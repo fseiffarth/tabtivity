@@ -1305,10 +1305,105 @@ run live.
    a file onto a folder; right-click a row — all as before. On a remote
    project the sync badges and the Run ▶ on a `.sh`/main `.py` still act.
 
-## Resume state (paused 2026-10-07, 11:40 CEST)
+### Review (S6 reviewer, 2026-10-08)
+Range reviewed: `2a19c24c..HEAD` (45bcd8a9, cdd2a37f, 91e780de, plus the
+first S6 reviewer's e10c5fe8, 3e067ec6, 8d274703). Two sessions: the first
+was stopped after its PaneSlot work and the schedule fix; this one finished
+`TabItem`/`FileRow`, rechecked those fixes and ran the gates. Nothing run
+live.
+
+**Bugs fixed**
+- `e10c5fe8` (first reviewer) — `TabItem` cached the ◷ tooltip's next
+  occurrence by the schedule list's identity, so once a slot passed with no
+  republish (a skipped run) the title named the past slot; the bar's
+  per-render computation never did. Hovering the indicator now recomputes
+  when the shown slot is behind the clock (one comparison, no timer). Test:
+  `TabBarItemMemo.test.tsx` "refreshes a passed occurrence when the indicator
+  is hovered". Rechecked: the span's `title` beats the `.tab`'s fast-mode
+  title, and a hover while the slot is still ahead renders nothing. The
+  Flagged item above about a stale tooltip no longer applies.
+- `3e067ec6` + `8d274703` (first reviewer) — not a code change: memo-key
+  tests for `PaneSlot` (remote status flip to a *different* state, project
+  record change, tab moved between groups, scope switch, popout detach +
+  re-attach, `setActive` on the active tab of an unfocused group still
+  moving focus), each asserting the one slot re-renders with the new answer
+  and the root scope's sixty do not.
+- `11bc2c3c` — e10c5fe8 put `scheduleEpoch` in the memo's deps, which the
+  linter calls unnecessary (the body reads the clock, not the epoch): lint
+  went 28 → 29 warnings. The dep is the point, so it stays with the same
+  documented disable `useT` uses for `dictGen`. Gate: lint back to 28.
+
+**Checked and sound**
+- `TabItem` vs the old per-tab JSX: every attribute, class, handler and
+  child is carried over; `isActive`/`editing`/`landing`/`isDragging`/`index`
+  are props, so activation, inline rename (Enter/Escape/blur, `selectOnMount`
+  now module-level and still one identity), the landing animation and the
+  pointer drag all see current values. Every bar closure goes through
+  `TabItemBar`; the forwarders read a ref refreshed in a deps-less
+  `useLayoutEffect`, and none of the forwarded handlers
+  (`onTabContextMenu`, `onTabPointerDown`, `commitRename`, hover, locality,
+  `clearLanded`, `setActive`) depend on render-time state a commit could
+  leave behind. Steering's `data-tab-index` and the drop slot are unchanged.
+- Subscriptions: `useTabStateClass` reads the same three entries the old
+  `tabStateClass` read, through the same pure `tabStateClassOf`;
+  `tabStateClass` is now called only for `TabStackChip` members, and the
+  bar's whole-map subscriptions fall back to constants exactly when no tab
+  of the bar has a `stack` (no other bar code reads the maps). The children
+  `TabItem` renders (`TabMarkBadge`, `TabSourceBadge`, `TabAgentModeMarks`,
+  `TabLocalityBadge`, `TabTexLinkBadge`, `TabStatusMark`) take only props
+  that cross the memo or subscribe themselves; `useT`/`useChordHint`
+  re-render on language/dict/binding changes. Item props are stable
+  (`computeHosts` is a store reference, `texPdfTabs` is `useShallow`'d).
+- `FileRow` vs the old row JSX: classes, `data-entry-path`,
+  `data-move-rel` followed by the `moveTargetAttrs` spread (the
+  `FileMove.test.ts` tripwire), click/double-click/context menu, Ctrl-armed
+  native drag vs pointer drag, tooltip dwell (`mouseLeave` takes no event,
+  as `handleEntryMouseLeave` never did), sync slot (busy flags computed from
+  the same `syncProgress`/`rel`), Run ▶ + right-click args (`runArgsByPath`
+  read at click time), compile spinner, local-only tag, folder sizes and the
+  scan-excluded note. `rel` now always computed changes nothing: every reader
+  is still gated on `syncTracked` or `is_dir`. `remarkCount` reproduces the
+  old `remarksEnabled && projectId && !e.is_dir` gate. Re-lists keep entry
+  identity when unchanged (`fileEntriesEqual`), so the row memo survives the
+  fs-change / poll refreshes. The new hooks sit above every early return
+  (rules-of-hooks is a lint error, lint has 0).
+- `PaneSlot` (spot-check after the first reviewer): the derivation is the
+  old block verbatim (`localRunning` uses the cached `location`, same value);
+  `remoteStatus.byHost[project]` is replaced on change, never mutated, so the
+  `hostSsh` prop changes with a worker lamp. The `setActive` short-cut only
+  skips a `writeScope` whose result would equal the current state.
+
+**Gates (worktree, at 11bc2c3c)**
+| Gate | Result |
+|---|---|
+| `npm run build` | clean (tsc + desktop + mobile bundles) |
+| `npm test` | 741 files / 7583 tests: 7581 passed, 2 failed — both in `MobileHeldPromptStore.test.ts`, a date time-bomb (see Flagged), fails alone, file and module untouched by the range; S6 implementer had 7576, +7 from the review tests |
+| `cargo test -q` | lib 3578 passed, 3 ignored; every other target green (no Rust in S6) |
+| `npm run lint` | 0 errors, 28 warnings (pre-existing; was 29 before 11bc2c3c) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | clean |
+| `git diff --check 2a19c24c..HEAD` | clean |
+
+**Flagged for user**
+- `MobileHeldPromptStore.test.ts` fails from 2026-10-07 on, independent of
+  this run: its fixtures' `sentAt` is fixed at 2026-09-30T11:59:50Z and
+  `heldPrompts.ts` drops prompts older than `MAX_AGE_MS` (7 days) against the
+  real clock, so "keeps only held prompts, per tab" and "hands a late
+  answer…" read back nothing. The test needs a faked clock (its unused
+  `NOW` constant suggests that was the intent). The main checkout has
+  uncommitted edits to this file — probably that fix; not touched here so
+  the landing merge doesn't conflict.
+- The comment above `tooltipTimer` in `FileTree.tsx` still says "the rows
+  are not memoized"; the dwell reasoning holds (the tree still re-renders),
+  but the sentence is now wrong. Comment-only.
+- `TabAgentModeMarks` whole-map subscription stays as the implementer
+  flagged (badge-only re-render in every tab on any agent's mode change).
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08)
 
 The run was paused by the user after S6's implementer and partway through
-S6's reviewer. Everything is on branch `perf` in worktree
+S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
+Everything is on branch `perf` in worktree
 `.claude/worktrees/perf`; the main checkout is untouched (its
 `docs/performance_plan.md`, `docs/performance_numbers.md` and
 `scripts/perf-numbers.sh` are untracked copies/tools, not yet on the branch —
@@ -1316,24 +1411,22 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 
 - Done, implemented + reviewed: S1 (backend quick wins), S2 (PDF render +
   reload), S3 (viewer state + hidden PDF release), S4 (terminal frontend),
-  S5 (terminal backend).
-- S6 (many-tabs memoisation): implemented (45bcd8a9, cdd2a37f, 91e780de,
-  handoff 78011e1c). Review STARTED, not finished: the reviewer landed
-  e10c5fe8 (schedule-occurrence cache refresh) and 3e067ec6 (PaneSlot memo
-  key tests) plus the one-line test fix committed above, then was stopped.
-  It had NOT yet: finished the `TabItem`/FileTree review items, rerun all
-  gates after its fixes, or written `### Review (S6 reviewer, …)`. Its last
-  note: the `npm run build` gate was denied by the permission classifier in
-  its session (it writes `dist/`); it meant to run `tsc --noEmit` instead.
-- Next: a fresh S6 reviewer continuing from HEAD (review range
-  2a19c24c..HEAD), then S7–S12 per plan §11, then the final whole-range
-  review, then landing on `develop` (`project_commit_amid_concurrent_sessions`
-  memory; the main checkout has other sessions' uncommitted edits in
-  `TabBar.tsx`, `TerminalView.tsx`, `TerminalReaderView.tsx`, `tabs.ts`,
-  `FileViewerPane.tsx`, `lib.rs`, `agent_auth.rs` — expect conflicts there).
-- Gates at HEAD of S6 implementer (78011e1c): build ok; vitest 741 files /
-  7576 tests; cargo lib 3578 passed; lint 0 errors / 28 pre-existing
-  warnings; clippy clean; brand ok. Not rerun after the reviewer's commits.
+  S5 (terminal backend), S6 (many-tabs memoisation: 45bcd8a9, cdd2a37f,
+  91e780de; review fixes e10c5fe8, 3e067ec6, 8d274703, 11bc2c3c — see
+  `### Review (S6 reviewer, 2026-10-08)`).
+- Next: S7 (pollers, git dots, launch chain — plan §3.3 first three sites,
+  §3.4, §3.5) with a fresh implementer, then its reviewer, then S8–S12 per
+  plan §11, then the final whole-range review, then landing on `develop`
+  (`project_commit_amid_concurrent_sessions` memory; the main checkout has
+  other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
+  `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
+  `agent_auth.rs` — expect conflicts there). S7 touches `FileTree.tsx`
+  again: new per-row inputs go through `FileRow` props / `RowActions`
+  (S6 Gotchas).
+- Gates at the S6 review's HEAD (11bc2c3c): build ok; vitest 741 files /
+  7583 tests, 2 failing in `MobileHeldPromptStore.test.ts` (date time-bomb,
+  not this run's — S6 review Flagged); cargo lib 3578 passed; lint 0 errors /
+  28 pre-existing warnings; clippy clean; brand ok; diff --check clean.
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
