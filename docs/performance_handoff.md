@@ -2297,7 +2297,106 @@ On a frozen dev build of this branch (after landing), Settings → Performance �
    it keeps working in the popout.
 8. Settings → "Never": nothing unloads.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented 2026-10-08, S10 review next)
+### Review (S10 reviewer, 2026-10-08)
+Range reviewed: `40738fea..a61038a8` (300c8d76, 45ba7dd8, 4df49caa,
+16b40766, handoff a61038a8). Nothing run live.
+
+**Bugs fixed** (each with a regression test that fails without the fix)
+- `8fa6b60b` (backend) — a woken pane lost the **terminal modes** its
+  program set at start. The wake (and a popout's attach) builds a fresh
+  xterm from `retained`; in a session that ran for hours the TUI's
+  `?2004h` (bracketed paste), `?1049h`, mouse reporting and cursor keys had
+  long fallen off that tail, so after a sleep a multi-line paste into an
+  agent submitted its first line and scheduled prompts were typed line by
+  line (`bracketedPaste()` false). `OutputRoute::retained_carried` now
+  folds the tail cap's cut-off front (as `carried` does for `pending`);
+  `route_wake_scrollback` and `route_scrollback` write it ahead of the tail;
+  `route_open` drops it. Cost: one `ScreenState::observe` per cap's worth
+  of output. Test `a_catch_up_keeps_the_modes_the_tail_cap_cut_off`.
+- `2e5e8108` — the wake replayed **old OSC 52 clipboard writes**: the tail
+  is output an earlier xterm already parsed, and the woken pane is focused,
+  so an agent's copy from an hour ago overwrote the clipboard again (with
+  the toast). The OSC 52 handler now skips anything parsed as a catch-up
+  (`staleParse`, the gate terminal replies already use). Test in
+  `TerminalSleepWake`.
+- `0b584a7c` — a pane put to sleep with **`pty_spawn` still in flight** (a
+  session container starting, the HPC / unfenced-platform question
+  waiting) parked nothing: the spawn then made a PTY nobody owned, and the
+  wake killed it and spawned another — a respawn by a visibility change.
+  The launch now holds the pane awake (`PaneSleepHoldContext`, imperative
+  token) until `setupAndSpawn` settles; released on unmount; attach/wake
+  mounts take none. Two tests in `TerminalSleepWake`.
+
+**Checked and sound**
+- Kill/park ordering: React runs a deleted subtree's passive cleanups
+  parent-first, so a close runs `PaneSlot`'s `killAsleepPty` before any
+  `TerminalView` teardown; the sleep transition deletes only the
+  `TabPane` subtree, so the view parks. A stale mark (none found; renders
+  here are synchronous) would still end in a kill on close and a
+  kill+spawn on relaunch. Pane layer key is `<scope>/<key>`, so group
+  moves, `detachTab`/`detachGroup` (tabs stay in `tabsByScope`), hidden
+  groups and popout dock-back never unmount a slot; scope unload, close,
+  close-all and a project going inactive unmount it and kill, as the
+  view's unmount did. StrictMode: the slot's synthetic cleanup finds no
+  entry at a fresh mount; the waking view's finds it parked and does
+  nothing.
+- Spawn identity: `tabTerminalSpawn` covers every spawn-effect dep except
+  `persistOnUnmount`/`attachOnly`, both constant for the owning pane;
+  relaunch, container/tmux toggle and the remote hold wake the slot, and the
+  mounted view kills the parked PTY before `pty_set_visible` + `pty_spawn`
+  (the same order an effect re-run used).
+- While asleep: busy lamps/attention come from `terminal-activity-batch`
+  (the router digests with zero viewers too) and the hook verdicts; the
+  stand-in reads `lastPtyOutputAt` off those digests; scheduler, phone holds
+  (`queueableWhileBusy` via `started`), auto-continue, steering's agent
+  prompt and the phone's Undo clear go through `scheduledAgentInput` →
+  `pty_write`, so they reach the parked PTY; the waiting-for-idle check
+  matches by `ptyId`, which the stand-in keeps. The phone bridge reads no
+  desktop xterm (tmux / transcripts / stores), so Focus chat, held prompts,
+  lazy history, `/model` probes, sign-in tabs and `tab_seen` are untouched.
+  Reader, Diffs, Reader facts/status and the sign-in card live inside the
+  pane (shown ⇒ awake); `terminalFor` readers (`agentModels`, mode marks,
+  steering, scroll) already handled a never-built xterm. `useOverlayAgent`
+  hears exit/ready on the bus, independent of the pane. Root console and the
+  docked column keep the owner mounted (`drawnElsewhere`); popouts use
+  `TabPane` directly (no slot, no sleep).
+- Backend: sleeping tail ≤ 2 MB (cap 1 MB, 2× hysteresis) plus `pending`
+  ≤ 2 MB; an ended sleeping route is freed by the wake read + the woken
+  view's close, or by `pty_kill` → `route_forget_sleep` (also when the PTY
+  is gone from the registry; `pty_kill_scope`'s unload is followed by the
+  slots' own kills); quit tears down every registry PTY, parked ones
+  included. A visible wake's registration replay ends inside the wake
+  snapshot and is dropped by offset; the hidden wake clears `pending`
+  (16b40766). Compatibility: `sleeping`/`wake` are single-word, optional
+  (`Option<bool>`), ignored by an old backend; `exited` is optional on the
+  frontend.
+
+**Gates (worktree, at 0b584a7c)**
+| Gate | Result |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,324.85 kB / gz 976.10 kB |
+| `npm test` | 751 files / 7641 tests (+3); full run at load ≈ 7: 3 failed — the 2 known `MobileHeldPromptStore` date time-bomb + `MobileIndicator` "lists paired devices…" (passes alone) |
+| `cargo test -q` | lib 3588 passed, 3 ignored (+1); every other target green (`api_usage` flush-timing test flaked once in a loaded run, green alone and on the rerun) |
+| `npm run lint` | 0 errors, 28 warnings (unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check 40738fea HEAD` | clean |
+
+**Flagged for user**
+- The OSC 52 fix also covers the hidden-spell replay: a copy an agent made
+  while its pane was hidden no longer lands on the clipboard when the tab is
+  shown (it was never focused when the copy happened — the focus gate's
+  intent). Say if such late copies should still go through.
+- More component-only state a wake does not bring back (add to the
+  implementer's list): a dismissed sign-in card comes back
+  (`dismissedSignIns` is a ref), and an agent tab's prompt line for a CLI
+  with no transcript prompt read (`agentModels.refresh` falls back to the
+  xterm echo) empties on its next refresh while asleep — as for a tab never
+  shown.
+- The launch hold also keeps a hidden pane awake while the HPC or unfenced-
+  platform question is open; it sleeps on the normal delay once answered.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08, S11 next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -2322,9 +2421,10 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 - Done, implemented + reviewed: S9 (sleeping tabs I: 6dbbafed,
   b1761c56; review fixes 96397d6d, 69eef2a4, 0cd729e0 — see
   `### Review (S9 reviewer, 2026-10-08)`).
-- Implemented, review next: S10 (sleeping tabs II, terminal kinds:
-  300c8d76, 45ba7dd8, 4df49caa, 16b40766 — see `## S10 — sleeping tabs II`).
-- Next: a fresh S10 reviewer, then S11–S12 per plan §11, then the final whole-range review, then landing on `develop`
+- Done, implemented + reviewed: S10 (sleeping tabs II, terminal kinds:
+  300c8d76, 45ba7dd8, 4df49caa, 16b40766; review fixes 8fa6b60b,
+  2e5e8108, 0b584a7c — see `### Review (S10 reviewer, 2026-10-08)`).
+- Next: S11 (backend structural, plan §11), then S12, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
