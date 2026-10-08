@@ -2396,7 +2396,162 @@ Range reviewed: `40738fea..a61038a8` (300c8d76, 45ba7dd8, 4df49caa,
 - The launch hold also keeps a hidden pane awake while the HPC or unfenced-
   platform question is open; it sleeps on the normal delay once answered.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08, S11 next)
+## S11 — backend structural
+
+*Written 2026-10-08 by the S11 implementer. Base `ccea64d7`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `f637fa9d` | §7.2 structural: new `services::proc_table` (one pid → ppid/`comm`/start snapshot, ≤ 1 s old, shared as `Arc`; `snapshot_within(ZERO)` walks fresh and shares it; per-process-image tab uid from `environ`; `alive`) read by `agent_turn`, the fence marker, `ui_priority`, `running_outputs` and `sysstat`'s descendant trees (Linux); 7 tests |
+| `84cd8be0` | §7.5: new `services::transcript_watch` (`notify` on the files a read went by, 250 ms settle, ≥ 1 s apart per id, ≤ 128 ids) + `agent_transcript::watch_targets`; `agent_tab_transcript`/`agent_tab_changes` take `watch`, answer `watched`; `agent_transcript_unwatch`; sink → `transcript-changed` in `lib.rs`; frontend `lib/agents/transcriptWatch.ts` `watchedReads` used by the Reader, its subagent view and the Changes panel; 6 Rust + 6 vitest tests |
+| `39686cac` | §7.7: `hostSessions` 7 s → 20 s + re-read on window focus (≥ 5 s apart); `net_usage` samples every 60 s unless a Network pane read within 30 s (then every 15 s tick); link row found by the master's socket inode in `ss -H -t -i -n -e` (no `-p`), `ssh -O check` skipped while the confirmed master (pid + start time) still runs; 4 Rust + 2 vitest tests |
+
+### What was built / choices made
+- **`proc_table`.** `Table::get(max_age, read)` re-checks under a walk
+  mutex, so callers missing together walk once. `MAX_AGE` 1 s for the
+  periodic readers. `sysstat::descendant_pids` (the strict, 1.5 s path the
+  PTY reaper and window resolvers use) asks `snapshot_within(ZERO)` — its
+  semantics are unchanged and its walk is now everyone's; the relaxed header
+  path (`descendant_pids_relaxed`) takes a ≤ 1 s table, so it can reuse a walk
+  `agent_turn` just took. The descendant cache (generation + TTL) stays as
+  S1/S7 left it. Non-Linux: the table is `sysstat::parent_map` with empty
+  names and `compute_descendant_pids` keeps its own walk there; no non-Linux
+  consumer reads `comm`.
+- **`agent_turn`.** `tool_shell_uids` reads a table no older than
+  `JOB_SCAN_MAX_AGE` (500 ms, the verdict-reuse window), `comm` from the
+  table, the tab uid once per process image (key pid + start + `comm`, so an
+  `exec` or reused pid reads again; pruned when the process leaves the
+  table), `cmdline` fresh for matched shells only — and a match counts only
+  if `proc_table::alive` (same pid, same start) still holds: a stale table
+  must not report a shell that ended as a job (a false "job" flash at every
+  Stop otherwise).
+- **Fence marker** walks the shared table's `children()`; `cmdline` +
+  `ns/mnt` per subtree pid as before. Only the pill counter; the fence launch
+  path is untouched (still fails closed).
+- **`ui_priority`** caches each process image's renderer verdict (key pid +
+  start + `comm`), so the 15 s rescan reads no `cmdline` for known processes.
+- **`running_outputs`**: pids from the shared table, shells first (the Bash
+  tool's wrapper shell holds a running output), then every other process
+  before an output is called closed (a command that `exec`ed holds it — the
+  existing test's holder is `sleep`). Plan's "restrict to agent_turn's shell
+  pids" not taken: it would miss exec'd holders and contained agents.
+- **Transcript watch.** Targets per read: Claude main = the file (`Exact`),
+  its folder (`Created` — a `/clear`'s new transcript, the session's
+  `<id>/` folder appearing), `<id>/subagents` (`Any`, part of the read's
+  version) once it exists; Claude subagent = its folder (`Any`); Codex = the
+  rollout + `Created` in its day folder; OpenCode = the store's folder with a
+  `Prefix(<db name>)` rule (`-wal`). The command re-arms on every read not
+  answered `unchanged` (that is how a rotation is followed: the new file has a
+  new version) and keeps an armed watch on `unchanged`. Unwatchable (nothing
+  on disk, remote tab, no store) → `watched: false` → the frontend keeps the
+  2 s clock — the "missing file" case. Watched → 15 s backstop (catches a
+  background shell dying with its CLI, a Codex rollout started in another
+  day folder, Codex spawn edges in sqlite). Not modelled on
+  `agent_turn::start(AppHandle)`: the service takes a sink closure;
+  `lib.rs` points it at `transcript-changed`. Event ids are `rw-<window
+  random>-<n>`; `watchedReads` never overlaps reads (a change mid-read runs
+  one more after it) and disarms on stop — and again if an in-flight read
+  re-armed after the stop. Leaked watches (a window reload never disarms)
+  are bounded by the 128-id cap (oldest armed evicted; an evicted live Reader
+  re-arms on its next backstop read).
+- **Sleeping tabs (S10):** the Reader lives in the pane, so a sleeping tab
+  has no Reader and no watch; the wake remounts it, which reads and arms
+  again. Nothing depends on the xterm.
+- **`net_usage`.** The loop still wakes every 15 s (disconnect detection and
+  the ~30 s flush keep their clock); a tick samples when due —
+  `sample_due(since_last, pane_open)`: every tick while a Network pane read
+  (`network_ssh_link_snapshot`/`network_host_snapshot` call
+  `net_usage::note_pane_read`) within `PANE_OPEN_MS` 30 s, else every 60 s.
+  Plan said "`ss -tni` filtered by the master's local port"; chosen instead:
+  the master's socket inodes from its own `/proc/<pid>/fd`, matched against
+  `ino:` in one shared `ss -H -t -i -n -e` dump — exact, needs no port first,
+  and the dump without `-p` walks no process fds. `ssh -O check` result is
+  cached per project keyed by the check args; reused while `/proc/<pid>/stat`
+  shows the same start time and `comm` `ssh`. Linux only; macOS (`nettop`
+  per pid, `ssh -O check` each time) unchanged. No new remote probe: both
+  only ever run for projects in `connected_ids` / behind `is_connected`.
+- **`hostSessions`.** `HOST_SESSIONS_POLL_MS` 20 s; a `focus` listener per
+  retained project (removed on the last release) re-reads unless a reading
+  started < `FOCUS_REFRESH_MIN_MS` 5 s ago. Not watcher-driven: nothing local
+  sees a host's tmux change.
+
+### Gotchas for later steps
+- **New `/proc` readers go through `services::proc_table`**; one that must
+  see a process forked a moment ago asks `snapshot_within(Duration::ZERO)`.
+  Tests that spawn a process and expect a ≤ 1 s-table reader to see it must
+  force a fresh walk first (see `a_claude_background_shell_runs_…`).
+- **S12 (`usePoll`):** `watchedReads` (15 s backstop / 2 s unwatched) and
+  `hostSessions`' 20 s interval + focus listener are the new timers; the
+  Reader's two transcript intervals and the Changes interval are gone.
+  Direct `setInterval(` lines in `src/` (non-test): 84 (S7: 87).
+- Reader tests: a mock answering `watched: true` drives the watch path;
+  `_notifyTranscriptChangedForTest(id)` delivers a change (the id is the
+  `watch` arg of the read).
+- `AgentTranscript`/`AgentChanges` gained `watched` (serde-skipped when
+  false); a new struct literal needs it.
+- Final review / landing: `src-tauri/` changed — **`npm run backend:stale`
+  owed**. New frontend on an old backend: `watch` is ignored and `watched`
+  absent, so the Reader polls every 2 s as before; `agent_transcript_unwatch`
+  is rejected and swallowed.
+
+### Gates (worktree, at 39686cac)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,325.66 kB / gz 976.32 kB |
+| `npm test` | 752 files / 7649 tests (S10 review 751 / 7641; +`TranscriptWatch` 5, Reader watch 1, hostSessions 2); 2 failed — the known `MobileHeldPromptStore` date time-bomb pair. Load ≈ 5–10, no timeouts |
+| `cargo test -q` | lib 3606 passed, 3 ignored (S10 review 3588; +18); every other target green (all targets 3774 passed) |
+| `npm run lint` | 0 errors, 28 warnings (unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `cargo check --target x86_64-pc-windows-msvc` (RC/lib shims) | ok |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check ccea64d7 HEAD` | clean |
+
+### Flagged for user
+- **Reader latency changes shape.** A write shows ~0.25–1 s after it lands
+  (was up to 2 s); what no file event says now waits for the 15 s backstop
+  (was 2 s): a background shell that died with its CLI leaving the shell row,
+  a Codex conversation continued in a rollout of another day's folder.
+  Unwatchable reads (before the first record, remote tabs) still poll 2 s.
+- **Job mark:** a background shell started < 500 ms before the hook record
+  that triggers a scan shows on the next 2 s tick instead (ended shells are
+  never reported — liveness check).
+- **Sessions list** refreshes every 20 s (was 7 s); a session started from
+  another terminal shows when the window regains focus or within 20 s.
+- **SSH traffic totals** sample every 60 s with no Network pane open: a
+  ControlMaster that dies between samples takes up to a minute of traffic
+  with it (was 15 s). Totals are otherwise the same (cumulative counters).
+- A ProxyJump/ProxyCommand master talks through pipes and has no TCP socket
+  of its own: its link reads "counters not visible" — as before (`ss -p`
+  never showed it either).
+- Not done: S1's "skip agent-auth homes with no live tab" — `proc_table` is
+  not a tab registry; still open under §7.3.
+- `npm run backend:stale` after landing (new commands, `watch` args, sampler).
+
+### Live click-through (user)
+On a frozen dev build of this branch (after landing):
+1. Open a Claude tab in Reader view, send a prompt: the answer appears about
+   a second after Claude writes it; leave it idle — `strace -f -e trace=openat
+   -p <tabtivity pid> 2>&1 | grep jsonl` shows no read of the transcript every
+   2 s, only one each ~15 s.
+2. `/clear` in that tab: the Reader switches to the empty chat within a
+   second or two; Undo clear brings the old one back.
+3. Ask for a subagent: it appears in the Subagents list; open it — its
+   conversation follows live. Open Diffs: an edit shows as a New card.
+4. Ask for `sleep 120` with run_in_background: the shell row and the tab's
+   job mark appear; after it ends both go. Kill the CLI with one running: the
+   row goes within 15 s.
+5. OpenCode tab in Reader view: answers still appear live.
+6. Remote project, Sessions view open: start `tmux new -d -s x` on the host
+   from another terminal, click back into the window: `x` is listed.
+7. Network pane → SSH link: rates update every second as before; close the
+   pane, transfer a file over the project, reopen after a few minutes: the
+   hour total includes it.
+8. Fence pill and UI priority unchanged: `ps -o ni= -p $(pgrep -f
+   WebKitWebProcess | head -1)` shows -10; an unfenced live tab still counts
+   on the project pill.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08; S11 implemented 2026-10-08, S11 review next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -2424,7 +2579,9 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 - Done, implemented + reviewed: S10 (sleeping tabs II, terminal kinds:
   300c8d76, 45ba7dd8, 4df49caa, 16b40766; review fixes 8fa6b60b,
   2e5e8108, 0b584a7c — see `### Review (S10 reviewer, 2026-10-08)`).
-- Next: S11 (backend structural, plan §11), then S12, then the final whole-range review, then landing on `develop`
+- Done, implemented: S11 (backend structural: f637fa9d, 84cd8be0,
+  39686cac — see `## S11 — backend structural`).
+- Next: S11 review (fresh reviewer, bugs only), then S12, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -2464,6 +2621,11 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   failures (129 load timeouts at load ≈ 60 all pass alone); cargo lib 3587
   passed; lint 0 errors / 28 warnings; clippy clean; brand ok; diff --check
   clean. `npm run backend:stale` owed after landing (terminal router).
+- Gates at S11's HEAD (39686cac): build ok (bootstrap 3,326 kB / gz
+  976 kB); vitest 752 files / 7649 tests, the 2 `MobileHeldPromptStore`
+  failures; cargo lib 3606 passed; lint 0 errors / 28 warnings; clippy
+  clean; Windows cross-check ok; brand ok; diff --check clean.
+  `npm run backend:stale` owed after landing (new commands, sampler).
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
