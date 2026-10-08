@@ -2480,7 +2480,8 @@ Range reviewed: `40738fea..a61038a8` (300c8d76, 45ba7dd8, 4df49caa,
 - **New `/proc` readers go through `services::proc_table`**; one that must
   see a process forked a moment ago asks `snapshot_within(Duration::ZERO)`.
   Tests that spawn a process and expect a ≤ 1 s-table reader to see it must
-  force a fresh walk first (see `a_claude_background_shell_runs_…`).
+  force a fresh walk first (`running_outputs` now re-walks on its own
+  before calling an output closed — S11 review).
 - **S12 (`usePoll`):** `watchedReads` (15 s backstop / 2 s unwatched) and
   `hostSessions`' 20 s interval + focus listener are the new timers; the
   Reader's two transcript intervals and the Changes interval are gone.
@@ -2551,7 +2552,114 @@ On a frozen dev build of this branch (after landing):
    WebKitWebProcess | head -1)` shows -10; an unfenced live tab still counts
    on the project pill.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08; S11 implemented 2026-10-08, S11 review next)
+### Review (S11 reviewer, 2026-10-08)
+Range reviewed: `ccea64d7..7f764e41` (f637fa9d, 84cd8be0, 39686cac, handoff
+7f764e41). Nothing run live.
+
+**Bugs fixed** (each with a regression test that fails without the fix)
+- `8244017d` — the OpenCode watch **re-armed itself**: a read-only SQLite
+  open that finds no other connection (OpenCode not running) rewrites the
+  store's `-shm` index (`IN_MODIFY`, checked with inotify), and the
+  `Prefix(<db>)` rule counted it, so each read caused the next — one read a
+  second for as long as the Reader showed, more than the 2 s poll it
+  replaced. `Rule::Prefix` now leaves `-shm` out (every committed write lands
+  in the store or its `-wal`). Test `reading_the_opencode_store_is_not_a_change_but_a_write_is`
+  (real rusqlite store + watcher).
+- `64e680bb` — the 128 cap **evicted live Readers first**: a shown Reader
+  arms once, then every read keeps it (`unchanged` → `armed`) or re-arms it
+  onto the same files (early return) — neither moved its eviction order, so
+  watches leaked later by a reload / closed popout outlived it and the live
+  Reader dropped to the 15 s backstop. Both paths now touch the order
+  (`transcript_watch::keep` replaces the command's `armed` check). Test
+  `a_watch_still_read_is_not_the_one_the_cap_evicts`.
+- `64eb3ce8` — `running_outputs` on a ≤ 1 s table **missed a just-started
+  background shell**: the watch fires on the very record that started it, so
+  the triggered read often had a table from before the start, called the
+  output closed and hid the shell row (and the `BACKGROUND_SEEN` memory)
+  until the next change or the 15 s backstop. Before calling an output
+  closed it now looks at the processes a fresh walk adds (new pid or start;
+  fds are read live, so nothing else can hold what it missed). The existing
+  test now walks the table *before* spawning its holder.
+- `8622f907` — `proc_table::tab_uid` **cached a mid-exec read**: `exec`
+  names the new image (`comm` "bash") before it sets up the environment, so a
+  scan in that window read an empty `environ` and remembered "no tab uid" —
+  that shell was never a job for its whole life. Seen as a real failure of
+  `a_live_backgrounded_shell_is_a_job_and_a_live_tool_call_is_not` in a
+  loaded full run (green alone). An empty block is no longer remembered; an
+  unreadable one (another user's) still is. Test
+  `an_empty_environment_read_mid_exec_is_read_again`.
+- `e496fd1b` (sibling) — `ui_priority`'s per-image renderer verdict had the
+  same window: no `cmdline` yet → remembered "not a renderer" → never
+  raised. `renderer_verdict` keeps a verdict only once the command line was
+  read. Test `a_renderer_verdict_is_kept_per_image_but_not_before_its_command_line`.
+
+**Checked and sound**
+- `proc_table`: `Table::get` re-checks under the walk mutex; a ZERO caller
+  always walks after taking it (never handed a walk that started before its
+  call); no lock is held across a caller's own work, the uid cache lock is
+  never taken with the walk lock in the other order. The strict path
+  (`descendant_pids` → `snapshot_within(ZERO)`, descendant cache TTL and
+  generation as before) still walks per miss, roots always included. No
+  caller runs on the GTK thread (agent_turn/ui_priority/fence threads,
+  `spawn_blocking` commands, PTY kill paths that walked before). Keys are
+  pid + start (+ `comm`), so a recycled pid reads again; `alive` gates the
+  job verdict. Fence marker on a stale table only misses a < 1 s-old tree
+  (→ Idle, not Unfenced); the launch path is untouched. Windows type-check
+  ok; macOS cfg read: `read_table` uses `sysstat::parent_map` (present),
+  `running_outputs` is gated at run time, network's cache is Linux-only.
+- `transcript_watch`: unwatch on effect stop (hidden pane, sleeping tab per
+  S10 = unmount, `sessionId`/`readTick` change); an in-flight read that armed
+  after the stop disarms again. Debounce never drops the last write (a change
+  after a send is due at `max(settle, last + 1 s)`). `/clear`: the Reader's
+  effect depends on `sessionId`, so the hook's new id re-reads at once; the
+  new file exists only with the first turn, until then the read is unwatched
+  (2 s clock). Watched folders are the scope's agent home (`claude_projects_roots`,
+  `codex_sessions_root`, the OpenCode store), never the project folder; a
+  symlink the fenced agent plants there is followed by inotify, but only the
+  watch id is emitted (no path, no data) and the reads went by those paths
+  before. Phone API: `watched` never set. Old backend: `watch` ignored,
+  `watched` absent → 2 s.
+- §7.7: `ino:` parsing matches iproute2 6.19 output (`uid:… ino:N sk:…`, the
+  same tokens since `-e` exists); IPv6 brackets leave fields 3/4 intact;
+  `ino:0` and a missing `ino:` are skipped. The `ssh -O check` cache is keyed
+  by the check args (socket + host) and pid + start + `comm` `ssh`, so pid
+  reuse or a new master asks again. That check only feeds the Network pane's
+  link reading and the traffic sampler — the connection lamp never read it,
+  so the skip cannot hold a dead link green (a live master over a dead TCP
+  link answered `-O check` "running" before too). `note_pane_read` is a
+  process-wide atomic, so a popout's Network pane counts. `hostSessions`
+  focus re-read is gated on `connected` like the timer and throttled 5 s.
+- Hidden window / HPC: no new timer runs for a hidden Reader (effect gated on
+  `visible`); `net_usage` ticks as before (local `ss` + `ssh -O check` on the
+  control socket, no host probe) and samples less; `hostSessions` only while
+  a Sessions view retains it.
+
+**Gates (worktree, at e496fd1b)**
+| Gate | Result |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,325.66 kB / gz 976.32 kB |
+| `npm test` | 752 files / 7649 tests; 2 failed — the known `MobileHeldPromptStore` date time-bomb pair (load ≈ 2–5) |
+| `cargo test -q` | lib 3610 passed, 3 ignored (+4); all targets 3778 passed. First full run (before `8622f907`) failed `a_live_backgrounded_shell_is_a_job…` — the bug that commit fixes |
+| `npm run lint` | 0 errors, 28 warnings (unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `cargo check --target x86_64-pc-windows-msvc` (RC/lib shims) | ok |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check ccea64d7 HEAD` | clean |
+
+**Flagged for user**
+- The cached ControlMaster is trusted while its process runs. If a master's
+  control socket is replaced while the old process lingers (ControlPersist
+  with channels still open, socket unlinked), the link reading and traffic
+  totals follow the old master until it exits, where `ssh -O check` would
+  name the new one. Not seen in Tabtivity's own reconnect paths; say if it
+  should also confirm the master still serves the socket.
+- Watches leaked by a window reload or a closed popout (no unmount runs) stay
+  armed — one inotify watch per folder, bounded by the 128 cap and now
+  evicted before any Reader still reading.
+- Still open from S11: the job mark's < 500 ms start window and the 15 s
+  backstop for what no file event says (implementer's Flagged list).
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08; S11 implemented + reviewed 2026-10-08, S12 next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -2579,9 +2687,10 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 - Done, implemented + reviewed: S10 (sleeping tabs II, terminal kinds:
   300c8d76, 45ba7dd8, 4df49caa, 16b40766; review fixes 8fa6b60b,
   2e5e8108, 0b584a7c — see `### Review (S10 reviewer, 2026-10-08)`).
-- Done, implemented: S11 (backend structural: f637fa9d, 84cd8be0,
-  39686cac — see `## S11 — backend structural`).
-- Next: S11 review (fresh reviewer, bugs only), then S12, then the final whole-range review, then landing on `develop`
+- Done, implemented + reviewed: S11 (backend structural: f637fa9d,
+  84cd8be0, 39686cac; review fixes 8244017d, 64e680bb, 64eb3ce8, 8622f907,
+  e496fd1b — see `### Review (S11 reviewer, 2026-10-08)`).
+- Next: S12, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -2626,6 +2735,11 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   failures; cargo lib 3606 passed; lint 0 errors / 28 warnings; clippy
   clean; Windows cross-check ok; brand ok; diff --check clean.
   `npm run backend:stale` owed after landing (new commands, sampler).
+- Gates at the S11 review's HEAD (e496fd1b): build ok (bootstrap 3,326 kB /
+  gz 976 kB); vitest 752 files / 7649 tests, the 2 `MobileHeldPromptStore`
+  failures; cargo lib 3610 passed (all targets 3778); lint 0 errors / 28
+  warnings; clippy clean; Windows cross-check ok; brand ok; diff --check
+  clean.
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
