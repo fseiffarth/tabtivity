@@ -21,7 +21,8 @@ import { agentFamily, agentInputWrites } from "../../../shared/agentComposer";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
-import { isInterruptInput, noteUserInput, useActivityStore } from "../../stores/activity";
+import { noteUserInput, useActivityStore } from "../../stores/activity";
+import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { useUse24h } from "../../lib/timeFormat";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
@@ -62,23 +63,10 @@ const PENDING_MS = 60_000;
  * often regardless (the busy row's timer, a pane not created yet). */
 const LIVE_SETTLE_MS = 250;
 const LIVE_POLL_MS = 1500;
-/** The phone's key pacing for a dialog answer: arrows apart, Enter later. */
-const KEY_GAP_MS = 80;
-const SUBMIT_GAP_MS = 200;
 /** How long an answered dialog stays unclickable while the session redraws. */
 const ANSWER_WAIT_MS = 3000;
 const ENCODER = new TextEncoder();
 
-async function typeKeys(ptyId: string, keys: string[]): Promise<void> {
-  for (let index = 0; index < keys.length; index += 1) {
-    const bytes = ENCODER.encode(keys[index]);
-    noteUserInput(ptyId, isInterruptInput(keys[index]));
-    await writePtyInput(ptyId, bytes);
-    if (index + 1 < keys.length) {
-      await new Promise((resolve) => setTimeout(resolve, index + 2 === keys.length ? SUBMIT_GAP_MS : KEY_GAP_MS));
-    }
-  }
-}
 
 /** A shell command the agent waits on — or sent to the background, where it
  * runs on past the turn — as a line under its working row: what it does (the
@@ -540,7 +528,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
             noteUserInput(ptyId);
             return writePtyInput(ptyId, ENCODER.encode(key)).then(() => true, () => false);
           },
-          command: (command) => typeKeys(ptyId, agentInputWrites(command)).then(() => true, () => false),
+          command: (command) => typePaneKeys(ptyId, agentInputWrites(command)).then(() => true, () => false),
           type: () => submitScheduledAgentMessage(target, text, { whileBusy: true }).then(() => true, () => false),
         }, subagent);
         if (!result.ok) {
@@ -727,7 +715,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   /** The working row's name for the agent, as the phone's says it: the model
    * the session prints, its first word (`Opus is working…`). */
   const workingModel = (live.status?.model ?? modelTag)?.trim().split(/\s+/)[0];
-  const typeIntoPane = useCallback((keys: string[]) => typeKeys(ptyId, keys), [ptyId]);
+  const typeIntoPane = useCallback((keys: string[]) => typePaneKeys(ptyId, keys), [ptyId]);
   /** Esc in the composer, once no status panel or subagent is open: the key
    * the terminal would get — it stops the turn, closes the CLI's own menus —
    * typed into the session, the chat staying shown (the prompt strip's switch
@@ -791,7 +779,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     setAnswered(live.signature);
     setAnsweredBy("row");
     stuck.current = true;
-    void typeKeys(ptyId, keys).catch(() => setAnswered(""));
+    void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
   };
   /** Answers the free-text row with the words typed under it. */
   const answerText = (index: number, text: string) => {
@@ -803,16 +791,16 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     setAnswered(live.signature);
     setAnsweredBy("row");
     stuck.current = true;
-    void typeKeys(ptyId, keys).catch(() => setAnswered(""));
+    void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
     if (!live.question || keys.length === 0 || answered) return;
     setAnswered(live.signature);
     setAnsweredBy("step");
-    void typeKeys(ptyId, keys).catch(() => setAnswered(""));
+    void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
   };
-  const stop = () => void typeKeys(ptyId, [STOP_KEY]).catch(() => {});
+  const stop = () => void typePaneKeys(ptyId, [STOP_KEY]).catch(() => {});
   const shownLive = picking ? NO_LIVE : live;
 
   const tabRef = useRef(tab);

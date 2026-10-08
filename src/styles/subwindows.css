@@ -996,6 +996,58 @@ button.steering-legend-hub:hover::before {
   gap: 5px;
   white-space: nowrap;
 }
+/* The chip row under the prompt (Alt+M model, Alt+E effort, Alt+K clear,
+   Alt+L plan, Alt+G goal): the phone composer's chips with their keys as key
+   caps; an open list or a lead in the text marks its chip with the accent. */
+.steering-prompt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -6px;
+}
+.steering-prompt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 4px;
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  background: var(--control-hover-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+}
+.steering-prompt-chip.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.steering-prompt-chip:disabled { opacity: 0.5; }
+.steering-prompt-chips .untested-tag { margin-left: auto; }
+.steering-prompt-note {
+  margin-top: -6px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+/* The list a chip opens, under the text: the Reader's picker rows; the
+   highlighted one (the session's own, or the effort cursor) in the accent. */
+.steering-prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+}
+.steering-prompt-list-head {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.steering-prompt-list .terminal-reader-option[aria-selected="true"] {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .steering-prompt-hint kbd {
   font-family: inherit;
   font-size: var(--text-xs);

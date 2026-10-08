@@ -204,4 +204,80 @@ describe("steering prompt box", () => {
     expect(box()).toBeNull();
     expect(steering().active).toBe(true);
   });
+
+  describe("chips", () => {
+    function openBox(target = "chips") {
+      activeTab({ kind: "agent", scheduleTargetId: target });
+      registerScheduledAgentInput(target, {
+        ptyId: "p:t1",
+        ready: () => true,
+        bracketedPaste: () => false,
+        recordAuthorizedInput: vi.fn(),
+      });
+      render(
+        <>
+          <Harness />
+          <SteeringPromptOverlay />
+        </>,
+      );
+      act(() => steering().enter());
+      press("i");
+      return box()!;
+    }
+    const alt = (input: HTMLTextAreaElement, key: string) =>
+      fireEvent.keyDown(input, { key, code: `Key${key.toUpperCase()}`, altKey: true });
+    const written = () => writeMock.mock.calls.map(([, bytes]) => decode(bytes));
+
+    it("Alt+L / Alt+G lead the text with /plan or /goal and take it off again", () => {
+      const input = openBox();
+      fireEvent.change(input, { target: { value: "tidy the tests" } });
+      alt(input, "l");
+      expect(box()!.value).toBe("/plan tidy the tests");
+      alt(input, "g");
+      expect(box()!.value).toBe("/goal tidy the tests");
+      alt(input, "g");
+      expect(box()!.value).toBe("tidy the tests");
+      expect(writeMock).not.toHaveBeenCalled();
+    });
+
+    it("Alt+K clears only on the second press", async () => {
+      const input = openBox();
+      alt(input, "k");
+      expect(writeMock).not.toHaveBeenCalled();
+      expect(document.querySelector(".steering-prompt-chip.on")).not.toBeNull();
+      alt(input, "k");
+      await vi.waitFor(() => expect(written()).toContain("/clear"));
+      expect(box()).not.toBeNull();
+    });
+
+    it("another key between the two Alt+K presses disarms Clear", () => {
+      const input = openBox();
+      alt(input, "k");
+      fireEvent.keyDown(input, { key: "a" });
+      alt(input, "k");
+      expect(writeMock).not.toHaveBeenCalled();
+    });
+
+    it("Alt+E lists Claude's efforts: ↓ and Enter send one, Escape closes the list first", async () => {
+      const input = openBox();
+      alt(input, "e");
+      expect(document.querySelector(".steering-prompt-list")).not.toBeNull();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await vi.waitFor(() => expect(written()).toContain("/effort medium"));
+      await vi.waitFor(() => expect(document.querySelector(".steering-prompt-list")).toBeNull());
+
+      alt(input, "e");
+      act(() => {
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      });
+      expect(document.querySelector(".steering-prompt-list")).toBeNull();
+      expect(box()).not.toBeNull();
+      // With no list up, Escape closes the box again.
+      act(() => {
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      });
+      expect(box()).toBeNull();
+    });
+  });
 });
