@@ -1947,10 +1947,10 @@ pub fn live_unfenced_by_scope(pid_of: impl Fn(&str) -> Option<u32>) -> HashMap<S
     let Ok(own_ns) = std::fs::read_link("/proc/self/ns/mnt") else {
         return counts;
     };
-    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (pid, ppid) in crate::sysstat::parent_map() {
-        children.entry(ppid).or_default().push(pid);
-    }
+    // The shared process table (`services::proc_table`): a 15 s marker reads
+    // a tree at most a second old as well as a walk of its own.
+    let table = crate::services::proc_table::snapshot();
+    let children = table.children();
     for (tab_id, tab) in tabs {
         let Some(leader) = pid_of(&tab_id) else {
             continue;

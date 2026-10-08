@@ -4,6 +4,9 @@ pub mod agent_session;
 // relayed from the hook script's per-tab record to the window's activity
 // store — the authority for the tab's working and finished marks.
 pub mod agent_turn;
+// One shared, at-most-a-second-old reading of the process table for the
+// background loops that each walked `/proc` on their own timer.
+pub mod proc_table;
 // The stored conversation behind an agent tab (Claude's session log, Codex's
 // rollout) as the prompt/answer entries the phone's Focus view lays out.
 pub mod agent_transcript;

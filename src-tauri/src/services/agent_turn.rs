@@ -226,8 +226,9 @@ struct TurnPayload {
 
 /// How often the tool-shell scan runs while agent tabs are bound. What it
 /// answers ("is a command of this agent's still running?") only has to be fresh
-/// to a couple of seconds, and the walk costs one `stat` read per process plus
-/// an `environ` read per shell.
+/// to a couple of seconds, and the scan costs the shared process table's walk
+/// (one `stat` read per process, shared with the other readers of
+/// `services::proc_table`) plus an `environ` read per new shell.
 const JOB_POLL: Duration = Duration::from_secs(2);
 
 /// How stale a scan may be before a hook record triggers a fresh one. Records
@@ -418,61 +419,53 @@ fn is_background_job(cmdline: &str, state: TurnState) -> bool {
 }
 
 /// The tab uid a NUL-separated environment block belongs to, if it sets one.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(test)]
 fn environ_uid(environ: &[u8]) -> Option<String> {
-    environ
-        .split(|b| *b == 0)
-        .find_map(|kv| kv.strip_prefix(concat!(crate::app_env!("TAB_UID"), "=").as_bytes()))
-        .and_then(|v| std::str::from_utf8(v).ok())
-        .map(str::to_string)
+    crate::services::proc_table::environ_tab_uid(environ)
 }
 
 /// Which of the tabs in `want` (uid → the state its hooks last reported) have a
-/// BACKGROUND job of their agent's running right now — one walk of `/proc` for
-/// the whole fleet, since a walk per tab is the same work repeated. What counts
-/// as backgrounded, rather than a tool call the agent is waiting on, is
-/// [`is_background_job`].
+/// BACKGROUND job of their agent's running right now — one look at the process
+/// table for the whole fleet, since a walk per tab is the same work repeated.
+/// What counts as backgrounded, rather than a tool call the agent is waiting
+/// on, is [`is_background_job`].
 ///
 /// The PTY's process tree cannot answer this — an agent tab runs under tmux, so
 /// the agent hangs off the tmux server, not the tab's PTY — but every process
 /// under the tab inherits `TABTIVITY_TAB_UID`, fenced ones included (bubblewrap
 /// moves the pid namespace, not the owner, so the host still reads their
-/// environ). Linux reads `/proc`; elsewhere no tab ever reports a job. A
-/// contained agent's shells belong to the container's user and a remote one's
-/// live on its host, so those report none either.
+/// environ). Linux reads `/proc`, through the shared table
+/// (`services::proc_table`): a snapshot no older than [`JOB_SCAN_MAX_AGE`],
+/// each shell's environment read once in its life, and each match checked
+/// alive before it counts — a shell that ended since the walk is no job.
+/// Elsewhere no tab ever reports a job. A contained agent's shells belong to
+/// the container's user and a remote one's live on its host, so those report
+/// none either.
 #[cfg(target_os = "linux")]
 fn tool_shell_uids(want: &HashMap<&str, TurnState>) -> std::collections::HashSet<String> {
-    fn stat_of(pid: &str) -> Option<(String, String)> {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        let comm = stat.get(stat.find('(')? + 1..stat.rfind(')')?)?.to_string();
-        let ppid = stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.to_string();
-        Some((comm, ppid))
-    }
+    use crate::services::proc_table;
     let mut out = std::collections::HashSet::new();
     if want.is_empty() {
         return out;
     }
-    let Ok(dir) = std::fs::read_dir("/proc") else { return out };
-    for entry in dir.flatten() {
-        let name = entry.file_name();
-        let Some(pid) = name.to_str().filter(|n| n.bytes().all(|b| b.is_ascii_digit())) else {
-            continue;
-        };
-        // `comm` first: a stat read is cheap, and only shells go on to have
+    let table = proc_table::snapshot_within(JOB_SCAN_MAX_AGE);
+    for proc_ in table.procs() {
+        // `comm` first: it comes with the table, and only shells go on to have
         // their environment read.
-        let Some((comm, ppid)) = stat_of(pid) else { continue };
-        if !SHELL_COMMS.contains(&comm.as_str()) {
+        if !SHELL_COMMS.contains(&proc_.comm.as_str()) {
             continue;
         }
-        let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else { continue };
-        let Some(uid) = environ_uid(&environ) else { continue };
+        let Some(uid) = proc_table::tab_uid(proc_) else { continue };
         let Some(state) = want.get(uid.as_str()) else { continue };
         if out.contains(&uid) {
             continue;
         }
-        let cmdline = crate::sysstat::cmdline(pid.parse().unwrap_or(0)).unwrap_or_default();
-        let parent_comm = stat_of(&ppid).map(|(c, _)| c).unwrap_or_default();
-        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state) {
+        let cmdline = crate::sysstat::cmdline(proc_.pid).unwrap_or_default();
+        let parent_comm = table.get(proc_.ppid).map(|p| p.comm.as_str()).unwrap_or_default();
+        if is_agent_tool_shell(&proc_.comm, &cmdline, parent_comm)
+            && is_background_job(&cmdline, *state)
+            && proc_table::alive(proc_)
+        {
             out.insert(uid);
         }
     }

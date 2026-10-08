@@ -264,7 +264,15 @@ fn descendant_pids_within(roots: &[u32], max_age: Duration) -> Vec<u32> {
         }
     }
 
-    let pids = compute_descendant_pids(&key);
+    // The relaxed readout may share the process-table walk another loop took
+    // within the last second; the default needs the table as it is now (the
+    // PTY layer reaps subtrees with it), and its walk is then shared instead.
+    let table_age = if max_age > CACHE_TTL {
+        crate::services::proc_table::MAX_AGE
+    } else {
+        Duration::ZERO
+    };
+    let pids = compute_descendant_pids(&key, table_age);
 
     let mut cache = DESCENDANT_CACHE.lock().unwrap();
     // A spawn/death or the TTL stales every entry at once (they all describe
@@ -291,9 +299,16 @@ fn descendant_pids_within(roots: &[u32], max_age: Duration) -> Vec<u32> {
     pids
 }
 
-/// Build a pid → ppid map from the backend, then collect every pid whose ancestor
-/// chain reaches one of the roots. The uncached core of [`descendant_pids`].
-fn compute_descendant_pids(roots: &[u32]) -> Vec<u32> {
+/// Every pid whose ancestor chain reaches one of the roots: from the shared
+/// process table on Linux (a snapshot at most `table_age` old), from a fresh
+/// pid → ppid map elsewhere. The uncached core of [`descendant_pids`].
+#[cfg(target_os = "linux")]
+fn compute_descendant_pids(roots: &[u32], table_age: Duration) -> Vec<u32> {
+    crate::services::proc_table::snapshot_within(table_age).descendants(roots)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn compute_descendant_pids(roots: &[u32], _table_age: Duration) -> Vec<u32> {
     use std::collections::{HashSet, VecDeque};
 
     let parent = platform::parent_map();

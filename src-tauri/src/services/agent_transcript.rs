@@ -1436,19 +1436,23 @@ fn claude_tasks_ended(line: &str) -> Vec<String> {
 /// shells with it without a notification. Read off `/proc/<pid>/fd`, whose
 /// links name the file as the process sees it — the path its CLI wrote down,
 /// inside a fence or a container too. Elsewhere nothing is known to run.
+///
+/// The pids come from the shared process table (`services::proc_table`, at
+/// most a second old) rather than a walk of their own, shells first: the
+/// holder of a running shell's output is the Bash tool's wrapper shell, so
+/// while the shells still run the look ends there; every other process is
+/// still looked at before an output is called closed (a command that
+/// `exec`ed out of its shell holds it too).
 fn running_outputs(outputs: &[&str]) -> std::collections::HashSet<String> {
     let mut open = std::collections::HashSet::new();
     if outputs.is_empty() || !cfg!(target_os = "linux") {
         return open;
     }
-    let Ok(procs) = std::fs::read_dir("/proc") else {
-        return open;
-    };
-    for proc in procs.flatten() {
-        if !proc.file_name().to_str().is_some_and(|name| name.bytes().all(|b| b.is_ascii_digit())) {
-            continue;
-        }
-        let Ok(fds) = std::fs::read_dir(proc.path().join("fd")) else {
+    let table = crate::services::proc_table::snapshot();
+    let is_shell = |comm: &str| matches!(comm, "bash" | "sh" | "dash" | "zsh" | "fish" | "ksh" | "mksh");
+    let (shells, rest): (Vec<_>, Vec<_>) = table.procs().partition(|p| is_shell(&p.comm));
+    for proc_ in shells.into_iter().chain(rest) {
+        let Ok(fds) = std::fs::read_dir(format!("/proc/{}/fd", proc_.pid)) else {
             continue;
         };
         for fd in fds.flatten() {
@@ -2437,6 +2441,9 @@ mod tests {
             .stdout(std::fs::File::create(&output).unwrap())
             .spawn()
             .unwrap();
+        // The look goes by the shared process table, up to a second old: a
+        // shell is seen once a walk has listed it.
+        crate::services::proc_table::snapshot_within(std::time::Duration::ZERO);
         let running = read(None);
         assert_eq!(running.shells.len(), 1);
         assert_eq!(running.shells[0].command, "npm run dev");

@@ -24,7 +24,7 @@
 //! before. `TABTIVITY_UI_PRIORITY=0` turns it off. Linux only (the module is
 //! compiled for nothing else).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use zbus::blocking::Connection;
 
 /// The nice the UI threads ask for. rtkit's floor is -15 by default; -10 is
@@ -132,13 +132,24 @@ fn watch() {
     // Each process is tried once: a failure is rtkit's or polkit's answer
     // and would be the same again, and rtkit rate-limits every caller.
     let mut tried: HashSet<u32> = HashSet::new();
+    // Each process image's verdict, read once (its command line does not
+    // change without an exec, which changes `comm`): the rescan then costs no
+    // per-descendant read, only the shared process table.
+    let mut renderers: HashMap<(u32, u64, String), bool> = HashMap::new();
     loop {
+        let table = crate::services::proc_table::snapshot();
         let mut pids = vec![own];
-        pids.extend(
-            crate::sysstat::descendant_pids(&[own])
-                .into_iter()
-                .filter(|&pid| is_renderer(pid)),
-        );
+        let mut live = HashSet::new();
+        for pid in table.descendants(&[own]) {
+            let Some(proc_) = table.get(pid) else { continue };
+            let key = (pid, proc_.start, proc_.comm.clone());
+            live.insert(key.clone());
+            if *renderers.entry(key).or_insert_with(|| is_renderer(pid)) {
+                pids.push(pid);
+            }
+        }
+        renderers.retain(|key, _| live.contains(key));
+        drop(table);
         tried.retain(|pid| pids.contains(pid));
         for pid in pids {
             if !tried.insert(pid) || !needs_raise(thread_nice(pid, pid)) {
