@@ -129,6 +129,375 @@ Fixed decisions (not up for review):
 | 6 | 8 (frontend) | 28, 40, 41 (+ ODT #869) | `src/lib/viewers/yaml.ts`, `FileViewerPane.tsx` (error boundary), `markdown.ts`, `gif.ts`, `OdtView.tsx` |
 | 7 | 13 + 14 | 35, 36 | `services/remote_sync.rs`, `commands/sync.rs`, `commands/tex.rs`, `services/sandbox.rs:49`, `docs/threat_model.md` |
 
+### Plan review notes (2026-10-08, against `6194ce1f`)
+
+Every cited file and function exists and every gap is still present. Line
+numbers below are at `6194ce1f`. Choices marked **Chosen** settle open
+questions for the implementer. They do not change the fixed decisions.
+
+**Agent step 1 (gap 16, A1 per-scope)**
+- Code: the registry is `commands/agents.rs:162` (Cline), `:173` (Vibe),
+  `:190` (aider), `:375` (mini-swe-agent), `:325` (CodeBuddy dir), `:409`
+  (Kimi dir). In `services/agent_auth.rs`: `reconcile_file` `:306`,
+  `reconcile_dir` `:368`, `import_from_user_home_in` `:594`, `copy_dir`
+  `:686` (recursive), `sign_out_in` `:701`. The keeper starts at
+  `lib.rs:1300-1302` (`import_once`, then `start`).
+- Set the four rows' `auth_paths` to `&[]`. Fix the doc comment at
+  `commands/agents.rs:34-41`: Vibe, aider, mini-swe-agent and Cline now sit
+  with Continue/Crush as per-scope. `LoginStatus.shared` becomes `false` for
+  them, so `SettingsSubPanels.tsx:748` drops them from the shared-login list
+  by itself. Adjust the English `settings.agentLoginsHelp` (`i18n.ts:1852`):
+  "a keyring or a database" no longer covers every unlisted CLI.
+- **Already-shared copies, concretely.** Each of the four CLIs has exactly one
+  shared path, so its whole store dir goes: `<state>/agent-auth/vibe/`
+  (`.vibe_.env`), `aider/` (`.aider_oauth-keys.env`), `mini-swe-agent/`
+  (`.config_mini-swe-agent_.env`) and `cline/`
+  (`.cline_data_settings_providers.json`), each with its `.placed/`,
+  `.account` and `.blocked`. Every existing home holds its own copy (own
+  inode since 2026-09-26). Once the paths leave the registry the keeper never
+  touches those copies again, so they become per-scope files as they are.
+  **Chosen:**
+  - Fenced scope homes and `*.local` homes keep their copy. The login
+    survives in every scope that has one. Residual for row 16: content planted
+    before the fix stays in the fenced homes it already reached. Nothing new
+    spreads.
+  - The Host home (`agent-homes/host`, unfenced) loses its copy when the
+    copy's sha256 equals the store's current bytes or
+    `.placed/host/<leaf>`, meaning Tabtivity put it there. A copy that differs
+    from both is the Host session's own unadopted write and stays.
+  - Implement this as an idempotent `agent_auth::retire_shared_paths_in(state_dir)`
+    with a const table `RETIRED: &[(cli, rel)]`. It runs at `lib.rs:1300`
+    before `import_once` and keys on the store file existing, so it needs no
+    marker. Order: Host check first, then delete the store dir. The same
+    function cleans the login folders (next bullet).
+  - Users who want one key everywhere can put the file in the Tabtivity-wide
+    layer (`services::agent_global`), which agents cannot write. Say so in
+    `docs/context/agent_authority.md`. Do not auto-migrate the store's copy
+    into that layer: the copy may be agent-written.
+- **Login-folder allowlists.** The repo does not record the file names. I
+  read them off the published bundles:
+  - CodeBuddy: `@tencent-ai/codebuddy-code` 2.162.0, `dist/codebuddy.js`
+    `getAuthSavePath`. One file, `<authId>.info`. The default id is
+    `Tencent-Cloud.coding-copilot` (`product.json`). Self-hosted endpoints get
+    `<id>-<x>-<host>` (`resolveCustomAuthId`). Logout renames the file to the
+    backup `<stem>.<ISO-ts with - for :.>.<pid>.<uuid>.info` and writes
+    `<file>.logged-out`. Temporaries are `.<file>.<pid>.<uuid>.tmp` and the
+    lock is the dir `<file>.lock`.
+  - Kimi Code: `@moonshot-ai/kimi-code` 2.1.1, `FileTokenStorage`.
+    `credentials/<name>.json`, default `kimi-code.json`; other OAuth keys give
+    `<key>.json`, with no leading dot and no `/`. Temporaries are
+    `<name>.json.tmp.<pid>.<hex>`.
+  - **Chosen allowlist** (an `AuthPath` field such as `names: fn(&str) -> bool`,
+    or a match in `reconcile_dir`):
+    - Kimi: `^[^./][^/]*\.json$`.
+    - CodeBuddy: `^[^./][^/]*\.info$`, minus names matching
+      `\.\d{4}-\d\d-\d\dT[0-9-]+Z\.\d+\.[0-9a-f-]{36}\.info$` (the logout
+      backups would otherwise pile up in every home).
+    - `.logged-out` markers stay per scope.
+  - Today's code already adopts any of these, including a temporary caught
+    mid-write.
+- Apply the allowlist in all three places: `reconcile_dir` (both adopt and
+  place), `import_from_user_home_in` (replace the recursive `copy_dir` with a
+  one-level, allowlisted copy) and `remove_copies`/`status_in` (count only
+  allowlisted names as signed in).
+- Migration for the folders, inside `retire_shared_paths_in`: delete every
+  non-allowlisted file in `agent-auth/{codebuddy,kimi}/<leaf>/` and its
+  `.placed/*/<leaf>_<name>` records. Remove a home's copy of such a name only
+  where its digest equals that home's placed record, meaning Tabtivity put it
+  there.
+- Remaining shared files: under the fixed decision there is no content
+  validator. The Host home gets the same credential files as every scope,
+  with the Pi check and account guard kept. The plan's sentence "the Host home
+  never receives a shared file that has not passed the check" therefore
+  reduces to the Pi check. Record that in row 16. Not re-surveyed here: Goose
+  `secrets.yaml`, OpenCode `auth.json` and Qoder `.auth`. List them as
+  "credential-only per the 2026-09-25 survey" in the row.
+- Fix stale prose: `agent_home.rs:17-18` ("hard-linked"),
+  `docs/context/agent_authority.md:140,283`, `sandbox.rs:49` (step 7 does
+  that one).
+- Out of scope, note only: on Windows Node's `os.homedir()` follows
+  `USERPROFILE`, not `HOME`, and the CodeBuddy path is Linux-only. On macOS
+  the login sits under `Library/Application Support/…` and is simply not
+  shared.
+- Tests (in `agent_auth.rs`):
+  - no registry row lists a `.env`, `providers.json` or other config path;
+  - retire: store dir gone, fenced copy kept, Host copy equal to the store
+    removed, divergent Host copy kept, a second run is a no-op;
+  - allowlist: `kimi-code.json` shared, while `kimi-code.json.tmp.1.ab` and
+    `x.env` are neither adopted nor placed; CodeBuddy default `.info` shared,
+    while the backup name and `.logged-out` are not;
+  - import copies only allowlisted names.
+- Update the existing tests:
+  - `a_local_model_home_receives_logins_but_never_feeds_them_back` (`:905`)
+    uses Cline's `providers.json`. Move it to e.g. `.codex/auth.json` and
+    keep its receive-only intent.
+  - `a_login_directory_is_reconciled_file_by_file` (`:1082`) uses Kimi
+    `token`. Rename it to `kimi-code.json`.
+- Acceptance: Settings lists Vibe, aider, mini-swe-agent and Cline nowhere
+  among the shared logins; `npm run backend:stale` reported; row 16 marked
+  with the residual.
+
+**Agent step 2 (gap 17)**
+- Code: `sanitize_untrusted_layout` `terminal_service.rs:403`,
+  `sanitize_tab_layout` `:425`, test `known_commands_keep_every_field_except_resume_args`
+  `:807`, `custom_agent_specs` `:359`, env applied at `terminal/mod.rs:1461`.
+  The TAB_UID rebuild is now at `src/stores/tabs.ts:5471-5473`.
+- `sanitize_untrusted_layout` covers all three untrusted doors:
+  `adopt_untrusted_session` (`:604`, used by `.tabtivityproj` import
+  `project_transfer.rs:1434` and by folder adoption `projects.rs:2709`), and
+  the one-time `migrate_project_sessions_once` (`:659`). No other door was
+  found (`strip_untrusted_project_fields` drops `tab_layout` on import).
+- Dropping `env` at the untrusted doors loses `TAB_UID` for every agent
+  except Codex and Vibe. New tabs set `TAB_UID = sessionId` for every
+  resumable agent (`newTabItems.ts:158`). **Chosen:** widen the restore
+  rebuild at `tabs.ts:5471` to every tab with `isResumableAgentTab` and a
+  `sessionId`, so turn binding (`launch_prep.rs:520`) survives. Test in
+  `CenterPanelSessionRestore.test.tsx`.
+- `embedExec` is executed: `EmbedPane` opens on mount
+  (`EmbedPane.tsx:30-37`) → `open_file` handler → `launch_command`
+  (`apps.rs:598-602`). External embeds are filtered as non-restorable on
+  load today, so this is defence in depth. Drop `embedExec` at the untrusted
+  doors as planned.
+- **Found while checking: the `env` hole is wider than loader variables.**
+  - `launch_prep.rs:400-412` uses `entry().or_insert` for `TABTIVITY_SCOPE`
+    and `TABTIVITY_PROJECT_DIR`. A persisted value therefore wins. A planted
+    `SCOPE` makes the agent shim fence a CLI typed in that shell tab into
+    *another* scope.
+  - The shim (`agent_bin.rs:71`) execs the real CLI **unfenced** when
+    `TABTIVITY_HOST_SESSION` or `TABTIVITY_AGENT_FENCE` is set, and a
+    persisted env can set either.
+  - `tmux_local::is_fence` (`:308`) also trusts `AGENT_FENCE`.
+  - **Chosen:** at the top of `launch_prep::prepare`, remove from
+    `opts.env` every Tabtivity control variable: `AGENT_FENCE`,
+    `HOST_SESSION`, `SCOPE`, `PROJECT_DIR`, the five `*_MCP_TOKEN` vars,
+    `PUSH_PREFLIGHT` and the API-key carriers, in both brand and legacy
+    (`ELDRUN_`) spellings. Then set `SCOPE`/`PROJECT_DIR` with `insert`. The
+    frontend never sends these (only `TAB_UID` and `LOCAL_MODEL` via
+    `envName`). That keeps within the fixed decision: these are variables
+    Tabtivity itself inserts, so an incoming value is never legitimate.
+    Before relying on it, `rg` every `prepare(` caller and every internal
+    `PtyOptions` builder.
+- Loader-variable denylist ("from a persisted layout"). The spawn cannot tell
+  where a variable came from, so apply the list where layouts are loaded. Put
+  a helper `terminal_service::strip_persisted_env(tab, custom)` in
+  `sanitize_tab_layout`'s known-command branch, which runs for trusted
+  state-dir loads too: `load_terminal_session` `:252`, `workspace.rs:817`.
+  Also call it from the headless owner's `mobile_control/headless.rs:740`
+  (`launch_options`), which reads the stored record raw and so bypasses the
+  sanitizer.
+  - List: `PATH`, `LD_*`, `DYLD_*`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`,
+    `PS4`, `SHELLOPTS`, `BASHOPTS`, `IFS`, `ZDOTDIR`, `HOME`, `XDG_*_HOME`,
+    `INPUTRC`, `GIT_*` (`GIT_CONFIG_*`, `GIT_SSH*`, `GIT_ASKPASS`,
+    `GIT_EXEC_PATH`, `GIT_EXTERNAL_DIFF`, `GIT_PROXY_COMMAND`, …),
+    `SSH_ASKPASS*`, `EDITOR`, `VISUAL`, `PAGER`, `NODE_OPTIONS`, `NODE_PATH`,
+    `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`, `PERL5OPT`, `PERL5LIB`,
+    `RUBYOPT`, `RUBYLIB`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, and the
+    control variables above.
+  - Custom agents legitimately carry `env` (`types/index.ts:111-112`,
+    settings.json). **Chosen:** extend `custom_agent_specs` to return each
+    spec's `env`, and for a custom-agent tab keep a denylisted key only when
+    the spec names the same key with the same value, as `rebuild_resume_args`
+    already does for `resumeArgs`.
+  - Built-in tabs never persist `PATH` or `LD_*` today (checked
+    `src/stores`, `src/lib/agents`, `src/components/tabs`).
+- Tests:
+  - an untrusted shell/`claude`/`bash` tab with `env` and `embedExec` loses
+    both, and its `TAB_UID` is rebuilt on the frontend;
+  - keep the trusted-path test at `:807`, minus denylisted keys;
+  - a state-dir layout with `PATH`/`LD_PRELOAD`/`TABTIVITY_HOST_SESSION`
+    loses them while `VIBE_HOME` and `TAB_UID` stay;
+  - a custom agent's spec env survives a round-trip, and a persisted value
+    that differs from the spec is dropped;
+  - `prepare` with an incoming `TABTIVITY_SCOPE=other` spawns with its own
+    scope, and an incoming `HOST_SESSION` is gone;
+  - `headless::launch_options` strips the list.
+- Size: this is about one day of work. Keep it in one agent step.
+
+**Agent step 3 (gap 18)**
+- Code: `preflight_command` `git_push_mcp.rs:552`, called per round from
+  `preflight` `:585`. The proposal is built at `:745` and runs after the
+  card at `:845`. `grant_git_push` is at `root_mcp.rs:904`, `Identity` at
+  `:89`, `PushBinding` at `:110`. `register_tab`/`fenced_scope_of_tab`/
+  `on_tab_gone` are at `agent_fence.rs:1740/1753/1806`. `pty_kill` is
+  `commands/terminal.rs:404`, `pty_kill_scope` `:426`. Teardown calls sit at
+  `terminal/mod.rs:1016` (`kill_all`), `:1092` (`teardown_taken`) and
+  `:1278` (reader-task end, already generation-guarded by `route_close`).
+- The Pusher token is minted in `prepare` at `launch_prep.rs:489`, *before*
+  the fence decision (`:730-762`). The identity therefore cannot know the
+  scope at mint time.
+  - **Chosen:** add `fence_scope: Option<String>` to `PushBinding`. Set it
+    where `fenced_registration` is set (`launch_prep.rs:762`), through a
+    `TokenStore` call keyed by the token in `opts.env[GIT_TOKEN_ENV]`.
+  - Copy it into the proposal at `:745`.
+  - `preflight_command` builds the one-shot fence from it. On `None` it
+    refuses with `FenceUnavailable` on every platform, keeping the Windows
+    message.
+  - The host branch survives only behind `#[cfg(test)]`, for the existing
+    hook tests (`:1669-1695`). A Pusher exists only for local,
+    non-container, non-remote project agents, which are always `Fenced` on
+    Linux/macOS, so nothing legitimate loses.
+- Generations. `PtyEntry` (`terminal/mod.rs:757`) has no generation, and
+  `route_open`'s seq is minted after `insert`. **Chosen:** mint one spawn seq
+  before `reg.insert` (`:1159`), store it in `PtyEntry`, expose it on
+  `TakenPty`, and pass it into `PreparedLaunch::commit(seq)` → `register_tab(id, scope, seq)`.
+  Then `on_tab_gone(id, seq)` does nothing (fence entry, `api_proxy` tokens,
+  keeper kick) unless the registered seq matches. Apply the same guard to
+  `agent_turn::on_tab_gone` and `root_mcp_review::on_tab_gone` at the
+  `pty_kill` call sites.
+  - When `take()` returns `None`, `pty_kill` skips the `on_tab_gone` calls:
+    the reader-task end already cleaned up that spawn.
+  - Use the route seq at `:1276`.
+  - `rg PreparedLaunch` for other spawn paths (headless).
+- Tests:
+  - a stale `on_tab_gone(id, old_seq)` after a respawn leaves the new
+    registration and its proxy tokens;
+  - a Pusher whose binding has no fence scope is refused with
+    `FenceUnavailable` and never runs the hook;
+  - the binding is stamped only for a `Fenced` decision.
+
+**Agent step 4 (plan step 6, gaps 29 and 30)**
+- Lines moved:
+  - `agent_turn.rs`: `bind_tab` record reads at `:138,148` (the spawn
+    path); `resolve_event` `:218`, which runs on the watcher thread
+    (`:524-533`).
+  - `agent_session.rs`: `.prev` `:1462`, `.src` `:1472`, id record `:1488`,
+    `.mode` `:1536`.
+  - `git_guard.rs`: `commondir` `:100`, `.git` pointer `:128`.
+  - `local_model_control_paths`: `agent_fence.rs:868`.
+- Missing from the plan's list, also agent-writable and blocking on a FIFO:
+  - Vibe `sessions/session_*/meta.json` (`agent_session.rs:121`);
+  - transcript tails through `File::open` (`with_transcript_tail`,
+    `agent_session.rs:667`). For these, use `O_NONBLOCK` plus an `fstat`
+    regular-file check and keep the existing tail cap.
+- Reuse what exists: `home_io::HomeFile::open_read` (`home_io.rs:329`)
+  already does `O_RDONLY|O_NOFOLLOW|O_NONBLOCK` plus an `fstat` regular-file
+  check. Add one path-based sibling, e.g. `home_io::read_record(path, cap)`,
+  with a 64 KiB cap. Do not add a third module. On non-unix keep the
+  `symlink_metadata().is_file()` fallback; there are no FIFOs on Windows.
+- Gap 30, **Chosen:**
+  - Create the control paths through `HomeDir`/`HomeFile` (`mkdirat`,
+    `openat(O_CREAT|O_NOFOLLOW)`, `unlinkat` for a link).
+  - Then, immediately before the argv is built, re-`lstat` each path and
+    compare dev/ino with the handle's `fstat`. Refuse the spawn on a
+    mismatch (fail closed).
+  - bwrap still opens the source by path afterwards, so a narrow window
+    remains. Record it as the residual in row 30. `--ro-bind-fd` would need
+    fds passed through the PTY spawn, which is out of proportion here.
+  - On macOS, Seatbelt rules are by path; same residual.
+- Tests:
+  - a FIFO at `.turn`, `.src`, `.mode`, the id record, `commondir` and
+    `meta.json` returns `None` without blocking (use a timeout);
+  - an oversized record is refused;
+  - a symlinked control path is replaced, and a swapped inode refuses the
+    spawn.
+
+**Agent step 5 (plan step 8 backend, gaps 24, 37 and 39)**
+- The calamine bomb is wider than `.xlsx`:
+  - `Xls` parses every sheet inside `open_workbook_auto`. A DIMENSIONS
+    record (BIFF8 rows are u32) drives `cells.reserve(rows*cols)`
+    (`calamine-0.36.1/src/xls.rs:617-620`) and aborts at *open*, before any
+    check can run.
+  - `read_shared_strings` and zip inflation are unbounded too.
+  - `open_workbook_auto` also accepts `.ods`/`.xlsb`, although the UI only
+    routes `.xlsx/.xls/.xlsm` (`fileUtils.ts:103`).
+  - **Chosen:** run the read in a child process. Add a hidden helper mode
+    of the main binary, `--sheet-read <path> <sheet>`, next to
+    `--agent-shim`/`--fence-scope` in `main.rs:12-30`. Linux/macOS: set
+    `RLIMIT_AS` (~2 GiB) and `RLIMIT_CPU`. Allow 30 s wall time. Return JSON
+    on stdout, capped. An abort then kills only the child.
+  - Inside the child, read xlsx/xlsm through `worksheet_cells_reader`
+    (`xlsx/mod.rs:2520`) with row/column/cell caps, never through a `Range`.
+    Refuse every extension except `.xlsx/.xlsm/.xls`.
+  - Windows: a plain child process is enough; the abort stays contained.
+- SQLite (`sqlite.rs:29,82,94`):
+  - Add rusqlite features `hooks` and `limits` (`Cargo.toml:72`).
+  - Use `progress_handler` with a ~5 s deadline, or the default-available
+    `get_interrupt_handle()` from a watchdog thread.
+  - Set `SQLITE_LIMIT_LENGTH` to 16 MiB, plus `SQL_LENGTH` and `EXPR_DEPTH`.
+  - Set `PRAGMA trusted_schema=OFF` and `query_only=1`.
+  - Clamp `limit` (u32 today) to 1000. Truncate `stringify` text to 4 KiB.
+  - `COUNT(*)` on a view is under the same deadline.
+- Confinement: add `project_id: Option<String>` to `read_spreadsheet`,
+  `sqlite_tables` and `sqlite_page`. Call `fs::confine_project_path`
+  (`fs.rs:2094`), copying `read_file_bytes`'s scope handling exactly so every
+  view that opens today keeps opening.
+  - Callers: `TableView.tsx:198`, `SqliteView.tsx:50,74` and the TeX
+    workspace's spreadsheet use (mocked in `TexWorkspace.test.tsx:892`). Find
+    its real call site and give it the project id.
+- Tests:
+  - a synthetic xlsx with cells at A1 and XFD1048576 returns a refusal,
+    built with `zip` in-test (`rust_xlsxwriter` is not a dependency);
+  - a crafted `.xls` DIMENSIONS ends the child, not the test process;
+  - a recursive-CTE view is interrupted;
+  - a path outside the scope is refused;
+  - an `.ods` is refused.
+
+**Agent step 6 (plan step 8 frontend, gaps 28, 40, 41 and ODT)**
+- YAML: `Bail` is at `yaml.ts:556`; `parseYaml`'s catch at `:583-595`
+  re-throws. The flow recursion is at `:1109/1176/1194/1201`. Block nesting
+  recurses too: cap a shared depth counter (512) across flow *and* block
+  nodes. `path` arrays are copied per level, which costs O(depth²) without
+  the cap. Add a `yamlParse.tooDeep` key (English required).
+- There is no error boundary anywhere in `src/`. Every viewer renders through
+  `FileViewerPane.tsx` (the shared host). Add one `ViewerErrorBoundary`
+  there, with a "Show source" fallback and i18n strings, reset on
+  `path`/`viewer` change.
+- Markdown: `attrText` is at `markdown.ts:172`, used at `:244`. The file
+  holds literal NUL bytes, so read it with `rtk proxy grep -a`.
+- GIF: besides the canvas at `gif.ts:311` (allocated before the check at
+  `:362`), each frame's `lzwDecode(…, w*h)` allocates from the frame's own
+  `w*h` (up to 65535² bytes) whatever the screen size. Check `frameBytes`
+  against `maxPixelBytes` before `:311`, and refuse a frame larger than the
+  logical screen.
+- ODT: `unzipSync` at `OdtView.tsx:45`. Use fflate's `filter` to extract
+  only `content.xml`/`styles.xml`/`meta.xml`, with a cap on the summed
+  declared `originalSize` (e.g. 64 MiB). fflate sizes the output buffer from
+  that field.
+- Tests: deep JSON and deep YAML each give a `Bail` reason with no throw; the
+  boundary renders its fallback when a child throws; alt text with
+  math/code markers; a 30-byte GIF claiming 65535² is refused; an ODT over
+  the cap is refused.
+
+**Agent step 7 (plan steps 13 and 14, gaps 35 and 36)**
+- rsync: `rsync_pull_args` `remote_sync.rs:805`. **Chosen argv:**
+  - Replace `-a` with `-t -c --no-links --no-devices --no-specials --max-size=<MAX_SYNC_FILE_BYTES>`.
+  - Drop `--recursive`: `--files-from` still creates the implied parent
+    dirs.
+  - No `-p`, `-o` or `-g`. That matches the SFTP floor, `pull_file`
+    `:660`, which writes default modes.
+- In `commands/sync.rs`, pre-filter the file list to `size <= cap` before
+  `try_rsync_pull` (call `:1774`). In the record loop after an rsync (`:1783`),
+  use `symlink_metadata`, record only a regular file within the cap, and skip
+  the rest.
+- Tests: update the args tests (`:1320,1347`); assert no `-a`, `-r` or
+  `--recursive`. If `rsync` is on PATH, add a local→local test with a listed
+  dir swapped for a FIFO and an oversized file.
+- TeX:
+  - `preview_env` is at `tex.rs:598`; previews run at `:1787,1882`; the
+    engine hint picks LuaTeX at `:365,369`.
+  - **Chosen:** hover previews never use LuaTeX. A Lua-only document gets no
+    preview: return `None`, as for any failed preview, with no new UI.
+  - Add `openin_any=p` to `preview_env`. Format and package lookups go
+    through kpathsea search, and `-output-directory` sets `TEXMFOUTPUT`, so
+    previews keep working. Verify with the engine test at `:2886`; add a
+    test that a preview's `\input{<absolute temp file>}` is refused.
+  - Build: check whether LuaTeX `io.open` writes on Build honour
+    `openout_any`. If not, or if unsure, pass `openout_any=p` to Build's
+    engine env too, and record the check in the handoff.
+- `sandbox.rs:49`: the comment says shared login dirs are mounted. They are
+  not (`:873-893`). Delete the line.
+- Threat model: add `/api/v1/inbox` (`mobile_control/host.rs:4280-4284`,
+  scope-less, 1 GiB, state dir) to Tier 0's phone-bridge row
+  (`threat_model.md:113-117`).
+
+**Ordering:** steps 2 and 3 both edit `launch_prep.rs` and step 4 edits
+`agent_fence.rs` after step 3. Run them in the listed order.
+
+**Blocking questions:** none. The one judgement call that goes beyond a
+default is step 1's migration: fenced homes keep their existing copy, so
+logins survive but a pre-fix plant persists there; the Host copy is
+dropped. List it under "Flagged for user" in the handoff.
+
 ## Decisions for the user
 
 - **A1 (step 1) — decided 2026-10-08: per-scope.** per-scope logins for every env- or config-shaped file (a login is entered once per scope), or keep sharing behind a per-CLI content validator. Reviewer's recommendation: per-scope for the dotenv files and Cline.
