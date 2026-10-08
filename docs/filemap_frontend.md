@@ -300,7 +300,7 @@ stores stay at the top. No `index.ts` barrels.
 | `vpnPrompt.ts` | State backing `VpnPasswordPrompt`. |
 | `headerStatus.ts` | What each `StatusCluster` member reports; widgets self-report (`null` = not a member); nothing here polls. |
 | `remoteStatus.ts` | Live SSH/VPN state for header lamps: `byProject` = primary host, `byHost[projectId][hostId]` = workers; read via `sshOf`/`vpnOf`/`hostStateOf`. |
-| `hostSessions.ts` | The project's tmux session list (#85): one poll per host shared by every surface. |
+| `hostSessions.ts` | The project's tmux session list (#85): one poll per host shared by every surface, every 20 s plus a re-read on window focus (≥ 5 s apart). |
 | `mobileHostStatus.ts` | The Mobile host's `mobile_host_status`, one refcounted 15 s + focus poll shared by `MobileIndicator` and every Files view's phone toggle; dropped when the last surface leaves. |
 | `syncConfirm.ts` | `confirmSyncTransfer(req)`: resolves true only after an explicit yes; preview fetched after the dialog is up; a second ask while open is answered no. |
 | `localLoss.ts` | The active project's local-loss log (#28q). Pulled from the backend's on-disk record — not pushed as an event — so a deletion during a background pass, or while the app was closed, still surfaces. |

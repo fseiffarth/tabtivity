@@ -16,7 +16,7 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 
-import { useHostSessionsStore, sessionHostsOf } from "../../stores/remote/hostSessions";
+import { FOCUS_REFRESH_MIN_MS, HOST_SESSIONS_POLL_MS, useHostSessionsStore, sessionHostsOf } from "../../stores/remote/hostSessions";
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import type { ProjectEntry } from "../../types";
@@ -108,7 +108,7 @@ describe("the shared session poll", () => {
     expect(listCalls()).toBe(1);
 
     // ...and one tick later it is still a single round trip per host.
-    await vi.advanceTimersByTimeAsync(7000);
+    await vi.advanceTimersByTimeAsync(HOST_SESSIONS_POLL_MS);
     expect(listCalls()).toBe(2);
 
     release(PID);
@@ -121,12 +121,12 @@ describe("the shared session poll", () => {
     retain(PID);
     await settle();
     release(PID); // one surface closes; the other still shows the list
-    await vi.advanceTimersByTimeAsync(7000);
+    await vi.advanceTimersByTimeAsync(HOST_SESSIONS_POLL_MS);
     const whileOpen = listCalls();
     expect(whileOpen).toBeGreaterThan(1);
 
     release(PID); // the last one closes
-    await vi.advanceTimersByTimeAsync(21000);
+    await vi.advanceTimersByTimeAsync(HOST_SESSIONS_POLL_MS * 3);
     expect(listCalls()).toBe(whileOpen);
   });
 
@@ -163,7 +163,7 @@ describe("the shared session poll", () => {
     invoke.mockImplementation((cmd: string) =>
       cmd === "remote_tmux_list" ? Promise.reject(new Error("ssh: connect failed")) : Promise.resolve(null),
     );
-    await vi.advanceTimersByTimeAsync(7000);
+    await vi.advanceTimersByTimeAsync(HOST_SESSIONS_POLL_MS);
     expect(useHostSessionsStore.getState().byProject[PID]).toHaveLength(1);
     release(PID);
   });
@@ -179,9 +179,41 @@ describe("the shared session poll", () => {
     invoke.mockImplementation((cmd: string) =>
       cmd === "remote_tmux_list" ? Promise.resolve([]) : Promise.resolve(null),
     );
-    await vi.advanceTimersByTimeAsync(7000);
+    await vi.advanceTimersByTimeAsync(HOST_SESSIONS_POLL_MS);
     expect(useHostSessionsStore.getState().byProject[PID]).toEqual([]);
     release(PID);
+  });
+
+  it("polls every 20 s, not every 7 s", async () => {
+    const { retain, release } = useHostSessionsStore.getState();
+    retain(PID);
+    await settle();
+    expect(listCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(HOST_SESSIONS_POLL_MS - 1000);
+    expect(listCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(listCalls()).toBe(2);
+    release(PID);
+  });
+
+  it("re-reads when the window regains focus, unless a reading just started", async () => {
+    const { retain, release } = useHostSessionsStore.getState();
+    retain(PID);
+    await settle();
+    expect(listCalls()).toBe(1);
+    window.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(FOCUS_REFRESH_MIN_MS);
+    window.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listCalls()).toBe(2);
+    release(PID);
+    // No surface left: a focus asks nothing.
+    await vi.advanceTimersByTimeAsync(FOCUS_REFRESH_MIN_MS);
+    window.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listCalls()).toBe(2);
   });
 
   it("re-polls the moment a host connects, rather than up to a tick later", async () => {

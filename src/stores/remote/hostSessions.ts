@@ -72,8 +72,14 @@ export interface SessionHost {
   label: string;
 }
 
-/** How often the shared poll re-reads each connected host. */
-const POLL_MS = 7000;
+/** How often the shared poll re-reads each connected host. Sessions change
+ *  mostly through Tabtivity itself (a kill or rename edits this list at once, a
+ *  new tab's session shows on the next reading) or out in another app, which
+ *  the window's regaining focus re-reads for (`FOCUS_REFRESH_MIN_MS`); the
+ *  timer is the backstop, one `ssh` per host every 20 s while a view shows. */
+export const HOST_SESSIONS_POLL_MS = 20_000;
+/** A window focus re-reads at once unless a reading started this recently. */
+export const FOCUS_REFRESH_MIN_MS = 5_000;
 
 /** Stable empty reading, so a project with no entry yet doesn't hand
  *  `useSyncExternalStore` a fresh array on every render (the loop `tabsByScope`
@@ -115,8 +121,11 @@ interface HostSessionsStore {
 
 /** Subscriber count per project — the poll runs iff this is ≥ 1. */
 const refs = new Map<string, number>();
-/** The live poll handles per project (interval + the connectivity subscription). */
-const polls = new Map<string, { iv: ReturnType<typeof setInterval>; unsub: () => void }>();
+/** The live poll handles per project (interval, the connectivity subscription,
+ *  the window-focus listener). */
+const polls = new Map<string, { iv: ReturnType<typeof setInterval>; unsub: () => void; offFocus: () => void }>();
+/** When the last reading of each project started (`Date.now()`). */
+const lastRead = new Map<string, number>();
 /** In-flight request count per project, so the interval never stacks round trips. */
 const inFlight = new Map<string, number>();
 /** Bumped whenever an in-flight answer stops being the answer to the current
@@ -125,7 +134,7 @@ const inFlight = new Map<string, number>();
 const gens = new Map<string, number>();
 
 /** A connectivity signature over a project's hosts, so the poll re-runs the
- *  moment one connects instead of up to `POLL_MS` later. The host *set* is read
+ *  moment one connects instead of up to `HOST_SESSIONS_POLL_MS` later. The host *set* is read
  *  fresh on every call rather than subscribed to separately: adding or removing a
  *  worker writes that host's lamp (`setSsh` / `clearHost`), so the signature moves
  *  with it, and a host that somehow changed without touching its lamp is picked up
@@ -154,9 +163,15 @@ export const useHostSessionsStore = create<HostSessionsStore>((set, get) => ({
       lastSig = sig;
       void get().refresh(projectId, true);
     });
+    const onFocus = () => {
+      if (Date.now() - (lastRead.get(projectId) ?? 0) < FOCUS_REFRESH_MIN_MS) return;
+      void get().refresh(projectId);
+    };
+    window.addEventListener("focus", onFocus);
     polls.set(projectId, {
-      iv: setInterval(() => void get().refresh(projectId), POLL_MS),
+      iv: setInterval(() => void get().refresh(projectId), HOST_SESSIONS_POLL_MS),
       unsub,
+      offFocus: () => window.removeEventListener("focus", onFocus),
     });
   },
 
@@ -171,6 +186,7 @@ export const useHostSessionsStore = create<HostSessionsStore>((set, get) => ({
     if (handle) {
       clearInterval(handle.iv);
       handle.unsub();
+      handle.offFocus();
       polls.delete(projectId);
     }
     gens.set(projectId, (gens.get(projectId) ?? 0) + 1);
@@ -189,7 +205,7 @@ export const useHostSessionsStore = create<HostSessionsStore>((set, get) => ({
     if (connected.length === 0) {
       // Idempotent: write the (shared, stable) empty reading once, then no-op —
       // "we looked and there is nothing" is a different state from "we never
-      // looked", but re-writing it every 7s would churn every subscriber.
+      // looked", but re-writing it every tick would churn every subscriber.
       set((s) =>
         s.byProject[projectId]?.length === 0
           ? {}
@@ -199,6 +215,7 @@ export const useHostSessionsStore = create<HostSessionsStore>((set, get) => ({
     }
     const gen = gens.get(projectId) ?? 0;
     const includeAll = get().showAll[projectId] ?? false;
+    lastRead.set(projectId, Date.now());
     inFlight.set(projectId, (inFlight.get(projectId) ?? 0) + 1);
     try {
       const lists = await Promise.all(

@@ -197,7 +197,7 @@ function relativeDuration(epochSecs: number): string {
  *  (`handleEntryMouseEnter`/`.file-tooltip`), applied to a session row. Carries
  *  only the (host, name) identity, not a snapshot of the session — the card
  *  looks the live row up from `sessionRows` on every render, so its stats keep
- *  advancing with the Sessions view's own 7s poll while it's open, rather than
+ *  advancing with the Sessions view's shared poll (`HOST_SESSIONS_POLL_MS`) while it's open, rather than
  *  freezing at whatever "working"/uptime the session had when the dwell fired. */
 interface SessionTooltip {
   rect: DOMRect;
