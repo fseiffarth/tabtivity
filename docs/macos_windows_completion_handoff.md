@@ -12,6 +12,13 @@ written by the implementer and amended by the reviewer. Newest at the bottom.
 
 (design doubts and anything a reviewer would not fix in code)
 
+User decisions (2026-10-08):
+- Every one-shot `cmd /C` runs as `cmd /D /C` (skips the user's AutoRun);
+  the interactive COMSPEC shell keeps AutoRun (a0772c5d, rebased).
+- The macOS tab fence keeps the git guard A7 added beyond the plan (parity
+  with Linux #158). First Mac check: a fenced tab starts, `git commit`/`git
+  gc` work, writes to `.git/hooks`/`.git/config` get EPERM (todo 32s).
+
 ## A1 — 3.1 + 3.2
 
 Commit: the one that carries this section — `git log -1 --format=%h -- docs/macos_windows_completion_handoff.md` on `osfix/a1` (one commit for the step).
