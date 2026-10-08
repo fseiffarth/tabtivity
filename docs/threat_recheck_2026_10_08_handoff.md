@@ -746,3 +746,144 @@ lint` 0 errors, 28 advisory warnings (unchanged); `cargo clippy --all-targets
 - Not re-reviewed beyond gap 29's scope: `agent_fence::shebang_interpreter`
   and `venv_base_prefix` read the resolved agent executable and its
   `pyvenv.cfg` with plain reads (install paths, not agent records).
+
+## Agent step 5 — implementer (gaps 24, 37, 39)
+
+**Commit:** `edff58e5` Parse spreadsheets in a limited child process and bound
+SQLite viewer queries.
+
+**Files:** new `services/sheet_reader.rs` (`MODE_FLAG = --sheet-read`,
+`child_main`, `read_in_child`/`run_reader`, `kill_all_for_exit`, `format_of`,
+cell-by-cell `.xlsx` reader, `Grid` caps, `viewer-limit:sheet-*` codes);
+`commands/sheets.rs` (thin: extension check, `confine_project_path`, child
+read; `project_id` argument); `commands/sqlite.rs` (`guard`, `sql_err`,
+truncating `stringify`, page clamp and byte cap, `project_id` on both
+commands); `main.rs` (mode dispatch before Tauri); `lib.rs` (`RunEvent::Exit`
+calls `sheet_reader::kill_all_for_exit`); `paths.rs` (`hide_command_window`
+now `pub(crate)`); `Cargo.toml` (rusqlite `hooks` + `limits`; dev-dep `cfb`
+0.7, already in the tree via `infer`). Frontend: `TableView.tsx`,
+`SqliteView.tsx` (pass `projectId` from `useFileScope()`, render errors via
+`viewerErrorText`), new `src/lib/viewers/limitError.ts`, six
+`viewerLimit.*` keys in all five dictionaries. Docs: `threat_model.md` rows
+24, 37, 39 (**Fixed, not live-verified.**, 24 and 37 with residuals),
+`filemap_backend.md` (`sqlite.rs + sheets.rs`, `sheet_reader.rs`),
+`filemap_frontend.md` (`limitError.ts`). No `docs/context/` file covers the
+viewers, so none was changed.
+
+**Tests added:** `sheet_reader`: `a_sparse_a1_xfd1048576_sheet_is_refused_without_allocating`
+(in-process on purpose; with the declared `A1:XFD1048576` dimension it is
+refused, without it the far row is dropped, and A1+XFD20000 is refused on
+the cells), `rows_past_the_cap_are_dropped_and_long_text_is_cut`,
+`reads_a_small_sheet_from_its_first_used_cell`,
+`only_the_three_viewer_extensions_are_read`, `the_child_answers_a_good_workbook`,
+`a_crafted_xls_dimensions_record_ends_the_child_not_the_app` (a CFB v3
+`.xls` built in-test; checked by hand that the child dies on "memory
+allocation of 687194767360 bytes failed", exit 134),
+`a_crash_a_hang_garbage_and_a_flood_map_to_viewer_errors` (SIGABRT, exit 101,
+garbage, no output, a refusal reply, a 300 ms timeout, 300 MB of output),
+`the_quit_teardown_kills_a_running_reader`, `cell_to_string_maps_variants`
+(moved). `sheets`: `a_path_outside_the_scope_is_refused_before_any_read`,
+`an_unsupported_extension_is_refused`. `sqlite`:
+`a_recursive_view_is_interrupted_at_the_deadline`,
+`a_value_past_the_length_limit_is_refused`,
+`long_text_is_cut_and_the_page_size_is_clamped`,
+`a_split_character_at_the_cut_is_dropped_not_garbled`,
+`a_path_outside_the_scope_is_refused` (both commands). Vitest:
+`src/__tests__/viewers/SheetSqliteScope.test.tsx` (both viewers pass
+`projectId`; crashed/timeout codes render translated; code mapping).
+
+**Gates (at `edff58e5`):** `npm run build` ok; `npm test` 736 files / 7561
+passed (a first run under concurrent cargo load had 1 failing test that
+passed on the rerun; its name was lost to the RTK-filtered output);
+`cargo test -q` 3782 passed, 3 ignored, 0 failed (lib 3614) — a first run
+under load failed the timing-based
+`api_usage::the_book_writes_on_flush_and_reads_its_file_back` (sleeps past
+`FLUSH_DELAY`), which passed alone and in the full rerun; `npm run lint` 0
+errors, 28 advisory warnings (unchanged); `cargo clippy --all-targets -D
+warnings` clean; `scripts/brand-check.sh` ok; `git diff --check` clean;
+`scripts/privacy-check.sh` (staged) clean. macOS and Windows not compiled.
+`npm run backend:stale` not run (main agent at landing).
+
+**Choices made:**
+- Child = the main binary (`/proc/self/exe` on Linux, so a rebuilt or
+  updated binary still execs the running image; `current_exe()` elsewhere),
+  stdin/stderr null, `CREATE_NO_WINDOW` on Windows. The reply is the last
+  non-empty stdout line (`{"ok": SheetData}` / `{"err": code}`); the child
+  writes a newline first. That is what lets the tests run the *test binary*
+  as the child (`tests::child_entry`, env `SHEET_READER_TEST_CHILD`) despite
+  libtest's preamble.
+- Limits: Linux `RLIMIT_AS` = address space at child start + 2 GiB (a fixed
+  2 GiB would already be exceeded by the 1 GB debug test binary's mappings),
+  `RLIMIT_CPU` 30 s, `RLIMIT_CORE` 0 and `PR_SET_DUMPABLE` 0; macOS
+  `RLIMIT_CPU` and core only. Wall 30 s, stdout cap 224 MiB. After the child
+  exits the drain thread gets 5 s; a timeout does not wait for it at all (a
+  grandchild holding the pipe cannot stall the command).
+- Caps: rows 20 000 counted from the first used row (kept from v1:
+  truncation, not refusal); grid cells (kept rows × used width) 2 000 000 —
+  checked on the sheet's declared `<dimension>` before any cell is read and
+  again on the cells — refused past it; cell text 32 KiB, all text 32 MiB.
+  The grid starts at the first used row/column as calamine's `Range` did, so
+  sheets look as before. `.xls` is parsed by calamine whole inside the child
+  (no streaming reader), then the same area check and caps.
+- SQLite: progress handler every 1000 VM ops with one 5 s deadline per
+  command (open, list, `COUNT(*)`, page); `LENGTH` 16 MiB, `SQL_LENGTH`
+  1 MiB, `EXPR_DEPTH` 100; `trusted_schema=OFF`, `query_only=1`; `limit`
+  clamped to 1000; text cut to 4 KiB (a split character dropped, `…`
+  appended); a page past 32 MiB of cell text is refused. Interrupt and
+  TOOBIG map to `viewer-limit:sqlite-timeout`/`-too-large`.
+- Confinement copies `read_file_bytes_local` (`confine_project_path` with the
+  viewer's scope; root scope = current project + root folder). No remote
+  branch: a remote project's non-mirror path never opened locally before
+  either; it is now refused as "not in the current project" instead of
+  failing to open.
+- Errors are fixed `viewer-limit:*` codes mapped to i18n keys by
+  `limitError.ts`; any other error (confinement, OS, SQLite) still shows as
+  the backend wrote it. No `UntestedTag`: no new feature surface, only error
+  strings in existing viewers.
+- The TeX workspace has no spreadsheet call site of its own; the mocked
+  `read_spreadsheet` in `TexWorkspace.test.tsx` renders `TableView`
+  directly, which now passes the scope.
+
+**Gotchas:**
+- RTK rewrites `npm run lint` into a global ESLint 6 that finds no config;
+  run it as `rtk proxy npm run lint`.
+- calamine refuses a CFB *version 4* file whose root has no mini stream
+  ("Empty Root directory"); the `cfb` crate's `create` defaults to v4, so
+  the test uses `create_with_version(V3, …)`.
+- calamine's `get_dimension` subtracts `u32`s unchecked, so a reversed
+  `<dimension ref="B2:A1">` panics a debug build — inside the child now, so
+  it reads as "reader stopped".
+
+**Flagged for user:**
+- **Residual (row 24):** macOS ignores `RLIMIT_AS` and Windows gets no
+  limit, so a large-but-possible allocation there uses memory until the 30 s
+  kill; only an impossible one aborts at once. A Windows Job object (memory
+  limit) would close it.
+- **Residual (row 37):** a view with many computed columns each just under
+  16 MiB can hold a lot of memory in one row before the deadline.
+- **Behaviour changes:** a wide sheet whose first 20 000 rows times its used
+  width pass 2 000 000 cells is now refused ("too large to show here")
+  instead of shown; a SQLite table holding a value over 16 MiB, or a page
+  over 32 MiB of (already cut) text, now errors; `.ods`/`.xlsb` were never
+  routed to the viewer and are refused by the command.
+- Each spreadsheet open or sheet switch spawns one short-lived child of the
+  app binary; it appears in process lists as `tabtivity --sheet-read …`
+  (Linux: `/proc/self/exe --sheet-read …`).
+
+**Live click-through (not run):**
+1. Open a normal `.xlsx` in a project's file tree: the table shows as
+   before; switch sheets with the sheet picker.
+2. Open a normal `.xls` and an `.xlsm`: both show.
+3. Craft an `.xlsx` with cells at A1 and XFD1048576 and a matching
+   `<dimension>` (as the unit test does) and open it: the viewer says the
+   spreadsheet is too large; every window and terminal stays up.
+4. While a large spreadsheet loads, quit the app: `pgrep -af -- --sheet-read`
+   afterwards finds nothing.
+5. Open a SQLite file with `CREATE VIEW forever AS WITH RECURSIVE n(i) AS
+   (SELECT 1 UNION ALL SELECT i+1 FROM n) SELECT i FROM n;` and click the
+   view: after ~5 s the grid says reading took too long; other tables still
+   open.
+6. Open a normal `.db`: tables list, paging and long text cells (cut with
+   `…`) work.
+7. Switch the app language to German and repeat 3 or 5: the message is
+   German.
