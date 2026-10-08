@@ -887,3 +887,66 @@ warnings` clean; `scripts/brand-check.sh` ok; `git diff --check` clean;
    `…`) work.
 7. Switch the app language to German and repeat 3 or 5: the message is
    German.
+
+## Agent step 5 — reviewer
+
+**Range reviewed:** `91b28c6d..1b657629` (code `edff58e5`) against plan step 8
+(backend), gaps 24/37/39 and the agent-step-5 plan review notes.
+
+**Findings:**
+1. **Fixed — SQLite limits refused whole databases** (`749cabe9`).
+   `SQLITE_LIMIT_SQL_LENGTH` (1 MiB) and `SQLITE_LIMIT_EXPR_DEPTH` (100) also
+   apply when SQLite parses the file's own `CREATE` statements at open. One
+   ordinary view with a 150-term `a OR b OR …` chain (one depth level per
+   term) or a `CREATE` over 1 MiB made every table unreadable ("malformed
+   database schema (v) - Expression tree is too large (maximum depth 100)" /
+   "string or blob too big"); probed before the fix. `SQL_LENGTH` now equals
+   the 16 MiB `LENGTH` limit (which already bounds a schema row's `sql`
+   text), `EXPR_DEPTH` is SQLite's default 1000, set explicitly. Test
+   `an_ordinary_deep_or_long_view_keeps_the_database_readable`.
+   `threat_model.md` row 37 updated.
+2. **Checked, no regression — confinement.** `TableView`/`SqliteView` render
+   only inside `FileViewerPane`, which publishes the same `projectId` that
+   `readFileBytes` uses (popouts, box siblings and root scope included), and
+   the commands call the same `confine_abs` as `read_file_bytes_local`. A
+   remote project's host path never opened before (both commands read the
+   local fs only); a mirror path still opens. No other caller exists: the
+   phone app and the TeX workspace never call these commands, and no Rust
+   code calls them.
+3. **Checked — child process.** Dispatched in `main.rs` before Tauri/GTK and
+   after only `hits::install` and `forget_inherited_carriers`; arguments are
+   positional (a `-`-leading path or sheet name is data); reaped on every path
+   (spawn failure, missing pipe, exit, timeout, quit); stdout framing is the
+   last non-empty line of single-line JSON; `/proc/self/exe` matches the
+   existing self-exec in `lib.rs`. `/proc/self/statm` stays readable after
+   `PR_SET_DUMPABLE 0` (checked), so the `RLIMIT_AS` step is not silently
+   skipped. The child starts without WebKit/GTK initialised, so its start
+   size is the mapped binary and libraries only.
+
+**Gates (at `749cabe9`):** `npm run build` ok; `npm test` 736 files / 7561
+passed; `cargo test -q` 3783 passed, 3 ignored, 0 failed (lib 3615);
+`rtk proxy npm run lint` 0 errors, 28 advisory warnings (unchanged); `cargo
+clippy --all-targets -D warnings` clean; `scripts/brand-check.sh` ok; `git
+diff --check` clean; `scripts/privacy-check.sh` (staged) clean.
+`npm run backend:stale` not run (main agent at landing). macOS and Windows
+not compiled.
+
+**Flagged for user:**
+- **Declared `<dimension>` refusal (row 24).** `read_xlsx` refuses a sheet
+  whose *declared* dimension passes the cell cap (kept rows × width > 2 M)
+  before reading a cell. calamine's old `worksheet_range` used the dimension
+  only as a reserve hint and built the grid from non-empty cells. Excel's
+  declared range counts formatted blank cells, so a sheet with formatting
+  over more than 100 columns × 20 000 rows and little data used to open and
+  is now refused. The check adds no safety: the cell-level caps (`Grid::push`
+  2 M cells / 32 MiB text, `finish` area check before allocating) already
+  stop the A1+XFD1048576 bomb, which without the declared check shows one
+  cell. I left it because the plan's test list asks for a *refusal* there.
+  To open such sheets, drop the `check_area` call on `reader.dimensions()` and
+  change the first assertion of
+  `a_sparse_a1_xfd1048576_sheet_is_refused_without_allocating`.
+- No test shows the `RLIMIT_AS` cap applies. The `.xls` bomb asks for
+  687 GB, which fails without any limit too.
+- The child has no `PR_SET_PDEATHSIG`. If the app is killed rather than quit,
+  a running reader lives until its 30 s CPU limit or until its next stdout
+  write fails. A clean quit kills it.
