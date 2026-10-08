@@ -2659,15 +2659,147 @@ Range reviewed: `ccea64d7..7f764e41` (f637fa9d, 84cd8be0, 39686cac, handoff
 - Still open from S11: the job mark's < 500 ms start window and the 15 s
   backstop for what no file event says (implementer's Flagged list).
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08; S11 implemented + reviewed 2026-10-08, S12 next)
+## S12 — poll helper + QA rows
+
+*Written 2026-10-09 by the S12 implementer. Base `037ba352`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `528a5066` | §3.3 helper: `src/lib/usePoll.ts` — `startPoll` (stores) / `usePoll` (components); 17 tests (`UsePoll.test.tsx`) |
+| `2d051ccc` | Stores onto `startPoll`: `mobileHostStatus` (S7 leftover), `remote/hostSessions`, `todo` urgent-mail backstop, `lib/ollamaStatus`; blur tests in `MobileHostStatusShared`, `HostSessionsShared`, `OllamaStatusPoller` |
+| `70628b5e` | Helper: `PollRun.stopped` handed to every run (replaces the effects' `cancelled` flags); store reads tolerate a module mocked down to its hook; +1 test |
+| `4761558e` | Header/menus/dialogs onto `usePoll`: `MobileIndicator` devices, `InboxIndicator`, `MachinesIndicator` utilization sweep, `RootOverlay` review, `ProjectPill` VM glyph, `VmSettingsDialog`, `SettingsPanel` VM install re-check, `SidePanel` debug renderer RSS |
+| `14f4ff41` | Panes onto `usePoll`: `ProjectFilesView` Git-view backstop (S7 leftover) and Slurm Jobs queue, `TerminalReaderFacts` usage limits, `usePromptChartUsage`, `NetworkTrafficPane` persisted totals; blur test in `GitBarRefresh` |
+| `d804ab39` | `ProjectDialog` VM install re-check onto `usePoll` |
+| `778585a4` | §8 + measurement: `todo/group-u-performance.md` items 2400–2413; `scripts/perf-numbers.sh` + `docs/performance_numbers.md` copied from the main checkout; plan §10 lists the 66 direct sites left; file map row for `lib/usePoll.ts` |
+
+### What was built / choices made
+- **What pauses a poll:** this window blurred (`stores/power` `blurred`, per
+  window — a popout has its own), `document.visibilityState === "hidden"`,
+  and for the hook a hidden pane (`usePaneVisible()`; only `FileViewerPane`
+  provides the context, other panes pass their `visible` as `enabled`) or the
+  caller's `enabled` off. `quiesce: false` keeps only cadence + overlap guard
+  (no site uses it yet; the exempt hosts keep their own timers).
+- **Energy Saver widens (×3, `saverInterval`), it does not stop.** The plan
+  says "built on `useQuiesce`, blurred → stop"; `useQuiesce` is saver OR
+  blurred, and stopping every poll on battery while the user works in the
+  window would blank lamps — so only the blur half stops.
+- **Catch-up:** on return (blur → focus, hidden → shown, a `focus` event) a
+  run happens at once if the last one started ≥ `catchUpAfterMs` ago
+  (default: the interval, i.e. only when one fell due); otherwise the cadence
+  carries on. `catchUpAfterMs: 0` keeps the old "re-read on every focus" of
+  `mobileHostStatus` and `InboxIndicator`; `hostSessions` keeps its 5 s focus
+  throttle through `catchUpAfterMs: FOCUS_REFRESH_MIN_MS` + `lastRunAt`
+  (its forced refreshes count). The two stores' own focus listeners are gone
+  (the poll's resume is the focus re-read).
+- **Start:** the first run happens even in a blurred window (a surface
+  mounted while unfocused still gets its reading); not in a hidden window
+  (deferred to the catch-up). `immediate: false` for sites whose caller
+  already reads at start (Root review, Git view, hostSessions, urgent mail,
+  Ollama, the two VM install re-checks).
+- **Cadence:** fixed rate from the last run's start; the next run is armed
+  only when the previous promise settles, and ticks a slow run covered are
+  skipped, not made up (`setInterval` + in-flight guard semantics — a wedged
+  backend is asked once per interval, never back to back).
+- **Hook API:** `usePoll(run, ms, { enabled, … })`; `run` is a dependency —
+  pass a `useCallback`; a new `run` (its inputs changed) or `enabled` turning
+  on restarts with an immediate run, which is how the replaced effects
+  behaved (e.g. a Files view switching project re-reads at once).
+- **Not changed:** any site's interval; the Ollama poller's shortest-wins
+  re-timing (`setIntervalMs`); `hostSessions`' connectivity re-poll;
+  `mobileHostStatus`' restart hold.
+- **Skipped (behaviour would change), listed in plan §10 with the rest:**
+  `VpnIndicator` (its 10 s refresh is what detects a dropped tunnel and gates
+  the SSH probes riding it — background work runs unfocused); `AppShell`'s
+  SSH-pool reconcile (silent reconnect for background HPC tabs); the
+  persistence flushes; `DetachedApp`'s hidden-window probe (it *is* the
+  hidden detection); `MailIndicator` (mail check / new-mail notice); file
+  auto-reload polls (a viewer beside an external editor or `latexmk -pvc`
+  must follow saves while unfocused — `FileViewerPane:1583` already chose
+  ×3-on-blur for the same reason); live monitors (`NetworkTrafficPane`'s 1 s
+  rate, `PrintManagerPane`); the sites already on `saverInterval(…,
+  quiesce)` (×3 on blur by design: header readouts on a visible window);
+  local clocks/xterm reads (no IPC); S11's `watchedReads` (setTimeout-based,
+  not counted: 15 s backstop / 2 s unwatched transcript read while a Reader
+  shows — a candidate, but it is S11's watch-arming logic); `stores/power`'s
+  battery reading (feeds the helper).
+- **Untested register:** the run's only new UI is S9/S10's
+  `settings.sleepTabs` (row present). The §8 cluster has no UI → no pills.
+- `setInterval(` lines in `src/` (non-test): **66** (S11: 84).
+
+### Gotchas for later steps
+- A new UI poll goes through `usePoll`/`startPoll`; a new direct
+  `setInterval` needs a line in plan §10's list.
+- `usePoll`'s `run` must be stable (`useCallback`) — an inline closure
+  restarts the poll every render (an immediate run per render).
+- Tests: the helper reads `usePowerStore.blurred`; set
+  `usePowerStore.setState({ blurred: false })` in `beforeEach` of a test
+  that blurs. A store module mocked down to its hook (no `getState`/
+  `subscribe`) reads as focused / on AC. A run whose promise has not settled
+  blocks the catch-up (flush with `advanceTimersByTimeAsync(0)` first).
+- Final review / landing: S12 changed no `src-tauri/`; the earlier steps'
+  `npm run backend:stale` still owed.
+
+### Gates (worktree, at 778585a4)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,326.60 kB / gz 977.08 kB; no "also statically imported" warning |
+| `npm test` | 753 files / 7671 tests (S11 review 752 / 7649; +`UsePoll` 18, blur cases 4); 2 failed — the known `MobileHeldPromptStore` date pair. Load ≈ 25 |
+| `cargo test -q` | lib 3610 passed, 3 ignored; all targets 3778. First run (concurrent with vitest, load ≈ 25) failed two `git_bounded` FIFO timeout tests; 6/6 alone and the full rerun green (S12 touched no Rust) |
+| `npm run lint` | 0 errors, 28 warnings (unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `scripts/privacy-check.sh 037ba352..HEAD` | ok (2150 added lines, 28 paths, 7 commits) |
+| `git diff --check 037ba352 HEAD` | clean |
+
+### Flagged for user
+- **Blurred = stopped** for the migrated polls (plan §2): with the window on
+  a second monitor but unfocused, the phone lamp, devices list, inbox,
+  sessions list, VM glyph, Slurm queue, Reader usage limits, Machines bars and
+  the Git view's counts stop updating until you click back (then at once).
+  Header readouts on `saverInterval` keep ticking ×3 slower as before.
+- **Not migrated, your call:** the Network pane's 1 s rate and the print
+  queue (monitors you may watch from another window), and file auto-reload
+  (would stop live PDF preview beside an external editor). Say if any of
+  them should pause unfocused.
+- `docs/performance_plan.md` in the main checkout is identical to the
+  branch's (no diff); the branch's is kept. `scripts/perf-numbers.sh` and
+  `docs/performance_numbers.md` are now on the branch — the main checkout's
+  untracked copies will collide on landing (delete them first, or take the
+  branch's).
+- QA: `todo/group-u-performance.md` 2400–2413 (75 🖐️ boxes for S1–S12's
+  click-throughs, 8 for the §8 cluster, item 2413 the open CPU-pressure
+  auto-engage). Numbers start at 2400 because branch `hosted` uses up to
+  2389.
+
+### Live click-through (user)
+On a frozen dev build of this branch (after landing):
+1. Local git project, side panel on the Git view; click into another app
+   and commit there; no `git status` runs for it while away; click back:
+   counts current within ~1 s.
+2. Mobile on: with the window unfocused stop the Mobile host from a
+   terminal; click back: the phone lamp turns red at once.
+3. Ollama running: load a model from a terminal while unfocused; click back:
+   the Models lamp shows it loaded within a second.
+4. Send a file from the phone while the window is unfocused; click back:
+   the header inbox lists it at once.
+5. Slurm project, Files → Jobs: refreshes every ~7 s focused, no `squeue`
+   while unfocused, current at once on return.
+6. Popout focused: its polls run, the main window's stop (and vice versa).
+7. Scheduled prompt one minute out, switch to another app: delivered (the
+   exempt hosts still run unfocused).
+8. Energy Saver "Always": the polls above run ~3× slower while focused.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08; S11 implemented + reviewed 2026-10-08; S12 implemented 2026-10-09, S12 review next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
 Everything is on branch `perf` in worktree
 `.claude/worktrees/perf`; the main checkout is untouched (its
 `docs/performance_plan.md`, `docs/performance_numbers.md` and
-`scripts/perf-numbers.sh` are untracked copies/tools, not yet on the branch —
-add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
+`scripts/perf-numbers.sh` are untracked copies/tools; S12 put the latter two
+on the branch, so delete or overwrite the main checkout's copies when landing).
 
 - Done, implemented + reviewed: S1 (backend quick wins), S2 (PDF render +
   reload), S3 (viewer state + hidden PDF release), S4 (terminal frontend),
@@ -2690,7 +2822,11 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 - Done, implemented + reviewed: S11 (backend structural: f637fa9d,
   84cd8be0, 39686cac; review fixes 8244017d, 64e680bb, 64eb3ce8, 8622f907,
   e496fd1b — see `### Review (S11 reviewer, 2026-10-08)`).
-- Next: S12, then the final whole-range review, then landing on `develop`
+- Done, implemented: S12 (poll helper + QA rows: 528a5066, 2d051ccc,
+  70628b5e, 4761558e, 14f4ff41, d804ab39, 778585a4 — see `## S12`);
+  `scripts/perf-numbers.sh` and `docs/performance_numbers.md` are now on the
+  branch.
+- Next: the S12 review, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -2740,6 +2876,11 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   failures; cargo lib 3610 passed (all targets 3778); lint 0 errors / 28
   warnings; clippy clean; Windows cross-check ok; brand ok; diff --check
   clean.
+- Gates at S12's HEAD (778585a4): build ok (bootstrap 3,327 kB / gz
+  977 kB); vitest 753 files / 7671 tests, the 2 `MobileHeldPromptStore`
+  failures; cargo lib 3610 passed (all targets 3778; two `git_bounded` FIFO
+  tests flaked once under load, green alone and on rerun); lint 0 errors /
+  28 warnings; clippy clean; brand ok; privacy ok; diff --check clean.
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell

@@ -614,8 +614,8 @@ S12). Each stays direct for a reason; a new UI poll goes through `usePoll`.
   monitor need not follow while unfocused.
 - **Local clocks and xterm reads, no IPC:** `SidePanel` (TTY rate),
   `TerminalReaderFacts` ×2, `TerminalReaderStatus`, `TerminalReaderView` ×2
-  (unwatched 2 s fallback, subagent clock), `TabLocalityBadges`,
-  `TabHoverCard`, `TodoIndicator`, `CalendarIndicator`, `TodoAgendaRail`,
+  (the live-screen clock until the pane has its xterm, subagent clock),
+  `TabLocalityBadges`, `TabHoverCard`, `TodoIndicator`, `CalendarIndicator`, `TodoAgendaRail`,
   `TimeGrid`, `useAlertsFeed`, `AgentSchedulesView`, `AgentScheduleDialog`,
   `PromptChart`, `DevBuildIndicator` (clock), `PdfPresentApp` (clock),
   `DeckPresenter`.
