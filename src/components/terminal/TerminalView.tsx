@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { CanvasAddon } from "@xterm/addon-canvas";
@@ -34,6 +34,7 @@ import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { asleepPty, killAsleepPty, parkPty, takeAsleepPty } from "../../lib/terminal/sleepingPtys";
 import { terminalSpawnKey } from "../../lib/terminal/terminalSpawn";
+import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
 import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
 import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
@@ -380,6 +381,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   const focusedRef = useRef(focused);
   visibleRef.current = visible;
   focusedRef.current = focused;
+  // The pane layer's sleep holds (§5.3), read from inside the spawn effect: a
+  // launch in flight keeps the pane awake (see `holdForSpawn` there).
+  const sleepHold = useContext(PaneSleepHoldContext);
+  const sleepHoldRef = useRef(sleepHold);
+  sleepHoldRef.current = sleepHold;
+  const [spawnHoldToken] = useState(() => ({}));
   // The live colour scheme, readable from inside the spawn effect without being
   // one of its deps — that effect owns the PTY, so listing `colorScheme` there
   // would respawn every terminal on a theme change. `tryOpen` reads it to adopt
@@ -1623,8 +1630,21 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // cleanup marks this lifecycle cancelled before the task runs, leaving only
     // the real setup to create the PTY. A genuine quick unmount gets the same
     // safe outcome (no process was ever started).
+    //
+    // The launch holds the pane awake until it is through (§5.3): a pane put
+    // to sleep with `pty_spawn` still out (a container starting, a dialog
+    // waiting on the user) has nobody to own the PTY that spawn then creates,
+    // and its wake would kill that program and start another.
+    let spawnHeld = false;
+    const holdForSpawn = (on: boolean) => {
+      if (on === spawnHeld) return;
+      spawnHeld = on;
+      sleepHoldRef.current?.(spawnHoldToken, on);
+    };
     queueMicrotask(() => {
-      if (!cancelled) void setupAndSpawn();
+      if (cancelled) return;
+      if (!attachOnly && !waking) holdForSpawn(true);
+      void setupAndSpawn().finally(() => holdForSpawn(false));
     });
 
     // A launch that never completes leaves the pane blank with nothing to say
@@ -1847,6 +1867,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
 
     return () => {
       cancelled = true;
+      holdForSpawn(false);
       clearPtyInput(id);
       if (initialEnterTimer.current) clearTimeout(initialEnterTimer.current);
       if (holdInputTimer) clearTimeout(holdInputTimer);

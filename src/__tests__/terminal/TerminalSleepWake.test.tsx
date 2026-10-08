@@ -110,6 +110,7 @@ import {
   markPtyAsleep,
 } from "../../lib/terminal/sleepingPtys";
 import { scheduledAgentInput, _clearScheduledAgentInputsForTest } from "../../lib/agents/scheduledAgentInput";
+import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 
 function giveLayout(on: boolean) {
   for (const [prop, value] of [
@@ -279,6 +280,45 @@ describe("TerminalView — sleeping terminal panes (§5.3)", () => {
     expect(names()).not.toContain("pty_kill");
     expect(names()).not.toContain("pty_spawn");
     expect(calls("pty_scrollback")).toHaveLength(1);
+  });
+
+  it("a launch still in flight holds the pane awake until it is through", async () => {
+    // A pane put to sleep while `pty_spawn` was still out (a container
+    // starting) left the PTY that spawn then made with no owner: the wake
+    // killed it and started another.
+    let finishSpawn = () => {};
+    invoke.mockImplementation((cmd: unknown) =>
+      cmd === "pty_spawn"
+        ? new Promise<undefined>((resolve) => {
+            finishSpawn = () => resolve(undefined);
+          })
+        : Promise.resolve(undefined),
+    );
+    const holds: boolean[] = [];
+    const report = (_token: object, on: boolean) => {
+      holds.push(on);
+    };
+    await act(async () => {
+      render(<PaneSleepHoldContext.Provider value={report}>{agentPane()}</PaneSleepHoldContext.Provider>);
+    });
+    expect(calls("pty_spawn")).toHaveLength(1);
+    expect(holds).toEqual([true]);
+    await act(async () => {
+      finishSpawn();
+    });
+    expect(holds).toEqual([true, false]);
+  });
+
+  it("a waking pane takes no launch hold (nothing is spawned)", async () => {
+    await mountAndSleep();
+    const holds: boolean[] = [];
+    await act(async () => {
+      render(
+        <PaneSleepHoldContext.Provider value={(_t, on) => holds.push(on)}>{agentPane()}</PaneSleepHoldContext.Provider>,
+      );
+    });
+    expect(names()).not.toContain("pty_spawn");
+    expect(holds).toEqual([]);
   });
 
   it("closing the tab while asleep kills the PTY (no view exists to do it)", async () => {
