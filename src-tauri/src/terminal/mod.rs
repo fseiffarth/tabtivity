@@ -1473,6 +1473,11 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
         if crate::services::webkit_a11y::installed() {
             cmd.env_remove(crate::services::webkit_a11y::BUS_ADDRESS_VAR);
         }
+        // Same for the GPU-decoder demotion (`services::webkit_video`): it is
+        // for Tabtivity's software-painted window, not a player a tab launches.
+        if crate::services::webkit_video::installed() {
+            cmd.env_remove(crate::services::webkit_video::RANK_VAR);
+        }
     }
 
     cmd

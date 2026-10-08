@@ -205,6 +205,10 @@ pub mod web_safety;
 // continuously rewriting UI hands it routinely. Installed before the first
 // webview, stripped from spawned children.
 pub mod webkit_a11y;
+// GPU video decoders demoted while the DMA-BUF renderer is off, so the media
+// viewer's frames decode where the software painter can draw them. Installed
+// before the first webview, stripped from spawned children.
+pub mod webkit_video;
 pub mod window_service;
 pub mod window_state;
 pub mod worker_sync;

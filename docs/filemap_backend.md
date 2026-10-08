@@ -183,6 +183,7 @@ only when breaking it does damage. The *why* goes in code comments or
 | `mail_pgp.rs` | OpenPGP keyring + sign/verify/encrypt/decrypt on rPGP, sealed under `k_wrap`. Key generation is Curve25519 only (no algorithm choice). |
 | `web_safety.rs` | Shared web-safety primitives for mail and browser: `sanitize_attachment_name`, host/scheme helpers, and the navigation gate (takes a parsed `Url`, never `&str`; three outcomes). |
 | `webkit_a11y.rs` | WebKitGTK AT-SPI opt-out: WebKit 2.48's a11y Text bridge `CRASH()`es the renderer on stale offsets, so Tabtivity redirects `WEBKIT_A11Y_BUS_ADDRESS`. |
+| `webkit_video.rs` | While the DMA-BUF renderer is off (software paint), demotes GPU video decoders via `GST_PLUGIN_FEATURE_RANK` so the media viewer's frames decode where they can be drawn; stripped from spawned children. |
 | `window_service.rs` | Window-state helpers, incl. `all_detached_labels` — every live popout regardless of owning project, which is the set the #240 monitor watcher re-fits (an unplugged display has nothing to do with which project is active). |
 | `skills.rs` | Skills Library service (`docs/skills_plan.md`): git sources shallow-cloned into `skills_cache/<id>/` via `commands::git`'s hardened clone; catalog parsed fresh from `**/SKILL.md` frontmatter; nothing persisted but sources. |
 | `spell.rs` | Dictionary spell check (M#248) on `spellbook` (pure-Rust Hunspell): system `.aff`/`.dic` + `<state_dir>/dictionaries/` (with `personal.dic`); Latin-1 fallback. |

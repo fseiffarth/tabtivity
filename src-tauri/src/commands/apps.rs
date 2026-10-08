@@ -368,6 +368,11 @@ fn launch_command(exec: &str, args: &[String], file: Option<&str>) -> Command {
     if crate::services::webkit_a11y::installed() {
         cmd.env_remove(crate::services::webkit_a11y::BUS_ADDRESS_VAR);
     }
+    // Nor does its GPU-decoder demotion (`services::webkit_video`).
+    #[cfg(target_os = "linux")]
+    if crate::services::webkit_video::installed() {
+        cmd.env_remove(crate::services::webkit_video::RANK_VAR);
+    }
     cmd.args(leading_args);
     cmd.args(args);
     if let Some(file) = file {

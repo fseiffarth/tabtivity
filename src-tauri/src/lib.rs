@@ -1020,6 +1020,12 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
+    // With that renderer off the page paints on the CPU, so a GPU video
+    // decoder's frames never reach the screen: the media viewer played with no
+    // picture. Demote GPU decoders for this process. See `services::webkit_video`.
+    #[cfg(target_os = "linux")]
+    services::webkit_video::install();
+
     // WebKit's AT-SPI bridge aborts the web process on a stale text offset, and
     // Tabtivity's constantly rewriting UI produces those by the second whenever a
     // screen reader is attached (2026-09-17: two renderer SIGABRTs, both taking
