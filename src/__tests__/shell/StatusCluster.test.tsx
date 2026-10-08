@@ -3,15 +3,27 @@
  * the summary lamp carries the worst tone instead.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve("none")) }));
 vi.mock("../../components/header/AlertsToggle", () => ({ AlertsToggle: () => <i data-testid="alerts" /> }));
 vi.mock("../../components/header/MobileIndicator", () => ({ MobileIndicator: () => <i data-testid="mobile" /> }));
 vi.mock("../../components/header/VpnIndicator", () => ({ VpnIndicator: () => <i data-testid="vpn" /> }));
-vi.mock("../../components/header/MachinesIndicator", () => ({
-  MachinesIndicator: () => <i data-testid="machines" />,
-}));
+const machinesLife = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
+vi.mock("../../components/header/MachinesIndicator", async () => {
+  const { useEffect } = await import("react");
+  return {
+    MachinesIndicator: () => {
+      useEffect(() => {
+        machinesLife.mounts++;
+        return () => {
+          machinesLife.unmounts++;
+        };
+      }, []);
+      return <i data-testid="machines" />;
+    },
+  };
+});
 vi.mock("../../components/header/AppResourceDisplay", () => ({
   AppResourceDisplay: ({ folded, peek }: { folded?: boolean; peek?: number }) => (
     <i data-testid="resources" data-folded-prop={String(!!folded)} data-peek={peek ?? 0} />
@@ -94,5 +106,24 @@ describe("StatusCluster", () => {
     await screen.findByTestId("vpn");
     await Promise.resolve();
     expect(screen.queryByTestId("machines")).toBeNull();
+  });
+
+  it("keeps the Machines menu mounted once it was on, so a pending sign-in survives switching it off", async () => {
+    machinesLife.mounts = 0;
+    machinesLife.unmounts = 0;
+    render(<StatusCluster />);
+    await screen.findByTestId("machines");
+    const setMachines = (on: boolean) =>
+      act(() => {
+        useSettingsStore.setState({
+          settings: { header_status_expanded: false, machines_enabled: on } as never,
+        } as never);
+      });
+    setMachines(false);
+    // The member's own `!enabled` branch hides it; the cluster must not unmount
+    // it, or a "sign in in a terminal" add/edit loses its poll and form.
+    expect(screen.getByTestId("machines")).toBeTruthy();
+    setMachines(true);
+    expect(machinesLife).toEqual({ mounts: 1, unmounts: 0 });
   });
 });

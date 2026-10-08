@@ -20,8 +20,10 @@ import { useT } from "../../lib/i18n";
 
 // Code-split (perf plan §6): the Machines menu is off by default (Settings'
 // "Remote features") and renders nothing while off, so its module graph loads
-// only once `machines_enabled` is on. Unmounting it when the setting goes off
-// clears its header report, the same as its own `!enabled` branch did.
+// only once `machines_enabled` is on. Once mounted it stays mounted: switching
+// the feature off is its own `!enabled` branch (no menu, header report
+// cleared), and a "sign in in a terminal" add/edit still waiting keeps its
+// poll and form instead of being dropped by an unmount.
 const MachinesIndicator = lazy(() =>
   import("./MachinesIndicator").then((m) => ({ default: m.MachinesIndicator })),
 );
@@ -76,8 +78,11 @@ export function StatusCluster() {
   const onBattery = usePowerStore((s) => s.onBattery);
   const expanded = useSettingsStore((s) => s.settings?.header_status_expanded ?? false);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
-  // Off by default; the lazy Machines menu is mounted only while on (above).
+  // Off by default; the lazy Machines menu is mounted from its first switch-on
+  // and then kept (above).
   const machinesEnabled = useSettingsStore((s) => s.settings?.machines_enabled ?? false);
+  const [machinesMounted, setMachinesMounted] = useState(machinesEnabled);
+  if (machinesEnabled && !machinesMounted) setMachinesMounted(true);
   const reports = useHeaderStatusStore((s) => s.reports);
   const [resourcePeek, setResourcePeek] = useState(0);
 
@@ -176,7 +181,7 @@ export function StatusCluster() {
         <VpnIndicator />
       </span>
       <span className="status-cluster-item" data-folded={collapsed}>
-        {machinesEnabled && (
+        {machinesMounted && (
           <Suspense fallback={null}>
             <MachinesIndicator />
           </Suspense>
