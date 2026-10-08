@@ -1929,7 +1929,8 @@ backend steps). Nothing here was run live.*
     root review, VM glyph/settings/install re-checks, debug renderer RSS, the
     Git view's backstop, Slurm jobs, Reader usage limits, prompt-chart resets,
     Network pane totals. Exempt by construction: schedulers, cron, alarms,
-    CalDAV sync, timer lease.
+    CalDAV sync, timer lease. The urgent-mail backstop keeps ticking unfocused
+    while the Mobile host's Alerts feed holds it (the phone reads those rows).
     - [x] 🤖 Automated test — `UsePoll` (hidden → no calls, show → one catch-up,
       unmount → none, no overlap, Energy Saver ×3), plus blur cases in
       `MobileHostStatusShared`, `HostSessionsShared`, `OllamaStatusPoller`,

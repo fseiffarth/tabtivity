@@ -2791,7 +2791,59 @@ On a frozen dev build of this branch (after landing):
    exempt hosts still run unfocused).
 8. Energy Saver "Always": the polls above run ~3× slower while focused.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08; S11 implemented + reviewed 2026-10-08; S12 implemented 2026-10-09, S12 review next)
+### Review (S12 reviewer, 2026-10-09)
+Range `037ba352..d21157cf`. Checked `startPoll`/`usePoll` (catch-up once per
+return — power-store and `focus` resumes collapse on the in-flight guard or
+the `catchUpAfterMs` test; no overlap; stop during an in-flight run arms
+nothing; `stopped` reaches every site that writes after an await; `enabled`
+and interval changes; Energy Saver re-arm; per-window focus state; the
+mocked-store fallbacks only apply where a module lacks `getState`/`subscribe`,
+never in the real path), all 18 sites (same intervals, same first-run
+timing — `immediate: false` exactly where the old code read outside the
+interval, same connected/remote gates, no lost side effect, all `enabled`
+values real booleans so `?? true` never turns a gate on), what each site's
+readers do while the window is in the background, the QA rows (83 🖐️ boxes,
+all with the four platform pairs; ids 2400–2413 unused on `develop`, `hosted`
+and the main checkout's working tree), and `perf-numbers.sh` (reads `/proc`
+only, appends to the doc, paths quoted, brand from `scripts/lib/brand.sh`) +
+`performance_numbers.md` (pids, process names, no hosts).
+
+**Fix**
+| Commit | Bug | Regression test |
+|---|---|---|
+| `e114dc6c` | The urgent-mail backstop (`stores/todo`) also feeds the **phone's Alerts screen** (`MobileBridgeHost` → `useAlertsFeed({ ignoreVisibility })`). Quiesced, it stopped exactly while the phone was in use (desktop window in the background): mail read, moved or re-flagged elsewhere stayed on the phone until the desktop was focused (only arrivals re-read via `newCount`). The old 60 s tick ran unfocused. A retainer that serves the phone (`retainUrgentMailPoll(true)`) now keeps the tick unquiesced; desktop-only retainers still stop on blur. | `todo/UrgentMailPoll.test.ts` (3; 2 fail on the unfixed store) |
+
+**Gates (worktree, at e114dc6c)**
+| Gate | Result |
+|---|---|
+| `npm run build` | ok (tsc + both bundles) |
+| `npm test` | 754 files / 7674 tests; 2 failed — the known `MobileHeldPromptStore` date pair |
+| `cargo test -q` | lib 3610 passed, 3 ignored; all targets 3778 |
+| `npm run lint` | 0 errors, 28 warnings (unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `scripts/privacy-check.sh 037ba352..HEAD` | ok |
+| `git diff --check 037ba352 HEAD` | clean |
+
+**Flagged for user (not changed)**
+- **An iframe takes the window's focus.** `startFocusTracking` sets `blurred`
+  on the window's `blur` event, which also fires when focus moves into a
+  same-window `<iframe>` (mail body, Browser reader view, `FileViewerPane`'s
+  frame) while `document.hasFocus()` stays true. Before S12 that only paused
+  animations and slowed `saverInterval` readouts ×3; now the migrated polls
+  stop while you read a mail body in the window, and catch up when you click
+  back into the app's own UI. A fix would re-check `document.hasFocus()` on
+  blur in `startFocusTracking` (changes the animation pause too) — your call.
+- **Focus at startup.** `startFocusTracking` seeds `blurred` from
+  `document.hasFocus()` at mount; if WebKitGTK reports false there and no
+  `focus` event follows, every migrated poll waits for the first blur/focus
+  round trip. Worth watching in S12.1–S12.4.
+- The implementer's three flags stand (blurred = stopped on a second
+  monitor; Network rate / print queue / file auto-reload kept direct; main
+  checkout's untracked `perf-numbers.sh`/`performance_numbers.md` collide on
+  landing).
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08; S11 implemented + reviewed 2026-10-08; S12 implemented + reviewed 2026-10-09; final whole-range review next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -2822,11 +2874,12 @@ on the branch, so delete or overwrite the main checkout's copies when landing).
 - Done, implemented + reviewed: S11 (backend structural: f637fa9d,
   84cd8be0, 39686cac; review fixes 8244017d, 64e680bb, 64eb3ce8, 8622f907,
   e496fd1b — see `### Review (S11 reviewer, 2026-10-08)`).
-- Done, implemented: S12 (poll helper + QA rows: 528a5066, 2d051ccc,
-  70628b5e, 4761558e, 14f4ff41, d804ab39, 778585a4 — see `## S12`);
+- Done, implemented + reviewed: S12 (poll helper + QA rows: 528a5066,
+  2d051ccc, 70628b5e, 4761558e, 14f4ff41, d804ab39, 778585a4; review fix
+  e114dc6c — see `### Review (S12 reviewer, 2026-10-09)`);
   `scripts/perf-numbers.sh` and `docs/performance_numbers.md` are now on the
   branch.
-- Next: the S12 review, then the final whole-range review, then landing on `develop`
+- Next: S12 reviewed — the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -2881,6 +2934,10 @@ on the branch, so delete or overwrite the main checkout's copies when landing).
   failures; cargo lib 3610 passed (all targets 3778; two `git_bounded` FIFO
   tests flaked once under load, green alone and on rerun); lint 0 errors /
   28 warnings; clippy clean; brand ok; privacy ok; diff --check clean.
+- Gates at the S12 review's HEAD (e114dc6c): build ok; vitest 754 files /
+  7674 tests, the 2 `MobileHeldPromptStore` failures; cargo lib 3610 passed
+  (all targets 3778); lint 0 errors / 28 warnings; clippy clean; brand ok;
+  privacy ok; diff --check clean.
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
