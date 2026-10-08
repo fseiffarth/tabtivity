@@ -2,7 +2,7 @@
  * The prompts the desktop holds for a tab outlive the phone's chat view:
  * kept per tab, and on return checked against the desktop's schedules.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScheduledPrompt } from "../../../mobile-web/src/api";
 import { onHeldPatched, patchHeld, readHeld, stillHeld, writeHeld } from "../../../mobile-web/src/terminal/heldPrompts";
 import { pendingPrompt, type PendingPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
@@ -15,7 +15,13 @@ const rule = (id: string, message: string, last?: ScheduledPrompt["last"]): Sche
   ({ id, enabled: true, message, rule: { type: "once", at: "2026-09-30T11:59:00.000Z" }, ...(last ? { last } : {}) });
 
 describe("held prompt store", () => {
-  beforeEach(() => localStorage.clear());
+  // `readHeld` ages holds against the real clock; pin it so the fixtures'
+  // 2026-09-30 sends never fall past the seven-day cutoff.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    localStorage.clear();
+  });
+  afterEach(() => vi.useRealTimers());
 
   it("keeps only held prompts, per tab", () => {
     writeHeld("a", [held(1, "one", "h1"), { ...pendingPrompt(2, "typed", []) }]);
