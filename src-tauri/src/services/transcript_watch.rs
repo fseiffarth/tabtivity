@@ -38,7 +38,10 @@ pub const MIN_GAP: Duration = Duration::from_secs(1);
 pub enum Rule {
     /// This one file.
     Exact(OsString),
-    /// Any file whose name starts so (a database and its `-wal`/`-shm`).
+    /// Any file whose name starts so (a database and its `-wal`) — except a
+    /// SQLite `-shm` index: a reader's own open rewrites it when no other
+    /// connection is open, so counting it made each read cause the next.
+    /// Every committed write lands in the database or its `-wal`.
     Prefix(String),
     /// Any entry newly created (or renamed in): the next transcript a `/clear`
     /// starts, a subagent's folder.
@@ -66,7 +69,10 @@ impl Target {
         }
         match &self.rule {
             Rule::Exact(name) => path.file_name() == Some(name.as_os_str()),
-            Rule::Prefix(prefix) => path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(prefix.as_str())),
+            Rule::Prefix(prefix) => path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(prefix.as_str()) && !n.ends_with("-shm")),
             Rule::Created => created,
             Rule::Any => true,
         }
@@ -406,6 +412,7 @@ mod tests {
         assert!(!created.matches(Path::new("/t/proj/new.jsonl"), false));
         let db = target("/t/oc", Rule::Prefix("opencode.db".into()));
         assert!(db.matches(Path::new("/t/oc/opencode.db-wal"), false));
+        assert!(!db.matches(Path::new("/t/oc/opencode.db-shm"), false));
         assert!(!db.matches(Path::new("/t/oc/other.db"), false));
         assert!(target("/t/sub", Rule::Any).matches(Path::new("/t/sub/x.meta.json"), false));
     }
@@ -465,6 +472,41 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         false
+    }
+
+    /// OpenCode's store is read through SQLite: a read-only connection that
+    /// finds no other one open (OpenCode not running) rewrites the store's
+    /// `-shm` index on open. Counting that as a change made every read cause
+    /// the next — a read a second for as long as the Reader showed.
+    #[test]
+    fn reading_the_opencode_store_is_not_a_change_but_a_write_is() {
+        use rusqlite::{Connection, OpenFlags};
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        {
+            let c = Connection::open(&db).unwrap();
+            c.pragma_update(None, "journal_mode", "wal").unwrap();
+            c.execute("CREATE TABLE m(x)", []).unwrap();
+        }
+        let read = || {
+            let c = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            c.query_row("SELECT count(*) FROM m", [], |r| r.get::<_, i64>(0)).unwrap();
+        };
+        // The first read creates the `-wal` and `-shm` beside the store (a
+        // new entry is a change); read once before arming.
+        read();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let sink_log = log.clone();
+        let watch = TranscriptWatch::start(move |id| sink_log.lock().unwrap().push(id.to_string()));
+        assert!(watch.arm("oc", vec![Target { dir: dir.path().to_path_buf(), rule: Rule::Prefix("opencode.db".into()) }]));
+        for _ in 0..3 {
+            read();
+        }
+        std::thread::sleep(SETTLE + Duration::from_millis(400));
+        assert!(log.lock().unwrap().is_empty(), "a read of the store is no change: {:?}", log.lock().unwrap());
+        // A write is.
+        Connection::open(&db).unwrap().execute("INSERT INTO m VALUES (1)", []).unwrap();
+        assert!(seen(&log, "oc", 1), "a write notified");
     }
 
     #[test]
