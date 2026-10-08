@@ -52,14 +52,17 @@ const CONTROL_ENV: &[&str] = &[
 ];
 
 /// Whether `key` is one of [`CONTROL_ENV`] or a key carrier, in the current
-/// spelling or the one an older build wrote.
+/// spelling or the one an older build wrote, in any letter case: Windows
+/// environment names are case-insensitive (`portable_pty` folds them there),
+/// so a planted `tabtivity_host_session` is the same variable.
 pub(crate) fn is_control_env(key: &str) -> bool {
+    let key = key.to_ascii_uppercase();
     let pair = crate::brand::PAIR;
     let current = pair
         .renamed()
         .then(|| pair.legacy.env_prefix())
         .and_then(|old| key.strip_prefix(old.as_str()).map(|name| pair.cur.env_name(name)));
-    let key = current.as_deref().unwrap_or(key);
+    let key = current.as_deref().unwrap_or(&key);
     key.starts_with(crate::services::agent_exec::CARRIER_PREFIX) || CONTROL_ENV.contains(&key)
 }
 
@@ -999,6 +1002,32 @@ mod tests {
         ] {
             assert!(!is_control_env(kept), "{kept}");
         }
+    }
+
+    /// Windows environment names are case-insensitive (`portable_pty` folds
+    /// them there): a planted lower-case control variable is the same
+    /// variable, and must go like the upper-case one, legacy spelling too.
+    #[test]
+    fn a_planted_control_variable_in_another_letter_case_is_dropped() {
+        let mut incoming: HashMap<String, String> = [
+            (crate::app_env!("HOST_SESSION").to_ascii_lowercase(), "1".to_string()),
+            (crate::app_env!("SCOPE").to_ascii_lowercase(), "other".to_string()),
+            (crate::services::agent_exec::carrier_name("X").to_ascii_lowercase(), "sk-test-fake".to_string()),
+            (crate::app_env!("TAB_UID").to_ascii_lowercase(), "uid-1".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        if let Some(old) = crate::brand::PAIR.legacy_env_name("AGENT_FENCE") {
+            incoming.insert(old.to_ascii_lowercase(), "1".into());
+        }
+        let env = own_env(incoming, "p1", None);
+        let mut keys: Vec<&str> = env.keys().map(String::as_str).collect();
+        keys.sort();
+        let tab_uid = crate::app_env!("TAB_UID").to_ascii_lowercase();
+        let mut want = vec![crate::app_env!("SCOPE"), tab_uid.as_str()];
+        want.sort();
+        assert_eq!(keys, want, "only the app's own scope and the tab's uid survive");
+        assert_eq!(env[crate::app_env!("SCOPE")], "p1");
     }
 
     // ── vm_spawn_refusal: the VM tier's no-local-fallback guard ────────────

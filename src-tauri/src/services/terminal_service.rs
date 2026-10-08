@@ -551,12 +551,18 @@ pub(crate) fn persisted_env_denied(key: &str) -> bool {
         // Set by Tabtivity at spawn for a CLI it wires to its MCP lanes or
         // its loaded models; each can name a program the CLI starts.
         "VIBE_MCP_SERVERS", "VIBE_ENABLED_TOOLS", "OPENCODE_CONFIG_CONTENT",
+        // Windows' counterparts of the above: the command search, the
+        // shells' startup and module autoload, the user's home and config homes.
+        "PATHEXT", "COMSPEC", "PSMODULEPATH", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
     ];
     const PREFIXES: &[&str] = &["LD_", "DYLD_", "GIT_", "SSH_ASKPASS"];
-    EXACT.contains(&key)
+    // Any letter case: Windows environment names are case-insensitive
+    // (`portable_pty` folds them there), so `Path` replaces `PATH`.
+    let key = key.to_ascii_uppercase();
+    EXACT.contains(&key.as_str())
         || PREFIXES.iter().any(|p| key.starts_with(p))
         || (key.starts_with("XDG_") && (key.ends_with("_HOME") || key.ends_with("_DIRS")))
-        || crate::services::launch_prep::is_control_env(key)
+        || crate::services::launch_prep::is_control_env(&key)
 }
 
 /// Drop from a known-command tab's persisted `env` every variable
@@ -1062,6 +1068,30 @@ mod tests {
         tabs[0].extra.insert("env".to_string(), serde_json::json!(["PATH=/tmp/evil"]));
         sanitize_tab_layout(&mut tabs, &known(), &no_custom());
         assert!(!tabs[0].extra.contains_key("env"));
+    }
+
+    #[test]
+    fn a_persisted_env_is_matched_in_any_letter_case() {
+        // Windows environment names are case-insensitive (`portable_pty`
+        // folds them there): `Path` replaces `PATH`, and a lower-case control
+        // variable is the control variable. The Windows loader variables go too.
+        let mut tabs = vec![entry("")];
+        tabs[0].extra.insert(
+            "env".to_string(),
+            serde_json::json!({
+                "Path": "C:\\evil",
+                "ld_preload": "/tmp/x.so",
+                "Git_Ssh_Command": "sh -c x",
+                "PsModulePath": "C:\\evil\\modules",
+                "PATHEXT": ".EVIL",
+                "UserProfile": "C:\\evil",
+                "xdg_config_home": "/tmp/cfg",
+                crate::app_env!("HOST_SESSION").to_ascii_lowercase(): "1",
+                "Keep_Me": "yes",
+            }),
+        );
+        sanitize_tab_layout(&mut tabs, &known(), &no_custom());
+        assert_eq!(tabs[0].extra.get("env"), Some(&serde_json::json!({ "Keep_Me": "yes" })));
     }
 
     #[test]
