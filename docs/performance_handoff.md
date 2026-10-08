@@ -2163,7 +2163,141 @@ plus the S8 follow-up bd8004f3 and its note bdc494a4). Nothing run live.
 - The settings help text says "Terminals and agents are never unloaded";
   S10 must reword it when terminal kinds start sleeping.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 next)
+## S10 — sleeping tabs II
+
+*Written 2026-10-08 by the S10 implementer. Base `40738fea`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `300c8d76` | §5.3 scrollback cap (backend): `pty_remove_view` takes `sleeping`; a sleeping route keeps a 1 MB catch-up tail (`ROUTE_SLEEP_SCROLLBACK_CAP`, was 256 KB) and outlives its spawn's end (`ended`); `pty_scrollback` `wake` returns the tail cut at its last full clear (`trim_replay`), with `exited`, and ends the sleep; `pty_kill` forgets a sleeping route (`route_forget_sleep`); 5 route tests |
+| `45ba7dd8` | §5.3 no-kill mount + attach wake (`TerminalView`): new `lib/terminal/sleepingPtys` registry and `lib/terminal/terminalSpawn` (`tabTerminalSpawn` mapping shared with `TabPane`, `terminalSpawnKey`); an unmount of a PTY marked asleep parks instead of `pty_kill` (plus a scheduled-input stand-in); a mount finding it parked under the same key attaches; `TerminalSleepWake.test.tsx` (9) |
+| `4df49caa` | §5.3 kill on close + dock view (`PaneSlot`/`CenterPanel`): terminal kinds sleep (`isSleepableTerminalTab`), marked in render; the slot's unmount kills an asleep PTY; spawn key = sleep `identity` (a change wakes); Host sessions, popouts and root tabs drawn by the console/dock never sleep; help text reworded (en/de/es/fr/it); `settings.sleepTabs` untested row extended; `SleepingTabs` +6 tests |
+| `16b40766` | Fix found while testing: a pane woken while still hidden got the hidden-spell buffer replayed on first show on top of the wake tail (same output twice) — the wake read drops the superseded `pending` when it is the route's only view; route test |
+
+### What was built / choices made
+- **No "no-kill flag from the start".** The plan's `persistOnUnmount`-at-mount
+  would also stop an *awake* close from killing. Instead a module registry
+  (`sleepingPtys`): `PaneSlot` marks `<scope>:<key>` asleep in the render that
+  swaps in `SleepingPane` (before the commit, like the Mobile first-seen
+  stamp), so the `TerminalView` unmounting in that commit sees it and parks
+  (`parkPty`: spawn key, terminal-ready seen, first output, settled) instead
+  of `pty_kill`/`clearTabTitle`; its `pty_remove_view` says `sleeping`.
+  Nothing in `TerminalView`'s spawn deps changed, so no visibility change can
+  kill or respawn.
+- **Wake = the existing attach path, as owner.** The spawn effect peeks the
+  registry at setup; parked under an equal `terminalSpawnKey` →
+  `historyPending`, no `launchName`/held input, no silent-start timer,
+  `initialInputSent`, refs restored from the parked state. The entry is
+  *taken* only in `setupAndSpawn` (after the microtask), so Strict Mode's
+  synthetic cleanup still sees it parked and neither kills nor parks. Then:
+  register view → `pty_scrollback {wake:true}` → write; `exited` appends
+  `[process exited]` (the plan's "AppShell window-wide exit listener" does
+  not exist — nothing else would ever say it). A parked PTY under a
+  *different* key (relaunched/container toggled while asleep) is killed
+  (`killAsleepPty`) and the mount spawns — what the effect re-running would
+  have done.
+- **Spawn identity, one mapping.** `tabTerminalSpawn(tab, scope, derived)`
+  is now what `TabPane` spreads into `TerminalView`; `PaneSlot` hashes the
+  same object (+ `holdRemoteTerminal`) as `useSleepWhenHidden`'s new
+  `identity`: a change while asleep wakes the slot in that render (relaunch,
+  container/tmux toggle, the host pool dropping into the remote hold — the
+  hold then kills the parked PTY as the view leaving for it did). The
+  derivation in `PaneSlot` therefore runs before the sleep branch (only on a
+  slot re-render; S9 skipped it for asleep slots).
+- **Close.** `PaneSlot`'s unmount effect calls `killAsleepPty` (no-op when
+  awake): closing, closing the group/all, unloading the scope — every path
+  that unmounts the slot, exactly where `TerminalView`'s unmount used to kill.
+  Not in `stores/tabs.ts`: one place covers every close path.
+- **Owner duties while asleep.** The scheduled-input registration (scheduler,
+  auto-continue, steering's agent prompt, phone held prompts) is re-registered
+  by the parking view as a stand-in (`ready` = was ready + quiet ≥ 1.2 s by
+  the digest stamp, `bracketedPaste` as last parsed); the wake's own
+  registration replaces it, `killAsleepPty` drops it.
+- **Dock view / never sleep.** Views are per-viewer-id in the router, so the
+  main pane's leaving never silences another; still, per S9/plan, a terminal
+  never sleeps while a popout, the root console (all root tabs) or an
+  overlay's docked column (that key) draws it (`drawnElsewhere`, a boolean
+  prop), nor a Host session. The §4.5 immediate popout stub stays viewer-only.
+- **Backend.** `asleep` set only by a `sleeping` remove-view; cleared by the
+  wake read, `pty_kill`, or a respawn from a registered pane. Exit while
+  asleep keeps the route (`seq = 0`, `ended`); the usual `seq == 0 && no
+  viewers` collection skips sleeping routes. The wake tail is cut by
+  `trim_replay` (≥ 128 KB only), so a TUI's megabyte of redraws arrives as
+  its last frame; the popout read is unchanged (untrimmed, 256 KB).
+
+### Gotchas for later steps
+- **A new spawn dep in `TerminalView` must also go into
+  `TerminalSpawnInputs`/`terminalSpawnKey` and `tabTerminalSpawn`**, or a
+  sleeping tab wakes by attaching to a PTY a mounted pane would have
+  respawned.
+- **A new owner-only duty registered at `TerminalView` mount and needed while
+  hidden** (like the scheduled input) needs a parked stand-in in the teardown's
+  sleep branch, or a `usePaneSleepHold`.
+- `PaneSlot` marks in render; `TerminalView` teardown and the remove-view
+  cleanup only *read* the registry. `parkPty` never creates an entry, so a view
+  torn down after `killAsleepPty` cannot resurrect it.
+- Tests mounting `PaneSlot`/`CenterPanel` with terminal tabs and fake timers:
+  `_clearAsleepPtysForTest()` in `beforeEach`; `PaneSlotProps` gained
+  `drawnElsewhere`.
+- Final review / landing: `src-tauri/` changed — `npm run backend:stale` owed.
+  New frontend on an old backend: the extra `sleeping`/`wake` args are
+  ignored, so a program that exits while asleep wakes to a blank pane and the
+  wake tail is 256 KB untrimmed; nothing else breaks.
+
+### Gates (worktree, at 16b40766)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,324.63 kB / gz 976.08 kB (S9 review 3,321.42 kB) |
+| `npm test` | 751 files / 7638 tests (S9 review 750 / 7623; +`TerminalSleepWake` 9, `SleepingTabs` +6). Full runs at load average 55–62 failed 129 tests in 14 files, all 20 s timeouts and their cascades (YamlViewer, TexViewer, Autocomplete, PythonViewer, BibCards, …); the 14 files rerun alone: 145/147, only the 2 known `MobileHeldPromptStore` date time-bomb failures |
+| `cargo test -q` | lib 3587 passed, 3 ignored (S9 3581; +6 route tests); every other target green |
+| `npm run lint` | 0 errors, 28 warnings (unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check 40738fea HEAD` | clean |
+
+### Flagged for user
+- **Terminal and agent tabs now unload** after the same "Unload hidden tabs
+  after" delay (default 10 min) — the program keeps running, only the xterm
+  goes. Busy terminals and working agents are not held awake (the plan does
+  not ask for it); their output buffers in the backend meanwhile (up to
+  ~2 MB replay buffer + ~2 MB tail per chatty PTY, with hysteresis).
+- **What a wake does not bring back:** scrollback older than the 1 MB tail,
+  and — for tails over 128 KB — anything before the last full-screen clear
+  (a `clear`, a TUI redraw); a text selection, keyboard-select, an open find
+  bar. A TUI repaints fully; a plain shell shows its recent lines.
+- **A tab whose spawn failed** (error printed in the pane) has no PTY to park:
+  after the delay it unloads and its wake *retries the spawn* (an HPC refusal
+  asks again). Say if a failed pane should hold awake instead.
+- **Root tabs never unload while the root console is open** (it draws them),
+  an addition to the plan's never-sleep list.
+- While asleep, mode marks / model tag read off the xterm fall back to the
+  transcript/tmux readings, as for a never-shown tab.
+- `npm run backend:stale` after landing (terminal router + commands).
+
+### Live click-through (user)
+On a frozen dev build of this branch (after landing), Settings → Performance →
+"Unload hidden tabs after" → 5 min.
+1. Open a shell tab, run `seq 1 200`, then `sleep 400; echo done-sleeping`;
+   switch to another tab in that group for > 5 min. Switch back: the numbers
+   and the prompt are there, then `done-sleeping` appears (the process ran on).
+2. In a hidden shell run `sleep 10; exit` and leave it > 5 min: switching back
+   shows its output and `[process exited]`.
+3. Ask an agent a long task, switch away > 5 min: its tab pill still shows
+   working/done; switching back shows the current screen, no restart, the
+   prompt not retyped.
+4. Schedule a prompt (Agents view) into an agent tab that has been hidden
+   > 5 min: it is delivered without opening the tab.
+5. Close a tab that has been hidden > 5 min: `ps`/System monitor shows its
+   program gone (subtree too, e.g. a `sleep` under the shell).
+6. Relaunch a hidden, unloaded agent tab from its tab menu (or switch its
+   container toggle): it restarts at once, not when next shown.
+7. Open the root console (or dock a root agent in the mail overlay) for > 5
+   min: its tabs keep working and are not unloaded; pop a terminal tab out:
+   it keeps working in the popout.
+8. Settings → "Never": nothing unloads.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented 2026-10-08, S10 review next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -2188,7 +2322,9 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 - Done, implemented + reviewed: S9 (sleeping tabs I: 6dbbafed,
   b1761c56; review fixes 96397d6d, 69eef2a4, 0cd729e0 — see
   `### Review (S9 reviewer, 2026-10-08)`).
-- Next: S10 (sleeping tabs II, terminal kinds), then S11–S12 per plan §11, then the final whole-range review, then landing on `develop`
+- Implemented, review next: S10 (sleeping tabs II, terminal kinds:
+  300c8d76, 45ba7dd8, 4df49caa, 16b40766 — see `## S10 — sleeping tabs II`).
+- Next: a fresh S10 reviewer, then S11–S12 per plan §11, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -2223,6 +2359,11 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   failures + the `MobileIndicator` load flake (3/3 alone); cargo lib 3581
   passed; lint 0 errors / 28 warnings; clippy clean; brand ok; diff --check
   clean.
+- Gates at S10's HEAD (16b40766): build ok (bootstrap 3,325 kB / gz
+  976 kB); vitest 751 files / 7638 tests, the 2 `MobileHeldPromptStore`
+  failures (129 load timeouts at load ≈ 60 all pass alone); cargo lib 3587
+  passed; lint 0 errors / 28 warnings; clippy clean; brand ok; diff --check
+  clean. `npm run backend:stale` owed after landing (terminal router).
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
