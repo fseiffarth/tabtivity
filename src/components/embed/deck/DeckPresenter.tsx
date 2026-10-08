@@ -268,6 +268,13 @@ export function DeckPresenter({
     setLinkError(null);
     try {
       await invoke("open_presenter_window", { label });
+      // Closed (the tab, the talk) while the window was still coming up: the
+      // unmount close below saw no audience yet, so the window that just
+      // landed would be left on the projector.
+      if (!mountedRef.current) {
+        void invoke("close_presenter_window", { label }).catch(() => {});
+        return;
+      }
       setAudience(label);
       // Take focus back. The new window has it, and over there `N`, `G`, `D` and
       // digit-goto are all inert — so without this the speaker's first few
@@ -408,14 +415,18 @@ export function DeckPresenter({
   // teardown, instead of on every toggle.
   const audienceRef = useRef<string | null>(null);
   audienceRef.current = audience;
-  useEffect(
-    () => () => {
+  // `mountedRef` also lets an open still in flight at teardown close the
+  // window it lands (see `openAudience`).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
       if (audienceRef.current) {
         void invoke("close_presenter_window", { label: audienceRef.current }).catch(() => {});
       }
-    },
-    [],
-  );
+    };
+  }, []);
 
   // --- keys ----------------------------------------------------------------
 
