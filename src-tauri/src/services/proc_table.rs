@@ -265,7 +265,13 @@ impl UidCache {
         if let Some(known) = self.lock().get(&key) {
             return known.clone();
         }
-        let uid = read(proc_.pid).and_then(|environ| environ_tab_uid(&environ));
+        let environ = read(proc_.pid);
+        let uid = environ.as_deref().and_then(environ_tab_uid);
+        // An empty block is a process caught inside `exec`: the kernel names
+        // the new image before it sets up its environment. Read it again.
+        if environ.as_ref().is_some_and(Vec::is_empty) {
+            return uid;
+        }
         self.lock().insert(key, uid.clone());
         uid
     }
@@ -417,6 +423,22 @@ mod tests {
         cache.prune(&[Proc { pid: 1, ppid: 0, comm: "init".into(), start: 1 }]);
         cache.tab_uid(&p, read);
         assert_eq!(reads.get(), 3);
+    }
+
+    /// `exec` names the new image (`comm`) before it sets up its environment:
+    /// a read in between gets an empty block. Remembering that as "no tab uid"
+    /// lost the shell for its whole life — never a job, however long it ran.
+    #[test]
+    fn an_empty_environment_read_mid_exec_is_read_again() {
+        let p = Proc { pid: 4_000_002, ppid: 1, comm: "bash".into(), start: 91 };
+        let cache = UidCache::new();
+        assert_eq!(cache.tab_uid(&p, |_| Some(Vec::new())), None);
+        let env = concat!(crate::app_env!("TAB_UID"), "=bbbb-2\0").as_bytes().to_vec();
+        assert_eq!(cache.tab_uid(&p, |_| Some(env.clone())).as_deref(), Some("bbbb-2"));
+        // Unreadable (another user's) stays known: not read again.
+        let q = Proc { pid: 4_000_003, ..p.clone() };
+        assert_eq!(cache.tab_uid(&q, |_| None), None);
+        assert_eq!(cache.tab_uid(&q, |_| Some(env.clone())), None);
     }
 
     #[test]
