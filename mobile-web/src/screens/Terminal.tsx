@@ -26,6 +26,7 @@ import {
   ApiError,
   api,
   attachDesktopImage,
+  clearOutbox,
   closeTab,
   deleteOutboxFile,
   getAgentStatus,
@@ -2424,6 +2425,15 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     });
     setOutboxOpen((open) => open?.name === file.name ? null : open);
   }, [tab.id]);
+  /** The gallery's Delete all, through this tab's scope: the project's whole
+   * outbox goes (every tab's sends, as the gallery lists them all), to free
+   * the space, and the sheet closes over the empty list. */
+  const removeAllOutbox = useCallback(async () => {
+    await clearOutbox({ tab: tab.id });
+    setOutbox([]);
+    setGallery(false);
+    setOutboxOpen(null);
+  }, [tab.id]);
   /** Chunks above the revealed window stay in memory but out of the DOM — the
    * lazy half of the earlier-output log. */
   const hiddenChunks = Math.max(0, earlier.chunks.length - revealed);
@@ -4396,7 +4406,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     />}
     {/* The viewer covers the phone; the gallery stays chosen behind it, so
         closing the file lands back on the grid. */}
-    {gallery && !outboxOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onClose={() => setGallery(false)} />}
+    {gallery && !outboxOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
     {outboxOpen && <OutboxViewer key={`${tab.id}/${outboxOpen.name}`} scope={outboxScope} file={outboxOpen} pictures={outboxPictures} onStep={setOutboxOpen} onClose={() => setOutboxOpen(null)} markup={markupTarget}
       newTab={markupNewTab} />}
     {/* What the reader sent is only looked at: no Mark up, no stepping. */}

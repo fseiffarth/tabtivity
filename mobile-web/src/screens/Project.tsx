@@ -3,7 +3,7 @@ import { FileImageIcon, FolderIcon } from "../../../src/components/common/icons/
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { promptClock, promptLines, promptsFromTranscript, scheduleClock } from "../agentPrompts";
 import { GitSheet } from "./GitSheet";
-import { ApiError, TAB_CREATE_TIMEOUT, api, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type TabSchedules } from "../api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type TabSchedules } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, writeChoice } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -350,6 +350,14 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     });
     setFileOpen((open) => open?.name === file.name ? null : open);
   }, [id]);
+  /** The gallery's Delete all: the project's whole outbox goes, to free the
+   * space, and the sheet closes over the empty list. */
+  const removeAllFiles = useCallback(async () => {
+    await clearOutbox({ project: id });
+    setOutbox([]);
+    setGalleryOpen(false);
+    setFileOpen(null);
+  }, [id]);
   /** Mark up from here has no chat to send to: its Submit opens a new tab of
    * the desktop's default agent, which its Open tab shows — offered once
    * there is one. */
@@ -693,7 +701,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {scheduleTab && <ScheduleSheet tabId={scheduleTab.tab.id} label={scheduleTab.tab.label} initialMessage={scheduleTab.initialMessage} onClose={() => setScheduleTab(null)} />}
     {/* The viewer covers the phone; the gallery stays open behind it, so
         closing the file comes back to the list it was opened from. */}
-    {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onClose={() => setGalleryOpen(false)} />}
+    {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onDeleteAll={removeAllFiles} onClose={() => setGalleryOpen(false)} />}
     {filesOpen && detail?.files && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => setFilesOpen(false)}
       showTab={markupNewTab?.show} />}
     {fileTabOpen && filesOffered && <OutboxViewer key={`${id}/files/${fileTabOpen.place}/${fileTabOpen.name}`} scope={filesScope} file={asViewerFile(fileTabOpen)} onClose={() => setFileTabOpen(null)}

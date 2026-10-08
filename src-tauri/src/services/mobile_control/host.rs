@@ -4680,6 +4680,61 @@ async fn project_outbox_delete(
     }
 }
 
+/// `DELETE /api/v1/tabs/{tab_id}/outbox` — the gallery's Delete all: every
+/// file the desktop published to the phone in this tab's project, to free the
+/// space. Same gates as one file's removal; `outbox::remove_all` clears only
+/// what a read would serve, past the listing's cap too.
+async fn outbox_clear(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    match outbox_root(&state, &phone, &tab_id) {
+        Ok(root) => outbox_clearing(root).await,
+        Err(error) => error,
+    }
+}
+
+/// `DELETE /api/v1/projects/{project_id}/outbox` — the same Delete all by the
+/// project, for the project screen's gallery.
+async fn project_outbox_clear(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    match project_drop_box_root(&state, &phone, &project_id) {
+        Ok(root) => outbox_clearing(root).await,
+        Err(error) => error,
+    }
+}
+
+async fn outbox_clearing(root: PathBuf) -> (StatusCode, Json<serde_json::Value>) {
+    let cleared = tokio::task::spawn_blocking(move || outbox::remove_all(&root))
+        .await
+        .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    match cleared {
+        Ok(cleared) => (StatusCode::OK, Json(json!({ "removed": cleared.files, "freed": cleared.bytes }))),
+        Err(outbox::OutboxError::Io(_)) => {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "delete_failed")
+        }
+        Err(error) => outbox_error(error),
+    }
+}
+
 async fn outbox_removal(root: PathBuf, name: String) -> (StatusCode, Json<serde_json::Value>) {
     if !outbox::valid_name(&name) {
         return api_error(StatusCode::NOT_FOUND, "file_not_found");
@@ -5695,7 +5750,7 @@ fn router(state: HostState) -> Router {
             get(desktop_images).post(attach_desktop_image),
         )
         .route("/api/v1/open-ticket", post(open_ticket))
-        .route("/api/v1/tabs/{tab_id}/outbox", get(outbox_list))
+        .route("/api/v1/tabs/{tab_id}/outbox", get(outbox_list).delete(outbox_clear))
         .route(
             "/api/v1/tabs/{tab_id}/outbox/{name}",
             get(outbox_file).delete(outbox_delete),
@@ -5705,7 +5760,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/projects/{project_id}/files/search", get(project_files_search))
         .route(
             "/api/v1/projects/{project_id}/outbox",
-            get(project_outbox_list),
+            get(project_outbox_list).delete(project_outbox_clear),
         )
         .route(
             "/api/v1/projects/{project_id}/outbox/{name}",
@@ -8988,6 +9043,24 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         let (status, _, _) = host.send(get_as(&list, "not-a-session")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Delete all: the exact-origin check first, then every file goes.
+        std::fs::write(dir.join("notes.txt"), "hello").unwrap();
+        let no_origin = Request::builder()
+            .method("DELETE")
+            .uri(&list)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .body(Body::empty())
+            .expect("request");
+        let (status, _, body) = host.send(no_origin).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        assert!(dir.join("plot.png").exists());
+        let (status, _, body) = host.send(request_as("DELETE", &list, &cookie, None)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["removed"], 2);
+        assert_eq!(json(&body)["freed"], png.len() as u64 + 5);
+        let (_, _, body) = host.send(get_as(&list, &cookie)).await;
+        assert_eq!(json(&body)["files"], serde_json::json!([]));
     }
 
     #[tokio::test]

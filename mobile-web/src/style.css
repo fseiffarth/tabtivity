@@ -1553,6 +1553,10 @@ span.files-close { background:transparent; }
 .outbox-confirm { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-left:auto; }
 .outbox-confirm button { border:1px solid #34384a; border-radius:999px; background:#141a26; color:#d8e2f5; font-size:.7rem; padding:4px 8px; }
 .outbox-confirm .outbox-delete-yes { border-color:#6b2f33; background:#2a1416; color:#f2b8b5; }
+/* The gallery's Delete all, under the count: the tile's red answer, as a pill. */
+.outbox-clear { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 6px 10px; }
+.outbox-clear .outbox-confirm { margin-left:0; color:#d8e2f5; font-size:.78rem; }
+.outbox-clear-all { border:1px solid #6b2f33; border-radius:999px; background:#2a1416; color:#f2b8b5; font-size:.78rem; padding:6px 12px; }
 .outbox-entry-error { padding:0 2px; color:#f2b8b5; font-size:.7rem; }
 .outbox-viewer-head a, .outbox-text-body a, .outbox-viewer > a { color:#8fb8ff; }
 /* The head's actions — Mark up, Save, Share — as one row of the same small

@@ -1076,6 +1076,13 @@ export async function deleteOutboxFile(scope: OutboxScope, name: string): Promis
   await api<{ removed: boolean }>(`${outboxBase(scope)}/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
+/** `DELETE …/outbox` — the gallery's Delete all, to free the space: every
+ * file the outbox would serve, past the listing's 40 too. Same exact-origin
+ * check as one file's delete; answers how many files went and their bytes. */
+export async function clearOutbox(scope: OutboxScope): Promise<{ removed: number; freed: number }> {
+  return api<{ removed: number; freed: number }>(outboxBase(scope), { method: "DELETE" });
+}
+
 /** POSTs a raw file to one of the desktop's drop boxes and returns the status
  * and JSON body, mapping a refusal to the desktop's wire code. */
 async function postFile<T>(url: string, file: Blob, retried = false): Promise<[number, T | undefined]> {
