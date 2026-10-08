@@ -25,6 +25,8 @@ import {
   type ParsedTable,
 } from "../../lib/viewers/table";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { viewerErrorText } from "../../lib/viewers/limitError";
+import { useFileScope } from "./fileAccess";
 
 /** Backend `read_spreadsheet` result (Dev G). Mirrors the Rust `SheetData`. */
 interface SheetData {
@@ -160,6 +162,8 @@ export function TableView({
 }) {
   const t = useT();
   const isSheet = useMemo(() => SHEET_RE.test(path), [path]);
+  // The owning project: the backend confines the workbook to its roots.
+  const scope = useFileScope();
 
   // The text draft behind a CSV/TSV. For a spreadsheet we don't edit the file at
   // all; disable text I/O while the workbook loader owns the rows.
@@ -195,7 +199,11 @@ export function TableView({
     let cancelled = false;
     setSheetLoaded(false);
     setSheetError(null);
-    invoke<SheetData>("read_spreadsheet", { path, sheet: selectedSheet ?? undefined })
+    invoke<SheetData>("read_spreadsheet", {
+      path,
+      sheet: selectedSheet ?? undefined,
+      projectId: scope,
+    })
       .then((data) => {
         if (cancelled) return;
         setSheetData(data);
@@ -211,9 +219,15 @@ export function TableView({
     return () => {
       cancelled = true;
     };
-  }, [isSheet, path, selectedSheet]);
+  }, [isSheet, path, selectedSheet, scope]);
 
-  const error = isSheet ? sheetError : file.error;
+  // A parser-limit refusal (too large, timed out, reader crashed) arrives as a
+  // code and is shown translated; any other error as the backend wrote it.
+  const error = isSheet
+    ? sheetError == null
+      ? null
+      : viewerErrorText(t, sheetError)
+    : file.error;
   const loaded = isSheet ? sheetLoaded : file.loaded;
   /** Spreadsheets have no source text to splice into, so they stay read-only. */
   const editable = !isSheet && loaded && error == null;

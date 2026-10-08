@@ -161,6 +161,8 @@ pub mod root_mcp_review;
 // unconditionally.
 pub mod sandbox;
 pub mod sftp;
+// Spreadsheet parsing in a limited child process of the main binary.
+pub mod sheet_reader;
 pub mod skills;
 // Dictionary-backed (Hunspell/spellbook) spell check for the native editors.
 pub mod spell;

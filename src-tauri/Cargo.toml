@@ -69,7 +69,7 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 # Encode the clipboard's raw RGBA image as PNG before writing it to disk.
 png = "0.17"
 calamine = "0.36"
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "hooks", "limits"] }
 # Stage host file bytes on disk so `git diff --no-index` can diff the local mirror
 # against the current host copy (SSH-sync host-vs-mirror diff button).
 tempfile = "3"
@@ -346,6 +346,9 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# Builds the crafted `.xls` (an OLE compound file) the spreadsheet reader's
+# child-process test feeds calamine; already in the tree via `infer`.
+cfb = "0.7"
 # The macOS GPU sampler's `ioreg` plist parser is pure and gated
 # `any(target_os = "macos", test)`, so its fixture test runs on every OS;
 # the crate is already the macOS runtime dependency above.

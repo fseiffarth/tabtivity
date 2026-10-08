@@ -6052,6 +6052,7 @@ dependencies = [
  "base64ct",
  "bytes",
  "calamine",
+ "cfb",
  "chacha20poly1305",
  "chrono",
  "chrono-tz",

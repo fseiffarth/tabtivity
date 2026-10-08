@@ -38,6 +38,13 @@ fn main() {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         std::process::exit(app_lib::services::agent_exec::run(&args));
     }
+    // `tabtivity --sheet-read <path> [sheet]`: a spreadsheet viewer's parse, in
+    // a limited child so a crafted workbook can abort only this process
+    // (`services::sheet_reader`).
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(app_lib::services::sheet_reader::MODE_FLAG)) {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
+        std::process::exit(app_lib::services::sheet_reader::child_main(&args));
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--mobile-host")) {
         let state_dir = app_lib::storage::state_dir();
         let runtime = tokio::runtime::Builder::new_multi_thread()

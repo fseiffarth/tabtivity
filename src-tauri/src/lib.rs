@@ -2293,6 +2293,10 @@ pub fn run() {
                 // is deliberately left alone: Ollama is a machine service as
                 // often as it is a Tabtivity detail.
                 commands::ollama::shutdown_owned_server();
+                // A spreadsheet viewer's parse child (`services::sheet_reader`):
+                // bounded by its own wall clock, ended here so none outlives
+                // the quit.
+                services::sheet_reader::kill_all_for_exit();
                 // The fenced Copilot language servers (one per consented project).
                 tauri::async_runtime::block_on(commands::copilot::stop_all_for_exit());
                 // Let the machine sleep again if a talk was on: the presenter's
