@@ -974,7 +974,6 @@ mod tests {
     fn junction(target: &Path, link: &Path) {
         use std::os::windows::process::CommandExt;
         let output = std::process::Command::new("cmd")
-            .arg("/D")
             .raw_arg(format!("/D /C mklink /J \"{}\" \"{}\"", link.display(), target.display()))
             .output()
             .unwrap();
