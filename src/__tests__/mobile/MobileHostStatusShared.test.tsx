@@ -105,6 +105,28 @@ describe("shared Mobile host status poll", () => {
     expect(useMobileHostStatusStore.getState().refreshing).toBe(false);
   });
 
+  it("a surface that leaves and returns while a read is in flight gets a fresh read", async () => {
+    // React StrictMode's mount → cleanup → mount, or a Files view toggling
+    // `active` quickly: the first read is superseded by the last release, so
+    // the returning surface must not sit on "no reading" for a whole poll.
+    const answers: Array<(v: typeof running) => void> = [];
+    invokeMock.mockImplementation(
+      () => new Promise((resolve) => {
+        answers.push(resolve as (v: typeof running) => void);
+      }),
+    );
+    const first = render(<Probe />);
+    first.unmount();
+    const view = render(<Probe />);
+    expect(statusCalls()).toBe(2);
+    await act(async () => {
+      answers.forEach((answer) => answer(running));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(view.getByText("up")).toBeTruthy();
+    expect(useMobileHostStatusStore.getState().refreshing).toBe(false);
+  });
+
   it("drops a read that was in flight when a restart began", async () => {
     const refused = { ...running, running: false, error: "refused" };
     let answer: (v: typeof refused) => void = () => {};

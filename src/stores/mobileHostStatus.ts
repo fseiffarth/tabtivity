@@ -46,8 +46,8 @@ interface MobileHostStatusStore {
   retain: () => void;
   release: () => void;
   /**
-   * Read the status now. A plain refresh is skipped while one is already in
-   * flight or a restart holds the reading (`beginRestart`); `waitForHost`
+   * Read the status now. A plain refresh is skipped while the newest read is
+   * still in flight or a restart holds the reading (`beginRestart`); `waitForHost`
    * (the restart's own read) retries until the host answers `running`.
    */
   refresh: (waitForHost?: boolean) => Promise<void>;
@@ -65,7 +65,11 @@ let poll: { iv: ReturnType<typeof setInterval>; onFocus: () => void } | null = n
 /** Bumped per read and by `publish`/`beginRestart`/last `release`: only the
  *  newest read may write. */
 let request = 0;
-let inFlight = 0;
+/** The `request` id of every read still in flight. A plain refresh skips only
+ *  while the NEWEST read is among them (its answer will still land); a read
+ *  superseded by `publish`/`beginRestart`/the last `release` writes nothing, so
+ *  a surface retaining again must not wait a whole poll for it. */
+const reading = new Set<number>();
 let restarting = 0;
 
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -97,9 +101,9 @@ export const useMobileHostStatusStore = create<MobileHostStatusStore>((set, get)
   },
 
   refresh: async (waitForHost = false) => {
-    if (!waitForHost && (restarting > 0 || inFlight > 0)) return;
+    if (!waitForHost && (restarting > 0 || reading.has(request))) return;
     const mine = ++request;
-    inFlight += 1;
+    reading.add(mine);
     set({ refreshing: true, error: null });
     try {
       let next: MobileHostRuntimeStatus | null = null;
@@ -112,7 +116,7 @@ export const useMobileHostStatusStore = create<MobileHostStatusStore>((set, get)
     } catch (reason) {
       if (mine === request) set({ status: null, error: String(reason) });
     } finally {
-      inFlight -= 1;
+      reading.delete(mine);
       if (mine === request) set({ refreshing: false });
     }
   },
@@ -130,7 +134,7 @@ export const useMobileHostStatusStore = create<MobileHostStatusStore>((set, get)
   endRestart: () => {
     restarting = Math.max(0, restarting - 1);
     // A read superseded by `beginRestart` never clears its own flag.
-    if (inFlight === 0) set({ refreshing: false });
+    if (reading.size === 0) set({ refreshing: false });
   },
 }));
 
@@ -153,7 +157,7 @@ export function __resetMobileHostStatusForTests(): void {
     poll = null;
   }
   refs = 0;
-  inFlight = 0;
+  reading.clear();
   restarting = 0;
   request += 1;
   useMobileHostStatusStore.setState({ status: null, refreshing: false, error: null });
