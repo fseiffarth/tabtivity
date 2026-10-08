@@ -116,8 +116,28 @@ fn raise(bus: &Connection, pid: u32, tid: u32) -> Result<(), String> {
     .map_err(|e| format!("rtkit: {e}"))
 }
 
-fn is_renderer(pid: u32) -> bool {
-    crate::sysstat::cmdline(pid).is_some_and(|cmd| cmd.contains("WebKitWebProcess"))
+/// One process image: pid, start time, `comm`.
+type ImageKey = (u32, u64, String);
+
+/// Whether the process image `key` is a WebKit renderer, read once per image
+/// through `cmdline` (its command line does not change without an exec,
+/// which changes `comm`). No command line yet is not remembered: exec names
+/// the new image before it sets up its arguments, and a renderer caught in
+/// that window would otherwise never be raised.
+fn renderer_verdict(
+    renderers: &mut HashMap<ImageKey, bool>,
+    key: ImageKey,
+    cmdline: impl FnOnce() -> Option<String>,
+) -> bool {
+    if let Some(known) = renderers.get(&key) {
+        return *known;
+    }
+    let Some(cmd) = cmdline() else {
+        return false;
+    };
+    let renderer = cmd.contains("WebKitWebProcess");
+    renderers.insert(key, renderer);
+    renderer
 }
 
 fn watch() {
@@ -135,7 +155,7 @@ fn watch() {
     // Each process image's verdict, read once (its command line does not
     // change without an exec, which changes `comm`): the rescan then costs no
     // per-descendant read, only the shared process table.
-    let mut renderers: HashMap<(u32, u64, String), bool> = HashMap::new();
+    let mut renderers: HashMap<ImageKey, bool> = HashMap::new();
     loop {
         let table = crate::services::proc_table::snapshot();
         let mut pids = vec![own];
@@ -144,7 +164,7 @@ fn watch() {
             let Some(proc_) = table.get(pid) else { continue };
             let key = (pid, proc_.start, proc_.comm.clone());
             live.insert(key.clone());
-            if *renderers.entry(key).or_insert_with(|| is_renderer(pid)) {
+            if renderer_verdict(&mut renderers, key, || crate::sysstat::cmdline(pid)) {
                 pids.push(pid);
             }
         }
@@ -182,6 +202,20 @@ mod tests {
         assert!(!opted_out(Some(OsStr::new("1"))));
         assert!(opted_out(Some(OsStr::new("0"))));
         assert!(opted_out(Some(OsStr::new(" Off "))));
+    }
+
+    #[test]
+    fn a_renderer_verdict_is_kept_per_image_but_not_before_its_command_line() {
+        let mut renderers = HashMap::new();
+        let key = (4_000_010, 7, "WebKitWebProces".to_string());
+        // Caught inside exec: no command line yet, nothing remembered.
+        assert!(!renderer_verdict(&mut renderers, key.clone(), || None));
+        assert!(renderer_verdict(&mut renderers, key.clone(), || Some("/usr/lib/WebKitWebProcess 7 9".into())));
+        // Known now: no second read.
+        assert!(renderer_verdict(&mut renderers, key, || panic!("read again")));
+        let other = (4_000_011, 7, "main-app".to_string());
+        assert!(!renderer_verdict(&mut renderers, other.clone(), || Some("main-app".into())));
+        assert!(!renderer_verdict(&mut renderers, other, || panic!("read again")));
     }
 
     #[test]
