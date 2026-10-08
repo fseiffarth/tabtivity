@@ -153,3 +153,101 @@ row, Steps row 1, the fixed decisions and the agent step 1 review notes.
   subdirectories in `agent-auth/{kimi,codebuddy}/<leaf>/`. Those were never
   placed and still are not, and the retire does not remove them (it only
   removes regular files).
+
+## Agent step 2 — implementer (gap 17)
+
+**Commit:** `7677ff7f` Drop env and embedExec from untrusted tab layouts and
+refuse planted control variables.
+
+**Files:** `src-tauri/src/services/terminal_service.rs` (`CustomAgentSpec
+{resume, env}` from `custom_agent_specs`, now `pub(crate)`;
+`sanitize_untrusted_layout_with` drops `env`/`embedExec` and re-inserts a
+registered custom agent's spec env; `persisted_env_denied` +
+`strip_persisted_env` in `sanitize_tab_layout`'s known-command branch;
+`ENV_KEY`/`EMBED_EXEC_KEY`), `services/launch_prep.rs` (`CONTROL_ENV`,
+`is_control_env`, `strip_control_env` right after `adopt_legacy_env`,
+`set_scope_env` with `insert`), `services/mobile_control/headless.rs`
+(`launch_options` filters a clone of the record), `src/stores/tabs.ts`
+(`restoreSavedTab` rebuilds `TAB_UID` for every `isResumableAgentTab` with a
+`sessionId`), docs: `threat_model.md` row 17 (**Fixed, not live-verified.**
++ residual), `context/project_transfer.md`, `context/agent_authority.md`
+(shell-tab shim paragraph), `filemap_backend.md` (`terminal_service.rs`,
+`launch_prep.rs` rows).
+
+**Tests added:** `terminal_service`:
+`untrusted_layouts_drop_env_and_embed_exec_for_known_commands` (`""`,
+claude, bash, sh, zsh, vibe), `an_untrusted_custom_agent_tab_gets_its_settings_env_only`,
+`a_state_dir_layout_loses_loader_and_control_variables` (PATH, LD_*, DYLD_*,
+BASH_ENV, PROMPT_COMMAND, GIT_*, SSH_ASKPASS, XDG_CONFIG_HOME, NODE_OPTIONS,
+VIBE_MCP_SERVERS, HOME, HOST_SESSION/AGENT_FENCE/SCOPE/ROOT_MCP_TOKEN, legacy
+HOST_SESSION gone; VIBE_HOME, TAB_UID, LOCAL_MODEL, XDG_SESSION_TYPE stay;
+non-object env dropped), `a_custom_agents_spec_env_survives_and_a_differing_value_is_dropped`;
+the trusted-path test is now `known_commands_keep_every_field_except_resume_args_and_denied_env`
+(fixture env gained VIBE_HOME/TAB_UID and an `embedExec`; both kept, LD_PRELOAD
+gone). `launch_prep`: `a_planted_scope_and_host_session_never_reach_the_spawn`
+(incl. legacy spellings, MCP token/URL, key carrier),
+`a_root_tab_gets_the_root_scope_and_no_project_dir`,
+`control_names_are_matched_exactly`. `headless`:
+`a_stored_records_env_is_filtered_before_launch`. Frontend
+(`CenterPanelSessionRestore.test.tsx`): `an agent tab adopted with no env gets
+its TAB_UID back from sessionId`.
+
+**Gates (at `7677ff7f`):** `npm run build` ok; `npm test` 735 files / 7556
+tests passed; `cargo test -q` 3741 passed, 3 ignored, 0 failed; `npm run
+lint` 0 errors, 28 advisory warnings (unchanged, none in touched files);
+`cargo clippy --all-targets -D warnings` clean; `scripts/brand-check.sh` ok;
+`git diff --check` clean; `scripts/privacy-check.sh` clean.
+`npm run backend:stale` not run (main agent at landing).
+
+**Choices:**
+- `prepare` has no full-path unit test (it needs the state dir, fence and
+  tmux). The env steps are pure helpers (`strip_control_env`,
+  `set_scope_env`) called from `prepare`; the test runs them in `prepare`'s
+  order with `adopt_legacy_env`. Callers checked: `pty_spawn` and the
+  headless `HeadlessSpawner` are the only `prepare` callers; no caller or
+  internal `PtyOptions` builder puts a control variable in `env` before
+  `prepare` (they are all inserted later in `prepare` or its callees).
+- Control list (both spellings, legacy via `adopt_legacy_env` then matched
+  again in `is_control_env`): `AGENT_FENCE`, `HOST_SESSION`, `SCOPE`,
+  `PROJECT_DIR`, `TAB_AGENT`, `STATE_DIR`, `HOME` (the app's), `PUSH_PREFLIGHT`,
+  `GIT_TOKEN`, the five `*_MCP_TOKEN` **and** `*_MCP_URL` vars, and every
+  `AGENT_SECRET_*` carrier. Added beyond the review note: the MCP URLs, the
+  app's `STATE_DIR`/`HOME` (a planted one would point the shim's
+  `--agent-shim` at another state dir) and `TAB_AGENT`.
+- Persisted-env denylist adds a few to the review list: `MANPAGER`,
+  `BROWSER`, `LESSOPEN`, `LESSCLOSE`, `PERL5DB`, `JDK_JAVA_OPTIONS`,
+  `XDG_*_DIRS`, and the spawn-time CLI configs Tabtivity itself sets
+  (`VIBE_MCP_SERVERS`, `VIBE_ENABLED_TOOLS`, `OPENCODE_CONFIG_CONTENT`), each
+  of which can name a program the CLI starts. The custom-agent exception
+  applies to the whole list (a control variable is then still dropped at
+  `prepare`).
+- At the untrusted doors a registered custom agent's env is rebuilt from its
+  settings entry (the source the window used to create it), rather than left
+  empty.
+- `TAB_UID` is overwritten from `sessionId` for every resumable agent, not
+  only filled in when missing: `buildStaticTabSpec` sets both from one uuid
+  and nothing changes a tab's `sessionId` later (only `duplicateSpec`, which
+  swaps both).
+- No `UntestedTag`: no new UI.
+
+**Gotchas:** cargo was warm this time (~3 min for clippy, under a minute
+for the targeted test build). `serde_json::json!` accepts
+`crate::app_env!(..)` as an object key.
+
+**Flagged for user:**
+- A tab adopted from a folder or an import bundle no longer brings its
+  environment. A local-model Vibe tab from another machine loses its
+  `VIBE_HOME` (it was that machine's path anyway); a custom agent gets the
+  env from this machine's settings.
+- State-dir layouts now lose the listed variables on every load. Built-in
+  tabs never persist them; a hand-edited `terminals.json` that set `PATH`
+  for a shell tab loses it (the log names the dropped keys).
+- Not traced: the headless owner relaunches a stored record with the
+  record's `env` (`launch_options`). An agent tab adopted from a folder has
+  no `TAB_UID` in its state-dir record until a window restores and re-saves
+  it, so a phone-started reopen of such a tab before that runs without turn
+  binding. Low impact (the window rewrites the record on first load).
+- Not live-verified: import a `.tabtivityproj` / adopt a folder layout with
+  a planted `env`, open the shell tab, check `env` in it; type `claude` in a
+  shell tab of a layout carrying `TABTIVITY_HOST_SESSION=1` and check it
+  runs fenced.
