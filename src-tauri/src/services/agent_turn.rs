@@ -91,17 +91,31 @@ fn bindings() -> &'static Mutex<HashMap<String, String>> {
     B.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// What the turn record an earlier run of a tab left behind said, read by
+/// [`bind_tab`] before it clears it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LeftTurn {
+    /// A turn still in flight (`working` / `decision`): the previous process
+    /// of this tab died mid-turn (a quit SIGKILLs agents, so no `Stop` or
+    /// `SessionEnd` ever overwrote it), and the tab starts out interrupted.
+    pub cut_off: bool,
+    /// A finished turn (`done`): the agent was last back at its composer, which
+    /// is where a resumed session starts and a reattached one still sits. The
+    /// window reads no question off such a tab's screen — a reattach repaints
+    /// the whole conversation, prompt echoes and numbered lists included —
+    /// until the agent's hooks speak again.
+    pub resting: bool,
+}
+
 /// Remember that the tab whose hooks key by `uid` is the PTY `pty_id`, and
 /// forget any turn record an earlier run of that tab left behind — a resumable
 /// tab keeps its uid across relaunches, and a `working` written before a crash
 /// or quit would otherwise be the first thing the watcher reports for it.
 ///
-/// Returns whether that record held a turn still in flight: the previous
-/// process of this tab died mid-turn (a quit SIGKILLs agents, so no `Stop` or
-/// `SessionEnd` ever overwrote it), and the tab starts out interrupted.
-pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> bool {
+/// Returns what that record said ([`LeftTurn`]).
+pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
     if uid.is_empty() || uid.chars().any(|c| !(c.is_ascii_alphanumeric() || c == '-')) {
-        return false;
+        return LeftTurn::default();
     }
     // One PTY, one uid: a respawn under a new uid must not leave the old key
     // pointing at this PTY, nor its turn state and job flag behind it.
@@ -110,9 +124,11 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> bool {
     states().lock().unwrap().remove(uid);
     jobs().lock().unwrap().remove(uid);
     settled().lock().unwrap().remove(uid);
-    let cut_off = records_hold_turn_in_flight(&record_paths(uid, project_id));
+    let paths = record_paths(uid, project_id);
+    let cut_off = records_hold_turn_in_flight(&paths);
+    let resting = !cut_off && records_hold_finished_turn(&paths);
     clear_record(uid, project_id);
-    cut_off
+    LeftTurn { cut_off, resting }
 }
 
 /// Whether any of a tab's turn records says `working` or `decision` — a turn
@@ -123,6 +139,16 @@ fn records_hold_turn_in_flight(paths: &[PathBuf]) -> bool {
             .ok()
             .and_then(|text| parse_turn_record(&text))
             .is_some_and(|state| matches!(state, TurnState::Working | TurnState::Decision))
+    })
+}
+
+/// Whether any of a tab's turn records says `done` — a turn the agent ended.
+fn records_hold_finished_turn(paths: &[PathBuf]) -> bool {
+    paths.iter().any(|p| {
+        std::fs::read_to_string(p)
+            .ok()
+            .and_then(|text| parse_turn_record(&text))
+            .is_some_and(|state| state == TurnState::Done)
     })
 }
 
@@ -222,6 +248,12 @@ struct TurnPayload {
     /// a command running alongside it is two things at once — which is what
     /// lets the window paint the agent's work and its commands apart.
     job: bool,
+    /// The event is the job scan re-reporting the state the hooks last wrote
+    /// (a job started or ended), not the agent speaking: the window carries
+    /// the flag on, but never lets it bring back a verdict the user's own
+    /// input already retired (an answered `decision`, an interrupted
+    /// `working`) — the record still says it, since no hook has overwritten it.
+    replay: bool,
 }
 
 /// How often the tool-shell scan runs while agent tabs are bound. What it
@@ -522,8 +554,8 @@ pub fn start(app: AppHandle) {
             eprintln!("agent_turn: watch {}: {e}", root.display());
             return;
         }
-        let emit = |id: String, state: TurnState, job: bool| {
-            let _ = app.emit(TURN_EVENT, TurnPayload { id, state: state.as_str(), job });
+        let emit = |id: String, state: TurnState, job: bool, replay: bool| {
+            let _ = app.emit(TURN_EVENT, TurnPayload { id, state: state.as_str(), job, replay });
         };
         // Keep the watcher alive for as long as events flow; the loop ends only
         // when the sender side is dropped, i.e. never before the app exits. The
@@ -545,9 +577,9 @@ pub fn start(app: AppHandle) {
                         // agent's last tool finished, and a job that ended with
                         // it must not be reported as still running.
                         for (pty, st, job) in refresh_jobs(Some(&uid)) {
-                            emit(pty, st, job);
+                            emit(pty, st, job, true);
                         }
-                        emit(id, state, job_flag(&uid));
+                        emit(id, state, job_flag(&uid), false);
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -555,7 +587,7 @@ pub fn start(app: AppHandle) {
                         continue;
                     }
                     for (pty, st, job) in refresh_jobs(None) {
-                        emit(pty, st, job);
+                        emit(pty, st, job, true);
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -622,9 +654,16 @@ mod tests {
         let root = dir.join("a.turn");
         let slice = dir.join("b.turn");
         assert!(!records_hold_turn_in_flight(&[root.clone(), slice.clone()]));
-        for (word, cut) in [("working 1", true), ("decision 2", true), ("done 3", false), ("idle 4", false), ("", false)] {
+        for (word, cut, rest) in [
+            ("working 1", true, false),
+            ("decision 2", true, false),
+            ("done 3", false, true),
+            ("idle 4", false, false),
+            ("", false, false),
+        ] {
             std::fs::write(&slice, word).unwrap();
             assert_eq!(records_hold_turn_in_flight(&[root.clone(), slice.clone()]), cut, "{word:?}");
+            assert_eq!(records_hold_finished_turn(&[root.clone(), slice.clone()]), rest, "{word:?}");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -636,7 +675,7 @@ mod tests {
         bind_tab("new-uid-2", pty, None);
         assert_eq!(pty_for("old-uid-2"), None);
         assert_eq!(pty_for("new-uid-2").as_deref(), Some(pty));
-        assert!(!bind_tab("../escape", pty, None));
+        assert_eq!(bind_tab("../escape", pty, None), LeftTurn::default());
         assert_eq!(pty_for("../escape"), None);
         assert_eq!(pty_for("new-uid-2").as_deref(), Some(pty));
         on_tab_gone(pty);

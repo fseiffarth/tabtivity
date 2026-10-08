@@ -21,6 +21,10 @@ pub struct PtySpawned {
     /// The tab's previous process died mid-turn (`agent_turn::bind_tab`): the
     /// tab starts out marked interrupted.
     pub interrupted: bool,
+    /// The tab's previous process left its turn finished: its agent sits at
+    /// its composer, so the window reads no question off its screen until
+    /// the hooks speak again (`agent_turn::LeftTurn`).
+    pub resting: bool,
 }
 
 #[tauri::command]
@@ -49,7 +53,7 @@ pub async fn pty_spawn(
     }
 
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
-    let (named, interrupted) = (prepared.named, prepared.interrupted);
+    let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
     let drop_dir = prepared.drop_dir.clone();
     let result = crate::terminal::spawn_pty(app.clone(), registry.inner().clone(), prepared.opts.clone());
     if result.is_ok() {
@@ -60,7 +64,7 @@ pub async fn pty_spawn(
             let _ = tauri::Emitter::emit(&app, crate::commands::root_mcp::SESSIONS_EVENT, ());
         }
     }
-    result.map(|()| PtySpawned { named, interrupted })
+    result.map(|()| PtySpawned { named, interrupted, resting })
 }
 
 /// Honest per-scope fence status for the project-pill menu.  This performs no

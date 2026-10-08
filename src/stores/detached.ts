@@ -46,7 +46,7 @@ import {
   type HostConnState,
 } from "./remote/remoteStatus";
 import { BOX_SCOPE_PREFIX, boxFolderOfScope, useBoxesStore } from "./boxes";
-import { useActivityStore, noteTurnCutOff, noteUserInput, type AttentionKind, type BusyKind } from "./activity";
+import { useActivityStore, noteAgentResting, noteTurnCutOff, noteUserInput, type AttentionKind, type BusyKind } from "./activity";
 import { bumpUsage } from "./usage";
 import { useRemoteMachinesStore } from "./remote/remoteMachines";
 import { useBigFoldersStore } from "./bigFolders";
@@ -169,8 +169,9 @@ export interface DetachedActivityEnvelope {
   /** `interrupt` is input that cuts the agent off (a bare Escape, Ctrl+C) —
    *  the one keystroke the classifier reads differently (see
    *  `activity.noteUserInput`). `cutoff` is a spawn that found the tab's
-   *  previous process died mid-turn (`activity.noteTurnCutOff`). */
-  kind: "input" | "interrupt" | "seen" | "bell" | "cutoff";
+   *  previous process died mid-turn (`activity.noteTurnCutOff`), `resting`
+   *  one whose previous process finished its turn (`activity.noteAgentResting`). */
+  kind: "input" | "interrupt" | "seen" | "bell" | "cutoff" | "resting";
 }
 
 /**
@@ -1171,6 +1172,7 @@ export async function listenDetachedHost(): Promise<() => void> {
     else if (kind === "seen") useActivityStore.getState().clearAttention(ptyId);
     else if (kind === "bell") useActivityStore.getState().noteBell(ptyId);
     else if (kind === "cutoff") noteTurnCutOff(ptyId);
+    else if (kind === "resting") noteAgentResting(ptyId);
   });
 
   // #234: a popout's usage counters land in the one accumulator that is flushed.

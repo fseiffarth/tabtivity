@@ -11,7 +11,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { cmdToKind, isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { isInterruptInput, lastPtyOutputAt, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteInput } from "../../lib/agents/promptCount";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
@@ -1448,7 +1448,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       // replay can't ride an old input stamp into a "working"/"done" glow.
       notePtySpawn(id);
       const spawn = async () => {
-        const spawned = await invoke<{ named?: boolean; interrupted?: boolean } | null>("pty_spawn", {
+        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; resting?: boolean } | null>("pty_spawn", {
           opts: { id, cmd, args, env, cwd, cols: term.cols, rows: term.rows, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession },
           sessionName: launchName,
         });
@@ -1458,6 +1458,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         // The tab's last run died mid-turn (a quit or crash): mark it
         // interrupted, as its resumed transcript will say.
         if (spawned?.interrupted === true) noteTurnCutOff(id);
+        // Its last run finished its turn: the agent is at its composer, and
+        // the conversation a resume or reattach repaints is not a question.
+        if (spawned?.resting === true) noteAgentResting(id);
       };
       try {
         await spawn();
