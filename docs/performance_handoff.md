@@ -1637,7 +1637,188 @@ fe07922e). Nothing run live.
   `fs-change` or tick after that corrects it (pre-existing overwrite race,
   only the stamp is new).
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08)
+## S8 — bundle + thin LTO
+
+*Written 2026-10-08 by the S8 implementer (finished by a second implementer after the first one's session ended: LTO commit, measurements, gates). Base `c162de8d`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `2e570eab` | §6 Rollup warnings: the eight `await import()`s that split nothing (plugin-dialog, `boxes`, `stopProjectPrompt` in `stores/projects.ts`; projects/settings/remoteStatus/hpcHost/remoteHosts in `hpcGuard.ts`) made static; the build prints no "dynamically imported but also statically imported" warning |
+| `e5c8a0bd` | §6 `TabPane`: calendar, browser, print manager, network/system/disk monitors, 3D projects view, skills library, prompt chart are `React.lazy` behind `LazyPane` (`.pane-loading` fallback); their other importers follow (calendar overlay, global machine monitor lazy-load the same chunks; `formatBytes`/`isPromptTargetTab` moved off the panes) |
+| `42ae9aa1` | §6 `AppShell` & co.: Machines overlay, Remote machines, HPC wizard, Models overlay mounted lazily once their store flag opens (`LazyWhen`); How to start / remote-features prompt / lessons lazy; Settings dialog + project dialogs lazy in `ProjectSwitcher`; recap lazy inside `StatsRecapHost`; header Machines member lazy and mounted only while `machines_enabled`; `DetachedApp` lazy in `App` |
+| `4273a1cc` | §6 `FileViewerPane`: GIF, ODT, media, sync/git merge views lazy (under the pane's existing Suspense); nested YAML tree/grid, bib cards, markdown graph, image annotator lazy with local Suspense |
+| `f1c7281f` | §6 root `Cargo.toml`: `[profile.release] lto = "thin"` |
+
+### What was built / choices made
+- **Measured with a scratch Rollup report** (a `generateBundle` plugin in the
+  scratchpad, not committed): per-chunk module sizes plus the static import
+  graph, and a "retained size" pass (bytes that leave startup if a module's
+  inbound static edges are cut) to pick cuts that actually move bytes. A
+  lazy site only helps if *every* static importer in the startup graph goes
+  too — several plan targets had a second importer (CalendarPane ← the
+  calendar overlay; SystemMonitorPane ← the global machine monitor;
+  NetworkTrafficPane ← StatsRecap's `formatBytes`; PromptChartTab ←
+  AgentSchedulesView's `isPromptTargetTab`; SettingsSubPanels ← ModelsOverlay;
+  MachinesIndicator ← StatusCluster + ExtendToRemoteDialog's `targetLabel`).
+- **Bundle numbers** (`bootstrap-*.js`, raw, minified):
+
+  | Step | bootstrap | JS chunks |
+  |---|---|---|
+  | base `c162de8d` | 3,973 kB (gz 1,149.5 kB) | 79 |
+  | static imports | 3,971 kB | 79 |
+  | TabPane split | 3,755 kB | 89 |
+  | AppShell/Settings split | 3,397 kB | 104 |
+  | viewer split | 3,319 kB (gz 974.3 kB) | 115 |
+
+  −654 kB raw (−16.5 %), −175 kB gz (−15.2 %). The bootstrap chunk's only static import is the
+  tiny `index-*.js` entry, so "initial JS" = bootstrap + 7 kB. **The plan's
+  ~1.5 MB target is not reached and not reachable with §6's list**: what
+  stays is the English dictionary (`lib/i18n.ts`, ~709 kB pre-minify), the
+  xterm stack (xterm + webgl + canvas addons, ~490 kB), react-dom (~134 kB),
+  `stores/tabs.ts`, `untested.ts` (kept on purpose, §6), and the always-
+  visible shell (HeaderBar, ProjectPill, FileTree, ProjectFilesView,
+  CenterPanel, TabBar, TerminalReaderView, MobileBridgeHost).
+- **Rollup warnings.** Plan said 5; the build printed 8. All were in-bundle
+  modules, so the fix is static imports. `hpcGuard`'s "cycle" comment was
+  stale (no static path from any target back to it). `projects ↔ boxes`
+  becomes a static cycle: safe, both sides touch each other only inside
+  actions (verified: no module-scope use).
+- **`TabPane` fallback.** The Suspense sits inside the host's `.center-pane`
+  box, which is what carries `data-scope-key`/`data-tab-key` (drag ghost),
+  the focus `onMouseDownCapture` and steering's lookups; no steering region
+  lives inside a pane (regions are side panel, header, tab card, overlays,
+  settings). `.pane-loading` only fills the box (`flex: 1 1 auto`).
+- **Hosts gated, not always-mounted-lazy**: a host that renders null until a
+  store flag is set gets an eager two-line wrapper in AppShell that reads the
+  flag (from the store's own module) and mounts the lazy host only then —
+  the mail/to-do pattern already there. DOM position unchanged (modal stacking
+  is DOM order). Hosts with always-on work stay eager: TourHost (listens for
+  `app:start-tour`; a lazy mount could miss an early event), RootOverlayHost
+  (review refresh listener), CalendarOverlayHost (chrome eager, only its
+  pane lazy), StatsRecapHost (event + daily check eager, recap lazy).
+- **Machines header member**: rendered nothing while `machines_enabled` is
+  off, so StatusCluster now mounts it only while on; unmounting clears its
+  header report exactly as its `!enabled` branch did.
+- **`DetachedApp` lazy in `App`**: none of the five modules only it reaches
+  has module-scope side effects, so the main window loses nothing by not
+  evaluating them. I did **not** lazy `AppShell` for popouts (would shrink a
+  popout's startup by ~1/3 but make the main window's startup a two-hop
+  waterfall and turn the bootstrap figure into a meaningless number) —
+  flagged below.
+- **TeX module not made dynamic.** `tex.ts` has 12 non-test importers (not 29)
+  and `FileViewerPane` uses ~60 of its names synchronously across the editor
+  (completions, ref-highlighting, click handlers, diagnostics; also generic
+  helpers like `offsetToLineCol`), plus `FileTree` and the PDF viewer. A
+  dynamic import would mean an async loader state threaded through all of
+  them for ~66 kB pre-minify (~1.7 % of startup). Not done; flagged.
+- **DiffView / CompareView / PresentationOverlay stay eager**: DiffView's row
+  is imported by the Reader's changes view, CompareView by the text editor's
+  compare mode, PresentationOverlay is mounted over every viewer.
+- **Phone PWA**: `vite.mobile.config.ts` / `vite.pdf-frame.config.ts` build a
+  separate entry; none of the split modules is in its graph. `npm run build`
+  (which runs `mobile:build` = tsc + `mobile:bundle`) is green. pdf.js still
+  loads only through `lib/viewers/pdfLoad.ts` (PdfView was already lazy;
+  nothing here touches it).
+- **Thin LTO**: measured with `cargo build --release --features custom-protocol`
+  (the exact command `scripts/package-dev.sh` runs, so frozen dev builds
+  **do** use the release profile and pay thin LTO on every post-commit
+  build; CI's three `package*` jobs on push do too), separate target dir,
+  `nice -n 10`, machine shared with other sessions:
+
+  | | full build | incremental (touch `lib.rs`) | binary |
+  |---|---|---|---|
+  | no LTO (base) | 494 s | 409 s | 111,106,960 B |
+  | `lto = "thin"` | 643 s (+30 %) | 453 s (+11 %) | 113,888,008 B (+2.5 %) |
+
+  The binary got **bigger**, not smaller, and builds are slower. The point
+  of thin LTO is cross-crate inlining (runtime / startup speed), which was
+  **not measured** here — plan §6 says "measure the gain against §1 before
+  keeping it", so that measurement is owed (perf-numbers after a dev build
+  with and without the profile). Kept in its own commit so reverting it is
+  one `git revert`. Debug/test/clippy builds are unaffected (dev profile).
+
+### Gotchas for later steps
+- **A new importer of a split module pulls its chunk back into startup**
+  (Rollup keeps a module in the chunk of any static importer). Check with
+  `npm run build`: the chunk must still be listed, and a "dynamically imported
+  but also statically imported" warning means a split stopped working. Rows
+  in `filemap_frontend.md` (`TabPane`, `AppShell`, `FileViewerPane`) say so.
+- **Tests: a `findBy*` inside `act(async () => …)` never sees lazily loaded
+  content** — React holds the Suspense retry until the act scope ends, so the
+  query times out. Await the lazy content outside `act`, then act on it
+  (`YamlViewer.test.tsx` `renderCards`). First import after `vi.resetModules`
+  is a fresh transform: give it a longer `findBy` timeout under load.
+- **S9 (`SleepingPane`)**: `TabPane`'s lazy kinds wake through `LazyPane`; a
+  slept-and-woken calendar/monitor pane re-renders from the module cache (no
+  second fetch). Keep `SleepingPane` outside `LazyPane` (in `PaneSlot`) so a
+  sleeping slot does not trigger a chunk load.
+- `StatusCluster` tests must set `machines_enabled: true` to see the Machines
+  member, and await it.
+- New gated overlay host → add it to AppShell's `LazyWhen` wrappers only if
+  its open flag lives in a module other than the host's own.
+
+### Gates (worktree)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,319.15 kB / gz 974.30 kB, 115 JS chunks; 0 "dynamically imported but also statically imported" warnings |
+| `npm test` | 745 files / 7607 tests, 2 failing = the known `MobileHeldPromptStore.test.ts` date time-bomb (S7 review 744 / 7603) |
+| `cargo test -q` | lib 3580 passed, 3 ignored (unchanged); every other target green (3748 total) |
+| `npm run lint` | 0 errors, 28 pre-existing warnings |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check c162de8d HEAD` | clean |
+
+`npm run backend:stale` not run: S8's only backend change is the cargo
+profile, which affects release builds only and nothing in the running window.
+The scratch release target dir (`target/s8-release`) was deleted.
+
+### Flagged for user
+- **Thin LTO made the binary 2.5 % bigger and builds 11–30 % slower**
+  (table above), with no measured runtime gain yet. Every post-commit frozen
+  dev build and every CI `package*` job pays it. Decide after a startup /
+  §1 measurement whether to keep `f1c7281f` or revert it.
+- **The ~1.5 MB bootstrap target is not reachable with §6's list**: after
+  the splits the bootstrap is 3,319 kB raw / 974 kB gz (−16.5 % / −15 %).
+  What remains is mostly the English dictionary, the xterm stack, react-dom,
+  `stores/tabs.ts`, `untested.ts` (kept on purpose) and the always-visible
+  shell. Going further needs a different lever (e.g. a lazily loaded or
+  split English dictionary), not more lazy panes.
+- **`AppShell` is not lazy for popouts**: a popout window still evaluates the
+  whole main shell's chunk. Making it lazy would cut a popout's startup by
+  ~1/3 but turn the main window's startup into a two-hop waterfall. Say if
+  popout startup matters more.
+- **TeX module (`lib/tex.ts`) not made dynamic**: ~60 synchronous uses across
+  the editor, `FileTree` and the PDF viewer for ~66 kB pre-minify (~1.7 % of
+  startup); an async loader through all of them was not worth it.
+- First open of each split pane / overlay / viewer now shows a brief
+  `.pane-loading` box (one chunk fetch from the local bundle, then cached).
+
+### Live click-through (user)
+On a frozen dev build of this branch (after landing). Each item: it opens
+as before; at most a blink of the loading box on the very first open, never
+a blank or broken pane; devtools console free of chunk-load errors.
+1. Launch: main window comes up as before (header, file tree, terminal tabs).
+2. Open one tab of each lazily loaded pane kind: calendar, browser, print
+   manager, network monitor, system monitor, disk monitor, 3D projects view,
+   skills library, prompt chart. Close and reopen one: no loading box the
+   second time.
+3. Overlays: Machines, Remote machines, HPC wizard, Models; the calendar
+   overlay; the stats recap; How to start / lessons pages. Turn the Machines
+   feature off and on in Settings: the header Machines member disappears and
+   comes back.
+4. Settings dialog from the project switcher, plus a project dialog (new /
+   edit project).
+5. Viewers in a Files tab: a GIF, an `.odt`, an audio/video file, a sync or
+   git merge view, a YAML file in tree and grid mode, a `.bib` in card view,
+   the markdown graph, the image annotator. Switching into each nested mode
+   must not blank the editor.
+6. Pop a tab out into its own window (and one root subwindow): the popout
+   opens and shows its tab; closing it returns the tab.
+7. Optional (LTO): compare startup time and idle CPU of this build with the
+   previous dev build.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented 2026-10-08, S8 review next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -1655,7 +1836,9 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 - Done, implemented + reviewed: S7 (pollers, git dots, launch chain:
   87b10d07, ee376977, d551f300; review fix 3934cd7e — see
   `### Review (S7 reviewer, 2026-10-08)`).
-- Next: S8 (fresh implementer), then S9–S12 per plan §11, then the final whole-range review, then landing on `develop`
+- Done, implemented (review owed): S8 (bundle + thin LTO: 2e570eab,
+  e5c8a0bd, 42ae9aa1, 4273a1cc, f1c7281f — see `## S8 — bundle + thin LTO`).
+- Next: S8 review (fresh reviewer), then S9–S12 per plan §11, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -1673,6 +1856,10 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   7603 tests, the same 2 `MobileHeldPromptStore` failures; cargo lib 3580
   passed; lint 0 errors / 28 warnings; clippy clean; brand ok; diff --check
   clean.
+- Gates at S8's HEAD (f1c7281f): build ok (bootstrap 3,319 kB / gz
+  974 kB); vitest 745 files / 7607 tests, the same 2 `MobileHeldPromptStore`
+  failures; cargo lib 3580 passed; lint 0 errors / 28 warnings; clippy
+  clean; brand ok; diff --check clean.
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
