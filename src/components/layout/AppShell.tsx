@@ -37,6 +37,7 @@ import { VpnPasswordPrompt } from "./VpnPasswordPrompt";
 import { AlarmPopup } from "../calendar/AlarmPopup";
 import { SteeringLegend } from "./SteeringLegend";
 import { SteeringPromptOverlay } from "./SteeringPromptOverlay";
+import { SteeringConfirmOverlay } from "./SteeringConfirmOverlay";
 import { ShortcutHelpOverlay } from "./ShortcutHelpOverlay";
 import { RemoteConnectDialog } from "../projects/RemoteConnectDialog";
 import { RemoteMachinesDialogHost } from "../projects/RemoteMachinesWindow";
@@ -1470,6 +1471,8 @@ export function AppShell() {
       <SteeringLegend />
       {/* Steering's prompt box (I): a prompt for the active agent tab. */}
       <SteeringPromptOverlay />
+      {/* Steering's "are you sure" before W closes a tab or K clears one. */}
+      <SteeringConfirmOverlay />
       <QuickOpen />
       <HintHost />
       <TourHost />

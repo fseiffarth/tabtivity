@@ -69,11 +69,8 @@ import {
   useRootOverlayStore,
 } from "../stores/rootOverlay";
 import { newTabRequestFor, requestNewTab, requestOverlayAgent } from "../lib/shortcuts/newTabChord";
-import {
-  clearAgentTab,
-  requestSteeringPrompt,
-  steeringActiveTab,
-} from "../lib/shortcuts/steeringAgent";
+import { requestSteeringPrompt, steeringActiveTab } from "../lib/shortcuts/steeringAgent";
+import { requestSteeringConfirm, steeringConfirmButton } from "../lib/shortcuts/steeringConfirm";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../lib/terminal/terminalScroll";
 import { documentScroller, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
@@ -607,9 +604,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
         case "files": // toggle the focused subwindow's docked file viewer
           if (focused && group) tabs.setGroupFiles(focused, !group.filesOpen);
           return;
-        case "closeTab":
-          if (tabs.activeKey) closeTabWithConfirm(tabs.activeKey);
+        // Asked first (`steeringConfirm`): the box comes up as the overlay
+        // region, the Confirm key closes, Esc keeps the tab.
+        case "closeTab": {
+          const active = steeringActiveTab();
+          if (active) requestSteeringConfirm("closeTab", active.scope, active.tab);
           return;
+        }
         // The card over the active tab's terminal (Undo clear after K, a
         // sign-in link): its buttons under the region cursor.
         case "tabCard":
@@ -622,12 +623,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
           return;
         }
         // The phone composer's Clear / Plan / Goal, on the active agent tab
-        // (`steeringAgent`). Steering stays on: Clear just goes in (Undo clear
-        // shows on the tab), Plan / Goal open the prompt box below led with
-        // their command. A tab that takes none of them leaves the key swallowed.
+        // (`steeringAgent`). Steering stays on: Clear asks first, as Close
+        // does, then goes in (Undo clear shows on the tab); Plan / Goal open
+        // the prompt box below led with their command. A tab that takes none
+        // of them leaves the key swallowed.
         case "agentClear": {
           const active = steeringActiveTab();
-          if (active) void clearAgentTab(active.scope, active.tab);
+          if (active) requestSteeringConfirm("agentClear", active.scope, active.tab);
           return;
         }
         // A text box over the window for the active agent tab; Enter sends it
@@ -789,6 +791,11 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
               { once: true },
             );
           }
+          return;
+        // Steering's own "are you sure" (W, K): yes, whatever the cursor is on.
+        // The box closes and `syncSoon` takes steering back down.
+        case "confirm":
+          steeringConfirmButton(root)?.click();
           return;
         case "press": {
           const done = activateRegionCursor();

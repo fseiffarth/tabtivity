@@ -14,6 +14,7 @@ import { newTabSlotLabels } from "../../lib/shortcuts/newTabChord";
 import { activeTabCard, steeringAppEnabled } from "../../lib/shortcuts/steeringRegion";
 import { statusTabs } from "../../lib/shortcuts/statusJump";
 import { steeringAgentOffer } from "../../lib/shortcuts/steeringAgent";
+import { steeringConfirmButton } from "../../lib/shortcuts/steeringConfirm";
 import { useActivityStore } from "../../stores/activity";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
@@ -218,6 +219,7 @@ export function SteeringLegend() {
     settingsRegion: region === "settings",
     headerRegion: region === "header",
     overlayRegion: region === "overlay",
+    steeringConfirm: region === "overlay" && !!steeringConfirmButton(document),
     // Read at render: the legend redraws on every steering key.
     tabCard: inPane && !!activeTabCard(),
     multiPane,

@@ -771,6 +771,7 @@ export type SteeringCondition =
   | "settingsRegion"
   | "headerRegion"
   | "overlayRegion"
+  | "steeringConfirm"
   | "walkRegion"
   | "tabCard"
   | "mail"
@@ -841,6 +842,8 @@ export interface SteeringLegendState {
   headerRegion?: boolean;
   /** The region cursor is in the dialog or menu on top. */
   overlayRegion?: boolean;
+  /** That dialog is steering's own "are you sure" (W, K). */
+  steeringConfirm?: boolean;
   /** A card floats over the active tab's terminal. */
   tabCard?: boolean;
   multiPane: boolean;
@@ -875,6 +878,8 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
       return !!s.headerRegion;
     case "overlayRegion":
       return !!s.overlayRegion;
+    case "steeringConfirm":
+      return !!s.overlayRegion && !!s.steeringConfirm;
     case "walkRegion":
       return !s.headerRegion;
     case "tabCard":
@@ -989,6 +994,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["left", "right"], pair: true, labelKey: "steering.overlayRow.label", descKey: "steering.overlayRow.desc", levels: ["region"], when: "overlayRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.sideView.label", descKey: "steering.sideView.desc", levels: ["region"], when: "sideRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.settingsPage.label", descKey: "steering.settingsPage.desc", levels: ["region"], when: "settingsRegion", group: "move" },
+  { actions: ["confirm"], labelKey: "steering.confirm.label", descKey: "steering.confirm.desc", levels: ["region"], when: "steeringConfirm", group: "act" },
   { actions: ["press"], labelKey: "steering.press.label", descKey: "steering.press.desc", levels: ["region"], group: "act" },
   { actions: ["search"], labelKey: "steering.search.label", descKey: "steering.search.desc", levels: ["region"], group: "act" },
   { actions: ["menu"], labelKey: "steering.menu.label", descKey: "steering.menu.desc", levels: [...BASE_LEVELS, "region"], group: "act" },

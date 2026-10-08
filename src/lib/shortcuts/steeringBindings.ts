@@ -47,6 +47,7 @@ export type SteeringAction =
   | "back"
   | "press"
   | "search"
+  | "confirm"
   | "newProject"
   | "mail"
   | "calendar"
@@ -143,6 +144,8 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   { action: "back", labelKey: "steering.back.label", scopes: ["region"], defaults: ["Escape"] },
   { action: "press", labelKey: "steering.press.label", scopes: ["region"], defaults: ["Enter"] },
   { action: "search", labelKey: "steering.search.label", scopes: ["region"], defaults: ["/"] },
+  // The yes of steering's own "are you sure" (W's close, K's clear).
+  { action: "confirm", labelKey: "steering.confirm.label", scopes: ["region"], defaults: ["y"] },
   // The right-click menu of what steering points at: the active project, the
   // active tab, the control under the region cursor.
   { action: "menu", labelKey: "steering.menu.label", scopes: ["mode"], defaults: [".", "ContextMenu"] },
