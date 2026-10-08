@@ -1910,7 +1910,166 @@ Range reviewed: `c162de8d..6ce56f89` (2e570eab, e5c8a0bd, 42ae9aa1,
   time, runtime gain not measured) are still the open decision on
   `f1c7281f`.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08, S9 next)
+## S9 — sleeping tabs I
+
+*Written 2026-10-08 by the S9 implementer. Base `3cb56a8c`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `6dbbafed` | §5.3 pane layer + viewer kinds + setting: `PaneSlot` renders the new `SleepingPane` instead of `TabPane` for a hidden viewer tab after the "Unload hidden tabs after" delay (Settings → Performance, `sleep_tabs_after_min`, default 10 min, Never = 0; named Rust field + round-trip test); pane holds (`PaneSleepHoldContext`/`usePaneSleepHold`) from `useUnsavedWork`, the text buffer, TeX compile, `PdfView` (marks/page edits/Submit/build) and playing media; i18n (en/de/es/fr/it), `UntestedTag` row `settings.sleepTabs`, filemap rows |
+| `b1761c56` | §4.5 stub: `CenterPanel` passes `inPopout` (one `Set` over `detachedGroupsByScope`); a sleepable viewer a popout shows renders `SleepingPane` in the main window at once (never mounted on a restore) unless its main copy holds unsaved work |
+
+### What was built / choices made
+- **Where it sleeps.** Exactly the S6 swap point: inside `PaneSlot`, after
+  the hooks and the Mobile first-seen stamp (moved above the branch, as S6
+  asked), before the derivation — a sleeping slot renders one
+  `<div class="sleeping-pane" data-sleeping="<kind>" aria-hidden>`. The
+  layer's `.center-pane` box (steering region/pane class, `data-tab-key` for
+  the drag ghost, `onMouseDownCapture` focus) is untouched, and
+  `SleepingPane` sits outside `LazyPane` (S8). The store is never written:
+  sleep is a render decision, so `tabsByScope`/`layoutByScope` keep identity
+  (tested).
+- **Timer: per slot, one-shot, not a 30 s layer tick.** The plan sketched
+  `hiddenSince` + a 30 s interval in the layer; S3's gotcha said reuse
+  `useSleepWhenHidden` as is, and S6's said pass scalars, never a Map of
+  sleep states. So each sleepable slot runs `useSleepWhenHidden({hidden:
+  sleepable && !visible, afterMs, hold})`: one `setTimeout` per *hidden
+  viewer* slot, armed on hide, cleared on show/hold/unmount, none for
+  terminal kinds or shown panes, none left once asleep (tested:
+  `getTimerCount() === 0`). No interval anywhere. Waking is the same render
+  that shows the pane (`asleep && hidden`), so focus and keyboard steering
+  wake through `visible` (`focused` implies `visible` here).
+- **Sleepable kinds (`isSleepableTab`, `lib/sleepWhenHidden.ts`):** `embed`
+  with a `viewer` (every `FileViewerPane` viewer — PDF, text/code, markdown,
+  TeX workspace, deck, YAML, media, …) and `projectfiles` (folder on
+  `TabEntry.folder`, source choice by `viewerId`). **Not:** terminal kinds
+  (S10), a viewer-less `embed` (its mount opens the file in an external app —
+  a wake would open it again), the plain `files` browser (its folder lives in
+  `FileBrowser` component state — it would come back at the root), nor
+  browser / calendar / monitors / printing / skills / prompt chart / 3D
+  (component state not on the tab; see Flagged).
+- **Holds.** `PaneSlot` provides a reporter (`PaneSleepHoldContext`); any
+  component in the pane calls `usePaneSleepHold(held)` with its own token
+  (holds lift independently; unmount releases). Wired: `useUnsavedWork`
+  (so PDF page edits, `PdfNoteLayer`, `DeckView`, `CompareView` hold for
+  free), `useEditableFile` (`isDirty || saving` — the text/code/markdown/
+  YAML/bib buffer), `TexView` (`compiling`), `PdfView` (`held || compiling`
+  — unsent/unsaved marks, Submit in flight, page edits, a build of the
+  file), `MediaView` (playing — new `onPlay/onPause/onEnded`). A hold cancels
+  the countdown; lifting it while hidden restarts the full delay (tested).
+  Outside `PaneSlot` (popouts, side panel, root console) there is no
+  provider and a hold is a no-op.
+- **Composition with S3.** A `PdfView` inside a sleeping pane is simply
+  unmounted (its 5 min timer never fires); one in an awake-but-hidden pane
+  still sleeps its canvas after 5 min. The viewer's unmount flushes its
+  staged position (`useViewerState` unmount flush), the wake mount seeds from
+  stage-then-store — the integration test (`PdfPaneSleep.test.tsx`, real
+  `PaneSlot → TabPane → FileViewerPane → PdfView`) scrolls to 900 at 150 %,
+  sleeps the pane, sees the document destroyed and `viewerState.scrollTop
+  === 900` in the store, wakes, and lands at 900 / 150 %.
+- **§4.5 popout stub.** For a viewer tab in a popout the main window's pane
+  is a hidden duplicate: it renders `SleepingPane` at once (`inPopout &&
+  !held`) — on a restore with popouts it is never mounted, so no second
+  `readFileBytes`/worker document. A main copy that holds unsaved work at
+  detach time stays mounted until that clears. Docking back mounts it from
+  `viewerState`, which carries the popout's staged position (so the S3
+  reviewer's #231 note — main viewer keeps its pre-detach scroll — no longer
+  applies to sleepable viewers).
+- **Setting.** `sleep_tabs_after_min?: number` (TS) / `Option<u32>` (Rust,
+  named field, `skip_serializing_if`, round-trip test for absent/0/30).
+  Read only through `sleepTabsAfterMs` (absent/negative/NaN → 10 min, 0 →
+  null = off). Dropdown: Never / 5 / 10 / 30 / 60 min; a hand-edited other
+  value still works. "Never" also turns the popout stub off (one switch to
+  back out of the feature). `CenterPanel` folds it into one scalar prop.
+
+### Gotchas for later steps
+- **S10 (terminal kinds):** extend `isSleepableTab` only together with the
+  no-kill mount — today `TerminalView` kills its PTY on unmount, so letting
+  a terminal kind through `isSleepableTab` before S10's `persistOnUnmount`-
+  from-the-start change would kill PTYs. Keep terminal kinds **out of the
+  `inPopout` immediate stub** forever: the main window's `TerminalView` is the
+  PTY owner a popout attaches to. Host sessions and a key the overlay dock
+  draws (`overlayAgentShown` in `CenterPanel`) must never sleep: either
+  exclude them in the predicate (pass a scalar like `dockShown`) or report a
+  hold. Closing an *asleep* terminal tab needs the explicit `pty_kill`
+  (no view exists) — the slot knows it is asleep only in render; the close
+  path in `stores/tabs.ts` will need its own answer (e.g. a module-level
+  `Set` of asleep PTY ids maintained by `PaneSlot` effects).
+- **Derivation on wake:** a sleeping slot skips the derivation; on wake it
+  re-runs from the same props, so `tmuxSession`/`sandbox`/`terminalCwd` come
+  back identical (pure function of props + the first-seen Map, whose stamp is
+  written before the branch). S10 can rely on that.
+- **The hold seam is general:** anything new inside a pane that must not be
+  unmounted (a long-running viewer job, an unsent form) calls
+  `usePaneSleepHold(cond)`. `useUnsavedWork` already reports, so registering
+  unsaved work is enough for most.
+- **Tests:** `SleepingTabs.test.tsx` mocks `TabPane` with a stand-in that
+  counts mounts/unmounts and raises a hold from a module `Set` — use fake
+  timers *before* `render` (the countdown starts at mount). `PdfPaneSleep`
+  needs a `getContext` Proxy (the presentation overlay's canvas calls
+  `clearRect`).
+
+### Gates (worktree, at b1761c56)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,321.36 kB / gz 975.00 kB (S8 3,319.15 kB) |
+| `npm test` | 747 files / 7619 tests (S8 745 / 7607; +2 files, +12 tests); 3 failed: the 2 known `MobileHeldPromptStore` date time-bomb + `MobileIndicator` "lists paired devices…" under load average 39 — 5/5 alone |
+| `cargo test -q` | lib 3581 passed, 3 ignored (S8 3580, +1 round-trip test); every other target green |
+| `npm run lint` | 0 errors, 28 warnings (unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check 3cb56a8c HEAD` | clean |
+
+`src-tauri/` changed (the settings field only): run `npm run backend:stale`
+after landing. A running older backend still round-trips the key (it rides
+in `Settings.extra`), so nothing breaks before a rebuild.
+
+### Flagged for user
+- **Which kinds sleep.** Only file viewers and Files (Project) tabs. The
+  plain Files browser, browser, calendar, monitors, print manager, skills,
+  prompt chart and 3D view keep state that is not on the tab (browsed folder,
+  page/scroll, monitor history) and stay mounted; say if any should sleep
+  (each needs its state moved onto the `TabEntry` first).
+- **What a wake does not bring back:** the position (scroll, zoom, page,
+  folds, TeX active file) comes back via `viewerState`; transient state that
+  was never persisted does not — a clean editor's undo history (autosave
+  users: Ctrl+Z after coming back to a tab hidden ≥ 10 min has nothing to
+  undo), a text selection, an open find bar, a paused video's playhead. Only
+  after the delay, never for unsaved work.
+- **Plan wording:** §5.3 says "never sleep … the tab a popout mirrors" while
+  §4.5 says render a stub in the main window for a popped-out PDF. Built per
+  §4.5 for viewer kinds (the main copy is the redundant one; unsaved work
+  still holds it). The "never sleep" rule stays true for terminal kinds (S10).
+- **"Never" disables the §4.5 stub too** (one switch to back out); say if the
+  popout stub should be unconditional.
+- **Scopes not shown** sleep their viewers by the same per-tab timer (every
+  tab of a hidden scope is hidden), not by a separate scope-level pass.
+- A popped-out TeX workspace's main copy is stubbed; its sub-pane positions
+  (`<key>#<path>`) were never persisted (pre-existing, S3 review), so a
+  dock-back opens the workspace's PDF centre at its default position.
+
+### Live click-through (user)
+On a frozen dev build of this branch (after landing). To see it quickly set
+Settings → Performance → "Unload hidden tabs after" → 5 min.
+1. Settings → Performance: the new row shows "10 min" on a profile that never
+   set it, with the untested pill; pick 5 min, reopen Settings: still 5 min.
+2. Open a long PDF, zoom to 150 %, scroll to page 20; open a markdown file
+   and scroll it; open a Files (Project) tab on a subfolder. Switch each
+   group to a terminal tab and wait > 5 min. Switch back to each: the PDF is
+   at page 20 / 150 % (brief reload), the markdown at its scroll, the Files
+   tab on its subfolder. A terminal/agent tab hidden as long is untouched
+   (scrollback, running process).
+3. Type into a text file with autosave off, hide it > 5 min, come back: the
+   unsaved text is still there. Same for a PDF with unsent markup.
+4. Start an audio file, switch tabs, wait > 5 min: it keeps playing.
+5. Pop a PDF tab out into its own window: it opens there as before; dock it
+   back: the main window shows it at the popout's page.
+6. Keyboard steering (Shift+Space) onto a tab card of a long-hidden viewer
+   and activate it: it opens and shows its content.
+7. Settings → "Never": nothing unloads any more.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented 2026-10-08, S9 review next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -1932,7 +2091,9 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   e5c8a0bd, 42ae9aa1, 4273a1cc, f1c7281f; review found no bug — see
   `### Review (S8 reviewer, 2026-10-08)`; thin LTO keep/revert is the
   user's call).
-- Next: S9 (sleeping tabs I) implementer, then S10–S12 per plan §11, then the final whole-range review, then landing on `develop`
+- Done, implemented (review pending): S9 (sleeping tabs I: 6dbbafed,
+  b1761c56 — see `## S9 — sleeping tabs I`).
+- Next: S9 reviewer, then S10–S12 per plan §11, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -1957,6 +2118,11 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 - Gates at the S8 review (6ce56f89 + review doc): identical to S8's HEAD
   (build ok, bootstrap 3,319 kB; vitest 745 / 7607, same 2 failures; cargo
   lib 3580; lint 0 / 28; clippy, brand, diff --check clean).
+- Gates at S9's HEAD (b1761c56): build ok (bootstrap 3,321 kB / gz
+  975 kB); vitest 747 files / 7619 tests, the 2 `MobileHeldPromptStore`
+  failures + a `MobileIndicator` load flake (passes alone); cargo lib 3581
+  passed; lint 0 errors / 28 warnings; clippy clean; brand ok; diff --check
+  clean. `npm run backend:stale` owed after landing (settings field).
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
