@@ -1605,7 +1605,7 @@ fn windows_script_command(script_path: &str, args: Option<&str>) -> Command {
         cmd
     } else {
         let mut cmd = crate::paths::command_no_window("cmd");
-        cmd.args(["/C", script_path]);
+        cmd.args(["/D", "/C", script_path]);
         cmd
     };
     if let Some(extra) = args.map(str::trim).filter(|a| !a.is_empty()) {
@@ -3035,6 +3035,9 @@ mod tests {
         for script in [r"C:\tmp\build.bat", r"C:\tmp\run.cmd", r"C:\tmp\go.sh"] {
             let cmd = windows_script_command(script, Some("--x 1"));
             assert_eq!(cmd.get_program().to_string_lossy(), "cmd");
+            // `/D`: no AutoRun from the user's registry before the script.
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            assert_eq!(&args[..2], ["/D", "/C"]);
         }
     }
 

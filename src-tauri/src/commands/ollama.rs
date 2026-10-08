@@ -407,7 +407,7 @@ pub async fn install_ollama(app: tauri::AppHandle) -> Result<String, String> {
     // shell level so a single reader sees every line in order. On unsupported
     // platforms there is no automated path — point at the manual download.
     let (program, args): (&str, Vec<String>) = if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C".into(), format!("{cmd} 2>&1")])
+        ("cmd", vec!["/D".into(), "/C".into(), format!("{cmd} 2>&1")])
     } else if cfg!(any(target_os = "linux", target_os = "macos")) {
         ("sh", vec!["-c".into(), format!("{cmd} 2>&1")])
     } else {

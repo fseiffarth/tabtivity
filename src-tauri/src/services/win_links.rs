@@ -31,7 +31,7 @@ pub fn mklink_junction_line(target: &Path, at: &Path) -> Result<String, String> 
     if target.contains('"') || at.contains('"') {
         return Err("the path holds a quote".into());
     }
-    Ok(format!("/C mklink /J \"{at}\" \"{target}\""))
+    Ok(format!("/D /C mklink /J \"{at}\" \"{target}\""))
 }
 
 /// Make a directory junction at `at` leading to `target` (absolute; a
@@ -71,14 +71,14 @@ mod tests {
         .unwrap();
         assert_eq!(
             line,
-            r#"/C mklink /J "C:\boxes\b\member one" "C:\work\member one""#
+            r#"/D /C mklink /J "C:\boxes\b\member one" "C:\work\member one""#
         );
     }
 
     #[test]
     fn a_verbatim_prefix_is_dropped_and_a_quote_refused() {
         let line = mklink_junction_line(Path::new(r"\\?\C:\work\m"), Path::new(r"C:\b\m")).unwrap();
-        assert_eq!(line, r#"/C mklink /J "C:\b\m" "C:\work\m""#);
+        assert_eq!(line, r#"/D /C mklink /J "C:\b\m" "C:\work\m""#);
         assert!(mklink_junction_line(Path::new("C:\\a\" & calc \""), Path::new(r"C:\b")).is_err());
         assert!(mklink_junction_line(Path::new(r"C:\a"), Path::new("C:\\b\"")).is_err());
     }
@@ -92,7 +92,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             line,
-            r#"/C mklink /J "\\srv\share\proj\link" "\\srv\share\proj\data""#
+            r#"/D /C mklink /J "\\srv\share\proj\link" "\\srv\share\proj\data""#
         );
     }
 }

@@ -975,7 +975,7 @@ mod tests {
         use std::os::windows::process::CommandExt;
         let output = std::process::Command::new("cmd")
             .arg("/D")
-            .raw_arg(format!("/C mklink /J \"{}\" \"{}\"", link.display(), target.display()))
+            .raw_arg(format!("/D /C mklink /J \"{}\" \"{}\"", link.display(), target.display()))
             .output()
             .unwrap();
         assert!(output.status.success(), "mklink: {}", String::from_utf8_lossy(&output.stderr));

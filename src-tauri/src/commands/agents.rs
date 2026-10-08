@@ -824,7 +824,7 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
             c = crate::paths::command_no_window("cmd");
             // cmd doesn't take an argv — hand it the raw line un-requoted.
             use std::os::windows::process::CommandExt;
-            c.raw_arg(format!("/C {cmd_str} 2>&1"));
+            c.raw_arg(format!("/D /C {cmd_str} 2>&1"));
         }
         into_install_home(&mut c)?;
         Ok(c)
@@ -1081,7 +1081,7 @@ fn npm_uninstall_command(
     let mut c = {
         use std::os::windows::process::CommandExt;
         let mut c = crate::paths::command_no_window("cmd");
-        c.raw_arg(format!("/C npm uninstall -g {pkg} 2>&1"));
+        c.raw_arg(format!("/D /C npm uninstall -g {pkg} 2>&1"));
         c
     };
     #[cfg(not(windows))]
