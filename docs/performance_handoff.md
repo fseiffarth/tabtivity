@@ -2843,7 +2843,123 @@ only, appends to the doc, paths quoted, brand from `scripts/lib/brand.sh`) +
   checkout's untracked `perf-numbers.sh`/`performance_numbers.md` collide on
   landing).
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 implemented + reviewed 2026-10-08; S11 implemented + reviewed 2026-10-08; S12 implemented + reviewed 2026-10-09; final whole-range review next)
+## Final review (2026-10-09)
+
+Range `a6ed2c7a..b53f2c7c` (96 commits, S1–S12 with their reviews), plus the
+fixes below. Nothing run live.
+
+**Checked (cross-step, what the per-step reviews could not see)**
+- Sleep × everything mounted in a pane: a sleeping viewer or terminal slot
+  unmounts the whole `TabPane` subtree, so S12 `usePoll`s (Reader facts,
+  Git view, Slurm queue, prompt chart, Network totals), S11 `watchedReads`
+  (unwatch on stop), S7 `useMobileHostStatus` retains and `coalescedRun`s,
+  and S3's `useViewerState` (unmount flush) all stop with it and restart on
+  the wake mount (immediate run / fresh read / seed from stage-then-store).
+  S8's `LazyPane` sits inside `TabPane`, so a sleeping slot loads no chunk;
+  a woken lazy pane renders from the module cache.
+- Parked PTYs × S5 digests / S4 lamps: `pty_remove_view(sleeping)` leaves the
+  route unsubscribed, so a sleeping tab digests through
+  `terminal-activity-batch` exactly like a hidden one; the S4 recompute reads
+  only stores; `lookedAtPtyIds` cannot contain a sleeping tab (it is hidden).
+  The S10 scheduled-input stand-in reads `lastPtyOutputAt` off those digests.
+- S6 memo × S9/S10 props: `sleepAfterMs`, `inPopout`, `drawnElsewhere` are
+  scalars; `held`/asleep are slot-local state; `markPtyAsleep` in render is
+  idempotent (StrictMode double render safe).
+- Holds: deck presenting (S9 review) still holds — `DeckPresentingSleepHold`
+  green after the deck fix below; PdfView `held || compiling`, TexView,
+  editors, media, annotator, commit box, launch-in-flight all report through
+  the one `PaneSleepHoldContext`.
+- Quit: `RunEvent::Exit` drains the persist lane, then `kill_all` over the
+  PTY registry — parked PTYs included (they stay registered); transcript
+  watches and `proc_table` are in-process (threads/statics, no child
+  process); `net_usage`'s `ss`/`ssh -O check` are waited for synchronously.
+- Leftovers: no TODO/FIXME/XXX, debug logging or `any` added (the
+  `eprintln!`s are error paths and one test skip note); new exports unused
+  outside their module are test seams or types only; clippy `-D warnings`
+  covers Rust dead code.
+- i18n: the range adds 4 keys (`settings.sleepTabs*`), present in en, de, es,
+  fr, it; the help text covers terminal kinds (S10 rewording). No hardcoded
+  display text in the new components (`SleepingPane` renders none).
+- Untested register: `settings.sleepTabs` row + pill (covers S9 and S10);
+  the other steps are behaviour changes with QA rows 2400–2413.
+- File maps: rows present for `PaneSlot`, `SleepingPane`, `sleepingPtys`,
+  `terminalSpawn`, `usePoll`, `coalescedRun`, `mobileHostStatus`,
+  `transcriptWatch`, `sleepWhenHidden`, `activityDigests`, `proc_table`,
+  `transcript_watch`, `replay_trim`; S1's `persist_lane.rs` and
+  `ordered_lane.rs` had none — added (`23633fad`).
+
+**Fixes**
+| Commit | Bug | Regression test |
+|---|---|---|
+| `a0703586` | Deck audience window (known bug c). The presenter's unmount close already existed for a window whose open had answered; the gap was an open still in flight: closing the deck tab (or ending the talk) before `open_presenter_window` answered left the window on the projector. The open now closes what it lands if the presenter is gone. | `deck/DeckAudienceUnmount.test.tsx` (2; the in-flight case fails unfixed) |
+| `edaad214` | Known bug a: focus moving into an iframe of the window (mail body, reader view, viewer frame) fired `blur` and stopped every S12 poll. `startFocusTracking` decides a blur one task later; an iframe as active element or `document.hasFocus()` counts as focused; a same-origin frame's own blur/focus track leaving/returning. | `Quiesce.test.ts` "startFocusTracking with an iframe" (3) |
+| `dc9dd67e` | Known bug b: `blurred` seeded from `document.hasFocus()`. A visible document now starts focused until a real `blur`; a hidden one starts blurred. | `Quiesce.test.ts` "startFocusTracking at startup" (2) |
+| `2bdc8ec2` | Found by a full `cargo test` (S11 × S1 timing): the job scan read a shared table up to 500 ms old, so a shell started just before a turn ended could be missing; the Stop scan then *settled* the tab and the 2 s tick skipped it — the job mark waited for the 30 s backstop (the S11 flag said "next 2 s tick"). Made `a_live_backgrounded_shell_is_a_job…` fail intermittently. A scan that can settle a tab (turn over, no job on record, not settled) walks fresh. | `a_turn_end_scan_sees_a_shell_younger_than_the_shared_table` |
+
+**Gates (worktree, at 2bdc8ec2)**
+| Gate | Result |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,327.37 kB / gz 977.38 kB |
+| `npm test` | 755 files / 7681 tests; 2 failed — the known `MobileHeldPromptStore` date pair (load < 1) |
+| `cargo test -q` | lib 3611 passed, 3 ignored; all targets 3779 passed, 0 failed (first full run, before `2bdc8ec2`: the agent_turn failure that commit fixes) |
+| `npm run lint` | 0 errors, 28 warnings (unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `cargo check --target x86_64-pc-windows-msvc` (RC/lib shims) | ok |
+| `scripts/brand-check.sh` | ok |
+| `scripts/privacy-check.sh a6ed2c7a..HEAD` | ok (18,752 added lines, 163 paths, 101 commits) |
+| `git diff --check a6ed2c7a HEAD` | clean |
+
+**Flagged for user — consolidated (every open item from S1–S12 and their reviews; fixed ones marked)**
+
+*Decisions owed*
+- Thin LTO (`f1c7281f`): binary +2.5 %, builds +11–30 %, runtime gain unmeasured — keep or revert (S8).
+- Bootstrap stays 3.3 MB (gz 977 kB); the 1.5 MB target needs another lever (lazy English dictionary), not more lazy panes (S8).
+- `AppShell` not lazy for popouts (popout startup vs main-window waterfall); `lib/tex.ts` not made dynamic (S8).
+- Glass themes: tab bars / docked file column lost their frost; compensate with a more opaque fill? (S7).
+- Blurred = stopped for the migrated polls (second-monitor case); Network 1 s rate, print queue, file auto-reload kept on direct timers (S12).
+- Which kinds sleep: viewers, Files (Project), shell/agent terminals; browser, calendar, monitors, print, skills, prompt chart, 3D, plain Files stay mounted (S9).
+- Busy terminals / working agents are not held awake; their output buffers in the backend (≈ 2 MB replay + 2 MB tail per chatty PTY) (S10).
+- A failed-spawn pane unloads and its wake retries the spawn (an HPC refusal asks again) (S10).
+- "Never" also turns off the §4.5 popout stub (S9).
+- OSC 52 copies made while a tab was hidden no longer reach the clipboard on show (S10 review).
+- Plan §7.1 `command(async)` replaced by the ordered lane (S1).
+- The cached ControlMaster is trusted while its process runs, even if its socket was replaced (S11 review).
+
+*Behaviour changes to expect*
+- No fsync / watcher event for an unchanged settings/projects/session write (S1).
+- Header resources every 5 s; Ollama installed mid-session shows on next hover/overlay close; Files-view Git flag follows the pill dot (nested repos update on show) (S7).
+- Reader: writes show in ~0.25–1 s; what no file event says (shell dying with its CLI, Codex rollout in another day folder) waits for the 15 s backstop; unwatchable reads still 2 s (S11).
+- Job mark: a shell started < 500 ms before a mid-turn hook shows on the next 2 s tick (S11); the turn-end case is fixed (`2bdc8ec2`).
+- Sessions list 20 s + on focus; SSH traffic totals every 60 s without a Network pane (S11).
+- After a hidden spell > 128 KB, lines scrolled off before the last full clear are not replayed into xterm's scrollback; Codex's inline viewport may never be trimmed (S5).
+- First open of each split pane/overlay shows a brief loading box; steering `,` to Settings on first open waits for the chunk (S8, S8 review).
+- Zoom preview scales inter-page gaps, the commit does not (pages far from the cursor shift ≤ 28 px × (eff − 1) per gap); a corrected middle page in the viewport resizes in place (S2 review).
+
+*What a wake does not bring back* (S9, S9 review, S10, S10 review, final)
+- A clean editor's undo history, a text selection, an open find bar, keyboard-select, a paused video's playhead, presentation marker strokes, an open SQLite query, a `ProjectFilesView` dialog or sort order, a dismissed sign-in card (comes back), scrollback past the 1 MB tail / before the last clear, a CLI's prompt line read off the xterm.
+- New here: a TeX workspace's sub-pane positions (`<key>#<path>`: the PDF centre's zoom/scroll, a child file's scroll) were never persisted, so any wake after the delay (not only a popout dock-back, S3/S9) reopens them at the default position; S3's 5 min PdfView sleep inside a TeX workspace does the same. Hold, or persist those keys?
+
+*Minor gaps left as they are*
+- S1: ordering against non-lane sync commands is gone (only briefly stale reads found); a panicking lane job leaves its promise pending (a quit could stall).
+- S2: no Rust unit test for `file_size_local`.
+- S3: a window dying mid-build leaves `compilingByPath` raised — that PDF never sleeps (S3) and, since S9, its pane never unloads; a PDF restored hidden at launch still parses once; the unsaved-markup hold is untested; (#231 reattach scroll: moot for sleepable viewers since S9).
+- S4: `SteeringLegend`/`useKeyboard` read no terminal for the frame before first open; a busy row that never repaints would drop a sent prompt in the Reader; the phone still reads 1200 rows; first bill tick after a long idle books 0; `isTabLookedAt` unions popout and scope keys; a shell tab's text-less frames count as text.
+- S5: the pending cap cuts at a char boundary (a mode split across it is lost); 8-bit C1 controls are text to the tokenizer; `?47h`/`?1047h` are not cuts; staggered ≥ 500 ms cadences approach one event per PTY.
+- S6: `TabAgentModeMarks` subscribes to the whole mode maps (badge-only re-render); `FileTree.tsx` comment above `tooltipTimer` still says rows are not memoised.
+- S7: one folder spelled two ways by two trees re-creates the one watcher for the last asker; a full Git-view reading landing after a newer dot probe overwrites and stamps it.
+- S9: a hold raised in the same few ms the sleep timer fires can lose to it.
+- S10: root tabs never unload while the root console is open; the launch hold keeps a pane awake while the HPC/unfenced question is open; mode marks / model tag fall back to transcript/tmux while asleep.
+- S11: watches leaked by a reload or closed popout stay armed (bounded by the 128 cap, evicted first); ProxyJump masters show no counters (as before); "skip agent-auth homes with no live tab" (§7.3) still open.
+- S12/final: leaving the window from *inside* a sandboxed (opaque-origin) iframe is not seen until the next focus change there — polls run on meanwhile (fails open, as before S12).
+- Final: `DeckPresenter.closeAudience` closes `presenterLabel(path)`, not the recorded `audience` label — a deck renamed mid-talk leaves its audience window open on D/Exit (pre-existing, not in the range).
+- Fixed: S6 schedule tooltip (`e10c5fe8`); S8 Machines off mid-add (`bd8004f3`); S9 deck audience window on unmount (`a0703586`); S9 help text (S10); S12 iframe focus (`edaad214`); S12 startup focus (`dc9dd67e`).
+
+*Landing*
+- `npm run backend:stale` after landing (S1 lane, S2 `file_size`, S5/S10 terminal router, S7 git/fs_watch, S9 settings field, S11 commands + sampler). New frontend on an old backend: a program that exits while asleep wakes to a blank pane, the Reader polls every 2 s, a symlink-spelled `projectDir` ignores `fs-change` until rebuilt.
+- Merge conflicts expected with the main checkout's uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`, `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx` (S2's `TexView.compile` hunks), `lib.rs`, `agent_auth.rs`; check `ProjectFilesView.tsx`, `FileTree.tsx`, `MobileIndicator.tsx`, `projects.ts`, `commands/git.rs`, `fs_watch.rs`. The main checkout's untracked `scripts/perf-numbers.sh` / `docs/performance_numbers.md` collide with the branch's.
+- `MobileHeldPromptStore.test.ts` (date time-bomb, 2 failures) is being fixed in the main checkout, not here.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S1–S12 implemented + reviewed by 2026-10-09; final review done 2026-10-09; landing on develop next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -2879,7 +2995,9 @@ on the branch, so delete or overwrite the main checkout's copies when landing).
   e114dc6c — see `### Review (S12 reviewer, 2026-10-09)`);
   `scripts/perf-numbers.sh` and `docs/performance_numbers.md` are now on the
   branch.
-- Next: S12 reviewed — the final whole-range review, then landing on `develop`
+- Done: the final whole-range review (2026-10-09; fixes a0703586, edaad214,
+  dc9dd67e, 2bdc8ec2, filemap 23633fad — see `## Final review (2026-10-09)`).
+- Next: landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -2938,6 +3056,11 @@ on the branch, so delete or overwrite the main checkout's copies when landing).
   7674 tests, the 2 `MobileHeldPromptStore` failures; cargo lib 3610 passed
   (all targets 3778); lint 0 errors / 28 warnings; clippy clean; brand ok;
   privacy ok; diff --check clean.
+- Gates at the final review's HEAD (2bdc8ec2): build ok (bootstrap 3,327 kB /
+  gz 977 kB); vitest 755 files / 7681 tests, the 2 `MobileHeldPromptStore`
+  failures; cargo lib 3611 passed (all targets 3779); lint 0 errors / 28
+  warnings; clippy clean; Windows cross-check ok; brand ok; privacy ok
+  (a6ed2c7a..HEAD); diff --check clean.
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
