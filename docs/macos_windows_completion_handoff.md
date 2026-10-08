@@ -1389,3 +1389,37 @@ Flagged for user:
   `test-windows` (and `test-macos`) run, delete their `continue-on-error`
   lines to make them real gates.
 - CI's newer stable clippy may still report lints 1.97 does not know.
+
+### Reviewer
+
+Reviewed `8b1d9f73..1751ae43`; no confirmed bug, no code change.
+- Every rewrite is behaviour-preserving on all three OSes:
+  `map_or(false, …)` → `is_some_and` is the same predicate; `sort_by_key`
+  is stable like `sort_by` on the same lowercase key; `read_dir(root)` /
+  `get(key)` only drop a borrow/deref (plist 1.10 `get(&str)`); the
+  `ns_window_id` / `resolve_window_id_for_pid` fn paths take the same
+  argument types the closures passed through; `BI_RGB.0` is already `u32`;
+  the `rows` lifetime elision binds the output to `buf` exactly as before;
+  each dropped `return` leaves its cfg block as the function's tail on its
+  OS (the cross-target builds would reject anything else);
+  `WindowsBackend::default()` is `new()`.
+- Keyring seccomp cfg narrowing: on Linux `cfg(target_os = "linux")` covers
+  test and non-test builds as before; the only users are
+  `write_keyring_filter` and the two keyring tests, all `cfg(target_os =
+  "linux")`. Nothing on macOS/Windows referenced them (`seccomp_launcher`,
+  which macOS tests do use, keeps its `all(test, unix)`).
+- The `allow` is `cfg_attr(target_os = "macos")` on one fn and one `let`,
+  the narrowest scopes that carry the `SsDump::default()` call.
+- CI: `components: clippy` on the pinned `rust-toolchain` step, clippy step
+  last in `test-windows` with step-level `continue-on-error`, same command
+  as macOS, no secrets, cache/order untouched; YAML parses.
+
+Gates (sequential): `npm run build` ok; `npm test` 7527, 2 failed (the
+known `MobileHeldPromptStore` pair); `cargo test` 3737 passed; `npm run
+lint` 0 errors / 28 warnings; Linux clippy `-D warnings` ok; brand-check
+ok; privacy-check (`8b1d9f73..HEAD`) ok; `git diff --check` clean; Windows
+cross clippy `--all-targets -D warnings` 0 findings; macOS cross clippy
+(check-only stand-ins) 0 findings in this crate (only the 5 known
+vendored `tauri-runtime-wry` warnings).
+
+Flagged for user: none beyond the implementer's.
