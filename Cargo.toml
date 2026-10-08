@@ -21,3 +21,12 @@ tauri-runtime-wry = { path = "src-tauri/patches/tauri-runtime-wry" }
 # unaffected.
 [profile.dev.package."*"]
 opt-level = 2
+
+# Thin LTO for shipped and frozen-dev builds (docs/performance_plan.md §6). Only
+# `lto`: `codegen-units` stays at its default, and there is deliberately NO
+# `panic = "abort"` — `catch_unwind` guards the phone markup bake and the window
+# park paths, and `lib.rs` installs a crash-log panic hook; abort would turn
+# each of those recoveries into a crash. Workspace-root profile: one in
+# `src-tauri/Cargo.toml` would be ignored.
+[profile.release]
+lto = "thin"
