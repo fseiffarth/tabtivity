@@ -302,6 +302,9 @@ const TabItem = memo(function TabItem({
       .filter((at): at is Date => !!at)
       .sort((a, b) => a.getTime() - b.getTime())[0];
     return { count: enabled.length, next };
+    // `scheduleEpoch` looks unnecessary to the linter because the body reads
+    // the clock, which it cannot see — the bump is what re-reads it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedules, scheduleEpoch]);
   const refreshScheduleNext = () => {
     if (schedule.next && schedule.next.getTime() <= Date.now()) setScheduleEpoch((n) => n + 1);
