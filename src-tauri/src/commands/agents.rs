@@ -1523,7 +1523,7 @@ fn arm_transcript_watch(
     let Some(id) = watch.filter(|id| transcript_watch::valid_id(id)) else {
         return false;
     };
-    if unchanged && transcript_watch::armed(id) {
+    if unchanged && transcript_watch::keep(id) {
         return true;
     }
     let targets = agent_transcript::watch_targets(agent, project_id, session_id, subagent, local_model);

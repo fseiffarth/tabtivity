@@ -80,7 +80,8 @@ impl Target {
 }
 
 /// The most watches kept at once. A window that reloads never disarms its
-/// Readers' watches; past this the oldest armed goes.
+/// Readers' watches; past this the one read least recently goes — a shown
+/// Reader reads at least every backstop period, a leaked watch never again.
 const MAX_WATCHES: usize = 128;
 
 /// Which ids watch what, and how many ids watch each folder.
@@ -88,7 +89,7 @@ const MAX_WATCHES: usize = 128;
 struct Registry {
     subs: HashMap<String, Vec<Target>>,
     dirs: HashMap<PathBuf, usize>,
-    /// When each id was (re)armed, in arm order.
+    /// When each id was last armed or kept by a read, in that order.
     armed_seq: HashMap<String, u64>,
     seq: u64,
 }
@@ -127,6 +128,17 @@ impl Registry {
         }
         self.subs.insert(id.to_string(), targets);
         (added, dropped)
+    }
+
+    /// A read kept `id` as it is: it is in use, so the last to be evicted.
+    /// False when `id` is not armed.
+    fn touch(&mut self, id: &str) -> bool {
+        if !self.subs.contains_key(id) {
+            return false;
+        }
+        self.seq += 1;
+        self.armed_seq.insert(id.to_string(), self.seq);
+        true
     }
 
     /// Forget `id`; answers the folders that lost their last watcher.
@@ -246,7 +258,7 @@ impl TranscriptWatch {
         targets.retain(|t| seen.insert(t.clone()));
         let mut state = self.lock();
         if state.registry.targets(id) == Some(&targets) {
-            return true;
+            return state.registry.touch(id);
         }
         let (added, dropped) = state.registry.arm(id, targets.clone());
         let State { registry, fs } = &mut *state;
@@ -287,6 +299,12 @@ impl TranscriptWatch {
     /// Whether watch `id` is armed.
     pub fn armed(&self, id: &str) -> bool {
         self.lock().registry.targets(id).is_some()
+    }
+
+    /// A read went by the same files as the one that armed `id`: keep it as
+    /// it is, marked in use. False when it is not armed (never, or evicted).
+    pub fn keep(&self, id: &str) -> bool {
+        self.lock().registry.touch(id)
     }
 }
 
@@ -357,8 +375,9 @@ pub fn disarm(id: &str) {
     }
 }
 
-pub fn armed(id: &str) -> bool {
-    GLOBAL.get().is_some_and(|w| w.armed(id))
+/// [`TranscriptWatch::keep`] on the process-wide watcher.
+pub fn keep(id: &str) -> bool {
+    GLOBAL.get().is_some_and(|w| w.keep(id))
 }
 
 /// A watch id as the window mints it: short, plain. Anything else is refused
@@ -452,6 +471,28 @@ mod tests {
         assert!(r.targets("w1").is_none());
         assert!(r.targets("w0").is_some());
         assert_eq!(r.subs.len(), MAX_WATCHES);
+    }
+
+    /// The cap evicts the watch read least recently. A shown Reader's watch is
+    /// armed once and then kept by every read (`keep`, or a re-arm onto the
+    /// same files) — while a window reload leaves newer, never-read leaks. By
+    /// arm time alone the live Reader went first and fell back to the 15 s
+    /// backstop.
+    #[test]
+    fn a_watch_still_read_is_not_the_one_the_cap_evicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let watch = TranscriptWatch::start(|_| {});
+        let file = |n: usize| Target::file(&dir.path().join(format!("{n}.jsonl"))).unwrap();
+        for n in 0..MAX_WATCHES {
+            assert!(watch.arm(&format!("w{n}"), vec![file(n)]));
+        }
+        // w0 is read again over the same files; w1 is kept by an unchanged read.
+        assert!(watch.arm("w0", vec![file(0)]));
+        assert!(watch.keep("w1"));
+        assert!(!watch.keep("never"), "keeping an unarmed id arms nothing");
+        assert!(watch.arm("new", vec![file(999)]));
+        assert!(watch.armed("w0") && watch.armed("w1") && watch.armed("new"));
+        assert!(!watch.armed("w2"), "the least recently read went");
     }
 
     #[test]
