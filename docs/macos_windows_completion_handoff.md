@@ -458,3 +458,124 @@ cross-check from the step stands.
   the step (recorded choice: it sits behind `connected`, which a tab with no
   tmux session never reaches). If the Terminal screen ever opens on such a
   host by another route, the held path would need its own gate.
+
+## A4 — 3.5
+
+Commit: the one that carries this section — `git log -1 --format=%h -- docs/macos_windows_completion_handoff.md` on `osfix/a4` (one commit for the step).
+
+Per file:
+- `scripts/tabtivity-send.ps1` — rewritten against the sh twin line by line
+  (84 → 195 lines): the four-line usage (`--help` line added); the sh
+  `case` as a `switch -CaseSensitive` with the sh's own exit-2 messages
+  (`Use --clear alone.`, `Use -n NAME for stdin.`, `Name at least one file.`,
+  `Unknown option; use --help.`); `The project directory is unavailable.`
+  split out of the root check; the `.send-lock` directory as the mutex
+  (a fresh `.send-<guid>` directory `[IO.Directory]::Move`d onto
+  `.send-lock` — the rename fails when the lock exists, so it is the sh
+  `mkdir`'s atomic twin; exit 5 + the sh message, removed in the outer `finally`,
+  which `exit`/`Fail` inside the `try` also reaches); `--clear` and the
+  1 GiB sum share one `OutboxFiles` (regular, non-reparse files; the sum
+  skips the current stage file, which the sh keeps in a subdirectory);
+  `OriginOf` = `GetFullPath` with the `$root\` prefix stripped
+  (ordinal, case-insensitive), `\` → `/`, empty outside the project or under
+  `.tabtivity/`; the leaf loop also checks `.<leaf>.src` and writes it after
+  `.tab`, both deleted when the publish fails; `KindOf` reads the first
+  4096 bytes with a `FileStream`, takes the magic from `[BitConverter]::ToString`
+  (PNG/JPEG/GIF87a/GIF89a/RIFF…WEBP → `shown as an image`, `%PDF-` →
+  `opens as a PDF`) and runs the sh `awk` UTF-8 machine verbatim
+  (`shown as text` / `offered as a download`); the report line is the sh's
+  `→ phone: <leaf> (<n> KB) — <kind>` with `[char]0x2192`/`0x2014` so the
+  file stays ASCII (no BOM needed for Windows PowerShell 5.1).
+- `scripts/install_phone.sh` — the `jq is required` gate becomes a parser
+  choice: `python3 -I` when present (`mobile_setting KEY DEFAULT`,
+  `serve_mapped AUTHORITY NEEDLE PORT < json`), else the same two reads as
+  `jq` functions, else `python3 or jq is required to read JSON (brew install
+  jq)`; the two call sites read through the functions. Bash 3.2: plain
+  functions, `[[ =~ ]]`, no arrays/`${,,}`.
+- `src-tauri/src/services/agent_bin.rs` — test
+  `powershell_send_twin_matches_the_sh_leaves_caps_and_messages`: both
+  scripts contain `.$leaf.tab`, `.$leaf.src`, `.send-lock`, `.send-`,
+  `25165824`, `25165825`, `1073741824`, `.<slug>/`; every `fail CODE '…'`
+  of the sh is `Fail CODE '…'` in the PS1 (≥ 14, codes 2–5), every
+  `report='…'` is `return '…'`, and the six single-quoted literals naming
+  the command (four usage lines, cleared, warning — scanned per line, since
+  comments like "tab's" carry apostrophes) are quoted the same.
+
+Choices where the plan left room:
+- The PS1 keeps its stage-file + `[IO.File]::Move` publication (never
+  overwrites) rather than the sh's stage directory + hard link; the plan asks
+  for parity of markers, lock, caps and messages, not of the mechanism.
+- Source paths resolve through
+  `$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath`
+  (PowerShell's own location, not the process CWD that `[IO.Path]::GetFullPath`
+  uses — the old `[IO.File]::Exists($source)` had that gap).
+- `-n NAME` is sanitised as given (`a/b` → `a_b`, like the sh `tr`), not
+  through `GetFileName`; a file's leaf uses `GetFileName` (both separators).
+- The extension split is `LastIndexOf('.')`, like the sh's `${name##*.}`,
+  not `[IO.Path]::GetExtension` (which drops a trailing `.`).
+- `Fail 3 'Cannot stage the file.'` and `Fail 4 'Cannot read the file.'`
+  are raised at the sh's points; anything else inside the loop still falls
+  to the existing `Fail 4 $_.Exception.Message`.
+- `install_phone.sh`'s python parser runs with `-I` (no cwd/`PYTHON*` on the
+  import path). `None`/`false` fall to the default like jq's `//`.
+- No `UntestedTag`/🖐️ line: no UI; 31ad's manual phone QA already covers
+  `tabtivity-send` on each platform.
+
+Gotchas:
+- PowerShell is not installed here (`command -v pwsh` empty): the PS1 is
+  read-verified only. Things that could only be caught by running it:
+  `[IO.Directory]::Move` refusing an existing `.send-lock` (Win32 `MoveFile`
+  without `REPLACE_EXISTING`), `finally` running on `exit` (it does; `exit` is a flow-control
+  exception no `catch` sees), `switch -CaseSensitive` with `$args`
+  reassignment in the `'--'` arm.
+- `GetFullPath` does not resolve directory symlinks/junctions, the sh's
+  `pwd -P` does: a project file reached through a junction outside `$root`
+  gets no origin marker on Windows (empty = gallery-only, never wrong).
+- The sh `trap 'exit 4' HUP INT TERM` has no PowerShell twin; Ctrl+C runs
+  the `finally` blocks (stage + lock removed) but exits with PowerShell's
+  own code.
+- `shellcheck` is not installed; `bash -n` only.
+- `install_phone.sh` was exercised with a fake `tailscale`/state dir
+  (scratchpad): python3-only PATH, jq-only PATH and neither — identical
+  answers for a good mapping, a Funnel-enabled one, a port mismatch and a
+  missing origin. (Re-run for the python path after the gate change below:
+  good mapping and port mismatch, same answers.)
+
+### Gates (finishing implementer, 2026-10-08)
+
+The first implementer's session was cut off before the gates; a second one
+read the diff against §3.5, ran the gates and made these changes before the
+commit:
+- PS1 lock: `New-Item -ItemType Directory -Path <WildcardPattern-escaped
+  outbox> -Name '.send-lock'` → a `.send-<guid>` directory renamed onto
+  `.send-lock`. Whether `New-Item -Path` globs differs between PowerShell
+  versions, so the escape broke `[`/`]` project paths on one of 5.1/7 either
+  way; the rename is pure .NET and atomic on both. This departs from §3.5's
+  "created with `New-Item`" wording, not from its intent (directory mutex,
+  exit 5, removed in `finally`).
+- PS1: `$tab` checked with `-cnotmatch '^…{1,64}\z'` (`$` let a trailing
+  newline through; case-insensitive matching let e.g. the Kelvin sign fold
+  into `[A-Za-z]`), and the name sanitised with `-creplace` for the same
+  reason. Non-ASCII still differs in count from the sh `tr` (one `_` per
+  UTF-16 unit vs. per byte) — leaf cosmetics only.
+- `install_phone.sh`: python3 is chosen by running `python3 -I -c 'import
+  json'`, not `command -v` — macOS's `/usr/bin/python3` is a stub that fails
+  until the Command Line Tools are installed, and jq now gets its turn then.
+
+Results: `npm run build` ok; `npm run lint` 0 errors / 28 warnings (no TS
+touched); `cargo test` 3713 passed (A3 3712 + the parity test); `cargo
+clippy --all-targets -D warnings` ok; `scripts/brand-check.sh` ok;
+`scripts/privacy-check.sh` ok; `git diff --check` clean; `bash -n
+scripts/install_phone.sh` ok. `npm test`: 730 files / 7527 tests, **2
+failed** — `src/__tests__/mobile/MobileHeldPromptStore.test.ts` (two cases),
+not this step: `readHeld` ages holds against the real clock and the
+fixtures' 2026-09-30 sends fell past the seven-day cutoff on 2026-10-07
+(it fails alone too; this step touches no TS, so `osfix/a3` is the same). The fix (`vi.useFakeTimers({ now: NOW,
+toFake: ["Date"] })` in `beforeEach`) sits uncommitted in the main checkout
+from another session, so it is not duplicated here.
+
+Flagged for user:
+- The `MobileHeldPromptStore` date bomb above: red on every branch until the
+  main checkout's fix lands on `develop`.
+- `tabtivity-send.ps1` has never been run (no PowerShell here); first run on
+  Windows is 31ad's phone QA.

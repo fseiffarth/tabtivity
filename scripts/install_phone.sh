@@ -21,12 +21,53 @@ if [[ ! -r "$state_dir/settings.json" ]]; then
   fi
 fi
 settings="$state_dir/settings.json"
-command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
+# JSON is read with python3 where there is one (stock on macOS), else jq;
+# neither is a hard requirement on its own. python3 is probed by running it:
+# macOS's /usr/bin/python3 is a stub that fails until the Command Line Tools
+# are installed, and jq should get its turn then.
+if python3 -I -c 'import json' >/dev/null 2>&1; then
+  # mobile_setting KEY DEFAULT — `.tabtivity_mobile_host.KEY`, or DEFAULT.
+  mobile_setting() {
+    python3 -I -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    settings = json.load(f)
+value = (settings.get("tabtivity_mobile_host") or {}).get(sys.argv[2])
+print(sys.argv[3] if value is None or value is False else value)
+' "$settings" "$1" "$2"
+  }
+  # serve_mapped AUTHORITY NEEDLE PUBLIC_PORT < serve-status-json — exit 0
+  # when the verified private root maps onto the loopback port, no Funnel.
+  serve_mapped() {
+    python3 -I -c '
+import json, sys
+serve = json.load(sys.stdin)
+authority, needle, public_port = sys.argv[1:4]
+tcp = (serve.get("TCP") or {}).get(public_port) or {}
+web = (serve.get("Web") or {}).get(authority) or {}
+proxy = ((web.get("Handlers") or {}).get("/") or {}).get("Proxy")
+funnel = (serve.get("AllowFunnel") or {}).get(authority) or False
+sys.exit(0 if tcp.get("HTTPS") is True and proxy == needle and not funnel else 1)
+' "$1" "$2" "$3"
+  }
+elif command -v jq >/dev/null; then
+  mobile_setting() { jq -r --arg key "$1" --arg default "$2" '.tabtivity_mobile_host[$key] // $default' "$settings"; }
+  serve_mapped() {
+    jq -e --arg authority "$1" --arg needle "$2" --arg public_port "$3" '
+      .TCP[$public_port].HTTPS == true
+      and .Web[$authority].Handlers["/"].Proxy == $needle
+      and ((.AllowFunnel[$authority] // false) | not)
+    ' >/dev/null
+  }
+else
+  echo "python3 or jq is required to read JSON (brew install jq)" >&2
+  exit 1
+fi
 command -v tailscale >/dev/null || { echo "Tailscale is not installed" >&2; exit 1; }
 [[ -r "$settings" ]] || { echo "Tabtivity settings are unavailable" >&2; exit 1; }
 
-port="$(jq -r '.tabtivity_mobile_host.port // 8742' "$settings")"
-origin="$(jq -r '.tabtivity_mobile_host.serve_origin // empty' "$settings")"
+port="$(mobile_setting port 8742)"
+origin="$(mobile_setting serve_origin "")"
 [[ "$origin" =~ ^https://([^/:]+)(:([0-9]+))?$ ]] || {
   echo "No verified exact HTTPS Serve origin is configured" >&2
   exit 1
@@ -37,11 +78,7 @@ authority="$serve_host:$public_port"
 
 serve_json="$(tailscale serve status --json)"
 needle="http://127.0.0.1:$port"
-jq -e --arg authority "$authority" --arg needle "$needle" --arg public_port "$public_port" '
-  .TCP[$public_port].HTTPS == true
-  and .Web[$authority].Handlers["/"].Proxy == $needle
-  and ((.AllowFunnel[$authority] // false) | not)
-' <<<"$serve_json" >/dev/null || {
+serve_mapped "$authority" "$needle" "$public_port" <<<"$serve_json" || {
   echo "Tailscale Serve does not have the verified private root mapping to the configured loopback port" >&2
   exit 1
 }
