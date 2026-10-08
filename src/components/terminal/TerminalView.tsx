@@ -1037,8 +1037,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // out from under whatever the user is actually working in. Every accepted
     // write announces itself in the transient toast, so a clipboard the user did
     // not fill is never a surprise.
+    // Live output only: a catch-up (`staleParse`) was written while nobody
+    // looked — or, for a pane woken from sleep or a popout, is the tail of
+    // output an earlier xterm already parsed — so a copy in it is either a
+    // background program's or one the clipboard took long ago; replayed, it
+    // would put back whatever the agent copied an hour before.
     onBuild.push((term) => termDisposables.push(term.parser.registerOscHandler(52, (data) => {
-      if (!focusedRef.current) return true;
+      if (!focusedRef.current || staleParse > 0) return true;
       const text = decodeOsc52Clipboard(data);
       if (text === null) return true;
       // Through the backend, not `navigator.clipboard`: this write comes with PTY

@@ -21,7 +21,12 @@ class ResizeObserverStub {
 
 const { invoke, terminals, bus } = vi.hoisted(() => ({
   invoke: vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve(undefined)),
-  terminals: [] as { opened: boolean; disposed: boolean; writes: string[] }[],
+  terminals: [] as {
+    opened: boolean;
+    disposed: boolean;
+    writes: string[];
+    osc: Map<number, (data: string) => boolean>;
+  }[],
   bus: { ready: new Map<string, () => void>() },
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
@@ -39,7 +44,12 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
     rows = 24;
-    state = { opened: false, disposed: false, writes: [] as string[] };
+    state = {
+      opened: false,
+      disposed: false,
+      writes: [] as string[],
+      osc: new Map<number, (data: string) => boolean>(),
+    };
     options: Record<string, unknown> = {};
     modes = { bracketedPasteMode: true };
     constructor() {
@@ -51,6 +61,10 @@ vi.mock("@xterm/xterm", () => ({
     }
     write(data: string, done?: () => void) {
       this.state.writes.push(data);
+      // Parse the OSC sequences the pane handles, as xterm would.
+      for (const m of data.matchAll(/\x1b\](\d+);([^\x07]*)\x07/g)) {
+        this.state.osc.get(Number(m[1]))?.(m[2]);
+      }
       done?.();
     }
     onData() {}
@@ -69,7 +83,13 @@ vi.mock("@xterm/xterm", () => ({
     }
     registerLinkProvider() { return { dispose() {} }; }
     onWriteParsed() { return { dispose() {} }; }
-    parser = { registerOscHandler: () => ({ dispose() {} }), registerCsiHandler: () => ({ dispose() {} }) };
+    parser = {
+      registerOscHandler: (code: number, handler: (data: string) => boolean) => {
+        this.state.osc.set(code, handler);
+        return { dispose() {} };
+      },
+      registerCsiHandler: () => ({ dispose() {} }),
+    };
   },
 }));
 vi.mock("@xterm/addon-canvas", () => ({ CanvasAddon: class { dispose() {} } }));
@@ -201,6 +221,28 @@ describe("TerminalView — sleeping terminal panes (§5.3)", () => {
     // The catch-up reached the new terminal; the initial line was not retyped.
     expect(terminals[terminals.length - 1]?.writes.join("")).toContain("earlier output");
     expect(names()).not.toContain("pty_write");
+  });
+
+  it("the wake's catch-up does not replay a clipboard write (OSC 52) the program made long ago", async () => {
+    await mountAndSleep();
+    // "hello", copied by the agent while the pane was live, still in the tail.
+    const tail = "before\x1b]52;c;aGVsbG8=\x07after\r\n";
+    invoke.mockImplementation((cmd: unknown) =>
+      Promise.resolve(
+        cmd === "pty_scrollback" ? { data: tail, startOffset: 0, endOffset: tail.length } : undefined,
+      ),
+    );
+    await act(async () => {
+      render(agentPane({ visible: true, focused: true }));
+    });
+    const woken = terminals[terminals.length - 1];
+    expect(woken?.writes.join("")).toContain("after");
+    expect(names()).not.toContain("copy_text_to_clipboard");
+    // A copy the program makes now, in the focused pane, still goes through.
+    await act(async () => {
+      woken?.osc.get(52)?.("c;aGVsbG8=");
+    });
+    expect(calls("copy_text_to_clipboard")).toEqual([["copy_text_to_clipboard", { text: "hello" }]]);
   });
 
   it("a program that ended while asleep says so on wake", async () => {
