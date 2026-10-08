@@ -444,3 +444,114 @@ tests passed; `cargo test -q` 3753 passed, 3 ignored, 0 failed (lib 3585);
      still work (its proxy token survived), and the tab's turn state (the
      working/done marks) still follows the agent.
   5. Close the tab: its MCP session disappears from MCP session access.
+
+## Agent step 3 — reviewer
+
+**Reviewed:** `a842b990..605edd71` (code `716e6ccc`) against the gap 18 row,
+Steps row 3, the run's fixed decisions and the agent step 3 review notes.
+
+**Verdict on minting the seq in `prepare`:** correct. `prepare` hands out the
+MCP tokens, the turn binding and the (same-per-tab) proxy token long before
+the PTY exists, so a seq minted at `reg.insert` would let the old kill's
+teardown, landing during the respawn's `prepare`, match and wipe them. Minting
+in `prepare` creates one new hazard, though: spawn order (`latest`) and
+registry insert order can now disagree (finding 1).
+
+**Checked, no change needed:**
+- No host path left for the hook: `HookBoundary::Host` exists only under
+  `#[cfg(test)]` and `HookBoundary::of` never yields it; the transport push
+  is `--no-verify` through `hardened_git_command_in`; `fenced_scope_of_tab`
+  has no production caller.
+- The stamp covers every legitimate Pusher: `grant_lanes` gives the push lane
+  only to local, non-container, non-remote, non-VM project agents (`!sandbox`,
+  `!off_host`), and on Linux/macOS `decide` answers `Fenced` for each of them.
+  Resumed tabs, phone-opened tabs (both through `pty_spawn`) and the headless
+  owner (`HeadlessSpawner` → `prepare`, the same process-global `tokens()`)
+  take the same path. The stamp lands before the tmux wrap. Container and
+  remote tabs get no Pusher; any mismatch now fails closed.
+- `pty_kill_scope`, `kill_all` and `teardown_taken` pass the taken entry's
+  seq; the reader-task end passes `route_seq`, which is the spawn seq.
+- Lock order: registry → fence map (`kill_all`, and now `insert_current_spawn`),
+  never the reverse; `abandon_spawn`/`on_tab_gone` drop the map lock before
+  `api_proxy`/untrack; the stamp takes only the token-store lock. The new
+  `agent_turn::on_tab_gone` under `kill_all`'s registry lock takes only
+  agent_turn's own locks.
+- The implementer's tests discriminate (the preflight test's `unwrap_err`
+  proves the hook was resolved before the refusal).
+
+**Findings:**
+1. **Fixed: an older spawn could replace a newer one's PTY.** Two spawns of
+   one id in `prepare` at once (a remount while the old mount's spawn is
+   still preparing, e.g. a remote tab's `connect_host`) can finish out of
+   order. The older one's `reg.insert` killed the newer PTY and took its slot.
+   From then on the older PTY's teardown was stale (`latest` = newer), and the
+   newer spawn's reader end lost `route_close`. So the newer spawn's
+   registration, MCP and proxy tokens and turn binding were never torn down,
+   not even by `kill_all` at quit (no registry entry). This is a regression:
+   the old unconditional teardown cleaned them. `spawn_pty` now inserts
+   through `PtyRegistry::insert_current_spawn`, which checks
+   `agent_fence::is_current_spawn` under the registry lock. A refused spawn
+   reaps its own child and returns an error, which the cancelled mount
+   ignores (`TerminalView` returns on `cancelled`).
+2. **Fixed: a failed spawn's tab state was never torn down.** `pty_kill` now
+   skips teardown when `take` finds nothing. But a spawn that fails after
+   `prepare` made grants (fence refusal, `HPC_GUARD`, crash-loop guard,
+   `spawn_pty` error) leaves no PTY, and the reader end never clears turn
+   bindings. The same holds after a stale kill of the old spawn followed by
+   a failed respawn, where the old spawn's `revoke_tab` and review cleanup
+   were skipped. Closing such a tab left its turn binding, review sandbox and
+   any unrevoked tab tokens behind until quit. `abandon_spawn` now answers
+   whether the id ended. When it did, `SpawnGeneration::drop` also runs
+   `root_mcp_review::on_tab_gone`, `agent_turn::on_tab_gone`,
+   `codex_bind::untrack_now` and `sandbox::kill_tab_process`.
+3. **Fixed (sibling, same race): `teardown_taken` ran `codex_bind::untrack_now`
+   and `sandbox::kill_tab_process` unguarded.** A stale kill dropped the
+   respawn's Codex tracking and resume claim, so the next relaunch could not
+   resume it. It also TERMed the respawned container agent, because the
+   respawn's `register_exec_tab` had replaced the record and already ended
+   the old in-container process. Both now run only when the teardown is
+   current. `kill_all` keeps them unconditional, since the app is quitting.
+
+**Fix commit:** `7c0ac8ee` Keep an older spawn out of a newer one's PTY slot
+and end a failed spawn's tab state. Docs: `context/agent_authority.md`
+("Spawn generations"), `filemap_backend.md` (`terminal/mod.rs` row).
+
+**Tests added** (each fails with its fix disabled, checked):
+`terminal::tests::an_older_spawn_never_replaces_a_newer_ones_pty`,
+`terminal::tests::a_stale_kill_leaves_the_respawns_codex_resume_claim`,
+`launch_prep::tests::a_failed_spawn_with_none_live_ends_the_tabs_tokens_and_turn_binding`
+(also: a failed respawn with an earlier spawn still live leaves that spawn's
+token and binding alone).
+
+**Gates (at `7c0ac8ee`):** `npm run build` ok; `npm test` 735 files / 7556
+tests passed; `cargo test -q` 3756 passed, 3 ignored, 0 failed; `npm run
+lint` 0 errors, 28 advisory warnings (unchanged); `cargo clippy --all-targets
+-D warnings` clean; `scripts/brand-check.sh` ok; `git diff --check` clean;
+`scripts/privacy-check.sh a842b990..HEAD` clean. `npm run backend:stale` not
+run (main agent at landing).
+
+**Flagged for user:**
+- **Closing a tab while its spawn is still being prepared** (no earlier PTY,
+  or the kill landed stale) still lets that spawn start. The PTY then runs
+  with no tab until quit. This predates the step. The backend cannot tell a
+  close from a remount's kill+spawn without a frontend signal (for example,
+  `pty_kill` naming the mount it ends).
+- **Overlapping spawns where the newer one fails:** the older spawn may
+  already sit in the registry unregistered (its commit came after the newer
+  one's `begin`). The newer one's abandon then ends the tab's tokens, proxy
+  token and turn binding under that running PTY. Its lane tokens were already
+  revoked by the newer `grant_lanes` before this step, so it was half-broken
+  anyway. This is a rare edge and was left alone.
+- **Spawns in `prepare` at quit** are not in the registry, so `kill_all`
+  misses them. This predates the step.
+- **The headless owner never tears down its `TabSpawns` entries.** Every
+  spawn registers now, not only fenced ones. The map is bounded by tab ids,
+  since a respawn reuses its entry.
+- **The implementer's flag about tmux re-attach is unverified.** It says a
+  re-attached tab "gets a fresh Pusher token with the scope stamped". But the
+  agent process inside a surviving tmux session keeps the token from its
+  original environment, and a respawn's `grant_lanes` replaces that token's
+  lane session. Whether a re-attached agent can push at all was not checked.
+- **No test drives `prepare` to the stamp itself.** Only `push_fence_scope`
+  and `stamp_push_fence_scope` are unit-tested. A refactor that moves the
+  stamp out of the fence block would pass the gates.
