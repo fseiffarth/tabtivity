@@ -165,6 +165,13 @@ struct OutputRoute {
     /// `ROUTE_SCROLLBACK_CAP`), so a viewer attaching to an already-running
     /// terminal can catch up instead of opening blank.
     retained: String,
+    /// The terminal state set by bytes the cap already trimmed off the front of
+    /// `retained` — the modes a TUI switched on at its start (bracketed paste,
+    /// the alternate screen, mouse reporting, cursor keys) are long gone from a
+    /// tail of a session that has run for hours. A catch-up read puts it in
+    /// front of the tail, so a fresh xterm (a woken pane, a popout) reads keys
+    /// and pastes the way the program expects. Folded on each trim, never spent.
+    retained_carried: ScreenState,
     /// Absolute UTF-8 byte offset of `retained[0]` in this spawn's output.
     retained_start: u64,
     /// The PTY's pane is asleep (§5.3): its view left with `sleeping`, so no
@@ -231,7 +238,11 @@ impl OutputRoute {
         self.output_offset += text.len() as u64;
         self.retained.push_str(&text);
         let cap = if self.asleep { ROUTE_SLEEP_SCROLLBACK_CAP } else { ROUTE_SCROLLBACK_CAP };
-        self.retained_start += trim_with_hysteresis(&mut self.retained, cap) as u64;
+        if let Some(cut) = hysteresis_cut(&self.retained, cap) {
+            self.retained_carried.observe(&self.retained[..cut]);
+            self.retained.drain(..cut);
+            self.retained_start += cut as u64;
+        }
         OutputSlice {
             text,
             start_offset,
@@ -620,6 +631,7 @@ fn route_open(id: &str) -> u64 {
     // A respawn is a new program: its predecessor's screen is not this one's
     // catch-up. (Same reason the pending buffer is cleared.)
     route.retained.clear();
+    route.retained_carried = ScreenState::default();
     route.retained_start = 0;
     route.pending_start = 0;
     route.output_offset = 0;
@@ -642,7 +654,9 @@ pub fn route_scrollback(id: &str) -> TerminalScrollback {
     let map = routes().lock().unwrap();
     match map.get(id) {
         Some(route) => TerminalScrollback {
-            data: route.retained.clone(),
+            // Whole (no cut: `usize::MAX`), behind the state its trimmed-off
+            // front left, if any.
+            data: trim_replay(route.retained.clone(), &route.retained_carried, usize::MAX),
             start_offset: route.retained_start,
             end_offset: route.output_offset,
             exited: route.ended,
@@ -674,7 +688,7 @@ pub fn route_wake_scrollback(id: &str) -> TerminalScrollback {
         route.carried = ScreenState::default();
         route.pending_start = route.output_offset;
     }
-    let data = trim_replay(route.retained.clone(), &ScreenState::default(), REPLAY_TRIM_FLOOR);
+    let data = trim_replay(route.retained.clone(), &route.retained_carried, REPLAY_TRIM_FLOOR);
     let snapshot = TerminalScrollback {
         data,
         start_offset: route.retained_start,
@@ -2531,6 +2545,43 @@ mod route_tests {
         assert!(!routes().lock().unwrap().get(id).unwrap().asleep);
         route_close(id, seq);
         assert!(!routes().lock().unwrap().contains_key(id));
+    }
+
+    /// The modes a TUI switched on at its start fall off a long session's
+    /// tail; a woken pane's fresh xterm (and a popout's) must still get them,
+    /// or it pastes without bracketed-paste markers — a multi-line paste into
+    /// an agent woken from sleep submitted its first line. The cap's cut-off
+    /// front is folded into the route's carried state and written ahead of the
+    /// tail by both reads; a respawn drops it.
+    #[test]
+    fn a_catch_up_keeps_the_modes_the_tail_cap_cut_off() {
+        let id = "route-t-sleep-carried-modes";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_chunk_at(id, b"\x1b[?2004h\x1b[?1049h", Instant::now(), seq);
+        let filler = "y".repeat(100_000);
+        for _ in 0..6 {
+            route_chunk_at(id, filler.as_bytes(), Instant::now(), seq);
+        }
+        let popout = route_scrollback(id);
+        assert!(popout.data.len() < 600_000, "the cap cut the front off");
+        assert!(popout.data.starts_with("\x1b[?2004h\x1b[?1049h"), "the popout read carries the modes");
+
+        route_remove_view(id, "test-view", 2, true);
+        set_visible(id, true);
+        let wake = route_wake_scrollback(id);
+        assert!(wake.data.starts_with("\x1b[?2004h\x1b[?1049h"), "so does the wake");
+        assert!(wake.data.ends_with('y'));
+
+        // A respawn is a new program: the predecessor's modes are not its own.
+        let seq2 = route_open(id);
+        route_chunk_at(id, b"fresh", Instant::now(), seq2);
+        assert_eq!(route_scrollback(id).data, "fresh");
+
+        set_visible(id, false);
+        route_remove_view(id, "test-view", 3, false);
+        route_close(id, seq);
+        route_close(id, seq2);
     }
 
     /// The wake's catch-up is cut at the last full clear, as a hidden spell's
