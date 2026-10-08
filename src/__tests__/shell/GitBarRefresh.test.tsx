@@ -51,6 +51,7 @@ import { useProjectsStore } from "../../stores/projects";
 import * as settingsModule from "../../stores/settings";
 import { SidePanel } from "../../components/layout/SidePanel";
 import { useGitDirtyStore } from "../../stores/gitDirty";
+import { usePowerStore } from "../../stores/power";
 
 const settingsState = (settingsModule as unknown as { __state: { settings: Settings | null } }).__state;
 
@@ -218,6 +219,32 @@ describe("git bar refresh", () => {
     // The 5 s poll, then the coalescing second (`coalescedRun`).
     await act(async () => {
       await vi.advanceTimersByTimeAsync(6_200);
+    });
+    expect(screen.queryByText("Add (163)")).toBeNull();
+  });
+
+  it("stops the Git view's poll while the window is blurred and catches up on return", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    usePowerStore.setState({ blurred: false });
+    settingsState.settings = { side_panel_view: "git" };
+    render(<SidePanel open={true} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(screen.getByText("Add (163)")).toBeTruthy();
+
+    act(() => usePowerStore.setState({ blurred: true }));
+    unstaged = 0;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16_000);
+    });
+    // Blurred: no backstop reading, the stale counts stay.
+    expect(screen.getByText("Add (163)")).toBeTruthy();
+
+    act(() => usePowerStore.setState({ blurred: false }));
+    // The catch-up asks the coalesced reading (one second).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_200);
     });
     expect(screen.queryByText("Add (163)")).toBeNull();
   });

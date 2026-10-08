@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dropdown } from "../common/Dropdown";
 import { isoWeekKeys, summarizeBuckets } from "../../lib/usageRollup";
@@ -9,6 +9,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { isCarefulHost, primaryTargetOf } from "../../lib/remote/carefulHost";
 import { isHpcHost } from "../../lib/remote/hpc/hpcHost";
 import { useT } from "../../lib/i18n";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 
 export interface NetworkInterfaceSnapshot {
   name: string;
@@ -458,31 +459,25 @@ export function NetworkTrafficPane({ projectId, visible, onConnect }: Props) {
   // nothing: it has no link to have moved bytes over, and the empty id this
   // command takes means *every* project's totals (the recap's reading), which is
   // not what a machine-wide tab would be showing.
-  useEffect(() => {
-    if (!visible || !projectId) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const data = await invoke<NetUsageReport>("get_net_usage", { projectId });
-        if (!cancelled) {
-          setUsage({
-            hours: data?.hours ?? {},
-            days: data?.days ?? {},
-            fileHours: data?.fileHours ?? {},
-            fileDays: data?.fileDays ?? {},
-          });
-        }
-      } catch {
-        // Leave the last-known totals in place on a transient failure.
+  const loadUsage = useCallback(async (poll: PollRun) => {
+    if (!projectId) return;
+    try {
+      const data = await invoke<NetUsageReport>("get_net_usage", { projectId });
+      if (!poll.stopped) {
+        setUsage({
+          hours: data?.hours ?? {},
+          days: data?.days ?? {},
+          fileHours: data?.fileHours ?? {},
+          fileDays: data?.fileDays ?? {},
+        });
       }
-    };
-    void load();
-    const timer = window.setInterval(() => void load(), 15000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [projectId, visible]);
+    } catch {
+      // Leave the last-known totals in place on a transient failure.
+    }
+  }, [projectId]);
+  // The totals stop with the window blurred (`usePoll`); the live rate poll
+  // above keeps running unfocused — a monitor is watched from other windows.
+  usePoll(loadUsage, 15000, { enabled: visible && !!projectId });
 
   const current = history[history.length - 1] ?? { rxRate: 0, txRate: 0 };
   // The project's own record, not the last snapshot's: with the poll gated on the

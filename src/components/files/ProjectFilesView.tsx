@@ -25,7 +25,8 @@ import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
 import { useWindowsStore } from "../../stores/windows";
 import { useGitDirtyStore, gitDirtyState, GIT_WATCH_COALESCE_MS, type GitDirtyState } from "../../stores/gitDirty";
-import { coalescedRun } from "../../lib/coalescedRun";
+import { coalescedRun, type CoalescedRun } from "../../lib/coalescedRun";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 import { resolveLocalMirror, type FilesPanelView, type GitReleasePreview, type ProjectEntry } from "../../types";
 import { fmtModified, type SortKey } from "../../lib/viewers/fileUtils";
 import {
@@ -953,21 +954,17 @@ export function ProjectFilesView({
       .catch(() => { if (!cancelled) setSlurmSupported(false); });
     return () => { cancelled = true; };
   }, [active, projectDir, primaryReady]);
-  useEffect(() => {
-    if (!active || view !== "jobs" || !slurmSupported || !projectDir) return;
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const jobs = await slurmQueue(projectDir);
-        if (!cancelled) setJobRows(jobs);
-      } catch {
-        if (!cancelled) setJobRows([]);
-      }
-    };
-    void poll();
-    const iv = setInterval(() => void poll(), 7000);
-    return () => { cancelled = true; clearInterval(iv); };
-  }, [active, view, slurmSupported, projectDir]);
+  // The queue, every 7 s while the Jobs view shows and the window is in front.
+  const pollJobs = useCallback(async (poll: PollRun) => {
+    if (!projectDir) return;
+    try {
+      const jobs = await slurmQueue(projectDir);
+      if (!poll.stopped) setJobRows(jobs);
+    } catch {
+      if (!poll.stopped) setJobRows([]);
+    }
+  }, [projectDir]);
+  usePoll(pollJobs, 7000, { enabled: active && view === "jobs" && slurmSupported && !!projectDir });
 
   // Watch a job: open a log tab tailing its stdout. Use the session store's path
   // if we submitted it this session, else resolve via scontrol.
@@ -1284,6 +1281,7 @@ export function ProjectFilesView({
   // button's flag then shows; the full counts are re-read on show and on
   // entering the Git view (a scope with no project keeps the coalesced full
   // reading). Only events for this project's own tree count.
+  const gitViewFullRef = useRef<CoalescedRun | null>(null);
   useEffect(() => {
     if (!active || !effectiveGitRoot || remoteBlocked) return;
     const root = effectiveGitRoot;
@@ -1307,24 +1305,30 @@ export function ProjectFilesView({
         else unlisten = un;
       });
     }
-    let poll: ReturnType<typeof setInterval> | null = null;
     if (inGitView) {
       refreshGit(root);
-      if (local) {
-        poll = setInterval(() => {
-          if (document.visibilityState === "visible") full.request();
-        }, GIT_VIEW_POLL_MS);
-      }
+      // The backstop poll below asks this coalesced reading.
+      if (local) gitViewFullRef.current = full;
     }
     return () => {
       cancelled = true;
       unlisten?.();
       full.cancel();
       dot?.cancel();
-      if (poll) clearInterval(poll);
+      if (gitViewFullRef.current === full) gitViewFullRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, effectiveGitRoot, remoteBlocked, project?.remote, view, gitContextKey, projectId, projectDir]);
+
+  // The Git view's backstop for what `fs-change` misses (a commit made outside,
+  // `.git` internals): every GIT_VIEW_POLL_MS while the Git view of a local
+  // project shows and the window is in front (`usePoll`), through the effect's
+  // coalesced full reading.
+  const requestGitView = useCallback(() => gitViewFullRef.current?.request(), []);
+  usePoll(requestGitView, GIT_VIEW_POLL_MS, {
+    enabled: active && view === "git" && !!effectiveGitRoot && !remoteBlocked && !project?.remote,
+    immediate: false,
+  });
 
   // The gear dialog belongs to the project it was opened on; a project switch
   // reloads the filters under it, so close it rather than let it re-target.
