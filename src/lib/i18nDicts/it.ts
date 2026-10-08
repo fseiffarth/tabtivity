@@ -1915,7 +1915,7 @@ export const dict: Dict = {
 
   "steering.project.label": "Cambia progetto",
 
-  "steering.project.desc": "Progetto precedente / successivo, terminale root incluso — l'anello che percorre Ctrl+Maiusc+Tab.",
+  "steering.project.desc": "Progetto precedente / successivo, terminale root incluso — l'anello che percorre Ctrl+Maiusc+Tab. La navigazione arriva sulle sue schede; ↑ torna qui per cambiare di nuovo.",
 
   "steering.into.label": "Nelle finestre",
 
@@ -1941,9 +1941,9 @@ export const dict: Dict = {
 
   "steering.intoTabs.desc": "Scende alle schede della sottofinestra a fuoco.",
 
-  "steering.up.label": "Su di un livello",
+  "steering.up.label": "Su ai progetti",
 
-  "steering.up.desc": "Torna alle sottofinestre e, da lì, ai progetti.",
+  "steering.up.desc": "Sale al livello dei progetti, dove le frecce cambiano progetto.",
   "steering.intoTerminal.label": "Nel terminale",
   "steering.intoTerminal.desc": "Entra nel terminale della scheda attiva per scorrerlo.",
   "steering.scroll.label": "Scorri indietro / avanti",
@@ -2008,11 +2008,15 @@ export const dict: Dict = {
 
   "steering.back.desc": "Su di un livello — fuori da pannello, overlay o menu, chiudendo ciò che la navigazione {app} ha aperto.",
   "steering.jump.label": "Vai al progetto",
-  "steering.jump.desc": "Attiva la stazione numerata: 1 è il terminale root, 2 la prima pillola di progetto.",
+  "steering.jump.desc": "Attiva la stazione numerata: 1 è il terminale root, 2 la prima pillola di progetto. La navigazione arriva sulle sue schede.",
   "steering.focus.label": "Cambia sottofinestra",
   "steering.focus.desc": "Sposta il focus alla sottofinestra precedente / successiva (ordine del documento, ciclico).",
   "steering.tabs.label": "Cambia scheda",
-  "steering.tabs.desc": "Scheda precedente / successiva nella sottofinestra a fuoco — con una sola sottofinestra le frecce cambiano subito scheda.",
+  "steering.tabs.desc": "Scheda precedente / successiva — dopo l'ultima (prima della prima) scheda di una sottofinestra le frecce proseguono nella sottofinestra successiva (precedente): ogni scheda è a poche frecce di distanza.",
+  "steering.focusShift.label": "Cambia sottofinestra",
+  "steering.focusShift.desc": "Sottofinestra precedente / successiva direttamente dalle schede (ordine del documento, ciclico) — senza salire prima di un livello.",
+  "steering.upPanes.label": "Alle sottofinestre",
+  "steering.upPanes.desc": "Sale al livello delle sottofinestre: lì le frecce passano da una sottofinestra all'altra e giù torna alle schede.",
   "steering.files.label": "Visore file",
   "steering.files.desc": "Attiva/disattiva il visore file agganciato della sottofinestra a fuoco.",
   "steering.panels.label": "Pannelli",

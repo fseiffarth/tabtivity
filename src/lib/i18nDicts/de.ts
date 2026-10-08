@@ -1917,7 +1917,7 @@ export const dict: Dict = {
 
   "steering.project.label": "Projekt wechseln",
 
-  "steering.project.desc": "Vorheriges / nächstes Projekt, Root-Terminal eingeschlossen — der Ring, den Strg+Umschalt+Tab durchläuft.",
+  "steering.project.desc": "Vorheriges / nächstes Projekt, Root-Terminal eingeschlossen — der Ring, den Strg+Umschalt+Tab durchläuft. Die Navigation landet auf seinen Tabs; ↑ führt zum erneuten Wechseln hierher zurück.",
 
   "steering.into.label": "In die Fenster",
 
@@ -1943,9 +1943,9 @@ export const dict: Dict = {
 
   "steering.intoTabs.desc": "Hinunter zu den Tabs des fokussierten Unterfensters.",
 
-  "steering.up.label": "Eine Ebene hoch",
+  "steering.up.label": "Hoch zu den Projekten",
 
-  "steering.up.desc": "Zurück zu den Unterfenstern, von dort zu den Projekten.",
+  "steering.up.desc": "Auf die Projektebene, wo die Pfeile das Projekt wechseln.",
   "steering.intoTerminal.label": "Ins Terminal",
   "steering.intoTerminal.desc": "In das Terminal des aktiven Tabs gehen, um es zu scrollen.",
   "steering.scroll.label": "Zurück / vor scrollen",
@@ -2010,11 +2010,15 @@ export const dict: Dict = {
 
   "steering.back.desc": "Eine Ebene hoch — aus Panel, Overlay oder Menü heraus; was die {app}-Navigation geöffnet hat, schließt sich.",
   "steering.jump.label": "Zu Projekt springen",
-  "steering.jump.desc": "Aktiviert die nummerierte Station: 1 ist das Root-Terminal, 2 die erste Projekt-Pille.",
+  "steering.jump.desc": "Aktiviert die nummerierte Station: 1 ist das Root-Terminal, 2 die erste Projekt-Pille. Die Navigation landet auf ihren Tabs.",
   "steering.focus.label": "Unterfenster wechseln",
   "steering.focus.desc": "Fokus auf das vorherige / nächste Unterfenster (Dokumentreihenfolge, umlaufend).",
   "steering.tabs.label": "Tab wechseln",
-  "steering.tabs.desc": "Vorheriger / nächster Tab im fokussierten Unterfenster — bei nur einem Unterfenster wechseln die Pfeile direkt die Tabs.",
+  "steering.tabs.desc": "Vorheriger / nächster Tab — hinter dem letzten (vor dem ersten) Tab eines Unterfensters geht es ins nächste (vorherige) Unterfenster weiter, so ist jeder Tab nur ein paar Pfeiltasten entfernt.",
+  "steering.focusShift.label": "Unterfenster wechseln",
+  "steering.focusShift.desc": "Vorheriges / nächstes Unterfenster direkt von den Tabs aus (Dokumentreihenfolge, umlaufend) — ohne erst eine Ebene hochzugehen.",
+  "steering.upPanes.label": "Zu den Unterfenstern",
+  "steering.upPanes.desc": "Hoch auf die Unterfensterebene: dort wechseln die Pfeile das Unterfenster, runter geht es zurück zu den Tabs.",
   "steering.files.label": "Dateiansicht",
   "steering.files.desc": "Schaltet die angedockte Dateiansicht des fokussierten Unterfensters um.",
   "steering.panels.label": "Panels",

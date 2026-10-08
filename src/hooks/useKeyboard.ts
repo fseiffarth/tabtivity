@@ -411,18 +411,34 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
       enterRegion(app);
     };
 
-    // The project level: ←/→ walk the station ring, ↓ goes into its windows.
+    // A focused subwindow for the levels below the projects: the first one
+    // when the scope has none focused.
+    const focusSomeGroup = () => {
+      const tabs = useTabsStore.getState();
+      const first = allGroups(tabs.layout)[0]?.id;
+      if (!tabs.focusedGroupId && first) tabs.focusGroup(first);
+    };
+    // A project switched to from the project level: steering goes straight
+    // down to its tabs, so the next switch is ↑ and ←/→ again. The subwindow
+    // is picked once the switch has swapped the tabs in.
+    const landOnTabs = (switched: Promise<unknown>) => {
+      useKeyboardSteeringStore.getState().setLevel("tabs");
+      void switched.then(focusSomeGroup, () => {});
+    };
+
+    // The project level: ←/→ walk the station ring and land on the tabs of
+    // the project switched to, ↓ goes into its windows.
     function steerProjects(e: KeyboardEvent, action: SteeringAction | null) {
       const steering = useKeyboardSteeringStore.getState();
       // The numbers — jump to the Nth station of the SAME ring cycleProject
       // walks: 1 = the root scope, 2 = the first project pill (display order)
-      // — the numbers the pill badges show. Stays on this level: ↓ goes in.
+      // — the numbers the pill badges show. Lands on its tabs, as ←/→ do.
       const slot = steeringSlot(action);
       if (slot !== null) {
         const target = projectStations()[slot - 1];
         if (target !== undefined) {
           const ps = useProjectsStore.getState();
-          if (target !== ps.activeId) void ps.setActive(target);
+          landOnTabs(target !== ps.activeId ? ps.setActive(target) : Promise.resolve());
         }
         return;
       }
@@ -431,16 +447,15 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
           exitSteering();
           return;
         case "left":
-        case "right":
-          cycleProject(action === "right" ? 1 : -1);
-          return;
-        case "down": {
-          const tabs = useTabsStore.getState();
-          const first = allGroups(tabs.layout)[0]?.id;
-          if (!tabs.focusedGroupId && first) tabs.focusGroup(first);
-          steering.setLevel("panes");
+        case "right": {
+          const switched = cycleProject(action === "right" ? 1 : -1);
+          if (switched) landOnTabs(switched);
           return;
         }
+        case "down":
+          focusSomeGroup();
+          steering.setLevel("panes");
+          return;
         // Above the projects: the top bar — its apps, menus and switches.
         case "up":
           enterRegion("header");
@@ -541,16 +556,41 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
         case "left":
         case "right": {
           const fwd = action === "right";
-          if (walksPanes) {
+          const neighbour = (id: string | null) => {
+            const from = id ? ids.indexOf(id) : -1;
+            const base = from >= 0 ? from : 0;
+            return ids[(base + (fwd ? 1 : -1) + ids.length) % ids.length];
+          };
+          // A fullscreen subwindow hides the others: it moves along with the
+          // focus, or the focus would land on one nobody can see.
+          const carryFullscreen = (id: string) => {
+            if (tabs.fullscreenGroupId && tabs.fullscreenGroupId !== id) tabs.toggleFullscreen(id);
+          };
+          // Shift on the tabs level walks the subwindows too, without the
+          // round trip up to the panes level and back down.
+          if (walksPanes || (level === "tabs" && e.shiftKey && ids.length >= 2)) {
             // Document order, wrapping, committed at once via focusGroup (no
             // Shift-preview: the badges re-anchor each step).
-            const from = focused ? ids.indexOf(focused) : -1;
-            const base = from >= 0 ? from : 0;
-            tabs.focusGroup(ids[(base + (fwd ? 1 : -1) + ids.length) % ids.length]);
-          } else if (group && group.tabKeys.length > 1) {
+            const next = neighbour(focused);
+            tabs.focusGroup(next);
+            carryFullscreen(next);
+          } else if (group) {
             const len = group.tabKeys.length;
             const cur = group.activeKey ? group.tabKeys.indexOf(group.activeKey) : 0;
-            tabs.setGroupActive(group.id, group.tabKeys[(cur + (fwd ? 1 : -1) + len) % len]);
+            const step = cur + (fwd ? 1 : -1);
+            if (ids.length >= 2 && (step < 0 || step >= len)) {
+              // Past the subwindow's last (first) tab the arrows walk on into
+              // the next (previous) subwindow's first (last) tab, so every tab
+              // is a run of ←/→ away; the last tab of all wraps to the first.
+              const next = neighbour(group.id);
+              const nextGroup = findGroup(tabs.layout, next);
+              const key = nextGroup?.tabKeys[fwd ? 0 : nextGroup.tabKeys.length - 1];
+              if (key) tabs.setGroupActive(next, key);
+              else tabs.focusGroup(next);
+              carryFullscreen(next);
+            } else if (len > 1) {
+              tabs.setGroupActive(group.id, group.tabKeys[(step + len) % len]);
+            }
           }
           return;
         }
@@ -1097,12 +1137,12 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
       // Cycle to the next / previous active project.
       if (is("cycleProject")) {
         e.preventDefault();
-        cycleProject(1);
+        void cycleProject(1);
         return;
       }
       if (is("cycleProjectBack")) {
         e.preventDefault();
-        cycleProject(-1);
+        void cycleProject(-1);
         return;
       }
 
@@ -1381,13 +1421,13 @@ function stepSidePanelView(delta: 1 | -1) {
  * steering digits and pill badges number the same list, so the three surfaces
  * can never disagree about which project is station N.
  */
-function cycleProject(delta: 1 | -1) {
+function cycleProject(delta: 1 | -1): Promise<void> | null {
   const ps = useProjectsStore.getState();
   const stations = projectStations();
-  if (stations.length < 2) return;
+  if (stations.length < 2) return null;
   const idx = stations.indexOf(ps.activeId);
   const next = stations[(idx + delta + stations.length) % stations.length];
-  if (next !== ps.activeId) void ps.setActive(next);
+  return next !== ps.activeId ? ps.setActive(next) : null;
 }
 
 /**

@@ -1915,7 +1915,7 @@ export const dict: Dict = {
 
   "steering.project.label": "Cambiar de proyecto",
 
-  "steering.project.desc": "Proyecto anterior / siguiente, terminal raíz incluida — el anillo que recorre Ctrl+Mayús+Tab.",
+  "steering.project.desc": "Proyecto anterior / siguiente, terminal raíz incluida — el anillo que recorre Ctrl+Mayús+Tab. La navegación llega a sus pestañas; ↑ vuelve aquí para cambiar de nuevo.",
 
   "steering.into.label": "A las ventanas",
 
@@ -1941,9 +1941,9 @@ export const dict: Dict = {
 
   "steering.intoTabs.desc": "Baja a las pestañas de la subventana enfocada.",
 
-  "steering.up.label": "Subir un nivel",
+  "steering.up.label": "Subir a los proyectos",
 
-  "steering.up.desc": "Vuelve a las subventanas y, desde ahí, a los proyectos.",
+  "steering.up.desc": "Sube al nivel de proyectos, donde las flechas cambian de proyecto.",
   "steering.intoTerminal.label": "Al terminal",
   "steering.intoTerminal.desc": "Entra en el terminal de la pestaña activa para desplazarlo.",
   "steering.scroll.label": "Desplazar atrás / adelante",
@@ -2008,11 +2008,15 @@ export const dict: Dict = {
 
   "steering.back.desc": "Sube un nivel — fuera de un panel, superposición o menú, cerrando lo que abrió la navegación de {app}.",
   "steering.jump.label": "Saltar a proyecto",
-  "steering.jump.desc": "Activa la estación numerada: 1 es la terminal raíz, 2 la primera píldora de proyecto.",
+  "steering.jump.desc": "Activa la estación numerada: 1 es la terminal raíz, 2 la primera píldora de proyecto. La navegación llega a sus pestañas.",
   "steering.focus.label": "Cambiar subventana",
   "steering.focus.desc": "Mueve el foco a la subventana anterior / siguiente (orden del documento, cíclico).",
   "steering.tabs.label": "Cambiar pestaña",
-  "steering.tabs.desc": "Pestaña anterior / siguiente en la subventana enfocada — con una sola subventana, las flechas cambian de pestaña directamente.",
+  "steering.tabs.desc": "Pestaña anterior / siguiente — tras la última (antes de la primera) pestaña de una subventana, las flechas siguen en la subventana siguiente (anterior): cada pestaña queda a unas pocas flechas.",
+  "steering.focusShift.label": "Cambiar subventana",
+  "steering.focusShift.desc": "Subventana anterior / siguiente directamente desde las pestañas (orden del documento, cíclico) — sin subir antes un nivel.",
+  "steering.upPanes.label": "A las subventanas",
+  "steering.upPanes.desc": "Sube al nivel de subventanas: allí las flechas pasan de una subventana a otra y abajo vuelve a las pestañas.",
   "steering.files.label": "Visor de archivos",
   "steering.files.desc": "Alterna el visor de archivos acoplado de la subventana enfocada.",
   "steering.panels.label": "Paneles",

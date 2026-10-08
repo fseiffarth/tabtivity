@@ -125,6 +125,8 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.dim" />
               <UntestedTag id="steering.popout" />
               <UntestedTag id="steering.pointer" />
+              <UntestedTag id="steering.landOnTabs" />
+              <UntestedTag id="steering.shiftPanes" />
             </h3>
             <p className="shortcut-help-intro">
               {t("shortcutHelp.steeringIntro", {

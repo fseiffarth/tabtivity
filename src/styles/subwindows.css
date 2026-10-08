@@ -1039,14 +1039,28 @@ html[data-steer="projects"] .app-header {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-html[data-steer="projects"] :is(.project-pill.active, .box-chip.active),
-html:is([data-steer="tabs"], [data-steer="scroll"]) .subwindow.focused .tab.active {
+html[data-steer="projects"] :is(.project-pill.active, .box-chip.active) {
   outline: 2px solid var(--tab-accent, var(--accent));
   outline-offset: -2px;
   background-image: linear-gradient(
     color-mix(in srgb, var(--tab-accent, var(--accent)) 26%, transparent),
     color-mix(in srgb, var(--tab-accent, var(--accent)) 26%, transparent)
   );
+}
+/* The steered tab takes a colour no tab kind uses — the theme's foreground
+   for the frame (white on dark themes, near-black on light) over a strong
+   accent fill — so it stands out from its own coloured siblings, the
+   everyday active tab's wash included. */
+html:is([data-steer="tabs"], [data-steer="scroll"]) .subwindow.focused .tab.active {
+  outline: 2px solid var(--text-primary);
+  outline-offset: -2px;
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--accent) 48%, transparent),
+    color-mix(in srgb, var(--accent) 48%, transparent)
+  );
+}
+html:is([data-steer="tabs"], [data-steer="scroll"]) .subwindow.focused .tab.active .tab-label {
+  opacity: 1;
 }
 /* Inside the terminal (the scroll level) the tab stays marked (above) and the
    frame thickens around it. On the focus frame, not `.subwindow-body`: the

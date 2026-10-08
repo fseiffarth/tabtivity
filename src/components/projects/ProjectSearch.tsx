@@ -128,24 +128,26 @@ export function ProjectSearch({
     return () => window.removeEventListener(PROJECT_JUMP_EVENT, onJump);
   }, []);
 
-  /** Leave jump mode for steering, on the level the jump started from. */
-  const backToSteering = () => {
+  /** Leave jump mode for steering, on the level the jump started from — or
+   *  on the tabs of a project it switched to, as steering's own switches land. */
+  const backToSteering = (switched = false) => {
     if (!jumpBack) return;
     setJumpBack(null);
     inputRef.current?.blur();
     const steering = useKeyboardSteeringStore.getState();
     steering.enter();
-    if (jumpBack !== "tabs") steering.setLevel(jumpBack);
+    if (jumpBack !== "tabs" && !switched) steering.setLevel(jumpBack);
   };
 
   const activateSearchResult = (row: SearchRow) => {
     setQuery("");
+    const switched = row.kind === "box" || row.project.status !== "current";
     if (row.kind === "box") {
       onOpenBox(row.box.id);
-    } else if (row.project.status !== "current") {
+    } else if (switched) {
       onActivateProject(row.project.id);
     }
-    backToSteering();
+    backToSteering(switched);
   };
 
   return (

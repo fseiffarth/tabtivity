@@ -67,7 +67,7 @@ afterEach(() => {
 });
 
 describe("steering project jump", () => {
-  it("lists the open projects first and activates an inactive pick", () => {
+  it("lists the open projects first, activates an inactive pick and lands on its tabs", () => {
     const { onActivateProject, input } = renderSearch();
     act(() => {
       steering().enter();
@@ -85,7 +85,7 @@ describe("steering project jump", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onActivateProject).toHaveBeenCalledWith("bench");
-    expect(steering()).toMatchObject({ active: true, level: "projects" });
+    expect(steering()).toMatchObject({ active: true, level: "tabs" });
     expect(input.value).toBe("");
   });
 
@@ -99,13 +99,16 @@ describe("steering project jump", () => {
     expect(steering()).toMatchObject({ active: true, level: "tabs" });
   });
 
-  it("picking the current project switches nothing", () => {
+  it("picking the current project switches nothing and returns to the level it came from", () => {
     const { onActivateProject, input } = renderSearch();
-    act(() => steering().enter());
+    act(() => {
+      steering().enter();
+      steering().setLevel("projects");
+    });
     press({ key: "/" });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onActivateProject).not.toHaveBeenCalled();
-    expect(steering().active).toBe(true);
+    expect(steering()).toMatchObject({ active: true, level: "projects" });
   });
 
   it("Escape goes back to steering without switching, and the box forgets jump mode", () => {

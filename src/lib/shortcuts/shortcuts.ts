@@ -736,6 +736,10 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *   stepsPanes — the panes level with two or more subwindows (←/→ walk them)
  *   stepsTabs  — the tabs level, or the panes level with one subwindow, where
  *                ←/→ step its tabs instead
+ *   tabsMultiPane — the tabs level with two or more subwindows (Shift+←/→
+ *                walk them, ↑ goes to them)
+ *   upToProjects — where ↑ climbs to the projects: the panes level, or the
+ *                tabs level with one subwindow
  *   sideRegion — the region cursor is in the side panel (←/→ switch its view,
  *                and its opening key leaves it as Back does)
  *   settingsRegion — the region cursor is in the settings dialog (←/→ step
@@ -761,6 +765,8 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
 export type SteeringCondition =
   | "stepsPanes"
   | "stepsTabs"
+  | "tabsMultiPane"
+  | "upToProjects"
   | "sideRegion"
   | "settingsRegion"
   | "headerRegion"
@@ -788,6 +794,8 @@ export interface SteeringKeyDef {
   actions: readonly SteeringAction[];
   /** A direction pair (←/→, ↑/↓): shown column-wise, "S F / ← →". */
   pair?: true;
+  /** The keys act with Shift held: shown "Shift+S F / ← →". */
+  shift?: true;
   /** The row is the nine number slots (`steeringSlotKeys`, "1–9"). */
   slots?: true;
   labelKey: TranslationKey;
@@ -855,6 +863,10 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
       return s.level === "panes" && s.multiPane;
     case "stepsTabs":
       return s.level === "tabs" || (s.level === "panes" && !s.multiPane);
+    case "tabsMultiPane":
+      return s.level === "tabs" && s.multiPane;
+    case "upToProjects":
+      return s.level === "panes" || (s.level === "tabs" && !s.multiPane);
     case "sideRegion":
       return s.sideRegion;
     case "settingsRegion":
@@ -902,9 +914,9 @@ export function steeringKeysFor(s: SteeringLegendState): SteeringKeyDef[] {
 
 /** The key text of a steering row, from the user's steering bindings. */
 export function steeringRowLabel(row: SteeringKeyDef, overrides: SteeringKeyMap | null | undefined): string {
-  return row.slots
-    ? steeringSlotKeys(overrides)
-    : steeringRowKeys(row.actions, overrides, !!row.pair);
+  if (row.slots) return steeringSlotKeys(overrides);
+  const keys = steeringRowKeys(row.actions, overrides, !!row.pair);
+  return row.shift && keys !== "—" ? `Shift+${keys}` : keys;
 }
 
 /**
@@ -944,10 +956,12 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   // Subwindows and their tabs.
   { actions: ["left", "right"], pair: true, labelKey: "steering.focus.label", descKey: "steering.focus.desc", levels: ["panes"], when: "stepsPanes", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.tabs.label", descKey: "steering.tabs.desc", levels: PANE_LEVELS, when: "stepsTabs", group: "move" },
+  { actions: ["left", "right"], pair: true, shift: true, labelKey: "steering.focusShift.label", descKey: "steering.focusShift.desc", levels: ["tabs"], when: "tabsMultiPane", group: "move" },
   { actions: ["down"], labelKey: "steering.intoTabs.label", descKey: "steering.intoTabs.desc", levels: ["panes"], when: "stepsPanes", group: "move" },
   { actions: ["down"], labelKey: "steering.intoTerminal.label", descKey: "steering.intoTerminal.desc", levels: PANE_LEVELS, when: "intoTerminal", group: "move" },
   { actions: ["down"], labelKey: "steering.intoDocument.label", descKey: "steering.intoDocument.desc", levels: PANE_LEVELS, when: "intoDocument", group: "move" },
-  { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: PANE_LEVELS, group: "move" },
+  { actions: ["up"], labelKey: "steering.upPanes.label", descKey: "steering.upPanes.desc", levels: ["tabs"], when: "tabsMultiPane", group: "move" },
+  { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: PANE_LEVELS, when: "upToProjects", group: "move" },
   { actions: ["newShell"], labelKey: "steering.newShell.label", descKey: "steering.newShell.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["newMonitor"], labelKey: "steering.newMonitor.label", descKey: "steering.newMonitor.desc", levels: PANE_LEVELS, group: "new" },
   { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, agentSlots: true, group: "new" },

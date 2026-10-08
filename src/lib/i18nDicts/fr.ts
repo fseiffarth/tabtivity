@@ -1916,7 +1916,7 @@ export const dict: Dict = {
 
   "steering.project.label": "Changer de projet",
 
-  "steering.project.desc": "Projet précédent / suivant, terminal racine compris — l'anneau que parcourt Ctrl+Maj+Tab.",
+  "steering.project.desc": "Projet précédent / suivant, terminal racine compris — l'anneau que parcourt Ctrl+Maj+Tab. La navigation arrive sur ses onglets ; ↑ revient ici pour changer encore.",
 
   "steering.into.label": "Dans les fenêtres",
 
@@ -1942,9 +1942,9 @@ export const dict: Dict = {
 
   "steering.intoTabs.desc": "Descend vers les onglets de la sous-fenêtre focalisée.",
 
-  "steering.up.label": "Remonter d'un niveau",
+  "steering.up.label": "Remonter aux projets",
 
-  "steering.up.desc": "Retour aux sous-fenêtres, puis de là aux projets.",
+  "steering.up.desc": "Monte au niveau des projets, où les flèches changent de projet.",
   "steering.intoTerminal.label": "Dans le terminal",
   "steering.intoTerminal.desc": "Entrer dans le terminal de l'onglet actif pour le faire défiler.",
   "steering.scroll.label": "Défiler arrière / avant",
@@ -2009,11 +2009,15 @@ export const dict: Dict = {
 
   "steering.back.desc": "Remonte d'un niveau — hors d'un panneau, d'une surcouche ou d'un menu, en refermant ce que la navigation {app} a ouvert.",
   "steering.jump.label": "Aller au projet",
-  "steering.jump.desc": "Active la station numérotée : 1 est le terminal racine, 2 la première pastille de projet.",
+  "steering.jump.desc": "Active la station numérotée : 1 est le terminal racine, 2 la première pastille de projet. La navigation arrive sur ses onglets.",
   "steering.focus.label": "Changer de sous-fenêtre",
   "steering.focus.desc": "Déplace le focus vers la sous-fenêtre précédente / suivante (ordre du document, en boucle).",
   "steering.tabs.label": "Changer d'onglet",
-  "steering.tabs.desc": "Onglet précédent / suivant dans la sous-fenêtre focalisée — avec une seule sous-fenêtre, les flèches changent directement d'onglet.",
+  "steering.tabs.desc": "Onglet précédent / suivant — après le dernier (avant le premier) onglet d'une sous-fenêtre, les flèches continuent dans la sous-fenêtre suivante (précédente) : chaque onglet est à quelques flèches.",
+  "steering.focusShift.label": "Changer de sous-fenêtre",
+  "steering.focusShift.desc": "Sous-fenêtre précédente / suivante directement depuis les onglets (ordre du document, cyclique) — sans remonter d'un niveau.",
+  "steering.upPanes.label": "Vers les sous-fenêtres",
+  "steering.upPanes.desc": "Monte au niveau des sous-fenêtres : là, les flèches passent d'une sous-fenêtre à l'autre et bas revient aux onglets.",
   "steering.files.label": "Visionneuse de fichiers",
   "steering.files.desc": "Bascule la visionneuse de fichiers ancrée de la sous-fenêtre focalisée.",
   "steering.panels.label": "Panneaux",
