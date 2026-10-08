@@ -32,6 +32,8 @@ import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseD
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
+import { asleepPty, killAsleepPty, parkPty, takeAsleepPty } from "../../lib/terminal/sleepingPtys";
+import { terminalSpawnKey } from "../../lib/terminal/terminalSpawn";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
 import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
 import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
@@ -87,6 +89,8 @@ interface PtyScrollback {
   data: string;
   startOffset: number;
   endOffset: number;
+  /** The program ended (a wake's read: it ended while the pane slept). */
+  exited?: boolean;
 }
 
 /** Keep only bytes newer than an atomic backend scrollback snapshot. */
@@ -397,10 +401,28 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   useEffect(() => {
     if (!containerRef.current) return;
     let cancelled = false;
-    initialInputSent.current = false;
-    initialInputPending.current = !!initialInput;
+    // Sleeping tabs (performance plan §5.3; `lib/terminal/sleepingPtys`). This
+    // pane may be mounting on WAKE: its predecessor was unmounted while hidden
+    // and left the PTY running. With the spawn identity unchanged it takes
+    // that PTY over through the attach path below (register, catch-up tail,
+    // live stream) and never spawns; a changed identity (relaunched, container
+    // toggled while asleep) respawns, as this effect re-running would have.
+    // Only read here — the entry is taken in `setupAndSpawn`, after Strict
+    // Mode's synthetic cleanup, which therefore still sees the PTY parked.
+    const spawnKey = attachOnly
+      ? null
+      : terminalSpawnKey({ id, cmd, args, env, initialInput, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
+    const parked = attachOnly ? undefined : asleepPty(id);
+    const waking = !!parked && parked.spawnKey !== null && parked.spawnKey === spawnKey;
+    // This lifecycle runs (spawned) or took over the PTY: only then does its
+    // pane's sleep park it rather than leave it to the next owner.
+    let ownsPty = false;
+    // The program was launched long ago: its initial line was typed then.
+    initialInputSent.current = waking;
+    initialInputPending.current = !!initialInput && !waking;
     scheduledReady.current = false;
-    terminalReadySeen.current = false;
+    terminalReadySeen.current = waking && !!parked?.ready;
+    if (waking) firstOutputAt.current = parked?.firstOutputAt ?? null;
 
     // The xterm is built on the pane's first show (`buildTerm`, from
     // `tryOpen`), not at mount: every tab of every active project mounts at
@@ -690,7 +712,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // even though its bytes are already IN the snapshot, so offset filtering is
     // what makes the handoff exactly-once. Cleared by the fetch in either
     // direction — a backend too old to answer must not leave a pane mute.
-    let historyPending = attachOnly;
+    let historyPending = attachOnly || waking;
     const historyOutput: Array<{ data: string; range?: TerminalOutputRange }> = [];
     const flushPending = () => {
       if (historyPending || !term) return;
@@ -812,7 +834,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // A detached view attaches to the same PTY but must never become a second
     // delivery owner. Readiness waits for terminal-ready plus real TUI output and
     // a short settle cushion, matching the initial-input gate below.
-    let settledOnce = false;
+    let settledOnce = waking && !!parked?.settled;
     const armScheduledReady = () => {
       if (!scheduleTargetId || attachOnly || !terminalReadySeen.current || firstOutputAt.current === null) return;
       if (scheduledSettleTimer.current) clearTimeout(scheduledSettleTimer.current);
@@ -939,9 +961,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // hold lifts the moment it does. Only a Claude Tabtivity cannot vouch for (a
     // container's or a remote host's, an old or not-yet-probed host CLI) is
     // still typed at. `launchNamed` is null until the spawn has answered.
-    const launchName = attachOnly ? null : claudeLaunchName(cmd, initialInput);
+    const launchName = attachOnly || waking ? null : claudeLaunchName(cmd, initialInput);
     let launchNamed: boolean | null = launchName ? null : false;
-    let holdingInput = !attachOnly && !!initialInput && (kind === "agent" || kind === "local_agent");
+    let holdingInput = !attachOnly && !waking && !!initialInput && (kind === "agent" || kind === "local_agent");
     const heldInput: string[] = [];
     let holdInputTimer: ReturnType<typeof setTimeout> | null = null;
     const releaseHeldInput = (flush: boolean) => {
@@ -1398,7 +1420,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       // The PTY already exists, spawned by the main window's pane; pty_spawn with
       // a duplicate id would kill+respawn it, destroying scrollback / the agent
       // session. We only subscribe to the broadcast output/input by id.
-      if (attachOnly) {
+      if (attachOnly || waking) {
+        // A waking pane takes the PTY over from its sleeping predecessor (§5.3).
+        // Gone meanwhile (the tab closed, its PTY killed): nothing to attach to.
+        if (waking) {
+          if (!takeAsleepPty(id)) return;
+          ownsPty = true;
+          spawnState = "spawned";
+        }
         // …but it does ask for what the terminal has already shown (#235). The
         // backend keeps a bounded tail of everything it routed for this PTY, so
         // a freshly popped-out shell renders its history instead of a blank
@@ -1422,13 +1451,24 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         }
         if (cancelled) return;
         try {
-          const snapshot = await invoke<string | PtyScrollback>("pty_scrollback", { id });
+          // A wake reads the sleeping route's longer tail, cut at its last
+          // full clear, and ends the route's sleep (`route_wake_scrollback`).
+          const snapshot = await invoke<string | PtyScrollback>(
+            "pty_scrollback",
+            waking ? { id, wake: true } : { id },
+          );
           if (typeof snapshot === "string") {
             // Backend-stale development session: retain the old response shape.
             tail = snapshot;
           } else if (snapshot) {
             tail = snapshot.data;
             snapshotEnd = snapshot.endOffset;
+            // It ended while the pane slept, when no pane listened for the
+            // exit: say so where the live pane would have.
+            if (waking && snapshot.exited && !exited) {
+              exited = true;
+              tail += "\r\n\x1b[33m[process exited]\x1b[0m\r\n";
+            }
           }
         } catch {
           // An older backend has no such command — open blank, as before.
@@ -1453,6 +1493,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         if (openedRef.current && visibleRef.current) flushPending();
         return;
       }
+
+      // A PTY parked by a sleeping pane under a different spawn identity: this
+      // mount replaces it, as the effect re-running on that change would have
+      // (kill, then spawn).
+      killAsleepPty(id);
 
       // Register this view with the visible-only output router *before* starting
       // the child. The ordinary visibility effect below also keeps that state in
@@ -1493,6 +1538,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       try {
         await spawn();
         spawnState = "spawned";
+        ownsPty = true;
       } catch (e) {
         // Every branch below either prints why or asks the user first, so a
         // silent-start notice would only talk over it.
@@ -1526,6 +1572,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
           try {
             await spawn();
             spawnState = "spawned";
+            ownsPty = true;
           } catch (retryErr) {
             if (!cancelled) writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
           }
@@ -1555,6 +1602,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
           });
           if (cancelled) return;
           await spawn();
+          ownsPty = true;
         } catch (retryErr) {
           if (!cancelled) writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
         }
@@ -1583,7 +1631,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // view's own stream, and — once the spawn is through, so a previous
     // occupant's stamp cannot count — by the activity digests a hidden pane gets
     // instead of a stream. Fires once.
-    if (!attachOnly) {
+    if (!attachOnly && !waking) {
       silentStartTimer.current = setTimeout(() => {
         silentStartTimer.current = null;
         if (cancelled) return;
@@ -1847,7 +1895,44 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       // would leave that window a dead black pane). Only a real close tears it
       // down. (c) `persistOnUnmount` — a dialog-embedded connection terminal
       // whose tunnel/login must outlive the dialog.
-      if (!attachOnly && !isDetachedPtyId(id) && !persistOnUnmount) {
+      //
+      // (d) Sleeping tabs (§5.3): this pane is being put to sleep — the pane
+      // layer marked its PTY asleep in the render that unmounts it. The PTY
+      // keeps running; what the next owner needs is parked, including a
+      // stand-in for the scheduled-input registration, so a scheduled prompt,
+      // steering or the phone still reaches the sleeping agent. A lifecycle
+      // that never owned the PTY (Strict Mode's synthetic cleanup of a waking
+      // mount) leaves the parked entry as it is.
+      if (!attachOnly && asleepPty(id)) {
+        if (ownsPty) {
+          const bracketed = term?.modes.bracketedPasteMode === true;
+          const ready = terminalReadySeen.current;
+          const quiet = () => {
+            const last = lastPtyOutputAt(id);
+            return last !== undefined && Date.now() - last >= SCHEDULED_SETTLE_MS;
+          };
+          parkPty(id, {
+            spawnKey,
+            ready,
+            firstOutputAt: firstOutputAt.current,
+            settled: settledOnce,
+            release: scheduleTargetId
+              ? registerScheduledAgentInput(scheduleTargetId, {
+                  ptyId: id,
+                  ready: () => ready && quiet(),
+                  started: () => settledOnce || (ready && quiet()),
+                  bracketedPaste: () => bracketed,
+                  agent: cmd,
+                  recordAuthorizedInput: () => {
+                    noteUserInput(id);
+                    countSubmit();
+                  },
+                  noteInput: () => noteUserInput(id),
+                })
+              : null,
+          });
+        }
+      } else if (!attachOnly && !isDetachedPtyId(id) && !persistOnUnmount) {
         invoke("pty_kill", { id }).catch(() => {});
         // Drop the captured agent-task title so a closed tab's summary can't
         // linger against a future tab that reuses the key. Through the shared
@@ -1948,9 +2033,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   useEffect(() => {
     return () => {
       const updateSeq = ++viewerUpdateSeq.current;
-      invoke("pty_remove_view", { id, viewerId, updateSeq }).catch(() => {});
+      // `sleeping`: the pane goes to sleep with its PTY running (§5.3), so the
+      // route keeps the longer tail and outlives the program for the wake.
+      const sleeping = !attachOnly && !!asleepPty(id);
+      invoke("pty_remove_view", { id, viewerId, updateSeq, sleeping }).catch(() => {});
     };
-  }, [id, viewerId]);
+  }, [id, viewerId, attachOnly]);
 
   // The Reader over an agent pane (`TerminalReaderView`): offered only for a
   // CLI whose transcript Tabtivity reads, and only in the tab's own pane.

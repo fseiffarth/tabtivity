@@ -6,7 +6,8 @@ import { EmbedPane } from "../embed/EmbedPane";
 import { FileViewerPane } from "../embed/FileViewerPane";
 import { RemotePaneHold } from "../projects/RemotePaneHold";
 import { HostSessionHold } from "./HostSessionHold";
-import { effectiveTabLocation, remoteHostIdOf, type TabEntry } from "../../stores/tabs";
+import type { TabEntry } from "../../stores/tabs";
+import { tabTerminalSpawn } from "../../lib/terminal/terminalSpawn";
 
 // Code-split (perf plan §6): the terminal, the Files tabs and the file viewer
 // are what nearly every window shows at launch, so they stay in the startup
@@ -141,7 +142,6 @@ function TabPaneImpl({
 }: TabPaneProps) {
   // Identical in both windows: null for the root scope, else the scope id.
   const projectId = scope === "root" ? null : scope;
-  const zoomable = tab.kind === "agent" || tab.kind === "local_agent";
 
   switch (tab.kind) {
     case "projects3d":
@@ -267,31 +267,9 @@ function TabPaneImpl({
       }
       return (
         <TerminalView
-          // PTY ids include the scope: tab keys alone collide across projects.
-          id={`${scope}:${tab.key}`}
-          cmd={tab.cmd}
-          args={tab.args ?? []}
-          env={tab.env ?? {}}
-          // A popout is attach-only and never spawns, and its `terminal-ready`
-          // never fires, so it takes no initialInput (matches its old behavior).
-          initialInput={attachOnly ? undefined : tab.initialInput}
-          cwd={terminalCwd}
-          localOnly={effectiveTabLocation(tab, { vmProject }) === "local"}
-          projectId={projectId}
-          // Multi-host: the worker id (or "primary") this tab runs on, so the
-          // backend resolves the right host's RemoteSpec (null for a local tab).
-          remoteHostId={remoteHostIdOf(effectiveTabLocation(tab, { vmProject }))}
-          sandbox={sandbox}
-          // Persistent remote session (TODO #85). An explicit attach (opened from
-          // the Sessions view) wins over the tab's own persistent session.
-          tmuxSession={tmuxSession ?? null}
-          tmuxAttach={tab.tmuxAttach ?? null}
-          hostBoundUid={tab.hostBoundUid ?? null}
-          hostSession={!!tab.hostSession}
-          kind={tab.kind}
-          scheduleTargetId={tab.scheduleTargetId}
-          relaunchSeq={tab.relaunchSeq ?? 0}
-          zoomable={zoomable}
+          // The spawn inputs, mapped once (`tabTerminalSpawn`): the pane layer
+          // reads the same identity to tell when a sleeping tab must wake.
+          {...tabTerminalSpawn(tab, scope, { terminalCwd, sandbox, tmuxSession, vmProject, attachOnly })}
           visible={visible}
           focused={focused}
           attachOnly={attachOnly}
