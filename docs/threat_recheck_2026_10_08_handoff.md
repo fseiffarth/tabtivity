@@ -318,3 +318,129 @@ not run (main agent at landing).
   `or_insert`, so a persisted `CARGO_HOME`, `RUSTUP_HOME` or `DOCKER_CONFIG`
   in a state-dir layout still wins over the user's. Not on the denylist
   (the user may set them for a shell tab); state-dir only.
+
+## Agent step 3 — implementer (gap 18)
+
+**Commit:** `716e6ccc` Run the push preflight only in the tab's recorded
+fence and guard tab teardown by spawn generation.
+
+**Files:** `services/root_mcp.rs` (`PushBinding::fence_scope`,
+`TokenStore::stamp_push_fence_scope`), `services/git_push_mcp.rs`
+(`HookBoundary {Fence, Unrecorded, #[cfg(test)] Host}`, `preflight_command`
+/`preflight` take it, `Proposal::fence_scope` copied in `new_proposal`,
+`run_request` uses it), `services/launch_prep.rs` (`SpawnGeneration` guard,
+`PreparedLaunch::{spawn_seq, fenced_scope, generation}`, `commit` →
+`register_tab(id, scope, seq)` and host-agent tracking only while current,
+`push_fence_scope` + the stamp after the fence match, `pub fn
+on_tab_gone(id, seq)`), `services/agent_fence.rs` (registry is now
+`TabSpawns {latest, live}`: `next_spawn_seq`, `begin_spawn`,
+`register_tab(id, Option<scope>, seq) -> bool`, `abandon_spawn`,
+`on_tab_gone(id, seq) -> bool`; `fenced_scope_of_tab` is `#[cfg(test)]`),
+`terminal/mod.rs` (`PtyEntry::seq`, `insert(.., seq)`, `spawn_pty(.., seq)`,
+`route_open_at(id, seq)` with a test-only `route_open`, `ROUTE_SEQ` gone,
+`kill_all`/`teardown_taken` → `launch_prep::on_tab_gone(id, seq)`, reader
+end → `agent_fence::on_tab_gone(id, route_seq)`), `commands/terminal.rs`
+(`pty_spawn` passes `spawn_seq()`; `pty_kill`/`pty_kill_scope` leave the
+cleanup to the teardown, skipped when `take` finds nothing),
+`services/api_proxy.rs` (test-only `issue_for_test`). Docs:
+`threat_model.md` row 18 (**Fixed, not live-verified.** + residual),
+`context/git_push_mcp.md` (preflight step 1, QA step 6),
+`context/agent_authority.md` ("Spawn generations" paragraph, proxy-token
+lifetime), `filemap_backend.md` (`launch_prep.rs`, `agent_fence.rs`,
+`git_push_mcp.rs`, `terminal/mod.rs` rows), `headless_mcp_handoff.md`
+(the queued-push fence gotcha now points at the binding's scope).
+
+**Tests added:** `agent_fence`:
+`a_stale_teardown_leaves_the_respawns_registration_and_proxy_tokens` (stale
+before and after the respawn's commit), `a_kill_of_an_uncommitted_spawn_beats_its_commit`,
+`an_abandoned_spawn_falls_back_to_the_live_one` (and a failed first spawn
+drops its proxy token), `an_unfenced_spawn_registers_without_a_scope`.
+`launch_prep`: `a_stale_teardown_keeps_the_respawns_tokens_and_turn_binding`
+(fence scope, MCP token, proxy token, `agent_turn` binding all survive the
+stale teardown and go with the current one), `a_dropped_launch_abandons_its_generation`,
+`only_a_fenced_local_agent_stamps_its_push_binding` (every `FenceDecision`,
+Host session and ssh/docker included). `root_mcp`:
+`only_a_pusher_binding_takes_a_fence_scope`. `git_push_mcp`:
+`a_pusher_with_no_recorded_fence_scope_is_refused_and_its_hook_never_runs`
+(also an unbuildable scope refuses, hook marker never written),
+`the_proposal_carries_the_fence_scope_its_binding_recorded`. The existing
+hook test runs on `HookBoundary::Host`.
+
+**Gates (at `716e6ccc`):** `npm run build` ok; `npm test` 735 files / 7556
+tests passed; `cargo test -q` 3753 passed, 3 ignored, 0 failed (lib 3585);
+`npm run lint` 0 errors, 28 advisory warnings (unchanged; no TS touched);
+`cargo clippy --all-targets -D warnings` clean; `scripts/brand-check.sh` ok;
+`git diff --check` clean; `scripts/privacy-check.sh a842b990..HEAD` clean.
+`npm run backend:stale` not run (main agent at landing).
+
+**Choices:**
+- **The generation starts in `prepare`, not at `reg.insert`** (a deviation
+  from the review note's wording, same intent). `prepare` hands out the MCP
+  tokens (`grant_lanes`), the turn binding (`bind_tab`) and the proxy tokens
+  (`inject_api_keys`) long before the PTY exists, and `api_proxy` gives a
+  respawn the *same* proxy token back. A seq minted at insert left the
+  likelier ordering open: the old kill's teardown landing while the
+  respawn is still in `prepare` matched the old registration and wiped
+  what the respawn had just been handed. So `SpawnGeneration::begin` runs
+  right before `grant_lanes`; `spawn_seq()` rides into `spawn_pty`, the
+  `PtyEntry` and the output route (one counter, `agent_fence::next_spawn_seq`,
+  so the reader end's `route_seq` *is* the spawn seq). `commit()` needs no
+  argument.
+- Registry rule: `on_tab_gone(id, seq)` is current when the id has no entry
+  or `latest == seq`; then the entry goes with untrack, proxy tokens and the
+  keeper kick. Otherwise it only clears `live` if that was its own spawn.
+  `register_tab` records only while `latest == seq` (a kill of the PTY
+  before its commit wins). A spawn dropped uncommitted (prepare error,
+  crash-loop guard, `spawn_pty` error, headless non-unix) falls back to the
+  live spawn, or with none removes the entry and its proxy tokens.
+- Every spawn registers (shells and unfenced tabs too, scope `None`), so the
+  generation check covers the Host session's and Windows tabs' proxy tokens
+  and turn bindings, not only fenced ones.
+- `launch_prep::on_tab_gone(id, seq)` is the one teardown for kill paths:
+  fence-level, then (current only) `root_mcp_review::on_tab_gone` and
+  `agent_turn::on_tab_gone`. `teardown_taken` and `kill_all` call it, so
+  `pty_kill`/`pty_kill_scope` no longer repeat the calls after the await
+  (they used to run each twice) and `kill_all`/`registry.kill` now also drop
+  the turn binding. The reader end keeps calling only the fence-level one
+  (its per-token revokes were already generation-safe).
+- Stamp: the push token is read from `opts.env[GIT_TOKEN_ENV]` right after
+  `grant_lanes` (before any wrap rewrites the env) and stamped after the
+  fence `match`, so a failed wrap (which returns) never stamps. The stamp
+  only touches a `Caller::Pusher` session with that exact token.
+- Refusal text: Windows keeps its message, now under `fence_unavailable`
+  (was `preflight_failed`); elsewhere "no recorded sandbox … restart the
+  tab, or push from the git bar". Agent-facing MCP text, English like the
+  rest of the lane (not i18n).
+- No `UntestedTag`: no new UI.
+
+**Gotchas:**
+- The match-guard-then-`map.remove` pattern in `agent_fence::on_tab_gone`
+  compiles under NLL; no Polonius workaround needed.
+- `pty_kill`'s `take` could in theory take the *respawn's* PTY if the
+  respawn inserted first; the frontend sends the kill before the spawn and
+  `take` runs on the kill's first poll, while the spawn awaits `prepare`.
+  Not changed.
+
+**Flagged for user:**
+- On Windows an agent push in a repo with a `pre-push` hook now reports
+  `fence_unavailable` instead of `preflight_failed` (same message, same
+  outcome: push from the git bar). macOS is unchanged (`fence_unavailable`,
+  no one-shot fence there).
+- A tab started before this build and re-attached from a surviving tmux
+  session gets a fresh Pusher token with the scope stamped at the respawn,
+  so nothing changes for it. A Pusher token minted by an older running
+  window (no stamp) does not exist past a restart of the window.
+- A stale teardown skips the old spawn's `root_mcp_review` sandbox cleanup;
+  the respawn's own teardown (same tab id) does it later.
+- Not live-verified. Click-through (Linux, dev build with this commit):
+  1. In a local project with `.githooks/pre-push` (this repo works), open a
+     Claude tab and set the project's agent pushes to Propose.
+  2. Remount the pane a few times (switch the split layout or move the tab
+     to another pane and back) so the tab respawns under the same id.
+  3. Ask the agent to commit something and call `git_push`. Expect the
+     preflight to run fenced: the hook's output on the card, and a hook
+     that writes `touch ~/preflight-probe` leaves no file in `$HOME`.
+  4. With the API-key proxy on, after the remount the agent's model calls
+     still work (its proxy token survived), and the tab's turn state (the
+     working/done marks) still follows the agent.
+  5. Close the tab: its MCP session disappears from MCP session access.
