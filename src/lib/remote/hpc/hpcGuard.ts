@@ -21,6 +21,17 @@
 
 import { useHpcGuardStore, type HpcGuardKind } from "../../../stores/remote/hpc/hpcGuardPrompt";
 import { envName } from "../../brand";
+// Static (§6 of docs/performance_plan.md). These used to be `await import()`s
+// inside `guardLoginNodeRun` to dodge a cycle through the dialog's store, but
+// none of these modules imports this one back any more, and every caller of
+// this module (TerminalView, FileTree, the Python runner) is in the startup
+// chunk with them — so the dynamic imports split nothing and only drew Rollup's
+// "also statically imported" warning.
+import { useProjectsStore } from "../../../stores/projects";
+import { useSettingsStore } from "../../../stores/settings";
+import { PRIMARY_HOST } from "../../../stores/remote/remoteStatus";
+import { isHpcHost } from "./hpcHost";
+import { hostsForProject } from "../remoteHosts";
 
 /** Must match `services::hpc_mode::HPC_GUARD`. */
 export const HPC_GUARD = envName("HPC_GUARD");
@@ -107,20 +118,10 @@ export async function guardLoginNodeRun(opts: {
   location: string | undefined;
   kind: Extract<HpcGuardKind, "login-node-run">;
 }): Promise<boolean> {
-  // The two cheap facts first, BEFORE anything is imported or any store is read:
-  // a run with no host (the overwhelming majority — every local project) can be
-  // answered without loading a line of this machinery.
+  // The two cheap facts first, before any store is read: a run with no host
+  // (the overwhelming majority — every local project) is answered at once.
   if (!opts.projectId || opts.projectId === "root") return true;
   if (!opts.location || opts.location === "local") return true;
-
-  // Imported here rather than at module scope: this module is pulled in by the
-  // dialog's own store, and the project/settings stores drag half the app behind
-  // them — a cycle that only shows up as an undefined store at first render.
-  const { useProjectsStore } = await import("../../../stores/projects");
-  const { useSettingsStore } = await import("../../../stores/settings");
-  const { isHpcHost } = await import("./hpcHost");
-  const { hostsForProject } = await import("../remoteHosts");
-  const { PRIMARY_HOST } = await import("../../../stores/remote/remoteStatus");
 
   const project = useProjectsStore.getState().projects.find((p) => p.id === opts.projectId);
   const hostId = opts.location === "remote" ? PRIMARY_HOST : opts.location.replace(/^host:/, "");
