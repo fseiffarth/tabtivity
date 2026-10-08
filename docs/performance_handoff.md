@@ -1551,7 +1551,93 @@ landing + a dev build.
    column look as before minus the frost; scrolling a busy terminal beside
    them stays smooth.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented 2026-10-08)
+### Review (S7 reviewer, 2026-10-08)
+Range reviewed: `48b3b398..fe07922e` (87b10d07, ee376977, d551f300, handoff
+fe07922e). Nothing run live.
+
+**Bugs fixed**
+- `3934cd7e` — `stores/mobileHostStatus.ts` skipped every plain refresh
+  while *any* read was in flight, including one the last `release` (or
+  `publish`, or `beginRestart`) had already superseded and whose answer
+  would be dropped. A surface leaving and coming back inside that window —
+  React StrictMode's mount → cleanup → mount (`bootstrap.tsx` wraps the app),
+  a Files view flipping `active` — showed no reading for a whole 15 s poll
+  (header lamp grey, Files phone toggle hidden). Now the skip applies only
+  while the *newest* read is pending (`reading` set of request ids). Test:
+  `MobileHostStatusShared.test.tsx` "a surface that leaves and returns while
+  a read is in flight gets a fresh read" (fails without the fix).
+
+**Checked and sound**
+- `mobileHostStatus`: retain/release balanced through the one effect
+  (`[enabled]` deps, cleanup = `release`); one interval + one focus listener
+  per 0→1, both removed on 1→0; refs clamp at 0. The restart guard keeps the
+  old semantics: `beginRestart` blocks plain reads and supersedes in-flight
+  ones, `refresh(true)` bypasses the block, `endRestart` clears a
+  `refreshing` no current read will clear. The indicator's
+  clear-error-on-read moved to an effect on `refreshing` — same edges as the
+  old in-`refresh` `setError(null)`. Local admin socket only, so the
+  connected-gate invariant does not apply; Files views retain only while
+  `active`.
+- `coalescedRun`: no lost trailing run (a trigger during a run or a timer
+  firing during one → exactly one follow-up after settle), never concurrent,
+  sync throw and rejection both release `inFlight`, `cancel` kills the timer
+  and the follow-up while a run in flight finishes harmlessly (its write is
+  gated by `gitContextKeyRef`). A run that never settles would wedge it, but
+  both callers end in backend calls with git timeouts.
+- `fs-change` payload: only `FileTree` and `ProjectFilesView` listen (no Rust
+  or phone listener). `FileTree` compares with the exact `absDir` it passed;
+  `ProjectFilesView` accepts payloads under `projectDir` with either
+  separator and a trailing-slash `projectDir`; Windows `C:\p/sub` spellings
+  match. Remote projects never watch (`remote_target_for_dir` no-op, and the
+  view's listener is local-only). Every surface derives `projectDir` the same
+  way (`resolveProjectDirectory`), so the same folder is spelled the same.
+- `git_dirty_probe` / `unpushed_count`: `run_git` is the hardened, hookless
+  path. Header cases: no upstream (`main`), detached (`HEAD (no branch)`),
+  `[gone]` → namesake fallback exactly as before; `[ahead N, behind M]` →
+  N, the same set `git log @{u}..` counts (merges included); unborn branch
+  with upstream → 0 either way; upstream on a local branch (`remote = .`) or
+  another-named branch → same `@{u}` base. Porcelain v1 ignores
+  `status.aheadBehind`; ref names cannot contain `[` or `..`.
+- `gitDotProbedAt`: stamped only by a probe that actually starts or by
+  `set` from a fresh, context-checked full reading (non-nested, no
+  worktree). The watcher only stamps when it really probes, so a dot cannot
+  go permanently stale: with no events the switcher's backstop resumes at
+  its normal cadence.
+- S1 relaxed cache 4 s → 9 s: `descendant_pids_relaxed` has one caller
+  (`debug_app_resource_usage`); strict callers still filter at `CACHE_TTL`
+  (1.5 s), the 9 s bound only widens the prune window.
+- Launch chain: `root_work_dir` is a pure path join, so nothing needed it
+  before `load_side_panel_folder`; the folder's project pick matches
+  `activeId` (same sort, first `current`), a failed read degrades to no
+  folder as before, `loaded` still set once with the folder.
+- Glass: no other rule or test relied on the `.tab-bar` /
+  `.subwindow-files` backdrop selectors; fills unchanged.
+- The Files-view Git flag's dot fallback excludes nested repos, remote,
+  boxes, and is never used in the Git view (where a selected worktree lives).
+
+**Gates (worktree, at 3934cd7e)**
+| Gate | Result |
+|---|---|
+| `npm run build` | ok (tsc + both bundles) |
+| `npm test` | 744 files / 7603 tests, 2 failing = the known `MobileHeldPromptStore.test.ts` date time-bomb (S7: 7602 + 1 new) |
+| `cargo test -q` | lib 3580 passed, 3 ignored; every other target green |
+| `npm run lint` | 0 errors, 28 pre-existing warnings |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check` | clean |
+
+**Flagged for user**
+- Two trees active at once on the *same* folder spelled two ways (a
+  symlinked project path and its real path) now re-create the one watcher
+  for whichever asked last, and the other tree ignores its events (it used
+  to re-list on every event). Every surface spells a project's folder the
+  same way today, so this needs a hand-built path; not changed.
+- A full Git-view reading that lands after a newer dot probe overwrites the
+  dot and stamps it, so the next switcher tick skips it; the next
+  `fs-change` or tick after that corrects it (pre-existing overwrite race,
+  only the stamp is new).
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -1566,9 +1652,10 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   S5 (terminal backend), S6 (many-tabs memoisation: 45bcd8a9, cdd2a37f,
   91e780de; review fixes e10c5fe8, 3e067ec6, 8d274703, 11bc2c3c — see
   `### Review (S6 reviewer, 2026-10-08)`).
-- Implemented, review owed: S7 (pollers, git dots, launch chain: 87b10d07,
-  ee376977, d551f300 — see `## S7`).
-- Next: the S7 reviewer (fresh), then S8–S12 per plan §11, then the final whole-range review, then landing on `develop`
+- Done, implemented + reviewed: S7 (pollers, git dots, launch chain:
+  87b10d07, ee376977, d551f300; review fix 3934cd7e — see
+  `### Review (S7 reviewer, 2026-10-08)`).
+- Next: S8 (fresh implementer), then S9–S12 per plan §11, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -1582,6 +1669,10 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 - Gates at S7's HEAD (d551f300): build ok; vitest 744 files / 7602 tests,
   the same 2 `MobileHeldPromptStore` failures; cargo lib 3580 passed; lint
   0 errors / 28 warnings; clippy clean; brand ok; diff --check clean.
+- Gates at the S7 review's HEAD (3934cd7e): build ok; vitest 744 files /
+  7603 tests, the same 2 `MobileHeldPromptStore` failures; cargo lib 3580
+  passed; lint 0 errors / 28 warnings; clippy clean; brand ok; diff --check
+  clean.
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
