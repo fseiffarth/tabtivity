@@ -2004,7 +2004,8 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20        # in above) can't hide a nested run — the tab's CLI has no claude\n\
          \x20        # above it, a nested one has. Without /proc (macOS) `ps` walks the\n\
          \x20        # same chain: `-E` appends the environment of a process of this\n\
-         \x20        # user; a `claude` is one whose executable or argv[0] is named so.\n\
+         \x20        # user, `-ww` keeps BSD `ps` from cutting it at 79 columns (no tty);\n\
+         \x20        # a `claude` is one whose executable or argv[0] is named so.\n\
          \x20        # Where neither answers nothing is counted and the start is taken.\n\
          \x20        clear|resume) n=0; p=$PPID\n\
          \x20          if [ -r \"{proc_root}/$p/environ\" ]; then\n\
@@ -2013,9 +2014,9 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20            p=$(sed 's/.*) [^ ]* \\([0-9]*\\).*/\\1/' \"{proc_root}/$p/stat\" 2>/dev/null)\n\
          \x20          done\n\
          \x20          else\n\
-         \x20          while [ \"$p\" -gt 1 ] 2>/dev/null && e=$(ps -E -o command= -p \"$p\" 2>/dev/null) &&\n\
+         \x20          while [ \"$p\" -gt 1 ] 2>/dev/null && e=$(ps -E -ww -o command= -p \"$p\" 2>/dev/null) &&\n\
          \x20            printf '%s\\n' \"$e\" | tr ' ' '\\n' | grep -qx \"[A-Z]*_TAB_UID=${UPPER}_TAB_UID\"; do\n\
-         \x20            c=$(ps -o comm= -p \"$p\" 2>/dev/null); a=${{e%% *}}\n\
+         \x20            c=$(ps -ww -o comm= -p \"$p\" 2>/dev/null); a=${{e%% *}}\n\
          \x20            if [ \"${{c##*/}}\" = claude ] || [ \"${{a##*/}}\" = claude ]; then n=$((n + 1)); fi\n\
          \x20            p=$(ps -o ppid= -p \"$p\" 2>/dev/null | tr -d ' ')\n\
          \x20          done\n\
@@ -3318,7 +3319,8 @@ mod tests {
     /// chain with `ps` instead. The procfs root is an empty directory and a
     /// `ps` shim answers `ppid=` / `comm=` / `command=` (the environment only
     /// with `-E`) from a scripted chain that starts at the hook's parent — this
-    /// test process.
+    /// test process. Like BSD `ps` with no tty, it cuts its line at 79 columns
+    /// unless given `-ww`.
     #[cfg(unix)]
     #[test]
     fn hook_script_walks_the_chain_with_ps_where_proc_is_unreadable() {
@@ -3338,16 +3340,17 @@ mod tests {
         std::fs::write(
             &ps,
             format!(
-                "#!/bin/sh\nf= p= env=\nwhile [ $# -gt 0 ]; do\n\
-                 \x20 case \"$1\" in -E) env=1 ;; -o) f=$2; shift ;; -p) p=$2; shift ;; esac\n\
+                "#!/bin/sh\nf= p= env= w=\nwhile [ $# -gt 0 ]; do\n\
+                 \x20 case \"$1\" in -E) env=1 ;; -ww) w=1 ;; -o) f=$2; shift ;; -p) p=$2; shift ;; esac\n\
                  \x20 shift\ndone\n\
                  while IFS='|' read -r pid ppid comm args envs; do\n\
                  \x20 [ \"$pid\" = \"$p\" ] || continue\n\
                  \x20 case \"$f\" in\n\
-                 \x20   ppid=) echo \"  $ppid\" ;;\n\
-                 \x20   comm=) echo \"$comm\" ;;\n\
-                 \x20   command=) if [ -n \"$env\" ]; then echo \"$args $envs\"; else echo \"$args\"; fi ;;\n\
+                 \x20   ppid=) out=\"  $ppid\" ;;\n\
+                 \x20   comm=) out=$comm ;;\n\
+                 \x20   command=) if [ -n \"$env\" ]; then out=\"$args $envs\"; else out=$args; fi ;;\n\
                  \x20 esac\n\
+                 \x20 if [ -n \"$w\" ]; then printf '%s\\n' \"$out\"; else printf '%s\\n' \"$out\" | cut -c1-79; fi\n\
                  \x20 exit 0\ndone < '{}'\nexit 1\n",
                 chain.display()
             ),
@@ -3407,6 +3410,17 @@ mod tests {
                 launchd.clone(),
             ];
             assert_eq!(run(src, &legacy), uid, "{src} nested, current name unset");
+            // Real lines are long: the native installer's versioned executable,
+            // and the tab id somewhere in a full environment. BSD `ps` without
+            // `-ww` would cut both at 79 columns and the nested run would pass.
+            let exe = "/Users/someone/.local/share/claude/versions/2.1.294/claude";
+            let envs = format!("TERM=xterm-256color SHELL=/bin/zsh HOME=/Users/someone LANG=en_US.UTF-8 {tab_uid}={uid}");
+            let long = [
+                format!("{me}|500|{exe}|claude -p --resume 33333333-3333-4333-8333-333333333333 --output-format json|{envs}"),
+                format!("500|1|/Users/someone/Library/Application Support/SomeLauncher/runtime/node_modules/.bin/claude|node|{envs}"),
+                launchd.clone(),
+            ];
+            assert_eq!(run(src, &long), uid, "{src} nested, long ps lines");
             // Another tab's id stops the walk; a `ps` that knows nothing counts nothing.
             let foreign = [format!("{me}|500|claude|claude|{tab_uid}={other}"), format!("500|1|claude|claude|{tab_uid}={uid}")];
             assert_eq!(run(src, &foreign), other, "{src} under another tab's id");

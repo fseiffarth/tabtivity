@@ -744,3 +744,52 @@ Flagged for user:
   manual line.
 - The PowerShell nested-`claude` walk stays unbuilt (decision 5, the
   "only with a Windows box" rule).
+
+### Reviewer
+
+Findings:
+- **Fixed — macOS `ps` cut the environment off.** BSD/macOS `ps` truncates
+  its last column to the terminal width; the hook has no tty (stdin a pipe,
+  stdout captured, stderr `/dev/null`), so the width is 79 (or `$COLUMNS`).
+  `-E` appends the environment *after* the arguments (Apple's
+  `getproclline`), so the tab id — somewhere in a full environment — was
+  practically always cut off: the walk stopped at the first process, nothing
+  was counted and every nested `claude --resume` was taken, i.e. the fallback
+  never refused anything. Same for `-o comm=` (macOS prints the executable
+  path; a long one loses its basename). Both calls now pass `-ww` (unlimited
+  width, overrides `$COLUMNS`). Regression: the `ps` shim now cuts at 79
+  columns unless given `-ww`, and a new "long ps lines" case (versioned native
+  path, tab id after other env vars, an 88-char `comm`) is refused;
+  mutation-checked — dropping either `-ww` fails it. Fix commit: the
+  `fix(hook)` commit on `osfix/a5` after fbb66ed5.
+- Checked, fine: Linux `/proc` loop byte-identical inside the new `if`;
+  POSIX sh only (`${e%% *}`, `${c##*/}`, `[ -gt ] 2>/dev/null`, `&&` line
+  continuation — no bashisms for bash 3.2 sh mode); `ps -o ppid=` leading
+  spaces stripped; macOS `-E` needs the same real uid (all tab processes are);
+  `route -n get default` / `arp -n` shapes, Windows `route print -4` 5-column
+  active rows vs 4-column persistent rows, `arp -a` 3-column rows, MAC
+  canonicalisation matching `/proc` (Linux hash unchanged); `current_exe` on
+  Linux is the same `read_link("/proc/self/exe")` (no `(deleted)` stripping
+  in std); `pid_alive` is `/proc` / `OpenProcess` / `kill(pid, 0)`; Ollama
+  text names no brand and no frontend matches it.
+
+Flagged for user (not changed):
+- `dev_build::status` on macOS: `own_exe` now answers there, so `frozen` (and
+  `can_relaunch`) can be true while `spawn_relauncher` always refuses "Linux
+  only" — a chip button that only errors. Unreachable unless a macOS window
+  runs from the dev `app_dir` binary, which only the Linux script produces.
+- macOS/Windows wired-network key changes from `lan` to `lan:<gateway_id>`
+  once the gateway MAC resolves: a per-network default printer saved there
+  under plain `lan` (before this step) no longer applies. Feature is untested
+  on those OSes; a fallback to `lan` would be a design change.
+- macOS `ps -E` against a hardened-runtime / notarised `claude` binary is
+  assumed to work (KERN_PROCARGS2, same uid); read-verified only.
+
+Gates (reviewer, after the fix): `npm run build` ok; `npm test` 730 files /
+7527 tests, 2 failed (the known `MobileHeldPromptStore` pair); `cargo test`
+3720 passed (one run under parallel `npm test` load failed the timing-based
+`api_usage::the_book_writes_on_flush_and_reads_its_file_back` — passes alone
+and in a quiet full rerun, not this step's); `cargo clippy --all-targets -D
+warnings` ok; `npm run lint` 0 errors / 28 warnings; `scripts/brand-check.sh`
+ok; `scripts/privacy-check.sh` ok; `git diff --check` clean; Windows `cargo
+check` ok.
