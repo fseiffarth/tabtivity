@@ -2073,7 +2073,97 @@ Settings → Performance → "Unload hidden tabs after" → 5 min.
    and activate it: it opens and shows its content.
 7. Settings → "Never": nothing unloads any more.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented 2026-10-08, S9 review next)
+### Review (S9 reviewer, 2026-10-08)
+Range reviewed: `3cb56a8c..bdc494a4` (6dbbafed, b1761c56, handoff 44d4f721;
+plus the S8 follow-up bd8004f3 and its note bdc494a4). Nothing run live.
+
+**Bugs fixed** (each with a regression test that fails without the fix)
+- `96397d6d` — a Files (Project) tab with its **commit box open** slept
+  after the delay and dropped the message: `commitMsg` (the user's edited
+  text) lives only in `ProjectFilesView` state. Now
+  `usePaneSleepHold(commitMsg !== null || gitBusy)`; no-op in the side
+  panel (no provider). Test `git/GitCommitSleepHold.test.tsx`.
+- `69eef2a4` — an image tab left **mid-annotation** slept and lost the
+  drawing (strokes live only on `ImageAnnotator`'s canvas, never registered
+  as unsaved work). The open annotator now holds the pane; Save/Close
+  (unmount) releases it. Test `viewers/ImageAnnotatorSleepHold.test.tsx`.
+- `0cd729e0` — a deck **presenting** could be slept: `DeckPresenter` is
+  portaled into `#root`, so the deck tab can be hidden under a running talk
+  (a project switch, an agent opening a file in that group). After the delay
+  the presenter unmounted mid-talk and, since its unmount does not close the
+  audience window, left a slide on the projector. `usePaneSleepHold(presenting)`
+  in `DeckView`. Test `deck/DeckPresentingSleepHold.test.tsx`.
+
+**Checked and sound**
+- Holds: `useUnsavedWork` (PDF marks/page edits, `PdfNoteLayer`, `DeckView`
+  edits, `CompareView` decisions — the only `useUnsavedWork` callers),
+  `useEditableFile` (`isDirty || saving`; every text/markdown/code/YAML/bib/
+  table buffer goes through it; `TableView` sheets are read-only), `TexView`
+  `compiling`, `PdfView` `held || compiling`, `MediaView` play/pause/ended.
+  Each hook's effect releases on lift and on unmount; tokens are per caller.
+  A hold raised while asleep is impossible: the pane's children are
+  unmounted. YAML/table cell buffers commit on blur (no hold needed).
+- `useSleepWhenHidden` in `PaneSlot`: one timer per hidden sleepable slot,
+  cleared on show, hold, unmount and `afterMs` change; a setting change
+  re-arms the full delay; Never (`null`) makes `hidden` false, so every
+  asleep slot wakes (mounts hidden) and no timer is left. `asleep && hidden`
+  wakes in the render `visible` flips; `focused` implies `visible`.
+- `PaneSlot` memo: the two new props are scalars (`sleepAfterMs` from a
+  primitive selector, `inPopout` a boolean from a `Set` memoised on
+  `detachedGroupsByScope`, which CenterPanel already subscribed to for the
+  current scope). Mobile first-seen stamp sits above the sleep branch.
+- `.center-pane` box (steering region, `data-tab-key`, focus capture,
+  `PaneVisibleContext` inside `TabPane`) untouched; the drag ghost only
+  clones the visible pane, which is never asleep.
+- Wake path: SyncTeX reverse search and `FileTreeSearch` go through
+  `useEditorJumpStore` (read on mount), forward search through the stored
+  reveal (S3), so a sleeping target still lands. Popout stub: `inPopout &&
+  !held`; dock-back, `recoverDetachedGroup` (popout that never came up or was
+  killed) and `hideDetachedGroup` all drop the key from
+  `detachedGroupsByScope`, so the main copy wakes/re-arms normally; a
+  Wayland scope-out keeps the record while the scope is hidden (stub
+  harmless, its panes are hidden anyway).
+- Terminal kinds: `isSleepableTab` admits only `embed`+`viewer` and
+  `projectfiles`; no `FileViewerPane`/files component mounts a PTY; the
+  popout stub is gated by the same predicate.
+- Rust: `Option<u32>`, `serde(default, skip_serializing_if)`, named field
+  (not `extra`) like the sibling `mail_check_interval_min`; snake_case key
+  matches the TS `Settings` type; no Python-era key exists. i18n: en + all
+  four maintained locales; `untested.ts` row + pill on the label.
+- bd8004f3 (Machines): `useState(machinesEnabled)` + set-during-render latch
+  only ever turns on; `MachinesIndicator`'s own `!enabled` branch returns
+  null and its report is `null` while off; its test drives on→off→on and
+  sees one mount, no unmount.
+
+**Gates (worktree, at 0cd729e0)**
+| Gate | Result |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,321.42 kB / gz 975.05 kB |
+| `npm test` | 750 files / 7623 tests (+3 files, +3 tests); 3 failed: the 2 known `MobileHeldPromptStore` date time-bomb + `MobileIndicator` "lists paired devices…" at load ≈ 35 — 3/3 alone |
+| `cargo test -q` | lib 3581 passed, 3 ignored; every other target green |
+| `npm run lint` | 0 errors, 28 warnings (unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check 3cb56a8c HEAD` | clean |
+
+**Flagged for user**
+- A narrow race, not fixed: if a hold is raised in a hidden pane in the same
+  few milliseconds its sleep timer fires, both state updates can land in one
+  render and the pane sleeps with the hold up. Only a hold that can rise
+  while hidden can hit it (a TeX build of a hidden PDF starting); none of
+  the data-holding sources (unsaved edits/marks) can become dirty while
+  hidden, and a PDF reloads on wake anyway.
+- More component-only state a wake does not bring back (add to the
+  implementer's list): the PDF/viewer **presentation marker** strokes
+  (`PresentationOverlay`, session-only by design), an open SQLite query, a
+  `ProjectFilesView` dialog or sort order. Say if any of these should hold.
+- `DeckPresenter` does not close its audience window on unmount (only via
+  Exit). With the hold the sleep path no longer reaches it; closing the deck
+  tab mid-talk still would (pre-existing).
+- The settings help text says "Terminals and agents are never unloaded";
+  S10 must reword it when terminal kinds start sleeping.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08; S9 implemented + reviewed 2026-10-08; S10 next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -2095,9 +2185,10 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   e5c8a0bd, 42ae9aa1, 4273a1cc, f1c7281f; review found no bug — see
   `### Review (S8 reviewer, 2026-10-08)`; thin LTO keep/revert is the
   user's call).
-- Done, implemented (review pending): S9 (sleeping tabs I: 6dbbafed,
-  b1761c56 — see `## S9 — sleeping tabs I`).
-- Next: S9 reviewer, then S10–S12 per plan §11, then the final whole-range review, then landing on `develop`
+- Done, implemented + reviewed: S9 (sleeping tabs I: 6dbbafed,
+  b1761c56; review fixes 96397d6d, 69eef2a4, 0cd729e0 — see
+  `### Review (S9 reviewer, 2026-10-08)`).
+- Next: S10 (sleeping tabs II, terminal kinds), then S11–S12 per plan §11, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -2127,6 +2218,11 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   failures + a `MobileIndicator` load flake (passes alone); cargo lib 3581
   passed; lint 0 errors / 28 warnings; clippy clean; brand ok; diff --check
   clean. `npm run backend:stale` owed after landing (settings field).
+- Gates at the S9 review's HEAD (0cd729e0): build ok (bootstrap 3,321 kB /
+  gz 975 kB); vitest 750 files / 7623 tests, the 2 `MobileHeldPromptStore`
+  failures + the `MobileIndicator` load flake (3/3 alone); cargo lib 3581
+  passed; lint 0 errors / 28 warnings; clippy clean; brand ok; diff --check
+  clean.
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
