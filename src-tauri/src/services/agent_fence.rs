@@ -1728,30 +1728,96 @@ pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
     }
 }
 
-struct FencedTab {
-    scope_id: String,
+/// One PTY id's spawn generations (gap 18). Ids are reused: a pane remount
+/// respawns the same id while the unmount's kill may still be on its way, and
+/// that kill's teardown used to clear the respawn's fence registration, its
+/// API proxy tokens and its turn binding. Every spawn now gets a sequence
+/// number when [`begin_spawn`] runs (in `launch_prep::prepare`, before any
+/// grant), and every teardown names the spawn it ends ([`on_tab_gone`]).
+#[derive(Default)]
+struct TabSpawns {
+    /// The newest spawn begun for the id, committed or not.
+    latest: u64,
+    /// The spawn whose process exists ([`register_tab`]).
+    live: Option<LiveSpawn>,
 }
 
-fn fenced_tabs() -> &'static Mutex<HashMap<String, FencedTab>> {
-    static TABS: OnceLock<Mutex<HashMap<String, FencedTab>>> = OnceLock::new();
+struct LiveSpawn {
+    seq: u64,
+    /// The fence scope it runs in; `None` for an unfenced tab.
+    scope_id: Option<String>,
+}
+
+fn tab_spawns() -> &'static Mutex<HashMap<String, TabSpawns>> {
+    static TABS: OnceLock<Mutex<HashMap<String, TabSpawns>>> = OnceLock::new();
     TABS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn register_tab(tab_id: &str, scope_id: &str) {
-    fenced_tabs()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(tab_id.to_string(), FencedTab {
-            scope_id: scope_id.to_string(),
-        });
+static SPAWN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A fresh spawn sequence number, never 0. The PTY's output route uses the
+/// same number (`terminal::spawn_pty`), so the reader task's end names the
+/// spawn it belonged to.
+pub fn next_spawn_seq() -> u64 {
+    SPAWN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
-/// The scope a fenced tab was spawned into, or `None` for a tab that runs
-/// unfenced (or is not a fenced host agent tab at all). The one record that a
-/// tab *was* fenced; a caller that runs work on the tab's behalf keeps it
-/// inside the same boundary ([`one_shot_command`]).
-pub fn fenced_scope_of_tab(tab_id: &str) -> Option<String> {
-    fenced_tabs().lock().unwrap_or_else(|e| e.into_inner()).get(tab_id).map(|t| t.scope_id.clone())
+/// A spawn of `tab_id` starts: from here on a teardown of any earlier spawn
+/// of the id leaves the shared per-tab state alone. Returns the spawn's
+/// sequence number, which the PTY entry, [`register_tab`] and the teardown
+/// carry. A spawn that never commits hands it back through [`abandon_spawn`].
+pub fn begin_spawn(tab_id: &str) -> u64 {
+    let seq = next_spawn_seq();
+    tab_spawns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(tab_id.to_string())
+        .or_default()
+        .latest = seq;
+    seq
+}
+
+/// The process of spawn `seq` exists; `scope_id` is the fence scope it runs
+/// in (`None`: unfenced). Whether `seq` is still the tab's newest spawn —
+/// `false` when it was torn down already or a newer spawn has begun, and then
+/// nothing is recorded.
+pub fn register_tab(tab_id: &str, scope_id: Option<&str>, seq: u64) -> bool {
+    match tab_spawns().lock().unwrap_or_else(|e| e.into_inner()).get_mut(tab_id) {
+        Some(spawns) if spawns.latest == seq => {
+            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string) });
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Spawn `seq` failed before its process existed: the id falls back to the
+/// spawn still live under it, or, with none, is gone (its proxy tokens too).
+pub fn abandon_spawn(tab_id: &str, seq: u64) {
+    let mut map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(spawns) = map.get_mut(tab_id) else { return };
+    if spawns.latest != seq {
+        return;
+    }
+    if let Some(live) = spawns.live.as_ref().map(|l| l.seq) {
+        spawns.latest = live;
+        return;
+    }
+    map.remove(tab_id);
+    drop(map);
+    untrack_host_agent_tab(tab_id);
+    crate::services::api_proxy::on_tab_gone(tab_id);
+}
+
+/// The scope the live spawn of a fenced tab runs in.
+#[cfg(test)]
+pub(crate) fn fenced_scope_of_tab(tab_id: &str) -> Option<String> {
+    tab_spawns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(tab_id)
+        .and_then(|s| s.live.as_ref())
+        .and_then(|l| l.scope_id.clone())
 }
 
 /// A one-shot command inside the fence of `scope_id`, for work Tabtivity runs on
@@ -1803,12 +1869,29 @@ pub fn one_shot_command(_scope_id: &str, _cmd: &str, _args: &[String], _cwd: &Pa
     Err(fence_unavailable_message())
 }
 
-pub fn on_tab_gone(tab_id: &str) {
-    let was_fenced = fenced_tabs()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(tab_id)
-        .is_some();
+/// Spawn `seq` of `tab_id` is gone (closed, exited, or the app is quitting).
+/// Only the tab's newest spawn takes the shared per-tab state with it: its
+/// registration, its host-agent tracking and its API proxy tokens. A stale
+/// teardown — a kill that lands after a respawn of the same id began — only
+/// forgets its own registration and answers `false`, and the caller then
+/// leaves the tab's MCP tokens and turn binding alone too
+/// (`launch_prep::on_tab_gone`). An id with nothing registered counts as
+/// current: no spawn of it is in flight.
+pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
+    let removed = {
+        let mut map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+        match map.get_mut(tab_id) {
+            None => None,
+            Some(spawns) if spawns.latest == seq => map.remove(tab_id).and_then(|s| s.live),
+            Some(spawns) => {
+                if spawns.live.as_ref().is_some_and(|l| l.seq == seq) {
+                    spawns.live = None;
+                }
+                return false;
+            }
+        }
+    };
+    let was_fenced = removed.is_some_and(|l| l.scope_id.is_some());
     untrack_host_agent_tab(tab_id);
     // Its API proxy tokens go with it (those of a tmux-held agent once the
     // session is gone too).
@@ -1819,6 +1902,7 @@ pub fn on_tab_gone(tab_id: &str) {
     if was_fenced {
         std::thread::spawn(crate::services::agent_auth::reconcile_now);
     }
+    true
 }
 
 /// A local agent tab whose agent runs on the host — not in a container, not on
@@ -2030,6 +2114,66 @@ mod tests {
     use super::*;
     use crate::schema::boxes::ProjectBox;
     use serde_json::{json, Value};
+
+    // ── spawn generations (gap 18) ──────────────────────────────────────────
+
+    #[test]
+    fn a_stale_teardown_leaves_the_respawns_registration_and_proxy_tokens() {
+        let tab = "gen-p:stale";
+        let old = begin_spawn(tab);
+        assert!(register_tab(tab, Some("gen-p"), old));
+        // The unmount's kill took the old PTY; the remount's spawn begins and
+        // is handed its proxy token before the kill's teardown lands.
+        let new = begin_spawn(tab);
+        let token = crate::services::api_proxy::issue_for_test("gen-p", tab).unwrap();
+        assert!(!on_tab_gone(tab, old), "a teardown of the older spawn is stale");
+        assert!(crate::services::api_proxy::token_live(&token));
+        assert!(register_tab(tab, Some("gen-p"), new), "the respawn commits");
+        assert!(!on_tab_gone(tab, old), "still stale after the commit");
+        assert_eq!(fenced_scope_of_tab(tab).as_deref(), Some("gen-p"));
+        assert!(crate::services::api_proxy::token_live(&token));
+        // The respawn's own teardown takes it all.
+        assert!(on_tab_gone(tab, new));
+        assert_eq!(fenced_scope_of_tab(tab), None);
+        assert!(!crate::services::api_proxy::token_live(&token));
+        // Nothing registered any more: a repeat teardown counts as current.
+        assert!(on_tab_gone(tab, new));
+    }
+
+    #[test]
+    fn a_kill_of_an_uncommitted_spawn_beats_its_commit() {
+        let tab = "gen-p:uncommitted";
+        let seq = begin_spawn(tab);
+        assert!(on_tab_gone(tab, seq));
+        assert!(!register_tab(tab, Some("gen-p"), seq), "the process is gone already");
+        assert_eq!(fenced_scope_of_tab(tab), None);
+    }
+
+    #[test]
+    fn an_abandoned_spawn_falls_back_to_the_live_one() {
+        let tab = "gen-p:abandon";
+        let live = begin_spawn(tab);
+        assert!(register_tab(tab, Some("gen-p"), live));
+        let failed = begin_spawn(tab);
+        abandon_spawn(tab, failed);
+        assert_eq!(fenced_scope_of_tab(tab).as_deref(), Some("gen-p"));
+        assert!(on_tab_gone(tab, live), "the live spawn is the newest again");
+        // A first spawn that fails leaves nothing, its proxy token included.
+        let only = begin_spawn(tab);
+        let token = crate::services::api_proxy::issue_for_test("gen-p", tab).unwrap();
+        abandon_spawn(tab, only);
+        assert!(!crate::services::api_proxy::token_live(&token));
+        assert!(!register_tab(tab, None, only));
+    }
+
+    #[test]
+    fn an_unfenced_spawn_registers_without_a_scope() {
+        let tab = "gen-p:unfenced";
+        let seq = begin_spawn(tab);
+        assert!(register_tab(tab, None, seq));
+        assert_eq!(fenced_scope_of_tab(tab), None);
+        assert!(on_tab_gone(tab, seq));
+    }
 
     #[test]
     fn a_failed_probe_under_the_userns_profile_names_the_namespace_not_the_package() {

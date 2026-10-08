@@ -313,9 +313,67 @@ pub struct PreparedLaunch {
     pub drop_dir: Option<String>,
     mcp_spawn_guard: Option<crate::services::root_mcp::SpawnTokenGuard>,
     resume_claim: Option<crate::services::codex_bind::ResumeClaim>,
-    fenced_registration: Option<(String, String)>,
+    /// The fence scope the spawn runs in, `None` for an unfenced one.
+    fenced_scope: Option<String>,
     host_agent_tab: Option<crate::services::agent_fence::HostAgentTab>,
     spawned_tab_id: String,
+    generation: SpawnGeneration,
+}
+
+/// A spawn's sequence number ([`agent_fence::begin_spawn`]), taken before any
+/// grant. Dropped uncommitted — a failed `prepare` or spawn — it hands the
+/// number back ([`agent_fence::abandon_spawn`]).
+///
+/// [`agent_fence::begin_spawn`]: crate::services::agent_fence::begin_spawn
+/// [`agent_fence::abandon_spawn`]: crate::services::agent_fence::abandon_spawn
+struct SpawnGeneration {
+    tab_id: String,
+    seq: u64,
+    kept: bool,
+}
+
+impl SpawnGeneration {
+    fn begin(tab_id: &str) -> Self {
+        Self { tab_id: tab_id.to_string(), seq: crate::services::agent_fence::begin_spawn(tab_id), kept: false }
+    }
+}
+
+impl Drop for SpawnGeneration {
+    fn drop(&mut self) {
+        if !self.kept {
+            crate::services::agent_fence::abandon_spawn(&self.tab_id, self.seq);
+        }
+    }
+}
+
+/// A tab's PTY of spawn `seq` is gone for good: the fence-level teardown
+/// ([`agent_fence::on_tab_gone`]), then — only when `seq` is still the tab's
+/// newest spawn — its MCP tokens and review sandbox and its turn binding. A
+/// stale teardown (a kill landing after a respawn of the same id began)
+/// touches none of the respawn's state. Whether it was current.
+///
+/// [`agent_fence::on_tab_gone`]: crate::services::agent_fence::on_tab_gone
+pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
+    if !crate::services::agent_fence::on_tab_gone(tab_id, seq) {
+        return false;
+    }
+    crate::services::root_mcp_review::on_tab_gone(&storage::state_dir(), tab_id);
+    crate::services::agent_turn::on_tab_gone(tab_id);
+    true
+}
+
+/// The fence scope a Pusher binding records (gap 18): the scope of a local
+/// agent the fence wraps, nothing for any other decision. A push preflight
+/// with no recorded scope is refused, never run on the host.
+fn push_fence_scope(
+    decision: &crate::services::agent_fence::FenceDecision,
+    local_agent: bool,
+    scope_id: &str,
+) -> Option<String> {
+    match decision {
+        crate::services::agent_fence::FenceDecision::Fenced { .. } if local_agent => Some(scope_id.to_string()),
+        _ => None,
+    }
 }
 
 impl PreparedLaunch {
@@ -325,8 +383,16 @@ impl PreparedLaunch {
         self.mcp_spawn_guard.as_ref().is_some_and(|g| g.holds_token())
     }
 
+    /// The spawn's sequence number: the PTY entry and its output route carry
+    /// it, so every teardown names the spawn it ends.
+    pub fn spawn_seq(&self) -> u64 {
+        self.generation.seq
+    }
+
     /// The process exists: keep the MCP token and the Codex resume claim,
-    /// register a fenced tab, and track/untrack it as a host agent tab.
+    /// register the spawn (with its fence scope), and track/untrack it as a
+    /// host agent tab — unless a teardown or a newer spawn of the id got there
+    /// first.
     pub fn commit(mut self) {
         if let Some(guard) = self.mcp_spawn_guard.as_mut() {
             guard.keep();
@@ -334,8 +400,14 @@ impl PreparedLaunch {
         if let Some(claim) = self.resume_claim.take() {
             claim.keep();
         }
-        if let Some((tab_id, scope_id)) = self.fenced_registration.take() {
-            crate::services::agent_fence::register_tab(&tab_id, &scope_id);
+        self.generation.kept = true;
+        let current = crate::services::agent_fence::register_tab(
+            &self.spawned_tab_id,
+            self.fenced_scope.as_deref(),
+            self.generation.seq,
+        );
+        if !current {
+            return;
         }
         match self.host_agent_tab.take() {
             Some(tab) => crate::services::agent_fence::track_host_agent_tab(&self.spawned_tab_id, tab),
@@ -543,6 +615,11 @@ pub async fn prepare(
         crate::services::agent_fence::add_box_root_args(&mut opts, roots, &own);
     }
 
+    // The spawn's generation, before any grant: a teardown of an earlier spawn
+    // of this id that lands from here on leaves what this spawn is handed
+    // alone (gap 18).
+    let generation = SpawnGeneration::begin(&opts.id);
+
     // The root console's extra rights (`services::root_mcp`): a LOCAL agent in
     // the ROOT scope — and no other spawn — is handed the MCP endpoint and its
     // per-run token. Decided here from the same `project_id` that picks the
@@ -566,6 +643,9 @@ pub async fn prepare(
     );
     let mcp_spawn_guard = agent_spawn
         .then(|| crate::services::root_mcp::SpawnTokenGuard::new(&opts));
+    // The push token, if `grant_lanes` minted one; its binding learns the fence
+    // scope once the fence is decided below.
+    let push_token = opts.env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned();
 
     // A local OpenCode is offered exactly the models Ollama has loaded (see
     // `commands::ollama::opencode_loaded_models_config`) — handed over as an
@@ -778,7 +858,7 @@ pub async fn prepare(
     // macOS) after docker/ssh selection but before local tmux.  This keeps the
     // tmux server on the host while the command *inside* its session is
     // fenced.  A missing/blocked fence tool fails closed.
-    let mut fenced_registration: Option<(String, String)> = None;
+    let mut fenced_scope: Option<String> = None;
     // Every agent tab that runs on the host, fenced or not, for the pill's
     // live check (`agent_fence::live_unfenced_by_scope`). Taken before the
     // fence and tmux rewrites replace `cmd`.
@@ -807,6 +887,7 @@ pub async fn prepare(
         );
         let local_agent = opts.cmd != "ssh" && opts.cmd != "docker";
         let scope_id = crate::services::agent_home::scope_of(opts.project_id.as_deref());
+        let push_scope = push_fence_scope(&decision, local_agent, &scope_id);
         match decision {
             crate::services::agent_fence::FenceDecision::Fenced { .. } if local_agent => {
                 // The scope's Tabtivity-owned home (`services::agent_home`), the
@@ -830,7 +911,7 @@ pub async fn prepare(
                     Some(paths) => crate::services::root_mcp::ProjectsGrant::Paths(paths),
                     None => crate::services::root_mcp::ProjectsGrant::Hidden,
                 };
-                fenced_registration = Some((opts.id.clone(), scope_id));
+                fenced_scope = Some(scope_id);
             }
             // The root console's Host session: unfenced, in Tabtivity's own
             // `host` home, sharing the logins. Never a project's default.
@@ -869,6 +950,12 @@ pub async fn prepare(
             }
             _ => {}
         }
+        // The Pusher binding records where its preflight runs (gap 18): the
+        // token was minted above, before the fence was decided. A wrap that
+        // failed returned already, so the scope is the tab's real fence.
+        if let (Some(token), Some(scope)) = (push_token.as_deref(), push_scope.as_deref()) {
+            crate::services::root_mcp::tokens().stamp_push_fence_scope(token, scope);
+        }
     }
 
     // Before the agent process exists, so no tool call can see the default.
@@ -896,9 +983,10 @@ pub async fn prepare(
         resting,
         mcp_spawn_guard,
         resume_claim,
-        fenced_registration,
+        fenced_scope,
         host_agent_tab,
         spawned_tab_id,
+        generation,
         drop_dir,
     })
 }
@@ -917,6 +1005,81 @@ mod tests {
     use crate::schema::projects::ProjectEntry;
     use std::collections::HashMap;
     use std::path::Path;
+
+    // ── spawn generations and the Pusher's fence scope (gap 18) ────────────
+
+    /// Commit a launch of `tab` under `generation`, as `pty_spawn` does once
+    /// its PTY exists.
+    fn committed(tab: &str, fenced_scope: Option<String>, generation: SpawnGeneration) {
+        let opts = PtyOptions {
+            id: tab.into(), cmd: "claude".into(), args: Vec::new(), env: HashMap::new(), cwd: "/p".into(),
+            cols: 80, rows: 24, local_only: false, sandbox: false, agent: true, project_id: None,
+            remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
+            local_model: false, schedule_target_id: None, host_session: false,
+        };
+        PreparedLaunch {
+            opts, named: false, interrupted: false, resting: false, drop_dir: None, mcp_spawn_guard: None,
+            resume_claim: None, fenced_scope, host_agent_tab: None, spawned_tab_id: tab.into(), generation,
+        }.commit();
+    }
+
+    /// A kill of the old PTY whose teardown lands after a remount respawned
+    /// the id leaves the respawn's MCP tokens, proxy token and turn binding.
+    #[test]
+    fn a_stale_teardown_keeps_the_respawns_tokens_and_turn_binding() {
+        use crate::services::{agent_fence, agent_turn, api_proxy, root_mcp};
+        let tab = "lp-gen:respawn";
+        let uid = "lp-gen-respawn-uid";
+        let old = SpawnGeneration::begin(tab);
+        let old_seq = old.seq;
+        committed(tab, Some("lp-gen".into()), old);
+        // The respawn: its generation first, then what `prepare` hands it.
+        let new = SpawnGeneration::begin(tab);
+        let new_seq = new.seq;
+        let (mcp_token, _) = root_mcp::test_session_for_tab(root_mcp::Caller::Pusher, tab, Path::new("/nonexistent"));
+        let proxy_token = api_proxy::issue_for_test("lp-gen", tab).unwrap();
+        agent_turn::bind_tab(uid, tab, None);
+        assert!(!on_tab_gone(tab, old_seq), "the old spawn's teardown is stale");
+        committed(tab, Some("lp-gen".into()), new);
+        assert!(!on_tab_gone(tab, old_seq));
+        assert_eq!(agent_fence::fenced_scope_of_tab(tab).as_deref(), Some("lp-gen"));
+        assert!(root_mcp::authenticate(Some(&format!("Bearer {mcp_token}"))).is_some());
+        assert!(api_proxy::token_live(&proxy_token));
+        assert_eq!(agent_turn::pty_for(uid).as_deref(), Some(tab));
+        // The respawn's own teardown ends all of it.
+        assert!(on_tab_gone(tab, new_seq));
+        assert_eq!(agent_fence::fenced_scope_of_tab(tab), None);
+        assert!(root_mcp::authenticate(Some(&format!("Bearer {mcp_token}"))).is_none());
+        assert!(!api_proxy::token_live(&proxy_token));
+        assert_eq!(agent_turn::pty_for(uid), None);
+    }
+
+    /// A spawn dropped before its process existed hands its number back.
+    #[test]
+    fn a_dropped_launch_abandons_its_generation() {
+        let tab = "lp-gen:dropped";
+        let live = SpawnGeneration::begin(tab);
+        let live_seq = live.seq;
+        committed(tab, None, live);
+        drop(SpawnGeneration::begin(tab));
+        assert!(on_tab_gone(tab, live_seq), "the live spawn is the newest again");
+    }
+
+    #[test]
+    fn only_a_fenced_local_agent_stamps_its_push_binding() {
+        use crate::services::agent_fence::{FenceDecision, HOST_SESSION_REASON};
+        let fenced = FenceDecision::Fenced { roots: vec![] };
+        assert_eq!(push_fence_scope(&fenced, true, "p1").as_deref(), Some("p1"));
+        assert_eq!(push_fence_scope(&fenced, false, "p1"), None, "an ssh or docker wrap is not the host fence");
+        for decision in [
+            FenceDecision::NotApplicable { reason: "platform" },
+            FenceDecision::NotApplicable { reason: HOST_SESSION_REASON },
+            FenceDecision::PlatformUnaccepted,
+            FenceDecision::Unavailable,
+        ] {
+            assert_eq!(push_fence_scope(&decision, true, "p1"), None, "{decision:?}");
+        }
+    }
 
     // ── control variables: Tabtivity's to set, never the tab's (gap 17) ────
 

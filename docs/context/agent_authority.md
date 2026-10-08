@@ -420,7 +420,10 @@ header, never follows a redirect, bounds the body (32 MiB, 256 MiB held over
 all sockets), drops a socket idle for 60 s between requests (64 at most),
 streams the answer through chunk by chunk, answers its own refusals in the
 provider's error shape (`x-should-retry: false`), and logs nothing. A token
-dies with its tab (`agent_fence::on_tab_gone` → `api_proxy::on_tab_gone`);
+dies with its tab (`agent_fence::on_tab_gone` → `api_proxy::on_tab_gone`,
+for the tab's newest spawn only: a kill that lands after a remount began
+respawning the id is stale and leaves the respawn's token, see "Spawn
+generations" below);
 one bound to a local tmux session lives while that session does (a project
 switch or reload kills only the client) — revoked when Tabtivity kills the
 session, following a rename, and swept once a minute otherwise — a respawn of
@@ -456,6 +459,22 @@ config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`, Gemini's `.env`) can
 still point the CLI at another host — which then receives only the token,
 worthless off this machine and dead with the tab; and the agent can spend
 through its token while the tab lives — up to the monthly limit (C3).
+
+**Spawn generations** (gap 18, 2026-10-08). PTY ids are reused: a pane
+remount respawns the same id while the unmount's un-awaited `pty_kill` is
+still tearing the old PTY down. That teardown used to clear the respawn's
+fence registration, API proxy tokens, MCP tokens and turn binding. Every
+spawn now takes a sequence number in `launch_prep::prepare` before any grant
+(`agent_fence::begin_spawn`); the PTY entry and its output route carry it,
+`PreparedLaunch::commit` registers it (`register_tab(id, scope, seq)`, the
+scope only for a fenced tab), and a spawn dropped uncommitted hands it back
+(`abandon_spawn`). Every teardown names the spawn it ends
+(`launch_prep::on_tab_gone(id, seq)` from `pty_kill`, `pty_kill_scope`,
+`kill_all`; `agent_fence::on_tab_gone(id, seq)` from the reader task's end).
+Only the id's newest spawn takes the shared per-tab state; a stale teardown
+forgets its own registration and nothing else. The push preflight no longer
+reads this registry at all: its fence scope rides on the push identity
+(`docs/context/git_push_mcp.md`).
 
 **Spending limit** (`services::api_usage`, `api_meter`, `api_prices`; plan
 C3). A key is saved only beside a monthly USD limit

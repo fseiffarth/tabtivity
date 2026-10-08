@@ -546,18 +546,47 @@ fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, token: Opti
 
 // ── Preflight: the repo's pre-push hook, in the tab's fence, no token ────────
 
-/// The command that runs `hook` on the tab's behalf: inside the fence the tab
-/// was spawned into, or plainly for a tab that runs unfenced (its own
-/// authority either way). Never carries a token.
-fn preflight_command(tab: &str, hook: &Path, dir: &Path, remote: &str, url: &str) -> Result<std::process::Command, Failure> {
+/// Where a preflight runs the hook (gap 18).
+#[derive(Clone, Copy, Debug)]
+enum HookBoundary<'a> {
+    /// The fence scope recorded on the tab's Pusher binding at spawn
+    /// ([`PushBinding::fence_scope`](super::root_mcp::PushBinding)).
+    Fence(&'a str),
+    /// No scope was recorded: the hook is not run and the push is refused.
+    /// The hook is agent-writable, so a missing record never means "run it
+    /// on the host".
+    Unrecorded,
+    /// The host, for the hook tests only.
+    #[cfg(test)]
+    Host,
+}
+
+impl<'a> HookBoundary<'a> {
+    fn of(fence_scope: Option<&'a str>) -> Self {
+        fence_scope.map_or(Self::Unrecorded, Self::Fence)
+    }
+}
+
+/// The command that runs `hook` on the tab's behalf, inside the fence its
+/// tab was spawned into. Never carries a token. A Pusher exists only for a
+/// local project agent, which is always fenced on Linux and macOS, so an
+/// unrecorded scope fails closed rather than falling back to the host; on
+/// Windows (no fence) a repo with a `pre-push` hook is pushed from the git
+/// bar.
+fn preflight_command(boundary: HookBoundary<'_>, hook: &Path, dir: &Path, remote: &str, url: &str) -> Result<std::process::Command, Failure> {
     let args = vec![remote.to_string(), url.to_string()];
-    let mut cmd = match super::agent_fence::fenced_scope_of_tab(tab) {
-        Some(scope) => super::agent_fence::one_shot_command(&scope, &hook.to_string_lossy(), &args, dir)
+    let mut cmd = match boundary {
+        HookBoundary::Fence(scope) => super::agent_fence::one_shot_command(scope, &hook.to_string_lossy(), &args, dir)
             .map_err(|e| Failure::new(Category::FenceUnavailable, format!("The tab is fenced but the fence cannot run the pre-push hook: {e}")))?,
-        None => {
-            if cfg!(windows) {
-                return Err(Failure::new(Category::PreflightFailed, "pre-push hooks are not run for agent pushes on Windows; the user can push from the git bar."));
-            }
+        HookBoundary::Unrecorded => {
+            return Err(Failure::new(Category::FenceUnavailable, if cfg!(windows) {
+                "pre-push hooks are not run for agent pushes on Windows; the user can push from the git bar."
+            } else {
+                "This tab has no recorded sandbox to run the repo's pre-push hook in, so nothing was pushed. Ask the user to restart the tab, or to push from the git bar."
+            }));
+        }
+        #[cfg(test)]
+        HookBoundary::Host => {
             let mut cmd = crate::paths::command_no_window(hook);
             cmd.args(&args).current_dir(dir);
             cmd
@@ -582,11 +611,11 @@ fn preflight_command(tab: &str, hook: &Path, dir: &Path, remote: &str, url: &str
 /// (a privacy scan) then covers every commit that leaves, including any that
 /// landed on the branch while it ran. A hook that still adds commits on that
 /// second run is refused rather than run again.
-fn preflight(dir: &Path, tab: &str, mut plan: Plan) -> Result<(Plan, String), Failure> {
+fn preflight(dir: &Path, boundary: HookBoundary<'_>, mut plan: Plan) -> Result<(Plan, String), Failure> {
     let Some(hook) = resolve_pre_push_hook(dir) else { return Ok((plan, String::new())) };
     let mut outputs: Vec<String> = Vec::new();
     for round in 0..2 {
-        let cmd = preflight_command(tab, &hook, dir, &plan.remote, &plan.url)?;
+        let cmd = preflight_command(boundary, &hook, dir, &plan.remote, &plan.url)?;
         let line = format!("refs/heads/{b} {h} refs/heads/{b} {r}\n", b = plan.branch, h = plan.head, r = plan.remote_sha);
         let ran = match run_capped(cmd, Some(line.as_bytes()), PREFLIGHT_TIMEOUT) {
             Ok(ran) => ran,
@@ -678,6 +707,10 @@ pub struct Proposal {
     pub project: String,
     #[serde(skip)]
     dir: PathBuf,
+    /// The fence scope the requesting tab was spawned into, copied from its
+    /// Pusher binding; where the preflight runs the hook.
+    #[serde(skip)]
+    fence_scope: Option<String>,
     pub kind: Kind,
     /// The release tag (`Kind::Release` only).
     pub tag: Option<String>,
@@ -743,6 +776,7 @@ fn new_proposal(session: &Session, project: &str, dir: &Path, note: String) -> P
     Proposal {
         id: format!("push-{}", super::root_mcp::mint_token().map(|t| t[..16].to_string()).unwrap_or_else(|| format!("{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()))),
         session: session.id.clone(), tab: session.identity.tab.clone(), project: project.to_string(), dir: dir.to_path_buf(),
+        fence_scope: session.identity.push.as_ref().and_then(|b| b.fence_scope.clone()),
         kind: Kind::Push, tag: None, branch: None, remote: None, url: None, head: None, remote_sha: None, commits: Vec::new(), diffstat: String::new(), note,
         needs_url_confirm: false, created_at: chrono::Local::now().to_rfc3339(), created: Instant::now(), status: Status::Running,
         category: None, message: String::new(), output: String::new(), state: RepoState::default(), preflight_output: String::new(),
@@ -842,7 +876,7 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
         Err(failure) => { fail(&id, failure); return; }
     };
     update(&id, |p| apply_plan(p, &plan));
-    let (plan, preflight_output) = match preflight(&p.dir, &p.tab, plan) {
+    let (plan, preflight_output) = match preflight(&p.dir, HookBoundary::of(p.fence_scope.as_deref()), plan) {
         Ok(done) => done,
         Err(failure) => { fail(&id, failure); return; }
     };
@@ -1347,7 +1381,7 @@ mod tests {
     fn session(tab: &str, dir: &Path) -> Session {
         let (_, mut s) = super::super::root_mcp::test_session_for_tab(Caller::Pusher, tab, Path::new("/nonexistent"));
         s.identity.project = Some("p".into());
-        s.identity.push = Some(super::super::root_mcp::PushBinding { dir: dir.to_path_buf() });
+        s.identity.push = Some(super::super::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: None });
         s
     }
     fn test_proposal(session: &Session, dir: &Path) -> String {
@@ -1666,7 +1700,7 @@ mod tests {
         let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
         let before = plan(&work, &policy, None, None, &[]).unwrap();
         std::env::set_var(crate::app_env!("GIT_TOKEN"), "leak-me-not");
-        let (after, output) = preflight(&work, "tab:not-fenced", before.clone()).unwrap();
+        let (after, output) = preflight(&work, HookBoundary::Host, before.clone()).unwrap();
         std::env::remove_var(crate::app_env!("GIT_TOKEN"));
         assert!(output.contains("hook says hi"), "{output}");
         let seen_file = work.join(".git").join("seen.txt");
@@ -1685,17 +1719,62 @@ mod tests {
         // A hook that adds a commit on every run is refused, not chased.
         std::fs::remove_file(&seen_file).unwrap();
         std::env::set_var("HOOK_ALWAYS", "1");
-        let failure = preflight(&work, "tab:not-fenced", plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        let failure = preflight(&work, HookBoundary::Host, plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
         std::env::remove_var("HOOK_ALWAYS");
         assert_eq!(failure.category, Category::PreflightFailed);
         assert!(failure.message.contains("again"), "{}", failure.message);
         assert_eq!(std::fs::read_to_string(&seen_file).unwrap().lines().filter(|l| l.starts_with("refs/heads/")).count(), 2, "run twice, never a third time");
         // Exit 1 refuses with the output.
         std::env::set_var("HOOK_EXIT", "1");
-        let failure = preflight(&work, "tab:not-fenced", plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        let failure = preflight(&work, HookBoundary::Host, plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
         std::env::remove_var("HOOK_EXIT");
         assert_eq!(failure.category, Category::PreflightFailed);
         assert!(failure.output.contains("hook says hi"));
+    }
+
+    /// Gap 18: the hook is agent-writable, so a Pusher whose binding holds no
+    /// fence scope is refused and the hook never runs on the host; a recorded
+    /// scope is where the preflight goes, and a fence that cannot run there
+    /// refuses too.
+    #[cfg(unix)]
+    #[test]
+    fn a_pusher_with_no_recorded_fence_scope_is_refused_and_its_hook_never_runs() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        use std::os::unix::fs::PermissionsExt;
+        let (_root, remote, work) = pair();
+        commit(&work, "b.txt");
+        let hooks = work.join(".githooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-push");
+        let marker = work.join(".git").join("hook-ran");
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        sh(&work, &["config", "core.hooksPath", ".githooks"]);
+        let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
+        let s = session("tab:unrecorded", &work);
+        let id = test_proposal(&s, &work);
+        let p = get(&id).unwrap();
+        assert_eq!(p.fence_scope, None);
+        let failure = preflight(&work, HookBoundary::of(p.fence_scope.as_deref()), plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        assert_eq!(failure.category, Category::FenceUnavailable, "{}", failure.message);
+        assert!(!marker.exists(), "the hook ran with no fence scope recorded");
+        // A scope the fence cannot build (an unknown one, or no fence on this
+        // platform) refuses as well, never falling back to the host.
+        let failure = preflight(&work, HookBoundary::Fence("gp-no-such-scope"), plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        assert_eq!(failure.category, Category::FenceUnavailable, "{}", failure.message);
+        assert!(!marker.exists());
+        proposals().lock().unwrap().retain(|p| p.id != id);
+    }
+
+    #[test]
+    fn the_proposal_carries_the_fence_scope_its_binding_recorded() {
+        let dir = Path::new("/nonexistent/gp-scope");
+        let mut s = session("tab:recorded", dir);
+        s.identity.push = Some(super::super::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: Some("p".into()) });
+        let p = new_proposal(&s, "p", dir, String::new());
+        assert_eq!(p.fence_scope.as_deref(), Some("p"));
+        assert!(matches!(HookBoundary::of(p.fence_scope.as_deref()), HookBoundary::Fence("p")));
+        assert!(matches!(HookBoundary::of(None), HookBoundary::Unrecorded));
     }
 
     #[cfg(target_os = "linux")]

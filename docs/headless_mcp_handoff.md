@@ -72,11 +72,11 @@ Sketch in the plan. The parts that matter:
    short timer in `commands::root_mcp::start`) into in-memory proposals marked
    adopted, runs `run_request` / `run_release`, and mirrors every change back.
    Adopted proposals are pruned by age only (their session lives in the host).
-4. **Gotcha — the fence.** `preflight_command` asks `fenced_scope_of_tab(tab)`
-   of the *window's* registry, which does not know the host's tabs and would
-   answer `None` → the hook runs **unfenced on the host**. Adopted proposals
-   must use the recorded scope, and a record without one on a platform that
-   fences must fail closed (`fence_unavailable`).
+4. **Gotcha — the fence.** Since gap 18 (2026-10-08) the preflight runs in
+   the scope stamped on the Pusher binding (`PushBinding::fence_scope`,
+   copied into the proposal) and refuses with `fence_unavailable` when none
+   is recorded; the window's fence registry is never asked. Adopted
+   proposals must carry the host's recorded scope into `Proposal::fence_scope`.
 5. A record stuck adopted by a window that died expires with the 24 h rule.
 
 ## Next — phase 3 (parity)

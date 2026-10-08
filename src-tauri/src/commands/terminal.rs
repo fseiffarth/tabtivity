@@ -55,7 +55,7 @@ pub async fn pty_spawn(
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
     let drop_dir = prepared.drop_dir.clone();
-    let result = crate::terminal::spawn_pty(app.clone(), registry.inner().clone(), prepared.opts.clone());
+    let result = crate::terminal::spawn_pty(app.clone(), registry.inner().clone(), prepared.opts.clone(), prepared.spawn_seq());
     if result.is_ok() {
         registry.lock().unwrap().set_drop_dir(&prepared.opts.id, drop_dir);
         prepared.commit();
@@ -406,16 +406,17 @@ pub async fn pty_kill(registry: State<'_, RegistryState>, id: String) -> Result<
     // future PTY that reuses the id.
     crate::commands::credentials::forget_login_pty(&id);
     // Taken under the lock, torn down after it: the lock is on every
-    // keystroke's path, the teardown walks the process table.
+    // keystroke's path, the teardown walks the process table. The teardown
+    // ends the per-tab state of the spawn it took, and only while that spawn
+    // is still the id's newest: this kill can land after a remount began
+    // respawning the id (gap 18). Nothing taken, nothing to end — the
+    // reader task's end already cleaned up that spawn.
     let taken = registry.lock().unwrap().take(&id);
     if let Some(taken) = taken {
         tauri::async_runtime::spawn_blocking(move || taken.teardown())
             .await
             .map_err(|e| e.to_string())?;
     }
-    crate::services::agent_fence::on_tab_gone(&id);
-    crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), &id);
-    crate::services::agent_turn::on_tab_gone(&id);
     Ok(())
 }
 
@@ -440,14 +441,11 @@ pub async fn pty_kill_scope(
         crate::commands::credentials::forget_login_pty(id);
         crate::terminal::route_remove_all_views(id);
     }
+    // The teardown ends each taken spawn's per-tab state, generation-guarded
+    // like `pty_kill`'s.
     tauri::async_runtime::spawn_blocking(move || crate::terminal::teardown_taken(taken))
         .await
         .map_err(|e| e.to_string())?;
-    for id in &ids {
-        crate::services::agent_fence::on_tab_gone(id);
-        crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), id);
-        crate::services::agent_turn::on_tab_gone(id);
-    }
     Ok(ids)
 }
 

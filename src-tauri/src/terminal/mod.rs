@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -299,7 +299,6 @@ fn routes() -> &'static Mutex<HashMap<String, OutputRoute>> {
     ROUTES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-static ROUTE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Trim with hysteresis (the frontend buffer's rule): cutting exactly to the
 /// cap on every chunk past it re-copies the whole buffer per chunk; letting it
@@ -440,10 +439,19 @@ fn route_digest_take(id: &str) -> Option<String> {
     route_digest_take_at(id, Instant::now())
 }
 
-/// Register a (re)spawn: keep the pane's visibility and any watchers, drop
-/// stale buffers, and mint the generation the task-end cleanup is guarded by.
+/// A route under a fresh generation, for the tests.
+#[cfg(test)]
 fn route_open(id: &str) -> u64 {
-    let seq = ROUTE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let seq = crate::services::agent_fence::next_spawn_seq();
+    route_open_at(id, seq);
+    seq
+}
+
+/// Register a (re)spawn: keep the pane's visibility and any watchers, drop
+/// stale buffers, and record the generation the task-end cleanup is guarded
+/// by — the spawn's own sequence number (`PreparedLaunch::spawn_seq`), so the
+/// task end names the spawn it belonged to.
+fn route_open_at(id: &str, seq: u64) {
     let mut map = routes().lock().unwrap();
     let route = map.entry(id.to_string()).or_default();
     route.pending.clear();
@@ -457,7 +465,6 @@ fn route_open(id: &str) -> u64 {
     route.decoder = Utf8StreamDecoder::default();
     route.last_activity = None;
     route.seq = seq;
-    seq
 }
 
 /// The retained catch-up tail for `id` (Group B #235), or an empty string when
@@ -763,6 +770,10 @@ struct PtyEntry {
     /// The local folder the process works in (`PreparedLaunch::drop_dir`),
     /// where a file dropped onto the tab lands; `None` for a remote tab.
     drop_dir: Option<String>,
+    /// The spawn's sequence number (`PreparedLaunch::spawn_seq`): what its
+    /// teardown passes to `launch_prep::on_tab_gone`, so a kill that lands
+    /// after a respawn of the same id cannot clear the respawn's state.
+    seq: u64,
 }
 
 /// Invalidate the cached process tree used for CPU sampling. Called whenever a
@@ -897,6 +908,7 @@ impl PtyRegistry {
         writer: Box<dyn Write + Send>,
         child: Box<dyn Child + Send + Sync>,
         dead: Arc<AtomicBool>,
+        seq: u64,
     ) {
         // A spawn that reuses an id must not leak the previous child process,
         // and must keep its crash history so the crash-loop guard stays armed.
@@ -936,6 +948,7 @@ impl PtyRegistry {
                 dead,
                 crash_times,
                 drop_dir: None,
+                seq,
             },
         );
         // A new child (and the old one it may have replaced) changes the process
@@ -1013,8 +1026,7 @@ impl PtyRegistry {
             // Containerized tab: also TERM the in-container process (the docker
             // exec client we just killed is not it).
             crate::services::sandbox::kill_tab_process(&id);
-            crate::services::agent_fence::on_tab_gone(&id);
-            crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), &id);
+            crate::services::launch_prep::on_tab_gone(&id, e.seq);
         }
         reap_pids(subtree, ReapMode::Immediate);
         invalidate_proc_tree_cache();
@@ -1089,8 +1101,9 @@ pub fn teardown_taken(taken: Vec<TakenPty>) {
         // `docker exec` CLIENT — TERM the process inside the container too
         // (best-effort, no-op for tabs that never containerized).
         crate::services::sandbox::kill_tab_process(&id);
-        crate::services::agent_fence::on_tab_gone(&id);
-        crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), &id);
+        // This spawn's per-tab state — fence registration, proxy tokens, MCP
+        // tokens, turn binding — unless a respawn of the id has begun since.
+        crate::services::launch_prep::on_tab_gone(&id, entry.seq);
     }
     // The tree shrank; drop the cached descendant-pid set.
     invalidate_proc_tree_cache();
@@ -1110,6 +1123,7 @@ pub fn spawn_pty(
     app: AppHandle,
     registry: Arc<Mutex<PtyRegistry>>,
     opts: PtyOptions,
+    seq: u64,
 ) -> Result<(), String> {
     // Record this PTY id so a later remount (HMR, webview reload) is a known
     // re-spawn. Agent-session resolution (Claude/Codex resume args) happens in
@@ -1156,7 +1170,7 @@ pub fn spawn_pty(
     let dead = Arc::new(AtomicBool::new(false));
     {
         let mut reg = registry.lock().unwrap();
-        reg.insert(opts.id.clone(), pair.master, writer, child, dead.clone());
+        reg.insert(opts.id.clone(), pair.master, writer, child, dead.clone(), seq);
     }
 
     let _ = app.emit(
@@ -1200,7 +1214,8 @@ pub fn spawn_pty(
     // ever tear down its own.
     let bind_seq = crate::services::codex_bind::current_seq(&opts.id);
     let resume_seq = crate::services::codex_bind::resume_seq(&opts.id);
-    let route_seq = route_open(&opts.id);
+    let route_seq = seq;
+    route_open_at(&opts.id, route_seq);
     let mcp_token = opts.env.get(crate::services::root_mcp::TOKEN_ENV)
         .or_else(|| opts.env.get(crate::services::root_mcp::SCHEDULE_TOKEN_ENV)).cloned();
     let help_token = opts.env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned();
@@ -1275,7 +1290,7 @@ pub fn spawn_pty(
             crate::services::codex_bind::release_resume(&id, seq);
         }
         if current_spawn_ended {
-            crate::services::agent_fence::on_tab_gone(&id);
+            crate::services::agent_fence::on_tab_gone(&id, route_seq);
             if let Some(token) = help_token {
                 crate::services::root_mcp::revoke_token(&token);
             }
@@ -2021,7 +2036,7 @@ mod tests {
         let dead = Arc::new(AtomicBool::new(false));
         {
             let mut reg = registry.lock().unwrap();
-            reg.insert("test".to_string(), master, writer, child, dead);
+            reg.insert("test".to_string(), master, writer, child, dead, 0);
         }
 
         resize_pty(&registry, "test", 100, 40).expect("resize");
@@ -2071,7 +2086,7 @@ mod tests {
         registry
             .lock()
             .unwrap()
-            .insert("test".to_string(), master, writer, child, dead);
+            .insert("test".to_string(), master, writer, child, dead, 0);
 
         // SAFETY: kill(pid, 0) probes existence without signalling; no pointers.
         let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
@@ -2140,6 +2155,7 @@ mod tests {
                 writer,
                 child,
                 Arc::new(AtomicBool::new(false)),
+                0,
             );
         }
         // Each leader's `sleep` child, once it has appeared.

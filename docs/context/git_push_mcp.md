@@ -35,14 +35,27 @@ runs project code holds the token:
 1. **Preflight, fenced, no token.** `resolve_pre_push_hook` finds the hook the
    way `exec_trust` does (`rev-parse --git-path hooks`). It runs with git's
    arguments (`<remote> <url>`) and stdin line, `TABTIVITY_PUSH_PREFLIGHT=1`, the
-   token variables removed, inside `agent_fence::one_shot_command` when the
-   tab was fenced (`fenced_scope_of_tab`) — a *narrower* bubblewrap profile
-   built from the same primitives (project/box roots, allowlist, git-control
-   guard, credential and state masks), none of the tab's agent-home or
-   launcher mounts. A fenced tab whose fence cannot run fails closed
-   (`fence_unavailable`); an unfenced tab's hook runs unfenced, still without
-   the token. Linux only; a fenced tab elsewhere gets `fence_unavailable`, an
-   unfenced Windows tab with a hook `preflight_failed`. Exit ≠ 0 refuses with
+   token variables removed, inside `agent_fence::one_shot_command` for the
+   fence scope recorded on the tab's push identity
+   (`PushBinding::fence_scope`, copied into the proposal) — a *narrower*
+   bubblewrap profile built from the same primitives (project/box roots,
+   allowlist, git-control guard, credential and state masks), none of the
+   tab's agent-home or launcher mounts. The token is minted in
+   `launch_prep::prepare` before the fence is decided, so the spawn path
+   stamps the scope onto the binding (`TokenStore::stamp_push_fence_scope`)
+   once the decision is `Fenced` and the wrap succeeded, before the agent
+   process exists. **No recorded scope, no hook run** (gap 18): the hook is
+   agent-writable, so a missing scope is `fence_unavailable`, never a host
+   fallback (the host branch exists only in the hook tests). A Pusher exists
+   only for a local project agent, which is always fenced on Linux and macOS,
+   and the root console's unfenced Host session gets no Pusher. A fence that
+   cannot run fails closed too (`fence_unavailable`). Linux only: on macOS
+   the one-shot fence is not built, so a repo with a hook gets
+   `fence_unavailable`; on Windows (no fence) it gets `fence_unavailable`
+   with "push from the git bar". A repo without a hook pushes on every
+   platform. The scope used to come from the fence registry
+   (`fenced_scope_of_tab`), which a stale `pty_kill` could clear after a
+   pane remount — then the hook ran unfenced. Exit ≠ 0 refuses with
    the hook's output; five minutes is the cap. Commits the hook adds are
    picked up: the plan's SHA, commit list and diffstat are re-read, and the
    hook runs once more on the new tip, so its stdin line always names the SHA
@@ -214,7 +227,8 @@ the app.
 5. Set Apply: a push lands without a card (the URL is confirmed by now).
    Revoke the session in MCP session access: further calls fail, the tab
    stays open, its card disappears.
-6. Repeat step 2 in Codex and in an unfenced tab.
+6. Repeat step 2 in Codex. On Windows (no fence), a repo with a `pre-push`
+   hook answers `fence_unavailable` ("push from the git bar").
 7. Fresh settings (no `git_push_mcp` key): a new agent tab has the tools and
    a project with no block reads Propose on the pill menu.
 8. Release button: with everything pushed, press Release; the dialog
