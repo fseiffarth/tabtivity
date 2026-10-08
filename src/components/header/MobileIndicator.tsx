@@ -10,6 +10,11 @@ import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_HOST_KEY } from "../../lib/brand";
 import { UntestedTag } from "../common/UntestedTag";
+import {
+  useMobileHostStatus,
+  useMobileHostStatusStore,
+  type MobileHostRuntimeStatus,
+} from "../../stores/mobileHostStatus";
 
 /** `translate` at the live language, for the async callbacks below (component
  *  `t` inside them would churn their identity on a language switch). */
@@ -21,26 +26,11 @@ function tr(
 }
 
 const MENU_ID = "mobile";
-const POLL_MS = 15_000;
 /** How often the open menu re-reads the device list: a phone signing in or
  * locking should show while somebody is looking at the list. One admin-socket
  * call, and only while the menu is open. */
 const DEVICES_POLL_MS = 5_000;
-// `systemctl --user restart` acknowledges the job before the replacement
-// sidecar has necessarily rebound its admin socket. A short bounded wait keeps
-// that expected hand-off from being rendered as a failed reconnect.
-const RECONNECT_READY_ATTEMPTS = 20;
-const RECONNECT_RETRY_MS = 250;
-
-interface RuntimeStatus {
-  configured: boolean;
-  running: boolean;
-  port?: number;
-  origin?: string;
-  error?: string;
-  installed_version?: string;
-  update_available: boolean;
-}
+type RuntimeStatus = MobileHostRuntimeStatus;
 
 interface AdminResponse {
   status: string;
@@ -58,8 +48,6 @@ interface PairedDevice {
   last_seen_at?: number | null;
   online?: boolean;
 }
-
-const pause = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 type StatusTone = "connected" | "connecting" | "off" | "error";
 
@@ -107,8 +95,11 @@ export function MobileIndicator() {
   const open = useHeaderHoverMenuStore((s) => s.openId === MENU_ID);
   const openMenu = useHeaderHoverMenuStore((s) => s.open);
   const closeMenu = useHeaderHoverMenuStore((s) => s.close);
-  const [status, setStatus] = useState<RuntimeStatus | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  // The status poll is the shared one (`stores/mobileHostStatus`): the Files
+  // views' phone toggle asks the same machine-wide question.
+  const status = useMobileHostStatus(mobileEnabled && visible);
+  const refreshing = useMobileHostStatusStore((s) => s.refreshing);
+  const statusError = useMobileHostStatusStore((s) => s.error);
   const [restarting, setRestarting] = useState<"reconnect" | "update" | null>(null);
   const [pairing, setPairing] = useState(false);
   // The code is only good for `PAIR_TTL` (five minutes), so it is held with its
@@ -129,43 +120,12 @@ export function MobileIndicator() {
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const lang = useI18nStore((s) => s.lang);
   const closeTimer = useRef<number | undefined>(undefined);
-  const statusRequest = useRef(0);
-  const reconnectingRef = useRef(false);
 
-  const refresh = useCallback(async (waitForHost = false) => {
-    if (!waitForHost && reconnectingRef.current) return;
-    const request = ++statusRequest.current;
-    setRefreshing(true);
-    setError(null);
-    try {
-      let next: RuntimeStatus | null = null;
-      for (let attempt = 0; attempt < (waitForHost ? RECONNECT_READY_ATTEMPTS : 1); attempt += 1) {
-        next = await invoke<RuntimeStatus>("mobile_host_status");
-        if (next.running || !waitForHost || attempt === RECONNECT_READY_ATTEMPTS - 1) break;
-        await pause(RECONNECT_RETRY_MS);
-      }
-      if (request === statusRequest.current) setStatus(next);
-    } catch (reason) {
-      if (request === statusRequest.current) {
-        setStatus(null);
-        setError(String(reason));
-      }
-    } finally {
-      if (request === statusRequest.current) setRefreshing(false);
-    }
-  }, []);
-
+  // Each status read clears the last action's error, as when this widget ran
+  // its own poll; a failed read reports its own (`statusError`).
   useEffect(() => {
-    if (!mobileEnabled || !visible) return;
-    void refresh();
-    const onFocus = () => void refresh();
-    window.addEventListener("focus", onFocus);
-    const interval = window.setInterval(() => void refresh(), POLL_MS);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      window.clearInterval(interval);
-    };
-  }, [mobileEnabled, visible, refresh]);
+    if (refreshing) setError(null);
+  }, [refreshing]);
 
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 
@@ -251,19 +211,19 @@ export function MobileIndicator() {
     // Ignore an earlier focus/interval probe while restart replaces the socket.
     // Without this generation bump, that old `ECONNREFUSED` can land after the
     // successful probe below and repaint the menu red.
-    reconnectingRef.current = true;
-    statusRequest.current += 1;
+    const host = useMobileHostStatusStore.getState();
+    host.beginRestart();
     setRestarting(kind);
     setError(null);
     setUpdateNotice(null);
     try {
       await invoke("mobile_host_apply", { enabled: true });
-      await refresh(true);
+      await host.refresh(true);
       if (kind === "update") setUpdateNotice(tr("mobile.indUpdateReady"));
     } catch (reason) {
       setError(kind === "update" ? tr("mobile.indUpdateError", { reason: String(reason) }) : String(reason));
     } finally {
-      reconnectingRef.current = false;
+      host.endRestart();
       setRestarting(null);
     }
   };
@@ -271,13 +231,13 @@ export function MobileIndicator() {
   const createPairingCode = async () => {
     // Pairing is the sidecar's own business, so the running host is asked again
     // here rather than trusted from the last poll: the button is enabled off a
-    // status that may be up to POLL_MS old.
+    // status that may be up to MOBILE_HOST_POLL_MS old.
     setPairing(true);
     setError(null);
     setPairCode(null);
     try {
       const current = await invoke<RuntimeStatus>("mobile_host_status");
-      setStatus(current);
+      useMobileHostStatusStore.getState().publish(current);
       if (!current.running) throw new Error(tr("mobile.errStartHostFirst"));
       const response = await invoke<AdminResponse>("mobile_admin", { request: { type: "pairing_code" } });
       if (response.status !== "pairing_code" || !response.code) {
@@ -336,6 +296,8 @@ export function MobileIndicator() {
   );
 
   if (!visible) return null;
+
+  const shownError = error ?? statusError;
 
   // Rendered from both branches so switching Mobile on from inside the guide
   // cannot yank the guide out from under the click that did it.
@@ -414,7 +376,7 @@ export function MobileIndicator() {
                 </div>
               </div>
               {status?.origin && <div className="mobile-indicator-origin">{status.origin}</div>}
-              {error && <ErrorNote className="mobile-indicator-error" error={error} />}
+              {shownError && <ErrorNote className="mobile-indicator-error" error={shownError} />}
               {updateNotice && <div className="mobile-indicator-notice" role="status">{updateNotice}</div>}
               {pairCode && (
                 <div className="mobile-indicator-paircode" role="status">

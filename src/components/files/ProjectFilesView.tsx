@@ -50,6 +50,7 @@ import {
   useShowAllSessions,
   type SessionRow,
 } from "../../stores/remote/hostSessions";
+import { useMobileHostStatus } from "../../stores/mobileHostStatus";
 import {
   slurmAvailable,
   slurmQueue,
@@ -92,13 +93,8 @@ import { tmuxSessionRest } from "../../lib/brandMigration";
  *  (TODO #85) — same value and rationale as `FileTree`'s `TOOLTIP_DWELL_MS`:
  *  long enough that a mouse merely passing over the list never triggers it. */
 const TOOLTIP_DWELL_MS = 400;
-const MOBILE_STATUS_POLL_MS = 15_000;
 /** Git view re-read cadence: nothing watches the repo while that view shows. */
 const GIT_VIEW_POLL_MS = 5_000;
-
-interface MobileHostStatus {
-  running: boolean;
-}
 
 /** Phone glyph for the header's Mobile access button — the same silhouette as
  *  the header `MobileIndicator`'s icon, so the machine-wide host lamp and this
@@ -467,7 +463,6 @@ export function ProjectFilesView({
     && !project.remote
     && !project.sandbox?.enabled
     && !project.vm?.enabled;
-  const [mobileHostConnected, setMobileHostConnected] = useState(false);
   const [mobileAccessBusy, setMobileAccessBusy] = useState(false);
   const [mobileAccessError, setMobileAccessError] = useState<string | null>(null);
   // Kept here (not in the pane): the pane unmounts while the view shows Git or
@@ -479,30 +474,10 @@ export function ProjectFilesView({
   // terminal surface is a per-project decision. Keep the quick toggle out of
   // the viewer until the host is actually reachable, matching the header's
   // green Mobile indicator rather than trusting its persisted enabled setting.
-  useEffect(() => {
-    if (!active || !mobileHostEnabled || !mobileEligible) {
-      setMobileHostConnected(false);
-      return;
-    }
-    let cancelled = false;
-    const refresh = () => {
-      void invoke<MobileHostStatus>("mobile_host_status")
-        .then((status) => {
-          if (!cancelled) setMobileHostConnected(status.running);
-        })
-        .catch(() => {
-          if (!cancelled) setMobileHostConnected(false);
-        });
-    };
-    refresh();
-    window.addEventListener("focus", refresh);
-    const interval = window.setInterval(refresh, MOBILE_STATUS_POLL_MS);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", refresh);
-      window.clearInterval(interval);
-    };
-  }, [active, mobileEligible, mobileHostEnabled]);
+  // The reading is the header's own shared poll (`stores/mobileHostStatus`).
+  const mobileStatusWanted = active && mobileHostEnabled && mobileEligible;
+  const mobileHostStatus = useMobileHostStatus(mobileStatusWanted);
+  const mobileHostConnected = mobileStatusWanted && (mobileHostStatus?.running ?? false);
 
   const mobileAccessOn = project?.[MOBILE_ACCESS_KEY] ?? false;
 

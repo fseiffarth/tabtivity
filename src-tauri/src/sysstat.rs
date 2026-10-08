@@ -207,11 +207,12 @@ const CACHE_TTL: Duration = Duration::from_millis(1500);
 
 /// The reuse bound for callers that only draw a coarse number
 /// ([`descendant_pids_relaxed`]). The header's resource readout asks every
-/// 2.5 s, so under [`CACHE_TTL`] it never hit the cache and walked all of
-/// `/proc` each time. Not the default: the window resolvers on Windows and
+/// 5 s (`AppResourceDisplay`'s `RESOURCE_POLL_MS`), so under [`CACHE_TTL`] it
+/// never hit the cache and walked all of `/proc` each time; at 9 s every
+/// other reading reuses the tree (an agent's own forks show within 10 s). Not the default: the window resolvers on Windows and
 /// macOS poll [`descendant_pids`] for a launcher's just-forked child, and the
 /// CPU pills want a tree no older than a hover.
-const CACHE_TTL_RELAXED: Duration = Duration::from_secs(4);
+const CACHE_TTL_RELAXED: Duration = Duration::from_secs(9);
 
 /// Invalidate the cached descendant-pid set. Called by the PTY layer on every
 /// spawn and death so the next CPU sample reflects the new process tree without

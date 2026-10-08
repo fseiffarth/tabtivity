@@ -82,26 +82,28 @@ export function LocalModelMenu() {
   // The pull / load progress events, into the shared store (ref-counted).
   useEffect(() => initLocalModelEvents(), []);
 
-  // Detect whether Ollama is installed. Poll while it's still missing so that
-  // installing Ollama mid-session is picked up without restarting Tabtivity; stop
-  // once detected (it won't be uninstalled live, and `ollama_status` polling
-  // takes over from here — see below).
+  // Detect whether Ollama is installed: once at mount, then again on each
+  // reveal of the dropdown and each close of the overlay (where Ollama is
+  // installed) while it is still missing — not on a timer, which for a machine
+  // without Ollama meant a PATH probe every 5 s forever. Once detected it stays
+  // (it won't be uninstalled live, and `ollama_status` polling takes over).
+  const mounted = useRef(true);
   useEffect(() => {
-    if (installed) return;
-    let cancelled = false;
-    const check = () =>
-      invoke<boolean>("ollama_is_installed")
-        .then((ok) => {
-          if (!cancelled) useOllamaActivityStore.getState().setInstalled(ok);
-        })
-        .catch(() => {});
-    void check();
-    const id = window.setInterval(check, saverInterval(5000, quiesce));
+    mounted.current = true;
     return () => {
-      cancelled = true;
-      window.clearInterval(id);
+      mounted.current = false;
     };
-  }, [installed, quiesce]);
+  }, []);
+  const checkInstalled = () => {
+    if (useOllamaActivityStore.getState().installed) return;
+    invoke<boolean>("ollama_is_installed")
+      .then((ok) => {
+        if (mounted.current) useOllamaActivityStore.getState().setInstalled(ok);
+      })
+      .catch(() => {});
+  };
+  // Mount only; the reveal and overlay-close edges below ask again.
+  useEffect(checkInstalled, []);
 
   const reveal = () => {
     // One consumer at a time: while the overlay is up it is the surface, and
@@ -115,6 +117,7 @@ export function LocalModelMenu() {
     // Agents, the model list and the installed Ollama version — read on every
     // reveal (`useModelsHub`'s `refresh`).
     hub.refresh();
+    checkInstalled();
   };
 
   // Focus comes back here when the overlay closes — on its open→closed edge,
@@ -130,6 +133,8 @@ export function LocalModelMenu() {
     // backdrop, so forget it (a real mouseenter after close sets it again).
     if (overlayOpen) pointerInRef.current = false;
     if (!was || overlayOpen) return;
+    // The overlay's Ollama tab is where Ollama gets installed.
+    checkInstalled();
     const active = document.activeElement;
     if (active && active !== document.body) return;
     skipRevealRef.current = true;

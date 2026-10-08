@@ -19,7 +19,7 @@ pub struct AppResourceUsage {
 
 /// The GPU half of [`debug_app_resource_usage`] (a loopback request to the
 /// model server plus the device read), kept this long: the header asks every
-/// 2.5 s and a VRAM figure that is ten seconds old reads the same.
+/// 5 s and a VRAM figure that is ten seconds old reads the same.
 const GPU_SECTION_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 type GpuSection = (u64, Vec<GpuSample>);
 static GPU_SECTION: std::sync::Mutex<Option<(std::time::Instant, GpuSection)>> = std::sync::Mutex::new(None);
@@ -62,7 +62,7 @@ pub async fn debug_app_resource_usage(gpu: Option<bool>) -> Result<AppResourceUs
 
     let (pids, t0) = tauri::async_runtime::spawn_blocking(|| {
         let root = app_process_root(std::process::id());
-        // Relaxed reuse: this is polled every 2.5 s for a header number.
+        // Relaxed reuse: this is polled every 5 s for a header number.
         let pids = sysstat::descendant_pids_relaxed(&[root]);
         let t0 = sysstat::sum_jiffies(&pids);
         (pids, t0)
