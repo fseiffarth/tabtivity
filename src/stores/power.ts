@@ -76,12 +76,82 @@ export function startFocusTracking(): () => void {
     if (blurred) root.dataset.blurred = "on";
     else delete root.dataset.blurred;
   };
-  const onBlur = () => apply(true);
-  const onFocus = () => apply(false);
+  // The window's `blur` also fires when focus moves into an <iframe> of this
+  // very document (a mail body, the Browser's reader view, a viewer's frame):
+  // the user is still in the window, reading. So a blur is decided one task
+  // later, once focus has landed — still inside this document (an iframe of it
+  // is the active element, or the document reports focus) counts as focused.
+  // While focus sits in a same-origin frame, that frame's own blur/focus say
+  // when the user leaves the window and comes back; a sandboxed (opaque-origin)
+  // frame cannot be listened to, so leaving the window from inside one is seen
+  // only at the next focus change here — the window reads as focused till then.
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  let frame: Window | null = null;
+  const cancelPending = () => {
+    if (pending !== null) clearTimeout(pending);
+    pending = null;
+  };
+  const onFrameBlur = () => {
+    cancelPending();
+    pending = setTimeout(() => {
+      pending = null;
+      if (!document.hasFocus()) apply(true);
+    }, 0);
+  };
+  const onFrameFocus = () => {
+    cancelPending();
+    apply(false);
+  };
+  const unwatchFrame = () => {
+    if (!frame) return;
+    try {
+      frame.removeEventListener("blur", onFrameBlur);
+      frame.removeEventListener("focus", onFrameFocus);
+    } catch {
+      // The frame navigated cross-origin meanwhile; its listeners went with it.
+    }
+    frame = null;
+  };
+  const watchFrame = (el: HTMLIFrameElement | HTMLFrameElement) => {
+    unwatchFrame();
+    try {
+      const win = el.contentWindow;
+      if (!win) return;
+      win.addEventListener("blur", onFrameBlur);
+      win.addEventListener("focus", onFrameFocus);
+      frame = win;
+    } catch {
+      // Cross-origin (a sandboxed frame): nothing to listen to.
+    }
+  };
+  const activeFrame = (): HTMLIFrameElement | HTMLFrameElement | null => {
+    const el = document.activeElement;
+    return el instanceof HTMLIFrameElement || el instanceof HTMLFrameElement ? el : null;
+  };
+  const onBlur = () => {
+    cancelPending();
+    pending = setTimeout(() => {
+      pending = null;
+      const el = activeFrame();
+      if (el || document.hasFocus()) {
+        if (el) watchFrame(el);
+        apply(false);
+      } else {
+        apply(true);
+      }
+    }, 0);
+  };
+  const onFocus = () => {
+    cancelPending();
+    unwatchFrame();
+    apply(false);
+  };
   apply(!document.hasFocus());
   window.addEventListener("blur", onBlur);
   window.addEventListener("focus", onFocus);
   return () => {
+    cancelPending();
+    unwatchFrame();
     window.removeEventListener("blur", onBlur);
     window.removeEventListener("focus", onFocus);
   };
