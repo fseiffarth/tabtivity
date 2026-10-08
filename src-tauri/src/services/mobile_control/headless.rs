@@ -737,7 +737,17 @@ pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
 /// window's `TerminalView` hands `pty_spawn`, at a fixed
 /// [`HEADLESS_COLS`]×[`HEADLESS_ROWS`]. `project_id` is the raw scope id (a
 /// project's or a box's).
+///
+/// The record is read raw, past the load sanitizer, so its `env` goes
+/// through the same filter here (`terminal_service::strip_persisted_env`):
+/// no loader or control variable from a stored layout reaches the spawn.
 pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
+    let mut filtered = tab.clone();
+    crate::services::terminal_service::strip_persisted_env(
+        &mut filtered,
+        &crate::services::terminal_service::custom_agent_specs(),
+    );
+    let tab = &filtered;
     let strings = |key: &str| -> Vec<String> {
         tab.extra
             .get(key)
@@ -1778,6 +1788,35 @@ mod tests {
         let opts = launch_options("p1", &record);
         assert!(opts.local_model);
         assert!(!opts.agent, "the fence knows a local-model driver by its command");
+    }
+
+    /// The owner reads a stored record raw, past the load sanitizer: a
+    /// loader or control variable in its `env` never reaches the spawn
+    /// (gap 17), while the tab's own `TAB_UID` and `VIBE_HOME` do.
+    #[test]
+    fn a_stored_records_env_is_filtered_before_launch() {
+        let mut record = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");
+        let mut env = serde_json::Map::new();
+        for (k, v) in [
+            ("PATH", "/tmp/evil"),
+            ("LD_PRELOAD", "/tmp/x.so"),
+            ("BASH_ENV", "/tmp/rc"),
+            (crate::app_env!("HOST_SESSION"), "1"),
+            (crate::app_env!("AGENT_FENCE"), "1"),
+            (crate::app_env!("TAB_UID"), "uid-1"),
+            ("VIBE_HOME", "/home/u/.vibe-local"),
+        ] {
+            env.insert(k.into(), serde_json::json!(v));
+        }
+        record.extra.insert("env".into(), serde_json::Value::Object(env));
+        let opts = launch_options("p1", &record);
+        let mut keys: Vec<&str> = opts.env.keys().map(String::as_str).collect();
+        keys.sort();
+        let mut want = [crate::app_env!("TAB_UID"), "VIBE_HOME"];
+        want.sort();
+        assert_eq!(keys, want);
+        // The stored record itself is not rewritten.
+        assert!(record.extra["env"].get("PATH").is_some());
     }
 
     #[test]

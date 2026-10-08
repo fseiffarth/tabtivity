@@ -52,6 +52,9 @@ claim, and import treats the whole file as untrusted:
   (`terminal_service::adopt_untrusted_session` → `sanitize_tab_layout`): a tab
   naming a command this installation does not know keeps its label, kind and
   cwd but loses its `cmd`, `resumeArgs`, `env`, `location` and `sessionId`;
+  every tab, known command or not, loses its `env` and `embedExec`
+  (`sanitize_untrusted_layout`, gap 17) — the window rebuilds `TAB_UID` from
+  `sessionId` and a custom agent gets its `settings.json` env back;
 - `open_apps` — a list of host commands launched on every activation — is
   dropped outright, upholding the invariant that it is never adopted from
   anywhere outside the state dir;

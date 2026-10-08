@@ -345,6 +345,10 @@ one shim per registry CLI at the front of every tab's PATH
 `TABTIVITY_SCOPE` — same scope home, same shared logins — and runs it as its
 child on the same terminal, draining the terminal's input queue once the
 CLI has exited and before the shell reads again (reevaluation item 3).
+`TABTIVITY_SCOPE`, `TABTIVITY_AGENT_FENCE` and `TABTIVITY_HOST_SESSION` are
+only ever Tabtivity's: `launch_prep::prepare` drops each one (and the other
+control variables) from a tab's incoming env and sets the scope itself, so a
+persisted layout cannot name another scope or switch the shim off (gap 17).
 Inside a fence the shim steps aside to the real CLI, skipping its own
 directory only to *find* it: the CLI runs with PATH unchanged, so
 `tabtivity-send` (same directory) stays reachable. Exporting the trimmed PATH

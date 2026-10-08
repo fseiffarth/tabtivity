@@ -5459,16 +5459,18 @@ function restoreSavedTab(
   // `--resume` rewrite (`services::agent_session`), and for every other
   // agent whatever its CLI does on resume.
   const args = base;
-  // Codex mints its conversation id itself, so `sessionId` is Tabtivity's
-  // stable *binding* key rather than a CLI argument. The backend resolves
-  // that key from TABTIVITY_TAB_UID before it spawns the restored tab. Layouts
-  // written before the key was persisted in `env` (and a stale layout whose
-  // env disagrees with its sessionId) would otherwise restore a visible
-  // Codex tab but launch a fresh conversation. Rebuild this identity field
-  // from the durable sessionId, just as `buildStaticTabSpec` does for a new
-  // tab; it is not a user-configurable environment override.
+  // Every resumable agent tab's TABTIVITY_TAB_UID is its `sessionId`
+  // (`buildStaticTabSpec` sets both from one uuid). The backend binds the
+  // agent's turn reports by it, and for Codex and Vibe — whose `sessionId`
+  // is Tabtivity's stable *binding* key rather than a CLI argument — resolves
+  // the conversation to resume from it. Rebuild it from the durable
+  // sessionId rather than read it from `env`: a layout written before the
+  // key was persisted, a stale one whose env disagrees, and one adopted from
+  // a folder or an import bundle (which carries no `env` at all, gap 17)
+  // would otherwise lose the binding. It is not a user-configurable
+  // environment override.
   const env = { ...(t.env ?? {}) };
-  if ((t.cmd === "codex" || t.cmd === "vibe") && t.sessionId) {
+  if (isResumableAgentTab(tabShape) && t.sessionId) {
     env[envName("TAB_UID")] = t.sessionId;
   }
   return {

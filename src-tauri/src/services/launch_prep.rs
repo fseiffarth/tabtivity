@@ -19,6 +19,70 @@ use crate::brand::UPPER;
 use crate::storage;
 use crate::terminal::PtyOptions;
 
+/// The app's own control variables: what tells the agent shim, the tmux
+/// wrap and the agent CLIs which scope a tab is, whether it is fenced or the
+/// Host session, and which MCP lanes it was granted. Tabtivity sets each one
+/// itself, here or in a step [`prepare`] runs; no caller ever sends one (the
+/// frontend's own variables are `TAB_UID`, `LOCAL_MODEL` and a Run tab's
+/// `PY_*`). A value arriving in `PtyOptions.env` came from a persisted tab
+/// layout, so [`prepare`] drops it before it can matter (gap 17): a planted
+/// `HOST_SESSION` or `AGENT_FENCE` made the shim exec the real CLI unfenced,
+/// a planted `SCOPE` fenced a typed CLI into another scope. The agent-key
+/// carriers (`agent_exec::CARRIER_PREFIX`) count as well.
+const CONTROL_ENV: &[&str] = &[
+    crate::app_env!("AGENT_FENCE"),
+    crate::app_env!("HOST_SESSION"),
+    crate::app_env!("SCOPE"),
+    crate::app_env!("PROJECT_DIR"),
+    crate::app_env!("TAB_AGENT"),
+    crate::app_env!("STATE_DIR"),
+    crate::app_env!("HOME"),
+    crate::app_env!("PUSH_PREFLIGHT"),
+    crate::app_env!("GIT_TOKEN"),
+    crate::services::root_mcp::TOKEN_ENV,
+    crate::services::root_mcp::URL_ENV,
+    crate::services::root_mcp::SCHEDULE_TOKEN_ENV,
+    crate::services::root_mcp::SCHEDULE_URL_ENV,
+    crate::services::root_mcp::GIT_TOKEN_ENV,
+    crate::services::root_mcp::GIT_URL_ENV,
+    crate::services::root_mcp::HELP_TOKEN_ENV,
+    crate::services::root_mcp::HELP_URL_ENV,
+    crate::services::root_mcp::MARKUP_TOKEN_ENV,
+    crate::services::root_mcp::MARKUP_URL_ENV,
+];
+
+/// Whether `key` is one of [`CONTROL_ENV`] or a key carrier, in the current
+/// spelling or the one an older build wrote.
+pub(crate) fn is_control_env(key: &str) -> bool {
+    let pair = crate::brand::PAIR;
+    let current = pair
+        .renamed()
+        .then(|| pair.legacy.env_prefix())
+        .and_then(|old| key.strip_prefix(old.as_str()).map(|name| pair.cur.env_name(name)));
+    let key = current.as_deref().unwrap_or(key);
+    key.starts_with(crate::services::agent_exec::CARRIER_PREFIX) || CONTROL_ENV.contains(&key)
+}
+
+/// Remove every control variable from an incoming `env`; returns the names
+/// removed, sorted (names only — a value may be a token).
+fn strip_control_env(env: &mut std::collections::HashMap<String, String>) -> Vec<String> {
+    let mut dropped: Vec<String> = env.keys().filter(|k| is_control_env(k)).cloned().collect();
+    for key in &dropped {
+        env.remove(key);
+    }
+    dropped.sort();
+    dropped
+}
+
+/// Set the tab's `SCOPE` and, when it has one, its `PROJECT_DIR` — always
+/// Tabtivity's value, never one the tab brought.
+fn set_scope_env(env: &mut std::collections::HashMap<String, String>, scope: String, project_dir: Option<&str>) {
+    env.insert(crate::app_env!("SCOPE").into(), scope);
+    if let Some(root) = project_dir.filter(|root| !root.is_empty()) {
+        env.insert(crate::app_env!("PROJECT_DIR").into(), root.into());
+    }
+}
+
 /// Read the global `agent_remote_control` setting, defaulting ON when the
 /// settings file or key is absent. A cheap per-spawn JSON read (spawns are
 /// infrequent), kept here so the spawn path has no `AppHandle` dependency.
@@ -304,6 +368,14 @@ pub async fn prepare(
     // the prefix is unchanged.
     crate::brand::PAIR.adopt_legacy_env(&mut opts.env);
 
+    // Every control variable is Tabtivity's to set; one that arrived with
+    // the tab came from its persisted layout (gap 17). Dropped before any
+    // step below reads `env`.
+    let planted = strip_control_env(&mut opts.env);
+    if !planted.is_empty() {
+        eprintln!("launch_prep: tab '{}' brought {}; dropped", opts.id, planted.join(", "));
+    }
+
     // The renderer's two authority flags (`sandbox`, `local_only`) are re-derived
     // here from `projects.json` in the state dir — the one project record a
     // containerized agent cannot write, unlike the persisted tab layout the
@@ -398,20 +470,16 @@ pub async fn prepare(
 
     // The tab's scope, for the agent shims a shell tab may run
     // (`services::agent_shim`): its project or box, else the root console.
-    opts.env
-        .entry(crate::app_env!("SCOPE").into())
-        .or_insert_with(|| crate::services::agent_home::scope_of(opts.project_id.as_deref()));
-    if let Some(pid) = opts.project_id.as_deref() {
+    let scope = crate::services::agent_home::scope_of(opts.project_id.as_deref());
+    let project_dir = opts.project_id.as_deref().map(|pid| {
         let box_folder = crate::commands::boxes::box_id_of_scope(pid).and_then(|id|
             crate::commands::boxes::get_boxes().ok()?.into_iter().find(|b| b.id == id)?.folder);
         let remote = crate::services::remote::remote_target_for(pid);
         let local = crate::services::sandbox::project_dir_for(pid).unwrap_or_default();
         let mirror = crate::services::remote_sync::mirror_dir(pid).to_string_lossy().into_owned();
-        let root = scope_root_for(&local, remote.as_ref().map(|r| r.spec.remote_path.as_str()), &mirror, box_folder.as_deref(), opts.local_only);
-        if !root.is_empty() {
-            opts.env.entry(crate::app_env!("PROJECT_DIR").into()).or_insert_with(|| root.into());
-        }
-    }
+        scope_root_for(&local, remote.as_ref().map(|r| r.spec.remote_path.as_str()), &mirror, box_folder.as_deref(), opts.local_only).to_string()
+    });
+    set_scope_env(&mut opts.env, scope, project_dir.as_deref());
 
     // Resolve agent-session resume args (Claude `--resume`, Codex `resume …`)
     // BEFORE any ssh wrapping. `wrap_pty_options` rewrites `opts.cmd` to "ssh",
@@ -846,6 +914,92 @@ mod tests {
     use crate::schema::projects::ProjectEntry;
     use std::collections::HashMap;
     use std::path::Path;
+
+    // ── control variables: Tabtivity's to set, never the tab's (gap 17) ────
+
+    /// What `prepare` does to an incoming `env`: legacy names adopted, every
+    /// control variable dropped, then the tab's own scope and project dir set.
+    fn own_env(mut env: HashMap<String, String>, scope: &str, project_dir: Option<&str>) -> HashMap<String, String> {
+        crate::brand::PAIR.adopt_legacy_env(&mut env);
+        strip_control_env(&mut env);
+        set_scope_env(&mut env, scope.to_string(), project_dir);
+        env
+    }
+
+    #[test]
+    fn a_planted_scope_and_host_session_never_reach_the_spawn() {
+        let carrier = crate::services::agent_exec::carrier_name("ANTHROPIC_API_KEY");
+        let mut incoming: HashMap<String, String> = [
+            (crate::app_env!("SCOPE"), "other"),
+            (crate::app_env!("PROJECT_DIR"), "/elsewhere"),
+            (crate::app_env!("HOST_SESSION"), "1"),
+            (crate::app_env!("AGENT_FENCE"), "1"),
+            (crate::app_env!("STATE_DIR"), "/tmp/planted-state"),
+            (crate::services::root_mcp::TOKEN_ENV, "planted-token"),
+            (crate::services::root_mcp::URL_ENV, "http://attacker.example/mcp"),
+            (crate::services::root_mcp::MARKUP_URL_ENV, "http://attacker.example/mcp"),
+            (crate::app_env!("TAB_UID"), "uid-1"),
+            (crate::app_env!("LOCAL_MODEL"), "qwen3:8b"),
+            ("VIBE_HOME", "/home/u/.vibe-local"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        incoming.insert(carrier.clone(), "sk-test-planted-fake".into());
+        if let Some(old) = crate::brand::PAIR.legacy_env_name("HOST_SESSION") {
+            incoming.insert(old, "1".into());
+        }
+        if let Some(old) = crate::brand::PAIR.legacy_env_name("SCOPE") {
+            incoming.insert(old, "older-other".into());
+        }
+
+        let env = own_env(incoming, "p1", Some("/home/u/p1"));
+        assert_eq!(env[crate::app_env!("SCOPE")], "p1");
+        assert_eq!(env[crate::app_env!("PROJECT_DIR")], "/home/u/p1");
+        for gone in [
+            crate::app_env!("HOST_SESSION"),
+            crate::app_env!("AGENT_FENCE"),
+            crate::app_env!("STATE_DIR"),
+            crate::services::root_mcp::TOKEN_ENV,
+            crate::services::root_mcp::URL_ENV,
+            crate::services::root_mcp::MARKUP_URL_ENV,
+            carrier.as_str(),
+        ] {
+            assert!(!env.contains_key(gone), "{gone} must not survive");
+        }
+        if crate::brand::PAIR.renamed() {
+            assert!(env.keys().all(|k| !k.starts_with(crate::brand::LEGACY_ENV_PREFIX)));
+        }
+        // The frontend's own variables and a CLI's are the tab's.
+        assert_eq!(env[crate::app_env!("TAB_UID")], "uid-1");
+        assert_eq!(env[crate::app_env!("LOCAL_MODEL")], "qwen3:8b");
+        assert_eq!(env["VIBE_HOME"], "/home/u/.vibe-local");
+    }
+
+    #[test]
+    fn a_root_tab_gets_the_root_scope_and_no_project_dir() {
+        let incoming = HashMap::from([(crate::app_env!("PROJECT_DIR").to_string(), "/elsewhere".to_string())]);
+        let env = own_env(incoming, crate::storage::ROOT_SCOPE, None);
+        assert_eq!(env[crate::app_env!("SCOPE")], crate::storage::ROOT_SCOPE);
+        assert!(!env.contains_key(crate::app_env!("PROJECT_DIR")));
+    }
+
+    #[test]
+    fn control_names_are_matched_exactly() {
+        assert!(is_control_env(crate::app_env!("HOST_SESSION")));
+        assert!(is_control_env(&crate::services::agent_exec::carrier_name("X")));
+        for kept in [
+            crate::app_env!("TAB_UID"),
+            crate::app_env!("LOCAL_MODEL"),
+            crate::app_env!("HPC_GUARD"),
+            crate::app_env!("SCOPE_X"),
+            "SCOPE",
+            "HOME",
+            "PATH",
+        ] {
+            assert!(!is_control_env(kept), "{kept}");
+        }
+    }
 
     // ── vm_spawn_refusal: the VM tier's no-local-fallback guard ────────────
 

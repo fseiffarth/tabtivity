@@ -332,7 +332,7 @@ const SCRIPT_INTERP_CMDS: &[&str] = &["sh", "bash", "zsh", "fish", "ksh", "power
 /// whatever the user configured as a **custom agent** — the latter read from
 /// `settings.json` in the state dir, which no container mounts, so it is a
 /// trustworthy source even though the layout naming it is not.
-fn known_tab_commands(custom: &HashMap<String, Vec<String>>) -> HashSet<String> {
+fn known_tab_commands(custom: &HashMap<String, CustomAgentSpec>) -> HashSet<String> {
     let mut set: HashSet<String> = HashSet::new();
     set.insert(String::new());
     for c in PANE_MARKER_CMDS
@@ -348,15 +348,25 @@ fn known_tab_commands(custom: &HashMap<String, Vec<String>>) -> HashSet<String> 
     set
 }
 
-/// The user's custom agents as `cmd → resume argv`, read from
+/// What a custom agent's `settings.json` entry says about its tabs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CustomAgentSpec {
+    /// Its "continue last session" argv; empty for a launch-only agent.
+    pub resume: Vec<String>,
+    /// The environment the user gave it (`CustomAgent.env`).
+    pub env: HashMap<String, String>,
+}
+
+/// The user's custom agents as `cmd → spec`, read from
 /// `Settings.custom_agents` (the settings `extra` catch-all).
 ///
 /// `settings.json` lives in the state dir, which no container mounts, so this is
-/// the trustworthy source for **both** questions the sanitizer asks: which command
-/// a persisted layout may name, and what argv that command's resume is allowed to
-/// use. A custom agent with no resume flag maps to an empty vector — it is
+/// the trustworthy source for **every** question the sanitizer asks: which command
+/// a persisted layout may name, what argv that command's resume is allowed to
+/// use, and which of the variables [`strip_persisted_env`] would drop it really
+/// sets. A custom agent with no resume flag has an empty `resume` — it is
 /// launch-only, so a persisted `resumeArgs` for it is never legitimate.
-fn custom_agent_specs() -> HashMap<String, Vec<String>> {
+pub(crate) fn custom_agent_specs() -> HashMap<String, CustomAgentSpec> {
     let path = storage::state_dir().join("settings.json");
     let Ok(settings) = storage::read_json::<crate::schema::Settings>(&path) else {
         return HashMap::new();
@@ -382,7 +392,16 @@ fn custom_agent_specs() -> HashMap<String, Vec<String>> {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    Some((cmd.to_string(), resume))
+                    let env = a
+                        .get("env")
+                        .and_then(Value::as_object)
+                        .map(|m| {
+                            m.iter()
+                                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some((cmd.to_string(), CustomAgentSpec { resume, env }))
                 })
                 .collect()
         })
@@ -401,12 +420,32 @@ pub fn sanitize_loaded_layout(tabs: &mut [TabEntry]) {
 /// Sanitize a project-tree layout and remove state-directory-only bindings that
 /// an exported/adopted folder is never allowed to introduce.
 fn sanitize_untrusted_layout(tabs: &mut [TabEntry]) {
-    sanitize_loaded_layout(tabs);
+    sanitize_untrusted_layout_with(tabs, &custom_agent_specs());
+}
+
+/// [`sanitize_untrusted_layout`] against a given custom-agent set.
+///
+/// Beyond the trusted load's rules, no tab keeps its `env` or `embedExec`
+/// (gap 17). Every variable a tab of this installation needs is rebuilt
+/// rather than read from the copy: the frontend re-derives `TAB_UID` from the
+/// tab's `sessionId` on restore (`restoreSavedTab`), the backend sets its own
+/// control variables at spawn (`launch_prep::prepare`), and a registered
+/// custom agent gets the environment its `settings.json` entry names. What a
+/// folder or a mailed bundle brought is another installation's choice of
+/// `PATH`, loader variables or `VIBE_HOME`, and an embed's open command.
+fn sanitize_untrusted_layout_with(tabs: &mut [TabEntry], custom: &HashMap<String, CustomAgentSpec>) {
+    sanitize_tab_layout(tabs, &known_tab_commands(custom), custom);
     for tab in tabs {
         tab.extra.remove(SCHEDULE_TARGET_KEY);
         // A relaunchable local-model tab is started from the state dir's
         // layout only; a folder copy never brings one back.
         tab.extra.remove(LOCAL_LAUNCH_KEY);
+        tab.extra.remove(ENV_KEY);
+        tab.extra.remove(EMBED_EXEC_KEY);
+        if let Some(spec) = custom.get(&tab.cmd).filter(|spec| !spec.env.is_empty()) {
+            let env = spec.env.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+            tab.extra.insert(ENV_KEY.to_string(), Value::Object(env));
+        }
     }
 }
 
@@ -417,20 +456,23 @@ fn sanitize_untrusted_layout(tabs: &mut [TabEntry]) {
 /// entry's authority — its `cmd` becomes the plain default shell, and the fields
 /// that would carry attacker-chosen argv, environment or locality into
 /// `pty_spawn` (`resumeArgs`, `env`, `location`, `sessionId`) are stripped. A tab
-/// whose `cmd` *is* known keeps all of them, so legitimate agent resume, remote
-/// locality and vibe's `VIBE_HOME` are untouched.
+/// whose `cmd` *is* known keeps its locality and session id, its `resumeArgs`
+/// only as its trustworthy source states them ([`rebuild_resume_args`]), and its
+/// `env` minus the variables no tab layout may set ([`strip_persisted_env`]), so
+/// legitimate agent resume, remote locality and vibe's `VIBE_HOME` are untouched.
 ///
 /// `sessionId` goes too: with `cmd` reset the entry is no longer a resumable agent
 /// tab, and a leftover id would only make `isResumableAgentTab` disagree with it.
 pub fn sanitize_tab_layout(
     tabs: &mut [TabEntry],
     known: &HashSet<String>,
-    custom: &HashMap<String, Vec<String>>,
+    custom: &HashMap<String, CustomAgentSpec>,
 ) {
     for tab in tabs.iter_mut() {
         if known.contains(&tab.cmd) {
             rebuild_resume_args(tab, custom);
             keep_valid_local_launch(tab);
+            strip_persisted_env(tab, custom);
             continue;
         }
         eprintln!(
@@ -442,7 +484,7 @@ pub fn sanitize_tab_layout(
         tab.session_id = None;
         for key in [
             "resumeArgs",
-            "env",
+            ENV_KEY,
             "location",
             "args",
             HOST_BOUND_UID_KEY,
@@ -491,6 +533,72 @@ pub(crate) fn local_launch_ok(launch: &Value, cmd: &str) -> bool {
     crate::commands::ollama::local_launch_line_ok(driver, model, cmd, &args)
 }
 
+/// Whether a persisted tab `env` may not set `key` (gap 17): the variables that
+/// pick which program runs or what it loads before its first line — the shell's
+/// startup and prompt hooks, `PATH`, the dynamic loader's, git's, the
+/// interpreters' — the user's own config homes, and the app's control variables
+/// (`launch_prep::is_control_env`), which only Tabtivity sets.
+///
+/// Built-in tabs never persist one of these; a layout that carries one was
+/// written by something else.
+pub(crate) fn persisted_env_denied(key: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "PATH", "BASH_ENV", "ENV", "PROMPT_COMMAND", "PS4", "SHELLOPTS", "BASHOPTS", "IFS",
+        "ZDOTDIR", "HOME", "INPUTRC", "EDITOR", "VISUAL", "PAGER", "MANPAGER", "BROWSER",
+        "LESSOPEN", "LESSCLOSE", "NODE_OPTIONS", "NODE_PATH", "PYTHONPATH", "PYTHONSTARTUP",
+        "PYTHONHOME", "PERL5OPT", "PERL5LIB", "PERL5DB", "RUBYOPT", "RUBYLIB",
+        "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
+        // Set by Tabtivity at spawn for a CLI it wires to its MCP lanes or
+        // its loaded models; each can name a program the CLI starts.
+        "VIBE_MCP_SERVERS", "VIBE_ENABLED_TOOLS", "OPENCODE_CONFIG_CONTENT",
+    ];
+    const PREFIXES: &[&str] = &["LD_", "DYLD_", "GIT_", "SSH_ASKPASS"];
+    EXACT.contains(&key)
+        || PREFIXES.iter().any(|p| key.starts_with(p))
+        || (key.starts_with("XDG_") && (key.ends_with("_HOME") || key.ends_with("_DIRS")))
+        || crate::services::launch_prep::is_control_env(key)
+}
+
+/// Drop from a known-command tab's persisted `env` every variable
+/// [`persisted_env_denied`] names, unless the tab is a registered custom agent
+/// whose `settings.json` entry sets that variable to the same value (the user
+/// chose it there, as `rebuild_resume_args` trusts the spec's resume flag). An
+/// `env` that is not an object is dropped whole. Every other variable stays:
+/// `TAB_UID`, a local-model tab's `VIBE_HOME`, a Run tab's `PY_*`.
+///
+/// Runs on every load, the state dir's included, and on the headless owner's
+/// raw record reads (`mobile_control::headless::launch_options`). Names only in
+/// the log.
+pub(crate) fn strip_persisted_env(tab: &mut TabEntry, custom: &HashMap<String, CustomAgentSpec>) {
+    let Some(env) = tab.extra.get_mut(ENV_KEY) else {
+        return;
+    };
+    let Some(map) = env.as_object_mut() else {
+        tab.extra.remove(ENV_KEY);
+        return;
+    };
+    let spec = custom.get(&tab.cmd).map(|spec| &spec.env);
+    let mut dropped: Vec<String> = Vec::new();
+    map.retain(|key, value| {
+        if !persisted_env_denied(key) {
+            return true;
+        }
+        let named = spec.and_then(|env| env.get(key)).is_some_and(|want| value.as_str() == Some(want.as_str()));
+        if !named {
+            dropped.push(key.clone());
+        }
+        named
+    });
+    if !dropped.is_empty() {
+        dropped.sort();
+        eprintln!(
+            "terminal_service: persisted tab '{}' set {} in its env — dropped",
+            tab.label,
+            dropped.join(", ")
+        );
+    }
+}
+
 /// Replace a known-command entry's persisted `resumeArgs` with the value its
 /// *trustworthy* source states, or remove the field when there is no such value.
 ///
@@ -510,8 +618,8 @@ pub(crate) fn local_launch_ok(launch: &Value, cmd: &str) -> bool {
 /// value is re-read from the spec rather than trusted from disk. A tab that is left
 /// with no `resumeArgs` and whose `cmd` is not in the built-in table simply stops
 /// being a resumable agent tab (`isResumableAgentTab`) and restores with no args.
-fn rebuild_resume_args(tab: &mut TabEntry, custom: &HashMap<String, Vec<String>>) {
-    match custom.get(&tab.cmd) {
+fn rebuild_resume_args(tab: &mut TabEntry, custom: &HashMap<String, CustomAgentSpec>) {
+    match custom.get(&tab.cmd).map(|spec| &spec.resume) {
         Some(resume) if !resume.is_empty() => {
             let want = Value::Array(resume.iter().map(|a| Value::String(a.clone())).collect());
             if tab.extra.get("resumeArgs") != Some(&want) {
@@ -710,6 +818,14 @@ const SCHEDULE_TARGET_KEY: &str = "scheduleTargetId";
 /// persisted so it restores. Validated on every load; never adopted.
 const LOCAL_LAUNCH_KEY: &str = "localLaunch";
 
+/// A tab's environment overrides (`TabEntry.env`). Filtered on every load
+/// ([`strip_persisted_env`]); never adopted.
+const ENV_KEY: &str = "env";
+
+/// How an embed tab opens its file (`TabEntry.embedExec`); `EmbedPane` runs it
+/// on mount. Never adopted.
+const EMBED_EXEC_KEY: &str = "embedExec";
+
 /// `<project>/.tabtivity/sessions/` — where the **export** copies of the session
 /// files live (and where `filetabs.json` / `layout.json` / `windows.json` still
 /// live outright; none of those is executable intent).
@@ -732,7 +848,15 @@ mod tests {
         );
         extra.insert(
             "env".to_string(),
-            serde_json::json!({ "LD_PRELOAD": "/tmp/x.so" }),
+            serde_json::json!({
+                "LD_PRELOAD": "/tmp/x.so",
+                "VIBE_HOME": "/home/u/.vibe-local",
+                crate::app_env!("TAB_UID"): "00000000-0000-0000-0000-000000000000",
+            }),
+        );
+        extra.insert(
+            "embedExec".to_string(),
+            serde_json::json!({ "kind": "app", "command": "/tmp/pwn" }),
         );
         extra.insert("kind".to_string(), Value::String("local_agent".to_string()));
         TabEntry {
@@ -758,8 +882,21 @@ mod tests {
         set
     }
 
-    fn no_custom() -> HashMap<String, Vec<String>> {
+    fn no_custom() -> HashMap<String, CustomAgentSpec> {
         HashMap::new()
+    }
+
+    fn spec(resume: &[&str], env: &[(&str, &str)]) -> CustomAgentSpec {
+        CustomAgentSpec {
+            resume: resume.iter().map(|a| a.to_string()).collect(),
+            env: env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        }
+    }
+
+    fn env_keys(tab: &TabEntry) -> Option<Vec<String>> {
+        let mut keys: Vec<String> = tab.extra.get("env")?.as_object()?.keys().cloned().collect();
+        keys.sort();
+        Some(keys)
     }
 
     fn resume_args(tab: &TabEntry) -> Option<Vec<String>> {
@@ -804,7 +941,7 @@ mod tests {
     }
 
     #[test]
-    fn known_commands_keep_every_field_except_resume_args() {
+    fn known_commands_keep_every_field_except_resume_args_and_denied_env() {
         for cmd in [
             "",
             "claude",
@@ -825,8 +962,136 @@ mod tests {
                 tabs[0].extra.contains_key("location"),
                 "'{cmd}' keeps locality"
             );
-            assert!(tabs[0].extra.contains_key("env"), "'{cmd}' keeps env");
+            // A trusted (state-dir) load keeps the env and the embed, minus
+            // the variables no layout may set.
+            let mut want = vec![crate::app_env!("TAB_UID").to_string(), "VIBE_HOME".to_string()];
+            want.sort();
+            assert_eq!(env_keys(&tabs[0]), Some(want), "'{cmd}' keeps its env minus LD_PRELOAD");
+            assert!(tabs[0].extra.contains_key("embedExec"), "'{cmd}' keeps embedExec");
         }
+    }
+
+    #[test]
+    fn untrusted_layouts_drop_env_and_embed_exec_for_known_commands() {
+        // Gap 17: a known `cmd` kept its `env` at the untrusted doors, so an
+        // imported bundle or an adopted folder chose PATH or LD_PRELOAD for a
+        // plain shell tab. Nothing the tab brought survives.
+        for cmd in ["", "claude", "bash", "sh", "zsh", "vibe"] {
+            let mut tabs = vec![entry(cmd)];
+            tabs[0]
+                .extra
+                .insert("env".to_string(), serde_json::json!({ "FOO": "bar", "PATH": "/tmp/evil" }));
+            sanitize_untrusted_layout_with(&mut tabs, &no_custom());
+            assert_eq!(tabs[0].cmd, cmd, "'{cmd}' stays known");
+            assert!(!tabs[0].extra.contains_key("env"), "'{cmd}' loses env");
+            assert!(!tabs[0].extra.contains_key("embedExec"), "'{cmd}' loses embedExec");
+            // Identity stays: the frontend rebuilds TAB_UID from it.
+            assert!(tabs[0].session_id.is_some(), "'{cmd}' keeps its session id");
+        }
+    }
+
+    #[test]
+    fn an_untrusted_custom_agent_tab_gets_its_settings_env_only() {
+        let custom = HashMap::from([(
+            "my-agent".to_string(),
+            spec(&["--continue"], &[("MY_AGENT_HOME", "/home/u/.my-agent"), ("PATH", "/opt/my-agent/bin")]),
+        )]);
+        let mut tabs = vec![entry("my-agent")];
+        tabs[0]
+            .extra
+            .insert("env".to_string(), serde_json::json!({ "PATH": "/tmp/evil", "PLANTED": "1" }));
+        sanitize_untrusted_layout_with(&mut tabs, &custom);
+        assert_eq!(tabs[0].cmd, "my-agent");
+        assert_eq!(
+            tabs[0].extra.get("env"),
+            Some(&serde_json::json!({ "MY_AGENT_HOME": "/home/u/.my-agent", "PATH": "/opt/my-agent/bin" }))
+        );
+
+        // A custom agent with no env in its spec gets none.
+        let custom = HashMap::from([("my-agent".to_string(), spec(&[], &[]))]);
+        let mut tabs = vec![entry("my-agent")];
+        sanitize_untrusted_layout_with(&mut tabs, &custom);
+        assert!(!tabs[0].extra.contains_key("env"));
+    }
+
+    #[test]
+    fn a_state_dir_layout_loses_loader_and_control_variables() {
+        let mut tabs = vec![entry("")];
+        let mut env = serde_json::json!({
+            "PATH": "/tmp/evil:/usr/bin",
+            "LD_PRELOAD": "/tmp/x.so",
+            "DYLD_INSERT_LIBRARIES": "/tmp/x.dylib",
+            "BASH_ENV": "/tmp/rc",
+            "PROMPT_COMMAND": "curl x|sh",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_SSH_COMMAND": "sh -c x",
+            "SSH_ASKPASS": "/tmp/x",
+            "XDG_CONFIG_HOME": "/tmp/cfg",
+            "NODE_OPTIONS": "--require /tmp/x.js",
+            "VIBE_MCP_SERVERS": "[]",
+            "HOME": "/tmp",
+            crate::app_env!("HOST_SESSION"): "1",
+            crate::app_env!("AGENT_FENCE"): "1",
+            crate::app_env!("SCOPE"): "other",
+            crate::services::root_mcp::TOKEN_ENV: "planted",
+            "VIBE_HOME": "/home/u/.vibe-local",
+            crate::app_env!("TAB_UID"): "uid-1",
+            crate::app_env!("LOCAL_MODEL"): "qwen3:8b",
+            "PY_TARGET_FIXTURE": "main.py",
+            "XDG_SESSION_TYPE": "x11",
+        });
+        if let Some(old) = crate::brand::PAIR.legacy_env_name("HOST_SESSION") {
+            env[old] = Value::String("1".into());
+        }
+        tabs[0].extra.insert("env".to_string(), env);
+        sanitize_tab_layout(&mut tabs, &known(), &no_custom());
+        let mut want: Vec<String> = [
+            crate::app_env!("LOCAL_MODEL"),
+            crate::app_env!("TAB_UID"),
+            "PY_TARGET_FIXTURE",
+            "VIBE_HOME",
+            "XDG_SESSION_TYPE",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        want.sort();
+        assert_eq!(env_keys(&tabs[0]), Some(want));
+
+        // An env that is not an object is dropped whole.
+        let mut tabs = vec![entry("")];
+        tabs[0].extra.insert("env".to_string(), serde_json::json!(["PATH=/tmp/evil"]));
+        sanitize_tab_layout(&mut tabs, &known(), &no_custom());
+        assert!(!tabs[0].extra.contains_key("env"));
+    }
+
+    #[test]
+    fn a_custom_agents_spec_env_survives_and_a_differing_value_is_dropped() {
+        let custom = HashMap::from([(
+            "my-agent".to_string(),
+            spec(&[], &[("PATH", "/opt/my-agent/bin"), ("NODE_OPTIONS", "--max-old-space-size=4096")]),
+        )]);
+        let set = known_tab_commands(&custom);
+        let mut tabs = vec![entry("my-agent")];
+        tabs[0].extra.insert(
+            "env".to_string(),
+            serde_json::json!({
+                "PATH": "/opt/my-agent/bin",
+                "NODE_OPTIONS": "--require /tmp/x.js",
+                "LD_PRELOAD": "/tmp/x.so",
+                "MY_AGENT_FLAG": "1",
+            }),
+        );
+        sanitize_tab_layout(&mut tabs, &set, &custom);
+        assert_eq!(
+            tabs[0].extra.get("env"),
+            Some(&serde_json::json!({ "PATH": "/opt/my-agent/bin", "MY_AGENT_FLAG": "1" }))
+        );
+
+        // The spec's value is honoured for its own command only.
+        let mut tabs = vec![entry("claude")];
+        tabs[0].extra.insert("env".to_string(), serde_json::json!({ "PATH": "/opt/my-agent/bin" }));
+        sanitize_tab_layout(&mut tabs, &set, &custom);
+        assert_eq!(tabs[0].extra.get("env"), Some(&serde_json::json!({})));
     }
 
     #[test]
@@ -868,7 +1133,7 @@ mod tests {
             "unregistered custom command is neutralized"
         );
 
-        let custom = HashMap::from([("my-agent".to_string(), vec!["--continue".to_string()])]);
+        let custom = HashMap::from([("my-agent".to_string(), spec(&["--continue"], &[]))]);
         let mut tabs = vec![entry("my-agent")];
         sanitize_tab_layout(&mut tabs, &known_tab_commands(&custom), &custom);
         assert_eq!(tabs[0].cmd, "my-agent");
@@ -901,8 +1166,8 @@ mod tests {
         // replaced by it rather than trusted — and a launch-only custom agent
         // (no resume flag in its spec) loses the field entirely.
         let custom = HashMap::from([
-            ("my-agent".to_string(), vec!["--continue".to_string()]),
-            ("launch-only".to_string(), Vec::new()),
+            ("my-agent".to_string(), spec(&["--continue"], &[])),
+            ("launch-only".to_string(), spec(&[], &[])),
         ]);
         let set = known_tab_commands(&custom);
 
