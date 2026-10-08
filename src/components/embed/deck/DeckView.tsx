@@ -123,6 +123,7 @@ import { slideStopIndex } from "../../../lib/viewers/deck/present";
 import { posterPng } from "./gifPlayback";
 import { useT } from "../../../lib/i18n";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
+import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
 import { ArrowUpRightIcon, PlayIcon } from "../../common/icons/Icon";
 
 /** Bounds for the rail's user-resizable width (px). Wide enough at the max that
@@ -252,6 +253,10 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
   const [mode, setMode] = useState<"design" | "animate" | "notes" | "tex" | "deck">("design");
   const [previewStep, setPreviewStep] = useState(0);
   const [presenting, setPresenting] = useState(false);
+  // A talk in progress keeps a sleepable pane awake (performance plan §5.3):
+  // the presenter (and its audience window) is portaled out of this view, so
+  // the tab can be hidden under it — sleeping would end the talk mid-slide.
+  usePaneSleepHold(presenting);
   const [exporting, setExporting] = useState(false);
   const [generating, setGenerating] = useState(false);
   /** Set when writing this deck back would lose something — see the module note.
