@@ -676,3 +676,73 @@ re-run. Untouched by this step.
      `<state_dir>/vibe_local/<model>/`, replace `tools` with a symlink and
      start a second tab of that model: it starts, and `tools` is a real
      folder again.
+
+## Agent step 4 — reviewer
+
+**Reviewed:** `cca43e77..a001ddef` (code `a3692f25`) against plan step 6, the
+gap 29/30 rows and the agent step 4 review notes.
+
+**Findings:**
+1. **Fixed (`1c52e7a0`): Vibe's `meta.json` refused past 64 KiB.** It is not
+   a small record: Vibe writes its full config dump, every tool schema and
+   the whole first system message (project context, the user's `AGENTS.md`)
+   into it (checked against mistral-vibe's `session_logger.py`). Under
+   `RECORD_CAP` a legacy-layout session with a real `meta.json` stopped
+   matching and `--resume` fell back to a fresh session. Now
+   `read_record_capped(…, VIBE_META_CAP = 16 MiB)` (made `pub`); still no
+   FIFO, link or special file. Regression: the legacy entry in
+   `vibe_resumes_its_own_recorded_session_and_preserves_legacy_fallback` is
+   now ~128 KiB (fails with the 64 KiB cap, checked).
+2. **Fixed (`94f02b56`): unconverted sibling readers.**
+   `agent_transcript::read_transcript_in` (the phone's Focus transcript) and
+   `agent_changes::read_changes` opened agent-written transcripts with
+   `File::open`; `agent_transcript::claude_spawned` read every subagent
+   `agent-*.meta.json` with `fs::read` after a following `metadata` size
+   check (a FIFO reports 0 bytes). Now `open_regular` / `read_record`.
+   Tests: `a_fifo_transcript_or_subagent_meta_reads_as_nothing_without_blocking`,
+   `a_fifo_or_linked_transcript_reads_as_nothing_without_blocking` (both under
+   `within_deadline`). Docs: `threat_model.md` row 29 and
+   `context/agent_authority.md` name them and the meta cap.
+3. Checked, no bug: `O_NONBLOCK` stays on the returned fds but only ever on
+   regular files (both Linux and macOS ignore it there); the turn watcher's
+   per-event read cannot block or drop a well-formed record (a `.turn` is
+   written by the hook as a plain file); `HomeFile::ensure` unlinks only
+   links, FIFOs and sockets — a real file or folder of either kind is kept,
+   never a user's data; Codex `config.toml` and transcripts are uncapped or
+   keep their own tail/head caps; the `.git` pointer is only read when
+   `lstat` already says regular file; cfg arms for Windows (`ensure`,
+   `open_regular`, `ControlPin.ino = None` on both sides) and macOS
+   (`sandbox_exec_inputs` → `Result`, its one caller uses `?`) read
+   correctly; every new FIFO test reads under `within_deadline` and removes
+   the FIFO before any later write.
+4. `verify_control_pins` false positives: nothing between the pins and the
+   check writes a control path; `prepare_local_agent`'s `config.toml` write
+   is in place (same inode); `register_vibe_hook_in` writes only when the
+   block differs. One narrow case remains (flagged below).
+
+**Gates (at `94f02b56`):** `npm run build` ok; `npm test` 735 files / 7556
+passed; `cargo test -q` 3767 passed, 3 ignored, 0 failed (lib 3599); `npm run
+lint` 0 errors, 28 advisory warnings (unchanged); `cargo clippy --all-targets
+-D warnings` clean; `scripts/brand-check.sh` ok; `git diff --check` clean;
+`scripts/privacy-check.sh cca43e77..HEAD` clean. macOS not compiled.
+`npm run backend:stale` not run (main agent at landing).
+
+**Flagged for user:**
+- **Concurrent first spawns of one local model can refuse one tab.** When
+  `hooks.toml` must be (re)written — a model's first tab ever, or after an
+  update changes the hook block — two spawns of that model starting at once
+  can both see stale content; the second's write (temp + rename, a new
+  inode) lands after the first pinned the old inode, and the first is
+  refused with "changed while this tab was starting". A retry works. Closing
+  it would need the rewrite done in place, or one lock held from the
+  rewrite to the PTY spawn.
+- **A host rewrite of `hooks.toml` unmounts it in running tabs (needs a
+  check).** Linux (3.18+) detaches a mount whose mount point is renamed over
+  from another namespace, so when a spawn replaces `hooks.toml`, running tabs
+  of that model lose its read-only bind and can write the file until they
+  respawn. Each later spawn rewrites it again (the app-owned block is reset
+  whenever it differs), so the effect is bounded; an in-place write would
+  avoid it. Not verified live.
+- Not re-reviewed beyond gap 29's scope: `agent_fence::shebang_interpreter`
+  and `venv_base_prefix` read the resolved agent executable and its
+  `pyvenv.cfg` with plain reads (install paths, not agent records).
