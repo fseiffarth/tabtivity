@@ -49,6 +49,16 @@ export interface PollOptions {
   saverFactor?: number;
 }
 
+/** Handed to every run: `stopped` turns true once the poll is stopped
+ *  (unmount, its gate or inputs changed), so an answer that lands later can be
+ *  dropped — the `cancelled` flag of the effects this replaces. */
+export interface PollRun {
+  readonly stopped: boolean;
+}
+
+/** A poll's body; a returned promise is waited for before the next run. */
+export type PollFn = (poll: PollRun) => unknown;
+
 export interface Poll {
   /** Change the cadence (the next run is re-armed from the last one's start). */
   setIntervalMs: (ms: number) => void;
@@ -57,6 +67,25 @@ export interface Poll {
 }
 
 const now = () => Date.now();
+
+// The store reads go through these so a module mocked down to its React hook
+// (many component tests mock `stores/settings`/`stores/power` that way) reads
+// as focused, on AC and never changing, instead of throwing in an effect.
+function saverOn(): boolean {
+  try {
+    return energySaverActive();
+  } catch {
+    return false;
+  }
+}
+
+function blurredNow(): boolean {
+  return typeof usePowerStore.getState === "function" ? usePowerStore.getState().blurred : false;
+}
+
+function subscribe(store: { subscribe?: (listener: () => void) => () => void }, listener: () => void): () => void {
+  return typeof store.subscribe === "function" ? store.subscribe(listener) : () => {};
+}
 
 function windowHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
@@ -67,7 +96,7 @@ function windowHidden(): boolean {
  * `stop()`. See the module comment for what pauses it.
  */
 export function startPoll(
-  run: () => unknown,
+  run: PollFn,
   intervalMs: number,
   options: PollOptions = {},
 ): Poll {
@@ -77,10 +106,15 @@ export function startPoll(
   let lastStart = Number.NEGATIVE_INFINITY;
   let inFlight = false;
   let stopped = false;
+  const handle: PollRun = {
+    get stopped() {
+      return stopped;
+    },
+  };
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let saver = energySaverActive();
+  let saver = saverOn();
 
-  const paused = () => stopped || (quiesce && (usePowerStore.getState().blurred || windowHidden()));
+  const paused = () => stopped || (quiesce && (blurredNow() || windowHidden()));
   const since = () => Math.max(lastStart, options.lastRunAt?.() ?? Number.NEGATIVE_INFINITY);
   const period = () => saverInterval(interval, saver, factor);
 
@@ -95,7 +129,7 @@ export function startPoll(
     lastStart = now();
     let pending: Promise<unknown>;
     try {
-      pending = Promise.resolve(run());
+      pending = Promise.resolve(run(handle));
     } catch (error) {
       pending = Promise.reject(error);
     }
@@ -138,18 +172,19 @@ export function startPoll(
 
   // Pause/resume on this window's blur and Energy Saver; `focus` itself also
   // resumes (a window whose focus tracking never ran still re-reads on return).
-  let blurred = usePowerStore.getState().blurred;
-  const unsubPower = usePowerStore.subscribe((s) => {
-    const nextSaver = energySaverActive();
-    if (s.blurred === blurred && nextSaver === saver) return;
-    const blurChanged = s.blurred !== blurred;
-    blurred = s.blurred;
+  let blurred = blurredNow();
+  const unsubPower = subscribe(usePowerStore, () => {
+    const nextBlurred = blurredNow();
+    const nextSaver = saverOn();
+    if (nextBlurred === blurred && nextSaver === saver) return;
+    const blurChanged = nextBlurred !== blurred;
+    blurred = nextBlurred;
     saver = nextSaver;
     if (blurChanged) resume();
     else arm();
   });
-  const unsubSettings = useSettingsStore.subscribe(() => {
-    const nextSaver = energySaverActive();
+  const unsubSettings = subscribe(useSettingsStore, () => {
+    const nextSaver = saverOn();
     if (nextSaver === saver) return;
     saver = nextSaver;
     arm();
@@ -192,7 +227,7 @@ export interface UsePollOptions extends PollOptions {
  * `run` — its inputs changed — restarts the poll with an immediate run, which
  * is how the effects this replaces behaved.
  */
-export function usePoll(run: () => unknown, intervalMs: number, options: UsePollOptions = {}): void {
+export function usePoll(run: PollFn, intervalMs: number, options: UsePollOptions = {}): void {
   const paneVisible = usePaneVisible();
   const active = (options.enabled ?? true) && paneVisible;
   const { quiesce, immediate, catchUpAfterMs, saverFactor, lastRunAt } = options;

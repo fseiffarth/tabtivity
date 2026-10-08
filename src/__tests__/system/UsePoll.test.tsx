@@ -162,6 +162,19 @@ describe("startPoll", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("tells a run that lands after stop that it is stale", async () => {
+    let resolve: () => void = () => {};
+    const seen: boolean[] = [];
+    const poll = startPoll(async (p) => {
+      await new Promise<void>((r) => { resolve = r; });
+      seen.push(p.stopped);
+    }, 1000);
+    poll.stop();
+    resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen).toEqual([true]);
+  });
+
   it("Energy Saver widens the interval ×3 instead of stopping", async () => {
     useSettingsStore.setState({ settings: { energy_saver: "always" } as unknown as Settings });
     const run = vi.fn();
