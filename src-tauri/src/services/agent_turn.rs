@@ -341,7 +341,27 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
         .iter()
         .filter_map(|(uid, _)| states.get(uid).map(|state| (uid.as_str(), *state)))
         .collect();
-    let live = tool_shell_uids(&want);
+    // A scan that can settle a tab (its turn is over, it has no job on record
+    // and is not settled yet) walks the table fresh: a shared table up to
+    // `JOB_SCAN_MAX_AGE` old can predate a shell the agent started just before
+    // its turn ended, and settling on that would hide the job until the
+    // `JOB_POLL_SETTLED` backstop. Other scans reuse a recent walk (a job on
+    // record is re-checked alive either way).
+    let unsettled_done: Vec<&str> = {
+        let settled = settled().lock().unwrap();
+        want.iter()
+            .filter(|(uid, state)| {
+                matches!(state, TurnState::Done | TurnState::Decision) && !settled.contains(**uid)
+            })
+            .map(|(uid, _)| *uid)
+            .collect()
+    };
+    let may_settle = {
+        let jobs = jobs().lock().unwrap();
+        unsettled_done.iter().any(|uid| !jobs.get(*uid).copied().unwrap_or(false))
+    };
+    let max_age = if may_settle { Duration::ZERO } else { JOB_SCAN_MAX_AGE };
+    let live = tool_shell_uids(&want, max_age);
     let mut jobs = jobs().lock().unwrap();
     let mut out = Vec::new();
     for (uid, pty) in &bound {
@@ -435,20 +455,23 @@ fn environ_uid(environ: &[u8]) -> Option<String> {
 /// under the tab inherits `TABTIVITY_TAB_UID`, fenced ones included (bubblewrap
 /// moves the pid namespace, not the owner, so the host still reads their
 /// environ). Linux reads `/proc`, through the shared table
-/// (`services::proc_table`): a snapshot no older than [`JOB_SCAN_MAX_AGE`],
-/// each shell's environment read once in its life, and each match checked
+/// (`services::proc_table`): a snapshot no older than `max_age` (see
+/// [`refresh_jobs`]), each shell's environment read once in its life, and each match checked
 /// alive before it counts — a shell that ended since the walk is no job.
 /// Elsewhere no tab ever reports a job. A contained agent's shells belong to
 /// the container's user and a remote one's live on its host, so those report
 /// none either.
 #[cfg(target_os = "linux")]
-fn tool_shell_uids(want: &HashMap<&str, TurnState>) -> std::collections::HashSet<String> {
+fn tool_shell_uids(
+    want: &HashMap<&str, TurnState>,
+    max_age: Duration,
+) -> std::collections::HashSet<String> {
     use crate::services::proc_table;
     let mut out = std::collections::HashSet::new();
     if want.is_empty() {
         return out;
     }
-    let table = proc_table::snapshot_within(JOB_SCAN_MAX_AGE);
+    let table = proc_table::snapshot_within(max_age);
     for proc_ in table.procs() {
         // `comm` first: it comes with the table, and only shells go on to have
         // their environment read.
@@ -473,7 +496,10 @@ fn tool_shell_uids(want: &HashMap<&str, TurnState>) -> std::collections::HashSet
 }
 
 #[cfg(not(target_os = "linux"))]
-fn tool_shell_uids(_want: &HashMap<&str, TurnState>) -> std::collections::HashSet<String> {
+fn tool_shell_uids(
+    _want: &HashMap<&str, TurnState>,
+    _max_age: Duration,
+) -> std::collections::HashSet<String> {
     std::collections::HashSet::new()
 }
 
@@ -778,6 +804,70 @@ mod tests {
         assert!(!job_flag(&bg_uid));
         on_tab_gone(bg_pty);
         on_tab_gone(fg_pty);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A shell the agent started just before its turn ended: the shared table
+    /// another reader walked a moment earlier does not have it yet. The scan
+    /// that would settle the tab must look again, or the job stays hidden until
+    /// the 30 s backstop (the tab is settled, so the 2 s tick skips it).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_turn_end_scan_sees_a_shell_younger_than_the_shared_table() {
+        use crate::services::proc_table;
+        let _guard = scan_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let uid = format!("job-late-{}", std::process::id());
+        let pty = "proj-j:agent-late";
+        let tmp = std::env::temp_dir()
+            .join(format!(concat!(crate::app_slug!(), "-job-late-{}"), std::process::id()));
+        let snap = tmp.join("shell-snapshots");
+        std::fs::create_dir_all(&snap).unwrap();
+        let snapshot = snap.join("snapshot-bash-test.sh");
+        std::fs::write(&snapshot, "").unwrap();
+        bind_tab(&uid, pty, None);
+        note_state(&uid, TurnState::Working);
+        // Some reader (sysstat, the fence marker, ui_priority) walks the table…
+        let walked = Instant::now();
+        let _ = proc_table::snapshot_within(Duration::ZERO);
+        // …then the agent backgrounds a command and its turn ends.
+        let mut shell = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "source {} 2>/dev/null || true && eval 'sleep 30' < /dev/null && pwd -P >| {}",
+                snapshot.display(),
+                tmp.join("cwd").display(),
+            ))
+            .env(crate::app_env!("TAB_UID"), &uid)
+            .spawn()
+            .unwrap();
+        let pid = shell.id();
+        // Wait (reading /proc directly) until the shell has exec'd and its
+        // environment is in place, as it is by the time a hook fires.
+        let ready = (0..200).any(|_| {
+            let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+            let env = std::fs::read(format!("/proc/{pid}/environ")).unwrap_or_default();
+            if comm.trim() == "bash" && !env.is_empty() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+            false
+        });
+        assert!(ready, "the test shell never came up");
+        note_state(&uid, TurnState::Done);
+        rescan();
+        let reported = refresh_jobs(None);
+        // Only meaningful while the walk above is still young enough to be
+        // reused; a machine that slow proves nothing either way.
+        if walked.elapsed() < JOB_SCAN_MAX_AGE {
+            assert!(
+                reported.contains(&(pty.to_string(), TurnState::Done, true)),
+                "the turn-end scan reused a table from before the shell started"
+            );
+            assert!(job_flag(&uid));
+        }
+        let _ = shell.kill();
+        let _ = shell.wait();
+        on_tab_gone(pty);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
