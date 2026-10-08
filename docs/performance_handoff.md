@@ -1818,7 +1818,99 @@ a blank or broken pane; devtools console free of chunk-load errors.
 7. Optional (LTO): compare startup time and idle CPU of this build with the
    previous dev build.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented 2026-10-08, S8 review next)
+### Review (S8 reviewer, 2026-10-08)
+Range reviewed: `c162de8d..6ce56f89` (2e570eab, e5c8a0bd, 42ae9aa1,
+4273a1cc, f1c7281f, handoff 6ce56f89). Nothing run live.
+
+**Bugs fixed**
+- None. No confirmed bug in the range, so no code commit.
+
+**Checked and sound**
+- Static cycles (2e570eab). `projects ↔ boxes`: every use of the other side
+  sits inside a function or action (no column-0 use anywhere of
+  `useBoxesStore`, and boxes' other exports are hoisted function
+  declarations or re-exports that resolve to `ptyId`/`tabs` directly).
+  `projects.ts` imports `./tabs` (line 42) before `./boxes` (line 54), so
+  when projects evaluates first, boxes' own deps are already done and its
+  body (a `create(...)`) touches nothing across the cycle; the
+  boxes-first order existed before S8. `hpcGuard`: a static-import graph
+  walk finds no path from projects, settings, remoteStatus, hpcHost or
+  remoteHosts back to it, and its only module-scope statement is
+  `envName(...)` from `brand`. The phone and pdf-frame bundles import
+  neither store nor `hpcGuard`.
+- What left the startup graph. A static-import closure from
+  `main.tsx`/`bootstrap.tsx` at `c162de8d` against HEAD: 88 modules left
+  startup. None has a module-scope side effect (no column-0 call,
+  `listen`, `addEventListener` or `.subscribe`); every Tauri or window
+  listener in them is in an effect of a component that mounted only while
+  shown before S8 too. The listeners for `app:open-settings`,
+  `OPEN_PROJECT_DIALOG_EVENT`, `OPEN_STATS_EVENT` and
+  `OVERLAY_AGENT_EVENT` live in hosts that stayed eager (ProjectSwitcher,
+  StatsRecapHost, the calendar overlay chrome via `useOverlayAgent`).
+- `LazyWhen` hosts. Each wrapper's flag is the host's own gate or a looser
+  one (Remote machines: `!!projectId` against the host's
+  `projectId && project.remote`). Every hand-off into them is store state
+  (`pendingDrop`, overlay `section`, wizard `open`), read on mount, not an
+  event. No host reset or persisted anything on mount.
+- Machines header member. Unmounting runs `useHeaderStatusReport`'s
+  cleanup (`report("machines", null)`), the same thing the old `!enabled`
+  branch published. Turning it on mounts it and runs `load()`, the same
+  thing the `[load, enabled]` effect did. The overlay host keeps its own
+  `enabled` gate inside `MachinesSurface`.
+- `DetachedApp` lazy: `setDetachedWindowContext` still runs in
+  DetachedApp's render, before any popout effect. The seed is pulled: the
+  request is emitted only after the listener is registered, and it
+  retries. None of the five popout-only modules has module-scope effects,
+  and the startup modules' module-scope subscriptions (settings class
+  toggle, activity `script-finished`, overlayAgent and agentModels
+  subscribers) don't route through the detached context.
+- Suspense placement. Every lazy pane in `TabPane` has its own `LazyPane`
+  boundary, so a suspend never hides a sibling terminal. The calendar
+  overlay's boundary wraps only the pane: the docked agent column is a
+  sibling outside it. FileViewerPane's top-level lazy viewers are each the
+  whole `view`. Its nested ones (tree, grid, cards, graph, annotator) each
+  have a local boundary, and no other site renders a newly lazy viewer.
+  Fallbacks are either empty (`.pane-loading`, `null`) or
+  `t("common.loading")`; the portaled ones (GlobalMachineMonitor,
+  Settings, project dialogs) have no text, so they need no colour.
+  `PaneVisibleContext` and `visible` props pass through unchanged.
+- Moved helpers. `lib/formatBytes`, `promptTarget.isPromptTargetTab` and
+  `lib/remote/machineLabel.targetLabel` are byte-identical to the old
+  bodies. Every importer (tests included) uses the new module or the kept
+  re-export.
+- Steering into the lazy Settings: `placeCursorSoon` retries for about 1 s
+  (20 × 50 ms). Tours poll for their anchors (`ANCHOR_WAIT_MS`).
+- `Cargo.toml`: `[profile.release] lto = "thin"` is in the workspace root
+  (members `src-tauri`; the patched `tauri-runtime-wry` is excluded but is
+  built as part of this workspace's graph). `src-tauri/Cargo.toml` has no
+  `[profile]`, and there is no `panic = "abort"` and no `codegen-units`.
+
+**Gates (worktree, at 6ce56f89; review adds only this section)**
+| Gate | Result |
+|---|---|
+| `npm run build` | ok (tsc + both bundles); `bootstrap-*.js` 3,319.15 kB / gz 974.30 kB; no "dynamically imported but also statically imported" warning |
+| `npm test` | 745 files / 7607 tests, 2 failing = the known `MobileHeldPromptStore.test.ts` date time-bomb |
+| `cargo test -q` | lib 3580 passed, 3 ignored; every other target green |
+| `npm run lint` | 0 errors, 28 pre-existing warnings |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check c162de8d HEAD` | clean |
+
+**Flagged for user**
+- Turning Machines off (`machines_enabled`) while a Machines "sign in in a
+  terminal" add or edit is still waiting now unmounts the menu, which
+  clears that poll (`clearAddPoll`/`clearEditPoll`) and the half-filled
+  form. Before S8 the hidden menu stayed mounted and would still adopt the
+  login. Not changed: this only happens if you switch the feature off
+  in the middle of adding a machine.
+- Steering's `,` → Settings on the very first open now waits for a chunk.
+  If parsing it takes more than about 1 s (heavy machine load), the cursor
+  isn't placed until the next steering key. Not observed; not changed.
+- The S8 implementer's thin-LTO numbers (+2.5 % binary, +11–30 % build
+  time, runtime gain not measured) are still the open decision on
+  `f1c7281f`.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented + reviewed 2026-10-08; S8 implemented + reviewed 2026-10-08, S9 next)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -1836,9 +1928,11 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
 - Done, implemented + reviewed: S7 (pollers, git dots, launch chain:
   87b10d07, ee376977, d551f300; review fix 3934cd7e — see
   `### Review (S7 reviewer, 2026-10-08)`).
-- Done, implemented (review owed): S8 (bundle + thin LTO: 2e570eab,
-  e5c8a0bd, 42ae9aa1, 4273a1cc, f1c7281f — see `## S8 — bundle + thin LTO`).
-- Next: S8 review (fresh reviewer), then S9–S12 per plan §11, then the final whole-range review, then landing on `develop`
+- Done, implemented + reviewed: S8 (bundle + thin LTO: 2e570eab,
+  e5c8a0bd, 42ae9aa1, 4273a1cc, f1c7281f; review found no bug — see
+  `### Review (S8 reviewer, 2026-10-08)`; thin LTO keep/revert is the
+  user's call).
+- Next: S9 (sleeping tabs I) implementer, then S10–S12 per plan §11, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
@@ -1860,6 +1954,9 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   974 kB); vitest 745 files / 7607 tests, the same 2 `MobileHeldPromptStore`
   failures; cargo lib 3580 passed; lint 0 errors / 28 warnings; clippy
   clean; brand ok; diff --check clean.
+- Gates at the S8 review (6ce56f89 + review doc): identical to S8's HEAD
+  (build ok, bootstrap 3,319 kB; vitest 745 / 7607, same 2 failures; cargo
+  lib 3580; lint 0 / 28; clippy, brand, diff --check clean).
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
