@@ -1903,6 +1903,10 @@ Range reviewed: `c162de8d..6ce56f89` (2e570eab, e5c8a0bd, 42ae9aa1,
   form. Before S8 the hidden menu stayed mounted and would still adopt the
   login. Not changed: this only happens if you switch the feature off
   in the middle of adding a machine.
+  **Fixed afterwards at the user's request** (`bd8004f3`, cherry-picked from
+  `7453933c`): `StatusCluster` keeps the member mounted from its first
+  switch-on, so its own `!enabled` branch handles "off" again and the poll
+  and form survive; regression test in `StatusCluster.test.tsx`.
 - Steering's `,` → Settings on the very first open now waits for a chunk.
   If parsing it takes more than about 1 s (heavy machine load), the cursor
   isn't placed until the next steering key. Not observed; not changed.
