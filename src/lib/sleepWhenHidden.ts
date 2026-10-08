@@ -21,22 +21,29 @@ export function useSleepWhenHidden({
   hidden,
   afterMs,
   hold = false,
+  identity = "",
 }: {
   hidden: boolean;
   afterMs: number;
   hold?: boolean;
+  /** What the pane would be remounted as. A change wakes a sleeping pane in
+   *  the same render and restarts the countdown — for a terminal, its spawn
+   *  identity: a relaunch or container toggle while asleep must reach the
+   *  program now, as it would through a mounted pane (performance plan §5.3). */
+  identity?: string;
 }): boolean {
-  const [asleep, setAsleep] = useState(false);
+  // The identity the pane fell asleep with, or null while awake.
+  const [asleepAs, setAsleepAs] = useState<string | null>(null);
   useEffect(() => {
     if (!hidden) {
-      setAsleep(false);
+      setAsleepAs(null);
       return;
     }
     if (hold) return;
-    const id = window.setTimeout(() => setAsleep(true), afterMs);
+    const id = window.setTimeout(() => setAsleepAs(identity), afterMs);
     return () => window.clearTimeout(id);
-  }, [hidden, hold, afterMs]);
-  return asleep && hidden;
+  }, [hidden, hold, afterMs, identity]);
+  return asleepAs !== null && asleepAs === identity && hidden;
 }
 
 /**
@@ -86,14 +93,31 @@ export function sleepTabsAfterMs(minutes: number | undefined | null): number | n
 }
 
 /**
- * Whether a tab's whole pane may sleep (be unmounted while hidden). Viewer
- * kinds only: a file viewer restores its position from the tab's
- * `viewerState` (§3.1 stage, then store) and a Files (Project) tab its folder
- * from `TabEntry.folder`. Not the terminal kinds (their PTY must survive —
- * plan §5.3's S10 half), not a placeholder `embed` without a viewer (its mount
- * opens the file in an external app, so a wake would open it again), not the
- * plain Files browser (its folder lives in component state).
+ * Whether a viewer tab's whole pane may sleep (be unmounted while hidden). A
+ * file viewer restores its position from the tab's `viewerState` (§3.1 stage,
+ * then store) and a Files (Project) tab its folder from `TabEntry.folder`.
+ * Not a placeholder `embed` without a viewer (its mount opens the file in an
+ * external app, so a wake would open it again), not the plain Files browser
+ * (its folder lives in component state). Terminal kinds sleep by their own
+ * rule, {@link isSleepableTerminalTab}.
  */
 export function isSleepableTab(tab: Pick<TabEntry, "kind" | "viewer">): boolean {
   return (tab.kind === "embed" && !!tab.viewer) || tab.kind === "projectfiles";
+}
+
+/**
+ * Whether a terminal tab's pane may sleep (§5.3, terminal kinds): its xterm is
+ * unmounted while the PTY keeps running (`lib/terminal/sleepingPtys`), and the
+ * wake re-attaches. Never a Host session (it ran unfenced with the user's full
+ * rights; its pane is the one place that says so), and never while another
+ * view of the PTY is drawn — a popout, the root console, an overlay's docked
+ * agent column: the main pane is the PTY owner those attach to, and it stays
+ * mounted while they show it.
+ */
+export function isSleepableTerminalTab(
+  tab: Pick<TabEntry, "kind" | "hostSession">,
+  { inPopout, drawnElsewhere }: { inPopout: boolean; drawnElsewhere: boolean },
+): boolean {
+  const terminal = tab.kind === "agent" || tab.kind === "local_agent" || tab.kind === "shell";
+  return terminal && !tab.hostSession && !inPopout && !drawnElsewhere;
 }

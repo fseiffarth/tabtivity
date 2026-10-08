@@ -1,12 +1,15 @@
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { TabPane } from "../tabs/TabPane";
 import { SleepingPane } from "./SleepingPane";
 import {
   isSleepableTab,
+  isSleepableTerminalTab,
   PaneSleepHoldContext,
   useSleepWhenHidden,
   type PaneSleepHoldReporter,
 } from "../../lib/sleepWhenHidden";
+import { killAsleepPty, markPtyAsleep } from "../../lib/terminal/sleepingPtys";
+import { tabTerminalSpawn, terminalSpawnKey } from "../../lib/terminal/terminalSpawn";
 import {
   effectiveTabLocation,
   isRelaunchableLocalTab,
@@ -51,6 +54,10 @@ export interface PaneSlotProps {
   /** This tab sits in a popout (a detached group): its pane here is a hidden
    *  duplicate of the popout's own, so a viewer sleeps at once (§4.5). */
   inPopout: boolean;
+  /** Another view in this window draws this tab's PTY right now (the root
+   *  console, an overlay's docked agent column): a terminal pane, the PTY
+   *  owner those attach to, does not sleep meanwhile (§5.3). */
+  drawnElsewhere: boolean;
 }
 
 /**
@@ -79,6 +86,7 @@ function PaneSlotImpl({
   mobileAgentTmuxReady,
   sleepAfterMs,
   inPopout,
+  drawnElsewhere,
 }: PaneSlotProps) {
   // Sleeping tabs (performance plan §5.3, viewer kinds; §4.5 for a popout's
   // duplicate). A hidden viewer pane is unmounted after `sleepAfterMs` — at
@@ -96,10 +104,6 @@ function PaneSlotImpl({
     },
     [holds],
   );
-  const sleepable = sleepAfterMs != null && isSleepableTab(tab);
-  const hidden = sleepable && !visible;
-  const timedAsleep = useSleepWhenHidden({ hidden, afterMs: sleepAfterMs ?? 0, hold: held });
-  const asleep = hidden && (timedAsleep || (inPopout && !held));
   // A box scope's Mobile switch (#31aa) plays the project's part here: an
   // agent tab of the box gets tmux underneath it — the one thing that makes
   // it attachable from the phone — by the box's own switch. Stamped on the
@@ -112,10 +116,6 @@ function PaneSlotImpl({
       !!paneProject?.[MOBILE_ACCESS_KEY] || !!paneBox?.[MOBILE_ACCESS_KEY],
     );
   }
-  // Asleep: none of the derivation below is needed, so a sleeping slot costs
-  // one element.
-  if (asleep) return <SleepingPane kind={tab.kind} />;
-
   // Mount-free remote, per-pane gating. A remote project's LOCAL panes run on
   // the mirror and work offline; only remote-I/O panes must wait for the pool.
   // Keyed by THIS pane's scope (not the active project) so a disconnected
@@ -222,6 +222,52 @@ function PaneSlotImpl({
     )
       ? tab.tmuxSession
       : undefined;
+
+  // Terminal kinds (§5.3, S10) sleep too: the xterm goes, the PTY keeps
+  // running, and the wake re-attaches (`lib/terminal/sleepingPtys`). Their
+  // spawn identity is the sleep's `identity`: a change while asleep (a
+  // relaunch, a container or tmux toggle, the remote host's pool dropping into
+  // the hold) wakes the pane in the same render, so the program is respawned
+  // or held now — what a mounted pane would have done — not at the next look.
+  const viewerSleepable = isSleepableTab(tab);
+  const terminalSleepable = isSleepableTerminalTab(tab, { inPopout, drawnElsewhere });
+  const ptyId = isPtyTabKind(tab.kind) ? `${scopeKey}:${tab.key}` : null;
+  const spawnIdentity = terminalSleepable
+    ? `${terminalSpawnKey(tabTerminalSpawn(tab, scopeKey, { terminalCwd, sandbox, tmuxSession, vmProject }))}|${holdRemoteTerminal}`
+    : "";
+  const sleepable = sleepAfterMs != null && (viewerSleepable || terminalSleepable);
+  const hidden = sleepable && !visible;
+  const timedAsleep = useSleepWhenHidden({
+    hidden,
+    afterMs: sleepAfterMs ?? 0,
+    hold: held,
+    identity: spawnIdentity,
+  });
+  const asleep = hidden && (timedAsleep || (viewerSleepable && inPopout && !held));
+  // Marked in the render that unmounts the pane, so the `TerminalView`
+  // unmounting in this commit parks its PTY instead of killing it.
+  // Not while held for a remote pool: that pane shows the Connect placeholder
+  // and has no PTY to park.
+  if (asleep && ptyId && !holdRemoteTerminal) markPtyAsleep(ptyId);
+  // The slot goes (its tab closed, its scope unloaded) while its pane sleeps:
+  // no view exists to kill the PTY, so the slot does — with its subtree, as the
+  // view's own unmount would have. A no-op for a pane that is awake.
+  useEffect(() => {
+    if (!ptyId) return;
+    return () => {
+      killAsleepPty(ptyId);
+    };
+  }, [ptyId]);
+  // Woken into the remote hold (the host's pool went down while asleep): the
+  // pane shows the Connect placeholder, no view will take the PTY over — kill
+  // it as the view leaving for the hold would have; the reconnect respawns.
+  useEffect(() => {
+    if (!asleep && holdRemoteTerminal && ptyId) killAsleepPty(ptyId);
+  }, [asleep, holdRemoteTerminal, ptyId]);
+
+  // Asleep: one element in place of the pane.
+  if (asleep) return <SleepingPane kind={tab.kind} />;
+
   return (
     /* The shared per-tab render switch (`components/tabs/TabPane`), the SAME
        one every detached popout renders. The main window owns the projects

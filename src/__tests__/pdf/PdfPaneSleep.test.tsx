@@ -148,6 +148,7 @@ function slot(visible: boolean) {
     mobileAgentTmuxReady: ready,
     sleepAfterMs: SLEEP_MS,
     inPopout: false,
+    drawnElsewhere: false,
   };
   return <PaneSlot {...props} />;
 }

@@ -1267,6 +1267,11 @@ function CenterPanelImpl() {
                 mobileAgentTmuxReady={mobileAgentTmuxReady.current}
                 sleepAfterMs={sleepAfterMs}
                 inPopout={popoutTabKeys.has(`${scopeKey}/${tab.key}`)}
+                // The root console / a docked agent column draws this PTY:
+                // its owning pane here stays mounted (§5.3, terminal kinds).
+                drawnElsewhere={
+                  scopeKey === ROOT_SCOPE && (rootConsoleOpen || overlayAgentShown.has(tab.key))
+                }
               />
             </div>
           );

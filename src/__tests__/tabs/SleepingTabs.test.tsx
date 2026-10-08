@@ -3,13 +3,17 @@
  * hidden for the "Unload hidden tabs after" delay renders
  * `SleepingPane` in place of `TabPane` — the viewer unmounts, the store is not
  * touched — and is mounted afresh, from the same `TabEntry`, the render it is
- * shown. Terminal kinds never sleep here (S10's half). A hold raised from
- * inside the pane keeps it awake. The popout stub (§4.5): a viewer a popout
- * shows sleeps in the main window at once.
+ * shown. A hold raised from inside the pane keeps it awake. The popout stub
+ * (§4.5): a viewer a popout shows sleeps in the main window at once.
+ * Terminal kinds (S10) sleep the same way with their PTY left running: the
+ * slot marks it asleep (`lib/terminal/sleepingPtys`), kills it when the tab
+ * closes asleep, and wakes on a spawn-identity change; Host sessions and
+ * tabs another view draws never sleep.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(undefined)) }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -69,11 +73,14 @@ import {
   sleepTabsAfterMs,
 } from "../../lib/sleepWhenHidden";
 import type { Settings } from "../../types";
+import { _clearAsleepPtysForTest, asleepPty } from "../../lib/terminal/sleepingPtys";
 
 const MIN = 60_000;
 const DELAY = SLEEP_TABS_DEFAULT_MIN * MIN;
 const VIEWERS = 25;
 const SHELLS = 5;
+/** The shells hidden behind the active (last) one. */
+const HIDDEN_SHELLS = SHELLS - 1;
 let viewerKeys: string[];
 let shellKeys: string[];
 
@@ -112,6 +119,8 @@ beforeEach(() => {
   unmounts.clear();
   mountedWith.clear();
   holding.clear();
+  _clearAsleepPtysForTest();
+  vi.mocked(invoke).mockClear();
   localStorage.clear();
   useSettingsStore.setState({ settings: null });
   useRemoteStatusStore.setState({ byProject: {}, byHost: {} });
@@ -144,7 +153,7 @@ afterEach(() => {
 });
 
 describe("sleeping tabs: the pane layer (30 tabs, 25 hidden viewers)", () => {
-  it("unmounts the 25 hidden viewers after the delay, never a terminal, and leaves the store alone", async () => {
+  it("unmounts the 25 hidden viewers and the hidden shells after the delay, and leaves the store alone", async () => {
     await mount();
     expect(sum(mounts, viewerKeys)).toBe(VIEWERS);
     expect(sum(mounts, shellKeys)).toBe(SHELLS);
@@ -157,11 +166,18 @@ describe("sleeping tabs: the pane layer (30 tabs, 25 hidden viewers)", () => {
 
     await advance(1);
     expect(sum(unmounts, viewerKeys)).toBe(VIEWERS);
-    expect(sleeping()).toBe(VIEWERS);
+    expect(sleeping()).toBe(VIEWERS + HIDDEN_SHELLS);
     for (const k of viewerKeys) expect(isMounted(k), k).toBe(false);
-    // Terminal kinds are S10's: no shell was put to sleep (no unmount, no stub).
-    expect(sum(unmounts, shellKeys)).toBe(0);
-    for (const k of shellKeys) expect(isMounted(k), k).toBe(true);
+    // Terminal kinds (S10): the hidden shells sleep with their PTYs marked
+    // asleep and never killed; the shown one stays.
+    expect(sum(unmounts, shellKeys)).toBe(HIDDEN_SHELLS);
+    for (const k of shellKeys.slice(0, HIDDEN_SHELLS)) {
+      expect(isMounted(k), k).toBe(false);
+      expect(asleepPty(`${ROOT_SCOPE}:${k}`), k).toBeDefined();
+    }
+    expect(isMounted(shellKeys[HIDDEN_SHELLS])).toBe(true);
+    expect(asleepPty(`${ROOT_SCOPE}:${shellKeys[HIDDEN_SHELLS]}`)).toBeUndefined();
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === "pty_kill")).toHaveLength(0);
     // Sleep is a render decision: the store did not change.
     expect(st().tabsByScope).toBe(tabsBefore);
     expect(st().layoutByScope).toBe(layoutBefore);
@@ -195,7 +211,7 @@ describe("sleeping tabs: the pane layer (30 tabs, 25 hidden viewers)", () => {
     expect(mounts.get(target)).toBe(2);
     expect(mountedWith.get(target)).toEqual({ scrollTop: 107 });
     // Only that one woke.
-    expect(sleeping()).toBe(VIEWERS - 1);
+    expect(sleeping()).toBe(VIEWERS - 1 + HIDDEN_SHELLS);
     for (const k of viewerKeys) if (k !== target) expect(mounts.get(k), k).toBe(1);
 
     // Hidden again: it sleeps again after the full delay, not before.
@@ -214,7 +230,7 @@ describe("sleeping tabs: the pane layer (30 tabs, 25 hidden viewers)", () => {
     await mount();
     await advance(DELAY * 3);
     expect(isMounted(held)).toBe(true);
-    expect(sleeping()).toBe(VIEWERS - 1);
+    expect(sleeping()).toBe(VIEWERS - 1 + HIDDEN_SHELLS);
 
     holding.delete(held);
     // Re-render the stand-in so it drops its hold (a real pane re-renders when
@@ -239,7 +255,7 @@ describe("sleeping tabs: the pane layer (30 tabs, 25 hidden viewers)", () => {
       useSettingsStore.setState({ settings: { sleep_tabs_after_min: 5 } as Settings });
     });
     await advance(5 * MIN);
-    expect(sleeping()).toBe(VIEWERS);
+    expect(sleeping()).toBe(VIEWERS + HIDDEN_SHELLS);
   });
 
   it("sleeps a Files (Project) tab, never a plain Files tab or a viewer-less embed", async () => {
@@ -258,6 +274,108 @@ describe("sleeping tabs: the pane layer (30 tabs, 25 hidden viewers)", () => {
     expect(isMounted(pf)).toBe(false);
     expect(isMounted(files)).toBe(true);
     expect(isMounted(ext)).toBe(true);
+  });
+});
+
+describe("sleeping terminal tabs (§5.3, S10)", () => {
+  const ptyId = (key: string) => `${ROOT_SCOPE}:${key}`;
+  const kills = () =>
+    vi.mocked(invoke).mock.calls.filter(([c]) => c === "pty_kill").map(([, a]) => (a as { id: string }).id);
+
+  it("wakes a sleeping shell the render it is shown, its PTY taken over, not killed", async () => {
+    await mount();
+    await advance(DELAY);
+    const target = shellKeys[1];
+    expect(isMounted(target)).toBe(false);
+    await act(async () => {
+      st().setActive(target);
+    });
+    expect(isMounted(target)).toBe(true);
+    expect(mounts.get(target)).toBe(2);
+    expect(kills()).toEqual([]);
+  });
+
+  it("closing a shell while it sleeps kills its PTY; closing an awake one leaves that to its view", async () => {
+    await mount();
+    await advance(DELAY);
+    const asleepKey = shellKeys[2];
+    await act(async () => {
+      st().removeTab(asleepKey);
+    });
+    expect(kills()).toEqual([ptyId(asleepKey)]);
+    expect(asleepPty(ptyId(asleepKey))).toBeUndefined();
+
+    vi.mocked(invoke).mockClear();
+    const awakeKey = shellKeys[HIDDEN_SHELLS];
+    await act(async () => {
+      st().removeTab(awakeKey);
+    });
+    // The mocked pane has no TerminalView: the slot itself never kills an
+    // awake pane's PTY (the view's unmount does).
+    expect(kills()).toEqual([]);
+  });
+
+  it("a relaunch while asleep wakes the pane, so the program is respawned now", async () => {
+    await mount();
+    await advance(DELAY);
+    const target = shellKeys[0];
+    expect(isMounted(target)).toBe(false);
+    await act(async () => {
+      st().relaunchTabInScope(ROOT_SCOPE, target, ["-l"]);
+    });
+    expect(isMounted(target)).toBe(true);
+    // …and it sleeps again after a full delay.
+    await advance(DELAY);
+    expect(isMounted(target)).toBe(false);
+  });
+
+  it("never sleeps a Host session", async () => {
+    const host = st().addTabToScope(ROOT_SCOPE, {
+      label: "Claude · Host",
+      cmd: "claude",
+      cwd: "/r",
+      kind: "agent",
+      hostSession: true,
+    } as Omit<TabEntry, "key">).key;
+    st().setActive(shellKeys[0]);
+    await mount();
+    await advance(DELAY * 2);
+    expect(isMounted(host)).toBe(true);
+  });
+
+  it("never sleeps a root tab the root console or a docked agent column draws", async () => {
+    await mount();
+    const docked = shellKeys[0];
+    await act(async () => {
+      useOverlayAgentStore.setState({ shownKeys: new Set([docked]) });
+    });
+    await advance(DELAY * 2);
+    expect(isMounted(docked)).toBe(true);
+    expect(isMounted(shellKeys[1])).toBe(false);
+
+    // The console opening wakes the ones already asleep: their owning pane
+    // must be mounted while the console's views attach to it.
+    await act(async () => {
+      useRootOverlayStore.setState({ open: true });
+    });
+    for (const k of shellKeys) expect(isMounted(k), k).toBe(true);
+    await advance(DELAY * 2);
+    for (const k of shellKeys) expect(isMounted(k), k).toBe(true);
+  });
+
+  it("never sleeps a terminal a popout shows (the main pane owns its PTY)", async () => {
+    const key = shellKeys[0];
+    useTabsStore.setState({
+      detachedGroupsByScope: {
+        [ROOT_SCOPE]: [
+          { id: "g9", label: "popout-g9", subtree: { type: "group", id: "g9", tabKeys: [key], activeKey: key } },
+        ],
+      },
+    });
+    await mount();
+    await advance(DELAY * 2);
+    expect(isMounted(key)).toBe(true);
+    expect(mounts.get(key)).toBe(1);
   });
 });
 

@@ -262,7 +262,7 @@ export const UNTESTED = {
   "settings.corners": { area: "layout", what: "ThemeCustomizer · Corners" },
   "settings.cursor": { area: "layout", what: "ThemeCustomizer · Mouse cursor" },
   "settings.fastMode": { area: "layout", what: "SettingsPanel · Fast mode" },
-  "settings.sleepTabs": { area: "layout", what: "SettingsPanel · Performance · Unload hidden tabs after: a file viewer or Files (Project) tab hidden that long unmounts and reloads where it was when shown (unsaved edits/marks, a build or playing media hold it); a viewer popped out is unloaded in the main window at once" },
+  "settings.sleepTabs": { area: "layout", what: "SettingsPanel · Performance · Unload hidden tabs after: a file viewer or Files (Project) tab hidden that long unmounts and reloads where it was when shown (unsaved edits/marks, a build or playing media hold it); a viewer popped out is unloaded in the main window at once. Terminal kinds (S10): a shell/agent tab hidden that long unmounts its xterm while its program keeps running; switching back re-attaches and shows the recent output (no respawn, no retyped prompt, \"[process exited]\" if it ended meanwhile); closing it while unloaded kills the program; scheduled/phone prompts still reach a sleeping agent; Host sessions and tabs shown in a popout, the root console or a docked agent column never unload" },
   "settings.language": { area: "layout", what: "SettingsPanel · Language" },
   "settings.layout": { area: "layout", what: "SettingsPanel · Layout" },
   "settings.mailClient": { area: "layout", what: "SettingsPanel · Mail client" },
