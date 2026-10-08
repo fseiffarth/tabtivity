@@ -100,6 +100,9 @@ where
     opts
 }
 
+/// The most of a legacy Vibe session's `meta.json` read to match its id.
+const VIBE_META_CAP: u64 = 16 * 1024 * 1024;
+
 fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
     if !is_uuid_shaped(id) {
         return false;
@@ -119,7 +122,9 @@ fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
             return false;
         }
         // Agent-written: a FIFO or a link here must not hang or steer a spawn.
-        let Some(raw) = crate::services::home_io::read_record(&path.join("meta.json")) else {
+        // Not a small record: Vibe dumps its config, every tool schema and the
+        // whole system prompt (the user's AGENTS.md included) into it.
+        let Some(raw) = crate::services::home_io::read_record_capped(&path.join("meta.json"), VIBE_META_CAP) else {
             return false;
         };
         serde_json::from_str::<serde_json::Value>(&raw).ok()
@@ -2511,7 +2516,14 @@ mod tests {
         std::fs::write(sessions.join("unified").join(own).join("CURRENT"), "1").unwrap();
         let legacy = sessions.join("session_20260923_120000_ffffffff");
         std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("meta.json"), format!("{{\"session_id\":\"{other}\"}}")).unwrap();
+        // Vibe's real metadata carries its config, tool schemas and system
+        // prompt: far past a small record's cap, and still read.
+        let padding = "x".repeat(2 * crate::services::home_io::RECORD_CAP as usize);
+        std::fs::write(
+            legacy.join("meta.json"),
+            format!("{{\"session_id\":\"{other}\",\"system_prompt\":{{\"content\":\"{padding}\"}}}}"),
+        )
+        .unwrap();
 
         let mut opts = opts_with_args(&["--continue"]);
         opts.cmd = "vibe".into();

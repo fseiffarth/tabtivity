@@ -621,7 +621,10 @@ pub fn read_record(path: &Path) -> Option<String> {
     read_record_capped(path, RECORD_CAP)
 }
 
-fn read_record_capped(path: &Path, cap: u64) -> Option<String> {
+/// [`read_record`] with a caller's own cap, for an agent-written file that is
+/// legitimately bigger than a record (Vibe's `meta.json` embeds the system
+/// prompt and every tool schema).
+pub fn read_record_capped(path: &Path, cap: u64) -> Option<String> {
     use std::io::Read;
     let mut bytes = Vec::new();
     open_regular(path)?.take(cap + 1).read_to_end(&mut bytes).ok()?;
