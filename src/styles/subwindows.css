@@ -208,6 +208,14 @@
   pointer-events: auto;
 }
 
+/* A code-split pane while its chunk loads (`TabPane`'s `LazyPane`): fills the
+   pane box (empty, over the panel background) so nothing collapses. */
+.pane-loading {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* ── 3D project blob (root "Projects" tab) ───────────────────────────────────
    A navigable cloud of every project + box. The viewport owns the orbit/zoom
    pointer surface; the scene is a preserve-3d space whose rotation/zoom is

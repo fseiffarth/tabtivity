@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { useSettingsStore } from "../../stores/settings";
 import { useT } from "../../lib/i18n";
@@ -8,8 +8,11 @@ import { CalendarGlyph } from "../header/HeaderGlyphs";
 import { OverlayApprovals } from "../layout/OverlayApprovals";
 import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentColumn";
 import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
-import { CalendarPane } from "./CalendarPane";
 import { storageKey } from "../../lib/brand";
+
+// The pane is the same lazily split chunk a calendar tab loads (`TabPane`); the
+// overlay's chrome stays in the startup chunk because its hooks run closed too.
+const CalendarPane = lazy(() => import("./CalendarPane").then((m) => ({ default: m.CalendarPane })));
 
 /**
  * The header calendar button's overlay — the twin of `MailOverlayHost`, and the
@@ -118,7 +121,9 @@ export function CalendarOverlayHost() {
           </div>
         </div>
         <div ref={bodyRef} className="subwindow-body calendar-overlay-body app-overlay-body-row" role="tabpanel">
-          <CalendarPane visible />
+          <Suspense fallback={<div className="pane-loading" aria-busy="true" />}>
+            <CalendarPane visible />
+          </Suspense>
           {agent.showColumn && (
             <OverlayAgentColumn
               app="calendar"

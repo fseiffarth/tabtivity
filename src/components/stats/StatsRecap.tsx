@@ -16,7 +16,8 @@ import {
   type Counters,
   type Period,
 } from "../../lib/usageRollup";
-import { formatBytes, type ByteCounts, type NetUsageReport } from "../monitoring/NetworkTrafficPane";
+import { formatBytes } from "../../lib/formatBytes";
+import type { ByteCounts, NetUsageReport } from "../monitoring/NetworkTrafficPane";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { useT, type TranslationKey } from "../../lib/i18n";
