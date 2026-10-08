@@ -266,8 +266,14 @@ fn read_from_roots(lists: &Lists, roots: &[PathBuf], parts: &[&str], asked: &str
             }
             continue;
         }
-        let joined = parts.iter().fold(root.clone(), |p, c| p.join(c));
-        if private.iter().any(|p| under_any_case(&joined, p)) {
+        // Both spellings of the root, as `root_refusal` checks them: a root
+        // reached through a link (or, on Windows, the `\\?\` form) to an
+        // ancestor of the state must not reach it through the rest.
+        let in_state = [Some(root.clone()), root.canonicalize().ok()].into_iter().flatten().any(|base| {
+            let joined = parts.iter().fold(base, |p, c| p.join(c));
+            private.iter().any(|p| under_any_case(&joined, p))
+        });
+        if in_state {
             return Err(concat!("that file lies inside ", crate::app_name!(), "'s own state, which no sandboxed tab sees").into());
         }
         match read_under(root, parts, crate::schema::mail::MAX_STAGED_BYTES) {
@@ -509,6 +515,27 @@ mod tests {
         assert!(root_refusal(dir.path(), &home, &state).is_some(), "an ancestor of home");
         assert!(root_refusal(&state.join("remote-projects/p/mirror"), &home, &state).is_some());
         assert!(root_refusal(&home.join("work/alpha"), &home, &state).is_none());
+    }
+
+    /// A root reached through a link to an ancestor of the state folder
+    /// (passes `root_refusal`, which sees neither home nor state in it) must
+    /// not read the state through the agent-spelled rest of the path.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_root_above_the_state_does_not_reach_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (share, link) = (dir.path().join("share"), dir.path().join("link"));
+        let state = share.join("state");
+        std::fs::create_dir_all(state.join("mail")).unwrap();
+        std::fs::write(state.join("mail/store.json"), b"private").unwrap();
+        std::os::unix::fs::symlink(&share, &link).unwrap();
+        let projects: ProjectsList = serde_json::from_value(serde_json::json!([
+            {"id":"a","name":"Alpha","status":"active","position":0,"local_file":"","directory": link}
+        ])).unwrap();
+        let home = dir.path().join("home");
+        let lists = Lists { projects: &projects, boxes: &Vec::new(), state_dir: &state, home: &home, granted: None };
+        let err = resolve(&lists, "a", "state/mail/store.json").unwrap_err();
+        assert!(err.contains("own state"), "{err}");
     }
 
     // Junctions need neither Administrator rights nor Developer Mode, so

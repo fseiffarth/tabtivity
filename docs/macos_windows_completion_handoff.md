@@ -1270,3 +1270,49 @@ Flagged for user:
   itself — it keeps Tabtivity's read on the agent's behalf to the same
   rules as on Linux (no links, no `.git`, no state, caps). That is the
   reason the old refusal gave; the plan chose to lift it.
+
+### Reviewer
+
+Checked and sound: the file is read from the handle `lookup_file` proved
+(`read_capped` on it; no re-open by path); every component, leaf included,
+is a single-name `NtCreateFile(FILE_OPEN_REPARSE_POINT)` relative to the held
+folder with the reparse attribute refused from the handle's metadata; the
+root's leaf too (`open_root`). `:` (ADS, `::$INDEX_ALLOCATION`, drives), 8.3
+`~N`, trailing dot/space refused before I/O; backslash, `\\?\`/UNC, leading
+`/`, `..` refused by `components` on every platform; device names are not
+special in a handle-relative NT open (no DOS name translation), so `CON`/`NUL`
+can only open a literal file. `.git` and the secret names are ASCII
+case-folded, as NTFS compares. The cap is enforced on the handle. Phone
+paths: `child_dir`/`open_file` were the only `open_at` callers and map
+`Err(())`/`Ok(None)` to `None` with the same flags and checks — unchanged.
+`private_state_paths` lost only its `cfg`. No `nlink` check, as on Unix (the
+plan asks for none). Unix arm: only the shared `read_capped`.
+
+Fix (one confirmed bug, also on Linux before this step):
+- The joined-path state check used the root only as spelled in the list. A
+  root that is a link (junction ancestor, `subst`, symlink on Unix) to an
+  ancestor of the state folder passes `root_refusal` and read the state
+  through `state/mail/…`. The check now joins onto the canonical root as
+  well, like `root_refusal`. Regression test
+  `a_linked_root_above_the_state_does_not_reach_it` (unix; failed before).
+  Commit: see `git log osfix/a8` (`fix(mail_attach): …`).
+
+Flagged for user:
+- Fails closed but with a misleading sentence: any non-NotFound open error
+  (a sharing violation on a file another app holds exclusively, access
+  denied) is reported as "a link or not a regular file; links … are never
+  followed". Also every reparse point is refused, so OneDrive cloud-file
+  placeholders and dedup'd files cannot be attached on Windows (the phone's
+  📁 behaves the same).
+- A root spelled through a UNC admin share (`\\localhost\C$\Users\…`) still
+  escapes both the home and the state checks (its canonical form is
+  `\\?\UNC\…`, never `C:\…`). The root comes from the trusted list and a
+  Windows root tab is unfenced (it can read the state itself), so this is
+  defence in depth only.
+
+Gates (after the fix, sequential): `npm run build` ok; `npm test` 7527, 2
+failed (the known `MobileHeldPromptStore` pair); `cargo test` 3737 passed
+(+1); `cargo clippy --all-targets -D warnings` ok; `npm run lint` 0 errors /
+28 warnings; brand-check ok; privacy-check ok; `git diff --check` clean;
+Windows `cargo check --tests` ok; Windows clippy the 14 pre-existing (A9's),
+none in this step's files.
