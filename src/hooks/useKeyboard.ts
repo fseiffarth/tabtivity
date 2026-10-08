@@ -76,6 +76,7 @@ import {
 } from "../lib/shortcuts/steeringAgent";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../lib/terminal/terminalScroll";
+import { documentScroller, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
 import { isPaneTerminalTarget, terminalMayTakeChord } from "../lib/shortcuts/terminalTabChord";
 import {
   actionMatches,
@@ -463,6 +464,12 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
       const ptyId = active ? `${active.scope}:${active.tab.key}` : null;
       return ptyId && terminalFor(ptyId) ? ptyId : null;
     };
+    // Otherwise the active tab itself, when a document in it scrolls.
+    const steeringActiveDocument = (): { scope: string; key: string } | null => {
+      const active = steeringActiveTab();
+      if (!active || steeringActivePty()) return null;
+      return documentScroller(active.scope, active.tab.key) ? { scope: active.scope, key: active.tab.key } : null;
+    };
 
     // The panes and tabs levels. With one subwindow there is nothing for ←/→
     // to walk between, so they step its tabs at once.
@@ -478,15 +485,23 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
       // back / forward (Shift: a whole one), ↓ back to its live end, ↑ out to
       // the tabs — which takes it back to live too (the subscription at the
       // bottom). Of the tab keys, only Work here and the prompt box act.
+      // A document tab (`documentScroll`) scrolls the same way, ↓ to its end
+      // (not on a held key's repeats — the ↓ that stepped in would run on to
+      // the end); it keeps its place when steering leaves.
       if (level === "scroll") {
         const pty = steeringActivePty();
+        const doc = pty ? null : steeringActiveTab();
         switch (action) {
           case "left":
-          case "right":
-            if (pty) scrollTerminal(pty, (action === "right" ? 1 : -1) * (e.shiftKey ? 1 : 0.5));
+          case "right": {
+            const pages = (action === "right" ? 1 : -1) * (e.shiftKey ? 1 : 0.5);
+            if (pty) scrollTerminal(pty, pages);
+            else if (doc) scrollDocument(doc.scope, doc.tab.key, pages);
             return;
+          }
           case "down":
             if (pty) scrollTerminalToLive(pty);
+            else if (doc && !e.repeat) scrollDocumentToEnd(doc.scope, doc.tab.key);
             return;
           case "up":
             steering.setLevel("tabs");
@@ -521,7 +536,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
           return;
         case "down":
           if (walksPanes) steering.setLevel("tabs");
-          else if (steeringActivePty()) steering.setLevel("scroll");
+          else if (steeringActivePty() || steeringActiveDocument()) steering.setLevel("scroll");
           return;
         case "left":
         case "right": {

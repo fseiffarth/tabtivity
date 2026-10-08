@@ -11,7 +11,9 @@ import { storageKey } from "../lib/brand";
  *   panes    — ←/→ step the subwindows (the tabs, when there is only one)
  *   tabs     — ←/→ step the focused subwindow's tabs
  *   scroll   — inside the active tab's terminal: ←/→ scroll it back and
- *              forth (`lib/terminal/terminalScroll`), ↓ back to its live end
+ *              forth (`lib/terminal/terminalScroll`), ↓ back to its live end;
+ *              or inside its document, the same (`lib/shortcuts/documentScroll`),
+ *              ↓ to its end
  *   region   — a keyboard cursor walking the controls of one surface that
  *              has no tab bar: the side panel, the mail / calendar / to-do
  *              overlays, a pane's + menu, the settings dialog, the top bar

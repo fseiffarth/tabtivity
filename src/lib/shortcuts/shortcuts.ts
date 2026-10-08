@@ -727,7 +727,7 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
   { id: "projects", labelKey: "steering.level.projects" },
   { id: "panes", labelKey: "steering.level.panes" },
   { id: "tabs", labelKey: "steering.level.tabs" },
-  { id: "scroll", labelKey: "steering.level.scroll" },
+  { id: "scroll", labelKey: "steering.level.scrollAny" },
   { id: "region", labelKey: "steering.level.region" },
 ];
 
@@ -753,6 +753,8 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *   agentPrompt — the active tab is an agent (the prompt box sends to it)
  *   intoTerminal — where ←/→ step tabs, and the active tab is a terminal
  *                ↓ can scroll (the scroll level)
+ *   intoDocument — the same for a tab whose document scrolls
+ *   inTerminal / inDocument — the scroll level is in a terminal / a document
  *   popouts    — the active scope has a subwindow popped out into its own
  *                window (J raises it)
  */
@@ -773,6 +775,9 @@ export type SteeringCondition =
   | "agentGoal"
   | "agentPrompt"
   | "intoTerminal"
+  | "intoDocument"
+  | "inTerminal"
+  | "inDocument"
   | "popouts";
 
 /** One row of the steering legend / cheat sheet: the steering actions it
@@ -834,6 +839,8 @@ export interface SteeringLegendState {
   apps: { mail: boolean; calendar: boolean; todo: boolean };
   /** The active tab is a live terminal (↓ scrolls it). */
   terminal?: boolean;
+  /** The active tab shows a document that scrolls (↓ scrolls it). */
+  document?: boolean;
   /** The active scope has popped-out subwindows. */
   popouts?: boolean;
   /** The agent keys the active tab takes; unset = none. */
@@ -870,6 +877,12 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
       return !!s.agent?.prompt;
     case "intoTerminal":
       return !!s.terminal && steeringConditionHolds("stepsTabs", s);
+    case "intoDocument":
+      return !s.terminal && !!s.document && steeringConditionHolds("stepsTabs", s);
+    case "inTerminal":
+      return !!s.terminal;
+    case "inDocument":
+      return !s.terminal;
     case "popouts":
       return !!s.popouts;
     default:
@@ -933,6 +946,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["left", "right"], pair: true, labelKey: "steering.tabs.label", descKey: "steering.tabs.desc", levels: PANE_LEVELS, when: "stepsTabs", group: "move" },
   { actions: ["down"], labelKey: "steering.intoTabs.label", descKey: "steering.intoTabs.desc", levels: ["panes"], when: "stepsPanes", group: "move" },
   { actions: ["down"], labelKey: "steering.intoTerminal.label", descKey: "steering.intoTerminal.desc", levels: PANE_LEVELS, when: "intoTerminal", group: "move" },
+  { actions: ["down"], labelKey: "steering.intoDocument.label", descKey: "steering.intoDocument.desc", levels: PANE_LEVELS, when: "intoDocument", group: "move" },
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: PANE_LEVELS, group: "move" },
   { actions: ["newShell"], labelKey: "steering.newShell.label", descKey: "steering.newShell.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["newMonitor"], labelKey: "steering.newMonitor.label", descKey: "steering.newMonitor.desc", levels: PANE_LEVELS, group: "new" },
@@ -946,10 +960,13 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["agentGoal"], labelKey: "steering.agentGoal.label", descKey: "steering.agentGoal.desc", levels: PANE_LEVELS, when: "agentGoal", group: "agent" },
   { actions: ["agentPrompt"], labelKey: "steering.agentPrompt.label", descKey: "steering.agentPrompt.desc", levels: [...PANE_LEVELS, "scroll"], when: "agentPrompt", group: "agent" },
   { actions: ["exit", "work"], labelKey: "steering.work.label", descKey: "steering.work.desc", levels: [...PANE_LEVELS, "scroll"], group: "mode" },
-  // Inside a terminal (its tab's ↓): Shift scrolls a whole screen.
-  { actions: ["left", "right"], pair: true, labelKey: "steering.scroll.label", descKey: "steering.scroll.desc", levels: ["scroll"], group: "move" },
-  { actions: ["down"], labelKey: "steering.scrollLive.label", descKey: "steering.scrollLive.desc", levels: ["scroll"], group: "move" },
-  { actions: ["up"], labelKey: "steering.scrollOut.label", descKey: "steering.scrollOut.desc", levels: ["scroll"], group: "move" },
+  // Inside a terminal or a document (its tab's ↓): Shift scrolls a whole screen.
+  { actions: ["left", "right"], pair: true, labelKey: "steering.scroll.label", descKey: "steering.scroll.desc", levels: ["scroll"], when: "inTerminal", group: "move" },
+  { actions: ["down"], labelKey: "steering.scrollLive.label", descKey: "steering.scrollLive.desc", levels: ["scroll"], when: "inTerminal", group: "move" },
+  { actions: ["up"], labelKey: "steering.scrollOut.label", descKey: "steering.scrollOut.desc", levels: ["scroll"], when: "inTerminal", group: "move" },
+  { actions: ["left", "right"], pair: true, labelKey: "steering.scrollDocument.label", descKey: "steering.scrollDocument.desc", levels: ["scroll"], when: "inDocument", group: "move" },
+  { actions: ["down"], labelKey: "steering.scrollEnd.label", descKey: "steering.scrollEnd.desc", levels: ["scroll"], when: "inDocument", group: "move" },
+  { actions: ["up"], labelKey: "steering.scrollOutDocument.label", descKey: "steering.scrollOutDocument.desc", levels: ["scroll"], when: "inDocument", group: "move" },
   // The region cursor (side panel, header apps, + menu, settings, the top bar,
   // any dialog or menu on top).
   { actions: ["up", "down"], pair: true, labelKey: "steering.move.label", descKey: "steering.move.desc", levels: ["region"], when: "walkRegion", group: "move" },

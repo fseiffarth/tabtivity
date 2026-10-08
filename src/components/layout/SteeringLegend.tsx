@@ -18,6 +18,7 @@ import { useActivityStore } from "../../stores/activity";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
+import { documentScroller } from "../../lib/shortcuts/documentScroll";
 import { KeyboardIcon } from "../common/icons/Icon";
 import { HUB_BOTTOM, HUB_R, orbitLayout, type Orbit } from "../../lib/shortcuts/steeringOrbit";
 
@@ -210,6 +211,7 @@ export function SteeringLegend() {
   const count = (kind: "decision" | "working" | "done") =>
     statusTabs(kind, busyByTab, attentionByTab, tabsByScope).length;
   const statusCounts = { decision: count("decision"), working: count("working"), done: count("done") };
+  const terminal = !!activeTab && !!terminalFor(`${tabScope}:${activeTab.key}`);
   const keys = steeringKeysFor({
     level,
     sideRegion: region === "side",
@@ -221,11 +223,20 @@ export function SteeringLegend() {
     multiPane,
     apps: { mail, calendar, todo },
     agent: steeringAgentOffer(activeTab),
-    terminal: !!activeTab && !!terminalFor(`${tabScope}:${activeTab.key}`),
+    terminal,
+    // Read at render too; only where ↓ could step into it.
+    document: !terminal && !!activeTab && (inPane || level === "scroll") && !!documentScroller(tabScope, activeTab.key),
     popouts,
     statusCounts,
   });
-  const where = level === "region" ? (region ? REGION_LABEL[region] : null) : LEVEL_LABEL[level];
+  const where =
+    level === "region"
+      ? region
+        ? REGION_LABEL[region]
+        : null
+      : level === "scroll" && !terminal
+        ? "steering.level.scrollDocument"
+        : LEVEL_LABEL[level];
 
   const item = (k: SteeringKeyDef) => {
     if (k.agentSlots) {

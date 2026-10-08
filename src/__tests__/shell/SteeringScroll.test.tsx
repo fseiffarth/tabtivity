@@ -23,6 +23,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../../lib/terminal/terminalScroll";
 import { steeringKeysFor, type SteeringLegendState } from "../../lib/shortcuts/shortcuts";
+import { documentScroller, scrollDocument } from "../../lib/shortcuts/documentScroll";
 
 function Harness() {
   useKeyboard({ onTogglePanels: () => {} });
@@ -228,10 +229,126 @@ describe("steering scroll level", () => {
     const labels = (s: SteeringLegendState) => steeringKeysFor(s).map((k) => k.labelKey);
     expect(labels(base)).not.toContain("steering.intoTerminal.label");
     expect(labels({ ...base, terminal: true })).toContain("steering.intoTerminal.label");
-    const inside = labels({ ...base, level: "scroll" });
+    const inside = labels({ ...base, level: "scroll", terminal: true });
     expect(inside).toEqual(
       expect.arrayContaining(["steering.scroll.label", "steering.scrollLive.label", "steering.scrollOut.label", "steering.work.label"]),
     );
     expect(inside).not.toContain("steering.newShell.label");
+    expect(inside).not.toContain("steering.scrollEnd.label");
+  });
+
+  it("the legend offers a scrolling document the same way, with its own keys inside", () => {
+    const base: SteeringLegendState = {
+      level: "tabs",
+      sideRegion: false,
+      multiPane: false,
+      apps: { mail: false, calendar: false, todo: false },
+      statusCounts: { decision: 0, working: 0, done: 0 },
+    };
+    const labels = (s: SteeringLegendState) => steeringKeysFor(s).map((k) => k.labelKey);
+    expect(labels({ ...base, document: true })).toContain("steering.intoDocument.label");
+    // A terminal wins: one way in, not two.
+    const both = labels({ ...base, terminal: true, document: true });
+    expect(both).toContain("steering.intoTerminal.label");
+    expect(both).not.toContain("steering.intoDocument.label");
+    const inside = labels({ ...base, level: "scroll", document: true });
+    expect(inside).toEqual(
+      expect.arrayContaining(["steering.scrollDocument.label", "steering.scrollEnd.label", "steering.scrollOutDocument.label"]),
+    );
+    expect(inside).not.toContain("steering.scrollLive.label");
+  });
+});
+
+/** A box that scrolls: jsdom has no layout, so its sizes are stubbed. */
+function scrollBox(parent: HTMLElement, size: { w: number; h: number; content: number }): HTMLElement {
+  const el = document.createElement("div");
+  el.style.overflowY = "auto";
+  Object.defineProperty(el, "clientWidth", { value: size.w });
+  Object.defineProperty(el, "clientHeight", { value: size.h });
+  Object.defineProperty(el, "scrollHeight", { value: size.content });
+  parent.appendChild(el);
+  return el;
+}
+
+/** The active tab's pane, on screen, as CenterPanel renders it. */
+function documentPane(tabKey: string, scope = "p"): HTMLElement {
+  const pane = document.createElement("div");
+  pane.className = "center-pane";
+  pane.dataset.scopeKey = scope;
+  pane.dataset.tabKey = tabKey;
+  pane.getBoundingClientRect = () => ({ width: 800, height: 600 }) as DOMRect;
+  document.body.appendChild(pane);
+  return pane;
+}
+
+describe("documentScroll", () => {
+  it("scrolls the largest scrolling box in the tab's pane, not its outline", () => {
+    const pane = documentPane("t");
+    const viewer = document.createElement("div");
+    pane.appendChild(viewer);
+    scrollBox(viewer, { w: 150, h: 580, content: 2000 }); // an outline beside it
+    const doc = scrollBox(viewer, { w: 600, h: 500, content: 9000 });
+    // What the document holds is not searched for another box.
+    scrollBox(doc, { w: 600, h: 400, content: 800 });
+    expect(documentScroller("p", "t")).toBe(doc);
+
+    expect(scrollDocument("p", "t", 0.5)).toBe(true);
+    expect(doc.scrollTop).toBe(225);
+    scrollDocument("p", "t", 1);
+    expect(doc.scrollTop).toBe(675);
+  });
+
+  it("finds nothing in a pane whose content fits, another scope's pane, or a hidden one", () => {
+    const pane = documentPane("t");
+    scrollBox(pane, { w: 600, h: 500, content: 500 });
+    expect(documentScroller("p", "t")).toBeNull();
+    expect(scrollDocument("p", "t", 0.5)).toBe(false);
+
+    const other = documentPane("u", "q");
+    scrollBox(other, { w: 600, h: 500, content: 5000 });
+    expect(documentScroller("p", "u")).toBeNull();
+    other.getBoundingClientRect = () => ({ width: 0, height: 0 }) as DOMRect;
+    expect(documentScroller("q", "u")).toBeNull();
+  });
+});
+
+describe("steering scroll level in a document", () => {
+  function oneDocumentTab() {
+    const tab = useTabsStore.getState().addTab({ label: "notes.md", cmd: "", cwd: "/p", kind: "files" });
+    return scrollBox(documentPane(tab.key), { w: 600, h: 400, content: 4000 });
+  }
+
+  it("D steps into the document, S/F scroll it, D jumps to its end, E keeps the place", () => {
+    const doc = oneDocumentTab();
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "d" });
+    expect(steering().level).toBe("scroll");
+
+    press({ key: "f" });
+    expect(doc.scrollTop).toBe(180);
+    press({ key: "F", shiftKey: true });
+    expect(doc.scrollTop).toBe(540);
+    press({ key: "s" });
+    expect(doc.scrollTop).toBe(360);
+    // A held D's repeats do not run on to the end.
+    press({ key: "d", repeat: true });
+    expect(doc.scrollTop).toBe(360);
+    press({ key: "d" });
+    expect(doc.scrollTop).toBe(4000);
+
+    doc.scrollTop = 700;
+    press({ key: "e" });
+    expect(steering().level).toBe("tabs");
+    expect(doc.scrollTop).toBe(700);
+  });
+
+  it("D stays on the tabs when nothing in the document scrolls", () => {
+    const tab = useTabsStore.getState().addTab({ label: "a.png", cmd: "", cwd: "/p", kind: "files" });
+    scrollBox(documentPane(tab.key), { w: 600, h: 400, content: 400 });
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "d" });
+    expect(steering().level).toBe("tabs");
   });
 });

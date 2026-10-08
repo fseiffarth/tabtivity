@@ -1894,6 +1894,8 @@ export const dict: Dict = {
 
   "steering.level.region": "Dentro de una superficie",
   "steering.level.scroll": "Dentro del terminal",
+  "steering.level.scrollAny": "Dentro de un terminal o documento",
+  "steering.level.scrollDocument": "Dentro del documento",
 
   "steering.region.side": "Panel lateral",
   "steering.region.card": "Tarjeta de la pestaña",
@@ -1950,6 +1952,14 @@ export const dict: Dict = {
   "steering.scrollLive.desc": "Vuelve al final en vivo del terminal.",
   "steering.scrollOut.label": "Volver a las pestañas",
   "steering.scrollOut.desc": "Sale del terminal a su barra de pestañas; vuelve a su final en vivo.",
+  "steering.intoDocument.label": "Al documento",
+  "steering.intoDocument.desc": "Entra en el documento de la pestaña activa para desplazarlo.",
+  "steering.scrollDocument.label": "Desplazar arriba / abajo",
+  "steering.scrollDocument.desc": "Media pantalla arriba o abajo en el documento; con Shift, una pantalla entera.",
+  "steering.scrollEnd.label": "Al final",
+  "steering.scrollEnd.desc": "Salta al final del documento.",
+  "steering.scrollOutDocument.label": "Volver a las pestañas",
+  "steering.scrollOutDocument.desc": "Sale del documento a su barra de pestañas; conserva su posición.",
 
   "steering.newShell.label": "Nuevo shell",
 

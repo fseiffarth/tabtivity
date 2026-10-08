@@ -1894,6 +1894,8 @@ export const dict: Dict = {
 
   "steering.level.region": "Dentro una superficie",
   "steering.level.scroll": "Dentro il terminale",
+  "steering.level.scrollAny": "Dentro un terminale o documento",
+  "steering.level.scrollDocument": "Dentro il documento",
 
   "steering.region.side": "Pannello laterale",
   "steering.region.card": "Scheda della tab",
@@ -1950,6 +1952,14 @@ export const dict: Dict = {
   "steering.scrollLive.desc": "Torna alla fine in tempo reale del terminale.",
   "steering.scrollOut.label": "Torna alle schede",
   "steering.scrollOut.desc": "Lascia il terminale per la sua barra delle schede; torna alla fine in tempo reale.",
+  "steering.intoDocument.label": "Nel documento",
+  "steering.intoDocument.desc": "Entra nel documento della scheda attiva per scorrerlo.",
+  "steering.scrollDocument.label": "Scorri su / giù",
+  "steering.scrollDocument.desc": "Mezzo schermo su o giù nel documento; con Maiusc, uno schermo intero.",
+  "steering.scrollEnd.label": "Alla fine",
+  "steering.scrollEnd.desc": "Salta alla fine del documento.",
+  "steering.scrollOutDocument.label": "Torna alle schede",
+  "steering.scrollOutDocument.desc": "Lascia il documento per la sua barra delle schede; mantiene la sua posizione.",
 
   "steering.newShell.label": "Nuova shell",
 

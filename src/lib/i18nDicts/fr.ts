@@ -1895,6 +1895,8 @@ export const dict: Dict = {
 
   "steering.level.region": "Dans une surface",
   "steering.level.scroll": "Dans le terminal",
+  "steering.level.scrollAny": "Dans un terminal ou un document",
+  "steering.level.scrollDocument": "Dans le document",
 
   "steering.region.side": "Panneau latéral",
   "steering.region.card": "Carte de l'onglet",
@@ -1951,6 +1953,14 @@ export const dict: Dict = {
   "steering.scrollLive.desc": "Revenir à la fin en direct du terminal.",
   "steering.scrollOut.label": "Retour aux onglets",
   "steering.scrollOut.desc": "Quitter le terminal pour sa barre d'onglets ; il revient à sa fin en direct.",
+  "steering.intoDocument.label": "Dans le document",
+  "steering.intoDocument.desc": "Entrer dans le document de l'onglet actif pour le faire défiler.",
+  "steering.scrollDocument.label": "Défiler haut / bas",
+  "steering.scrollDocument.desc": "Un demi-écran vers le haut ou le bas du document ; avec Maj, un écran entier.",
+  "steering.scrollEnd.label": "À la fin",
+  "steering.scrollEnd.desc": "Aller à la fin du document.",
+  "steering.scrollOutDocument.label": "Retour aux onglets",
+  "steering.scrollOutDocument.desc": "Quitter le document pour sa barre d'onglets ; il garde sa position.",
 
   "steering.newShell.label": "Nouveau shell",
 

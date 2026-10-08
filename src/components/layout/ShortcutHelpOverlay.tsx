@@ -119,6 +119,7 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.agentKeysStay" />
               <UntestedTag id="steering.overlays" />
               <UntestedTag id="steering.scroll" />
+              <UntestedTag id="steering.scrollDocument" />
               <UntestedTag id="steering.legendGroups" />
               <UntestedTag id="steering.handoffLegend" />
               <UntestedTag id="steering.dim" />

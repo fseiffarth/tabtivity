@@ -1896,6 +1896,8 @@ export const dict: Dict = {
 
   "steering.level.region": "In einer Fläche",
   "steering.level.scroll": "Im Terminal",
+  "steering.level.scrollAny": "Im Terminal oder Dokument",
+  "steering.level.scrollDocument": "Im Dokument",
 
   "steering.region.side": "Seitenpanel",
   "steering.region.card": "Karte des Tabs",
@@ -1952,6 +1954,14 @@ export const dict: Dict = {
   "steering.scrollLive.desc": "Zurück zum aktuellen Ende des Terminals.",
   "steering.scrollOut.label": "Zurück zu den Tabs",
   "steering.scrollOut.desc": "Das Terminal zur Tableiste verlassen; es springt zurück an sein aktuelles Ende.",
+  "steering.intoDocument.label": "Ins Dokument",
+  "steering.intoDocument.desc": "In das Dokument des aktiven Tabs gehen, um es zu scrollen.",
+  "steering.scrollDocument.label": "Hoch / runter scrollen",
+  "steering.scrollDocument.desc": "Einen halben Bildschirm im Dokument hoch oder runter; mit Shift einen ganzen.",
+  "steering.scrollEnd.label": "Ans Ende",
+  "steering.scrollEnd.desc": "Ans Ende des Dokuments springen.",
+  "steering.scrollOutDocument.label": "Zurück zu den Tabs",
+  "steering.scrollOutDocument.desc": "Das Dokument zur Tableiste verlassen; es bleibt an seiner Stelle.",
 
   "steering.newShell.label": "Neue Shell",
 
