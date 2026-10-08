@@ -89,6 +89,7 @@ import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../li
 import { MobileAccessPicker, phoneReachLabel } from "../mobile/MobileAccessPicker";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
+import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
 
 /** How long the pointer must rest on a session row before its stats card opens
  *  (TODO #85) — same value and rationale as `FileTree`'s `TOOLTIP_DWELL_MS`:
@@ -546,6 +547,11 @@ export function ProjectFilesView({
   const [openTree, setOpenTree] = useState<"add" | "commit" | "push" | null>(null);
   const [commitMsg, setCommitMsg] = useState<string | null>(null);
   const [gitBusy, setGitBusy] = useState(false);
+  // An open commit box (its message may be the user's own text) or a git verb
+  // in flight keeps a sleepable Files (Project) pane awake: a sleeping pane is
+  // unmounted, which would drop both (performance plan §5.3). No-op outside a
+  // pane (the side panel).
+  usePaneSleepHold(commitMsg !== null || gitBusy);
   const [gitWorktree, setGitWorktree] = useState<{ root: string; selection: GitWorktreeSelection | null } | null>(null);
   // Bumped by the Pull button: GitHistory owns the pull preview it opens.
   const [pullRequest, setPullRequest] = useState(0);
