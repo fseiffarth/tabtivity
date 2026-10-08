@@ -23,6 +23,7 @@ import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { useActivityStore } from "../../stores/activity";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { chordLabel } from "../../lib/shortcuts/shortcuts";
 
 type Open = Omit<SteeringPromptDetail, "handled">;
 
@@ -79,6 +80,12 @@ export function SteeringPromptOverlay() {
  *  tab level (K, L, G). */
 const CHIP_KEYS = { model: "m", effort: "e", clear: "k", plan: "l", goal: "g" } as const;
 type Chip = keyof typeof CHIP_KEYS;
+
+/** A chip's key as its `<kbd>` names it: `chordLabel`'s Alt — "Alt+M", or
+ *  "⌥M" on macOS, where the key is Option. */
+export function chipKeyLabel(chip: Chip): string {
+  return chordLabel({ key: CHIP_KEYS[chip], alt: true });
+}
 
 function chipFor(e: ReactKeyboardEvent): Chip | null {
   if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return null;
@@ -434,7 +441,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
             title={chip.title}
             onClick={() => { runChip(chip.chip); refocus(); }}
           >
-            <kbd>{t("steering.prompt.keyAlt", { key: CHIP_KEYS[chip.chip].toUpperCase() })}</kbd>
+            <kbd>{chipKeyLabel(chip.chip)}</kbd>
             <span>{chip.label}</span>
           </button>
         ))}

@@ -2077,7 +2077,6 @@ export const enSource = {
   "steering.prompt.chipClearAgain": "Clear? Press again",
   "steering.prompt.chipPlan": "Plan",
   "steering.prompt.chipGoal": "Goal",
-  "steering.prompt.keyAlt": "Alt+{key}",
   "steering.prompt.current": "current",
   "steering.prompt.moreRows": "More rows than shown: ↑/↓ scroll them in.",
   "steering.prompt.listKeys": "↑/↓ choose · Enter or a digit picks · Esc closes the list",

@@ -2057,7 +2057,6 @@ export const dict: Dict = {
   "steering.prompt.chipClearAgain": "Pulire? Premi di nuovo",
   "steering.prompt.chipPlan": "Piano",
   "steering.prompt.chipGoal": "Obiettivo",
-  "steering.prompt.keyAlt": "Alt+{key}",
   "steering.prompt.current": "attuale",
   "steering.prompt.moreRows": "Più righe di quelle mostrate: ↑/↓ le scorrono.",
   "steering.prompt.listKeys": "↑/↓ scegli · Invio o una cifra seleziona · Esc chiude la lista",
