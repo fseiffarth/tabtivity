@@ -49,13 +49,11 @@ import { Dropdown } from "../common/Dropdown";
 import { PrinterIcon } from "../common/PrinterIcon";
 import { SaveIcon } from "../common/SaveIcon";
 import { CompareView } from "./CompareView";
-import { GitMergeView } from "./GitMergeView";
 import { PresentationOverlay } from "./PresentationOverlay";
 import { usePresentationStore } from "../../stores/viewers/presentation";
 import { matchAnchorId, renderMarkdown, splitLineHint, toggleTaskCheckbox } from "../../lib/viewers/markdown";
 import { useMdAnchorStore } from "../../stores/viewers/mdAnchor";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
-import { MdGraphView } from "./MdGraphView";
 import {
   highlight,
   languageForPath,
@@ -175,11 +173,6 @@ import {
   describeFileErrorKey,
 } from "./fileAccess";
 import { DiffView } from "./DiffView";
-import { SyncMergeView } from "./SyncMergeView";
-import { OdtView } from "./OdtView";
-import { MediaView } from "./MediaView";
-import { GifView } from "./GifView";
-import { ImageAnnotator } from "./ImageAnnotator";
 import {
   type TexCapability,
   type TexCompileResult,
@@ -269,9 +262,6 @@ import {
   unregisterTexCompile,
   unregisterTexWorkspace,
 } from "../../stores/viewers/texCenter";
-import { YamlTree } from "./YamlTree";
-import { YamlGrid } from "./YamlGrid";
-import { BibCards } from "./BibCards";
 import { isTreePath, isJsonPath } from "../../lib/viewers/yaml";
 import { isBibPath } from "../../lib/viewers/tex/bib";
 import { hasCards } from "../../lib/viewers/yamlGrid";
@@ -296,6 +286,21 @@ const NotebookView = lazy(() => import("./NotebookView").then((m) => ({ default:
 const SqliteView = lazy(() => import("./SqliteView").then((m) => ({ default: m.SqliteView })));
 const PdfView = lazy(() => import("./pdf/PdfViewer").then((m) => ({ default: m.PdfView })));
 const DeckView = lazy(() => import("./deck/DeckView").then((m) => ({ default: m.DeckView })));
+// Perf plan §6: the rest of the viewers a plain text/markdown/code tab never
+// shows. The top-level ones render under the pane's own `<Suspense>` (below);
+// the nested ones (a text tab's tree/grid/card preview half, the markdown link
+// graph, the image annotator) each get a local boundary at their site, so a
+// first switch to one never blanks the editor around it.
+const GifView = lazy(() => import("./GifView").then((m) => ({ default: m.GifView })));
+const SyncMergeView = lazy(() => import("./SyncMergeView").then((m) => ({ default: m.SyncMergeView })));
+const GitMergeView = lazy(() => import("./GitMergeView").then((m) => ({ default: m.GitMergeView })));
+const OdtView = lazy(() => import("./OdtView").then((m) => ({ default: m.OdtView })));
+const MediaView = lazy(() => import("./MediaView").then((m) => ({ default: m.MediaView })));
+const YamlTree = lazy(() => import("./YamlTree").then((m) => ({ default: m.YamlTree })));
+const YamlGrid = lazy(() => import("./YamlGrid").then((m) => ({ default: m.YamlGrid })));
+const BibCards = lazy(() => import("./BibCards").then((m) => ({ default: m.BibCards })));
+const MdGraphView = lazy(() => import("./MdGraphView").then((m) => ({ default: m.MdGraphView })));
+const ImageAnnotator = lazy(() => import("./ImageAnnotator").then((m) => ({ default: m.ImageAnnotator })));
 
 /**
  * Persisted reader-position plumbing for an in-app viewer. Snapshots the tab's
@@ -7856,33 +7861,39 @@ function TextView({
           ) : isBib ? (
             // One card per bibliography entry, splicing the same draft — a field
             // edit here is dirty, undoable and saveable exactly like a typed one.
-            <BibCards
-              text={draft}
-              onChange={setDraft}
-              tabKey={tabKey}
-              fontSize={font.isCustom ? font.fontSize : undefined}
-            />
+            <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
+              <BibCards
+                text={draft}
+                onChange={setDraft}
+                tabKey={tabKey}
+                fontSize={font.isCustom ? font.fontSize : undefined}
+              />
+            </Suspense>
           ) : showGrid ? (
             // The grid edits the same draft by splice, just like the tree — a cell
             // edit is dirty, undoable and saveable exactly like a typed one.
-            <YamlGrid
-              text={draft}
-              onChange={setDraft}
-              tabKey={tabKey}
-              fontSize={font.isCustom ? font.fontSize : undefined}
-              strict={jsonStrict}
-            />
+            <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
+              <YamlGrid
+                text={draft}
+                onChange={setDraft}
+                tabKey={tabKey}
+                fontSize={font.isCustom ? font.fontSize : undefined}
+                strict={jsonStrict}
+              />
+            </Suspense>
           ) : isYaml ? (
             // The tree edits the draft in place — the same draft Source shows and
             // Ctrl+S writes, so an edit made here is dirty, undoable and saveable
             // exactly like a typed one.
-            <YamlTree
-              text={draft}
-              onChange={setDraft}
-              tabKey={tabKey}
-              fontSize={font.isCustom ? font.fontSize : undefined}
-              strict={jsonStrict}
-            />
+            <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
+              <YamlTree
+                text={draft}
+                onChange={setDraft}
+                tabKey={tabKey}
+                fontSize={font.isCustom ? font.fontSize : undefined}
+                strict={jsonStrict}
+              />
+            </Suspense>
           ) : (
             // Preview reflects the live draft, so it tracks unsaved edits.
             previewKind === "svg" ? (
@@ -8400,18 +8411,20 @@ function MarkdownView({
         onScroll={reportPreviewSync}
       >
         {mode === "graph" ? (
-          <MdGraphView
-            path={path}
-            onOpen={(target) => {
-              const viewer = viewerForPath(target);
-              openLinkedFile(tabKey, dirname(path), {
-                path: target,
-                viewer,
-                label: basename(target),
-                mdGraphOriginKey: viewer === "markdown" ? tabKey : undefined,
-              });
-            }}
-          />
+          <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
+            <MdGraphView
+              path={path}
+              onOpen={(target) => {
+                const viewer = viewerForPath(target);
+                openLinkedFile(tabKey, dirname(path), {
+                  path: target,
+                  viewer,
+                  label: basename(target),
+                  mdGraphOriginKey: viewer === "markdown" ? tabKey : undefined,
+                });
+              }}
+            />
+          </Suspense>
         ) : mode === "edit" && compareOpen ? (
           <CompareView
             path={path}
@@ -10764,12 +10777,14 @@ function ImageView({
       </ViewerHeader>
       <div className="file-viewer-body file-viewer-image-body">
         {annotating && url != null && (
-          <ImageAnnotator
-            src={url}
-            path={path}
-            fileName={fileName}
-            onClose={() => setAnnotating(false)}
-          />
+          <Suspense fallback={null}>
+            <ImageAnnotator
+              src={url}
+              path={path}
+              fileName={fileName}
+              onClose={() => setAnnotating(false)}
+            />
+          </Suspense>
         )}
         {error != null ? (
           <div className="file-viewer-error">{error}</div>

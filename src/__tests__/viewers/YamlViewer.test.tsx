@@ -637,8 +637,13 @@ describe("card view (#yaml-grid)", () => {
     await act(async () => {
       fireEvent.click(await screen.findByRole("button", { name: "Cards" }));
     });
+    // The card view is a lazily split chunk (perf plan §6): wait for it OUTSIDE
+    // an `act` scope — inside one, React holds the Suspense retry until the scope
+    // ends, so the grid never appears while a findBy inside it is polling. Its
+    // first import after `resetModules` is a fresh transform, hence the timeout.
+    const openDocument = await screen.findByRole("button", { name: "Open document" }, { timeout: 15_000 });
     await act(async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Open document" }));
+      fireEvent.click(openDocument);
     });
     await screen.findByLabelText("Value of port");
   }
