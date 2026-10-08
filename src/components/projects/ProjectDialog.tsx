@@ -1,5 +1,5 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
@@ -38,6 +38,7 @@ import { IS_WINDOWS, IS_MAC } from "../../lib/platform";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
+import { usePoll } from "../../lib/usePoll";
 
 /** OS-appropriate command to install git, used by the one-click "Install git"
  *  prompt shown when creating/importing a git-backed project on a machine with
@@ -413,13 +414,12 @@ export function ProjectDialog({
   // …and again while the install button's terminal is working, so the tier
   // appears in the dropdown the moment QEMU lands instead of after a reopen.
   // Only runs after that click, and stops as soon as the doctor is happy.
-  useEffect(() => {
-    if (!vmInstalling || vmDoctor?.ok) return;
-    const timer = window.setInterval(() => {
-      invoke<VmDoctorReport>("vm_doctor").then(setVmDoctor).catch(() => {});
-    }, 6000);
-    return () => window.clearInterval(timer);
-  }, [vmInstalling, vmDoctor?.ok]);
+  // With the window in front (`usePoll`); the install tab blurs nothing.
+  const recheckVmDoctor = useCallback(
+    () => invoke<VmDoctorReport>("vm_doctor").then(setVmDoctor).catch(() => {}),
+    [],
+  );
+  usePoll(recheckVmDoctor, 6000, { enabled: vmInstalling && !vmDoctor?.ok, immediate: false });
 
   // A clone import knows where its repository is hosted — so the Git hosting
   // field is filled from the repository itself rather than from a guess: the
