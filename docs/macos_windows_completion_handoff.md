@@ -793,3 +793,117 @@ and in a quiet full rerun, not this step's); `cargo clippy --all-targets -D
 warnings` ok; `npm run lint` 0 errors / 28 warnings; `scripts/brand-check.sh`
 ok; `scripts/privacy-check.sh` ok; `git diff --check` clean; Windows `cargo
 check` ok.
+
+## A6 — 3.7
+
+Commit: the one that carries this section — `git log -1 --format=%h -- docs/macos_windows_completion_handoff.md` on `osfix/a6` (one commit for the step).
+
+Per file:
+- `src-tauri/src/services/private_file.rs` (new) — pure cores
+  `classify_sid(authority, subs)` (Administrators S-1-5-32-544, SYSTEM
+  S-1-5-18, TrustedInstaller S-1-5-80-956008885-…, else `Other`),
+  `sid_string`, `windows_acl_is_locked(owner, Option<&[AceEntry]>)` (trusted
+  owner, a DACL present, no non-inherit-only allow ACE for `Other` with any
+  write right: write/append data, EA, delete child, attributes, `DELETE`,
+  `WRITE_DAC`, `WRITE_OWNER`, `GENERIC_ALL/WRITE`), `icacls_restrict_steps`.
+  `cfg(windows)`: `restrict_to_owner(path)` (user SID from the process token
+  → `icacls <p> /grant:r *<sid>:F /Q`, then `icacls <p> /inheritance:r /Q`;
+  failure → `eprintln!`, never an error) and `admin_locked(path)`
+  (canonicalize, regular file, `GetFileSecurityW` owner + DACL of the file
+  **and** its folder). Unparsed allow ACE types count as "anyone may write".
+- `src-tauri/src/services/win_links.rs` (new) — pure `mklink_junction_line`
+  (both paths quoted, `\\?\` dropped, `"` refused) + `cfg(windows)`
+  `make_junction`. Replaces the private copies in `commands/boxes.rs`
+  (`make_member_link`) and `services/brand_migration/state_dir.rs`
+  (`link_dir`'s fallback, a third copy the plan did not list).
+- `src-tauri/src/paths.rs` — `system_executable` Windows arm:
+  `windows_system_bin_dirs(ProgramFiles, SystemRoot)` = `Git\cmd`, `Git\bin`,
+  `System32\OpenSSH`, `System32\WindowsPowerShell\v1.0`, `System32`; file
+  `<bin>.exe` through `first_trusted_in` (now un-gated) with
+  `private_file::admin_locked`. `TRUSTED_HELPERS` gains `cmd`, `powershell`,
+  `icacls`. Test of the dir order.
+- `src-tauri/src/services/agent_install.rs` — `install_env_for(windows,
+  state_dir)` adds `USERPROFILE` (= install home) and `APPDATA`
+  (`<home>\AppData\Roaming`) on Windows; `bin_dirs_for(windows, …)` adds the
+  npm prefix root on Windows. `install_env_in`/`bin_dirs_in` keep their
+  signatures (`cfg!(windows)`). New test for both values.
+- `src-tauri/src/commands/agents.rs` — both Windows spawns (PowerShell,
+  `cmd /C`) and the `sh` one go through the new `into_install_home` (create
+  the home and the `APPDATA` stand-in, install env, `agent_install_path()`,
+  now un-gated).
+- `src-tauri/src/commands/project_transfer.rs` — Windows `make_symlink`:
+  target `/`→`\` (`windows_link_target`, tested), resolved against the
+  link's folder; a directory → `symlink_dir`, on os error 1314 a junction to
+  the canonicalized target; otherwise `symlink_file` as before.
+- `src-tauri/src/services/mail_crypt.rs` — `harden` calls
+  `restrict_to_owner` on Windows; the post-rename `harden` is Unix-only (the
+  rename keeps the temp file's ACL — one `icacls` pair per write, not two).
+- `src-tauri/src/services/mobile_control/store.rs` — `write_bytes_atomic`
+  restricts the temp file right after creating it, before any byte is
+  written; `ensure_private_file`'s non-Unix arm says why it stays `Ok(())`.
+- `src-tauri/src/storage.rs` — `write_json_file`'s private branch restricts
+  a file this call creates (not every rewrite: an `icacls` spawn per state
+  write would be too costly; mirrors the Unix create-mode semantics).
+- `src-tauri/src/services/mod.rs` — two module lines with comments.
+- `docs/filemap_backend.md` — rows for `private_file.rs` (next to
+  `mail_attach.rs`) and `win_links.rs`; `paths.rs` and `agent_install.rs`
+  rows updated.
+- `todo/group-h-crossplatform.md` — new `32r` with the four platform pairs.
+
+Choices where the plan left room:
+- **ACL read through the API, not `icacls` text.** `GetFileSecurityW`,
+  `GetSecurityDescriptorOwner/Dacl`, `GetAce` and the SID accessors are all
+  in the already-enabled `Win32_Security` feature (the plan's reason for
+  `icacls` was that `GetNamedSecurityInfoW` needs a new feature). `icacls`
+  prints localized principal names (`VORDEFINIERT\Administratoren`) and no
+  owner, so text parsing would fail closed on every non-English Windows and
+  could not check the owner at all. The pure core is a decision over
+  classified SIDs + masks instead of over text; tested with the stock
+  Program Files / System32 shapes. No new crate feature, no spawn per check,
+  no cache.
+- `restrict_to_owner` grants the user's **SID** (`*S-1-5-21-…`), not a
+  name, and grants before it drops inheritance, so a half-failure never
+  leaves an empty ACL (an unreadable key file would be an unopenable
+  mailbox).
+- `cmd`/`powershell`/`icacls` joined `TRUSTED_HELPERS` so the junction
+  helper, the installer spawns and `restrict_to_owner` itself get the
+  System32 copies instead of whatever `PATH` (with `~\.local\bin` first)
+  finds. Unix has no root-owned copies of those names → unchanged there.
+- Junction helper is its own `services::win_links` (plan's second option).
+- `LOCALAPPDATA` is not redirected (plan named only `USERPROFILE`/`APPDATA`):
+  installers that put launchers there would land in a dir `bin_dirs` does
+  not list.
+
+Gotchas:
+- The `cmd /C mklink /J "…"` line expands `%VAR%` inside the quotes (cmd
+  does that even quoted) — pre-existing in all three copies; a folder named
+  with two `%` around an existing variable name would get the wrong link.
+  Not fixed (no reliable `%` escape on a `cmd /C` line; a native
+  `FSCTL_SET_REPARSE_POINT` would be the fix).
+- An installer that asks the shell API (`SHGetKnownFolderPath`) for the
+  profile instead of reading the env still lands in the user's profile.
+- Windows `ssh` now prefers `System32\OpenSSH\ssh.exe` over a Git-for-Windows
+  or winget copy earlier on `PATH` (same rule as Linux preferring
+  `/usr/bin`); ssh-agent pairing differs between the two.
+- `cfg(windows)` code compiles (cross `cargo check`/`clippy`) but has never
+  run; the FFI (`TOKEN_USER` cast, `ACCESS_ALLOWED_ACE.SidStart`) is
+  read-verified only.
+- The threat model's #861 row (`docs/threat_model.md:31`) still describes
+  only Unix; not edited because the main checkout has uncommitted edits to
+  that file from another session.
+
+Gates: `npm run build` ok; `npm test` 730 files / 7527 tests, 2 failed (the
+known `MobileHeldPromptStore` pair); `cargo test` 3730 passed (+10);
+`cargo clippy --all-targets -D warnings` ok; `npm run lint` 0 errors / 28
+warnings; `scripts/brand-check.sh` ok; `scripts/privacy-check.sh` ok; `git
+diff --check` clean; Windows `cargo check` ok; Windows `cargo clippy` only
+the 14 pre-existing findings (A9's), none in this step's files.
+
+Flagged for user:
+- Nothing here has run on Windows: §6 Windows 4 and the `32r` manual line
+  are the first live checks (Codex install location, git status in a file
+  tree, the phone key file's ACL, a re-imported directory link).
+- The ACL check via the API instead of the plan's `icacls` parsing (see
+  Choices) — a deliberate deviation.
+- Threat-model row #861 wants a Windows sentence once the concurrent edit
+  to `docs/threat_model.md` lands.

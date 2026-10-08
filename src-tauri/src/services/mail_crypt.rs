@@ -547,7 +547,8 @@ fn write_key_file(dir: &Path, file: &MailKeyFile) -> Result<(), String> {
     write_bytes_atomic(&path, &json)
 }
 
-/// Write via a sibling temp file and rename, then `0600`.
+/// Write via a sibling temp file and rename, then `0600` (on Windows: the
+/// temp file is restricted to its owner, and the rename keeps that ACL).
 ///
 /// The mail store's own `write_json_atomic` analogue, kept here because this
 /// module must not depend on `storage` for one function and because what it
@@ -560,17 +561,25 @@ pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
     harden(&tmp, 0o600);
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
     harden(path, 0o600);
     Ok(())
 }
 
+/// Owner-only: `mode` on Unix, `private_file::restrict_to_owner` on Windows
+/// (which logs a failure; the file keeps the profile folder's ACL then).
 fn harden(path: &Path, mode: u32) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let _ = mode;
+        crate::services::private_file::restrict_to_owner(path);
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, mode);
     }

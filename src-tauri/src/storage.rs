@@ -42,9 +42,18 @@ where
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    #[cfg(not(unix))]
+    // Windows: like the Unix mode, only a file this call creates is
+    // restricted (an `icacls` run per write would cost a spawn each time).
+    #[cfg(windows)]
+    let created = private && !path.exists();
+    #[cfg(not(any(unix, windows)))]
     let _ = private;
-    opts.open(path)?.write_all(json.as_bytes())?;
+    let mut file = opts.open(path)?;
+    #[cfg(windows)]
+    if created {
+        crate::services::private_file::restrict_to_owner(path);
+    }
+    file.write_all(json.as_bytes())?;
     Ok(())
 }
 

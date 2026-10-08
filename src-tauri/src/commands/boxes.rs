@@ -456,32 +456,14 @@ fn remove_member_link(link: &Path) -> std::io::Result<()> {
     fs::remove_file(link)
 }
 
-/// Windows: a **directory junction** (`mklink /J`), not a symlink. Creating a
-/// symlink needs `SeCreateSymbolicLinkPrivilege` (or Developer Mode), which an
-/// ordinary account does not hold; a junction is a reparse point any user may
-/// create, and std treats it as a symlink for `is_symlink`, `read_link` and
-/// `remove_dir`. Agent CLIs launched in the box folder traverse it like any
-/// directory. The target is passed absolute and a missing one is accepted
-/// (a dangling junction, mirroring the Unix rule). Spawned through `cmd` because
-/// `mklink` is a shell builtin; the two paths are quoted verbatim and a Windows
-/// path can never contain `"`.
+/// Windows: a **directory junction** (`services::win_links`), not a symlink —
+/// a symlink needs a privilege an ordinary account does not hold. Agent CLIs
+/// launched in the box folder traverse it like any directory. The target is
+/// passed absolute and a missing one is accepted (a dangling junction,
+/// mirroring the Unix rule).
 #[cfg(windows)]
 fn make_member_link(target: &Path, link: &Path) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    let out = crate::paths::command_no_window("cmd")
-        .raw_arg(format!(
-            "/C mklink /J \"{}\" \"{}\"",
-            link.display(),
-            target.display()
-        ))
-        .output()?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(std::io::Error::other(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ))
-    }
+    crate::services::win_links::make_junction(target, link)
 }
 
 /// Windows: a junction is removed as an (empty) directory — that unlinks the

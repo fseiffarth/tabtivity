@@ -759,6 +759,44 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+    - [x] **32r — Windows installer home, trusted helpers, links, private
+      files** (2026-10-08, plan §3.7, ⚠️ never run on Windows). Manage CLIs
+      installs on Windows now get the install home, its env (plus
+      `USERPROFILE`/`APPDATA` inside it) and its launcher dirs on `PATH`
+      (npm's `<prefix>` root included), so they land under the state dir like
+      on Linux. `git`/`ssh`/`scp`/`sftp`/`cmd`/`powershell`/`icacls` come from
+      Program Files\Git, System32\OpenSSH, Windows PowerShell or System32 only
+      when the file and its folder are owned by Administrators/SYSTEM/
+      TrustedInstaller with no one else allowed to write (read with
+      `GetFileSecurityW`), else from `PATH` as before. A project import makes
+      directory links as directory symlinks, or junctions without the symlink
+      privilege; box links, the state-dir move and import share one junction
+      helper (`services::win_links`). Key/token/private state files are
+      restricted to the user (`services::private_file::restrict_to_owner`,
+      `icacls` grant then `/inheritance:r`).
+      - [x] 🤖 Automated test — `the_windows_installer_env_also_moves_the_profile_and_appdata`,
+        `windows_helpers_are_looked_up_in_the_admin_dirs_in_order`,
+        `a_stock_program_files_acl_is_locked`,
+        `any_write_right_for_another_principal_unlocks`,
+        `the_trusted_principals_are_told_apart_by_sid`,
+        `a_sid_is_spelled_like_windows_spells_it`,
+        `restricting_grants_before_it_drops_inheritance`,
+        `the_junction_line_quotes_both_paths_link_first`,
+        `an_archived_link_target_is_written_in_windows_spelling`
+      - [ ] 🖐️ Manual test — Windows: Manage CLIs → install Codex → it lands
+        under the state dir's `agents\install\npm`, not `%APPDATA%\npm`, and a
+        new Codex tab starts; a file tree in a git project still shows status
+        (git from Program Files\Git); after pairing a phone, `icacls` on the
+        control dir's key file lists only the user; import a project export
+        that holds a directory symlink → it is a link (or junction) again
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
     - [ ] **32z — deferred from the sweep** (each needs live hardware or a
       product call first):
       - X11 backend on any X11 session — mutates the WM workspace count and

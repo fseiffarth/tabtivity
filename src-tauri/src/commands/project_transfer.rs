@@ -1185,9 +1185,41 @@ fn make_symlink(target: &str, at: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, at)
 }
 
-#[cfg(not(unix))]
+/// Windows: a directory link or a file link by what the target is, judged
+/// against the link's own folder (a relative target is relative to it). An
+/// account without the symlink privilege (os error 1314,
+/// `ERROR_PRIVILEGE_NOT_HELD`) still gets a directory link, as a junction
+/// to the resolved target; a file link stays a reported gap. A target the
+/// archive spelled with `/` is written with `\`, which is what a relative
+/// Windows link needs to resolve.
+#[cfg(windows)]
 fn make_symlink(target: &str, at: &Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_file(target, at)
+    let target = windows_link_target(target);
+    let resolved = at.parent().map(|dir| dir.join(&target)).unwrap_or_else(|| PathBuf::from(&target));
+    if !resolved.is_dir() {
+        return std::os::windows::fs::symlink_file(&target, at);
+    }
+    match std::os::windows::fs::symlink_dir(&target, at) {
+        Err(e) if e.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+            let absolute = resolved.canonicalize().unwrap_or(resolved);
+            crate::services::win_links::make_junction(&absolute, at)
+        }
+        other => other,
+    }
+}
+
+#[cfg(windows)]
+const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+
+/// A link target from the archive in Windows spelling.
+#[cfg(any(windows, test))]
+fn windows_link_target(target: &str) -> String {
+    target.replace('/', "\\")
+}
+
+#[cfg(not(any(unix, windows)))]
+fn make_symlink(_target: &str, _at: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::other("no links on this platform"))
 }
 
 pub fn import_project_export_blocking(
@@ -1589,6 +1621,12 @@ mod tests {
             }),
             vec!["src/main.rs".to_string()]
         );
+    }
+
+    #[test]
+    fn an_archived_link_target_is_written_in_windows_spelling() {
+        assert_eq!(windows_link_target("../shared/data"), r"..\shared\data");
+        assert_eq!(windows_link_target(r"C:\abs\x"), r"C:\abs\x");
     }
 
     #[cfg(unix)]
