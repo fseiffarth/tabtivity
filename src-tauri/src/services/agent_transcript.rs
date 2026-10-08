@@ -726,7 +726,9 @@ fn read_transcript_in(
     limit: usize,
 ) -> Option<AgentTranscript> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
+    // The agent writes its transcript: never a link, a FIFO or another special
+    // file (threat model gap 29).
+    let mut file = crate::services::home_io::open_regular(path)?;
     let meta = file.metadata().ok()?;
     let mut current = fingerprint(&meta);
     // A subagent's `.meta.json` can land after the call that spawned it was
@@ -1011,11 +1013,9 @@ fn claude_spawned(folder: &Path) -> std::collections::HashMap<String, ClaudeSpaw
         else {
             continue;
         };
-        // A few hundred bytes; anything much larger is not Claude's.
-        if std::fs::metadata(&path).map_or(true, |meta| meta.len() > 64 * 1024) {
-            continue;
-        }
-        let Some(meta) = std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()) else {
+        // A few hundred bytes; anything past a record's cap is not Claude's.
+        // Agent-written: never a link or a FIFO (gap 29).
+        let Some(meta) = crate::services::home_io::read_record(&path).and_then(|text| serde_json::from_str::<Value>(&text).ok()) else {
             continue;
         };
         let text = |key: &str| meta.get(key).and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_string);
@@ -2575,5 +2575,31 @@ mod tests {
         // the fresh, empty chat the session itself would be.
         let read = agent_session_transcript("claude", None, None, None, "0f5f9b7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b", Some(&subagent_token("x")), None, 5);
         assert_eq!(read.reason.as_deref(), Some("no_subagent"));
+    }
+
+    /// Gap 29: the phone's transcript read and the subagent `.meta.json`
+    /// scan are agent-written files. A planted FIFO reads as nothing without
+    /// blocking, and a linked `.meta.json` is not followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_transcript_or_subagent_meta_reads_as_nothing_without_blocking() {
+        use crate::services::home_io::{mkfifo, within_deadline};
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("s.jsonl");
+        mkfifo(&main);
+        let at = main.clone();
+        let read = within_deadline(move || read_transcript_in(&at, TranscriptKind::Claude, &Spawns::None, false, None, DEFAULT_LIMIT).is_none());
+        assert!(read, "a FIFO is not a transcript");
+
+        let folder = dir.path().join("subagents");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("agent-a.meta.json"), r#"{"toolUseId":"toolu_A"}"#).unwrap();
+        let outside = dir.path().join("outside.json");
+        std::fs::write(&outside, r#"{"toolUseId":"toolu_L"}"#).unwrap();
+        std::os::unix::fs::symlink(&outside, folder.join("agent-l.meta.json")).unwrap();
+        mkfifo(&folder.join("agent-f.meta.json"));
+        let at = folder.clone();
+        let spawned = within_deadline(move || claude_spawned(&at).into_keys().collect::<Vec<_>>());
+        assert_eq!(spawned, vec!["toolu_A".to_string()]);
     }
 }

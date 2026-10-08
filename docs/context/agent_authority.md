@@ -225,9 +225,12 @@ config) is agent-written and treated as attacker-controlled, as before.
 **Agent-written files are read and set up without trusting the path.** A
 plain read blocks forever on a FIFO, so every small record the host reads
 out of agent reach — the live-session slice, `.git/commondir` and the `.git`
-pointer, Vibe's `meta.json`, transcript tails, Codex's rollout heads — goes
-through `home_io::open_regular` / `read_record` (`O_NOFOLLOW | O_NONBLOCK`,
-a regular file on the opened inode, records capped at 64 KiB; gap 29). The
+pointer, Vibe's `meta.json`, transcript tails (including the phone's
+transcript and changes reads, and Claude's subagent `.meta.json`), Codex's
+rollout heads — goes through `home_io::open_regular` / `read_record`
+(`O_NOFOLLOW | O_NONBLOCK`, a regular file on the opened inode, records
+capped at 64 KiB; Vibe's `meta.json`, which embeds the system prompt and
+tool schemas, at 16 MiB; gap 29). The
 local-model home `<state_dir>/vibe_local/<model>` is writable to every
 running tab of that model, so its read-only control paths (`config.toml`,
 `hooks.toml`, `.env`, `AGENTS.md`, the tool/plugin/skill/agent/prompt

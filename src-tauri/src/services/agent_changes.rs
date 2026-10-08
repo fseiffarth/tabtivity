@@ -214,7 +214,9 @@ pub enum Store {
 /// changes in it. `None` only when the file cannot be read.
 pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usize) -> Option<AgentChanges> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
+    // The agent writes its transcript: never a link, a FIFO or another special
+    // file (threat model gap 29).
+    let mut file = crate::services::home_io::open_regular(path)?;
     let meta = file.metadata().ok()?;
     let current = agent_transcript::fingerprint(&meta);
     if version == Some(current.as_str()) {
@@ -586,5 +588,24 @@ mod tests {
         let read = read_changes(&path, Store::Claude, None, 2).unwrap();
         assert!(read.truncated);
         assert_eq!(read.changes.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(), vec!["/p/3", "/p/4"]);
+    }
+
+    /// Gap 29: the transcript is agent-written; a planted FIFO or a link reads
+    /// as nothing, without blocking.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_linked_transcript_reads_as_nothing_without_blocking() {
+        use crate::services::home_io::{mkfifo, within_deadline};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        mkfifo(&path);
+        let at = path.clone();
+        assert!(within_deadline(move || read_changes(&at, Store::Claude, None, DEFAULT_LIMIT).is_none()));
+        std::fs::remove_file(&path).unwrap();
+        let outside = dir.path().join("outside.jsonl");
+        std::fs::write(&outside, "").unwrap();
+        std::os::unix::fs::symlink(&outside, &path).unwrap();
+        assert!(read_changes(&path, Store::Claude, None, DEFAULT_LIMIT).is_none());
+        assert!(read_changes(&outside, Store::Claude, None, DEFAULT_LIMIT).is_some());
     }
 }
