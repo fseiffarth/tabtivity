@@ -303,13 +303,16 @@ mod win {
                 let inherit_only = header.AceFlags & INHERIT_ONLY_ACE != 0;
                 let entry = match header.AceType {
                     ACCESS_ALLOWED_ACE_TYPE | ACCESS_DENIED_ACE_TYPE => {
-                        let body = &*(ace as *const ACCESS_ALLOWED_ACE);
-                        let sid = PSID(std::ptr::addr_of!(body.SidStart) as *mut _);
+                        // The SID runs past the struct's one-`u32` `SidStart`,
+                        // so its pointer comes from the raw ACE pointer, not
+                        // from a reference that covers the struct alone.
+                        let body = ace as *const ACCESS_ALLOWED_ACE;
+                        let sid = PSID(std::ptr::addr_of!((*body).SidStart) as *mut _);
                         let (authority, subs) = sid_parts(sid)?;
                         AceEntry {
                             allow: header.AceType == ACCESS_ALLOWED_ACE_TYPE,
                             who: classify_sid(authority, &subs),
-                            mask: body.Mask,
+                            mask: (*body).Mask,
                             inherit_only,
                         }
                     }

@@ -13,11 +13,18 @@ use std::path::Path;
 /// The `cmd` line that makes a junction at `at` leading to `target`: both
 /// paths quoted verbatim (`mklink` is a `cmd` builtin and takes no argv) with
 /// a `\\?\` prefix dropped, which `mklink` would store as part of the
-/// target. A path holding a `"` is refused — Windows never allows one in a
-/// name, so it can only be a malformed or hostile string.
+/// target. The verbatim UNC form `\\?\UNC\srv\share` (what `canonicalize`
+/// returns on a mapped network drive) becomes `\\srv\share` — dropping only
+/// `\\?\` would leave the relative `UNC\srv\share`, which `mklink` resolves
+/// against its working directory. A path holding a `"` is refused — Windows
+/// never allows one in a name, so it can only be a malformed or hostile
+/// string.
 pub fn mklink_junction_line(target: &Path, at: &Path) -> Result<String, String> {
     let plain = |p: &Path| {
         let s = p.to_string_lossy();
+        if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{unc}");
+        }
         s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
     };
     let (target, at) = (plain(target), plain(at));
@@ -74,5 +81,18 @@ mod tests {
         assert_eq!(line, r#"/C mklink /J "C:\b\m" "C:\work\m""#);
         assert!(mklink_junction_line(Path::new("C:\\a\" & calc \""), Path::new(r"C:\b")).is_err());
         assert!(mklink_junction_line(Path::new(r"C:\a"), Path::new("C:\\b\"")).is_err());
+    }
+
+    #[test]
+    fn a_verbatim_unc_path_keeps_its_leading_backslashes() {
+        let line = mklink_junction_line(
+            Path::new(r"\\?\UNC\srv\share\proj\data"),
+            Path::new(r"\\?\UNC\srv\share\proj\link"),
+        )
+        .unwrap();
+        assert_eq!(
+            line,
+            r#"/C mklink /J "\\srv\share\proj\link" "\\srv\share\proj\data""#
+        );
     }
 }

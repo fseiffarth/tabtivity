@@ -1070,21 +1070,30 @@ fn should_retry_npm_install(spec: &AgentSpec, output: &str) -> bool {
 
 /// Build the `npm uninstall -g <pkg>` process for the host OS (same shell
 /// choice as the npm branch of `installer_command`: `cmd /C` on Windows, `sh -c`
-/// elsewhere).
-fn npm_uninstall_command(pkg: &str) -> std::process::Command {
+/// elsewhere). A CLI Tabtivity installed is removed from its install home's
+/// npm prefix (the installer's own environment); `npm -g` there would
+/// otherwise mean the user's prefix, missing the copy that was found.
+fn npm_uninstall_command(
+    pkg: &str,
+    in_install_home: bool,
+) -> Result<std::process::Command, String> {
     #[cfg(windows)]
-    {
+    let mut c = {
         use std::os::windows::process::CommandExt;
         let mut c = crate::paths::command_no_window("cmd");
         c.raw_arg(format!("/C npm uninstall -g {pkg} 2>&1"));
         c
-    }
+    };
     #[cfg(not(windows))]
-    {
+    let mut c = {
         let mut c = crate::paths::command_no_window("sh");
         c.arg("-c").arg(format!("npm uninstall -g {pkg} 2>&1"));
         c
+    };
+    if in_install_home {
+        into_install_home(&mut c)?;
     }
+    Ok(c)
 }
 
 /// Remove an installed agent CLI so it can be cleanly reinstalled — the
@@ -1109,10 +1118,11 @@ pub async fn uninstall_agent(id: String) -> Result<String, String> {
     };
 
     if let Some(pkg) = npm_package_from_cmd(cmd_for_platform) {
-        if !spec_is_installed(spec) {
+        let Some(found) = resolve_spec_path(spec) else {
             return Ok(format!("{} is not installed.", spec.label));
-        }
-        let out = run_capture(npm_uninstall_command(pkg)).map_err(|e| {
+        };
+        let in_install_home = crate::services::agent_install::owns_path(&found);
+        let out = run_capture(npm_uninstall_command(pkg, in_install_home)?).map_err(|e| {
             if is_permission_error(&e) {
                 format!(
                     "Permission denied — this machine's npm global directory needs \

@@ -907,3 +907,75 @@ Flagged for user:
   Choices) — a deliberate deviation.
 - Threat-model row #861 wants a Windows sentence once the concurrent edit
   to `docs/threat_model.md` lands.
+
+### Reviewer
+
+Read-verified against the Win32 contracts (nothing here can run on
+Windows): `classify_sid` (S-1-5-18, S-1-5-32-544, the TrustedInstaller
+S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464 all
+correct); `WRITE_RIGHTS` covers write/append data, EA, delete child,
+attributes, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`, `GENERIC_ALL/WRITE` and
+does not overlap a stock `(RX)` = `0x1200A9`; NULL/absent DACL, owner-less
+descriptor, unreadable file, unknown allow-ACE type and every API failure
+all end in "not locked"; deny ACEs never unlock; inherited ACEs count,
+inherit-only ones are skipped. Stock `System32\cmd.exe`/`icacls.exe`, the
+`System32` folder and a per-machine `Program Files\Git\cmd` all pass the
+rule. Buffers are sized by the first call and outlive every pointer into
+them; the token handle is closed on every path. `icacls` order (grant the
+user SID, then `/inheritance:r`) and the `*S-1-…` spelling are right; std
+quotes the path argument. Installer env keeps `USERPROFILE`/`APPDATA`
+inside the install home. Unix behaviour unchanged (the three new
+`TRUSTED_HELPERS` names have no root-owned copy there and are never spawned
+there).
+
+Fixes (one commit, `fix(windows): ...` after 02da4361):
+- `win_links::mklink_junction_line` turned the verbatim UNC form
+  `\\?\UNC\srv\share\x` (what `canonicalize` returns on a mapped network
+  drive, and what `make_symlink`'s junction fallback passes) into the
+  *relative* `UNC\srv\share\x`, which `mklink /J` resolves against `cmd`'s
+  working directory — a junction to the wrong place. Now `\\srv\share\x`
+  (mklink then refuses a non-local target loudly). Test
+  `a_verbatim_unc_path_keeps_its_leading_backslashes`.
+- Remove of an npm-installed CLI (`uninstall_agent` → `npm uninstall -g`)
+  ran without the install home's environment, so `-g` meant the user's own
+  npm prefix: a CLI Tabtivity installed into its home (Unix since the
+  install home landed; Windows new with this step) was not removed ("still
+  detected") and a same-named copy in the user's prefix would have been.
+  Now the uninstall gets `into_install_home` when the detected binary lies
+  in the install home (`agent_install::owns_path{,_in}`, factored out of
+  `owns_command_in`); a host-installed CLI is uninstalled as before. Test
+  extends `a_command_is_owned_only_when_it_resolves_inside_the_install_tree`.
+- `private_file::win::read_security` took the ACE's SID pointer from a
+  reference to `ACCESS_ALLOWED_ACE`, whose provenance covers only the
+  struct's one-`u32` `SidStart`, then read the SID past it; now from the raw
+  ACE pointer. No behaviour change; Windows `cargo check`/`clippy` only.
+
+Flagged for user:
+- `uninstall_agent` still runs `npm uninstall -g` against the user's own npm
+  prefix for a CLI the user installed on the host (pre-existing). That edits
+  another app's paths at the user's request; whether Remove should do that
+  at all is a product call.
+- `cmd /C` (junctions, installers, npm uninstall) runs without `/D`, so a
+  `HKCU\Software\Microsoft\Command Processor\AutoRun` entry runs first and
+  can change the cwd or print into captured output. Only reachable with
+  user-level registry write; `/D` would make the spawns deterministic.
+- `admin_locked` checks the canonical file's folder, like the Unix
+  `root_owned_file`, not the lookup dir itself; a user-writable lookup dir
+  holding a link to a locked file would pass. Needs the symlink privilege or
+  a junction on the dir, and Program Files / System32 are not user-writable
+  on a stock install.
+- `make_symlink` now probes the archive's link target (`is_dir`) during
+  import; a UNC target makes Windows open an SMB session to that host with
+  the user's credentials. Anything walking the link later does the same
+  (pre-existing), but the probe moves it to import time.
+- `mobile_control::store::write_bytes_atomic` spawns two `icacls` per write
+  (cost, not correctness).
+
+Gates (reviewer, 2026-10-08): `npm run build` ok; `npm test` 730 files /
+7527 tests, 2 failed (the known `MobileHeldPromptStore` pair; a first run
+under load average ~28 had 39 timing failures, the rerun only the pair);
+`cargo test` 3731 passed (+1); `cargo clippy --all-targets -D warnings` ok;
+`npm run lint` 0 errors / 28 warnings; `scripts/brand-check.sh`,
+`scripts/privacy-check.sh` ok; `git diff --check` clean; Windows `cargo
+check` ok; Windows `cargo clippy` the 14 pre-existing findings (A9's), none
+new.

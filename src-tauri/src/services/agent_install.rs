@@ -106,22 +106,29 @@ pub fn bin_dirs() -> Vec<PathBuf> {
 /// Whether `cmd`, as found on `search_dirs`, is a CLI Tabtivity installed. Pure
 /// over the filesystem.
 pub fn owns_command_in(state_dir: &Path, cmd: &str, search_dirs: &[PathBuf]) -> bool {
-    let root = install_root_in(state_dir);
     let found = if cmd.contains('/') {
         Some(PathBuf::from(cmd))
     } else {
         search_dirs.iter().map(|d| d.join(cmd)).find(|c| c.is_file())
     };
-    let Some(found) = found else {
-        return false;
-    };
-    let real = found.canonicalize().unwrap_or(found.clone());
+    found.is_some_and(|found| owns_path_in(state_dir, &found))
+}
+
+/// Whether `path` (as found, or after resolving links) lies in the install
+/// home. Pure over the filesystem.
+pub fn owns_path_in(state_dir: &Path, path: &Path) -> bool {
+    let root = install_root_in(state_dir);
+    let real = path.canonicalize().unwrap_or(path.to_path_buf());
     let root_real = root.canonicalize().unwrap_or(root.clone());
-    found.starts_with(&root) || real.starts_with(&root_real)
+    path.starts_with(&root) || real.starts_with(&root_real)
 }
 
 pub fn owns_command(cmd: &str, search_dirs: &[PathBuf]) -> bool {
     owns_command_in(&storage::state_dir(), cmd, search_dirs)
+}
+
+pub fn owns_path(path: &Path) -> bool {
+    owns_path_in(&storage::state_dir(), path)
 }
 
 /// The install tree, read-only inside every fence (only when it exists: a
@@ -239,6 +246,9 @@ mod tests {
         assert!(!owns_command_in(state, "codex", &dirs));
         assert!(!owns_command_in(state, "missing", &dirs));
         assert!(owns_command_in(state, &owned_bin.join("claude").to_string_lossy(), &[]));
+        // A resolved path (the npm uninstall picks its prefix by this).
+        assert!(owns_path_in(state, &owned_bin.join("claude")));
+        assert!(!owns_path_in(state, &host_bin.join("codex")));
     }
 
     #[test]
