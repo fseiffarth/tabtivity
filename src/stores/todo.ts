@@ -296,19 +296,41 @@ export const useTodoStore = create<TodoStore>((set, get) => ({
 const URGENT_MAIL_TICK_MS = 60_000;
 
 let urgentMailRefs = 0;
+/** Retainers that read the rows for a surface outside this window — the phone's
+ *  Alerts screen (`MobileBridgeHost` → `useAlertsFeed({ ignoreVisibility })`).
+ *  While any is held the backstop tick keeps running unfocused: the user is on
+ *  the phone exactly when this window is blurred, and the phone has no focus of
+ *  its own to catch up on. */
+let urgentMailUnfocusedRefs = 0;
 let urgentMailPoll: Poll | null = null;
 let urgentMailUnsub: (() => void) | null = null;
 
-/** Join (or start) the shared poll. Pair with {@link releaseUrgentMailPoll}. */
-export function retainUrgentMailPoll(): void {
-  urgentMailRefs += 1;
-  if (urgentMailRefs > 1) return; // another surface already drives the poll
-  void useTodoStore.getState().loadUrgentMail();
-  // The backstop tick stops while the window is blurred or hidden and catches
-  // up on return (`lib/usePoll`); arrivals still re-read below.
+/** (Re)arm the backstop tick: quiesced (stops while this window is blurred or
+ *  hidden, catches up on return — `lib/usePoll`) unless a retainer serves the
+ *  phone. The caller has just read, so the first tick is one interval out. */
+function armUrgentMailTick(): void {
+  urgentMailPoll?.stop();
   urgentMailPoll = startPoll(() => useTodoStore.getState().loadUrgentMail(), URGENT_MAIL_TICK_MS, {
     immediate: false,
+    quiesce: urgentMailUnfocusedRefs === 0,
   });
+}
+
+/** Join (or start) the shared poll. Pair with {@link releaseUrgentMailPoll},
+ *  passing the same `unfocused`. `unfocused`: this retainer feeds a surface
+ *  outside this window (the phone), so the tick must not stop on blur. */
+export function retainUrgentMailPoll(unfocused = false): void {
+  urgentMailRefs += 1;
+  if (unfocused) urgentMailUnfocusedRefs += 1;
+  if (urgentMailRefs > 1) {
+    // Another surface already drives the poll; the first phone retainer turns
+    // its quiescing off.
+    if (unfocused && urgentMailUnfocusedRefs === 1) armUrgentMailTick();
+    return;
+  }
+  void useTodoStore.getState().loadUrgentMail();
+  // Arrivals still re-read below whatever the tick does.
+  armUrgentMailTick();
   // `newCount` is the arrival signal (the `mail:new` listener itself belongs to
   // `MailIndicator`, mounted once per window). Re-reading on it lives HERE, once,
   // rather than in each consumer's effect deps, where a delivery re-fired the
@@ -324,11 +346,17 @@ export function retainUrgentMailPoll(): void {
 /** Drop one subscriber; the poll stops when the last one leaves. The last
  *  reading is deliberately kept (`hostSessions`' rule): an emptied rail would
  *  read as "nothing urgent", which is a different and possibly wrong claim. */
-export function releaseUrgentMailPoll(): void {
+export function releaseUrgentMailPoll(unfocused = false): void {
   urgentMailRefs = Math.max(0, urgentMailRefs - 1);
-  if (urgentMailRefs > 0) return;
+  if (unfocused) urgentMailUnfocusedRefs = Math.max(0, urgentMailUnfocusedRefs - 1);
+  if (urgentMailRefs > 0) {
+    // The last phone retainer left: the remaining surfaces quiesce again.
+    if (unfocused && urgentMailUnfocusedRefs === 0) armUrgentMailTick();
+    return;
+  }
   urgentMailPoll?.stop();
   urgentMailPoll = null;
+  urgentMailUnfocusedRefs = 0;
   urgentMailUnsub?.();
   urgentMailUnsub = null;
 }
