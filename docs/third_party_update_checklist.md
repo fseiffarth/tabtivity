@@ -336,6 +336,31 @@ aliases, and anything about where or how credentials are stored.
 
 **Assumes**
 
+- **0.161.0 (2026-10-07), live but outside Tabtivity** — the GitHub release's
+  musl build (npm's linux-x64 tarball was not served yet) run in a private
+  tmux with its own `CODEX_HOME`, inside a fenced agent tab, `--no-daemon`.
+  `--version` prints `codex-cli 0.161.0`; `resume [SESSION_ID]`,
+  `exec --skip-git-repo-check`, `--no-daemon`, `--oss`, `-m`, `-c` stand and
+  `-a` still takes `on-request | never`. Verified live and fed to the parsers
+  as captured: the approval menu (same three labels as 0.159.2, `›` on row 1,
+  `looksLikeDecisionPrompt` true, `readSelectPrompt` reads all three) and its
+  title frames `[ ! ]`/`[ . ] Action Required | <action> | <dir>`; both
+  `/model` steps (heading, two blank lines, rows from 1, row 5
+  `More reasoning…`, footer `enter default · s session · esc back`); the mode
+  line — CSI-u Shift+Tab (and tmux's backtab) toggles the silent default and
+  `Plan mode`, which `sessionStatus` / `currentMode` read as `working` and
+  `plan`; the rollout's first line `session_meta` with `session_id` and `cwd`,
+  then `turn_context.model` and user prompts as `response_item` user messages
+  (no `event_msg` `user_message`, as since 0.158.0). Hook events unchanged
+  (`PreToolUse` … `Interrupt`, `UserPromptSubmit`, `Stop`; still no
+  `Notification`). The writer lock is markers only (`active writer`,
+  `thread-writer-locks`); its lifecycle was last probed on 0.154.0. The
+  installed 0.160.1 matched 0.159.3 on the same binary markers and rollouts.
+  New: the TUI runs shell commands through a sibling `codex-code-mode-host`
+  and fails closed ("host executable is missing") without it. The standalone
+  package ships it in `bin/` next to `codex`, a directory the fence already
+  binds because it is on the binary's symlink chain; keep it that way if the
+  binding is ever narrowed to the one file.
 - **0.159.3 (2026-10-01), binary and rollout check** — the installed standalone
   CLI prints `codex-cli 0.159.3`. Its help still accepts `resume [SESSION_ID]`,
   `exec --skip-git-repo-check`, `--no-daemon`, `--oss`, `-m` and `-c`.
@@ -424,7 +449,7 @@ aliases, and anything about where or how credentials are stored.
 - Preface commands `/new /compact /status`; `/status` is *not* available in
   exec mode, so there is no usage recipe.
 - The decision lamp reads Codex's screen off the PTY, and two habits of its
-  ratatui TUI are load-bearing (verified against 0.153.0; 0.157.0 by strings):
+  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.161.0):
   - **A blocked Codex is not a quiet Codex.** It keeps repainting its terminal
     title on a ~100ms timer — a braille frame while working, and while blocked
     an `ESC ] 0 ; [ ! ] Action Required BEL` alternating with `[ . ]`. Those
@@ -448,8 +473,9 @@ aliases, and anything about where or how credentials are stored.
     `agentPrompt.ts` matches the first word of each option; renaming the
     options away from yes/no/allow/cancel wording is what would break it.
 - Mobile: modes `working (silent) | plan | read only | auto | full access`;
-  Shift+Tab is sent as CSI-u. Verified against codex-cli 0.151.0 (0.157.0 by
-  strings).
+  Shift+Tab is sent as CSI-u. Verified against codex-cli 0.151.0; live on
+  0.161.0, where Shift+Tab toggles only the silent default and plan (the
+  other three are not on its cycle).
 - Mobile's model sheet reads `/model` off the screen, and Codex answers it in
   **two steps** — `Select Model and Effort`, then `Select Reasoning Level for
   <model>` (whose row 5, "More reasoning…", opens a third). Each step is a
@@ -457,7 +483,7 @@ aliases, and anything about where or how credentials are stored.
   the highlight marked `›`; the sheet holds until a *different* list is drawn
   and closes when none is. Renumbering, dropping the heading, or drawing the
   next step without clearing the previous one is what would break it. Verified
-  against codex-cli 0.153.4 and live against 0.159.2, whose reasoning step's
+  against codex-cli 0.153.4 and live against 0.159.2 and 0.161.0, whose reasoning step's
   footer reads `enter default · s session · esc back`: the Enter the sheet
   sends saves the pick as the default, `s` would keep it to the session.
 

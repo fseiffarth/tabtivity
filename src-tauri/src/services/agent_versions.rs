@@ -66,7 +66,7 @@ pub const PROBE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const VERSION_ARGV: &[(&str, &[&str])] = &[
     // "2.1.284 (Claude Code)"
     ("claude", &["--version"]),
-    // "codex-cli 0.159.3"
+    // "codex-cli 0.161.0"
     ("codex", &["--version"]),
     // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
@@ -117,22 +117,22 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "codex",
-        version: "0.159.3",
+        version: "0.161.0",
         surface: "§1.2 — mobile mode lines and Shift+Tab (agentModes.ts)",
     },
     Verified {
         agent: "codex",
-        version: "0.159.3",
+        version: "0.161.0",
         surface: "§1.2 — decision lamp: title repaints, numbered approval rows",
     },
     Verified {
         agent: "codex",
-        version: "0.159.3",
+        version: "0.161.0",
         surface: "§1.2 — the two-step /model sheet read off the screen",
     },
     Verified {
         agent: "codex",
-        version: "0.159.3",
+        version: "0.161.0",
         surface: "§1.2 — resume writer-lock markers (lifecycle last probed on 0.154.0)",
     },
     Verified {
@@ -794,13 +794,13 @@ mod tests {
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
-        let (state, stale) = drift("codex", Some("0.159.3"));
+        let (state, stale) = drift("codex", Some("0.161.0"));
         assert_eq!(state, DriftState::Match);
         assert!(stale.is_empty());
-        let (state, stale) = drift("codex", Some("0.159.4"));
+        let (state, stale) = drift("codex", Some("0.161.1"));
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
-        assert!(stale.iter().all(|note| note.version == "0.159.3" && note.direction == Direction::Newer));
+        assert!(stale.iter().all(|note| note.version == "0.161.0" && note.direction == Direction::Newer));
     }
 
     #[test]

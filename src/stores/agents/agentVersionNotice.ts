@@ -47,7 +47,7 @@ export interface NewerAgentVersion {
 // stops showing its old backend's card when the frontend hot-reloads.
 const FRONTEND_VERIFIED: Readonly<Record<string, string>> = {
   claude: "2.1.292",
-  codex: "0.159.3",
+  codex: "0.161.0",
 };
 
 interface AgentVersionNoticeStore {
