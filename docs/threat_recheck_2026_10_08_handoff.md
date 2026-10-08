@@ -251,3 +251,70 @@ for the targeted test build). `serde_json::json!` accepts
   a planted `env`, open the shell tab, check `env` in it; type `claude` in a
   shell tab of a layout carrying `TABTIVITY_HOST_SESSION=1` and check it
   runs fenced.
+
+## Agent step 2 — reviewer
+
+**Range reviewed:** `9baa2945..05781677` (code `7677ff7f`).
+
+**Traced, no bug found:**
+- Untrusted doors: `.tabtivityproj` import (`project_transfer.rs` →
+  `adopt_untrusted_session`), folder adoption (`adopt_folder_tab_layout` →
+  `adopt_project_tree_session`), `migrate_project_sessions_once`. All three
+  run `sanitize_untrusted_layout`; `read_project_tree_session` has no other
+  caller. The frontend only ever sees the stored (sanitized) copy, via
+  `load_tab_session`/`workspace_snapshot`/`project-runtime-switched`; no tab
+  layout is kept in browser storage; popouts get tabs from the main window.
+  `tab_groups` carries no tab specs.
+- Headless owner: every `launch_options` caller (create, reopen, undo-clear
+  relaunch) filters; `prepare` strips control variables for both `pty_spawn`
+  and the headless spawner.
+- Tabtivity-inserted variables: every control-variable insert (`TAB_AGENT`
+  in `agent_session`, MCP tokens/URLs in `root_mcp::grant_lanes`, key
+  carriers, `HOST_SESSION`, `AGENT_FENCE`, the macOS/Windows `home_env`) runs
+  after the strip in `prepare`. The frontend's fresh-spawn env
+  (`buildStaticTabSpec`, sign-in, cloud, local-model, Run tab, custom agent
+  `item.env`) sets no denylisted key except what a custom agent's settings
+  name, which the exception keeps.
+- `restoreSavedTab` TAB_UID: every creator sets `TAB_UID = sessionId`
+  (`newTabItems.ts`, `localTabSpec.ts`, headless `tab_record`,
+  `duplicateSpec` swaps both); non-resumable and `localLaunch` tabs have no
+  `sessionId` and are untouched.
+
+**Finding 1 (fixed, `07868c59`):** the filters matched names exactly, but
+Windows environment names are case-insensitive — `portable_pty` lowercases
+the key on Windows (`EnvEntry::map_key`), so a persisted `Path` replaced the
+`PATH` Tabtivity set, and a lower-case `tabtivity_host_session` /
+`tabtivity_scope` survived `strip_control_env` (for `SCOPE`, which of the two
+entries won then depended on `HashMap` order). `persisted_env_denied` and
+`is_control_env` now upper-case the key first (legacy prefix too). Also
+added the Windows counterparts of listed entries to the persisted denylist:
+`PATHEXT`, `COMSPEC`, `PSMODULEPATH`, `USERPROFILE`, `APPDATA`,
+`LOCALAPPDATA` (`USERPROFILE` is one of the `home_env` keys applied with
+`or_insert`, so a persisted one would have won on Windows).
+Tests: `terminal_service::a_persisted_env_is_matched_in_any_letter_case`,
+`launch_prep::a_planted_control_variable_in_another_letter_case_is_dropped`.
+
+**Gates (at `07868c59`):** `npm run build` ok; `npm test` 735 files / 7556
+tests passed; `cargo test -q` 3743 passed, 3 ignored, 0 failed; `npm run
+lint` 0 errors, 28 advisory warnings (unchanged); `cargo clippy
+--all-targets -D warnings` clean; `scripts/brand-check.sh` ok; `git diff
+--check` clean; `scripts/privacy-check.sh` clean. `npm run backend:stale`
+not run (main agent at landing).
+
+**Flagged for user:**
+- `workspace_sync` answers with the stored tabs raw (no load sanitizer) and
+  its patch ops carry other clients' tabs. Today every writer is a window
+  (already sanitized), the headless owner (Tabtivity-built record) or
+  `reopen_tab_in` (a closed record, only reached with no window), so no
+  untrusted tab gets through; it is a load path the denylist does not cover
+  if a new writer appears.
+- Agree with the implementer's headless `TAB_UID` note: an adopted agent
+  tab's state-dir record has no `TAB_UID` until a window restores and saves
+  it. The headless paths that relaunch a stored record (reopen of a closed
+  tab, undo-clear relaunch of a live one) only meet records a window or the
+  owner already wrote, so it is unreached in practice; mirroring the
+  `restoreSavedTab` rebuild in `launch_options` would close it.
+- On macOS/Windows/Host session `home_env` keys are applied with
+  `or_insert`, so a persisted `CARGO_HOME`, `RUSTUP_HOME` or `DOCKER_CONFIG`
+  in a state-dir layout still wins over the user's. Not on the denylist
+  (the user may set them for a shell tab); state-dir only.
