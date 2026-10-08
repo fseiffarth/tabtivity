@@ -1316,3 +1316,76 @@ failed (the known `MobileHeldPromptStore` pair); `cargo test` 3737 passed
 28 warnings; brand-check ok; privacy-check ok; `git diff --check` clean;
 Windows `cargo check --tests` ok; Windows clippy the 14 pre-existing (A9's),
 none in this step's files.
+
+## A9 — 3.12
+
+Range: `8b1d9f73..` the commit that carries this section on `osfix/a9`
+(`git log -1 --format=%h -- docs/macos_windows_completion_handoff.md`; one
+commit for the step).
+
+Per file (all lint-only; no behaviour change on any platform):
+- `.github/workflows/ci-cd.yml` — `test-windows`: `components: clippy` on
+  Setup Rust and a final `Lint backend (clippy, staged)` step,
+  `continue-on-error: true`, the same command as macOS. The macOS step's
+  comment now says its arms were linted locally through stand-ins (it stays
+  staged, decision 9).
+- Windows findings (14, all fixed as clippy suggested):
+  `commands/apps.rs` (`needless_return` in `list_installed_apps`,
+  `sort_by_key`, four `map_or(false, …)` → `is_some_and`, `BI_RGB.0 as u32`),
+  `commands/screenshot.rs` (`BI_RGB.0 as u32`), `commands/network.rs`
+  (elided lifetimes on the Windows `rows` helper), `platform/windows.rs`
+  (`impl Default for WindowsBackend` → `new()`, `is_some_and`),
+  `platform/mod.rs` and `services/vm.rs` (`needless_return`),
+  `services/project_runtime.rs` (redundant closure → the fn path; this one
+  was shared with macOS).
+- macOS findings (A7's 12 were 10 lib + 2 test-only after the shared ones;
+  all fixed): `apps.rs` (`needless_return`, `read_dir(root)`, `get(key)`,
+  the macOS `sort_by_key`), `screenshot.rs` (unused `Command` import),
+  `subwindow.rs` and `lib.rs` (`ns as *mut c_void` same-type cast → pass
+  `ns_window_id` directly), `platform/mod.rs` and `vm.rs` (`needless_return`),
+  `services/agent_fence.rs` (`KEYRING_SYSCALLS` / `keyring_seccomp_filter`
+  were `cfg(any(linux, all(test, unix)))` but every user is Linux-only →
+  narrowed to `cfg(target_os = "linux")`; dead code in the macOS test build).
+- `commands/network.rs` `local_ssh_link` and `services/net_usage.rs` — the one
+  `allow`: `#[cfg_attr(target_os = "macos",
+  allow(clippy::default_constructed_unit_structs))]` with a comment.
+  `SsDump` is a unit struct only on macOS; `SsDump::default()` is the one
+  spelling Linux (a tuple struct) also compiles, so clippy's fix would break
+  Linux.
+
+Choices where the plan left room:
+- Fixed the macOS findings too (plan only required Windows): same lint
+  classes, same files, all compile-checked through the stand-ins. The macOS
+  CI step still stays staged — the stand-ins never link and a real Mac has
+  not run it.
+- `Default` for `WindowsBackend` rather than an `allow`: `new()` only reads
+  the process id.
+
+Gotchas:
+- Local toolchain is rustc/clippy 1.97.1 (2026-07-14); CI uses latest
+  stable, likely one or two releases newer. `rustup check` cannot run here
+  (read-only `~/.rustup` under the fence), so a newer clippy may print new
+  lints on the first Windows/macOS run — that is what `continue-on-error`
+  is for.
+- The vendored `src-tauri/patches/tauri-runtime-wry` prints 5 "unnecessary
+  `unsafe` block" warnings when built for macOS (`src/window/macos.rs`). A
+  dependency's warnings do not fail `-D warnings`; not touched.
+- macOS stand-ins (check only, never link) as in A7: a `cc` that truncates
+  its `-o` file and an `ar` that truncates the `.a`;
+  `CC_aarch64_apple_darwin=<dir>/cc AR_aarch64_apple_darwin=<dir>/ar`.
+  Delete the untracked `src-tauri/gen/schemas/macOS-schema.json` afterwards.
+
+Gates (sequential): `npm run build` ok; `npm test` 730 files / 7527 tests,
+2 failed (the known `MobileHeldPromptStore` pair); `cargo test` 3737 passed;
+`cargo clippy --all-targets -D warnings` ok; `npm run lint` 0 errors / 28
+warnings; brand-check ok; privacy-check ok; `git diff --check` clean;
+Windows `cargo check` and `cargo check --tests` ok (no warnings); Windows
+`cargo clippy --all-targets -D warnings` **0 findings**; macOS `cargo check
+--tests` ok (stand-ins) and macOS `cargo clippy --all-targets -D warnings`
+**0 findings** in this crate; YAML parses (PyYAML 6.0.3).
+
+Flagged for user:
+- Neither staged step has run on a real runner. After the first green
+  `test-windows` (and `test-macos`) run, delete their `continue-on-error`
+  lines to make them real gates.
+- CI's newer stable clippy may still report lints 1.97 does not know.

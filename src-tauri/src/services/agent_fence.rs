@@ -1017,20 +1017,20 @@ fn guard_git_control(args: &mut Vec<String>, guard: crate::services::git_guard::
 /// architecture and the 32-bit one its kernel also runs: a 32-bit binary
 /// reaches the same keyring through the compat table. x32 is x86-64's `arch`
 /// with bit 30 set in `nr` and shares its numbers, hence the mask.
-#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
     (0xC000_003E, 0xBFFF_FFFF, [248, 249, 250]),
     (0x4000_0003, u32::MAX, [286, 287, 288]),
 ];
-#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "aarch64"))]
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
     (0xC000_00B7, u32::MAX, [217, 218, 219]),
     (0x4000_0028, u32::MAX, [309, 310, 311]),
 ];
-#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "riscv64"))]
+#[cfg(all(target_os = "linux", target_arch = "riscv64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[(0xC000_00F3, u32::MAX, [217, 218, 219])];
 #[cfg(all(
-    any(target_os = "linux", all(test, unix)),
+    target_os = "linux",
     not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))
 ))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
@@ -1049,7 +1049,7 @@ const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
 ///
 /// Classic BPF over `seccomp_data` (`nr` at offset 0, `arch` at 4). An
 /// architecture outside the table gets `EPERM` for every syscall.
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(target_os = "linux")]
 pub(crate) fn keyring_seccomp_filter() -> Option<Vec<u8>> {
     const LD_W_ABS: u16 = 0x20;
     const ALU_AND_K: u16 = 0x54;

@@ -1247,7 +1247,7 @@ pub fn run() {
                 if let Some(id) = _app
                     .get_webview_window("main")
                     .and_then(|w| w.ns_window().ok())
-                    .and_then(|ns| platform::macos::ns_window_id(ns as *mut std::ffi::c_void))
+                    .and_then(platform::macos::ns_window_id)
                 {
                     workspace.lock().unwrap().backend.set_main_window_id(id);
                 }

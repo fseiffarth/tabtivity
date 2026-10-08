@@ -157,7 +157,7 @@ pub fn switch(
             window_service::resolve_missing_window_ids(
                 &mut wins.windows,
                 previous_project_id,
-                |pid| crate::commands::apps::resolve_window_id_for_pid(pid),
+                crate::commands::apps::resolve_window_id_for_pid,
             );
             window_service::project_window_ids(&wins.windows, previous_project_id)
         };

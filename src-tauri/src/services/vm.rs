@@ -727,13 +727,13 @@ fn probe_accel() -> (bool, Option<String>) {
         if rc == 0 && value == 1 {
             return (true, None);
         }
-        return (
+        (
             false,
             Some(
                 "Hypervisor.framework is not available on this Mac (kern.hv_support is 0); project VMs need it."
                     .to_string(),
             ),
-        );
+        )
     }
     #[cfg(target_os = "windows")]
     {
@@ -746,13 +746,13 @@ fn probe_accel() -> (bool, Option<String>) {
         if listed {
             return (true, None);
         }
-        return (
+        (
             false,
             Some(
                 "QEMU reports no WHPX accelerator. Install the official QEMU for Windows and turn on 'Windows Hypervisor Platform' under Windows Features."
                     .to_string(),
             ),
-        );
+        )
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {

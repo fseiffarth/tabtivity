@@ -1306,11 +1306,11 @@ pub struct InstalledApp {
 pub fn list_installed_apps() -> Vec<InstalledApp> {
     #[cfg(target_os = "windows")]
     {
-        return windows_installed_apps();
+        windows_installed_apps()
     }
     #[cfg(target_os = "macos")]
     {
-        return macos_installed_apps();
+        macos_installed_apps()
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
@@ -1362,7 +1362,7 @@ fn windows_installed_apps() -> Vec<InstalledApp> {
             });
         }
     }
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_key(|a| a.name.to_lowercase());
     apps
 }
 
@@ -1387,7 +1387,7 @@ fn macos_installed_apps_in(roots: &[PathBuf]) -> Vec<InstalledApp> {
     let mut seen = std::collections::HashSet::new();
     let mut apps: Vec<InstalledApp> = Vec::new();
     for root in roots {
-        let Ok(entries) = fs::read_dir(&root) else {
+        let Ok(entries) = fs::read_dir(root) else {
             continue;
         };
         for entry in entries.flatten() {
@@ -1404,7 +1404,7 @@ fn macos_installed_apps_in(roots: &[PathBuf]) -> Vec<InstalledApp> {
             apps.push(app);
         }
     }
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_key(|a| a.name.to_lowercase());
     apps
 }
 
@@ -1424,7 +1424,7 @@ fn parse_macos_app_bundle(app: &Path) -> Option<InstalledApp> {
     }
     let name = ["CFBundleDisplayName", "CFBundleName"]
         .iter()
-        .find_map(|key| dict.get(*key).and_then(plist::Value::as_string))
+        .find_map(|key| dict.get(key).and_then(plist::Value::as_string))
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_string)
@@ -1594,7 +1594,7 @@ fn windows_script_command(script_path: &str, args: Option<&str>) -> Command {
     let is_ps1 = Path::new(script_path)
         .extension()
         .and_then(|ext| ext.to_str())
-        .map_or(false, |ext| ext.eq_ignore_ascii_case("ps1"));
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("ps1"));
     // `command_no_window` sets CREATE_NO_WINDOW so a background "run script"
     // action doesn't pop a transient console window — its output is intentionally
     // not surfaced (callers wanting output open a terminal tab instead).
@@ -1642,7 +1642,7 @@ fn resolve_windows_app_icon(exec: &str) -> Option<String> {
         if direct
             .extension()
             .and_then(|ext| ext.to_str())
-            .map_or(false, |ext| ext.eq_ignore_ascii_case("lnk"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
         {
             return resolve_windows_shortcut(&direct)
                 .and_then(|shortcut| shortcut.icon_path.or(Some(shortcut.target_path)))
@@ -1702,7 +1702,7 @@ fn collect_windows_shortcuts(dir: &Path, depth: usize, out: &mut Vec<ShortcutEnt
         } else if path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map_or(false, |ext| ext.eq_ignore_ascii_case("lnk"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
         {
             if let Some(shortcut) = resolve_windows_shortcut(&path) {
                 out.push(shortcut);
@@ -1759,7 +1759,7 @@ fn windows_icon_to_data_url(path: &Path) -> Option<String> {
     if path
         .extension()
         .and_then(|ext| ext.to_str())
-        .map_or(false, |ext| ext.eq_ignore_ascii_case("png"))
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
     {
         return icon_to_data_url(path);
     }
@@ -1847,7 +1847,7 @@ unsafe fn hicon_to_rgba(
             biHeight: -height,
             biPlanes: 1,
             biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
+            biCompression: BI_RGB.0,
             ..Default::default()
         };
 
