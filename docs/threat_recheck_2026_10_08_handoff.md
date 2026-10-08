@@ -555,3 +555,124 @@ run (main agent at landing).
 - **No test drives `prepare` to the stamp itself.** Only `push_fence_scope`
   and `stamp_push_fence_scope` are unit-tested. A refactor that moves the
   stamp out of the fence block would pass the gates.
+
+## Agent step 4 — implementer (gaps 29, 30)
+
+**Commit:** `a3692f25` Read agent-written records without blocking and pin
+local-model control paths.
+
+**Files:** `services/home_io.rs` (`RECORD_CAP` = 64 KiB, path-based
+`open_regular` (`O_NOFOLLOW|O_NONBLOCK`, regular file on the opened inode;
+Windows keeps the `lstat` check) and `read_record`; `HomeFile::ensure(dir)`
+makes a name a file/folder through the handle (link/FIFO/socket
+`unlinkat`-ed, `O_CREAT|O_NOFOLLOW|O_NONBLOCK` or `mkdirat`, `Meta` with the
+inode read off a no-follow handle); test helpers `within_deadline` (5 s) and
+`mkfifo`, both `cfg(all(test, unix))`). Readers converted:
+`agent_turn.rs` (`bind_tab`'s leftover checks, `resolve_event` on the watcher
+thread), `agent_session.rs` (id record, `.src`, `.mode`, `.prev`, Vibe
+`meta.json`, `with_transcript_tail`, Codex `config.toml` in
+`codex_hook_state_of_home`), `git_guard.rs` (`commondir`, `.git` pointer),
+and siblings `mobile_control/headless.rs` (`turn_record`, the phone's read
+of the same `.turn`) and `codex_bind.rs` (`read_rollout_meta`).
+`agent_fence.rs`: `ControlPin {path, ino}`, `local_model_control_paths` →
+`Result<Vec<ControlPin>, String>` via `HomeDir`/`HomeFile::ensure`,
+`verify_control_pins`, `local_model_mounts`/`agent_state_mounts` return
+`Result<(mounts, pins)>`; `wrap_pty_options_bwrap` verifies right before
+`seccomp_launcher` builds the final argv; macOS `sandbox_exec_inputs` returns
+the pins (its `protected` list now comes from them instead of a second setup
+call) and `wrap_pty_options_sandbox_exec` verifies before building the
+`sandbox-exec` argv. Docs: `threat_model.md` rows 29 and 30 (**Fixed, not
+live-verified.**, 30 with its residual), `context/agent_authority.md` (new
+"Agent-written files…" paragraph), `context/agent_sessions.md` (records
+paragraph), `filemap_backend.md` (`home_io.rs`, `agent_fence.rs` rows).
+
+**Tests added:** `home_io`: `a_record_reads_whole_up_to_the_cap_and_not_past_it`,
+`a_record_is_never_read_through_a_link_or_from_a_fifo`,
+`ensure_replaces_a_link_or_fifo_and_keeps_what_is_real`. `agent_session`:
+`planted_fifos_links_and_oversized_records_read_as_nothing` (FIFO at the id
+record, `.src`, `.mode`, `.prev` one at a time with the others valid, so each
+reader reaches its own file; link; 64 KiB+1 refused while exactly 64 KiB
+reads; Vibe `meta.json` FIFO; transcript FIFO; Codex config FIFO).
+`agent_turn`: `a_planted_fifo_link_or_huge_turn_record_reads_as_nothing_without_blocking`.
+`git_guard`: `a_fifo_linked_or_huge_commondir_or_pointer_is_not_read`.
+`headless`: `a_fifo_turn_record_reads_as_nothing_without_blocking`.
+`codex_bind`: FIFO case in the rollout-meta test. `agent_fence`:
+`a_control_path_swapped_after_setup_refuses_the_spawn` (raced link at a file
+and at a folder, a new inode, a removed path) and
+`a_fifo_at_a_control_path_is_replaced_without_blocking`; the existing mount
+and symlink tests now also check the pins. Every FIFO read runs under
+`within_deadline`, so a regression fails instead of hanging the suite (an
+early draft of my own test did hang on a `write` into a FIFO — that is what
+the deadline is for; only reads are wrapped, so keep writes off FIFOs).
+
+**Gates (at `a3692f25`):** `npm run build` ok; `npm test` 735 files / 7556
+tests passed; `cargo test -q` 3765 passed, 3 ignored, 0 failed (lib 3597);
+`npm run lint` 0 errors, 28 advisory warnings (unchanged); `cargo clippy
+--all-targets -D warnings` clean; `scripts/brand-check.sh` ok; `git diff
+--check` clean; `scripts/privacy-check.sh cca43e77..HEAD` clean. Windows
+`cargo clippy --target x86_64-pc-windows-msvc --lib --tests` (shims): no
+finding in any touched file; 15 findings elsewhere (`commands/apps.rs`,
+`network.rs`, `screenshot.rs`, `platform/{mod,windows}.rs`,
+`project_runtime.rs`, `vm.rs`, and the test-only `HookBoundary::Host` dead
+variant from step 3) are in files this step does not touch, so pre-existing
+(not re-run at `cca43e77`). macOS not compiled (no Apple `cc`); its arm was
+checked by reading. `npm run backend:stale` not run (main agent at landing).
+One run of the targeted tests failed
+`codex_bind::tests::a_watched_tree_is_walked_only_after_a_change` (inotify
+timing, under load from a parallel build); it passed in the full run and the
+re-run. Untouched by this step.
+
+**Choices:**
+- One helper pair in `home_io`, no new module. `open_regular` is for
+  transcripts and rollouts (the caller keeps its tail/head cap);
+  `read_record` for whole small records. Both refuse a link at the last
+  component, including transcripts (the note asked only for `O_NONBLOCK` +
+  `fstat`; nothing in Tabtivity makes a transcript a link, and a link there
+  would let an agent point the host's reader at any file).
+- The watcher's per-event read stays on its thread: with `O_NONBLOCK` and a
+  regular-file check it cannot block, so no second thread.
+- Siblings fixed too (same records, same hazard): the phone's `turn_record`,
+  Codex rollout heads in `codex_bind`, Codex `config.toml` in the hook check.
+- Gap 30: a link, FIFO or socket at a control name is unlinked and replaced;
+  a regular file or folder already there is kept and mounted read-only
+  *whichever kind was asked for* (a folder at `config.toml` is RO-bound
+  rather than left writable; the old code skipped such a path, leaving it
+  unmounted and agent-writable). Any setup failure now **refuses the spawn**
+  (it used to skip the path). `register_vibe_hook_in` stays first: its write
+  replaces `hooks.toml`'s inode, and it is idempotent (no write when the
+  content matches), so two tabs of one model starting together do not trip
+  each other's pins.
+- The verify sits after `guard_paths`/masks/keyring filter, right before the
+  final argv, which is as late as the wrapper allows; the PTY spawn (tmux
+  wrap) follows.
+- Refusal messages are English like the rest of the fence's
+  (`fence_unavailable_message`); no UI, so no `UntestedTag`.
+
+**Gotchas:**
+- The worktree's cargo target dir is `<worktree>/target`, not
+  `src-tauri/target`.
+- A FIFO left in a test dir makes any later `std::fs::write` to that path
+  block forever (open for write waits for a reader): remove it first.
+
+**Flagged for user:**
+- **Residual of gap 30:** bubblewrap (and Seatbelt) still open the control
+  paths by name after `verify_control_pins`, so a swap in that window is
+  missed; closing it needs `--ro-bind-fd` with descriptors passed through
+  the PTY spawn.
+- **Behaviour change:** a local-model tab whose control path cannot be set
+  up (or changes during startup) is now refused with an "Agent sandbox: …"
+  message instead of starting with that path unmounted.
+- macOS arm not compiled here; CI `test-macos` is the check.
+- Not live-verified. Click-through (Linux, dev build with this commit):
+  1. Open a Claude tab in a project and let it finish a turn; in a
+     terminal, `mkfifo` over its `.turn` record:
+     `rm <state_dir>/live_sessions/<project_key>/<uid>.turn && mkfifo …`.
+     Send another prompt; other tabs' working/done marks must keep updating
+     (before: every tab's turn state froze).
+  2. `mkfifo <project>/.git/commondir` (with `.git` a folder), then open a
+     new agent tab in that project: it starts (before: the spawn hung).
+     Remove the FIFO afterwards.
+  3. Start a local-model (Ollama/Vibe) tab; it works as before. In
+     `<state_dir>/vibe_local/<model>/`, replace `tools` with a symlink and
+     start a second tab of that model: it starts, and `tools` is a real
+     folder again.
