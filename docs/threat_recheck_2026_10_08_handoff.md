@@ -81,3 +81,75 @@ foreground `timeout 590` run printed nothing. Run cargo in the background.
 - Not live-verified; the allowlists are read off CodeBuddy 2.162.0 and Kimi
   Code 2.1.1 bundles. A newer CLI that renames its login file would stop
   being shared (fails safe: it signs in per project).
+
+## Agent step 1 — reviewer
+
+Reviewed `0ac7eaf9..5200f442` (`6b0e0649`, `5200f442`) against the gap 16
+row, Steps row 1, the fixed decisions and the agent step 1 review notes.
+**No code change; no confirmed bug.**
+
+**Checked and fine:**
+- No env/config file left in the registry: Cline, Vibe, aider and
+  mini-swe-agent rows are `&[]`; the remaining shared files are the
+  credential files the plan lists. Nothing else writes into
+  `agent-auth/<cli>/` for them (only `import_from_user_home_in` creates an
+  empty store dir on a direct invoke, which returns an error, and the next
+  start's retire removes it). No other module copies those paths into a home
+  (`agent_global` copies only the user's layer).
+- Allowlist: `DirNames::admits` refuses empty names, leading dots (so `.`,
+  `..`, `..json`), `/` and `\`. Upper-case or Windows-mangled names fail
+  closed. Every home read and write goes through `home_io` handles
+  (`O_NOFOLLOW`, regular file only on read), so a symlink, FIFO or directory
+  named `x.json` is neither adopted nor followed. Store-side listings keep
+  regular files only.
+- Applied in `reconcile_dir` (adopt and place), `status_in` (signed in and
+  importable), `remove_copies` (sign-out and import) and the one-level
+  `copy_dir_logins`. `import_once` skips the four CLIs (`shared: false`), and
+  Settings and the phone bridge filter on `shared`.
+- Retire: runs once per start, synchronously in setup before `import_once`
+  and the keeper (`lib.rs:1303`), which are the only entry points, so it
+  cannot race the keeper. It is idempotent: the store dirs are gone after
+  the first run, the folder records for unlisted names are gone, and no code
+  path writes either again. Store keys come from `store_dir_in`/`leaf_of`
+  like the keeper's, and the `host` record key matches `home_key`. If the
+  Host copy cannot be removed, the store is kept for the next start. The
+  Host session has no `.local` home (`launch_prep` always uses
+  `prepare_host_home`). On Windows every scope home is already unfenced, so
+  the copies kept there add nothing.
+- Tests fail on the old code for the right reason (`x.env` and the temp were
+  adopted before; the retired rows were in the registry). The rewritten
+  local-model test still covers receive-only on a remaining shared file.
+- i18n: `settings.agentLoginsHelp` changed in en/de/es/fr/it, the only
+  dictionaries. Docs (`agent_authority.md`, `help/agent-clis.md`,
+  `threat_model.md` row 16, file map, checklist) match the code. The
+  remaining mentions of the old paths are plan or history prose.
+
+**Gates (at `5200f442`, nothing changed):** `cargo test -q` 3733 passed,
+3 ignored, 0 failed (`--lib agent_` subset 359 passed);
+`cargo clippy --all-targets -D warnings` clean. The npm gates were not rerun
+(no TS changed since the implementer's run).
+
+**Flagged for user:**
+- The Host cleanup also removes a Host-session login that the keeper had
+  adopted into the store. An adopted copy and a placed copy leave the same
+  record (`.placed/host/<leaf>` = digest), so the code cannot tell a Vibe,
+  Aider, mini-swe-agent or Cline login made in the Host session from one
+  Tabtivity put there. That file goes, including any other settings the
+  user had added to it. This is the plan's chosen rule, and it is the safe
+  side. The implementer's note "the Host session loses a copy Tabtivity put
+  there" understates it: after the first start, sign in to those CLIs again
+  in the Host session. If keeping such a file matters, rename it aside
+  (for example to `<file>.tabtivity-retired`) instead of deleting it. That
+  is a design change, not made here.
+- The same applies, on a small scale, to the folder cleanup: a CodeBuddy
+  `.logged-out` marker or logout backup in the home that wrote it has a
+  matching placed record (from its adoption) and is removed there too.
+- Sign out now removes only allowlisted names. A CodeBuddy logout backup
+  (`<stem>.<time>.<pid>.<uuid>.info`, which holds the old token) or a
+  leftover Kimi temp file stays in the home whose CLI wrote it. These files
+  are that scope's own and are not shared. Earlier, Sign out wiped the whole
+  folder in every home.
+- Dead data: an import by the old recursive `copy_dir` could leave
+  subdirectories in `agent-auth/{kimi,codebuddy}/<leaf>/`. Those were never
+  placed and still are not, and the retire does not remove them (it only
+  removes regular files).
