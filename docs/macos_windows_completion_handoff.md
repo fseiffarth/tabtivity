@@ -1295,7 +1295,7 @@ Fix (one confirmed bug, also on Linux before this step):
   through `state/mail/…`. The check now joins onto the canonical root as
   well, like `root_refusal`. Regression test
   `a_linked_root_above_the_state_does_not_reach_it` (unix; failed before).
-  Commit: see `git log osfix/a8` (`fix(mail_attach): …`).
+  Commit ee7faf4f.
 
 Flagged for user:
 - Fails closed but with a misleading sentence: any non-NotFound open error
