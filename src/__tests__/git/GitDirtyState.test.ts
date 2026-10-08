@@ -8,6 +8,8 @@ import {
   expectsGitRepo,
   gitDotsDue,
   GIT_DOT_BACKGROUND_EVERY,
+  GIT_DOT_TICK_MS,
+  gitDotProbedAt,
   useGitDirtyStore,
 } from "../../stores/gitDirty";
 
@@ -134,5 +136,22 @@ describe("useGitDirtyStore.refresh", () => {
     await refresh("p2", "/p2");
     expect(mockInvoke).toHaveBeenCalledTimes(5);
     expect(useGitDirtyStore.getState().byId.p2).toBe("staged");
+  });
+});
+
+describe("gitDotProbedAt — the watcher's probes count for the switcher's timer", () => {
+  it("stamps a probe and a full reading, so the next tick skips that project", async () => {
+    gitDotProbedAt.clear();
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue({ status: status({ unstaged: 1 }), unpushed: 0 });
+    await useGitDirtyStore.getState().refresh("watched", "/w");
+    useGitDirtyStore.getState().set("bar-read", "staged");
+    const now = Date.now();
+    const due = gitDotsDue(["watched", "bar-read", "never"], new Set(["watched", "bar-read"]), gitDotProbedAt, now, GIT_DOT_TICK_MS);
+    expect(due).toEqual(["never"]);
+    // A tick later both are due again: the timer stays the backstop.
+    expect(
+      gitDotsDue(["watched", "bar-read"], new Set(["watched", "bar-read"]), gitDotProbedAt, now + GIT_DOT_TICK_MS, GIT_DOT_TICK_MS),
+    ).toEqual(["watched", "bar-read"]);
   });
 });

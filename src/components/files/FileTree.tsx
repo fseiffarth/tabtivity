@@ -1785,7 +1785,12 @@ export function FileTree({
     // `repoDir` points the backend's `.git` watch at the project's repo, so
     // add/commit/push (which only write `.git/`) re-read the markers too.
     invoke("watch_dir", { path: absDir, repoDir: projectDir }).catch(() => {});
-    listen("fs-change", () => {
+    listen<string>("fs-change", (event) => {
+      // The payload is the watched folder as asked for (`fs_watch.rs`); the one
+      // backend slot is shared by every tree in every window, so an event for
+      // another tree's folder is not this tree's to re-list (perf plan §3.4).
+      // Its `.git` changes arrive under the same payload, so they still count.
+      if (typeof event?.payload === "string" && event.payload !== absDir) return;
       // Coalesce the burst of events a single write emits into one reload.
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => refresh(relPath), 250);

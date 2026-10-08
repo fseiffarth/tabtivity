@@ -19,7 +19,7 @@ import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
-import { GIT_DOT_TICK_MS, gitDotsDue, useGitDirtyStore } from "../../stores/gitDirty";
+import { GIT_DOT_TICK_MS, gitDotProbedAt, gitDotsDue, useGitDirtyStore } from "../../stores/gitDirty";
 import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
 import { projectStations, useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useQuiesce, saverInterval } from "../../stores/power";
@@ -194,10 +194,11 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   // it feeds is the definition of an aid — the project's own file view says the
   // same thing, on the project being worked in, for free.
   const fastMode = useFastMode();
-  // When each project's dot was last probed. A ref, not effect-local: the effect
-  // re-arms on every focus change (`quiesce`), and probing every project on each
-  // re-arm made an alt-tab cost one `git status` per open project.
-  const gitDotProbedAt = useRef(new Map<string, number>());
+  // When each project's dot was last probed: the store's map, not effect-local
+  // — the effect re-arms on every focus change (`quiesce`), and probing every
+  // project on each re-arm made an alt-tab cost one `git status` per open
+  // project — and shared with the Files view's `.git`-watcher refresh, so a
+  // project whose tree is on screen is probed by its watcher, not this timer.
   useEffect(() => {
     if (gitDotTargets.length === 0 || fastMode) return;
     const refresh = useGitDirtyStore.getState().refresh;
@@ -213,11 +214,10 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     const run = () => {
       const now = Date.now();
       const due = new Set(
-        gitDotsDue(gitDotTargets.map((t) => t.id), foreground(), gitDotProbedAt.current, now, tickMs),
+        gitDotsDue(gitDotTargets.map((t) => t.id), foreground(), gitDotProbedAt, now, tickMs),
       );
       for (const t of gitDotTargets) {
         if (!due.has(t.id)) continue;
-        gitDotProbedAt.current.set(t.id, now);
         void refresh(t.id, t.dir);
       }
     };

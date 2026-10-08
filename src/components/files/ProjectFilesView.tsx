@@ -24,7 +24,8 @@ import { useSyncStore, amberPaths, localNewPaths } from "../../stores/remote/syn
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
 import { useWindowsStore } from "../../stores/windows";
-import { useGitDirtyStore, gitDirtyState } from "../../stores/gitDirty";
+import { useGitDirtyStore, gitDirtyState, GIT_WATCH_COALESCE_MS, type GitDirtyState } from "../../stores/gitDirty";
+import { coalescedRun } from "../../lib/coalescedRun";
 import { resolveLocalMirror, type FilesPanelView, type GitReleasePreview, type ProjectEntry } from "../../types";
 import { fmtModified, type SortKey } from "../../lib/viewers/fileUtils";
 import {
@@ -95,6 +96,32 @@ import { tmuxSessionRest } from "../../lib/brandMigration";
 const TOOLTIP_DWELL_MS = 400;
 /** Git view re-read cadence: nothing watches the repo while that view shows. */
 const GIT_VIEW_POLL_MS = 5_000;
+
+/** The Git button's flag colour for a pill-dot level; `undefined` for a level
+ *  that says nothing about the counts (no reading, an errored or broken one). */
+function dotFlagColor(level: GitDirtyState | undefined): string | null | undefined {
+  switch (level) {
+    case "dirty":
+      return GIT_STATE_COLOR.modified;
+    case "staged":
+      return GIT_STATE_COLOR.staged;
+    case "unpushed":
+      return GIT_STATE_COLOR.unpushed;
+    case "clean":
+      return null;
+    default:
+      return undefined;
+  }
+}
+
+/** Whether an `fs-change` payload (the watched folder, as `FileTree` asked
+ *  for it) lies in `dir`. A payload that is not a string is not filtered. */
+function fsChangeIsUnder(payload: unknown, dir: string): boolean {
+  if (typeof payload !== "string") return true;
+  if (payload === dir) return true;
+  const base = dir.replace(/[/\\]+$/, "");
+  return payload.startsWith(`${base}/`) || payload.startsWith(`${base}\\`);
+}
 
 /** Phone glyph for the header's Mobile access button — the same silhouette as
  *  the header `MobileIndicator`'s icon, so the machine-wide host lamp and this
@@ -549,10 +576,10 @@ export function ProjectFilesView({
   // Run both git probes concurrently (Eff #9): they hit independent
   // subprocesses, so `Promise.all` collapses two serially-awaited chains into
   // one round of parallel work. Each result still applies independently.
-  const runRefreshGit = (dir: string) => {
+  const runRefreshGit = (dir: string): Promise<void> => {
     const context = gitContextKey;
     const worktreeArgs = gitWorktreeArgs(selectedGitWorktree);
-    void Promise.all([
+    return Promise.all([
       invoke<GitStatus>("git_status", { projectDir: dir, ...worktreeArgs }).catch(() => null),
       // A failed read (git refused or timed out, #2349) is no reading, not
       // "nothing to push": `null`, so neither this bar nor the pill draws clean.
@@ -1242,34 +1269,56 @@ export function ProjectFilesView({
   // repo's index/HEAD/refs, `fs_watch.rs`), and in the Git view — which mounts
   // no tree, and must not steal the backend's single watch slot from one shown
   // elsewhere — re-read on entry and on a slow poll while it is on screen.
+  //
+  // Perf plan §3.4: the full reading (`git_status` + `git_unpushed_commits`,
+  // five git spawns) follows `fs-change` only while the Git view — the bar —
+  // is on screen, at most once a second and never twice at once
+  // (`coalescedRun`). Elsewhere the event refreshes the project's pill dot (one
+  // spawn, shared with the switcher, `stores/gitDirty`), which is what the Git
+  // button's flag then shows; the full counts are re-read on show and on
+  // entering the Git view (a scope with no project keeps the coalesced full
+  // reading). Only events for this project's own tree count.
   useEffect(() => {
     if (!active || !effectiveGitRoot || remoteBlocked) return;
     const root = effectiveGitRoot;
     const local = !project?.remote;
+    const inGitView = view === "git";
+    const full = coalescedRun(() => runRefreshGit(root), GIT_WATCH_COALESCE_MS);
+    const dotProject = projectId;
+    const dot =
+      !inGitView && dotProject && projectDir
+        ? coalescedRun(() => useGitDirtyStore.getState().refresh(dotProject, projectDir), GIT_WATCH_COALESCE_MS)
+        : null;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     if (local) {
-      void listen("fs-change", () => refreshGit(root)).then((un) => {
+      void listen<string>("fs-change", (event) => {
+        if (projectDir && !fsChangeIsUnder(event?.payload, projectDir)) return;
+        // No project to hang a dot on (the root scope): the counts, coalesced.
+        (inGitView || !dot ? full : dot).request();
+      }).then((un) => {
         if (cancelled) un();
         else unlisten = un;
       });
     }
     let poll: ReturnType<typeof setInterval> | null = null;
-    if (view === "git") {
+    if (inGitView) {
       refreshGit(root);
       if (local) {
         poll = setInterval(() => {
-          if (document.visibilityState === "visible") refreshGit(root);
+          if (document.visibilityState === "visible") full.request();
         }, GIT_VIEW_POLL_MS);
       }
     }
     return () => {
       cancelled = true;
       unlisten?.();
+      full.cancel();
+      dot?.cancel();
       if (poll) clearInterval(poll);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, effectiveGitRoot, remoteBlocked, project?.remote, view, gitContextKey]);
+  }, [active, effectiveGitRoot, remoteBlocked, project?.remote, view, gitContextKey, projectId, projectDir]);
 
   // The gear dialog belongs to the project it was opened on; a project switch
   // reloads the filters under it, so close it rather than let it re-target.
@@ -1391,7 +1440,16 @@ export function ProjectFilesView({
   // Keep pending Git work visible from the Files view without keeping the
   // action controls in a separate header row. The colour matches the next
   // actionable step: add, then commit, then push.
-  const gitPendingColor = !gitStatus?.is_repo
+  //
+  // Outside the Git view the counts are only read on show, so the flag follows
+  // the project's pill dot instead, which the `.git` watcher keeps current
+  // (above); a nested repo, a remote project or no dot reading yet falls back
+  // to the last counts.
+  const dotLevel = useGitDirtyStore((s) => (projectId ? s.byId[projectId] : undefined));
+  const dotFlag = view !== "git" && !onNestedRepo && !project?.remote && !activeBox ? dotFlagColor(dotLevel) : undefined;
+  const gitPendingColor = dotFlag !== undefined
+    ? dotFlag
+    : !gitStatus?.is_repo
     ? null
     : gitStatus.unstaged + gitStatus.untracked > 0
       ? GIT_STATE_COLOR.modified
