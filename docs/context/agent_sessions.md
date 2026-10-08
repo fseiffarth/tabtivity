@@ -82,6 +82,13 @@ resumed after a crash never starts out "working" from a stale file. Codex's
 new hooks need the same one-time `/hooks` trust as its `SessionStart` one;
 until then a Codex tab stays on the byte heuristic.
 
+Every record in the slice is written by the agent's hook, and a fenced agent
+can replace it with a FIFO, a link or a huge file. The host reads them all
+(`<key>`, `.turn`, `.src`, `.mode`, `.prev`, on the watcher thread and at
+spawn) through `home_io::read_record`: no link at the name, `O_NONBLOCK`, a
+regular file, at most 64 KiB, else "no record" (threat model gap 29). One
+FIFO used to stop turn state for every tab until restart.
+
 For Claude the key is its launch id (`--session-id`); Codex mints its own id so
 the key is a separate per-tab uuid and the backend injects
 `codex resume <live-id>`. **Codex caveat:** user-level Codex hooks need a

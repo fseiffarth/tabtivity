@@ -37,6 +37,7 @@ use tauri::{AppHandle, Emitter};
 use crate::services::agent_session::{
     live_sessions_dir, project_live_sessions_dir, read_live_source_in, LIVE_SOURCE_SUFFIX,
 };
+use crate::services::home_io;
 
 /// Suffix of the per-tab turn record beside the session record (`<uid>.turn`).
 pub const TURN_SUFFIX: &str = ".turn";
@@ -135,8 +136,7 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
 /// begun and never ended.
 fn records_hold_turn_in_flight(paths: &[PathBuf]) -> bool {
     paths.iter().any(|p| {
-        std::fs::read_to_string(p)
-            .ok()
+        home_io::read_record(p)
             .and_then(|text| parse_turn_record(&text))
             .is_some_and(|state| matches!(state, TurnState::Working | TurnState::Decision))
     })
@@ -145,8 +145,7 @@ fn records_hold_turn_in_flight(paths: &[PathBuf]) -> bool {
 /// Whether any of a tab's turn records says `done` — a turn the agent ended.
 fn records_hold_finished_turn(paths: &[PathBuf]) -> bool {
     paths.iter().any(|p| {
-        std::fs::read_to_string(p)
-            .ok()
+        home_io::read_record(p)
             .and_then(|text| parse_turn_record(&text))
             .is_some_and(|state| state == TurnState::Done)
     })
@@ -215,7 +214,8 @@ fn uid_with_suffix(path: &Path, suffix: &str) -> Option<String> {
 pub fn resolve_event(path: &Path) -> Option<(String, TurnState)> {
     let uid = uid_of(path)?;
     let pty = pty_for(&uid)?;
-    let text = std::fs::read_to_string(path).ok()?;
+    // On the watcher's one thread: a FIFO here must not stall every tab.
+    let text = home_io::read_record(path)?;
     let state = parse_turn_record(&text)?;
     Some((pty, state))
 }
@@ -666,6 +666,38 @@ mod tests {
             assert_eq!(records_hold_finished_turn(&[root.clone(), slice.clone()]), rest, "{word:?}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Gap 29: the watcher's per-event read and the spawn's leftover check run
+    /// on agent-writable files. A FIFO, a link or an oversized file reads as no
+    /// record instead of stalling the one watcher thread (or the spawn).
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_fifo_link_or_huge_turn_record_reads_as_nothing_without_blocking() {
+        use crate::services::home_io::{mkfifo, within_deadline, RECORD_CAP};
+        let tmp = tempfile::tempdir().unwrap();
+        let uid = "turn-test-uid-fifo";
+        let pty = "proj-a:agent-turn-fifo";
+        let rec = tmp.path().join(format!("{uid}{TURN_SUFFIX}"));
+        bindings().lock().unwrap().insert(uid.to_string(), pty.to_string());
+        mkfifo(&rec);
+        let (r1, r2) = (rec.clone(), rec.clone());
+        assert_eq!(within_deadline(move || resolve_event(&r1)), None);
+        assert!(!within_deadline(move || records_hold_turn_in_flight(std::slice::from_ref(&r2)) || records_hold_finished_turn(&[r2])));
+        std::fs::remove_file(&rec).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::write(&outside, "working 1").unwrap();
+        std::os::unix::fs::symlink(&outside, &rec).unwrap();
+        assert_eq!(resolve_event(&rec), None);
+        assert!(!records_hold_turn_in_flight(std::slice::from_ref(&rec)));
+        std::fs::remove_file(&rec).unwrap();
+        let mut huge = b"working 1".to_vec();
+        huge.resize(RECORD_CAP as usize + 1, b' ');
+        std::fs::write(&rec, huge).unwrap();
+        assert_eq!(resolve_event(&rec), None);
+        std::fs::write(&rec, "working 1").unwrap();
+        assert_eq!(resolve_event(&rec), Some((pty.to_string(), TurnState::Working)));
+        on_tab_gone(pty);
     }
 
     #[test]

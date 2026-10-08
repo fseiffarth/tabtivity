@@ -817,14 +817,17 @@ fn mount_pair(pair: &str, read_only: bool) -> Option<BindMount> {
 /// ([`LOCAL_MODEL_CONTROL`]); vibe keeps writing its logs, history, cache and
 /// trusted-folder list beside them.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
-pub(crate) fn local_model_mounts(home: Option<&Path>) -> Vec<BindMount> {
+pub(crate) fn local_model_mounts(home: Option<&Path>) -> Result<(Vec<BindMount>, Vec<ControlPin>), String> {
     let Some(home) = home else {
-        return Vec::new();
+        return Ok((Vec::new(), Vec::new()));
     };
-    // Tabtivity's hook alone, whatever an earlier tab left in the file.
+    // Tabtivity's hook alone, whatever an earlier tab left in the file. First:
+    // the write replaces `hooks.toml`'s inode, and the pins below record the
+    // inode that is mounted.
     if let Err(e) = crate::services::agent_session::register_vibe_hook_in(home) {
         eprintln!("agent_fence: reset local vibe hooks: {e}");
     }
+    let pins = local_model_control_paths(home)?;
     let path = home.to_string_lossy().into_owned();
     let mut mounts = vec![BindMount {
         src: path.clone(),
@@ -832,15 +835,15 @@ pub(crate) fn local_model_mounts(home: Option<&Path>) -> Vec<BindMount> {
         read_only: false,
     }];
     // Placed after the home mount, so they shadow it.
-    mounts.extend(local_model_control_paths(home).into_iter().map(|p| {
-        let p = p.to_string_lossy().into_owned();
+    mounts.extend(pins.iter().map(|pin| {
+        let p = pin.path.to_string_lossy().into_owned();
         BindMount {
             src: p.clone(),
             dst: p,
             read_only: true,
         }
     }));
-    mounts
+    Ok((mounts, pins))
 }
 
 /// What vibe reads from `VIBE_HOME` that makes it run or trust something:
@@ -859,34 +862,75 @@ const LOCAL_MODEL_CONTROL: &[(&str, bool)] = &[
     ("prompts", true),
 ];
 
+/// One [`LOCAL_MODEL_CONTROL`] path as [`local_model_control_paths`] left it,
+/// with the `(device, inode)` its handle saw (`None` on Windows, where this
+/// only runs in tests).
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ControlPin {
+    pub path: PathBuf,
+    ino: Option<(u64, u64)>,
+}
+
 /// Every [`LOCAL_MODEL_CONTROL`] path in `home`, created empty where missing:
 /// a path that doesn't exist can't be mounted read-only, and one the agent
 /// could create would be as good as writable. An empty `.env` or `AGENTS.md`
-/// changes nothing (vibe skips a blank instructions file). A symlink in one of
-/// these places is not Tabtivity's and is replaced.
+/// changes nothing (vibe skips a blank instructions file).
+///
+/// Another running tab of the same model can write this folder while the
+/// spawn sets it up (gap 30), so every step goes through a handle on `home`
+/// (`services::home_io`): a link, FIFO or socket at a control name is
+/// unlinked relative to the handle — never followed — and the file or folder
+/// made with `O_CREAT | O_NOFOLLOW` / `mkdirat`. Each path's identity comes
+/// from a handle opened on it, for [`verify_control_pins`] to compare just
+/// before the fence argv is built. Any path that cannot be set up refuses the
+/// spawn: an unmounted control path would stay writable to the agent.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
-pub(crate) fn local_model_control_paths(home: &Path) -> Vec<PathBuf> {
+pub(crate) fn local_model_control_paths(home: &Path) -> Result<Vec<ControlPin>, String> {
+    let refuse = |what: &Path, why: &dyn std::fmt::Display| {
+        format!(
+            "Agent sandbox: could not prepare the local model's {} ({why}), so this agent was not started.",
+            what.display()
+        )
+    };
+    let dir = crate::services::home_io::HomeDir::open_existing(home, "")
+        .ok_or_else(|| refuse(home, &"not a folder"))?;
     let mut out = Vec::new();
     for &(name, is_dir) in LOCAL_MODEL_CONTROL {
-        let path = home.join(name);
-        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
-            let _ = std::fs::remove_file(&path);
-        }
-        let ready = if is_dir {
-            std::fs::create_dir_all(&path).is_ok() && path.is_dir()
-        } else {
-            std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&path)
-                .is_ok()
-                && path.is_file()
-        };
-        if ready {
-            out.push(path);
+        let file = dir.file(name).ok_or_else(|| refuse(&home.join(name), &"bad name"))?;
+        let meta = file.ensure(is_dir).map_err(|e| refuse(&file.path(), &e))?;
+        out.push(ControlPin { path: file.path(), ino: meta.ino });
+    }
+    Ok(out)
+}
+
+/// Re-`lstat` each pinned control path and refuse unless the inode there is
+/// still the one set up (fail closed). bubblewrap and Seatbelt take the paths
+/// by name, so this runs as the last step before the fence argv is built; the
+/// window between it and the sandbox opening the path remains (gap 30's
+/// residual).
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+pub(crate) fn verify_control_pins(pins: &[ControlPin]) -> Result<(), String> {
+    for pin in pins {
+        let now = std::fs::symlink_metadata(&pin.path).ok();
+        let same = now.is_some_and(|m| {
+            #[cfg(unix)]
+            let ino = {
+                use std::os::unix::fs::MetadataExt;
+                Some((m.dev(), m.ino()))
+            };
+            #[cfg(not(unix))]
+            let ino = None;
+            !m.file_type().is_symlink() && ino == pin.ino
+        });
+        if !same {
+            return Err(format!(
+                "Agent sandbox: the local model's {} changed while this tab was starting, so this agent was not started. Start it again; if this keeps happening, close the model's other tabs first.",
+                pin.path.display()
+            ));
         }
     }
-    out
+    Ok(())
 }
 
 /// The spawn's own local-model home: its `VIBE_HOME`, when that is a direct
@@ -916,7 +960,7 @@ pub(crate) fn local_model_home(
 fn agent_state_mounts(
     scope_id: &str,
     env: &std::collections::HashMap<String, String>,
-) -> Vec<BindMount> {
+) -> Result<(Vec<BindMount>, Vec<ControlPin>), String> {
     let state_dir = storage::state_dir();
     let live_root = crate::services::agent_session::live_sessions_dir();
     let live_own = crate::services::agent_session::project_live_sessions_dir(scope_id);
@@ -931,7 +975,8 @@ fn agent_state_mounts(
             .into_iter()
             .filter_map(|m| mount_pair(&m, true)),
     );
-    mounts.extend(local_model_mounts(local_model_home(env, &state_dir).as_deref()));
+    let (local, pins) = local_model_mounts(local_model_home(env, &state_dir).as_deref())?;
+    mounts.extend(local);
     let bin = crate::services::agent_bin::bin_dir();
     let _ = std::fs::create_dir_all(&bin);
     let bin = bin.to_string_lossy().into_owned();
@@ -939,7 +984,7 @@ fn agent_state_mounts(
     // Logins are per-home copies in the home itself (`services::agent_auth`);
     // nothing shared is bound in.
     add_install_mount(&mut mounts, &state_dir);
-    mounts
+    Ok((mounts, pins))
 }
 
 /// Installs live inside private state, so they must be explicit support mounts
@@ -1285,7 +1330,7 @@ pub fn wrap_pty_options_bwrap(
     let copilot = basename(&agent_cmd) == "copilot";
     let subcommand = runs_subcommand(&opts.args);
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
-    let mounts = agent_state_mounts(scope_id, &opts.env);
+    let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env)?;
     let support_mounts = mounts.clone();
     let mut extra_ro = configured_read_only_paths();
     // A root agent's read-only view of the projects (a switch, default off):
@@ -1348,6 +1393,9 @@ pub fn wrap_pty_options_bwrap(
         crate::services::agent_exec::has_carriers(&opts.env),
         crate::services::fence_scope::running_binary,
     );
+    // Last before the argv: the local model's control paths still hold the
+    // inodes set up above (gap 30).
+    verify_control_pins(&control_pins)?;
     (opts.cmd, opts.args) = seccomp_launcher(
         &bwrap.to_string_lossy(),
         step.as_ref().map(|(helper, mode)| (helper.as_str(), *mode)),
@@ -1486,10 +1534,15 @@ pub(crate) fn sandbox_exec_profile(inputs: &SeatbeltInputs) -> String {
 /// Resolve the profile inputs for a scope from the same mount planners the
 /// bubblewrap fence uses, so the two fences agree on what an agent may touch.
 #[cfg(target_os = "macos")]
-fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, scope_home: &Path) -> SeatbeltInputs {
+fn sandbox_exec_inputs(
+    opts: &PtyOptions,
+    roots: &[PathBuf],
+    scope_id: &str,
+    scope_home: &Path,
+) -> Result<(SeatbeltInputs, Vec<ControlPin>), String> {
     let home = paths::home_dir_string();
     let state_dir = storage::state_dir();
-    let mounts = agent_state_mounts(scope_id, &opts.env);
+    let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env)?;
     let mut writable: Vec<String> = Vec::new();
     let mut readable: Vec<String> = Vec::new();
     let mut protected: Vec<String> = Vec::new();
@@ -1506,14 +1559,8 @@ fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, sco
     protected.push(state_dir.join("hooks").to_string_lossy().into_owned());
     // A local-model home is writable, its control files are not (gap 7):
     // Seatbelt has no mount order, so a read-only path inside a writable one
-    // has to be denied explicitly.
-    if let Some(home) = local_model_home(&opts.env, &state_dir) {
-        protected.extend(
-            local_model_control_paths(&home)
-                .into_iter()
-                .map(|p| p.to_string_lossy().into_owned()),
-        );
-    }
+    // has to be denied explicitly. The same paths `agent_state_mounts` set up.
+    protected.extend(control_pins.iter().map(|pin| pin.path.to_string_lossy().into_owned()));
     protected.push(crate::services::agent_bin::bin_dir().to_string_lossy().into_owned());
     // Temp dirs: macOS gives each user a private one under /var/folders.
     for tmp in ["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"] {
@@ -1536,7 +1583,7 @@ fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, sco
         &visible,
     ));
     let homes_root = crate::services::agent_home::homes_root_in(&state_dir);
-    SeatbeltInputs {
+    let inputs = SeatbeltInputs {
         home,
         roots: roots.iter().map(|r| r.to_string_lossy().into_owned()).collect(),
         writable,
@@ -1550,7 +1597,8 @@ fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, sco
             }).map(|p| p.to_string_lossy().into_owned())
         ).chain(std::iter::once(homes_root.to_string_lossy().into_owned())).collect(),
         own_home: Some(scope_home.to_string_lossy().into_owned()),
-    }
+    };
+    Ok((inputs, control_pins))
 }
 
 /// Rewrite a local agent spawn into its `sandbox-exec` boundary (macOS). The
@@ -1573,7 +1621,7 @@ pub fn wrap_pty_options_sandbox_exec(
     // Before `opts.args` becomes sandbox-exec's below.
     let subcommand = runs_subcommand(&opts.args);
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
-    let inputs = sandbox_exec_inputs(opts, roots, scope_id, scope_home);
+    let (inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
     std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
@@ -1584,6 +1632,9 @@ pub fn wrap_pty_options_sandbox_exec(
     } else {
         paths::resolve_executable(&opts.cmd).unwrap_or_else(|| PathBuf::from(&opts.cmd))
     };
+    // Last before the argv: the local model's control paths still hold the
+    // inodes set up above (gap 30).
+    verify_control_pins(&control_pins)?;
     let mut args = vec![
         "-f".to_string(),
         profile_path.to_string_lossy().into_owned(),
@@ -3008,7 +3059,7 @@ mod tests {
 
         // Not a local-model tab (a Claude tab, the root console's agent): nothing.
         assert_eq!(local_model_home(&Default::default(), state.path()), None);
-        assert!(local_model_mounts(None).is_empty());
+        assert!(local_model_mounts(None).unwrap().0.is_empty());
         // The renderer names the home; only a direct, existing child counts.
         for bad in [
             root.to_string_lossy().into_owned(),
@@ -3028,7 +3079,9 @@ mod tests {
 
         let own = root.join("gemma4-e4b");
         let home = local_model_home(&env(&own.to_string_lossy()), state.path()).unwrap();
-        let mounts = local_model_mounts(Some(&home));
+        let (mounts, pins) = local_model_mounts(Some(&home)).unwrap();
+        assert_eq!(pins.len(), LOCAL_MODEL_CONTROL.len());
+        verify_control_pins(&pins).unwrap();
         let own_str = own.to_string_lossy().into_owned();
         // The home itself, writable — vibe keeps its logs and history there —
         // and never the sibling models' homes or the directory above.
@@ -3060,11 +3113,65 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, home.join("tools")).unwrap();
         std::os::unix::fs::symlink(outside.join("x.toml"), home.join("hooks.toml")).unwrap();
-        local_model_control_paths(&home);
+        local_model_control_paths(&home).unwrap();
         assert!(!std::fs::symlink_metadata(home.join("tools")).unwrap().file_type().is_symlink());
         assert!(home.join("tools").is_dir());
         assert!(!std::fs::symlink_metadata(home.join("hooks.toml")).unwrap().file_type().is_symlink());
         assert!(!outside.join("x.toml").exists());
+    }
+
+    /// Gap 30: the swap another tab of the model makes *after* setup — a link
+    /// in place of a pinned file or folder — refuses the spawn.
+    #[cfg(unix)]
+    #[test]
+    fn a_control_path_swapped_after_setup_refuses_the_spawn() {
+        let state = tempfile::tempdir().unwrap();
+        let home = state.path().join("vibe_local/gemma4-e4b");
+        std::fs::create_dir_all(&home).unwrap();
+        let outside = state.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let pins = local_model_control_paths(&home).unwrap();
+        verify_control_pins(&pins).unwrap();
+        // A raced link where a file was.
+        std::fs::remove_file(home.join("config.toml")).unwrap();
+        std::os::unix::fs::symlink(outside.join("c.toml"), home.join("config.toml")).unwrap();
+        let err = verify_control_pins(&pins).unwrap_err();
+        assert!(err.contains("config.toml"), "{err}");
+        // Set up again: the link is replaced and the new pins hold.
+        let pins = local_model_control_paths(&home).unwrap();
+        verify_control_pins(&pins).unwrap();
+        // A raced link where a folder was.
+        std::fs::remove_dir(home.join("plugins")).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("plugins")).unwrap();
+        assert!(verify_control_pins(&pins).unwrap_err().contains("plugins"));
+        // A different real file (a new inode) is a swap too.
+        let pins = local_model_control_paths(&home).unwrap();
+        std::fs::remove_file(home.join(".env")).unwrap();
+        std::fs::write(home.join(".env"), "").unwrap();
+        assert!(verify_control_pins(&pins).unwrap_err().contains(".env"));
+        // Gone altogether: refused.
+        let pins = local_model_control_paths(&home).unwrap();
+        std::fs::remove_file(home.join("AGENTS.md")).unwrap();
+        assert!(verify_control_pins(&pins).is_err());
+    }
+
+    /// A FIFO planted at a control name is replaced without blocking the spawn,
+    /// and a home that is not a plain folder refuses it.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_a_control_path_is_replaced_without_blocking() {
+        let state = tempfile::tempdir().unwrap();
+        let home = state.path().join("vibe_local/gemma4-e4b");
+        std::fs::create_dir_all(&home).unwrap();
+        crate::services::home_io::mkfifo(&home.join("config.toml"));
+        crate::services::home_io::mkfifo(&home.join("tools"));
+        let at = home.clone();
+        let pins = crate::services::home_io::within_deadline(move || local_model_control_paths(&at)).unwrap();
+        verify_control_pins(&pins).unwrap();
+        assert!(std::fs::symlink_metadata(home.join("config.toml")).unwrap().is_file());
+        assert!(std::fs::symlink_metadata(home.join("tools")).unwrap().is_dir());
+        let missing = state.path().join("vibe_local/missing");
+        assert!(local_model_control_paths(&missing).is_err());
     }
 
     #[test]

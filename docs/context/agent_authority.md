@@ -222,6 +222,21 @@ its session hooks in each home's `settings.json` / `config.toml` /
 Tabtivity reads back out of a home (transcripts, Codex's SQLite, Copilot's
 config) is agent-written and treated as attacker-controlled, as before.
 
+**Agent-written files are read and set up without trusting the path.** A
+plain read blocks forever on a FIFO, so every small record the host reads
+out of agent reach — the live-session slice, `.git/commondir` and the `.git`
+pointer, Vibe's `meta.json`, transcript tails, Codex's rollout heads — goes
+through `home_io::open_regular` / `read_record` (`O_NOFOLLOW | O_NONBLOCK`,
+a regular file on the opened inode, records capped at 64 KiB; gap 29). The
+local-model home `<state_dir>/vibe_local/<model>` is writable to every
+running tab of that model, so its read-only control paths (`config.toml`,
+`hooks.toml`, `.env`, `AGENTS.md`, the tool/plugin/skill/agent/prompt
+folders) are created through a handle on that home (`HomeFile::ensure`),
+pinned by inode, and re-`lstat`-ed as the fence wrapper's last step; any
+change refuses the spawn (`agent_fence::verify_control_pins`, gap 30).
+bubblewrap and Seatbelt still open the paths by name after that check: the
+remaining window is the gap's stated residual.
+
 A home is seeded once: the scope's existing Tabtivity-kept Codex store and
 Copilot home move in, the Claude transcripts of the scope's own roots are
 **copied** from the user's `~/.claude/projects` (so every tab open before the

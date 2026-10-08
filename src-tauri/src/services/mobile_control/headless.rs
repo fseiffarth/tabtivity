@@ -431,7 +431,7 @@ pub(super) fn turn_record(state_dir: &Path, project_id: &str, uid: &str) -> Opti
     [live.join(&name), live.join(storage::project_key(project_id)).join(&name)]
         .iter()
         .filter_map(|path| {
-            let text = std::fs::read_to_string(path).ok()?;
+            let text = crate::services::home_io::read_record(path)?;
             let state = parse_turn_record(&text)?;
             let at = text.split_whitespace().nth(1).and_then(|s| s.parse::<u64>().ok());
             Some((state, at))
@@ -1443,6 +1443,23 @@ fn zone_from_localtime_target(target: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The phone's turn read is the same agent-written `.turn` record the
+    /// watcher reads: a FIFO there reads as nothing, without blocking (gap 29).
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_turn_record_reads_as_nothing_without_blocking() {
+        let state = tempfile::tempdir().unwrap();
+        let live = state.path().join("live_sessions");
+        std::fs::create_dir_all(&live).unwrap();
+        let uid = "turn-fifo-uid";
+        std::fs::write(live.join(format!("{uid}{TURN_SUFFIX}")), "working 5").unwrap();
+        assert_eq!(turn_record(state.path(), "p", uid), Some((TurnState::Working, Some(5))));
+        std::fs::remove_file(live.join(format!("{uid}{TURN_SUFFIX}"))).unwrap();
+        crate::services::home_io::mkfifo(&live.join(format!("{uid}{TURN_SUFFIX}")));
+        let at = state.path().to_path_buf();
+        assert_eq!(crate::services::home_io::within_deadline(move || turn_record(&at, "p", uid)), None);
+    }
     use crate::commands::calendar::{create_event_at, create_task_at};
     use crate::schema::calendar::{CalendarEvent, CalendarTask, Freq, Rrule};
 

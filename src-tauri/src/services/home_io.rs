@@ -494,6 +494,162 @@ impl HomeFile {
             Ok(())
         }
     }
+
+    /// Make the name a folder (`dir`) or a regular file, created empty where
+    /// missing. A link or any other special file there (a FIFO, a socket) is
+    /// removed first — never what a link points at; a regular file or folder
+    /// already there is kept, whichever was asked for. The [`Meta`] returned
+    /// is read off a handle opened without following a link, so its `ino` is
+    /// the inode now at the name: a caller that later uses the *path* can
+    /// re-`lstat` it and compare (`agent_fence::verify_control_pins`).
+    pub fn ensure(&self, dir: bool) -> io::Result<Meta> {
+        #[cfg(unix)]
+        {
+            if self.metadata().is_some_and(|m| !(m.is_file || m.is_dir)) {
+                if let Err(e) = self.unlink_in_dir(&self.name) {
+                    if e.kind() != io::ErrorKind::NotFound {
+                        return Err(e);
+                    }
+                }
+            }
+            if !self.exists() {
+                if dir {
+                    let c = cstr(&self.name)?;
+                    // SAFETY: valid C string and descriptor.
+                    if unsafe { libc::mkdirat(self.dir.fd.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
+                        let e = io::Error::last_os_error();
+                        if e.kind() != io::ErrorKind::AlreadyExists {
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    // No `O_TRUNC`: a file that appeared meanwhile is kept; a
+                    // link that did fails `ELOOP`, a FIFO `ENXIO`.
+                    self.open_at(&self.name, libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_NONBLOCK, 0o600)?;
+                }
+            }
+            let held = self.open_at(&self.name, libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK, 0)?;
+            let meta = meta_of(&held.metadata()?);
+            if !(meta.is_file || meta.is_dir) {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "neither a regular file nor a folder"));
+            }
+            Ok(meta)
+        }
+        #[cfg(not(unix))]
+        {
+            let path = self.path();
+            if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink() || !(m.is_file() || m.is_dir())) {
+                let _ = std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path));
+            }
+            if std::fs::symlink_metadata(&path).is_err() {
+                if dir {
+                    if let Err(e) = std::fs::create_dir(&path) {
+                        if e.kind() != io::ErrorKind::AlreadyExists {
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    std::fs::OpenOptions::new().append(true).create(true).open(&path)?;
+                }
+            }
+            match self.metadata() {
+                Some(meta) if !meta.is_symlink && (meta.is_file || meta.is_dir) => Ok(meta),
+                Some(_) => Err(io::Error::new(io::ErrorKind::InvalidInput, "neither a regular file nor a folder")),
+                None => Err(io::Error::from(io::ErrorKind::NotFound)),
+            }
+        }
+    }
+}
+
+/// [`Meta`] of an open handle's `fstat`.
+#[cfg(unix)]
+fn meta_of(m: &std::fs::Metadata) -> Meta {
+    use std::os::unix::fs::MetadataExt;
+    Meta {
+        is_file: m.file_type().is_file(),
+        is_dir: m.file_type().is_dir(),
+        is_symlink: m.file_type().is_symlink(),
+        len: m.len(),
+        mode: m.mode() & 0o7777,
+        ino: Some((m.dev(), m.ino())),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agent-written records, read by path (threat model gap 29)
+// ---------------------------------------------------------------------------
+//
+// The live-session slice a fenced agent's hook writes (`<uid>`, `.turn`,
+// `.src`, `.mode`, `.prev`), a project's `.git/commondir` and `.git` pointer,
+// a CLI's session metadata and its transcripts are all files an agent can
+// replace with a FIFO, a link or something huge. A plain `read_to_string`
+// blocks forever on the FIFO — on the turn watcher's one thread, that stops
+// turn state for every tab — so these reads go through here.
+
+/// The most an agent-written record is read: a session id, a turn word, a
+/// `.git` pointer, a CLI's `meta.json` are all far below it.
+pub const RECORD_CAP: u64 = 64 * 1024;
+
+/// Open `path` for reading the way the host must open a file an agent can
+/// write: never through a link at its last component, never blocking on a
+/// planted FIFO (`O_NONBLOCK`), and only when the *opened* inode is a regular
+/// file. The folders above it are the caller's to vouch for. Windows has no
+/// FIFOs to plant and no fence; it keeps the `lstat` check.
+pub fn open_regular(path: &Path) -> Option<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+            .ok()?;
+        file.metadata().ok()?.is_file().then_some(file)
+    }
+    #[cfg(not(unix))]
+    {
+        if !std::fs::symlink_metadata(path).ok()?.is_file() {
+            return None;
+        }
+        std::fs::File::open(path).ok()
+    }
+}
+
+/// An agent-written record at `path`, whole, as text: [`open_regular`]'s
+/// checks, and `None` past [`RECORD_CAP`] bytes or for non-UTF-8.
+pub fn read_record(path: &Path) -> Option<String> {
+    read_record_capped(path, RECORD_CAP)
+}
+
+fn read_record_capped(path: &Path, cap: u64) -> Option<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    open_regular(path)?.take(cap + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > cap {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Run `f` on its own thread and fail the test if it has not returned within
+/// a few seconds — a reader that blocks on a FIFO fails instead of hanging the
+/// suite (the stuck thread is left behind).
+#[cfg(all(test, unix))]
+pub(crate) fn within_deadline<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the read blocked: it must never wait on a FIFO")
+}
+
+/// Plant a FIFO at `path`.
+#[cfg(all(test, unix))]
+pub(crate) fn mkfifo(path: &Path) {
+    let c = std::ffi::CString::new(path.to_string_lossy().into_owned()).unwrap();
+    // SAFETY: a valid C string.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "mkfifo {}", path.display());
 }
 
 #[cfg(test)]
@@ -602,6 +758,78 @@ mod tests {
         sub.file("c").unwrap().write(b"c").unwrap();
         assert_eq!(std::fs::read(home.join(".codex/nested/c")).unwrap(), b"c");
         dir.set_private().unwrap();
+    }
+
+    #[test]
+    fn a_record_reads_whole_up_to_the_cap_and_not_past_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("rec");
+        std::fs::write(&rec, "abc\n").unwrap();
+        assert_eq!(read_record(&rec).as_deref(), Some("abc\n"));
+        assert!(open_regular(&rec).is_some());
+        std::fs::write(&rec, vec![b'a'; RECORD_CAP as usize]).unwrap();
+        assert_eq!(read_record(&rec).map(|s| s.len()), Some(RECORD_CAP as usize));
+        std::fs::write(&rec, vec![b'a'; RECORD_CAP as usize + 1]).unwrap();
+        assert_eq!(read_record(&rec), None, "an oversized record is refused");
+        assert_eq!(read_record_capped(&rec, 4), None);
+        assert_eq!(read_record(&tmp.path().join("missing")), None);
+        assert_eq!(read_record(tmp.path()), None, "a folder is not a record");
+        assert!(open_regular(tmp.path()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_is_never_read_through_a_link_or_from_a_fifo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "secret").unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        assert_eq!(read_record(&link), None);
+        assert!(open_regular(&link).is_none());
+        let fifo = tmp.path().join("fifo");
+        mkfifo(&fifo);
+        assert_eq!(within_deadline(move || read_record(&fifo)), None);
+        let fifo = tmp.path().join("fifo");
+        assert!(within_deadline(move || open_regular(&fifo).is_none()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_replaces_a_link_or_fifo_and_keeps_what_is_real() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let dir = HomeDir::open_existing(&home, "").unwrap();
+        // Missing: created, as asked.
+        let made = dir.file("config.toml").unwrap().ensure(false).unwrap();
+        assert!(made.is_file && made.len == 0);
+        assert!(dir.file("tools").unwrap().ensure(true).unwrap().is_dir);
+        // A link is replaced, its target untouched.
+        std::fs::write(outside.join("x"), "keep").unwrap();
+        std::os::unix::fs::symlink(outside.join("x"), home.join(".env")).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("skills")).unwrap();
+        assert!(dir.file(".env").unwrap().ensure(false).unwrap().is_file);
+        assert!(dir.file("skills").unwrap().ensure(true).unwrap().is_dir);
+        assert!(!std::fs::symlink_metadata(home.join(".env")).unwrap().file_type().is_symlink());
+        assert!(!std::fs::symlink_metadata(home.join("skills")).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(outside.join("x")).unwrap(), "keep");
+        // A FIFO is replaced without blocking.
+        mkfifo(&home.join("hooks.toml"));
+        let fifo_home = home.clone();
+        let meta = within_deadline(move || {
+            HomeDir::open_existing(&fifo_home, "").unwrap().file("hooks.toml").unwrap().ensure(false).unwrap()
+        });
+        assert!(meta.is_file);
+        // An existing file keeps its contents, and the identity is its inode.
+        std::fs::write(home.join("AGENTS.md"), "mine").unwrap();
+        let meta = dir.file("AGENTS.md").unwrap().ensure(false).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join("AGENTS.md")).unwrap(), "mine");
+        use std::os::unix::fs::MetadataExt;
+        let st = std::fs::symlink_metadata(home.join("AGENTS.md")).unwrap();
+        assert_eq!(meta.ino, Some((st.dev(), st.ino())));
     }
 
     #[cfg(unix)]
