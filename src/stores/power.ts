@@ -146,7 +146,12 @@ export function startFocusTracking(): () => void {
     unwatchFrame();
     apply(false);
   };
-  apply(!document.hasFocus());
+  // Start focused unless the window is hidden: WebKitGTK can report
+  // `hasFocus()` false for a window that is in front and never follow it with a
+  // `focus` event, which would hold every quiesced poll until a blur/focus
+  // round trip. A window that really starts in the background is caught by
+  // its first blur/focus; until then it runs as an unfocused window always did.
+  apply(document.visibilityState === "hidden");
   window.addEventListener("blur", onBlur);
   window.addEventListener("focus", onFocus);
   return () => {

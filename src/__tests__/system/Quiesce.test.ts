@@ -47,8 +47,6 @@ afterEach(() => {
 describe("startFocusTracking", () => {
   it("blur engages quiesce and marks the root; focus disengages both", async () => {
     const stop = startFocusTracking();
-    // Tracking seeds from document.hasFocus() (false in jsdom); a focus event
-    // settles it, which is also what a real window fires as it comes forward.
     window.dispatchEvent(new Event("focus"));
     expect(usePowerStore.getState().blurred).toBe(false);
     expect(quiesceActive()).toBe(false);
@@ -72,6 +70,27 @@ describe("startFocusTracking", () => {
     await blur();
     expect(usePowerStore.getState().blurred).toBe(false);
     expect(document.documentElement.dataset.blurred).toBeUndefined();
+  });
+});
+
+describe("startFocusTracking at startup", () => {
+  it("starts a visible window focused even when hasFocus() says otherwise", () => {
+    // WebKitGTK can report false for a window in front and never send `focus`;
+    // seeding from it held every quiesced poll until a blur/focus round trip.
+    usePowerStore.setState({ blurred: true });
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const stop = startFocusTracking();
+    expect(usePowerStore.getState().blurred).toBe(false);
+    expect(document.documentElement.dataset.blurred).toBeUndefined();
+    stop();
+  });
+
+  it("starts a hidden window blurred", () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const stop = startFocusTracking();
+    expect(usePowerStore.getState().blurred).toBe(true);
+    stop();
   });
 });
 
