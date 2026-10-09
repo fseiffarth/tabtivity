@@ -762,14 +762,19 @@ const RETIRED: &[(&str, &str)] = &[
 /// - Every scope home and local-model home keeps its copy: the copies have
 ///   been their own inodes since 2026-09-26, and the login survives in every
 ///   scope that had it.
-/// - The Host home (unfenced) loses its copy of a retired file where the
-///   bytes are the store's current ones or the ones the store last placed
-///   there — that is, Tabtivity put it there, from whichever scope. A copy
-///   that differs from both is the Host session's own write and stays.
-/// - Then the CLI's store directory goes, with its records.
+/// - The Host home (unfenced) has its copy of a retired file renamed aside
+///   to `<name>.pre-scope` ([`PRE_SCOPE_SUFFIX`]) where the bytes are the
+///   store's current ones or the ones the store last placed there — that
+///   is, Tabtivity put it there, from whichever scope, or adopted it from
+///   the Host session itself (the two leave the same record). Nothing is
+///   deleted: a login or settings the user made there survive under the
+///   new name. A copy that differs from both is the Host session's own
+///   write and stays where it is.
+/// - Then the CLI's store directory goes, with its records (kept when the
+///   rename failed, so the next start can tell again).
 /// - In a login directory, every store file the allowlist no longer admits
-///   goes, and a home's copy of such a name only where it still matches
-///   what the store placed in that home.
+///   goes, and a home's copy of such a name is renamed aside the same way
+///   only where it still matches what the store placed in that home.
 ///
 /// Users who want one key everywhere put the file into the Tabtivity-wide
 /// layer (`services::agent_global`); the store's copy is not moved there,
@@ -787,12 +792,9 @@ pub fn retire_shared_paths_in(state_dir: &Path) {
                 let hash = digest(&bytes);
                 let ours = std::fs::read(store_dir.join(&leaf)).is_ok_and(|s| digest(&s) == hash)
                     || read_placed(&store_dir, &host, &leaf).as_deref() == Some(hash.as_str());
-                if ours {
-                    if let Err(e) = copy.remove() {
-                        eprintln!("agent_auth: {cli}: retire the Host copy: {e}");
-                        // Keep the store so the next start can tell again.
-                        continue;
-                    }
+                if ours && !move_aside(cli, &copy) {
+                    // Keep the store so the next start can tell again.
+                    continue;
                 }
             }
         }
@@ -805,6 +807,27 @@ pub fn retire_shared_paths_in(state_dir: &Path) {
         for path in paths {
             let AuthKind::Dir(names) = path.kind else { continue };
             retire_dir_names(state_dir, cli, path.rel, names, &homes);
+        }
+    }
+}
+
+/// What a retired home copy is renamed to, in its own directory:
+/// `<name>.pre-scope` (then `.1`, `.2`, … when taken). No CLI loads such a
+/// name and no [`DirNames`] admits it, so the keeper neither adopts nor
+/// places it; the user's own settings in it survive for them to copy back.
+const PRE_SCOPE_SUFFIX: &str = ".pre-scope";
+
+/// Rename a home copy aside ([`PRE_SCOPE_SUFFIX`]) instead of deleting it.
+/// Logs one line either way; `false` when it could not be moved.
+fn move_aside(cli: &str, copy: &HomeFile) -> bool {
+    match copy.rename_aside(PRE_SCOPE_SUFFIX) {
+        Ok(to) => {
+            eprintln!("agent_auth: {cli}: no longer shared, moved {} aside to {to}", copy.path().display());
+            true
+        }
+        Err(e) => {
+            eprintln!("agent_auth: {cli}: move {} aside: {e}", copy.path().display());
+            false
         }
     }
 }
@@ -824,7 +847,7 @@ fn retire_dir_names(state_dir: &Path, cli: &str, rel: &str, names: DirNames, hom
             let Some(placed) = read_placed(&store_dir, home, &format!("{prefix}{name}")) else { continue };
             let Some(copy) = dir.file(&name) else { continue };
             if copy.read().is_some_and(|b| digest(&b) == placed) {
-                let _ = copy.remove();
+                move_aside(cli, &copy);
             }
         }
     }
@@ -1357,6 +1380,16 @@ mod tests {
                     "{cli} shares the retired {retired_cli} path {rel}"
                 );
             }
+            // A copy moved aside is never a shared name again.
+            for path in paths {
+                assert!(!path.rel.contains(PRE_SCOPE_SUFFIX), "{cli}: {}", path.rel);
+                if let AuthKind::Dir(names) = path.kind {
+                    for name in ["kimi-code.json", "a.info", ".logged-out", "x.env"] {
+                        assert!(!names.admits(&format!("{name}{PRE_SCOPE_SUFFIX}")), "{cli}: {name}");
+                        assert!(!names.admits(&format!("{name}{PRE_SCOPE_SUFFIX}.1")), "{cli}: {name}");
+                    }
+                }
+            }
         }
     }
 
@@ -1404,9 +1437,18 @@ mod tests {
             assert_eq!(std::fs::read_to_string(home.join(vibe)).unwrap(), "VIBE_FIXTURE=shared");
         }
         assert_eq!(std::fs::read_to_string(a.join(cline)).unwrap(), r#"{"v":2}"#);
+        // The Host copies are renamed aside, content intact, never deleted.
         assert!(!host.join(vibe).exists());
         assert!(!host.join(cline).exists());
+        let aside = |rel: &str| host.join(format!("{rel}{PRE_SCOPE_SUFFIX}"));
+        assert_eq!(std::fs::read_to_string(aside(vibe)).unwrap(), "VIBE_FIXTURE=shared");
+        assert_eq!(std::fs::read_to_string(aside(cline)).unwrap(), r#"{"v":1}"#);
         assert_eq!(std::fs::read_to_string(host.join(aider)).unwrap(), "AIDER_FIXTURE=host");
+        assert!(!aside(aider).exists());
+        // Fenced and local-model homes are untouched: nothing moved aside.
+        for home in [&a, &local] {
+            assert!(!home.join(format!("{vibe}{PRE_SCOPE_SUFFIX}")).exists());
+        }
         // No longer shared: a write in one scope stays there.
         let b = crate::services::agent_home::scope_home_in(state, "b");
         std::fs::create_dir_all(&b).unwrap();
@@ -1422,6 +1464,67 @@ mod tests {
         assert_eq!(std::fs::read_to_string(host.join(aider)).unwrap(), "AIDER_FIXTURE=host");
         assert_eq!(std::fs::read_to_string(a.join(vibe)).unwrap(), "GIT_CONFIG_COUNT=1");
         assert!(store("codex", ".codex/auth.json").is_file());
+        assert_eq!(std::fs::read_to_string(aside(vibe)).unwrap(), "VIBE_FIXTURE=shared");
+        assert!(!host.join(format!("{vibe}{PRE_SCOPE_SUFFIX}.1")).exists());
+        assert!(!host.join(vibe).exists());
+    }
+
+    /// The rename aside never replaces a file: a taken `.pre-scope` name
+    /// gets the next free numbered suffix, and what was there stays.
+    #[test]
+    fn retiring_a_host_copy_picks_a_free_pre_scope_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let host = crate::services::agent_home::host_home_in(state);
+        let vibe = ".vibe/.env";
+        let store = store_dir_in(state, "vibe").join(leaf_of(vibe));
+        std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+        std::fs::write(&store, "VIBE_FIXTURE=shared").unwrap();
+        std::fs::create_dir_all(host.join(".vibe")).unwrap();
+        std::fs::write(host.join(vibe), "VIBE_FIXTURE=shared").unwrap();
+        std::fs::write(host.join(".vibe/.env.pre-scope"), "older").unwrap();
+        std::fs::write(host.join(".vibe/.env.pre-scope.1"), "oldest").unwrap();
+
+        retire_shared_paths_in(state);
+
+        assert!(!host.join(vibe).exists());
+        assert_eq!(std::fs::read_to_string(host.join(".vibe/.env.pre-scope")).unwrap(), "older");
+        assert_eq!(std::fs::read_to_string(host.join(".vibe/.env.pre-scope.1")).unwrap(), "oldest");
+        assert_eq!(std::fs::read_to_string(host.join(".vibe/.env.pre-scope.2")).unwrap(), "VIBE_FIXTURE=shared");
+        assert!(!store_dir_in(state, "vibe").exists());
+    }
+
+    /// When the Host copy cannot be moved aside, the store stays so the
+    /// next start can tell Tabtivity's copy from the Host session's again.
+    #[cfg(unix)]
+    #[test]
+    fn retiring_keeps_the_store_when_the_host_copy_cannot_be_moved() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root renames inside a read-only directory
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let host = crate::services::agent_home::host_home_in(state);
+        let vibe = ".vibe/.env";
+        let store = store_dir_in(state, "vibe").join(leaf_of(vibe));
+        std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+        std::fs::write(&store, "VIBE_FIXTURE=shared").unwrap();
+        std::fs::create_dir_all(host.join(".vibe")).unwrap();
+        std::fs::write(host.join(vibe), "VIBE_FIXTURE=shared").unwrap();
+        std::fs::set_permissions(host.join(".vibe"), std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        retire_shared_paths_in(state);
+        let kept = store.is_file();
+        let still = std::fs::read_to_string(host.join(vibe)).ok();
+        std::fs::set_permissions(host.join(".vibe"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(kept, "store kept");
+        assert_eq!(still.as_deref(), Some("VIBE_FIXTURE=shared"));
+
+        // Once it can be moved, the next start finishes the job.
+        retire_shared_paths_in(state);
+        assert!(!store_dir_in(state, "vibe").exists());
+        assert_eq!(std::fs::read_to_string(host.join(".vibe/.env.pre-scope")).unwrap(), "VIBE_FIXTURE=shared");
     }
 
     /// Gap 16 migration for login folders: a name the allowlist no longer
@@ -1456,9 +1559,22 @@ mod tests {
         assert_eq!(store_dir_files(&store), vec!["kimi-code.json".to_string()]);
         for home in [&a, &host] {
             assert!(!home.join(kimi).join("x.env").exists());
+            assert_eq!(
+                std::fs::read_to_string(home.join(kimi).join("x.env.pre-scope")).unwrap(),
+                "GIT_CONFIG_COUNT=1"
+            );
             assert!(read_placed(&store_dir, home, &leaf("x.env")).is_none());
         }
         assert_eq!(std::fs::read_to_string(b.join(kimi).join("x.env")).unwrap(), "OWN=1");
+        assert!(!b.join(kimi).join("x.env.pre-scope").exists());
+        // The renamed copies are neither adopted nor placed by the keeper.
+        let c = crate::services::agent_home::scope_home_in(state, "c");
+        std::fs::create_dir_all(&c).unwrap();
+        reconcile_all_in(state);
+        assert_eq!(store_dir_files(&store), vec!["kimi-code.json".to_string()]);
+        assert_eq!(std::fs::read_to_string(c.join(kimi).join("kimi-code.json")).unwrap(), "k1");
+        assert!(!c.join(kimi).join("x.env.pre-scope").exists());
+        assert!(!b.join(kimi).join("x.env.pre-scope").exists());
         for home in [&a, &b, &host] {
             assert_eq!(std::fs::read_to_string(home.join(kimi).join("kimi-code.json")).unwrap(), "k1");
             assert!(read_placed(&store_dir, home, &leaf("kimi-code.json")).is_some());
@@ -1467,6 +1583,10 @@ mod tests {
         retire_shared_paths_in(state);
         assert_eq!(std::fs::read_to_string(b.join(kimi).join("x.env")).unwrap(), "OWN=1");
         assert!(store.join("kimi-code.json").is_file());
+        for home in [&a, &host] {
+            assert!(home.join(kimi).join("x.env.pre-scope").is_file());
+            assert!(!home.join(kimi).join("x.env.pre-scope.1").exists());
+        }
     }
 
     #[test]

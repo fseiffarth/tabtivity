@@ -311,9 +311,16 @@ scope's fence and unfenced in the Host session. There is no content
 validator for them; they left the shared set, and those CLIs sign in once
 per scope. At startup, before the import and the keeper,
 `agent_auth::retire_shared_paths_in` drops their store dirs; every scope
-and local-model home keeps the copy it holds, and the Host home loses its
-copy where the bytes are the store's or what the store last placed there
-(a copy that differs from both is the Host session's own write and stays).
+and local-model home keeps the copy it holds, and the Host home's copy is
+renamed aside to `<name>.pre-scope` (`.1`, `.2`, … when taken; through the
+`home_io` handle, never replacing a file) where the bytes are the store's or
+what the store last placed there (a copy that differs from both is the Host
+session's own write and stays). Nothing is deleted: an adopted Host login
+and a placed copy leave the same record, so the cleanup cannot tell a login
+the user made in the Host session from one Tabtivity put there, and the
+rename keeps the former's settings for the user to copy back. No CLI loads
+a `.pre-scope` name and no allowlist admits one. If the rename fails, the
+store dir stays so the next start can tell again.
 Content planted before the fix stays in the fenced homes it already
 reached. A user who wants one key everywhere puts the file into the
 Tabtivity-wide layer (`<state_dir>/agent-global/`, "Open folder"), which no
@@ -325,7 +332,8 @@ reconciled file by file and only for an allowlist of names
 temporary, a `.logged-out` marker, a backup or a planted file stays in the
 home it was written in; the import copies the folder one level deep under
 the same allowlist, and the startup cleanup removes unlisted names from the
-store and a home's copy where it still matches what the store placed there.
+store and renames a home's copy aside (`<name>.pre-scope`) where it still
+matches what the store placed there.
 Where a file names an account
 (Codex's `account_id`; Claude's via the `.claude.json` identity the store
 also keeps), the store records it at first adoption and a later file naming

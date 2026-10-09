@@ -84,6 +84,10 @@ environment (Mistral Vibe's `.env`, Aider, mini-swe-agent, Cline), signs in
 once per project instead — an agent in one project must not be able to plant
 settings that run in another. To use one Vibe, Aider or mini-swe-agent key
 everywhere, put that `.env` file into the global agent config (below).
+Earlier versions shared those four files; if one reached the Host session's
+home that way, the first start of this version renames it beside itself to
+`<name>.pre-scope` (for example `.vibe/.env.pre-scope`) — nothing is deleted.
+Sign in again in the Host session, or copy your settings back from that file.
 Copilot's case is described under the sandbox below.
 
 **API keys instead of a subscription.** If you pay per token, Settings → Agent
