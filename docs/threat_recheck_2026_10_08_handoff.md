@@ -1148,3 +1148,162 @@ passed; `rtk proxy npm run lint` 0 errors, 28 advisory warnings (unchanged);
   truncated or padded).
 - Viewers that never offered Open externally (`syncmerge`, `gitmerge`) get it
   on the crash card, opening the pane's `path` with the OS handler on click.
+
+## Agent step 7 — implementer (gaps 35, 36; plan steps 13, 14)
+
+**Commit:** `f3260ec6` Hold the rsync pull fast path and TeX previews to
+their confinement.
+
+**Files:** `services/remote_sync.rs` (new `rsync_pull_flags`, `rsync_pull_args`
+builds on it; `rsync_may_transfer`, `rsync_pulled_base`); `commands/sync.rs`
+(`try_rsync_pull` leaves files over the cap out of the list; the record loop
+after an rsync uses `rsync_pulled_base`); `commands/tex.rs`
+(`OPENOUT_PARANOID` set in `run_in_within_env`, `preview_env(scratch)`,
+`preview_engine`, `PREVIEW_NO_LUATEX`, `preview_main_file`; the preview run and
+the preview format build use them); `services/sandbox.rs` (login-dirs line
+deleted from the mount list comment). Docs: `threat_model.md` rows 35, 36
+(**Fixed, not live-verified.**), the byte-sync tier-0 row, the TeX hover
+preview tier-2 row, the build/TeX compile row, and the Send-to-desktop upload
+in the phone-bridge row; `remote_sync_guide.md` §2.5; `context/git_sync.md`
+(rsync bullet); `filemap_backend.md` (`tex.rs`, `remote_sync.rs`).
+
+**rsync argv now:** `-t -c --no-links --no-devices --no-specials
+--max-size=67108864 --exclude=/.git --exclude=.tabtivity --exclude=.git
+--from0 --files-from=<list> -e <ssh …> <host:src/> <dest/>`. Kept: timestamps
+(`-t`), checksum compare (`-c`), the NUL files-from list, the excludes, the
+ControlMaster ssh transport, and the local/host availability probes with their
+SFTP fallback (untouched).
+
+**Tests added/changed:**
+- `remote_sync.rs`: the args test asserts `-t`/`-c`, no `-a --archive -r
+  --recursive -l --links -D -p -o -g`, no bundled short flags, and the
+  presence of `--no-links --no-devices --no-specials --max-size=<cap>`;
+  `rsync_size_gate_matches_the_floor`;
+  `rsync_pulled_base_records_only_regular_files_within_the_cap` (regular file
+  yes; host-listed over cap, missing, directory, sparse over-cap file, symlink
+  to a file, FIFO no); `rsync_pull_flags_land_only_listed_regular_files_within_the_cap`
+  runs the real flags local→local (rsync 3.4.1 here): a listed path under a
+  dir swapped for a FIFO, a listed FIFO, a listed path that became a directory
+  full of unlisted files, a symlink and a 64 MiB + 1 file never land; the
+  listed regular file lands with its mtime. Skips without rsync on PATH.
+- `tex.rs`: `a_preview_never_enables_shell_escape` also asserts
+  `openin_any=p`, `TEXMFOUTPUT=<scratch>` and `OPENOUT_PARANOID`;
+  `a_hover_preview_never_runs_luatex` (pure: explicit non-Lua engines kept
+  without reading the preamble; Lua hint or `% !TEX program = lualatex` → no
+  preview even with LuaLaTeX requested; LuaLaTeX request → pdfLaTeX, fontspec
+  → XeLaTeX, else pdfLaTeX; only LuaLaTeX installed → no preview; Build's
+  `engine_for_hint` still picks LuaLaTeX); `a_hover_preview_reads_only_below_the_document`
+  (real engine, in a `/tmp/.tmpXXXX` dot dir like the state dir: absolute
+  `\input` refused — and only because of the mode, a control run with
+  `openin_any=a` reads it — `../` refused, relative `\input{macros}` plus
+  `amsmath` typesets, a decoy `p.tex` in the document folder is not used);
+  `a_build_engine_run_confines_luatex_writes` (real LuaLaTeX: with
+  `openout_any=a` reaching the engine `io.open` writes an absolute path; through
+  `run_in_within_env` neither the absolute nor the `../` write lands and the PDF
+  is built). The existing #867 end-to-end test now picks pdfLaTeX/XeLaTeX only.
+
+**LuaTeX write check (review note):** on LuaHBTeX 1.22.0 (TeX Live
+2025/Debian, `texmf.cnf` `openout_any = p`, `openin_any = a`), a Build-like
+`lualatex -no-shell-escape -output-directory=…` run of a document whose
+`\directlua` does `io.open("<abs>", "w")` and `io.open("../x", "w")`, plus an
+`\openout` to an absolute path: with the environment unset and with
+`openout_any=p` all three are refused; with `openout_any=a` in the
+environment all three are written. So LuaTeX's `io.open` honours
+`openout_any`, the environment outranks `texmf.cnf`, and Build was confined
+only by the distribution default. **Chosen:** every engine run sets
+`openout_any=p` itself (one `.env` in `run_in_within_env`, after the inherited
+environment, before the caller's `envs`) — Build through latexmk (which hands
+the environment to the engine), the direct engine path, bibtex, the document
+and preview format dumps and previews. `io.open` reads stay open on LuaTeX
+(`/etc/hostname` read fine under `openin_any=a`), and LuaLaTeX does not start
+at all under `openin_any=p` (luaotfload cannot open its font cache), so Build
+gets no `openin_any`.
+
+**Choices made:**
+- **Wrapper by name, not path (deviation found by the test):** kpathsea's
+  paranoid input mode refuses any path with a dot component
+  (`TEXMFOUTPUT` set or not — measured), and the preview scratch dir is
+  `~/.local/share/tabtivity/tex-preview/…` on Linux. Passing the absolute
+  wrapper path would have broken every preview there. The preview run and its
+  format build now pass `tabtivity-preview.tex` by name; web2c looks in
+  `-output-directory` first, so the scratch copy wins even over a same-named
+  file in the document folder (tested). `-fmt=<abs dotted path>` is not
+  subject to the check (measured, and the format run typesets).
+- `TEXMFOUTPUT` is pinned to the scratch dir in `preview_env`, so a user's own
+  `TEXMFOUTPUT` cannot widen where a preamble reads by absolute path.
+- Preview engine: the requested engine is used if installed and not LuaLaTeX
+  (no preamble scan, same cost as before); otherwise the preamble hint decides
+  with LuaLaTeX removed — Lua hint or a LuaLaTeX magic comment → `Err("no
+  hover preview for a LuaLaTeX preamble")`, which the hover card shows like
+  any failed preview (no new UI, no new string key — backend errors were
+  English already). A fontspec preamble previews with XeLaTeX (verified under
+  `openin_any=p`), else pdfLaTeX (fails over to the existing body-only
+  fallback document).
+- rsync: no `--no-recursive` added (the review note's "drop `--recursive`" is
+  the spec; `--files-from` never implies `-r`). Files over the cap are
+  filtered before the list is written; if nothing within the cap remains, the
+  fast path is skipped (the SFTP floor refuses them per file as before).
+  After rsync, a listed file over the cap, or a local path that is not a
+  regular file (lstat) or exceeds the cap, is not recorded and is reported
+  with the existing `sync_pull: skip` line. Nothing that rsync left on disk is
+  deleted (destructive moves in the mirror are out of scope).
+
+**Gates (at `f3260ec6`):** `npm run build` ok; `npm test` 738 files / 7580
+passed; `cargo test -q` 3789 passed, 3 ignored, 0 failed (lib 3621, +6);
+`rtk proxy npm run lint` 0 errors, 28 advisory warnings (unchanged); `cargo
+clippy --all-targets -D warnings` clean; `scripts/brand-check.sh` ok; `git diff
+--check` clean; `scripts/privacy-check.sh` (staged) clean. `npm run
+backend:stale` not run (per instructions).
+
+**Gotchas:**
+- `tempfile::tempdir()` lives in `/tmp/.tmpXXXX` — a dot dir — so any test
+  that runs TeX under `openin_any=p` with an absolute input fails there for
+  the same reason production would under `~/.local/share`.
+- The existing #867 end-to-end test (`…runs_no_shell_command…`) skips on this
+  Debian TeX Live ("pdflatex ignores shell_escape=t here"); new engine checks
+  went into their own tests so they do not hide behind that skip.
+- rsync exits 23 when a listed path vanished or turned into something else;
+  `rsync_pull_dir` treats any non-zero exit as failure, so such a race falls
+  back to the SFTP floor (as before).
+- The test suite writes nothing to the state dir for the new tests; there is
+  no end-to-end `preview_snippet_blocking` test because the state dir is not
+  isolated in tests (it would write the real `~/.local/share/tabtivity`).
+
+**Flagged for user:**
+- **Residual (row 35):** `--max-size` is enforced from sizes the host's own
+  rsync reports; a host account that replaces `rsync` on its PATH can still
+  land a big file in the mirror (left unrecorded, not deleted).
+- **Residual (row 36):** a Build of a document that asks for LuaLaTeX still
+  runs LuaTeX with reads open (it cannot run under `openin_any=p`); TeX Live
+  < 2023 without the CVE-2023-32700 patch remains exposed on Build. MiKTeX
+  ignores both kpathsea variables.
+- **Behaviour changes:** a LuaLaTeX-only preamble (luacode, `\directlua`,
+  luatexja, `% !TEX program = lualatex`) no longer gets hover previews; a
+  fontspec preamble previews with XeLaTeX instead of LuaLaTeX (fonts may
+  differ slightly); a preamble that `\input`s an absolute path or `../` gets
+  no preview. A user whose `texmf.cnf` set `openout_any = a` can no longer
+  have a Build write outside the document folder / output dir. On an old
+  macOS rsync 2.6.9 or Apple's openrsync, an unknown flag makes rsync fail and
+  the pull falls back to SFTP (slower, same result) — not checked on macOS.
+- No `UntestedTag`: no new UI.
+
+**Live click-through (not run):**
+1. Remote project with rsync on both ends: Remote tree → right-click a folder
+   holding a few files → Pull. Files arrive, rows go green, timestamps match
+   the host.
+2. On the host, `mkfifo pipe` and `truncate -s 70M big.bin` inside that
+   folder, Pull again: neither appears in the mirror; the rest still pulls.
+3. TeX: in a `.tex` with a plain `amsmath` preamble and `\input{macros}`
+   (a `macros.tex` beside it), hover `$\frac{a}{b}$`: the preview renders and
+   uses the macros.
+4. Add `\usepackage{luacode}` to the preamble and hover again: the card shows
+   "no hover preview for a LuaLaTeX preamble". Press Build: it still builds
+   with LuaLaTeX.
+5. Replace with `\usepackage{fontspec}` and hover: the preview renders (via
+   XeLaTeX).
+6. Add `\input{/etc/hostname}` to a preamble and hover: no preview; Build is
+   unchanged by this step (reads stay open on Build).
+7. With `openout_any=a` exported in the environment that starts Tabtivity, Build
+   a LuaLaTeX document whose `\directlua` does
+   `io.open("/tmp/tt-escape.txt","w")`: no `/tmp/tt-escape.txt` appears; the
+   PDF builds.
