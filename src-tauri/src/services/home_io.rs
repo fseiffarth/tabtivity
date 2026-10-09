@@ -514,8 +514,9 @@ impl HomeFile {
     /// `<name><suffix>.1`, `.2`, … when that is taken; returns the new name.
     /// Relative to the handle, so a link at the name is moved, never
     /// followed, and an existing name is never replaced (`RENAME_NOREPLACE`
-    /// on Linux, `RENAME_EXCL` on macOS; elsewhere, and on a filesystem
-    /// without either, a check just before the rename).
+    /// on Linux, `RENAME_EXCL` on macOS; on a filesystem without either, a
+    /// hard link then an unlink, see [`HomeFile::link_aside`]; on Windows,
+    /// which has no fence, a check just before the rename).
     pub fn rename_aside(&self, suffix: &str) -> io::Result<String> {
         let name = self.name.to_string_lossy().into_owned();
         for n in 0..1000u32 {
@@ -535,6 +536,7 @@ impl HomeFile {
     #[cfg(unix)]
     fn rename_noreplace(&self, to: &OsStr) -> io::Result<()> {
         let (from_c, to_c) = (cstr(&self.name)?, cstr(to)?);
+        #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
         let fd = self.dir.fd.as_raw_fd();
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         {
@@ -558,12 +560,42 @@ impl HomeFile {
                 return Err(e);
             }
         }
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        // SAFETY: valid C string, descriptor and out-pointer.
-        if unsafe { libc::fstatat(fd, to_c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } == 0 {
-            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        self.link_aside(&from_c, &to_c)
+    }
+
+    /// The no-replace move on a filesystem without an atomic flag for it
+    /// (NFS answers `RENAME_NOREPLACE` with `EINVAL`): hard-link `from` to
+    /// `to`, which fails on an existing name, then drop `from` if it is still
+    /// the same file. Never a replacing rename: a filesystem without hard
+    /// links refuses the move, and the caller keeps what it has. If `from`
+    /// was replaced in between, the newcomer stays where it is and the file
+    /// that was there is the one at `to`.
+    #[cfg(unix)]
+    fn link_aside(&self, from: &std::ffi::CStr, to: &std::ffi::CStr) -> io::Result<()> {
+        let fd = self.dir.fd.as_raw_fd();
+        // SAFETY: valid C strings and descriptor; flags 0 links a symlink
+        // itself, never what it points at.
+        if unsafe { libc::linkat(fd, from.as_ptr(), fd, to.as_ptr(), 0) } != 0 {
+            return Err(io::Error::last_os_error());
         }
-        self.rename_in_dir(&self.name, to)
+        let id = |name: &std::ffi::CStr| {
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            // SAFETY: valid C string, descriptor and out-pointer.
+            let r = unsafe { libc::fstatat(fd, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
+            (r == 0).then_some((st.st_dev, st.st_ino))
+        };
+        if id(from).is_none_or(|a| Some(a) != id(to)) {
+            return Ok(());
+        }
+        // SAFETY: valid C string and descriptor.
+        if unsafe { libc::unlinkat(fd, from.as_ptr(), 0) } != 0 {
+            let e = io::Error::last_os_error();
+            // Not left under two names: drop the link just made.
+            // SAFETY: valid C string and descriptor.
+            unsafe { libc::unlinkat(fd, to.as_ptr(), 0) };
+            return Err(e);
+        }
+        Ok(())
     }
 
     #[cfg(not(unix))]
@@ -1042,5 +1074,37 @@ mod tests {
         // Nothing at the name: an error, nothing created.
         assert!(file.rename_aside(".old").is_err());
         assert!(!home.join(".vibe/.env.old.3").exists());
+    }
+
+    /// The fallback for a filesystem without `RENAME_NOREPLACE` (NFS) is a
+    /// hard link then an unlink, never a replacing rename: a taken name is
+    /// refused with both files intact, a link is moved as a link.
+    #[cfg(unix)]
+    #[test]
+    fn the_link_fallback_never_replaces_and_never_follows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(home.join(".vibe")).unwrap();
+        std::fs::write(home.join(".vibe/.env"), "mine").unwrap();
+        std::fs::write(home.join(".vibe/.env.old"), "older").unwrap();
+        let file = HomeFile::open_existing(&home, ".vibe/.env").unwrap();
+        let c = |s: &str| std::ffi::CString::new(s).unwrap();
+
+        let err = file.link_aside(&c(".env"), &c(".env.old")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(home.join(".vibe/.env")).unwrap(), "mine");
+        assert_eq!(std::fs::read_to_string(home.join(".vibe/.env.old")).unwrap(), "older");
+
+        file.link_aside(&c(".env"), &c(".env.old.1")).unwrap();
+        assert!(!home.join(".vibe/.env").exists());
+        assert_eq!(std::fs::read_to_string(home.join(".vibe/.env.old.1")).unwrap(), "mine");
+
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        std::os::unix::fs::symlink(&victim, home.join(".vibe/.env")).unwrap();
+        file.link_aside(&c(".env"), &c(".env.old.2")).unwrap();
+        assert!(std::fs::symlink_metadata(home.join(".vibe/.env")).is_err());
+        assert!(std::fs::symlink_metadata(home.join(".vibe/.env.old.2")).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
     }
 }
