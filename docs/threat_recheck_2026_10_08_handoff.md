@@ -1392,3 +1392,195 @@ backend:stale` not run (per instructions).
   The flags are supported (finding 5), but the exact exit code for a vanished
   listed path (asserted `0 | 23`) is not checked on openrsync. Watch the
   first macOS run.
+
+## Final review
+
+**Range:** `6c420e42..a8064db4` (steps 1–7 with their reviews), reviewed as a
+whole; per-step reviews not redone.
+
+**Fix commits:** `7c8b87a0` (Rust + docs: hooks in place, sheet dimension,
+reader death signal, Lua preamble preview), `3ed6003f` (frontend: GIF frame
+bound, merge-view crash card).
+
+### Part A — whole-range findings
+
+- **Steps 2/3/4 in one `prepare` compose.** Order: `adopt_legacy_env` →
+  `strip_control_env` (step 2) → … → `SpawnGeneration::begin` → `grant_lanes`
+  (inserts the push token after the strip, so a planted `GIT_TOKEN` can never
+  be the one stamped) → push token read → fence `match` (step 4's
+  `local_model_mounts` + `verify_control_pins` inside `wrap_pty_options_bwrap`;
+  a refusal returns, the generation abandons, the token guard revokes) → stamp
+  (step 3) → `export_both` → tmux wrap. `terminal/mod.rs` seq plumbing and
+  `home_io` additions (step 4 readers, step 1 login I/O) do not overlap.
+- No leftover TODO/FIXME/`dbg!`/`console.log` in the range.
+- i18n: all 16 new/changed keys (`settings.agentLoginsHelp`, six
+  `viewerLimit.*`, `yamlParse.tooDeep`, `odt.errTooLarge`, seven
+  `viewerCrash.*`) are in all five dictionaries and used.
+- `UntestedTag`: the one pill (`viewerCrash.title`) has its register row
+  (row text updated for the merge-view change).
+- Filemap rows exist for `sheet_reader.rs`, `limitError.ts`, `odtArchive.ts`,
+  `ViewerErrorBoundary.tsx`; updated for this review's changes (`home_io.rs`,
+  `sheet_reader.rs`, `tex.rs`, `gif.ts`, `ViewerErrorBoundary.tsx`).
+- `threat_model.md`: rows 16, 17, 18, 24, 28, 29, 30, 35, 36, 37, 39, 40, 41
+  all read "**Fixed, not live-verified.**" with residuals. **Fixed here:**
+  tier-2 rows that cite them were stale — the SQLite row still said only
+  "opened read-only; table names quoted" (now names the row 37/39 bounds), no
+  spreadsheet or GIF row existed (added, citing rows 24/39 and 41), and the
+  agent-push row did not say the preflight's fence comes from the scope the
+  push token recorded (gap 18). Rows 24, 30, 36, 41 and the hover-preview row
+  updated for Part B.
+- brand-check, `git diff --check`, privacy-check over `6c420e42..HEAD`: clean.
+
+### Part B — decided fixes (each with a regression test)
+
+1. **`hooks.toml` rewritten in place.** New `HomeFile::write_in_place`: opens
+   the name `O_WRONLY|O_NOFOLLOW|O_NONBLOCK` relative to the handle, writes
+   only into a regular file with one link (offset 0, then `set_len`), creates
+   a missing one `O_EXCL` (so two racing creators share one inode), and falls
+   back to temp + rename for a link, FIFO, socket or hard link. Used by the
+   app-owned (local-model) branch of `write_vibe_hooks`. Tests:
+   `agent_session::a_hooks_rewrite_between_pin_and_verify_keeps_the_pin_valid`
+   (fails with the old `write`, checked),
+   `home_io::an_in_place_write_keeps_the_inode_and_replaces_what_is_not_plain`.
+2. **Declared `<dimension>` no longer refuses a sheet.** Test renamed
+   `a_sparse_a1_xfd1048576_sheet_never_allocates_its_box` (first assertion now
+   "one cell"); new `a_huge_declared_dimension_with_few_cells_opens`.
+3. **Reader child dies with the app (Linux).** `die_with_parent` in a
+   `pre_exec`: `PR_SET_PDEATHSIG(SIGKILL)` then `getppid()` against the
+   captured parent pid (no allocation). The kernel's "parent" is the spawning
+   *thread*; `run_reader` waits for the child on that thread (inside
+   `spawn_blocking`), so it outlives the child. Test:
+   `the_reader_child_dies_with_its_parent` (spawned from a thread that ends,
+   child gets SIGKILL).
+4. **GIF frame bound by memory.** `w*h*4 > maxPixelBytes` refuses before
+   decoding; an oversize frame within it decodes and draws clipped. Tests:
+   "refuses a frame claiming a huge size before decoding it" (GifDecodeError,
+   and truncation after a good frame under a small cap), "animates a frame
+   wider than the screen, drawn clipped".
+5. **Crash card on merge views.** `onOpenExternally` is `null` for
+   `syncmerge`/`gitmerge` (`NO_OPEN_EXTERNALLY_VIEWERS`), and the card leaves
+   the button out. Test: "offers no Open externally for the merge views…"
+   (fails without the fix, checked; a file viewer still offers it).
+6. **LuaLaTeX preamble → body-only preview.** `preview_engine` returns
+   `PreviewPlan::{Preamble, BodyOnly}`; a Lua hint gives `BodyOnly(pdflatex)`
+   (else another non-Lua engine; only LuaLaTeX installed → still no preview),
+   and the run goes straight to `fallback_preview_document` (no format dump,
+   preamble never run), reported with `fallback: true`. Test:
+   `a_hover_preview_never_runs_luatex` rewritten for the plan.
+
+### Gates (at `3ed6003f`)
+
+`npm run build` ok; `npm test` 738 files / 7582 passed; `cargo test -q` 3793
+passed, 3 ignored, 0 failed (lib 3625); `rtk proxy npm run lint` 0 errors, 28
+advisory warnings (unchanged); `cargo clippy --all-targets -D warnings` clean;
+`scripts/brand-check.sh` ok; `git diff --check` clean;
+`scripts/privacy-check.sh` clean (staged and `6c420e42..HEAD`). No flakes this
+run. `npm run backend:stale` not run (per instructions). macOS/Windows not
+compiled.
+
+### Flagged for user (consolidated, all steps)
+
+- **Step 1 Host-home cleanup (decision pending, unchanged here):** the first
+  start removes a Vibe/Aider/mini-swe-agent/Cline login file from the Host
+  home when it matches the store or its placed record, including one the user
+  made there; sign in again in the Host session. Alternative: rename aside.
+  Same on a small scale for CodeBuddy `.logged-out` markers/backups.
+- Step 1: those four CLIs now sign in once per project; Goose `secrets.yaml`,
+  OpenCode `auth.json`, Qoder `.auth` still shared (not re-surveyed); old
+  recursive-import subdirectories in `agent-auth/{kimi,codebuddy}` stay as dead
+  data; Sign out leaves CodeBuddy logout backups/Kimi temps in their own home.
+- Step 2: adopted/imported tabs lose their `env` (custom agents get this
+  machine's settings env); state-dir layouts lose denylisted variables
+  (`PATH` for a shell tab included); `workspace_sync` serves stored tabs raw
+  (no untrusted writer today); headless relaunch of an adopted agent tab before
+  a window re-saves it has no `TAB_UID`; persisted `CARGO_HOME`/`RUSTUP_HOME`/
+  `DOCKER_CONFIG` still win on macOS/Windows/Host session.
+- Step 3: closing a tab while its spawn is still in `prepare` lets that PTY
+  start orphaned (pre-existing); overlapping spawns where the newer fails can
+  end the older one's tokens; spawns in `prepare` at quit escape `kill_all`;
+  headless `TabSpawns` entries never torn down (bounded); whether an agent in a
+  re-attached tmux session can still push is unverified; no test drives
+  `prepare` to the stamp itself. Windows push with a `pre-push` hook now says
+  `fence_unavailable`.
+- Step 4: residual of gap 30 (bwrap/Seatbelt open the control paths by name
+  after the check; needs `--ro-bind-fd`); a local-model tab whose control path
+  cannot be set up is now refused; macOS arm not compiled. (The concurrent
+  `hooks.toml` refusal and mount detach flagged by the step 4 reviewer are
+  fixed here.)
+- Step 5: macOS ignores `RLIMIT_AS`, Windows has no limit (Job object would
+  close it); a SQLite view with many near-16 MiB computed columns; no test
+  shows `RLIMIT_AS` applies; a SQLite value over 16 MiB or a page over 32 MiB
+  now errors; each spreadsheet open spawns a short-lived `--sheet-read` child.
+- Step 6: ODT keeps inline images within a 64 MiB budget (later pictures
+  missing past it) and refuses a part whose real size disagrees with its
+  declared size; a crashed pane's draft survives only with autosave on; gap 40
+  was a false positive (marked fixed with that note).
+- Step 7: residual — `--max-size` trusts the host rsync's sizes; a LuaLaTeX
+  Build still reads freely; MiKTeX ignores the kpathsea variables; previews
+  follow in-folder symlinks by name; multi-file previews (`subfiles`,
+  `\input{../preamble}`) degrade to body-only; files over 64 MiB in a pulled
+  folder are skipped with no toast; watch the first macOS CI run of the
+  real-rsync test (exit code for a vanished path on openrsync).
+- This review: `write_in_place` is not atomic for a reader (Vibe could read a
+  half-written `hooks.toml` during the rare rewrite; it then fails to parse
+  that one file once); `PR_SET_PDEATHSIG` is Linux-only (macOS/Windows readers
+  still live to their wall/CPU limit if the app is killed).
+
+### Live click-through (consolidated, not run)
+
+Linux, the frozen dev build with these commits.
+
+1. **Logins (step 1):** in a project, sign in to Vibe; open Vibe in a second
+   project: it asks to sign in again. Put `.vibe/.env` into Settings → Agent
+   sandbox → Global agent config: both projects start signed in.
+2. **Tab layouts (step 2):** import a `.tabtivityproj` (or adopt a folder
+   layout) whose shell tab carries `env: {"LD_PRELOAD": "/x", "PATH": "/x"}`
+   and an agent tab with `TABTIVITY_HOST_SESSION=1`; open them: `env` in the
+   shell shows neither; `claude` typed in it runs fenced; the agent tab keeps
+   its turn marks (TAB_UID rebuilt).
+3. **Push preflight (step 3):** local project with `.githooks/pre-push`, agent
+   pushes on Propose; remount the Claude tab a few times (move it between
+   panes); ask it to commit and `git_push`: the hook output shows on the card,
+   a hook doing `touch ~/preflight-probe` leaves nothing in `$HOME`; with the
+   API-key proxy on, model calls and turn marks still work after the remount;
+   closing the tab drops its MCP session.
+4. **Records (step 4):** `mkfifo` over a Claude tab's `.turn` record; other
+   tabs' working/done marks keep updating. `mkfifo <project>/.git/commondir`
+   (with `.git` a folder); a new agent tab still starts. Remove the FIFOs.
+5. **Local model (steps 4 + this review):** with no local-model tab open,
+   delete `<state_dir>/vibe_local/<model>/hooks.toml`, then open two tabs of
+   that model at once (e.g. restore a layout holding both): both start. With
+   one running, append a line to its `hooks.toml` and open another: it starts,
+   the file is reset, and in the first tab `echo x >> $VIBE_HOME/hooks.toml`
+   still fails (read-only bind kept). Replace `tools` with a symlink and start
+   a tab: it starts and `tools` is a folder again.
+6. **Spreadsheets (step 5 + this review):** a normal `.xlsx`, `.xls`, `.xlsm`
+   open and switch sheets. An `.xlsx` with cells at A1 and XFD1048576 shows one
+   cell, every window stays up. A sheet with formatting over ~200 columns ×
+   30 000 rows and little data opens. While a large sheet loads, `kill -9` the
+   app: `pgrep -af -- --sheet-read` finds nothing afterwards (also after a clean
+   quit).
+7. **SQLite (step 5):** a recursive view errors after ~5 s ("reading took too
+   long") while other tables still open; a normal `.db` lists, pages, cuts long
+   text with `…`; in German the messages are German.
+8. **YAML/JSON + crash card (step 6 + this review):** `deep.json` with 5000
+   `[`…`]` and `deep.yaml` with `- `×5000 show the 512-levels notice; another
+   tab's unsaved edit survives. (The crash card itself has no in-app trigger;
+   unit tests only. On a merge view it would show no Open externally.)
+9. **GIF (step 6 + this review):** a GIF claiming `ffff×ffff` shows the
+   decode-failed note with the native image, memory flat; a normal animated
+   GIF plays; a GIF with one frame larger than its screen (out-of-spec export)
+   animates, clipped.
+10. **ODT (step 6):** a normal `.odt` with pictures renders; a copy with
+    `content.xml`'s central-directory size patched to `ff ff ff 7f` says too
+    large.
+11. **rsync pull (step 7):** Pull a remote folder: files arrive with host
+    timestamps; a host-side FIFO and a 70 MB file in it do not appear.
+12. **TeX (step 7 + this review):** hover a formula under a plain `amsmath`
+    preamble with `\input{macros}`: renders with the macros. Add
+    `\usepackage{luacode}`: the hover renders the formula without the preamble
+    (fallback note), and Build still builds with LuaLaTeX. With `fontspec`:
+    renders (XeLaTeX). `\input{/etc/hostname}` in a preamble: falls back.
+    With `openout_any=a` exported when Tabtivity starts, Build a LuaLaTeX
+    document whose `\directlua` does `io.open("/tmp/tt-escape.txt","w")`: no
+    file appears, the PDF builds.
