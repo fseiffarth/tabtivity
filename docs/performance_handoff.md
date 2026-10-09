@@ -2911,19 +2911,20 @@ fixes below. Nothing run live.
 
 **Flagged for user — consolidated (every open item from S1–S12 and their reviews; fixed ones marked)**
 
-*Decisions owed*
-- Thin LTO (`f1c7281f`): binary +2.5 %, builds +11–30 %, runtime gain unmeasured — keep or revert (S8).
-- Bootstrap stays 3.3 MB (gz 977 kB); the 1.5 MB target needs another lever (lazy English dictionary), not more lazy panes (S8).
-- `AppShell` not lazy for popouts (popout startup vs main-window waterfall); `lib/tex.ts` not made dynamic (S8).
-- Glass themes: tab bars / docked file column lost their frost; compensate with a more opaque fill? (S7).
-- Blurred = stopped for the migrated polls (second-monitor case); Network 1 s rate, print queue, file auto-reload kept on direct timers (S12).
-- Which kinds sleep: viewers, Files (Project), shell/agent terminals; browser, calendar, monitors, print, skills, prompt chart, 3D, plain Files stay mounted (S9).
-- Busy terminals / working agents are not held awake; their output buffers in the backend (≈ 2 MB replay + 2 MB tail per chatty PTY) (S10).
-- A failed-spawn pane unloads and its wake retries the spawn (an HPC refusal asks again) (S10).
-- "Never" also turns off the §4.5 popout stub (S9).
-- OSC 52 copies made while a tab was hidden no longer reach the clipboard on show (S10 review).
-- Plan §7.1 `command(async)` replaced by the ordered lane (S1).
-- The cached ControlMaster is trusted while its process runs, even if its socket was replaced (S11 review).
+*Decisions owed* (decided by the user 2026-10-09, except where marked)
+- Thin LTO (`f1c7281f`): binary +2.5 %, builds +11–30 %, runtime gain unmeasured — keep or revert (S8). **Decided:** keep until measured with `scripts/perf-numbers.sh`; revert if it shows no gain.
+- Bootstrap stays 3.3 MB (gz 977 kB); the 1.5 MB target needs another lever (lazy English dictionary), not more lazy panes (S8). **Decided:** measure first; lazy-load the dictionary only if parse time shows.
+- `AppShell` not lazy for popouts (popout startup vs main-window waterfall); `lib/tex.ts` not made dynamic (S8). **Decided:** leave as is.
+- Glass themes: tab bars / docked file column lost their frost; compensate with a more opaque fill? (S7). **Decided:** more opaque fill — done in S13 (`2198c80a`).
+- Blurred = stopped for the migrated polls (second-monitor case); Network 1 s rate, print queue, file auto-reload kept on direct timers (S12). **Decided:** stop when unfocused, as built.
+- Which kinds sleep: viewers, Files (Project), shell/agent terminals; browser, calendar, monitors, print, skills, prompt chart, 3D, plain Files stay mounted (S9). **Decided:** as built.
+- Busy terminals / working agents are not held awake; their output buffers in the backend (≈ 2 MB replay + 2 MB tail per chatty PTY) (S10). **Decided:** let them sleep, as built.
+- A failed-spawn pane unloads and its wake retries the spawn (an HPC refusal asks again) (S10). **Decided:** never sleep it — done in S13 (`81077229`).
+- "Never" also turns off the §4.5 popout stub (S9). **Decided:** fine as is.
+- OSC 52 copies made while a tab was hidden no longer reach the clipboard on show (S10 review). **Decided:** drop them, as built.
+- Plan §7.1 `command(async)` replaced by the ordered lane (S1). (Not raised 2026-10-09.)
+- The cached ControlMaster is trusted while its process runs, even if its socket was replaced (S11 review). **Decided:** trust while running, as built.
+- TeX workspace sub-pane positions (below, *What a wake does not bring back*). **Decided:** persist — done in S13 (`b13a0df5`).
 
 *Behaviour changes to expect*
 - No fsync / watcher event for an unchanged settings/projects/session write (S1).
@@ -2937,7 +2938,7 @@ fixes below. Nothing run live.
 
 *What a wake does not bring back* (S9, S9 review, S10, S10 review, final)
 - A clean editor's undo history, a text selection, an open find bar, keyboard-select, a paused video's playhead, presentation marker strokes, an open SQLite query, a `ProjectFilesView` dialog or sort order, a dismissed sign-in card (comes back), scrollback past the 1 MB tail / before the last clear, a CLI's prompt line read off the xterm.
-- New here: a TeX workspace's sub-pane positions (`<key>#<path>`: the PDF centre's zoom/scroll, a child file's scroll) were never persisted, so any wake after the delay (not only a popout dock-back, S3/S9) reopens them at the default position; S3's 5 min PdfView sleep inside a TeX workspace does the same. Hold, or persist those keys?
+- New here: a TeX workspace's sub-pane positions (`<key>#<path>`: the PDF centre's zoom/scroll, a child file's scroll) were never persisted, so any wake after the delay (not only a popout dock-back, S3/S9) reopens them at the default position; S3's 5 min PdfView sleep inside a TeX workspace does the same. Fixed in S13 (`b13a0df5`): persisted in the workspace tab's `viewerState.texPanes`.
 
 *Minor gaps left as they are*
 - S1: ordering against non-lane sync commands is gone (only briefly stale reads found); a panicking lane job leaves its promise pending (a quit could stall).
@@ -2951,13 +2952,38 @@ fixes below. Nothing run live.
 - S10: root tabs never unload while the root console is open; the launch hold keeps a pane awake while the HPC/unfenced question is open; mode marks / model tag fall back to transcript/tmux while asleep.
 - S11: watches leaked by a reload or closed popout stay armed (bounded by the 128 cap, evicted first); ProxyJump masters show no counters (as before); "skip agent-auth homes with no live tab" (§7.3) still open.
 - S12/final: leaving the window from *inside* a sandboxed (opaque-origin) iframe is not seen until the next focus change there — polls run on meanwhile (fails open, as before S12).
-- Final: `DeckPresenter.closeAudience` closes `presenterLabel(path)`, not the recorded `audience` label — a deck renamed mid-talk leaves its audience window open on D/Exit (pre-existing, not in the range).
+- Final: `DeckPresenter.closeAudience` closes `presenterLabel(path)`, not the recorded `audience` label — a deck renamed mid-talk leaves its audience window open on D/Exit (pre-existing, not in the range). Fixed in S13 (`9a48f8a1`).
 - Fixed: S6 schedule tooltip (`e10c5fe8`); S8 Machines off mid-add (`bd8004f3`); S9 deck audience window on unmount (`a0703586`); S9 help text (S10); S12 iframe focus (`edaad214`); S12 startup focus (`dc9dd67e`).
 
 *Landing*
 - `npm run backend:stale` after landing (S1 lane, S2 `file_size`, S5/S10 terminal router, S7 git/fs_watch, S9 settings field, S11 commands + sampler). New frontend on an old backend: a program that exits while asleep wakes to a blank pane, the Reader polls every 2 s, a symlink-spelled `projectDir` ignores `fs-change` until rebuilt.
 - Merge conflicts expected with the main checkout's uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`, `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx` (S2's `TexView.compile` hunks), `lib.rs`, `agent_auth.rs`; check `ProjectFilesView.tsx`, `FileTree.tsx`, `MobileIndicator.tsx`, `projects.ts`, `commands/git.rs`, `fs_watch.rs`. The main checkout's untracked `scripts/perf-numbers.sh` / `docs/performance_numbers.md` collide with the branch's.
 - `MobileHeldPromptStore.test.ts` (date time-bomb, 2 failures) is being fixed in the main checkout, not here.
+
+### S13 (follow-up fixes, 2026-10-09)
+
+The user's decisions on the final review's flagged list (recorded above);
+four of them needed code. Worktree, branch `perf`, on top of `7746648d`.
+Nothing run live.
+
+| Commit | What | Regression test |
+|---|---|---|
+| `9a48f8a1` | Deck: `closeAudience` closes the recorded `audience` label, not `presenterLabel(path)` — a deck renamed mid-talk no longer leaves its audience window on the projector on D / the second-display toggle / Exit. The in-flight open (`a0703586`) already closes the label it opened (captured before its await). | `deck/DeckAudienceUnmount.test.tsx` "after a rename mid-talk" (2) |
+| `81077229` | Terminal: a launch that ends without a PTY (spawn error, declined HPC / unfenced-platform question) keeps its `PaneSleepHoldContext` launch hold, so the pane never sleeps and nothing re-spawns on a wake; the effect cleanup (close, relaunch) lifts it. | `terminal/TerminalSleepWake.test.tsx` "a launch that failed keeps holding the pane awake" |
+| `2198c80a` | Glass themes: `--glass-panel` (the fill of the unblurred tab bars and docked file column; `--glass-subheader` mixes over it) 0.6 / 0.58 → 0.9 alpha in `fancy_dark` / `light_lavender`. No blur, no shadow. | `theme/GlassChromeBlur.test.ts` "glass chrome fill without the blur" (2) |
+| `b13a0df5` | TeX workspace sub-panes (`<key>#<path>`) persist in the workspace tab's `viewerState.texPanes[path]` through the §3.1 stage, the popout edit and the viewer seed (`persistedViewerState`); at most `TEX_PANES_CAP` = 32 paths, least recently written dropped; gone with the tab. Sibling: PdfView's popout-mirror hold now asks for the workspace tab, not the sub-pane key. | `viewers/ViewerStateTexPanes.test.tsx` (5); `windows/DetachedTwoHeap.test.ts` sub-pane dock-back; `pdf/PdfSleepHidden.test.tsx` workspace PDF pane (2) |
+
+Gates (worktree, at `b13a0df5`): build ok (`bootstrap-*.js` 3,352.53 kB /
+gz 985.56 kB); vitest 765 files / 7764 tests, all pass; lint 0 errors /
+28 warnings; brand-check ok; privacy-check `7746648d..HEAD` ok; diff
+--check clean. No Rust touched (cargo/clippy not rerun).
+
+Flagged: a sub-pane's per-tab settings (a child file's `fontSize`, AI
+toggles, breakpoints) now persist in `texPanes` too, since they go through
+the same `setViewerState` — before, they were dropped. A workspace's
+`texPanes` entries for files no longer in the structure are inert until
+they age out of the 32 cap (no structure-driven pruning). The glass fill
+is 0.9 in both themes, picked without a live look.
 
 ## Resume state (paused 2026-10-07, 11:40 CEST; S1–S12 implemented + reviewed by 2026-10-09; final review done 2026-10-09; landed on develop 2026-10-09)
 
@@ -3010,6 +3036,11 @@ on the branch, so delete or overwrite the main checkout's copies when landing).
   fix `bd8004f3` (S8 follow-up). Owed: `npm run backend:stale`, the frozen
   dev build, the user's click-through (`todo/group-u-performance.md`
   2400–2413) and the flagged decisions under `## Final review`.
+- Done: S13 (2026-10-09, on `perf` after the landing, not yet on
+  `develop`): the user's decisions on the flagged list recorded, and the four
+  that needed code — `9a48f8a1`, `81077229`, `2198c80a`, `b13a0df5` (see
+  `### S13`). Owed: `git merge --ff-only perf` on `develop`, the frozen dev
+  build, a click-through (no backend change, so no `backend:stale`).
 - Gates at the S6 review's HEAD (11bc2c3c): build ok; vitest 741 files /
   7583 tests, 2 failing in `MobileHeldPromptStore.test.ts` (date time-bomb,
   not this run's — S6 review Flagged); cargo lib 3578 passed; lint 0 errors /
