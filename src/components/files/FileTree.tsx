@@ -2795,10 +2795,15 @@ export function FileTree({
       if (action === "keep") await syncPush(projectId, rel, true);
       else if (action === "host") {
         // A host copy that grew past the cap is not pulled; say so rather
-        // than let the queue move on as if it had been.
+        // than let the queue move on as if it had been. Added to a skipped
+        // line the queue already shows, so an earlier one is not lost.
         const outcome = await syncPull(projectId, rel);
         if (outcome.skippedTooLarge.length > 0) {
-          setSyncNotice({ text: "", bad: false, skipped: outcome.skippedTooLarge });
+          setSyncNotice((prev) => ({
+            text: "",
+            bad: false,
+            skipped: [...(prev && !prev.text ? (prev.skipped ?? []) : []), ...outcome.skippedTooLarge],
+          }));
         }
       }
       // "skip" leaves both sides as-is.

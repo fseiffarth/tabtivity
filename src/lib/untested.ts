@@ -166,7 +166,7 @@ export const UNTESTED = {
   "gitMergeView.1": { area: "embed", what: "Git merge view · Incoming diff and conflict resolve" },
   "importDrop.title": { area: "files", what: "importDrop · File already exists" },
   "projectFilesPane.1": { area: "files", what: "ProjectFilesPane · Project settings" },
-  "projectFilesPane.syncSkippedLarge": { area: "files", what: "Remote tree Pull / Sync all result line · names the files over 64 MiB the pull left on the host (count, then the list; more than three fold behind Show files), rsync and SFTP path alike" },
+  "projectFilesPane.syncSkippedLarge": { area: "files", what: "Remote tree Pull / Sync all result line, and the diverged view's take-host (per row and for all) · names the files over 64 MiB the pull left on the host (count, then the list; more than three fold behind Show files), rsync and SFTP path alike" },
   "projectFilesPane.2": { area: "files", what: "ProjectFilesPane · Large folders…" },
   "projectFilesView.1": { area: "files", what: "ProjectFilesView · Files" },
   "projectFilesView.2": { area: "files", what: "ProjectFilesView · Remote machines…" },

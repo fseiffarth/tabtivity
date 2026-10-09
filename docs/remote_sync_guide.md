@@ -158,7 +158,8 @@ files it overwrites are logged. Files over the 64 MiB cap stay on the host on
 either path; the pull returns them (`remote_sync::PullOutcome`:
 `pulled` + `skippedTooLarge`, path and size), and the result line under the
 Remote tree (a folder Pull, *Sync all*, a *take host* in the push-conflict
-queue) says "N file(s) over 64 MiB were not pulled" with the list
+queue), or atop the diverged (orange) view for its *take host* per row and
+for all, says "N file(s) over 64 MiB were not pulled" with the list
 (`SyncSkippedLarge`, folded past three). Copy such a file by hand (`scp`,
 `rsync`) if the mirror needs it.
 

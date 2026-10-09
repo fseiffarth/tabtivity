@@ -20,7 +20,7 @@ import { useImportDrop } from "./importDrop";
 import { logoutRemote, useProjectsStore } from "../../stores/projects";
 import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
-import { useSyncStore, amberPaths, localNewPaths } from "../../stores/remote/sync";
+import { useSyncStore, amberPaths, localNewPaths, type SyncSkippedFile } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
 import { useWindowsStore } from "../../stores/windows";
@@ -37,6 +37,7 @@ import { projectTypeTags } from "../projects/projectTypeTags";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { UntestedTag } from "../common/UntestedTag";
+import { SyncSkippedLarge } from "./SyncSkippedLarge";
 import { AgentSchedulesView } from "../agents/AgentSchedulesView";
 import { useDialogs } from "../common/PromptDialogs";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
@@ -548,6 +549,9 @@ export function ProjectFilesView({
   // Bumped by the Pull button: GitHistory owns the pull preview it opens.
   const [pullRequest, setPullRequest] = useState(0);
   const [gitError, setGitError] = useState<string | null>(null);
+  // Files over the 64 MiB cap a "take host" in the diverged view left on the
+  // host (gap 35): named in a result line instead of a log line only.
+  const [orangeSkipped, setOrangeSkipped] = useState<SyncSkippedFile[] | null>(null);
   // Whether the project is missing scaffold files — drives the "no scaffold"
   // type tag shown beside its name, mirroring ProjectPill's hover tags.
   const [scaffoldMissing, setScaffoldMissing] = useState(false);
@@ -2039,6 +2043,21 @@ export function ProjectFilesView({
 
       {view === "orange" && (
         <div className="side-panel-scroll side-panel-orange" style={{ flex: 1, overflowY: "auto" }}>
+          {orangeSkipped && orangeSkipped.length > 0 && (
+            <div className="project-files-sync-result" role="status">
+              <span>
+                <SyncSkippedLarge files={orangeSkipped} lead={false} />
+              </span>
+              <button
+                className="file-tree-up"
+                onClick={() => setOrangeSkipped(null)}
+                title={t("common.close")}
+                aria-label={t("common.close")}
+              >
+                ×
+              </button>
+            </div>
+          )}
           {orangeFiles.length === 0 && newLocalFiles.length === 0 ? (
             <div className="side-panel-orange-empty">{t("projectFilesView.noDivergedFiles")}</div>
           ) : (
@@ -2075,9 +2094,11 @@ export function ProjectFilesView({
                           force: true,
                         });
                         if (!ok) return;
-                        await useSyncStore
+                        setOrangeSkipped(null);
+                        const skipped = await useSyncStore
                           .getState()
                           .resolveAll(projectId, orangeFiles, "host");
+                        setOrangeSkipped(skipped);
                       })();
                     }}
                   >
@@ -2226,7 +2247,10 @@ export function ProjectFilesView({
                           label: basename(rel) || rel,
                           force: true,
                         });
-                        if (ok) await useSyncStore.getState().pull(projectId, rel);
+                        if (!ok) return;
+                        setOrangeSkipped(null);
+                        const outcome = await useSyncStore.getState().pull(projectId, rel);
+                        setOrangeSkipped(outcome.skippedTooLarge);
                       })();
                     }}
                   >

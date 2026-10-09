@@ -223,12 +223,14 @@ interface SyncStore {
   /** Resolve a batch of diverged files by taking one side for every path at once:
    *  "host" pulls each (host overwrites the mirror), "local" force-pushes each
    *  (the mirror overwrites the host). Refreshes the status once at the end rather
-   *  than per file. Backs the orange view's "…for all" buttons. */
+   *  than per file. Backs the orange view's "…for all" buttons. Resolves to the
+   *  files over the cap a "host" batch left on the host (gap 35), for the view
+   *  to name; empty for "local". */
   resolveAll: (
     projectId: string,
     relPaths: string[],
     side: "host" | "local",
-  ) => Promise<void>;
+  ) => Promise<SyncSkippedFile[]>;
   /** Toggle the selected flag for paths without transferring (deselect = stop). */
   markSelected: (
     projectId: string,
@@ -499,11 +501,14 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     // Iterate per path (each side has its own single-file command) but refresh
     // the cached status only once at the end — refreshing per file would re-stat
     // the whole selection N times. A single failed file is logged and skipped so
-    // one bad path doesn't abort the rest of the batch.
+    // one bad path doesn't abort the rest of the batch. A host copy over the
+    // cap is not pulled; it is collected and returned rather than only logged.
+    const skipped: SyncSkippedFile[] = [];
     for (const rel of relPaths) {
       try {
         if (side === "host") {
-          await invoke("sync_pull", { projectId, relPath: rel });
+          const outcome = toPullOutcome(await invoke<unknown>("sync_pull", { projectId, relPath: rel }));
+          skipped.push(...outcome.skippedTooLarge);
         } else {
           await invoke("sync_push", { projectId, relPath: rel, force: true });
         }
@@ -512,6 +517,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       }
     }
     await get().refreshStatus(projectId);
+    return skipped;
   },
 
   markSelected: async (projectId, relPaths, selected, isDir) => {
