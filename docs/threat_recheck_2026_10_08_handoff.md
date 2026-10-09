@@ -1584,3 +1584,132 @@ Linux, the frozen dev build with these commits.
     With `openout_any=a` exported when Tabtivity starts, Build a LuaLaTeX
     document whose `\directlua` does `io.open("/tmp/tt-escape.txt","w")`: no
     file appears, the PDF builds.
+
+## Follow-up step 8 — implementer (user decisions 2026-10-09: gap 16 rename, gap 35 notice)
+
+**Commits:** `f5b86a5b` Rename retired Host-home login copies aside instead of
+deleting them; `3e79717d` Name the files over 64 MiB a folder pull leaves on
+the host.
+
+**Files (gap 16):** `services/home_io.rs` (`HomeFile::rename_aside` +
+`rename_noreplace`: `renameat2(RENAME_NOREPLACE)` on Linux glibc,
+`renameatx_np(RENAME_EXCL)` on macOS, else — and on `EINVAL`/`ENOSYS`/`ENOTSUP`
+— an `fstatat` check before `renameat`; Windows path-based),
+`services/agent_auth.rs` (`PRE_SCOPE_SUFFIX`, `move_aside`; used by
+`retire_shared_paths_in` for the Host copy and by `retire_dir_names` for a
+home's copy of an unlisted name; doc comment), `docs/threat_model.md` row 16,
+`docs/context/agent_authority.md` (retire paragraph + login-folder sentence),
+`docs/help/agent-clis.md` (Sign in: the `.pre-scope` file),
+`docs/filemap_backend.md` (`agent_auth.rs`, `home_io.rs`).
+`settings.agentLoginsHelp` (en/de/es/fr/it) does not mention removal, so it
+is unchanged.
+
+**Files (gap 35):** `services/remote_sync.rs` (`SkippedFile`, `PullOutcome`
+with `tally`, `rsync_transfer_list`; `pull_file` now wraps `pull_file_with`,
+which takes the host read as a closure), `commands/sync.rs` (`sync_pull`,
+`sync_whole_project`, `pull_subtree` return `PullOutcome`; `try_rsync_pull`
+uses `rsync_transfer_list`), `src/stores/remote/sync.ts` (`SyncSkippedFile`,
+`SyncPullOutcome`, `toPullOutcome`; `pull`/`syncWholeProject` return it),
+new `src/components/files/SyncSkippedLarge.tsx`, `FileTree.tsx` (Pull result
+line; take-host in the push-conflict queue), `ProjectFilesPane.tsx` (*Sync
+all* result line), `i18n.ts` + de/es/fr/it (`projectFilesPane.syncSkippedLarge`,
+`…SyncSkippedShow`, `…SyncSkippedHide`), `src/lib/untested.ts`
+(`projectFilesPane.syncSkippedLarge`), docs: `remote_sync_guide.md` §2.5 +
+symptom row, `threat_model.md` row 35, `filemap_backend.md` (`remote_sync.rs`),
+`filemap_frontend.md` (new `SyncSkippedLarge.tsx` row).
+
+**Tests added/changed:**
+- `agent_auth.rs`: `retiring_a_shared_path_keeps_scope_copies_and_clears_the_hosts`
+  now asserts the Host copies (store-equal Vibe, placed-record Cline) are at
+  `<name>.pre-scope` with their content, the original names are gone, the
+  divergent Aider copy is not moved, fenced/local homes have no `.pre-scope`,
+  and a second run leaves exactly one `.pre-scope` (no `.1`);
+  new `retiring_a_host_copy_picks_a_free_pre_scope_name` (`.pre-scope` and
+  `.pre-scope.1` taken → `.pre-scope.2`, the old ones untouched);
+  new `retiring_keeps_the_store_when_the_host_copy_cannot_be_moved` (read-only
+  `.vibe` → store and Host copy kept; next run renames and drops the store;
+  skips as root); `retiring_drops_unlisted_names_from_login_folders` now
+  asserts `x.env.pre-scope` with content in the matching homes, none in the
+  divergent one, and that a keeper pass neither adopts nor places it (store
+  unchanged, a new home gets only `kimi-code.json`), second run no `.1`;
+  `no_registry_row_shares_an_env_or_config_file` also asserts no
+  `auth_paths` contains `.pre-scope` and no `DirNames` admits
+  `<name>.pre-scope[.1]`.
+- `home_io.rs`: `a_rename_aside_takes_a_free_name_and_never_follows_a_link`.
+- `remote_sync.rs`: `a_pull_reports_files_over_the_cap_on_the_rsync_path`
+  (real rsync local→local with `rsync_transfer_list` + `rsync_pull_flags`,
+  `rsync_pulled_base` + `tally`; skips without rsync),
+  `a_pull_reports_files_over_the_cap_on_the_sftp_path` (`pull_file_with`
+  over a local "host": the big file is never read, the rest lands),
+  `a_pull_outcome_is_camel_case_and_defaults_to_nothing_skipped`.
+- Frontend: new `src/__tests__/files/SyncSkippedLarge.test.tsx` (count +
+  names with sizes; nothing for an empty list; five files fold behind
+  Show files / Hide files); `SyncStore.test.ts` (both actions return the
+  outcome; a bare-count answer reads as nothing skipped).
+
+**Gates (at `3e79717d`):** `npm run build` ok; `npm test` 739 files / 7586
+passed; `cargo test -q` 3799 passed, 3 ignored, 0 failed (lib 3631) — first
+run had 1 failure, the known timing flake
+`commands::sqlite::tests::an_ordinary_deep_or_long_view_keeps_the_database_readable`
+(`viewer-limit:sqlite-timeout`, run concurrently with `npm test`); rerun
+clean; `rtk proxy npm run lint` 0 errors, 28 advisory warnings (unchanged);
+`cargo clippy --all-targets -D warnings` clean; `scripts/brand-check.sh` ok;
+`git diff --check` clean; `scripts/privacy-check.sh` (staged) clean.
+`npm run backend:stale` not run (per instructions).
+
+**Choices:**
+- The login-folder cleanup renamed too (it deleted from every home where the
+  copy matched that home's placed record); it still acts only on those
+  copies. Fenced/local homes keep their retired-file copies untouched, as
+  before.
+- No-replace rename instead of check-then-rename where the OS has one; the
+  fallback check is fine at startup (before the keeper and any tab).
+- The Pull result is a struct now (`{pulled, skippedTooLarge}`) instead of a
+  bare count; no frontend caller used the count. `pulled` counts files that
+  landed (the old count included skipped ones). `skippedTooLarge` is
+  `#[serde(default)]`, and the store reads a bare number or a missing field as
+  nothing skipped.
+- "Too large" means the host walk listed the file over the cap. A file that
+  grew past the cap between the walk and the transfer, or failed for another
+  reason, stays a stderr `sync_pull: skip` line.
+- The take-host action of the push-conflict queue also shows the notice
+  (without a "Synced" text), since it pulls through the same command.
+- Reused shared styling only: the existing `.project-files-sync-result` line,
+  `ErrorNote`'s `.inline-link-btn` toggle and `.error-note-raw` list. No new
+  CSS.
+- The SFTP path test runs `pull_file`'s whole per-file rule through
+  `pull_file_with` with a local read in place of the SFTP read. The wire
+  itself has no test double in this repo.
+
+**Gotchas:** RTK cuts `rg` output in this worktree; use `rtk proxy rg`.
+`libc::renameat2` exists only for linux-gnu in libc 0.2.186, hence the cfg.
+
+**Flagged for user:**
+- The Host session sees `.vibe/.env.pre-scope` (etc.) after the first start
+  with this build if Tabtivity had placed or adopted that file. Sign in again
+  there, or copy settings back from it. The files are never cleaned up
+  automatically.
+- Not reported in the UI: big files skipped by the background auto-sync pass
+  (`sync_auto`) and by the orange-files "take host" batch (`resolveAll`),
+  which ignores pull results. Both still log to stderr only.
+- macOS (`renameatx_np`) and Windows paths of `rename_aside` are not compiled
+  here.
+
+**Live click-through (not run):**
+1. Host-home rename: with a build before `f5b86a5b`, sign in to Vibe in a
+   project tab, then open a Host session (root console `+` → Host session)
+   so `<state_dir>/agent-homes/host/.vibe/.env` exists. Start this build:
+   that file is now `.vibe/.env.pre-scope` with the same content; `.vibe/.env`
+   is gone; stderr shows `agent_auth: vibe: no longer shared, moved … aside
+   to .env.pre-scope`. Restart: nothing changes (no `.pre-scope.1`).
+2. Big-file notice: remote project, host folder `data/` with a few small
+   files and `truncate -s 70M data/big.bin`. Remote tree → right-click
+   `data` → Pull → confirm. The line under the tree reads "Synced data from
+   the host. · 1 file(s) over 64 MiB were not pulled — they stay on the
+   host:" with `data/big.bin (70.0 MB)` and the untested pill; the small
+   files are green, `big.bin` is not in the mirror. Repeat with rsync
+   missing on the host (or locally): same line.
+3. Add four more 70 MB files and use *Sync all*: the line under the sync
+   row shows "5 file(s) …" and a Show files link that reveals the list.
+4. A folder with no big file: Pull shows only "Synced … from the host.".
+5. German UI: the line reads "… Datei(en) über 64 MiB wurden nicht geholt …".
