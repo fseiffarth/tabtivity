@@ -153,3 +153,47 @@ describe("DeckPresenter audience window on unmount", () => {
     expect(closes().map((c) => c.args.label)).toEqual([opened!.args.label]);
   });
 });
+
+describe("DeckPresenter audience window after a rename mid-talk", () => {
+  async function presentAt(path: string) {
+    const { DeckPresenter } = await import("../../components/embed/deck/DeckPresenter");
+    const d = emptyDeck("talk.pdf");
+    d.slides = [{ ...blankSlide(1), id: "s1", objects: [] }];
+    const props = {
+      deck: d,
+      doc: null,
+      metrics: null,
+      assets: new Map<string, string>(),
+      gifs: new Map(),
+      scope: null,
+      onClose: () => {},
+    };
+    const view = render(<DeckPresenter {...props} path={path} />);
+    await settle();
+    await click(document.querySelector('button[aria-label="Second display"]'));
+    await settle();
+    const opened = calls.find((c) => c.cmd === "open_presenter_window");
+    expect(opened).toBeTruthy();
+    // The deck file is renamed: the presenter now carries the new path.
+    view.rerender(<DeckPresenter {...props} path="/p/talks/renamed.eldeck.json" />);
+    await settle();
+    return { view, label: opened!.args.label };
+  }
+
+  it("the second-display toggle closes the window that was opened", async () => {
+    const { label } = await presentAt(DECK_PATH);
+    await click(document.querySelector('button[aria-label="Second display"]'));
+    await settle();
+    expect(closes().map((c) => c.args.label)).toEqual([label]);
+  });
+
+  it("D closes the window that was opened", async () => {
+    const { label } = await presentAt(DECK_PATH);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "D" }));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(closes().map((c) => c.args.label)).toEqual([label]);
+  });
+});

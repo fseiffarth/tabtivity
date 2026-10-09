@@ -271,7 +271,9 @@ export function DeckPresenter({
       await invoke("open_presenter_window", { label });
       // Closed (the tab, the talk) while the window was still coming up: the
       // unmount close below saw no audience yet, so the window that just
-      // landed would be left on the projector.
+      // landed would be left on the projector. `label` is this call's own,
+      // captured before the await — the one opened even if the deck was
+      // renamed meanwhile.
       if (!mountedRef.current) {
         void invoke("close_presenter_window", { label }).catch(() => {});
         return;
@@ -290,12 +292,17 @@ export function DeckPresenter({
     }
   }, [label, t]);
 
+  // Close the window actually opened, not `presenterLabel(path)` now: a deck
+  // renamed mid-talk changes `label`, and closing the new name would leave the
+  // audience window on the projector.
   const closeAudience = useCallback(() => {
+    const open = audience;
     setAudience(null);
-    void invoke("close_presenter_window", { label }).catch(() => {
+    if (!open) return;
+    void invoke("close_presenter_window", { label: open }).catch(() => {
       // A window already gone is the state we wanted.
     });
-  }, [label]);
+  }, [audience]);
 
   // Closing the talk takes the audience window with it — a slide left glowing on
   // a projector after the speaker has sat down is worse than no second display.
