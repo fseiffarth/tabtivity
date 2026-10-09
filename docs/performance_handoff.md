@@ -2985,6 +2985,55 @@ the same `setViewerState` — before, they were dropped. A workspace's
 they age out of the 32 cap (no structure-driven pruning). The glass fill
 is 0.9 in both themes, picked without a live look.
 
+### Review (S13 reviewer, 2026-10-09)
+
+Range `7746648d..8e40abf4`. Nothing run live.
+
+**Checked**
+- `texPanes` round-trip: the backend keeps `viewerState` opaque
+  (`schema/project.rs` `TabEntry.extra`, flattened `Value`), so the field
+  survives `workspace_sync` and the legacy save; `restoreSavedTab` copies it;
+  a session without it reads as no entry; no other persisted shape changes.
+  `toSavedTabEntry` folds staged `<key>#<path>` positions in, so a quit inside
+  the 5 s interval keeps them; `duplicateSpec` carries them.
+- Popout: the popout writes its seed registry under the workspace tab's key
+  (`withViewerPatch`) and forwards the raw sub key; the main side's
+  `applyDetachedEdit` stages / writes through with the same split. Reseeds
+  flush first. The only composite pane key in the tree is `centerFor`'s.
+- Cap: re-writing an entry moves it last; deduped writes do not bump it.
+  Within one flush interval the order is first-staged, not last-written (the
+  stage is a Map) — immaterial at 32.
+- Close with sub-pane state staged: the flush drops it (no tab); the
+  unmount flush of the sub-pane runs after the tab is gone and is a no-op.
+- Launch hold: lifted on any PTY (first spawn, unfenced retry, HPC retry),
+  on cleanup (close, relaunch via `relaunchSeq`, identity change), on Strict
+  Mode's synthetic cleanup; never taken by attach-only or waking mounts.
+- `--glass-panel`: read only by `.subwindow-files` and through
+  `--glass-subheader` (`--subwindow-header-bg`, the tab bars), both only
+  under the two glass themes; dialogs/menus use `--glass-elevated`, the side
+  panel `--bg-side-panel`. The Theme Customizer lists the token by name only.
+
+**Fixes**
+| Commit | Bug | Regression test |
+|---|---|---|
+| `34459a71` | Pre-existing, flagged by the implementer: the HPC connect-then-spawn retry set `ownsPty` but left `spawnState` "failed", so a tab started after the user chose Connect never got the silent-start notice. The S13 hold already lifted there (`ownsPty`); the test pins both. | `terminal/TerminalSilentStart.test.tsx` "speaks for a tab the HPC connect-then-spawn retry started" (fails unfixed) |
+
+QA rows: `todo/group-u-performance.md` 2414 (S13.1–S13.4).
+
+**Gates (worktree, after the fix)**: build ok (`bootstrap-*.js` 3,352.54 kB
+/ gz 985.56 kB); vitest 765 files / 7765 tests, all pass; lint 0 errors /
+28 warnings; brand-check ok; privacy-check ok; `git diff --check` clean. No
+Rust touched.
+
+**Flagged for user**
+- Each sub-pane flush now changes the workspace tab's `viewerState`, so the
+  TeX workspace (and its centred viewer) re-renders once per flush (≤ every
+  5 s while scrolling a child file or the PDF centre), as the main document's
+  own pane already did. Not measured.
+- A failed-spawn pane is held awake until relaunch/close, including a
+  declined HPC question — by the decision; a later Connect from the pill does
+  not retry that tab by itself (it never did).
+
 ## Resume state (paused 2026-10-07, 11:40 CEST; S1–S12 implemented + reviewed by 2026-10-09; final review done 2026-10-09; landed on develop 2026-10-09)
 
 The run was paused by the user after S6's implementer and partway through

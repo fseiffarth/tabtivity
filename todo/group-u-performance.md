@@ -2146,3 +2146,72 @@ backend steps). Nothing here was run live.*
     rather than inventing a new gate. Its “GPU-compositing setting” stays
     dropped (2026-08 DMABUF retest: silent artifacts and a crash).
     - [ ] Implement
+
+2414. **Perf run S13: follow-up fixes from the final review.** ✅ Done on
+    branch `perf` (S13 in `docs/performance_handoff.md`), code-complete and
+    **live-unverified**. A TeX workspace's other panes (a child `.tex`, a
+    graphic, a PDF in the centre) keep their position in the workspace tab
+    (`viewerState.texPanes`, at most 32 files); the deck presenter closes the
+    audience window it opened even after a rename; a terminal whose program
+    failed to start never sleeps; the glass themes' tab bars and docked file
+    column are near-opaque.
+    - [x] 🤖 Automated test — `ViewerStateTexPanes`, `DetachedTwoHeap` (sub-pane
+      dock-back), `PdfSleepHidden` (workspace PDF pane), `DeckAudienceUnmount`
+      (rename mid-talk), `TerminalSleepWake` (failed launch keeps its hold),
+      `TerminalSilentStart` (HPC retry), `GlassChromeBlur` (fill)
+    - [ ] 🖐️ Manual test (S13.1) — Open a multi-file thesis as a TeX workspace.
+      Centre a child chapter and scroll halfway down; centre the compiled PDF,
+      zoom to 150 % and scroll to page 5. Switch to another tab for longer than
+      the sleep delay (Settings → sleeping tabs), come back: both the chapter
+      and the PDF reopen where they were. Quit and relaunch: the same. Pop the
+      workspace out, scroll the chapter elsewhere, dock it back: it keeps the
+      new position.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S13.2) — Deck with a second display: start the
+      talk, open the audience window (⧉ or D), rename the deck file from the
+      Files view while presenting, then press D (and separately: the ⧉ toggle,
+      Exit): the audience window closes each time, nothing stays on the
+      projector.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S13.3) — A tab whose program cannot start (an agent
+      tab whose CLI was uninstalled, or an HPC-tagged remote tab where the
+      connect question is declined): the pane shows its error. Leave it hidden
+      for longer than the sleep delay and come back: the error is still there,
+      no second spawn or HPC question happened. Relaunching or closing the tab
+      still works. For the HPC case answered with Connect: the tab starts, and
+      if its program prints nothing for 10 s the "started but has shown
+      nothing" notice appears; hidden past the sleep delay it does sleep.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S13.4) — Themes `fancy_dark` and `light_lavender`:
+      the subwindow tab bars and the docked file column are near-opaque
+      (terminal or code text behind or beneath them does not read through);
+      the header, dialogs and menus look as before; other themes unchanged.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
