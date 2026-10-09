@@ -3005,8 +3005,8 @@ Count:2
     /// Gap 36, where pdfLaTeX or XeLaTeX is installed: under the preview's
     /// environment an `\input` of an absolute path outside the scratch dir or
     /// of `../` is refused, while one relative to the document's folder still
-    /// resolves and the wrapper itself (an absolute path in the scratch dir)
-    /// opens.
+    /// resolves and the wrapper itself (named by file name, found in the
+    /// scratch `-output-directory`) opens.
     #[cfg(unix)]
     #[test]
     fn a_hover_preview_reads_only_below_the_document() {
