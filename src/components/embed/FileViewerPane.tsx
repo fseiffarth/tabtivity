@@ -175,6 +175,7 @@ import {
 import { DiffView } from "./DiffView";
 import { SyncMergeView } from "./SyncMergeView";
 import { OdtView } from "./OdtView";
+import { ViewerErrorBoundary } from "./ViewerErrorBoundary";
 import { MediaView } from "./MediaView";
 import { GifView } from "./GifView";
 import { ImageAnnotator } from "./ImageAnnotator";
@@ -726,7 +727,17 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
         <div className="presentation-host">
           {/* Fallback null: a lazy viewer's chunk loads in milliseconds off
               local disk, and any placeholder would flash for exactly that. */}
-          <Suspense fallback={null}>{view}</Suspense>
+          {/* One boundary for every viewer (threat model row 28): a viewer that
+              throws while rendering shows a card in this pane instead of
+              unmounting the window. Reset when the file or viewer changes. */}
+          <ViewerErrorBoundary
+            resetKey={`${viewer}\u0000${effectivePath}`}
+            sourcePath={TEXT_SOURCE_VIEWERS.has(viewer) ? effectivePath : null}
+            projectId={projectId}
+            onOpenExternally={openExternally}
+          >
+            <Suspense fallback={null}>{view}</Suspense>
+          </ViewerErrorBoundary>
           {!presenting && <PresentationOverlay />}
         </div>
       </ViewerHeaderInfoContext.Provider>
@@ -734,6 +745,13 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
     </FileScopeContext.Provider>
   );
 }
+
+/** Viewers whose file is text, so the error boundary can offer it as plain
+ *  source. Binary viewers (images, PDF, ODT, media, SQLite, spreadsheets) and
+ *  the comparison views, whose `path` means something else, are left out. */
+const TEXT_SOURCE_VIEWERS: ReadonlySet<InternalViewer> = new Set<InternalViewer>([
+  "text", "markdown", "tex", "texworkspace", "html", "yaml", "bib", "eldeck", "notebook",
+]);
 
 /** The file identity a `ViewerHeader` needs to offer file-scoped actions (the
  *  auto-sync toggle, the Local/Remote source switch) without every sub-viewer

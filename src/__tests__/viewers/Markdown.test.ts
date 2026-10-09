@@ -220,6 +220,26 @@ describe("renderMarkdown — hostile documents", () => {
       .querySelector("img");
     expect(img?.getAttribute("alt")).toBe("a<b and c");
   });
+
+  it("never restores a math/code span's HTML inside an alt attribute (row 40)", () => {
+    // Every image kind that writes `altEsc` into markup: inline data, local and
+    // remote. The restored spans carry quotes and tags (`<span class="md-math"
+    // data-display="false">`); in an attribute they would end it early.
+    for (const url of ["data:image/png;base64,AA", "pics/a.png", "https://example.com/a.png"]) {
+      const html = renderMarkdown(`![\`<i>"q"</i>\` $x^2$ \`b\`](${url})`);
+      expect(html).not.toContain("md-math");
+      expect(html).not.toContain("<code>");
+      expect(html).not.toContain("\u0000");
+      const el = new DOMParser().parseFromString(html, "text/html").querySelector("img, .md-img-remote");
+      expect(el, url).not.toBeNull();
+      const alt = el!.tagName === "IMG" ? el!.getAttribute("alt") : el!.textContent;
+      expect(alt).toBe('<i>"q"</i> x^2 b');
+      // Exactly the attributes the renderer writes: nothing leaked out of `alt`.
+      if (el!.tagName === "IMG") {
+        for (const a of Array.from(el!.attributes)) expect(["src", "alt", "class", "data-md-src"]).toContain(a.name);
+      }
+    }
+  });
 });
 
 describe("toggleTaskCheckbox", () => {

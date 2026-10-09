@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { unzipSync } from "fflate";
 import { ViewerHeader, useViewerState } from "./FileViewerPane";
 import { useFileScope, usePaneVisible, readFileBytes, fileMtime } from "./fileAccess";
 import { extractOdt, renderOdtDocument } from "../../lib/viewers/odt";
+import { unzipOdt } from "../../lib/viewers/odtArchive";
 import { useT } from "../../lib/i18n";
 
 // Re-read the file this long after an external change is detected (mirrors the
@@ -12,7 +12,8 @@ const RELOAD_POLL_MS = 1500;
 /**
  * Read-only in-app viewer for OpenDocument Text (`.odt`) files (#51, lightweight
  * approach). An `.odt` is a ZIP, so it's loaded as raw bytes via `read_file_bytes`
- * (not `read_file_text`), unzipped in-process with fflate, and rendered to safe
+ * (not `read_file_text`), unzipped in-process (`unzipOdt`: bounded, only the parts
+ * the renderer reads), and rendered to safe
  * HTML by the pure `renderOdtDocument`. Like the table/notebook viewers it polls
  * `file_mtime` and silently re-renders when the document changes on disk.
  *
@@ -42,7 +43,8 @@ export function OdtView({
   const load = useCallback(async () => {
     try {
       const bytes = await readFileBytes(path, scope);
-      const entries = unzipSync(new Uint8Array(bytes));
+      // Only the parts the renderer reads, within a size budget (#869).
+      const entries = unzipOdt(new Uint8Array(bytes));
       const { contentXml, images } = extractOdt(entries);
       setHtml(renderOdtDocument(contentXml, { images }));
       setError(null);

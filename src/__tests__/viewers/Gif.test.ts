@@ -428,6 +428,42 @@ describe("truncation and caps", () => {
     expect(decodeGif(bytes).frames).toHaveLength(2);
   });
 
+  it("refuses a huge claimed screen before allocating its canvas (row 41)", () => {
+    // A complete GIF that claims a 65535×65535 screen: 16 GiB of RGBA. Allocating
+    // that canvas would throw a RangeError (or take the renderer down); the
+    // refusal is a GifDecodeError, so the size check ran first.
+    const bomb = buildGif({ width: 65535, height: 65535, gct: [RED, GREEN], frames: [{ rect: [0, 0, 1, 1], indices: [0] }] });
+    expect(bomb.length).toBeLessThan(64);
+    expect(() => openGif(bomb)).toThrow(GifDecodeError);
+    expect(() => openGif(bomb)).toThrow(/screen too large/);
+    // The same check honours a caller's cap.
+    const small = buildGif({ width: 4, height: 4, gct: [RED, GREEN], frames: [{ indices: Array(16).fill(0) }] });
+    expect(() => openGif(small, { maxPixelBytes: 63 })).toThrow(/screen too large/);
+    expect(decodeGif(small, { maxPixelBytes: 64 }).frames).toHaveLength(1);
+  });
+
+  it("refuses a frame larger than the screen before decoding it (row 41)", () => {
+    // A 2×2 screen whose frame claims 65535×65535: `lzwDecode` would size its
+    // index buffer from the frame's own w*h (4 GiB).
+    const huge = buildGif({
+      width: 2,
+      height: 2,
+      gct: [RED, GREEN],
+      frames: [{ rect: [0, 0, 65535, 65535], indices: [0] }],
+    });
+    expect(() => decodeGif(huge)).toThrow(/frame larger than the screen/);
+    // After a good frame, an oversize one ends the stream as truncated.
+    const tail = buildGif({
+      width: 2,
+      height: 2,
+      gct: [RED, GREEN],
+      frames: [{ indices: [0, 0, 0, 0] }, { rect: [0, 0, 3, 2], indices: [1, 1, 1, 1, 1, 1] }],
+    });
+    const gif = decodeGif(tail);
+    expect(gif.frames).toHaveLength(1);
+    expect(gif.truncated).toBe(true);
+  });
+
   it("streams frames one at a time via openGif", () => {
     const stream = openGif(
       buildGif({

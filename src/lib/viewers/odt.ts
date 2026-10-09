@@ -4,7 +4,7 @@
  * An `.odt` is a ZIP holding `content.xml` (the document body as ODF XML),
  * `styles.xml`, and embedded images under `Pictures/`. This module is the pure,
  * framework-free half: it turns the *already-unzipped* archive into safe HTML.
- * The ZIP is opened by `OdtView` (via fflate), which hands the raw entry map to
+ * The ZIP is opened by `OdtView` (via `odtArchive.unzipOdt`, bounded), which hands the entry map to
  * `extractOdt`; keeping fflate out of here means the transform is unit-testable
  * with a plain `content.xml` string and no real archive.
  *
