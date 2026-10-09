@@ -1713,3 +1713,89 @@ clean; `rtk proxy npm run lint` 0 errors, 28 advisory warnings (unchanged);
    row shows "5 file(s) …" and a Show files link that reveals the list.
 4. A folder with no big file: Pull shows only "Synced … from the host.".
 5. German UI: the line reads "… Datei(en) über 64 MiB wurden nicht geholt …".
+
+## Follow-up step 8 — reviewer
+
+Range `1c798ae8..e1ffdc3f` (`f5b86a5b`, `3e79717d`, `e1ffdc3f`) against the
+two decisions: Host-home login copies renamed to `<name>.pre-scope[.N]`,
+never deleted; a pull that skips files over 64 MiB names them on both paths,
+cap kept.
+
+**Findings:**
+1. **Fixed (`2a1864a7`).** `HomeFile::rename_aside`'s fallback, taken when
+   `renameat2(RENAME_NOREPLACE)` answers `EINVAL`/`ENOSYS` (NFS homes, old
+   kernels), musl, or macOS `renameatx_np` answers `EINVAL`/`ENOTSUP`, was
+   `fstatat` then a plain, replacing `renameat`. Now `link_aside`: `linkat`
+   (flags 0, so a symlink is linked as itself) to the free name, refused with
+   `EEXIST` when taken, then `unlinkat` of the old name only while it is still
+   the same `(dev, ino)`; if the name was replaced in between, the newcomer
+   stays and the old file is the one at `.pre-scope`. A filesystem with
+   neither no-replace rename nor hard links refuses the move (the store is
+   kept, as for any failed move). Windows (no fence) keeps check-then-rename.
+2. **Checked, fine.** Linux `renameat2` + `RENAME_NOREPLACE` (`c_uint`) is
+   linux-gnu only in libc 0.2.186, matching the cfg. macOS: `renameatx_np(c_int,
+   *const c_char, c_int, *const c_char, c_uint)` and `RENAME_EXCL: c_uint`
+   exist in libc 0.2.186 `unix/bsd/apple`. The full crate cannot be
+   cross-checked here (a C build dependency needs an Apple `cc`), so the unix
+   function, `link_aside` included, was compiled in a scratch crate against
+   libc 0.2.186 for `aarch64-apple-darwin` and linux-gnu: clean. The Windows
+   branch uses std only (`self.dir.path`, `self.path()` exist there). Suffix
+   loop bounded at 1000; a name with `/` or `\` is refused.
+3. **Checked, fine.** `.pre-scope[.N]` is never shared: no `auth_paths` row
+   contains it, neither `DirNames` admits it (`.json`/`.info` suffix), the
+   keeper's adopt/place goes through those, and `status_in`'s `signed_in`
+   reads the store, not the homes.
+4. **Checked, fine.** `PullOutcome` callers: only `src/stores/remote/sync.ts`
+   invokes `sync_pull`/`sync_whole_project`; no `mobile-web/`, headless-owner
+   or Rust caller. `toPullOutcome` reads a bare count or a missing field.
+5. **Fixed (`1e6646ac`).** User-initiated pulls still silent: the diverged
+   view's *take host for all* (`resolveAll`) and its per-row *take host*
+   ignored the outcome. `resolveAll` now returns the skipped files (empty for
+   "local"), and both show the shared `SyncSkippedLarge` line (same
+   `.project-files-sync-result` chrome, close button) atop the diverged view,
+   outside the empty-list branch. Untested row text widened.
+6. **Fixed (`1e6646ac`), sibling.** The push-conflict queue's take-host
+   replaced the skipped line on every big file, so a second one hid the
+   first; it now appends to a skipped-only line.
+7. **Checked, fine.** i18n: the repo has no plural forms; `{count} file(s)`
+   matches the sibling keys; all five dictionaries carry the three keys.
+   Styling reuses `.inline-link-btn` / `.error-note-raw`.
+8. **Fixed (`3a64da68`).** Timing flake
+   `an_ordinary_deep_or_long_view_keeps_the_database_readable`: it tests the
+   schema limits, not speed, but ran four opens (the `long` view's 250 000-entry
+   `IN` list, ~1 s unoptimised) under the 5 s production deadline. New
+   `sqlite_tables_within(path, budget)`; the test runs tables and pages under
+   120 s.
+
+**Tests added:** `home_io.rs`
+`the_link_fallback_never_replaces_and_never_follows` (taken name →
+`AlreadyExists`, both files intact; a file moves; a symlink moves as a link,
+its target untouched); `SyncStore.test.ts` "resolveAll on the host side
+collects the files left on the host as too large" (big file collected, a
+failed path skipped, "local" returns `[]`).
+
+**Gates (at `1e6646ac`):** `npm run build` ok; `npm test` 739 files / 7587
+passed; `cargo test -q` 3800 passed, 3 ignored, 0 failed (lib 3632), run
+after `npm test`, not alongside; `rtk proxy npm run lint` 0 errors, 28
+advisory warnings (unchanged); `cargo clippy --all-targets -D warnings`
+clean (Linux; macOS/Windows clippy not runnable here); `scripts/brand-check.sh`
+ok; `git diff --check` clean; `scripts/privacy-check.sh` (staged) clean.
+`npm run backend:stale` not run (per instructions).
+
+**Flagged for user:**
+- The background auto-sync pass (`sync_auto`) still skips files over the cap
+  with a stderr line only; nobody clicked anything, so there is no result
+  line to put it in. A persistent marker on the row would be a design call.
+- The 5 s SQLite deadline covers the schema parse, `COUNT(*)` and the page
+  together. On a slow disk or machine an ordinary large table (millions of
+  rows; `COUNT(*)` walks the whole b-tree) or an aggregating view can pass
+  it and the viewer shows the timeout instead of the data. Options: a longer
+  budget, or a count that may time out on its own and show "?" while the
+  page still loads.
+- A single-file Pull of a file over the cap reads "Pulled X from the host. ·
+  1 file(s) over 64 MiB were not pulled" — informative but contradictory; the
+  done text could be dropped when nothing landed.
+- The diverged view's per-row take-host still drops a rejected pull without
+  any message (unhandled promise), as before this range.
+- macOS/Windows branches of `rename_aside` remain unrun; CI on those
+  platforms is the first real compile of the whole crate there.
