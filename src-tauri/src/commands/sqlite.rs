@@ -174,7 +174,11 @@ pub async fn sqlite_tables(path: String, project_id: Option<String>) -> Result<V
 }
 
 pub fn sqlite_tables_blocking(path: String) -> Result<Vec<String>, String> {
-    let conn = open_readonly(&path, DEADLINE)?;
+    sqlite_tables_within(&path, DEADLINE)
+}
+
+fn sqlite_tables_within(path: &str, budget: Duration) -> Result<Vec<String>, String> {
+    let conn = open_readonly(path, budget)?;
     list_tables(&conn)
 }
 
@@ -391,7 +395,10 @@ mod tests {
 
     /// The limits apply to the schema parse at open: a view an ordinary
     /// database may well hold (a 150-term `OR` chain, a statement over 1 MiB)
-    /// must not make its plain tables unreadable.
+    /// must not make its plain tables unreadable. It checks the schema limits,
+    /// not speed, so it runs under a generous budget: the `long` view's
+    /// 250 000-entry `IN` list takes about a second unoptimised and failed
+    /// `sqlite-timeout` under the production deadline on a loaded machine.
     #[test]
     fn an_ordinary_deep_or_long_view_keeps_the_database_readable() {
         let dir = tempfile::tempdir().unwrap();
@@ -410,12 +417,13 @@ mod tests {
         .unwrap();
         drop(conn);
         let path = path.to_string_lossy().into_owned();
+        let budget = Duration::from_secs(120);
         assert_eq!(
-            sqlite_tables_blocking(path.clone()).unwrap(),
+            sqlite_tables_within(&path, budget).unwrap(),
             vec!["deep".to_string(), "long".to_string(), "t".to_string()]
         );
         for table in ["t", "deep", "long"] {
-            let page = sqlite_page_blocking(path.clone(), table.into(), 10, 0).unwrap();
+            let page = sqlite_page_within(&path, table, 10, 0, budget).unwrap();
             assert_eq!(page.rows, vec![vec!["3".to_string()]], "{table}");
         }
     }
