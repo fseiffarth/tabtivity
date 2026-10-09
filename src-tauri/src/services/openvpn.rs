@@ -3741,7 +3741,7 @@ mod tests {
         // caller's own process group and so reads as alive).
         let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
             .args(if cfg!(windows) {
-                vec!["/C", "exit"]
+                vec!["/D", "/C", "exit"]
             } else {
                 vec![]
             })

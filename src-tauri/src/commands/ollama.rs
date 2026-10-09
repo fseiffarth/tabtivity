@@ -407,7 +407,7 @@ pub async fn install_ollama(app: tauri::AppHandle) -> Result<String, String> {
     // shell level so a single reader sees every line in order. On unsupported
     // platforms there is no automated path — point at the manual download.
     let (program, args): (&str, Vec<String>) = if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C".into(), format!("{cmd} 2>&1")])
+        ("cmd", vec!["/D".into(), "/C".into(), format!("{cmd} 2>&1")])
     } else if cfg!(any(target_os = "linux", target_os = "macos")) {
         ("sh", vec!["-c".into(), format!("{cmd} 2>&1")])
     } else {
@@ -1233,9 +1233,12 @@ fn remove_blob_files_elevated(files: &[&std::path::PathBuf]) -> Result<(), Strin
     }
 }
 
+/// No `ollama.service` / `pkexec` here: a blob this user may not delete
+/// belongs to another account or is held open (Windows locks a file Ollama
+/// still has open), so the message names that, not a system service.
 #[cfg(not(target_os = "linux"))]
 fn remove_blob_files_elevated(_files: &[&std::path::PathBuf]) -> Result<(), String> {
-    Err("permission denied: these files belong to another user (the Ollama service)".into())
+    Err("permission denied: these files belong to another account or are locked by a running Ollama; quit Ollama or remove them as their owner".into())
 }
 
 /// Forget an interrupted pull (e.g. the user dismisses it, or it finished).

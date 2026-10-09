@@ -119,6 +119,69 @@ mod tests {
         }
     }
 
+    /// The PowerShell twin cannot run here, so it is held to the sh script at
+    /// string level: the same marker leaves, byte caps and origin exclusion,
+    /// and every `fail CODE 'message'`, `report='…'` and `app-send: …` line
+    /// of the sh twin spelled the same (with the same exit code) in the PS1.
+    #[test]
+    fn powershell_send_twin_matches_the_sh_leaves_caps_and_messages() {
+        // brand-check: allow — include paths are literals; the script files are renamed at the flip
+        let sh = include_str!("../../../scripts/tabtivity-send.sh");
+        // brand-check: allow — include paths are literals; the script files are renamed at the flip
+        let ps1 = include_str!("../../../scripts/tabtivity-send.ps1");
+        let outbox_exclusion = concat!(".", crate::app_slug!(), "/");
+        for needle in [".$leaf.tab", ".$leaf.src", ".send-lock", ".send-", "25165824", "25165825", "1073741824", outbox_exclusion] {
+            assert!(sh.contains(needle), "sh lacks {needle:?}");
+            assert!(ps1.contains(needle), "ps1 lacks {needle:?}");
+        }
+        // The leaf loop counts a dangling link as taken (`-e || -L`); the
+        // PS1's `Present`, never `Test-Path`, which follows links.
+        for leaf in ["$leaf", ".$leaf.tab", ".$leaf.src"] {
+            assert!(sh.contains(&format!("[ -L \"$outbox/{leaf}\" ]")), "sh lacks the -L check of {leaf}");
+        }
+        for var in ["$dest", "$marker", "$origin"] {
+            assert!(ps1.contains(&format!("(Present {var})")), "ps1 lacks `(Present {var})`");
+            assert!(!ps1.contains(&format!("Test-Path -LiteralPath {var}")), "ps1 follows links at {var}");
+        }
+        // `fail CODE 'message'` → `Fail CODE 'message'`.
+        let quoted = |rest: &str| rest.strip_prefix('\'').and_then(|r| r.split_once('\'')).map(|(msg, _)| msg.to_string());
+        let mut fails = Vec::new();
+        for (i, _) in sh.match_indices("fail ") {
+            let rest = &sh[i + 5..];
+            let (code, rest) = rest.split_once(' ').unwrap();
+            if let (Ok(code), Some(msg)) = (code.parse::<u8>(), quoted(rest)) {
+                fails.push((code, msg));
+            }
+        }
+        assert!(fails.len() >= 14, "the sh twin's fail table was not read: {fails:?}");
+        for (code, msg) in &fails {
+            assert!(ps1.contains(&format!("Fail {code} '{msg}'")), "ps1 lacks `Fail {code} '{msg}'`");
+        }
+        assert!(fails.iter().all(|(code, _)| (2..=5).contains(code)));
+        // `report='kind'` → `return 'kind'`.
+        let reports: Vec<_> = sh.match_indices("report='").filter_map(|(i, _)| quoted(&sh[i + 7..])).collect();
+        assert_eq!(reports.len(), 4, "{reports:?}");
+        for kind in &reports {
+            assert!(ps1.contains(&format!("return '{kind}'")), "ps1 lacks `return '{kind}'`");
+        }
+        // Every single-quoted literal naming the command (the four usage
+        // lines, `outbox cleared.`, the warning), quoted the same; the
+        // `fail` helper's `printf` format is not a message.
+        let lines: Vec<_> = sh
+            .lines()
+            .flat_map(|line| line.split('\'').skip(1).step_by(2))
+            .filter(|l| l.contains(crate::brand::SEND_CLI) && !l.contains('%'))
+            .collect();
+        assert_eq!(lines.len(), 6, "{lines:?}");
+        for line in &lines {
+            assert!(ps1.contains(&format!("'{line}'")), "ps1 lacks '{line}'");
+        }
+        assert!(lines.iter().any(|l| l.ends_with("outbox cleared.")));
+        assert!(lines.iter().any(|l| l.contains("warning: ")));
+        assert!(lines.iter().any(|l| l.ends_with(" --help")));
+        assert!(lines.iter().any(|l| l.ends_with(" -n NAME")));
+    }
+
     #[test]
     fn a_shim_execs_app_outside_a_fence_and_the_real_cli_inside_one() {
         let dir = tempfile::tempdir().unwrap();

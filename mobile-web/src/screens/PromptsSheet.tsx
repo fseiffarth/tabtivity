@@ -23,7 +23,9 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
   projectId: string;
   tabs: TabRow[];
   onClose: () => void;
-  onSchedule: (tab: TabRow, message: string) => void;
+  /** Hands a prompt to the per-tab schedule sheet; absent where the host's
+   * tabs cannot be scheduled (no tmux), and the Schedule button with it. */
+  onSchedule?: (tab: TabRow, message: string) => void;
 }) {
   const t = useT();
   const agentTabs = tabs.filter((tab) => tab.kind === "agent" && tab.available);
@@ -128,7 +130,7 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
         <p>{prompt.message}</p>
         <div>
           <button className="primary" disabled={busy || held || !target} onClick={() => void send(prompt)} aria-label={t("mobile.prompts.sendNowAria", { message: prompt.message })}>{t("agentPrompts.send")}</button>
-          <button disabled={busy || held || !target} onClick={() => target && onSchedule(target, prompt.message)}>{t("agentPrompts.schedule")}</button>
+          {onSchedule && <button disabled={busy || held || !target} onClick={() => target && onSchedule(target, prompt.message)}>{t("agentPrompts.schedule")}</button>}
           <button disabled={busy || held} onClick={() => { setEditing(prompt.id); setMessage(prompt.message); }}>{t("common.edit")}</button>
           <button className="danger" disabled={busy || held} onClick={() => { setBusy(true); void deletePrompt(projectId, prompt.id).then(apply, fail).finally(() => setBusy(false)); }}>{t("common.delete")}</button>
         </div>

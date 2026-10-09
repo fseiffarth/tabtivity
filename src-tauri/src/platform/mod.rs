@@ -125,7 +125,7 @@ pub trait WorkspaceBackend: Send + Sync {
 pub fn detect_backend() -> Box<dyn WorkspaceBackend> {
     #[cfg(target_os = "windows")]
     {
-        return Box::new(windows::WindowsBackend::new());
+        Box::new(windows::WindowsBackend::new())
     }
 
     #[cfg(target_os = "linux")]
@@ -159,7 +159,7 @@ pub fn detect_backend() -> Box<dyn WorkspaceBackend> {
 
     #[cfg(target_os = "macos")]
     {
-        return Box::new(macos::MacBackend::new());
+        Box::new(macos::MacBackend::new())
     }
 
     // Fallback for Linux desktops that matched no backend above, plus other

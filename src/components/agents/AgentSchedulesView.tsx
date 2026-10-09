@@ -3,6 +3,7 @@ import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type Agent
 import { relativeToNow, scheduleStatus, scheduleSummary, type ScheduledAgentPrompt } from "../../lib/agents/agentSchedule";
 import { agentModelsFor, buildPreface, prefaceCommandsFor } from "../../lib/agents/agentPrefaces";
 import { useI18nStore, useT } from "../../lib/i18n";
+import { useChordHint } from "../../lib/shortcuts/shortcutHint";
 import { jumpToTab, openPromptChartTab } from "../../lib/shortcuts/tabJump";
 import { useActivityStore } from "../../stores/activity";
 import { continueKey, useAgentContinueStore } from "../../stores/agents/agentContinue";
@@ -43,6 +44,7 @@ function writeAgentSort(sort: AgentSort): void {
 
 function AgentTabComposer({ scope, tab, offered, models }: { scope: string; tab: TabEntry; offered: string[]; models: string[] }) {
   const t = useT();
+  const chordHint = useChordHint();
   const [draft, setDraft] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [model, setModel] = useState("");
@@ -69,7 +71,7 @@ function AgentTabComposer({ scope, tab, offered, models }: { scope: string; tab:
       {models.length > 0 && <label className="agent-composer-model"><span>{t("agentPrompts.model")}</span><Dropdown value={model} placeholder={t("agentPrompts.modelUnchanged")} title={t("agentPrompts.modelTitle")} options={[{ value: "", label: t("agentPrompts.modelUnchanged") }, ...models.map((name) => ({ value: name, label: name }))]} onChange={setModel} /></label>}
       <MarkdownPromptField rows={3} value={draft} placeholder={t("agentPrompts.composerPlaceholder", { tab: tab.label })} ariaLabel={t("agentPrompts.composerPlaceholder", { tab: tab.label })} onChange={setDraft} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy) void submit(); } }} />
       {preface.length > 0 && <small className="agent-composer-preview">{t("agentPrompts.prefixPreview", { commands: preface.join(" · ") })}</small>}
-      <div className="agent-schedule-form-actions"><button className="settings-btn sm primary" type="button" disabled={busy || !draft.trim()} title={t("agentPrompts.composerSendTitle")} onClick={() => void submit()}>{t("agentPrompts.composerSend")}</button></div>
+      <div className="agent-schedule-form-actions"><button className="settings-btn sm primary" type="button" disabled={busy || !draft.trim()} title={chordHint(t("agentPrompts.composerSendTitle"), { key: "Enter", ctrl: true })} onClick={() => void submit()}>{t("agentPrompts.composerSend")}</button></div>
       {notice && <div className="agent-prompts-notice" data-testid="agent-composer-notice">{notice}</div>}
       {error && <ErrorNote className="project-dialog-error" error={error} />}
     </div>

@@ -81,6 +81,18 @@ describe("tabs store — retargetTabs", () => {
     useTabsStore.getState().retargetTabs("/p/absent.md", "/p/x.md");
     expect(useTabsStore.getState().tabsByScope.p).toBe(before);
   });
+
+  it("swaps the directory prefix on a segment boundary and keeps the tail's bytes", () => {
+    // `/p/sub2` is not under `/p/sub`; a POSIX file name may hold a `\`, which
+    // must survive the swap (the normalising path helpers would read it as a
+    // separator).
+    seed([embedTab("t1", "/p/sub/a.md"), embedTab("t2", "/p/sub2/b.md"), embedTab("t3", "/p/sub/we\\ird.md")]);
+    useTabsStore.getState().retargetTabs("/p/sub", "/p/sub2");
+    const byKey = (k: string) => useTabsStore.getState().tabsByScope.p.find((t) => t.key === k)!;
+    expect(byKey("t1").embedPath).toBe("/p/sub2/a.md");
+    expect(byKey("t2").embedPath).toBe("/p/sub2/b.md");
+    expect(byKey("t3").embedPath).toBe("/p/sub2/we\\ird.md");
+  });
 });
 
 describe("fileTabSync — current scope, no popouts", () => {

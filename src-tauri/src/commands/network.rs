@@ -391,7 +391,7 @@ fn windows_connections() -> Vec<NetworkConnection> {
     /// # Safety
     /// `buf` must have been filled by the `Get*Table` call whose layout `T`
     /// names, and `first` must return the address of that table's `table[0]`.
-    unsafe fn rows<'a, T, R: Copy>(buf: &'a [u8], first: unsafe fn(*const T) -> *const R) -> &'a [R] {
+    unsafe fn rows<T, R: Copy>(buf: &[u8], first: unsafe fn(*const T) -> *const R) -> &[R] {
         let table = buf.as_ptr() as *const T;
         let count = *(buf.as_ptr() as *const u32) as usize;
         let start = first(table);
@@ -825,7 +825,11 @@ impl SsDump {
     }
 }
 
+// `SsDump` is a unit struct on macOS only; `SsDump::default()` is the one
+// spelling both platforms compile, so clippy's "drop the `default()`" would
+// break Linux.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(target_os = "macos", allow(clippy::default_constructed_unit_structs))]
 pub(crate) fn local_ssh_link(project_id: &str) -> SshLinkSnapshot {
     local_ssh_link_shared(project_id, &mut SsDump::default())
 }

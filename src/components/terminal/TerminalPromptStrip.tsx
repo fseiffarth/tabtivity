@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
+import { modifierLabel } from "../../lib/shortcuts/shortcuts";
 import { useUse24h } from "../../lib/timeFormat";
 import { buildPromptTrail, type TrailPrompt } from "../../lib/agents/prompt/trail";
 import { useAgentPromptsStore } from "../../stores/agents/agentPrompts";
@@ -267,7 +268,7 @@ export function TerminalPromptStrip({
                 ))}
             </ol>
           )}
-          <div className="prompt-strip-keys">{t("terminal.promptStrip.keys")}</div>
+          <div className="prompt-strip-keys">{t("terminal.promptStrip.keys", { modifier: modifierLabel() })}</div>
         </div>
       )}
     </div>

@@ -811,6 +811,10 @@ pub async fn list_agents() -> Vec<AgentInfo> {
 /// via PowerShell when the command is PowerShell-only (`irm … | iex`), else via
 /// `cmd /C` — plain `npm`/`python` installs may chain with `&&`, which Windows
 /// PowerShell 5.1 does not parse but cmd does.
+///
+/// Every OS runs the installer into Tabtivity's own install home, never the
+/// user's (`services::agent_install`): the home is created, the installer gets
+/// its environment and a `PATH` with the home's launcher dirs first.
 fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> {
     #[cfg(windows)]
     {
@@ -831,8 +835,9 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
             c = crate::paths::command_no_window("cmd");
             // cmd doesn't take an argv — hand it the raw line un-requoted.
             use std::os::windows::process::CommandExt;
-            c.raw_arg(format!("/C {cmd_str} 2>&1"));
+            c.raw_arg(format!("/D /C {cmd_str} 2>&1"));
         }
+        into_install_home(&mut c)?;
         Ok(c)
     }
     #[cfg(not(windows))]
@@ -845,19 +850,29 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
         }
         let mut c = crate::paths::command_no_window("sh");
         c.arg("-c").arg(format!("{} 2>&1", spec.install_cmd));
-        // Into Tabtivity's own install home, never the user's
-        // (`services::agent_install`).
-        let root = crate::services::agent_install::install_root();
-        std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
-        c.envs(crate::services::agent_install::install_env());
-        c.env("PATH", agent_install_path());
+        into_install_home(&mut c)?;
         Ok(c)
     }
 }
 
+/// Point an installer at Tabtivity's own install home: create it, hand over
+/// its environment and [`agent_install_path`].
+fn into_install_home(c: &mut std::process::Command) -> Result<(), String> {
+    let root = crate::services::agent_install::install_root();
+    std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
+    let env = crate::services::agent_install::install_env();
+    // The Windows `APPDATA` stand-in must exist: npm and PowerShell write
+    // into it without creating it first.
+    if let Some((_, appdata)) = env.iter().find(|(k, _)| k == "APPDATA") {
+        std::fs::create_dir_all(appdata).map_err(|e| format!("create {appdata}: {e}"))?;
+    }
+    c.envs(env);
+    c.env("PATH", agent_install_path());
+    Ok(())
+}
+
 /// PATH for an installer: the install home's launcher dirs first, so a
 /// second installer of the same vendor finds the first's tools there.
-#[cfg(not(windows))]
 fn agent_install_path() -> std::ffi::OsString {
     let mut dirs = crate::services::agent_install::bin_dirs_in(&crate::storage::state_dir());
     if let Some(path) = crate::paths::effective_path() {
@@ -1066,21 +1081,30 @@ fn should_retry_npm_install(spec: &AgentSpec, output: &str) -> bool {
 
 /// Build the `npm uninstall -g <pkg>` process for the host OS (same shell
 /// choice as the npm branch of `installer_command`: `cmd /C` on Windows, `sh -c`
-/// elsewhere).
-fn npm_uninstall_command(pkg: &str) -> std::process::Command {
+/// elsewhere). A CLI Tabtivity installed is removed from its install home's
+/// npm prefix (the installer's own environment); `npm -g` there would
+/// otherwise mean the user's prefix, missing the copy that was found.
+fn npm_uninstall_command(
+    pkg: &str,
+    in_install_home: bool,
+) -> Result<std::process::Command, String> {
     #[cfg(windows)]
-    {
+    let mut c = {
         use std::os::windows::process::CommandExt;
         let mut c = crate::paths::command_no_window("cmd");
-        c.raw_arg(format!("/C npm uninstall -g {pkg} 2>&1"));
+        c.raw_arg(format!("/D /C npm uninstall -g {pkg} 2>&1"));
         c
-    }
+    };
     #[cfg(not(windows))]
-    {
+    let mut c = {
         let mut c = crate::paths::command_no_window("sh");
         c.arg("-c").arg(format!("npm uninstall -g {pkg} 2>&1"));
         c
+    };
+    if in_install_home {
+        into_install_home(&mut c)?;
     }
+    Ok(c)
 }
 
 /// Remove an installed agent CLI so it can be cleanly reinstalled — the
@@ -1105,10 +1129,11 @@ pub async fn uninstall_agent(id: String) -> Result<String, String> {
     };
 
     if let Some(pkg) = npm_package_from_cmd(cmd_for_platform) {
-        if !spec_is_installed(spec) {
+        let Some(found) = resolve_spec_path(spec) else {
             return Ok(format!("{} is not installed.", spec.label));
-        }
-        let out = run_capture(npm_uninstall_command(pkg)).map_err(|e| {
+        };
+        let in_install_home = crate::services::agent_install::owns_path(&found);
+        let out = run_capture(npm_uninstall_command(pkg, in_install_home)?).map_err(|e| {
             if is_permission_error(&e) {
                 format!(
                     "Permission denied — this machine's npm global directory needs \

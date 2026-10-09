@@ -279,5 +279,39 @@ describe("steering prompt box", () => {
       });
       expect(box()).toBeNull();
     });
+
+    it("names each chip's key the way the platform does (Alt+M here)", () => {
+      openBox();
+      const keys = Array.from(document.querySelectorAll(".steering-prompt-chip kbd")).map((k) => k.textContent);
+      expect(keys.length).toBeGreaterThan(0);
+      for (const key of keys) expect(key).toMatch(/^Alt\+[A-Z]$/);
+    });
+
+    /** `IS_MAC` is an import-time constant: read the label from a fresh module
+     *  graph under a mocked `lib/platform`. */
+    it("names the chip keys with Option (⌥) on macOS", async () => {
+      vi.resetModules();
+      vi.doMock("../../lib/platform", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../lib/platform")>()),
+        IS_MAC: true,
+        IS_WINDOWS: false,
+        IS_LINUX: false,
+        PLATFORM: "macos",
+      }));
+      try {
+        const { chipKeyLabel } = await import("../../components/layout/SteeringPromptOverlay");
+        const chips = ["model", "effort", "clear", "plan", "goal"] as const;
+        expect(chips.map((c) => chipKeyLabel(c))).toEqual([
+          "⌥M",
+          "⌥E",
+          "⌥K",
+          "⌥L",
+          "⌥G",
+        ]);
+      } finally {
+        vi.doUnmock("../../lib/platform");
+        vi.resetModules();
+      }
+    });
   });
 });

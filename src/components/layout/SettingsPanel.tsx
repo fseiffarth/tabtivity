@@ -44,6 +44,7 @@ import {
   chordLabel,
   findConflicts,
   isUnbound,
+  modifierLabel,
   resolveChord,
   type ShortcutAction,
   type ShortcutDef,
@@ -1843,7 +1844,7 @@ export function SettingsDialog({
               label={<>{t("settings.rootMcp")} <UntestedTag id="settings.rootMcp" /></>}
               checked={settings?.root_mcp ?? true}
               onChange={(e) => void updateSettings({ root_mcp: e.target.checked })}
-              help={t("settings.rootMcpHelp")}
+              help={t("settings.rootMcpHelp", { modifier: modifierLabel() })}
             />
             {/* Subordinate to the switch above. Read per spawn and per request
                 too: on, the endpoint refuses the cloud agents already running. */}
@@ -2139,7 +2140,7 @@ export function SettingsDialog({
                   {t("settings.pythonRunHelp1")} <code>.py</code> {t("settings.pythonRunHelp2")}{" "}
                   <b><PlayIcon /> {t("fileViewer.runLabel")}</b> {t("settings.pythonRunHelp3")} <b><BugIcon /> {t("fileViewer.debugLabel")}</b>{" "}
                   {t("settings.pythonRunHelp4")} <code>pdb</code>
-                  {t("settings.pythonRunHelp5")}
+                  {t("settings.pythonRunHelp5", { modifier: modifierLabel() })}
                 </>
               }
             />

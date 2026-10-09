@@ -15,7 +15,7 @@ import { openFileEntry } from "../../components/files/openFileEntry";
 import { openProjectFilesTab } from "../../components/files/ProjectFilesTab";
 import { useTabsStore } from "../../stores/tabs";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
-import { relativePathWithin } from "../paths";
+import { basename, relativePathWithin } from "../paths";
 import { internalViewerFor, type FileEntry, type InternalViewer } from "../viewers/fileUtils";
 import type { TranslationKey } from "../i18n";
 
@@ -38,9 +38,14 @@ const TRAILING = /[.:!?]+$/u;
 // `:12`, `:12:5` (line, column), `:12-20` (from line 12), `#L12`, `#L12C5`,
 // `#L12-L20`.
 const LINE_SUFFIX = /(?::(\d+)(?::(\d+)|-\d+)?|#L(\d+)(?:C(\d+)|-L?\d+)?)$/u;
-const PATH_SHAPE = /^(?:\/|(?:\.{1,2}\/)+)?[\p{L}\p{N}_@+.~-]+(?:\/[\p{L}\p{N}_@+.~-]+)*\/?$/u;
+// Segments joined by either separator (`src/a.ts`, `src\a.ts`), rooted at a
+// POSIX `/`, a Windows drive (`C:\…`) or `./`/`../`. A bare leading `\` is no
+// root here: `\section` is TeX, not a path.
+const PATH_SHAPE = /^(?:\/|[A-Za-z]:[\\/]|(?:\.{1,2}[\\/])+)?[\p{L}\p{N}_@+.~-]+(?:[\\/][\p{L}\p{N}_@+.~-]+)*[\\/]?$/u;
+// Two separators in a row (`a//b`, `a\\b`): an escaped string, not a path.
+const DOUBLE_SEP = /[\\/]{2}/u;
 // The last segment's extension, with a letter in it (`v0.1.111` has none).
-const EXTENSION = /[^/.]\.[\p{N}_-]*\p{L}[\p{L}\p{N}_-]{0,11}$|^\.[\p{L}][\p{L}\p{N}_.-]*$/u;
+const EXTENSION = /[^/\\.]\.[\p{N}_-]*\p{L}[\p{L}\p{N}_-]{0,11}$|^\.[\p{L}][\p{L}\p{N}_.-]*$/u;
 const MAX_PATH_CHARS = 400;
 
 /** The path-shaped words of `text`: a word with a `/` between two names, or a
@@ -64,11 +69,11 @@ export function findPathCandidates(text: string): PathCandidate[] {
       if (c > 0) column = c;
     }
     path = path.replace(TRAILING, "");
-    if (!path || path.length > MAX_PATH_CHARS || !PATH_SHAPE.test(path) || path.includes("//")) continue;
+    if (!path || path.length > MAX_PATH_CHARS || !PATH_SHAPE.test(path) || DOUBLE_SEP.test(path)) continue;
     if (!/\p{L}/u.test(path)) continue;
-    const trimmed = path.replace(/\/+$/, "");
-    const last = trimmed.slice(trimmed.lastIndexOf("/") + 1);
-    const slashed = /[^/]\/[^/]/u.test(path) || (path.startsWith("/") && trimmed.length > 1);
+    const trimmed = path.replace(/[\\/]+$/u, "");
+    const last = basename(path);
+    const slashed = /[^\\/][\\/][^\\/]/u.test(path) || (path.startsWith("/") && trimmed.length > 1);
     if (!slashed && !EXTENSION.test(last)) continue;
     if (last === "." || last === "..") continue;
     const shown = line !== undefined ? word : path;

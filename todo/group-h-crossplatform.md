@@ -712,6 +712,147 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+    - [x] **32p — frontend reads native Windows paths** (2026-10-07, ⚠️ never
+      run on Windows). The rename retarget (`FileTree`, `tabs.retargetTabs`),
+      the Rename dialog's folder label, Disk Usage's parent/picked-folder
+      labels and the deck's file labels split on `/` only, so `C:\p\a.txt`
+      came out whole or empty; now `basename`/`dirname`/`resolvePath` from
+      `lib/paths`. `.ps1`/`.bat` Run quoted `'…'`, which cmd/PowerShell hand
+      through verbatim; now `"…"`. Terminal/Reader path links accept
+      `src\a.ts:120`, `C:\…\a.ts`, `.\src\a.ts`. `currentPlatform()` reads
+      `lib/platform` instead of the UA string.
+      - [x] 🤖 Automated test — `files/WindowsPaths.test.ts`,
+        `run/ShellScriptRun.test.ts`, `terminal/PathLinks.test.tsx`
+      - [ ] 🖐️ Manual test — Windows: rename a file open in a tab (tab follows),
+        ▶ on a `.bat` runs it, an agent's `src\a.ts:12` is a link
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **32q — wired-network identity, dev-build chip, Ollama wording off
+      Linux** (2026-10-08, plan §3.9, ⚠️ never run on macOS/Windows). The
+      per-network default printer keyed a wired link by its gateway only on
+      Linux (`/proc`); macOS now reads the `gateway:` of `route -n get default`
+      and `arp -n <ip>`, Windows the lowest-metric `0.0.0.0` row of `route
+      print -4` and `arp -a <ip>`, MACs canonicalised to the `/proc` spelling
+      so the id is the same on every OS. The dev-build chip's lock check uses
+      `apps::pid_alive` (no `/proc`), its own-binary check `current_exe`, and
+      "Relaunch now" says it is Linux-only elsewhere. A blob Delete refused
+      off Linux says the files belong to another account or are locked.
+      - [x] 🤖 Automated test — `macos_route_get_names_the_gateway_and_the_interface`,
+        `macos_arp_n_resolves_only_a_complete_entry`,
+        `windows_route_print_picks_the_lowest_metric_default_gateway`,
+        `windows_arp_a_resolves_the_gateway_row`, `every_os_spells_one_mac_the_same`
+      - [ ] 🖐️ Manual test — on a wired link: Print manager → set "Default on
+        this network" → the label names the gateway IP; unplug/replug or
+        relaunch → the same default is applied; on another wired network it
+        is not
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **32r — Windows installer home, trusted helpers, links, private
+      files** (2026-10-08, plan §3.7, ⚠️ never run on Windows). Manage CLIs
+      installs on Windows now get the install home, its env (plus
+      `USERPROFILE`/`APPDATA` inside it) and its launcher dirs on `PATH`
+      (npm's `<prefix>` root included), so they land under the state dir like
+      on Linux. `git`/`ssh`/`scp`/`sftp`/`cmd`/`powershell`/`icacls` come from
+      Program Files\Git, System32\OpenSSH, Windows PowerShell or System32 only
+      when the file and its folder are owned by Administrators/SYSTEM/
+      TrustedInstaller with no one else allowed to write (read with
+      `GetFileSecurityW`), else from `PATH` as before. A project import makes
+      directory links as directory symlinks, or junctions without the symlink
+      privilege; box links, the state-dir move and import share one junction
+      helper (`services::win_links`). Key/token/private state files are
+      restricted to the user (`services::private_file::restrict_to_owner`,
+      `icacls` grant then `/inheritance:r`).
+      - [x] 🤖 Automated test — `the_windows_installer_env_also_moves_the_profile_and_appdata`,
+        `windows_helpers_are_looked_up_in_the_admin_dirs_in_order`,
+        `a_stock_program_files_acl_is_locked`,
+        `any_write_right_for_another_principal_unlocks`,
+        `the_trusted_principals_are_told_apart_by_sid`,
+        `a_sid_is_spelled_like_windows_spells_it`,
+        `restricting_grants_before_it_drops_inheritance`,
+        `the_junction_line_quotes_both_paths_link_first`,
+        `an_archived_link_target_is_written_in_windows_spelling`
+      - [ ] 🖐️ Manual test — Windows: Manage CLIs → install Codex → it lands
+        under the state dir's `agents\install\npm`, not `%APPDATA%\npm`, and a
+        new Codex tab starts; a file tree in a git project still shows status
+        (git from Program Files\Git); after pairing a phone, `icacls` on the
+        control dir's key file lists only the user; import a project export
+        that holds a directory symlink → it is a link (or junction) again
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **32s — macOS fenced push preflight, git guard, background-job tabs**
+      (2026-10-08, plan §3.8 + §3.10, ⚠️ never run on macOS). An agent
+      `git_push` from a fenced Mac tab ran no pre-push hook (refused as
+      `fence_unavailable`); it now runs it under `sandbox-exec` with a
+      narrower `preflight.sb` profile (roots read-write, allowlist read-only,
+      temp writable, git control files guarded, the whole state dir and Cargo
+      tokens hidden, no agent home). The tab fence's Seatbelt profile now
+      also write-denies the repo's git control files and pins `.git` (it had
+      no `git_guard` at all). Tabs on a Mac now get the "background job"
+      mark: the scan reads `pbi_comm`, parents and the tab id from the
+      environment half of `KERN_PROCARGS2` (that variable only). Windows
+      still reports no jobs (no environment reader).
+      - [x] 🤖 Automated test — `the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home`,
+        `procargs2_env_starts_after_the_argv_strings`,
+        `the_walk_reads_the_tab_id_from_the_environment_half_of_procargs2`
+      - [ ] 🖐️ Manual test — macOS: in a fenced Claude tab of a repo with a
+        pre-push hook, ask the agent to `git_push` → the hook runs and the
+        push card appears; in the same tab `echo x >> .git/hooks/pre-push`
+        and `git commit` both behave as on Linux (the first refused, the
+        second works); ask Claude to run `sleep 120` in the background → the
+        tab shows the background-job mark until it ends
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **32t — Windows: agent mail attachments through the handle walk**
+      (2026-10-08, plan §3.11, ⚠️ never run on Windows). A root agent's
+      `attach` on a mail draft was refused outright on Windows; it now reads
+      through the phone's handle-based `files::ProjectDir` walk (one
+      `NtCreateFile` per name relative to the held folder, every reparse
+      point — junctions included — refused, the proven handle read), with
+      the same roots, caps and secret-name list as Linux/macOS. Names Windows
+      would read as another file (`a:b` streams, `GIT~1` short names, a
+      trailing dot or space) are refused before any I/O, and the state-dir
+      check ignores case.
+      - [x] 🤖 Automated test — `windows_aliases_are_refused_before_io`,
+        `the_state_check_ignores_case`, `junctions_are_refused_never_followed`
+        (Windows CI only), `content_is_pinned_at_call_time` and
+        `attach_on_update_replaces_keeps_or_clears` now also on Windows
+      - [ ] 🖐️ Manual test — Windows: in a root tab (unfenced there, so it
+        reads every project) ask the agent to draft a mail attaching a project's PDF →
+        the composer shows the file chip; make a junction in the project
+        (`mklink /J away C:\Windows`) and ask it to attach `away/win.ini` →
+        refused ("never followed"); `GIT~1/config` → refused
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
     - [ ] **32z — deferred from the sweep** (each needs live hardware or a
       product call first):
       - X11 backend on any X11 session — mutates the WM workspace count and
@@ -728,7 +869,26 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
       - Windows shutdown time budget — measure teardown on hardware first.
       - Roaming `%APPDATA%` state dir — needs a migration; niche.
       - Phone-side "no terminals on Windows" copy — new mobile API field +
-        mobile-web i18n.
+        mobile-web i18n. Built 2026-10-07 (plan §3.4): the project detail
+        carries `terminals: "tmux" | "unsupported"`; the phone keeps ＋ for
+        its Send a file row only, hides Schedule and Mark up's Submit and
+        shows one line.
+        - [x] 🤖 Automated test — `mobile/MobileProjectTerminalsUnsupported.test.tsx`,
+          `terminals_support_names_tmux_or_unsupported`,
+          `a_create_with_no_window_is_minted_spawned_and_listed_by_the_owner`
+        - [ ] 🖐️ Manual test — Windows desktop, phone on the project screen:
+          ＋ opens only "Send a file from this phone" (and it lands in the
+          project inbox), no ◷ on agent cards, the Prompts sheet has no
+          Schedule, a gallery picture has no Mark up, and the one line says
+          tmux is missing
+          - [ ] ✅ Works on Linux (X11)
+          - [ ] ❌ Doesn't work on Linux (X11)
+          - [ ] ✅ Works on Linux (Wayland)
+          - [ ] ❌ Doesn't work on Linux (Wayland)
+          - [ ] ✅ Works on Windows
+          - [ ] ❌ Doesn't work on Windows
+          - [ ] ✅ Works on macOS
+          - [ ] ❌ Doesn't work on macOS
       - Job Object for ConPTY children — needs hardware to see current crash
         reaping.
       - Keychain file read for fenced Claude on macOS — security trade-off;

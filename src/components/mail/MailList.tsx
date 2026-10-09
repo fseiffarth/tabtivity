@@ -9,6 +9,7 @@ import {
 } from "../../lib/mail";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useI18nStore, useT } from "../../lib/i18n";
+import { modifierLabel } from "../../lib/shortcuts/shortcuts";
 import { useUse24h } from "../../lib/timeFormat";
 import { UntestedTag } from "../common/UntestedTag";
 import type { MailHeader, MailPriority, MailSort } from "../../types/mail";
@@ -425,7 +426,7 @@ function MailListImpl({
             }${h.seen ? "" : " unread"}`}
             role="button"
             tabIndex={0}
-            title={t("mail.selectHint")}
+            title={t("mail.selectHint", { modifier: modifierLabel() })}
             onClick={(e) => {
               // A modified click picks rows and deliberately opens nothing:
               // building a selection of ten messages must not fetch ten bodies

@@ -71,8 +71,12 @@ pub fn binary_on_path(bin: &str) -> bool {
 /// in project folders and against remote hosts, often in the background. By
 /// bare name they would resolve through [`effective_path`], which puts
 /// user-writable dirs (`~/.local/bin`, …) first — a planted `~/.local/bin/git`
-/// would then run at the next file-tree poll (#861).
-const TRUSTED_HELPERS: &[&str] = &["git", "tmux", "ssh", "scp", "sftp", "rsync"];
+/// would then run at the next file-tree poll (#861). The last three are
+/// Windows' own shells and ACL tool, which Tabtivity runs its one-liners
+/// through (agent installers, junctions, `services::private_file`); Unix has
+/// no root-owned copy of them, so nothing changes there.
+const TRUSTED_HELPERS: &[&str] =
+    &["git", "tmux", "ssh", "scp", "sftp", "rsync", "cmd", "powershell", "icacls"];
 
 /// Directories only root can add a program to on a sane Unix install. Each
 /// hit is still checked with [`root_owned_file`].
@@ -86,8 +90,29 @@ const SYSTEM_BIN_DIRS: &[&str] = &[
     "/usr/local/sbin",
 ];
 
+/// Where an administrator-installed copy of a helper lives on Windows, in
+/// lookup order: Git for Windows' launcher and tool dirs, the in-box OpenSSH,
+/// Windows PowerShell, System32. Each hit is still checked with
+/// `services::private_file::admin_locked`, so a variable pointing somewhere
+/// the user can write only ever costs the lookup. Pure over the two values.
+#[cfg(any(windows, test))]
+fn windows_system_bin_dirs(program_files: Option<&OsStr>, system_root: Option<&OsStr>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(pf) = program_files.filter(|p| !p.is_empty()) {
+        let git = Path::new(pf).join("Git");
+        dirs.push(git.join("cmd"));
+        dirs.push(git.join("bin"));
+    }
+    if let Some(root) = system_root.filter(|r| !r.is_empty()) {
+        let system32 = Path::new(root).join("System32");
+        dirs.push(system32.join("OpenSSH"));
+        dirs.push(system32.join("WindowsPowerShell").join("v1.0"));
+        dirs.push(system32);
+    }
+    dirs
+}
+
 /// The first `dir/bin` in `dirs` that `trusted` accepts. Pure over `trusted`.
-#[cfg(any(unix, test))]
 fn first_trusted_in(
     dirs: &[PathBuf],
     bin: &str,
@@ -117,15 +142,30 @@ fn root_owned_file(path: &Path) -> bool {
 }
 
 /// `bin` from the root-owned system directories only — never from `PATH` or a
-/// per-user directory. `None` when there is no such copy (always on Windows).
-/// The agent fence takes `bwrap` from here and fails closed without it.
+/// per-user directory. `None` when there is no such copy. On Windows the
+/// directories are [`windows_system_bin_dirs`], the file is `<bin>.exe`, and
+/// "root-owned" means owned by Administrators/SYSTEM/TrustedInstaller with no
+/// one else allowed to write it or its folder; a descriptor that cannot be
+/// read is `None`, never trusted. The agent fence takes `bwrap` from here and
+/// fails closed without it.
 pub fn system_executable(bin: &str) -> Option<PathBuf> {
     #[cfg(unix)]
     {
         let dirs: Vec<PathBuf> = SYSTEM_BIN_DIRS.iter().map(PathBuf::from).collect();
         first_trusted_in(&dirs, bin, &root_owned_file)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        if bin.is_empty() {
+            return None;
+        }
+        let dirs = windows_system_bin_dirs(
+            std::env::var_os("ProgramFiles").as_deref(),
+            std::env::var_os("SystemRoot").as_deref(),
+        );
+        first_trusted_in(&dirs, &format!("{bin}.exe"), &crate::services::private_file::admin_locked)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = bin;
         None
@@ -134,8 +174,8 @@ pub fn system_executable(bin: &str) -> Option<PathBuf> {
 
 /// The program to spawn for one of Tabtivity's own helpers ([`TRUSTED_HELPERS`]):
 /// its root-owned system copy when there is one. `None` for any other name,
-/// and for a helper the system lacks (Homebrew's tmux, Git for Windows), which
-/// then resolves on the effective `PATH` as before.
+/// and for a helper the system lacks (Homebrew's tmux, a per-user Git for
+/// Windows), which then resolves on the effective `PATH` as before.
 pub fn helper_program(bin: &OsStr) -> Option<PathBuf> {
     let name = bin.to_str()?;
     if !TRUSTED_HELPERS.contains(&name) {
@@ -950,6 +990,25 @@ mod tests {
         assert_eq!(first_trusted_in(&dirs, "bwrap", &trusted), None);
         assert_eq!(first_trusted_in(&dirs, "../usr/bin/git", &trusted), None);
         assert_eq!(first_trusted_in(&dirs, "", &trusted), None);
+    }
+
+    #[test]
+    fn windows_helpers_are_looked_up_in_the_admin_dirs_in_order() {
+        let pf = Path::new(r"C:\Program Files");
+        let sys = Path::new(r"C:\Windows").join("System32");
+        assert_eq!(
+            windows_system_bin_dirs(Some(OsStr::new(r"C:\Program Files")), Some(OsStr::new(r"C:\Windows"))),
+            vec![
+                pf.join("Git").join("cmd"),
+                pf.join("Git").join("bin"),
+                sys.join("OpenSSH"),
+                sys.join("WindowsPowerShell").join("v1.0"),
+                sys.clone(),
+            ]
+        );
+        // An unset or empty variable drops its dirs; it never means "here".
+        assert_eq!(windows_system_bin_dirs(None, Some(OsStr::new(""))), Vec::<PathBuf>::new());
+        assert_eq!(windows_system_bin_dirs(Some(OsStr::new("")), Some(OsStr::new(r"C:\Windows"))).len(), 3);
     }
 
     #[cfg(unix)]

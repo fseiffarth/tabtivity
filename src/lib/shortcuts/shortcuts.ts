@@ -591,6 +591,14 @@ function prettyKey(key: string): string {
   return key.length === 1 ? key.toUpperCase() : key;
 }
 
+/** The primary modifier as prose names it — "⌘" on macOS, "Ctrl" elsewhere —
+ *  for the mouse-modifier copy ("{modifier}+click opens …") that `chordLabel`
+ *  cannot render because no key chord is involved. Tooltips naming a key chord
+ *  go through `useChordHint` instead, so a rebinding shows up there. */
+export function modifierLabel(): string {
+  return IS_MAC ? "⌘" : "Ctrl";
+}
+
 /** The stored shortcut map (action id → chord). Partial: any unset action
  *  falls back to its default. Mirrors `Settings["keyboard_shortcuts"]`. */
 export type ShortcutMap = Partial<Record<ShortcutAction, ChordDescriptor>>;

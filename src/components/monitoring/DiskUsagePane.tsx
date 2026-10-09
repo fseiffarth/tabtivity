@@ -25,6 +25,7 @@ import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { OrbitSpinner } from "../common/OrbitSpinner";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { basename, dirname } from "../../lib/paths";
 
 interface Props {
   /** Owning project, or `null` in the root scope. */
@@ -72,9 +73,10 @@ function trail(root: DuNode, path: string): DuNode[] {
   return [];
 }
 
-function parentDir(path: string): string {
-  const i = path.lastIndexOf("/");
-  return i > 0 ? path.slice(0, i) : "/";
+/** The folder a scanned entry sits in (a shell tab's cwd); the root of a
+ *  rootless path falls back to `/`. Native paths: `C:\p\a.txt` → `C:\p`. */
+export function parentDir(path: string): string {
+  return dirname(path) || "/";
 }
 
 // ── Pane ──────────────────────────────────────────────────────────────────────
@@ -185,7 +187,7 @@ export function DiskUsagePane({ projectId, projectCwd, tabKey, visible }: Props)
       title: t("diskUsage.scanFolderDialogTitle"),
     });
     if (typeof picked === "string") {
-      void startScan(picked, false, picked.slice(picked.lastIndexOf("/") + 1) || picked);
+      void startScan(picked, false, basename(picked) || picked);
     }
   }
 

@@ -38,22 +38,24 @@ runs project code holds the token:
    token variables removed, inside `agent_fence::one_shot_command` for the
    fence scope recorded on the tab's push identity
    (`PushBinding::fence_scope`, copied into the proposal) — a *narrower*
-   bubblewrap profile built from the same primitives (project/box roots,
-   allowlist, git-control guard, credential and state masks), none of the
-   tab's agent-home or launcher mounts. The token is minted in
-   `launch_prep::prepare` before the fence is decided, so the spawn path
-   stamps the scope onto the binding (`TokenStore::stamp_push_fence_scope`)
-   once the decision is `Fenced` and the wrap succeeded, before the agent
-   process exists. **No recorded scope, no hook run** (gap 18): the hook is
-   agent-writable, so a missing scope is `fence_unavailable`, never a host
-   fallback (the host branch exists only in the hook tests). A Pusher exists
-   only for a local project agent, which is always fenced on Linux and macOS,
-   and the root console's unfenced Host session gets no Pusher. A fence that
-   cannot run fails closed too (`fence_unavailable`). Linux only: on macOS
-   the one-shot fence is not built, so a repo with a hook gets
-   `fence_unavailable`; on Windows (no fence) it gets `fence_unavailable`
-   with "push from the git bar". A repo without a hook pushes on every
-   platform. The scope used to come from the fence registry
+   profile built from the same primitives (project/box roots, allowlist,
+   git-control guard, credential and state masks), none of the tab's
+   agent-home or launcher mounts. On Linux that is bubblewrap; on macOS a
+   `preflight.sb` Seatbelt profile run through `sandbox-exec`
+   (`one_shot_seatbelt_inputs`: temp writable, the whole state dir hidden, no
+   agent home; `HOME` stays the user's with reads under it denied except the
+   allowlist). The token is minted in `launch_prep::prepare` before the fence
+   is decided, so the spawn path stamps the scope onto the binding
+   (`TokenStore::stamp_push_fence_scope`) once the decision is `Fenced` and
+   the wrap succeeded, before the agent process exists. **No recorded scope,
+   no hook run** (gap 18): the hook is agent-writable, so a missing scope is
+   `fence_unavailable`, never a host fallback (the host branch exists only in
+   the hook tests). A Pusher exists only for a local project agent, which is
+   always fenced on Linux and macOS, and the root console's unfenced Host
+   session gets no Pusher. A fence that cannot run fails closed too
+   (`fence_unavailable`). Windows has no fence, so a repo with a hook gets
+   `fence_unavailable` with "push from the git bar". A repo without a hook
+   pushes on every platform. The scope used to come from the fence registry
    (`fenced_scope_of_tab`), which a stale `pty_kill` could clear after a
    pane remount — then the hook ran unfenced. Exit ≠ 0 refuses with
    the hook's output; five minutes is the cap. Commits the hook adds are

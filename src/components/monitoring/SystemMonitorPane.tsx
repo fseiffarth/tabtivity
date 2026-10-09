@@ -924,7 +924,7 @@ export function SystemMonitorPane({ projectId, visible, globalMachine }: Props) 
             : t("sysmon.connectProject", { host: remoteHost })}
         </div>
       ) : snap && !snap.supported ? (
-        <div className="sysmon-placeholder">{t("sysmon.linuxOnly")}</div>
+        <div className="sysmon-placeholder">{t("sysmon.unavailable")}</div>
       ) : !snap ? (
         <div className="sysmon-placeholder">{error ?? t("sysmon.sampling")}</div>
       ) : (

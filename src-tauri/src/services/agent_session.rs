@@ -1936,7 +1936,8 @@ fn container_hook_script_path() -> PathBuf {
 /// — except that a Claude fired inside it (`CLAUDECODE` is set by Claude for its
 /// children, never by Codex) is refused outright. A `clear`/`resume` start is
 /// taken only from a Claude with no other Claude above it among the tab's
-/// processes (POSIX, via `/proc`): a `claude -p --resume <id>` run from the
+/// processes (POSIX, via `/proc`; where that is unreadable — macOS — via `ps`,
+/// whose `-E` shows a same-user process's environment): a `claude -p --resume <id>` run from the
 /// agent's Bash tool sent `source: resume` under its own id and moved the
 /// record, so the Reader showed that run's conversation until the tab's next
 /// `Stop` (2.1.287, 2026-10-02). Claude's env can't tell them apart — every
@@ -1960,6 +1961,14 @@ const HOOK_ENV: &[&str] = &["TAB_UID", "TAB_AGENT", "PROJECT_DIR"];
 /// The POSIX body itself — the hook on Unix, and on Windows the container twin
 /// (see `write_hook_script`), so it is compiled everywhere.
 fn posix_hook_script_body(live_dir: &str) -> String {
+    posix_hook_script_body_with(live_dir, "/proc")
+}
+
+/// `posix_hook_script_body` with the procfs root it walks baked in as a
+/// literal. Production passes `/proc`; a test passes an empty directory to
+/// drive the `ps` fallback (macOS). A literal, not an environment variable:
+/// the hook runs under the agent's environment, which a project can shape.
+fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
     let hint = crate::services::agent_hint::HINT;
     format!(
         "#!/bin/sh\n\
@@ -2009,13 +2018,25 @@ fn posix_hook_script_body(live_dir: &str) -> String {
          \x20        # the same start. Among the tab's processes — those carrying its\n\
          \x20        # id under either tab-id name, so unsetting one (the other fills it\n\
          \x20        # in above) can't hide a nested run — the tab's CLI has no claude\n\
-         \x20        # above it, a nested one has. Without /proc nothing is counted and\n\
-         \x20        # the start is taken.\n\
+         \x20        # above it, a nested one has. Without /proc (macOS) `ps` walks the\n\
+         \x20        # same chain: `-E` appends the environment of a process of this\n\
+         \x20        # user, `-ww` keeps BSD `ps` from cutting it at 79 columns (no tty);\n\
+         \x20        # a `claude` is one whose executable or argv[0] is named so.\n\
+         \x20        # Where neither answers nothing is counted and the start is taken.\n\
          \x20        clear|resume) n=0; p=$PPID\n\
-         \x20          while [ -r \"/proc/$p/environ\" ] && tr '\\0' '\\n' < \"/proc/$p/environ\" | grep -qx \"[A-Z]*_TAB_UID=${UPPER}_TAB_UID\"; do\n\
-         \x20            [ \"$(cat \"/proc/$p/comm\" 2>/dev/null)\" = claude ] && n=$((n + 1))\n\
-         \x20            p=$(sed 's/.*) [^ ]* \\([0-9]*\\).*/\\1/' \"/proc/$p/stat\" 2>/dev/null)\n\
+         \x20          if [ -r \"{proc_root}/$p/environ\" ]; then\n\
+         \x20          while [ -r \"{proc_root}/$p/environ\" ] && tr '\\0' '\\n' < \"{proc_root}/$p/environ\" | grep -qx \"[A-Z]*_TAB_UID=${UPPER}_TAB_UID\"; do\n\
+         \x20            [ \"$(cat \"{proc_root}/$p/comm\" 2>/dev/null)\" = claude ] && n=$((n + 1))\n\
+         \x20            p=$(sed 's/.*) [^ ]* \\([0-9]*\\).*/\\1/' \"{proc_root}/$p/stat\" 2>/dev/null)\n\
          \x20          done\n\
+         \x20          else\n\
+         \x20          while [ \"$p\" -gt 1 ] 2>/dev/null && e=$(ps -E -ww -o command= -p \"$p\" 2>/dev/null) &&\n\
+         \x20            printf '%s\\n' \"$e\" | tr ' ' '\\n' | grep -qx \"[A-Z]*_TAB_UID=${UPPER}_TAB_UID\"; do\n\
+         \x20            c=$(ps -ww -o comm= -p \"$p\" 2>/dev/null); a=${{e%% *}}\n\
+         \x20            if [ \"${{c##*/}}\" = claude ] || [ \"${{a##*/}}\" = claude ]; then n=$((n + 1)); fi\n\
+         \x20            p=$(ps -o ppid= -p \"$p\" 2>/dev/null | tr -d ' ')\n\
+         \x20          done\n\
+         \x20          fi\n\
          \x20          [ \"$n\" -lt 2 ] || exit 0 ;;\n\
          \x20        # Claude relaunches itself (switching its renderer, updating) and,\n\
          \x20        # while its session has no transcript yet, comes back under a fresh\n\
@@ -2068,6 +2089,7 @@ fn posix_hook_script_body(live_dir: &str) -> String {
          esac\n\
          exit 0\n",
         live_dir = live_dir,
+        proc_root = proc_root,
         legacy_env = crate::services::brand_migration::compat::script_preamble_sh(HOOK_ENV),
     )
 }
@@ -3341,6 +3363,120 @@ mod tests {
             let half_unset = format!(r#"env -u {tab_uid} "$CLAUDE_BIN" -c "$HOOK"; true"#);
             assert_eq!(run_with(&legacy_script, true, src, &half_unset), uid, "{src} nested, current name unset");
             assert_eq!(run_with(&legacy_script, true, src, &alone), other, "{src} from the tab's own claude, legacy install");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The same guard where `/proc` is unreadable (macOS): the hook walks the
+    /// chain with `ps` instead. The procfs root is an empty directory and a
+    /// `ps` shim answers `ppid=` / `comm=` / `command=` (the environment only
+    /// with `-E`) from a scripted chain that starts at the hook's parent — this
+    /// test process. Like BSD `ps` with no tty, it cuts its line at 79 columns
+    /// unless given `-ww`.
+    #[cfg(unix)]
+    #[test]
+    fn hook_script_walks_the_chain_with_ps_where_proc_is_unreadable() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-hook-nested-ps"));
+        let live = tmp.join("live");
+        let bin = tmp.join("bin");
+        let no_proc = tmp.join("no-proc");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&no_proc).unwrap();
+        let script = tmp.join("hook.sh");
+        std::fs::write(&script, posix_hook_script_body_with(&live.to_string_lossy(), &no_proc.to_string_lossy())).unwrap();
+        // The production body is this one with `/proc` baked in.
+        assert_eq!(posix_hook_script_body("/l"), posix_hook_script_body_with("/l", "/proc"));
+        let chain = tmp.join("chain");
+        let ps = bin.join("ps");
+        std::fs::write(
+            &ps,
+            format!(
+                "#!/bin/sh\nf= p= env= w=\nwhile [ $# -gt 0 ]; do\n\
+                 \x20 case \"$1\" in -E) env=1 ;; -ww) w=1 ;; -o) f=$2; shift ;; -p) p=$2; shift ;; esac\n\
+                 \x20 shift\ndone\n\
+                 while IFS='|' read -r pid ppid comm args envs; do\n\
+                 \x20 [ \"$pid\" = \"$p\" ] || continue\n\
+                 \x20 case \"$f\" in\n\
+                 \x20   ppid=) out=\"  $ppid\" ;;\n\
+                 \x20   comm=) out=$comm ;;\n\
+                 \x20   command=) if [ -n \"$env\" ]; then out=\"$args $envs\"; else out=$args; fi ;;\n\
+                 \x20 esac\n\
+                 \x20 if [ -n \"$w\" ]; then printf '%s\\n' \"$out\"; else printf '%s\\n' \"$out\" | cut -c1-79; fi\n\
+                 \x20 exit 0\ndone < '{}'\nexit 1\n",
+                chain.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&ps, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        let uid = "11111111-1111-4111-8111-111111111111";
+        let other = "22222222-2222-4222-8222-222222222222";
+        let tab_uid = crate::app_env!("TAB_UID");
+        let legacy_tab_uid = crate::brand::PAIR.legacy_env_name("TAB_UID").unwrap();
+        let me = std::process::id();
+        let run = |src: &str, lines: &[String]| {
+            use std::io::Write as _;
+            std::fs::write(&chain, lines.join("\n") + "\n").unwrap();
+            std::fs::create_dir_all(&live).unwrap();
+            std::fs::write(live.join(uid), uid).unwrap();
+            let mut child = std::process::Command::new("sh")
+                .arg(&script)
+                .env_clear()
+                .env("PATH", &path)
+                .env(tab_uid, uid)
+                .env(TAB_AGENT_ENV, "claude")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            write!(
+                child.stdin.take().unwrap(),
+                r#"{{"session_id":"{other}","hook_event_name":"SessionStart","source":"{src}"}}"#
+            )
+            .unwrap();
+            assert!(child.wait().unwrap().success());
+            std::fs::read_to_string(live.join(uid)).unwrap()
+        };
+        let launchd = "1|0|/sbin/launchd|/sbin/launchd|".to_string();
+        for src in ["resume", "clear"] {
+            // The tab's own Claude (full executable path, as macOS `comm` prints it).
+            let alone = [format!("{me}|1|/Users/x/.local/bin/claude|claude --resume|{tab_uid}={uid} HOME=/h"), launchd.clone()];
+            assert_eq!(run(src, &alone), other, "{src} from the tab's own claude");
+            // A `claude -p --resume` from the agent's Bash tool, under the tab's.
+            let nested = [
+                format!("{me}|500|claude|claude -p --resume x|{tab_uid}={uid}"),
+                format!("500|1|/Users/x/.local/bin/claude|claude|{tab_uid}={uid}"),
+                launchd.clone(),
+            ];
+            assert_eq!(run(src, &nested), uid, "{src} from a claude nested under it");
+            // A `claude` above the tab's own that is not the tab's (no tab id).
+            let outside = [format!("{me}|500|claude|claude|{tab_uid}={uid}"), "500|1|claude|claude|PATH=/bin".to_string(), launchd.clone()];
+            assert_eq!(run(src, &outside), other, "{src} under a claude outside the tab");
+            // Only the legacy name set on the nested run, and an executable named
+            // otherwise whose argv[0] is `claude` (a retitled node): still nested.
+            let legacy = [
+                format!("{me}|500|node|claude -p|{legacy_tab_uid}={uid}"),
+                format!("500|1|claude|claude|{tab_uid}={uid} {legacy_tab_uid}={uid}"),
+                launchd.clone(),
+            ];
+            assert_eq!(run(src, &legacy), uid, "{src} nested, current name unset");
+            // Real lines are long: the native installer's versioned executable,
+            // and the tab id somewhere in a full environment. BSD `ps` without
+            // `-ww` would cut both at 79 columns and the nested run would pass.
+            let exe = "/Users/someone/.local/share/claude/versions/2.1.294/claude";
+            let envs = format!("TERM=xterm-256color SHELL=/bin/zsh HOME=/Users/someone LANG=en_US.UTF-8 {tab_uid}={uid}");
+            let long = [
+                format!("{me}|500|{exe}|claude -p --resume 33333333-3333-4333-8333-333333333333 --output-format json|{envs}"),
+                format!("500|1|/Users/someone/Library/Application Support/SomeLauncher/runtime/node_modules/.bin/claude|node|{envs}"),
+                launchd.clone(),
+            ];
+            assert_eq!(run(src, &long), uid, "{src} nested, long ps lines");
+            // Another tab's id stops the walk; a `ps` that knows nothing counts nothing.
+            let foreign = [format!("{me}|500|claude|claude|{tab_uid}={other}"), format!("500|1|claude|claude|{tab_uid}={uid}")];
+            assert_eq!(run(src, &foreign), other, "{src} under another tab's id");
+            assert_eq!(run(src, &[]), other, "{src} with nothing to walk");
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }

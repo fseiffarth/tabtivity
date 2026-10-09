@@ -5,6 +5,7 @@ import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import {
   STEERING_GROUPS,
+  modifierLabel,
   steeringKeysFor,
   steeringRowLabel,
   type SteeringKeyDef,
@@ -257,7 +258,7 @@ export function SteeringLegend() {
       }
     }
     return (
-      <span className="steering-legend-item" key={`${k.actions.join(",")}|${k.labelKey}`} title={t(k.descKey)}>
+      <span className="steering-legend-item" key={`${k.actions.join(",")}|${k.labelKey}`} title={t(k.descKey, { modifier: modifierLabel() })}>
         <kbd>{steeringRowLabel(k, steerKeys)}</kbd>
         <span className="steering-legend-label">{t(k.labelKey)}</span>
         {k.status && <span className="steering-legend-count">{statusCounts[k.status]}</span>}

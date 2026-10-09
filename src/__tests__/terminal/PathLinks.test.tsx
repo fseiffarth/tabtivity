@@ -61,6 +61,21 @@ describe("path-shaped words", () => {
     expect(paths("3.5 of v0.1.111, 1/2 of it, and/or this — e.g. that")).toEqual(["and/or", "e.g"]);
     expect(paths("a//b.md / . ..")).toEqual([]);
   });
+
+  it("finds Windows paths: backslashes, a drive, `.\\`", () => {
+    const text = "see src\\a.ts:120 in C:\\Users\\x\\p\\src\\a.ts, .\\src\\a.ts and ..\\up\\b.rs";
+    const found = findPathCandidates(text);
+    expect(found.map(({ path, line }) => ({ path, line }))).toEqual([
+      { path: "src\\a.ts", line: 120 },
+      { path: "C:\\Users\\x\\p\\src\\a.ts", line: undefined },
+      { path: ".\\src\\a.ts", line: undefined },
+      { path: "..\\up\\b.rs", line: undefined },
+    ]);
+    expect(text.slice(found[0].start, found[0].end)).toBe("src\\a.ts:120");
+    expect(paths("the `src\\lib\\` folder and D:\\x\\.gitignore")).toEqual(["src\\lib\\", "D:\\x\\.gitignore"]);
+    // Not paths: TeX commands, escaped strings, a bare drive, a lone root.
+    expect(paths("\\section{x} \\textbf a\\\\b.md C: C:\\ \\")).toEqual([]);
+  });
 });
 
 describe("where paths are looked up", () => {

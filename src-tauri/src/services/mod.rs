@@ -127,6 +127,11 @@ pub mod mail_authres;
 // The mail client's address book: cards, lists, collected addresses, vCard.
 pub mod mail_contacts;
 pub mod mail_crypt;
+// Who may touch a file on Windows: `restrict_to_owner` (icacls, the Windows
+// spelling of a 0600 key/state file) and `admin_locked` (the trusted-helper
+// check of `paths::system_executable`). Pure SID/ACL decisions, tested
+// everywhere.
+pub mod private_file;
 pub mod mail_crypto;
 pub mod mail_engine;
 pub mod mail_filters;
@@ -211,6 +216,10 @@ pub mod webkit_a11y;
 // viewer's frames decode where the software painter can draw them. Installed
 // before the first webview, stripped from spawned children.
 pub mod webkit_video;
+
+// Privilege-free directory links on Windows (junctions via `mklink /J`),
+// shared by box member links, the state-dir migration and project import.
+pub mod win_links;
 pub mod window_service;
 pub mod window_state;
 pub mod worker_sync;

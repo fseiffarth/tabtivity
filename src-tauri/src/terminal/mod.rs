@@ -1469,7 +1469,8 @@ fn command_for_resolved(path: std::path::PathBuf) -> CommandBuilder {
     match ext.as_deref() {
         Some("cmd") | Some("bat") => {
             let mut c = CommandBuilder::new("cmd.exe");
-            c.arg("/c");
+            c.arg("/D");
+            c.arg("/C");
             c.arg(path);
             c
         }

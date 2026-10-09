@@ -8,6 +8,7 @@ import {
   STEERING_CONTEXTS,
   STEERING_KEYS,
   chordLabel,
+  modifierLabel,
   resolveChord,
   steeringRowLabel,
   type ShortcutMap,
@@ -147,7 +148,7 @@ export function ShortcutHelpOverlay() {
                       <kbd>{steeringRowLabel(k, steerKeys)}</kbd>
                       <span className="shortcut-help-label">
                         {t(k.labelKey)}
-                        <span className="shortcut-help-desc"> — {t(k.descKey)}</span>
+                        <span className="shortcut-help-desc"> — {t(k.descKey, { modifier: modifierLabel() })}</span>
                       </span>
                     </div>
                   ))}

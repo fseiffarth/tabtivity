@@ -2549,6 +2549,29 @@ unchanged; the new agents are additive.
     - [ ] ✅ Works on Windows
     - [ ] ❌ Doesn't work on Windows
 
+- [~] **Nested `claude --resume` guard on macOS — `ps` fallback** (2026-10-08;
+  `docs/macos_windows_completion_plan.md` §3.6; ✅ code-complete, ❌ never run
+  on a Mac). Where `/proc` is unreadable the POSIX hook walks the tab's
+  processes with `ps -o ppid=` and reads each one's environment with `ps -E -o
+  command=` (same uid; any `*_TAB_UID`), counting a `claude` by the basename of
+  `ps -o comm=` or of argv[0]. Linux keeps the `/proc` walk. Backend changed:
+  the hook script is rewritten at the next launch.
+  - [x] 🤖 Automated test —
+    `agent_session::tests::hook_script_walks_the_chain_with_ps_where_proc_is_unreadable`
+    (scripted `ps` shim, empty procfs root).
+  - [ ] 🖐️ Manual test — In a Claude tab, ask the agent to run `claude -p "hi"
+    --resume <another session id>` from its Bash tool: the Reader keeps
+    showing the tab's own conversation. Then type `/clear` in the tab: the
+    Reader follows the new conversation and "Undo clear" is offered.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [~] **API keys for agent CLIs** (2026-10-04; ✅ code-complete, automated
   tests passing — `agent_api_keys` / `api_proxy` / `tmux_local` /
   `launch_prep` cargo tests, `AgentApiKeys.test.tsx`, `MobileLaunchOptions`,

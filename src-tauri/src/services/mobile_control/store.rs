@@ -15,9 +15,11 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T, mode: u32) -> Res
 /// Write `bytes` to a sibling created with `mode`, then rename it over `path`,
 /// so a reader sees either the old contents or the new ones and never a
 /// truncated file. The sibling carries the private mode from creation, so key
-/// material is never world-readable for even an instant.
+/// material is never world-readable for even an instant. On Windows the
+/// sibling is restricted to its owner (`private_file::restrict_to_owner`)
+/// before a byte is written, and the rename keeps that ACL; `mode` is not
+/// used there.
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
-    // On Windows the profile directory's ACL stands in for the mode bits.
     #[cfg(not(unix))]
     let _ = mode;
     let parent = path.parent().ok_or("state path has no parent")?;
@@ -33,6 +35,8 @@ pub fn write_bytes_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), St
     let mut file = options
         .open(&tmp)
         .map_err(|e| format!("open {}: {e}", tmp.display()))?;
+    #[cfg(windows)]
+    crate::services::private_file::restrict_to_owner(&tmp);
     file.write_all(bytes)
         .and_then(|_| file.sync_all())
         .map_err(|e| e.to_string())?;
@@ -66,6 +70,10 @@ pub fn ensure_private_file(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Not checked off Unix: verifying a Windows ACL is a second reader beside
+/// `private_file`'s writer and is not built. The files are restricted when
+/// written (`write_bytes_atomic`), and the profile folder's ACL is the
+/// barrier for one placed by hand.
 #[cfg(not(unix))]
 pub fn ensure_private_file(_: &Path) -> Result<(), String> {
     Ok(())

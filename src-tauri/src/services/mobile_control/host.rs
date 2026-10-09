@@ -28,7 +28,7 @@ use super::{
     alarms,
     auth::AuthStore,
     config::{verify_tailscale_serve, HostConfig},
-    discovery::{shells_open, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
+    discovery::{shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
     git_overview,
     headless,
@@ -1159,7 +1159,11 @@ async fn project(
                 // switch, and a project rather than a box or the root console.
                 "files": project.public.kind == ScopeKind::Project && files::files_open(&state.config.state_dir),
                 // Whether the phone may offer a new shell (`shells_open`).
-                "shells": shells_open(&state.config.state_dir) }),
+                "shells": shells_open(&state.config.state_dir),
+                // `tmux` where tabs attach through tmux; `unsupported` on a
+                // host with none (Windows), where the phone hides ＋, Schedule
+                // and Mark up's Submit (`terminals_support`).
+                "terminals": terminals_support() }),
         ),
     )
 }
@@ -7172,6 +7176,10 @@ mod tests {
         let detail = json(&body);
         assert_eq!(detail["desktop_available"], false);
         assert_eq!(detail["closed"], json!([]));
+        // The host says whether its tabs attach through tmux at all (3.4):
+        // `tmux` here, `unsupported` on a Windows build — never absent.
+        assert_eq!(detail["terminals"], terminals_support());
+        assert_eq!(detail["terminals"], if cfg!(target_os = "windows") { "unsupported" } else { "tmux" });
         let claude = detail["agents"]
             .as_array()
             .expect("agents")

@@ -57,6 +57,12 @@ pub struct WindowsBackend {
     cleaned_up: Mutex<bool>,
 }
 
+impl Default for WindowsBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WindowsBackend {
     pub fn new() -> Self {
         Self {
@@ -304,7 +310,7 @@ pub fn find_window_for_pid(pid: u32, attempts: usize) -> Option<u64> {
         let pids = crate::sysstat::descendant_pids(&[pid]);
         if let Some(hwnd) = enumerate_windows()
             .into_iter()
-            .find(|&hwnd| window_pid(hwnd).map_or(false, |p| pids.contains(&p)))
+            .find(|&hwnd| window_pid(hwnd).is_some_and(|p| pids.contains(&p)))
         {
             return Some(hwnd_to_u64(hwnd));
         }

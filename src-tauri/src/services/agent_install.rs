@@ -27,12 +27,22 @@ pub fn install_root() -> PathBuf {
     install_root_in(&storage::state_dir())
 }
 
-/// The environment an installer runs with: its `HOME` and every prefix the
-/// common installers honour, all under [`install_root_in`].
+/// The environment an installer runs with on this OS: see [`install_env_for`].
 pub fn install_env_in(state_dir: &Path) -> Vec<(String, String)> {
+    install_env_for(cfg!(windows), state_dir)
+}
+
+/// The environment an installer runs with: its `HOME` and every prefix the
+/// common installers honour, all under [`install_root_in`]. On Windows also
+/// `USERPROFILE` (what PowerShell's `$HOME` and npm's `~` read there) and
+/// `APPDATA` (npm's default global prefix, `%APPDATA%\npm`, and most
+/// per-user tool configs) inside the install home. An installer that asks
+/// the shell API for the profile folder instead of the environment still
+/// lands in the user's profile; that is not reachable from here.
+pub fn install_env_for(windows: bool, state_dir: &Path) -> Vec<(String, String)> {
     let root = install_root_in(state_dir);
     let s = |p: PathBuf| p.to_string_lossy().into_owned();
-    vec![
+    let mut env: Vec<(String, String)> = vec![
         ("HOME".into(), s(root.clone())),
         ("NPM_CONFIG_PREFIX".into(), s(root.join("npm"))),
         ("BUN_INSTALL".into(), s(root.join(".bun"))),
@@ -41,17 +51,30 @@ pub fn install_env_in(state_dir: &Path) -> Vec<(String, String)> {
         // `pip install` without `--user` targets the system site-packages.
         ("PIP_USER".into(), "1".into()),
         ("PYTHONUSERBASE".into(), s(root.join(".local"))),
-    ]
+    ];
+    if windows {
+        env.push(("USERPROFILE".into(), s(root.clone())));
+        env.push(("APPDATA".into(), s(root.join("AppData").join("Roaming"))));
+    }
+    env
 }
 
 pub fn install_env() -> Vec<(String, String)> {
     install_env_in(&storage::state_dir())
 }
 
-/// Where the installers put their launchers under the install home.
+/// Where the installers put their launchers under the install home, on this
+/// OS: see [`bin_dirs_for`].
 pub fn bin_dirs_in(state_dir: &Path) -> Vec<PathBuf> {
+    bin_dirs_for(cfg!(windows), state_dir)
+}
+
+/// Where the installers put their launchers under the install home. npm
+/// writes its launchers into `<prefix>/bin` on Unix but into `<prefix>`
+/// itself on Windows, so the prefix root joins the list there.
+pub fn bin_dirs_for(windows: bool, state_dir: &Path) -> Vec<PathBuf> {
     let root = install_root_in(state_dir);
-    [
+    let mut dirs: Vec<PathBuf> = [
         ".local/bin",
         "npm/bin",
         ".bun/bin",
@@ -65,7 +88,11 @@ pub fn bin_dirs_in(state_dir: &Path) -> Vec<PathBuf> {
     ]
     .iter()
     .map(|rel| rel.split('/').fold(root.clone(), |p, seg| p.join(seg)))
-    .collect()
+    .collect();
+    if windows {
+        dirs.insert(2, root.join("npm"));
+    }
+    dirs
 }
 
 /// The launcher dirs that exist, for PATH and detection.
@@ -79,22 +106,29 @@ pub fn bin_dirs() -> Vec<PathBuf> {
 /// Whether `cmd`, as found on `search_dirs`, is a CLI Tabtivity installed. Pure
 /// over the filesystem.
 pub fn owns_command_in(state_dir: &Path, cmd: &str, search_dirs: &[PathBuf]) -> bool {
-    let root = install_root_in(state_dir);
     let found = if cmd.contains('/') {
         Some(PathBuf::from(cmd))
     } else {
         search_dirs.iter().map(|d| d.join(cmd)).find(|c| c.is_file())
     };
-    let Some(found) = found else {
-        return false;
-    };
-    let real = found.canonicalize().unwrap_or(found.clone());
+    found.is_some_and(|found| owns_path_in(state_dir, &found))
+}
+
+/// Whether `path` (as found, or after resolving links) lies in the install
+/// home. Pure over the filesystem.
+pub fn owns_path_in(state_dir: &Path, path: &Path) -> bool {
+    let root = install_root_in(state_dir);
+    let real = path.canonicalize().unwrap_or(path.to_path_buf());
     let root_real = root.canonicalize().unwrap_or(root.clone());
-    found.starts_with(&root) || real.starts_with(&root_real)
+    path.starts_with(&root) || real.starts_with(&root_real)
 }
 
 pub fn owns_command(cmd: &str, search_dirs: &[PathBuf]) -> bool {
     owns_command_in(&storage::state_dir(), cmd, search_dirs)
+}
+
+pub fn owns_path(path: &Path) -> bool {
+    owns_path_in(&storage::state_dir(), path)
 }
 
 /// The install tree, read-only inside every fence (only when it exists: a
@@ -173,6 +207,31 @@ mod tests {
     }
 
     #[test]
+    fn the_windows_installer_env_also_moves_the_profile_and_appdata() {
+        let state = Path::new("/s");
+        let root = install_root_in(state);
+        let get = |env: &[(String, String)], k: &str| env.iter().find(|(key, _)| key == k).map(|(_, v)| PathBuf::from(v));
+        let unix = install_env_for(false, state);
+        let win = install_env_for(true, state);
+        assert_eq!(get(&unix, "USERPROFILE"), None);
+        assert_eq!(get(&unix, "APPDATA"), None);
+        assert_eq!(get(&win, "USERPROFILE"), Some(root.clone()));
+        assert_eq!(get(&win, "APPDATA"), Some(root.join("AppData").join("Roaming")));
+        // Everything Unix sets, Windows sets the same way.
+        for (k, v) in &unix {
+            assert_eq!(get(&win, k), Some(PathBuf::from(v)), "{k}");
+        }
+        // Every variable points into the install home (or is a switch).
+        for (k, v) in &win {
+            assert!(k == "PIP_USER" || Path::new(v).starts_with(&root), "{k}={v}");
+        }
+        // npm's Windows launchers sit in the prefix root; Unix has no such dir.
+        assert!(bin_dirs_for(true, state).contains(&root.join("npm")));
+        assert!(!bin_dirs_for(false, state).contains(&root.join("npm")));
+        assert!(bin_dirs_for(true, state).contains(&root.join(".local").join("bin")));
+    }
+
+    #[test]
     fn a_command_is_owned_only_when_it_resolves_inside_the_install_tree() {
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path();
@@ -187,6 +246,9 @@ mod tests {
         assert!(!owns_command_in(state, "codex", &dirs));
         assert!(!owns_command_in(state, "missing", &dirs));
         assert!(owns_command_in(state, &owned_bin.join("claude").to_string_lossy(), &[]));
+        // A resolved path (the npm uninstall picks its prefix by this).
+        assert!(owns_path_in(state, &owned_bin.join("claude")));
+        assert!(!owns_path_in(state, &host_bin.join("codex")));
     }
 
     #[test]

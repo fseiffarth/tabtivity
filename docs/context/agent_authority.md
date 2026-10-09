@@ -580,7 +580,11 @@ Composition is explicit:
   as the per-project filtered copy Linux stages. Device writes are denied too,
   except `/dev/null`, `/dev/zero`, `/dev/tty`, `/dev/dtracehelper` and
   `/dev/fd`; other terminals' `/dev/ttys*` stay denied, so a fenced agent cannot
-  write into another tab's terminal.
+  write into another tab's terminal. The repo's git control files
+  (`git_guard`) are write-denied and each `.git` is denied as a `literal`
+  (no rename or replace, its contents stay writable) — the Seatbelt form of
+  the Linux re-mounts; the agent push preflight gets the same profile shape,
+  narrower (`one_shot_command`).
 - The macOS fence is a filesystem fence only. The profile starts from
   `(allow default)`, so mach services stay reachable — `securityd` among them.
   A fenced agent can therefore ask the keychain for any item whose access list
