@@ -2959,7 +2959,7 @@ fixes below. Nothing run live.
 - Merge conflicts expected with the main checkout's uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`, `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx` (S2's `TexView.compile` hunks), `lib.rs`, `agent_auth.rs`; check `ProjectFilesView.tsx`, `FileTree.tsx`, `MobileIndicator.tsx`, `projects.ts`, `commands/git.rs`, `fs_watch.rs`. The main checkout's untracked `scripts/perf-numbers.sh` / `docs/performance_numbers.md` collide with the branch's.
 - `MobileHeldPromptStore.test.ts` (date time-bomb, 2 failures) is being fixed in the main checkout, not here.
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S1–S12 implemented + reviewed by 2026-10-09; final review done 2026-10-09; landing on develop next)
+## Resume state (paused 2026-10-07, 11:40 CEST; S1–S12 implemented + reviewed by 2026-10-09; final review done 2026-10-09; landed on develop 2026-10-09)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -2997,13 +2997,19 @@ on the branch, so delete or overwrite the main checkout's copies when landing).
   branch.
 - Done: the final whole-range review (2026-10-09; fixes a0703586, edaad214,
   dc9dd67e, 2bdc8ec2, filemap 23633fad — see `## Final review (2026-10-09)`).
-- Next: landing on `develop`
-  (`project_commit_amid_concurrent_sessions` memory; the main checkout has
-  other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
-  `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
-  `agent_auth.rs` — expect conflicts there; S7 adds `ProjectFilesView.tsx`,
-  `FileTree.tsx`, `MobileIndicator.tsx`, `projects.ts`, `commands/git.rs`,
-  `fs_watch.rs` to the files a landing merge must check).
+- Landed on `develop` 2026-10-09 by fast-forward to the merge `cd238b86`
+  ("Merge develop into perf": 52 develop commits since base `a6ed2c7a`;
+  conflicts in `agent_turn.rs` (Linux `proc_table` scan + develop's macOS
+  probe walk), `agents.rs`, `agent_auth.rs`, `network.rs`, `TerminalView`,
+  Reader views, `AppShell`, `TabPane`, filemaps; `TerminalDrop.test` given a
+  layout for the lazy xterm). Gates on the merge: build ok; vitest 764 files
+  / 7751 tests all green (`MobileHeldPromptStore` fixed on develop); cargo
+  lib 3653 passed, 3 ignored, every target green; lint 0 errors / 28
+  warnings; clippy clean; Windows `cargo check` (shims) ok; brand-check ok;
+  privacy-check ok. Also on the branch: the user-requested Machines sign-in
+  fix `bd8004f3` (S8 follow-up). Owed: `npm run backend:stale`, the frozen
+  dev build, the user's click-through (`todo/group-u-performance.md`
+  2400–2413) and the flagged decisions under `## Final review`.
 - Gates at the S6 review's HEAD (11bc2c3c): build ok; vitest 741 files /
   7583 tests, 2 failing in `MobileHeldPromptStore.test.ts` (date time-bomb,
   not this run's — S6 review Flagged); cargo lib 3578 passed; lint 0 errors /
