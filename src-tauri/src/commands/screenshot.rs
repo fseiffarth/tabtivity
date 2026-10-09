@@ -722,7 +722,7 @@ mod platform {
                 biHeight: -height,
                 biPlanes: 1,
                 biBitCount: 32,
-                biCompression: BI_RGB.0 as u32,
+                biCompression: BI_RGB.0,
                 ..Default::default()
             };
             let mut info = BITMAPINFO {
@@ -780,7 +780,7 @@ mod platform {
     //! The configured `exec` is ignored (the OS tool is always used).
 
     use std::path::Path;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     /// Spawn `screencapture -i <file>` (interactive region capture) writing into
     /// `dir`. `_exec` is unused on macOS.

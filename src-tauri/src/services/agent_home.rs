@@ -72,6 +72,14 @@ pub fn local_model_home_in(state_dir: &Path, scope_id: &str) -> PathBuf {
     homes_root_in(state_dir).join(format!("{}{LOCAL_MODEL_SUFFIX}", storage::project_key(scope_id)))
 }
 
+/// Whether `home` is a scope's local-model home ([`local_model_home_in`]):
+/// no scope's own key can end in [`LOCAL_MODEL_SUFFIX`].
+pub fn is_local_model_home(home: &Path) -> bool {
+    home.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(LOCAL_MODEL_SUFFIX))
+}
+
 /// The local-model home of a scope (`None` is the root console). A path only;
 /// see [`prepare_local_model_home`].
 pub fn local_model_home(scope_id: Option<&str>) -> PathBuf {

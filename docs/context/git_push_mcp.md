@@ -41,8 +41,11 @@ runs project code holds the token:
    guard, credential and state masks), none of the tab's agent-home or
    launcher mounts. A fenced tab whose fence cannot run fails closed
    (`fence_unavailable`); an unfenced tab's hook runs unfenced, still without
-   the token. Linux only; a fenced tab elsewhere gets `fence_unavailable`, an
-   unfenced Windows tab with a hook `preflight_failed`. Exit ≠ 0 refuses with
+   the token. On macOS the same narrower boundary is a `preflight.sb`
+   Seatbelt profile run through `sandbox-exec` (`one_shot_seatbelt_inputs`:
+   temp writable, the whole state dir hidden, no agent home; `HOME` stays the
+   user's with reads under it denied except the allowlist); Windows has no
+   fence, and an unfenced Windows tab with a hook gets `preflight_failed`. Exit ≠ 0 refuses with
    the hook's output; five minutes is the cap. Commits the hook adds are
    picked up: the plan's SHA, commit list and diffstat are re-read, and the
    hook runs once more on the new tip, so its stdin line always names the SHA

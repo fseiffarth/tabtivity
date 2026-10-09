@@ -6,7 +6,6 @@ import { EmbedPane } from "../embed/EmbedPane";
 import { FileViewerPane } from "../embed/FileViewerPane";
 import { RemotePaneHold } from "../projects/RemotePaneHold";
 import { HostSessionHold } from "./HostSessionHold";
-import type { TabEntry } from "../../stores/tabs";
 import { tabTerminalSpawn } from "../../lib/terminal/terminalSpawn";
 
 // Code-split (perf plan §6): the terminal, the Files tabs and the file viewer
@@ -59,6 +58,8 @@ function LazyPane({ children }: { children: ReactNode }) {
     <Suspense fallback={<div className="pane-loading" aria-busy="true" />}>{children}</Suspense>
   );
 }
+import { PaneTabContext } from "./paneTabContext";
+import type { TabEntry } from "../../stores/tabs";
 
 /**
  * The single per-tab `kind → pane` render switch, shared by the main window
@@ -265,7 +266,10 @@ function TabPaneImpl({
       if (tab.hostSession && tab.hostSessionPaused && !attachOnly) {
         return <HostSessionHold scope={scope} tabKey={tab.key} />;
       }
+      // The tab itself rides along for the pane's prompt strip, Chat and
+      // Diffs: a popout's tabs store has no entry to look it up in.
       return (
+        <PaneTabContext.Provider value={{ scope, tab }}>
         <TerminalView
           // The spawn inputs, mapped once (`tabTerminalSpawn`): the pane layer
           // reads the same identity to tell when a sleeping tab must wake.
@@ -274,6 +278,7 @@ function TabPaneImpl({
           focused={focused}
           attachOnly={attachOnly}
         />
+        </PaneTabContext.Provider>
       );
   }
 }

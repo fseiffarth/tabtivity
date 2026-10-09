@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ArrowUpRightIcon, TrashIcon } from "../../../src/components/common/icons/Icon";
 
 import { useT } from "../../../src/lib/i18n";
 import { outboxFileUrl, sentName, type OutboxFile, type OutboxScope } from "../api";
@@ -88,14 +89,14 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
             disabled={sharing.busy === file.name}
             onClick={() => void sharing.share(file)}
             aria-label={t(sharing.ready === file.name ? "mobile.outbox.shareReadyFile" : "mobile.outbox.shareFile", { name: sentName(file) })}
-          ><span aria-hidden="true">↗</span>{t(sharing.ready === file.name ? "mobile.outbox.shareReady" : "mobile.outbox.share")}</button>}
+          ><span aria-hidden="true"><ArrowUpRightIcon /></span>{t(sharing.ready === file.name ? "mobile.outbox.shareReady" : "mobile.outbox.share")}</button>}
           {!isImage && <button className="outbox-details" onClick={() => onDetails(file)} aria-label={t("mobile.outbox.actions", { name: sentName(file) })}>⋯</button>}
           {onDelete && (asking === file.name
             ? <span className="outbox-confirm" role="group" aria-label={t("mobile.outbox.deleteAsk", { name: sentName(file) })}>
               <button className="outbox-delete-yes" disabled={deleting === file.name} onClick={() => void remove(file)}>{t("mobile.outbox.deleteYes")}</button>
               <button onClick={() => setAsking(null)}>{t("mobile.outbox.deleteNo")}</button>
             </span>
-            : <button className="outbox-delete" onClick={() => { setFailed(null); setAsking(file.name); }} aria-label={t("mobile.outbox.delete", { name: sentName(file) })} title={t("mobile.outbox.deleteYes")}><span aria-hidden="true">🗑</span></button>)}
+            : <button className="outbox-delete" onClick={() => { setFailed(null); setAsking(file.name); }} aria-label={t("mobile.outbox.delete", { name: sentName(file) })} title={t("mobile.outbox.deleteYes")}><span aria-hidden="true"><TrashIcon /></span></button>)}
         </div>
         {failed === file.name && <span className="outbox-entry-error" role="alert">{t("mobile.outbox.deleteError")}</span>}
         {sharing.failed === file.name && <span className="outbox-entry-error" role="alert">{t("mobile.outbox.shareError")}</span>}

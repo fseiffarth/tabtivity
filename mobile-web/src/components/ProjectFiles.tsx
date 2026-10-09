@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
@@ -290,7 +291,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
         disabled={sharing.busy === entry.name}
         onClick={() => void sharing.share(file)}
         aria-label={t(ready ? "mobile.outbox.shareReadyFile" : "mobile.outbox.shareFile", { name: entry.name })}
-      ><span aria-hidden="true">↗</span>{ready && t("mobile.outbox.shareReady")}</button>}
+      ><span aria-hidden="true"><ArrowUpRightIcon /></span>{ready && t("mobile.outbox.shareReady")}</button>}
       {sharing.failed === entry.name && <p className="files-share-error" role="alert">{t("mobile.outbox.shareError")}</p>}
     </li>;
   }

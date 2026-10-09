@@ -28,6 +28,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { basename, dirname, relativePathWithin } from "../paths";
+import { IS_WINDOWS } from "../platform";
 import { useTabsStore, isRemoteLocation, type TabEntry, type TabLocation } from "../../stores/tabs";
 import { guardLoginNodeRun } from "../remote/hpc/hpcGuard";
 import { translate, useI18nStore } from "../i18n";
@@ -156,8 +157,9 @@ export async function resolveInterpreter(
   }
 }
 
+/** The host's quoting family, from the one OS detector (`lib/platform`). */
 export function currentPlatform(): PyPlatform {
-  return navigator.userAgent.includes("Windows") ? "windows" : "unix";
+  return IS_WINDOWS ? "windows" : "unix";
 }
 
 /**
@@ -267,12 +269,14 @@ export function pythonRunPlan(opts: {
   return { location, cwd, runPath: rel && rel.trim() ? rel : file, probeDir };
 }
 
-/** The label a run/debug tab carries. Plain text (a tab label is a string):
- *  ▶ pinned to text presentation, and debug named in words, not a 🐞 emoji. */
+/** The label a run/debug tab carries: the file's name, and debug named in
+ *  words, not a 🐞 emoji. No typed ▶ — a popout's WebKitGTK drew it as the
+ *  colour emoji despite the U+FE0E pin, in the tab and in its hover card. That
+ *  the run is going is the strip's drawn status mark (`TabStatusMark`). */
 export function pyTabLabel(mode: PyRunMode, file: string): string {
   return mode === "debug"
     ? translate(useI18nStore.getState().lang, "pythonRun.debugTabLabel", { file: basename(file) })
-    : `▶\uFE0E ${basename(file)}`;
+    : basename(file);
 }
 
 /**

@@ -100,11 +100,6 @@ paused() { [ -f "$PAUSED" ] && [ ! -f "$ONCE" ]; }
 
 note() { printf '%s %s\n' "$(date -Is)" "$*"; }
 
-notify() { # urgency, title, body
-  command -v notify-send >/dev/null 2>&1 || return 0
-  notify-send -u "$1" -a "$APP_DISPLAY" "$2" "$3" 2>/dev/null || true
-}
-
 # Every reason not to touch the frozen build, cheapest first. `declined once`
 # is `--build-now`'s check: the user's click outranks only the pause.
 declined() {
@@ -296,14 +291,8 @@ run() {
   # Paused while settling: nothing was built, nothing to announce.
   [ "$passes" -eq 0 ] && paused && return 0
 
-  local version commit
-  version="$(node -p "require('$ROOT/package.json').version" 2>/dev/null || echo '?')"
-  commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
-  if [ "$status" -eq 0 ]; then
-    notify low "$APP_DISPLAY (dev) rebuilt" "$version @ $commit — relaunch $APP_DISPLAY (dev) to pick it up."
-  else
-    notify critical "$APP_DISPLAY (dev) build failed" "$version @ $commit — see $LOG"
-  fi
+  # No desktop notification: one per commit filled the GNOME tray and lock
+  # screen (user, 2026-10-07). The window's dev-build chip shows both outcomes.
   return "$status"
 }
 

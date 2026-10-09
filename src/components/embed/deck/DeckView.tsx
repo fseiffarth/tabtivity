@@ -122,6 +122,8 @@ import { IconPicker } from "./IconPicker";
 import { slideStopIndex } from "../../../lib/viewers/deck/present";
 import { posterPng } from "./gifPlayback";
 import { useT } from "../../../lib/i18n";
+import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
+import { basename } from "../../../lib/paths";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
 import { ArrowUpRightIcon, PlayIcon } from "../../common/icons/Icon";
@@ -233,6 +235,7 @@ export interface DeckViewProps {
 
 export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewProps) {
   const t = useT();
+  const chordHint = useChordHint();
   const scope = useFileScope();
   const paneVisible = usePaneVisible();
   /** The scope project's own directory — the boundary `read_file_bytes` confines
@@ -954,7 +957,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       setNotice(
         t(out.pages === 1 ? "deckView.exportedOne" : "deckView.exportedMany", {
           n: out.pages,
-          file: exportTarget.split("/").pop() ?? exportTarget,
+          file: basename(exportTarget) || exportTarget,
         }) + (out.warnings.length ? ` ${out.warnings.join(" ")}` : ""),
       );
     } catch (e) {
@@ -1047,7 +1050,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
     });
     if (typeof chosen !== "string") return null;
     if (!withinProject(projectRoot, chosen)) {
-      setNotice(t("deckView.outsideProjectNotice", { name: chosen.split("/").pop() ?? chosen }));
+      setNotice(t("deckView.outsideProjectNotice", { name: basename(chosen) || chosen }));
       return null;
     }
     return toDeckRelative(chosen);
@@ -1187,7 +1190,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       openLinkedFile(tabKey, dir, {
         path: resolveRel(dir, obj.texSrc),
         viewer: "tex",
-        label: obj.texSrc.split("/").pop() ?? obj.texSrc,
+        label: basename(obj.texSrc) || obj.texSrc,
       });
     },
     [path, tabKey],
@@ -1488,7 +1491,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
           className="file-viewer-zoom-btn"
           disabled={!hasSel}
           onClick={duplicateSelection}
-          title={t("deckView.duplicateSelectionTitle")}
+          title={chordHint(t("deckView.duplicateSelectionTitle"), { key: "d", ctrl: true })}
         >
           ⧉
         </button>

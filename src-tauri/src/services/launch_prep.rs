@@ -265,6 +265,10 @@ pub struct PreparedLaunch {
     pub named: bool,
     /// The tab's previous process died mid-turn (`agent_turn::bind_tab`).
     pub interrupted: bool,
+    /// The tab's previous process left its turn finished (`agent_turn::LeftTurn`).
+    pub resting: bool,
+    /// The local folder the tab works in, `None` for a remote tab.
+    pub drop_dir: Option<String>,
     mcp_spawn_guard: Option<crate::services::root_mcp::SpawnTokenGuard>,
     resume_claim: Option<crate::services::codex_bind::ResumeClaim>,
     fenced_registration: Option<(String, String)>,
@@ -538,10 +542,11 @@ pub async fn prepare(
     // The agent's hooks report its turn state under its tab uid; bind that uid
     // to this PTY so the report reaches the tab's own marks, and drop any
     // record a previous run of the same tab left behind (see agent_turn).
-    let interrupted = match opts.env.get(crate::app_env!("TAB_UID")).cloned() {
+    let left = match opts.env.get(crate::app_env!("TAB_UID")).cloned() {
         Some(uid) => crate::services::agent_turn::bind_tab(&uid, &opts.id, opts.project_id.as_deref()),
-        None => false,
+        None => Default::default(),
     };
+    let (interrupted, resting) = (left.cut_off, left.resting);
 
     // Codex resume, without the hook. Codex will not run Tabtivity's SessionStart
     // hook until the user trusts it (`/hooks`), and an untrusted hook fails
@@ -634,6 +639,14 @@ pub async fn prepare(
     // environment into an argv, and once more before the spawn for what the
     // wrappers add. A no-op while the prefix is unchanged.
     crate::brand::PAIR.export_both(&mut opts.env);
+    // Where a file dropped onto the tab lands (`commands::terminal::pty_drop_files`):
+    // the folder the process works in, read before a wrapper rewrites `cwd`. A
+    // container mounts the project at the same path; a remote tab has none, as a
+    // path on this disk means nothing on the far host.
+    let drop_dir = (opts.local_only
+        || opts.sandbox
+        || crate::services::ssh_exec::remote_target_of(&opts).is_none())
+    .then(|| opts.cwd.clone());
     if opts.sandbox && !opts.local_only {
         // Every host, Windows included: the mount destinations and `-w` are
         // spelled for the container by `sandbox::container_path`, so a `C:\`
@@ -833,11 +846,13 @@ pub async fn prepare(
         opts,
         named,
         interrupted,
+        resting,
         mcp_spawn_guard,
         resume_claim,
         fenced_registration,
         host_agent_tab,
         spawned_tab_id,
+        drop_dir,
     })
 }
 

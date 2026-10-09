@@ -231,7 +231,7 @@ fn lock_holder_alive(lock_dir: &Path) -> bool {
     let Some(pid) = read_trimmed(&lock_dir.join("pid")).and_then(|p| p.parse::<u32>().ok()) else {
         return false;
     };
-    Path::new(&format!("/proc/{pid}")).exists()
+    crate::commands::apps::pid_alive(pid)
 }
 
 fn commits_behind(root: &str, installed: &str) -> Option<u32> {
@@ -245,16 +245,24 @@ fn commits_behind(root: &str, installed: &str) -> Option<u32> {
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
-/// What this process runs as, from `/proc/self/exe`: (path, replaced). Linux
-/// keeps the link pointing at the inode this process runs, and marks it
-/// `(deleted)` once `install` has replaced the path.
+/// What this process runs as: (path, replaced). On Linux `current_exe` reads
+/// `/proc/self/exe`, which keeps pointing at the inode this process runs and
+/// is marked `(deleted)` once `install` has replaced the path. Elsewhere there
+/// is no such mark, so a replaced binary is not detected (`false`).
 fn own_exe() -> Option<(PathBuf, bool)> {
-    let exe = fs::read_link("/proc/self/exe").ok()?;
-    let exe = exe.to_string_lossy();
-    Some(match exe.strip_suffix(" (deleted)") {
-        Some(path) => (PathBuf::from(path), true),
-        None => (PathBuf::from(exe.as_ref()), false),
-    })
+    let exe = std::env::current_exe().ok()?;
+    #[cfg(target_os = "linux")]
+    {
+        let exe = exe.to_string_lossy();
+        Some(match exe.strip_suffix(" (deleted)") {
+            Some(path) => (PathBuf::from(path), true),
+            None => (PathBuf::from(exe.as_ref()), false),
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Some((exe, false))
+    }
 }
 
 /// The short commit of a finished snapshot in the tree that
@@ -464,6 +472,11 @@ fn head_sha(root: &str) -> Option<String> {
 /// after two minutes rather than open a second window some hours later.
 pub fn spawn_relauncher() -> Result<(), String> {
     let root = SOURCE_ROOT.ok_or("not a dev build")?;
+    // The launcher and the wait below are POSIX sh, and the frozen dev build is
+    // a Linux flow (`package-dev-auto.sh`): say so rather than fail on `sh`.
+    if !cfg!(target_os = "linux") {
+        return Err("dev relaunch is Linux-only".into());
+    }
     let binary = app_dir().join(crate::brand::DEV_BIN_NAME);
     if !own_exe().is_some_and(|(exe, _)| exe == binary) {
         return Err(concat!("this window is not the frozen ", crate::app_name!(), " (dev) binary").into());

@@ -85,7 +85,9 @@ change was not run live.
   dirty edits swept in, and never failed by an `npm run build` that rewrites
   `dist/` mid-compile. `npm run package:dev` by hand still freezes the live
   tree, as the explicit way to try an uncommitted change. It
-  installs and notifies; it never launches or stops anything, and a running
+  installs and stays quiet — no desktop notification per commit (user,
+  2026-10-07: they piled up on the lock screen); the header chip shows the
+  outcome. It never launches or stops anything, and a running
   frozen window keeps its old inode until the user relaunches it. **From an
   agent tab it builds and stops there** (2026-09-04): `services::agent_fence`
   gives an agent a tmpfs `$HOME`, so the install wrote 75 MB into a directory

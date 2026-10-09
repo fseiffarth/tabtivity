@@ -1,4 +1,5 @@
 import { NAMES } from "../../../src/lib/brand";
+import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { translate, useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
@@ -25,6 +26,7 @@ import {
   ApiError,
   api,
   attachDesktopImage,
+  clearOutbox,
   closeTab,
   deleteOutboxFile,
   getAgentStatus,
@@ -2423,6 +2425,15 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     });
     setOutboxOpen((open) => open?.name === file.name ? null : open);
   }, [tab.id]);
+  /** The gallery's Delete all, through this tab's scope: the project's whole
+   * outbox goes (every tab's sends, as the gallery lists them all), to free
+   * the space, and the sheet closes over the empty list. */
+  const removeAllOutbox = useCallback(async () => {
+    await clearOutbox({ tab: tab.id });
+    setOutbox([]);
+    setGallery(false);
+    setOutboxOpen(null);
+  }, [tab.id]);
   /** Chunks above the revealed window stay in memory but out of the DOM — the
    * lazy half of the earlier-output log. */
   const hiddenChunks = Math.max(0, earlier.chunks.length - revealed);
@@ -3979,7 +3990,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           </div>}
         </div>}
   </>;
-  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>{outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true">🖼</span><small>{outbox.length}</small></button>}<div className="terminal-view-switch" aria-label={t("mobile.focus.outputView")}><button className={view === "focus" ? "selected" : ""} aria-pressed={view === "focus"} aria-haspopup={chat ? "menu" : undefined} aria-expanded={chat ? focusMenu : undefined} onClick={() => {
+  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>{outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{outbox.length}</small></button>}<div className="terminal-view-switch" aria-label={t("mobile.focus.outputView")}><button className={view === "focus" ? "selected" : ""} aria-pressed={view === "focus"} aria-haspopup={chat ? "menu" : undefined} aria-expanded={chat ? focusMenu : undefined} onClick={() => {
       // An agent tab's Reader is a list once it is up: where it reads from.
       if (chat && view === "focus") setFocusMenu((open) => !open);
       else chooseView("focus");
@@ -4395,7 +4406,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     />}
     {/* The viewer covers the phone; the gallery stays chosen behind it, so
         closing the file lands back on the grid. */}
-    {gallery && !outboxOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onClose={() => setGallery(false)} />}
+    {gallery && !outboxOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
     {outboxOpen && <OutboxViewer key={`${tab.id}/${outboxOpen.name}`} scope={outboxScope} file={outboxOpen} pictures={outboxPictures} onStep={setOutboxOpen} onClose={() => setOutboxOpen(null)} markup={markupTarget}
       newTab={markupNewTab} />}
     {/* What the reader sent is only looked at: no Mark up, no stepping. */}

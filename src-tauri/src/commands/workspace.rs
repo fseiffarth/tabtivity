@@ -439,14 +439,22 @@ fn wifi_ssid_macos() -> String {
     let Some(route) = probe_output_capped("route", &["-n", "get", "default"]) else {
         return String::new();
     };
-    for line in route.lines() {
-        if let Some(iface) = line.trim().strip_prefix("interface:") {
-            return probe_output_capped("networksetup", &["-getairportnetwork", iface.trim()])
-                .and_then(|text| parse_airport_ssid(&text))
-                .unwrap_or_default();
-        }
+    match route_get_field(&route, "interface") {
+        Some(iface) => probe_output_capped("networksetup", &["-getairportnetwork", iface])
+            .and_then(|text| parse_airport_ssid(&text))
+            .unwrap_or_default(),
+        None => String::new(),
     }
-    String::new()
+}
+
+/// One `key: value` line of macOS `route -n get default` (`gateway`,
+/// `interface`, …), trimmed; `None` when the line is missing or empty.
+fn route_get_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    text.lines().find_map(|line| {
+        let (k, v) = line.trim().split_once(':')?;
+        let v = v.trim();
+        (k.trim() == key && !v.is_empty()).then_some(v)
+    })
 }
 
 /// `networksetup -getairportnetwork <iface>` answers
@@ -476,8 +484,9 @@ pub struct NetworkIdentity {
     /// name it.
     pub ssid: String,
     /// The default gateway's IPv4 address, shown in the label. Only read for a
-    /// wired link (Wi-Fi has its SSID) and only on Linux, where it comes from
-    /// `/proc` without a spawn; empty elsewhere.
+    /// wired link (Wi-Fi has its SSID): from `/proc` on Linux, `route -n get
+    /// default` on macOS and `route print -4` on Windows; empty when none of
+    /// them names one.
     pub gateway_ip: String,
     /// A salted SHA-256 of the gateway's hardware address (16 hex chars), never
     /// the MAC itself: it ends up as a settings key, and a settings file that is
@@ -508,19 +517,118 @@ fn network_identity_blocking() -> NetworkIdentity {
     };
     match kind.as_str() {
         "wlan" => id.ssid = wifi_ssid_blocking(),
-        "lan" if cfg!(target_os = "linux") => {
-            let route = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
-            if let Some(ip) = parse_proc_default_gateway(&route) {
-                let arp = std::fs::read_to_string("/proc/net/arp").unwrap_or_default();
-                id.gateway_id = parse_proc_arp_mac(&arp, &ip)
-                    .map(|mac| gateway_id_of(&mac))
-                    .unwrap_or_default();
+        "lan" => {
+            if let Some((ip, mac)) = wired_gateway() {
+                id.gateway_id = mac.map(|mac| gateway_id_of(&mac)).unwrap_or_default();
                 id.gateway_ip = ip;
             }
         }
         _ => {}
     }
     id
+}
+
+/// The wired link's default gateway and, when the neighbour table has it
+/// resolved, its MAC. Linux reads `/proc` (no spawn); macOS and Windows ask
+/// `route` and `arp`, each spawn capped like the other probes.
+fn wired_gateway() -> Option<(String, Option<String>)> {
+    if cfg!(target_os = "linux") {
+        let route = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
+        let ip = parse_proc_default_gateway(&route)?;
+        let arp = std::fs::read_to_string("/proc/net/arp").unwrap_or_default();
+        let mac = parse_proc_arp_mac(&arp, &ip);
+        Some((ip, mac))
+    } else if cfg!(target_os = "macos") {
+        let ip = gateway_from_route_get(&probe_output_capped("route", &["-n", "get", "default"])?)?;
+        let mac = probe_output_capped("arp", &["-n", &ip]).and_then(|text| mac_from_arp_n(&text, &ip));
+        Some((ip, mac))
+    } else if cfg!(target_os = "windows") {
+        let ip = gateway_from_route_print(&probe_output_capped("route", &["print", "-4"])?)?;
+        let mac = probe_output_capped("arp", &["-a", &ip]).and_then(|text| mac_from_arp_a(&text, &ip));
+        Some((ip, mac))
+    } else {
+        None
+    }
+}
+
+/// The IPv4 gateway of macOS `route -n get default` (its `gateway:` line). A
+/// default route through an interface (`link#5`) names no gateway.
+pub(crate) fn gateway_from_route_get(text: &str) -> Option<String> {
+    let gw = route_get_field(text, "gateway")?;
+    gw.parse::<std::net::Ipv4Addr>().ok().map(|ip| ip.to_string())
+}
+
+/// The IPv4 default gateway of Windows `route print -4`: the lowest-metric
+/// `0.0.0.0 0.0.0.0 <gateway> <interface> <metric>` row of the active table.
+/// The column headings are localised, the rows are not, so only rows are read;
+/// an `On-link` gateway and the persistent table's `Default` metric are skipped.
+pub(crate) fn gateway_from_route_print(text: &str) -> Option<String> {
+    let mut best: Option<(u32, String)> = None;
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let [dest, mask, gw, _iface, metric] = cols.as_slice() else {
+            continue;
+        };
+        if *dest != "0.0.0.0" || *mask != "0.0.0.0" {
+            continue;
+        }
+        let (Ok(ip), Ok(metric)) = (gw.parse::<std::net::Ipv4Addr>(), metric.parse::<u32>()) else {
+            continue;
+        };
+        if ip.is_unspecified() {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(m, _)| metric < *m) {
+            best = Some((metric, ip.to_string()));
+        }
+    }
+    best.map(|(_, ip)| ip)
+}
+
+/// `ip`'s MAC from macOS `arp -n <ip>`: `? (<ip>) at <mac> on en0 …`. An
+/// `(incomplete)` entry or `-- no entry` is no answer.
+pub(crate) fn mac_from_arp_n(text: &str, ip: &str) -> Option<String> {
+    let wanted = format!("({ip})");
+    text.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        words.find(|w| *w == wanted)?;
+        (words.next()? == "at").then_some(())?;
+        canonical_mac(words.next()?)
+    })
+}
+
+/// `ip`'s MAC from Windows `arp -a [<ip>]`: rows `<ip> <aa-bb-cc-dd-ee-ff>
+/// <type>` under each `Interface:` heading (headings localised, rows not).
+pub(crate) fn mac_from_arp_a(text: &str, ip: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        match cols.as_slice() {
+            [addr, mac, _kind] if *addr == ip => canonical_mac(mac),
+            _ => None,
+        }
+    })
+}
+
+/// A MAC as `/proc/net/arp` spells it — six two-digit lower-case hex groups
+/// joined by `:` — from macOS's unpadded `0:1a:2b:3:4:5` or Windows'
+/// `00-1A-2B-03-04-05`, so a network's id is the same whichever OS read it.
+/// The all-zero and broadcast addresses are no answer.
+fn canonical_mac(raw: &str) -> Option<String> {
+    let groups: Vec<&str> = raw.split([':', '-']).collect();
+    if groups.len() != 6 {
+        return None;
+    }
+    let mut bytes = [0u8; 6];
+    for (b, g) in bytes.iter_mut().zip(&groups) {
+        if g.is_empty() || g.len() > 2 {
+            return None;
+        }
+        *b = u8::from_str_radix(g, 16).ok()?;
+    }
+    if bytes == [0; 6] || bytes == [0xff; 6] {
+        return None;
+    }
+    Some(bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":"))
 }
 
 /// The IPv4 default gateway from `/proc/net/route`: the lowest-metric row whose
@@ -724,6 +832,87 @@ mod tests {
         );
         assert_eq!(parse_proc_arp_mac(arp, "192.0.2.7"), None);
         assert_eq!(parse_proc_arp_mac(arp, "192.0.2.9"), None);
+    }
+
+    #[test]
+    fn macos_route_get_names_the_gateway_and_the_interface() {
+        // Captured shape of `route -n get default` (documentation address).
+        let route = "   route to: default\n\
+                     destination: default\n       mask: default\n    gateway: 192.0.2.1\n\
+                     \x20 interface: en0\n      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING>\n\
+                     \x20recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n\
+                     \x20      0         0         0         0         0         0      1500         0\n";
+        assert_eq!(gateway_from_route_get(route).as_deref(), Some("192.0.2.1"));
+        assert_eq!(route_get_field(route, "interface"), Some("en0"));
+        // A default route through an interface has no gateway address.
+        let link = "destination: default\n    gateway: link#5\n  interface: utun3\n";
+        assert_eq!(gateway_from_route_get(link), None);
+        assert_eq!(gateway_from_route_get("route: writing to routing socket: not in table\n"), None);
+    }
+
+    #[test]
+    fn macos_arp_n_resolves_only_a_complete_entry() {
+        let arp = "? (192.0.2.1) at 2:0:0:0:a:1 on en0 ifscope [ethernet]\n";
+        assert_eq!(mac_from_arp_n(arp, "192.0.2.1").as_deref(), Some("02:00:00:00:0a:01"));
+        assert_eq!(mac_from_arp_n(arp, "192.0.2.10"), None);
+        assert_eq!(mac_from_arp_n("? (192.0.2.1) at (incomplete) on en0 ifscope [ethernet]\n", "192.0.2.1"), None);
+        assert_eq!(mac_from_arp_n("192.0.2.1 (192.0.2.1) -- no entry\n", "192.0.2.1"), None);
+    }
+
+    #[test]
+    fn windows_route_print_picks_the_lowest_metric_default_gateway() {
+        // Captured shape of `route print -4` (documentation addresses; the
+        // headings are localised on a non-English Windows, the rows are not).
+        let route = "===========================================================================\n\
+                     Interface List\n 12...02 00 00 00 00 01 ......Ethernet Adapter\n\
+                     \x20 1...........................Software Loopback Interface 1\n\
+                     ===========================================================================\n\n\
+                     IPv4 Route Table\n\
+                     ===========================================================================\n\
+                     Active Routes:\n\
+                     Network Destination        Netmask          Gateway       Interface  Metric\n\
+                     \x20         0.0.0.0          0.0.0.0     198.51.100.1  198.51.100.20     50\n\
+                     \x20         0.0.0.0          0.0.0.0        192.0.2.1     192.0.2.20     25\n\
+                     \x20         0.0.0.0          0.0.0.0         On-link     192.0.2.20    281\n\
+                     ===========================================================================\n\
+                     Persistent Routes:\n\
+                     \x20 Network Address          Netmask  Gateway Address  Metric\n\
+                     \x20         0.0.0.0          0.0.0.0      203.0.113.1  Default\n\
+                     ===========================================================================\n";
+        assert_eq!(gateway_from_route_print(route).as_deref(), Some("192.0.2.1"));
+        let on_link = "          0.0.0.0          0.0.0.0         On-link     192.0.2.20     25\n";
+        assert_eq!(gateway_from_route_print(on_link), None);
+        assert_eq!(gateway_from_route_print(""), None);
+    }
+
+    #[test]
+    fn windows_arp_a_resolves_the_gateway_row() {
+        let arp = "\nInterface: 192.0.2.20 --- 0xc\n\
+                   \x20 Internet Address      Physical Address      Type\n\
+                   \x20 192.0.2.1             02-00-00-00-0A-01     dynamic\n\
+                   \x20 192.0.2.7             00-00-00-00-00-00     invalid\n\
+                   \x20 192.0.2.255           ff-ff-ff-ff-ff-ff     static\n";
+        assert_eq!(mac_from_arp_a(arp, "192.0.2.1").as_deref(), Some("02:00:00:00:0a:01"));
+        assert_eq!(mac_from_arp_a(arp, "192.0.2.7"), None);
+        assert_eq!(mac_from_arp_a(arp, "192.0.2.255"), None);
+        assert_eq!(mac_from_arp_a("No ARP Entries Found.\n", "192.0.2.1"), None);
+        // The interface heading's own address is not a row.
+        assert_eq!(mac_from_arp_a(arp, "192.0.2.20"), None);
+    }
+
+    #[test]
+    fn every_os_spells_one_mac_the_same() {
+        // The id the network is remembered under must not depend on which OS
+        // read the neighbour table.
+        let linux = parse_proc_arp_mac(
+            "hdr\n 192.0.2.1 0x1 0x2 02:00:00:00:0a:01 * eth0\n",
+            "192.0.2.1",
+        );
+        assert_eq!(linux.as_deref(), Some("02:00:00:00:0a:01"));
+        assert_eq!(canonical_mac("2:0:0:0:a:1"), linux);
+        assert_eq!(canonical_mac("02-00-00-00-0A-01"), linux);
+        assert_eq!(canonical_mac("2:0:0:0:a"), None);
+        assert_eq!(canonical_mac("2:0:0:0:a:100"), None);
     }
 
     #[test]

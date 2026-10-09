@@ -629,8 +629,9 @@ export function VpnIndicator() {
         onClick={reveal}
         onFocus={reveal}
       >
-        <ConnLamp status={lamp} label="OpenVPN" />
-        <VpnGlyph className="header-status-glyph" />
+        {/* The glyph itself carries the state, like Mobile's phone icon — no
+            separate lamp beside it. */}
+        <VpnGlyph className={`header-status-glyph vpn-indicator-glyph ${lamp}`} />
       </button>
       {open && (
         <div className="tab-new-menu vpn-indicator-menu" role="menu">

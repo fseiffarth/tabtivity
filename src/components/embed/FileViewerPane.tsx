@@ -243,6 +243,7 @@ import {
   actionMatches,
   chordLabel,
   chordMatches,
+  modifierLabel,
   resolveChord,
   zoomFor,
   type ShortcutMap,
@@ -356,9 +357,13 @@ export function useViewerState(tabKey: string | undefined) {
   return useMemo(() => ({ initial, persist }), [initial, persist]);
 }
 
-// The modifier that opens a recognised file link (Ctrl/Cmd+Click). Shown verbatim
-// in the hover hint, so it must read as the key the user actually presses.
-const OPEN_MODIFIER = IS_MAC ? "⌘" : "Ctrl";
+// The ghost-suggestion key legend's Alt chords, rendered once through
+// `chordLabel` so they read ⌥ on macOS and Alt elsewhere; the handler itself is
+// unchanged (`e.altKey`).
+const AC_KEY_LABELS = {
+  altRight: chordLabel({ key: "ArrowRight", alt: true }),
+  altBrackets: `${chordLabel({ key: "[", alt: true })}/]`,
+};
 
 /** A small floating "{Ctrl}+Click to open" hint, anchored just above a hovered
  *  file link (#49). `at` is viewport coordinates of the link's top-left, or null
@@ -374,7 +379,7 @@ function LinkOpenHint({
   if (!at) return null;
   return (
     <div className="link-open-hint" role="tooltip" style={{ left: at.left, top: at.top }}>
-      {label ?? t("fileViewer.linkOpenHint", { modifier: OPEN_MODIFIER })}
+      {label ?? t("fileViewer.linkOpenHint", { modifier: modifierLabel() })}
     </div>
   );
 }
@@ -2984,6 +2989,7 @@ function CodeEditor({
   groupId?: string | null;
 }) {
   const t = useT();
+  const chordHint = useChordHint();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Proportional scroll-link to a paired subwindow (no-op unless linked).
   const reportScrollSync = useScrollSync(groupId, textareaRef);
@@ -5314,7 +5320,7 @@ function CodeEditor({
       )}
       {suggestion && !acStatus && (
         <div className="file-viewer-ac-status" role="status">
-          {acCopilot ? t("fileViewer.copilotControls") : t("fileViewer.autocompleteControls", { candidate: acCandidate.current + 1 })}
+          {acCopilot ? t("fileViewer.copilotControls", AC_KEY_LABELS) : t("fileViewer.autocompleteControls", { ...AC_KEY_LABELS, candidate: acCandidate.current + 1 })}
         </div>
       )}
       {acStatus && (
@@ -5520,7 +5526,7 @@ function CodeEditor({
               onClick={() => setReplaceOpen((v) => !v)}
               aria-pressed={replaceOpen}
               aria-label={replaceOpen ? t("fileViewer.hideReplace") : t("fileViewer.showReplace")}
-              title={replaceOpen ? t("fileViewer.hideReplace") : t("fileViewer.showReplaceTitle")}
+              title={replaceOpen ? t("fileViewer.hideReplace") : chordHint(t("fileViewer.showReplaceTitle"), "editorReplace")}
             >
               {replaceOpen ? "▾" : "▸"}
             </button>
@@ -5600,7 +5606,7 @@ function CodeEditor({
                 className="file-viewer-find-btn file-viewer-replace-btn"
                 onClick={replaceAll}
                 disabled={matches.length === 0}
-                title={t("fileViewer.replaceAllTitle")}
+                title={chordHint(t("fileViewer.replaceAllTitle"), { key: "Enter", ctrl: true })}
                 aria-label={t("fileViewer.replaceAllLabel")}
               >
                 {t("fileViewer.replaceAllBtn")}
@@ -5628,6 +5634,7 @@ export function SaveButton({
   title?: string;
 }) {
   const t = useT();
+  const chordHint = useChordHint();
   return (
     <button
       className={`file-viewer-save${isDirty ? " is-dirty" : ""}${saving ? " is-saving" : ""}`}
@@ -5637,7 +5644,7 @@ export function SaveButton({
       title={
         saving
           ? t("common.saving")
-          : title ?? (isDirty ? t("fileViewer.saveWithShortcut") : t("fileViewer.noUnsavedChanges"))
+          : title ?? (isDirty ? chordHint(t("fileViewer.saveWithShortcut"), "editorSave") : t("fileViewer.noUnsavedChanges"))
       }
     >
       {saving ? (
@@ -5693,6 +5700,7 @@ export function UndoRedoButtons({
   canRedo: boolean;
 }) {
   const t = useT();
+  const chordHint = useChordHint();
   return (
     <div className="file-viewer-history" role="group" aria-label={t("fileViewer.editHistory")}>
       <button
@@ -5700,7 +5708,7 @@ export function UndoRedoButtons({
         onClick={undo}
         disabled={!canUndo}
         aria-label={t("common.undo")}
-        title={t("fileViewer.undoShortcut")}
+        title={chordHint(t("fileViewer.undoShortcut"), "editorUndo")}
       >
         ↶
       </button>
@@ -5709,7 +5717,7 @@ export function UndoRedoButtons({
         onClick={redo}
         disabled={!canRedo}
         aria-label={t("common.redo")}
-        title={t("fileViewer.redoShortcut")}
+        title={chordHint(t("fileViewer.redoShortcut"), "editorRedo")}
       >
         ↷
       </button>
@@ -6402,6 +6410,7 @@ function useLocalModelLoaded(): boolean {
  */
 function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string }) {
   const t = useT();
+  const chordHint = useChordHint();
   const modelLoaded = useLocalModelLoaded();
   const scope = useFileScope();
   const enabled = useExperimental("copilot_completion");
@@ -6433,8 +6442,8 @@ function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string }) {
             onClick={ai.toggleAutocomplete}
             aria-pressed={ai.autocomplete}
             title={
-              copilot ? t("fileViewer.copilotToggleHint") : ai.autocomplete
-                ? t("fileViewer.autocompleteOnHint")
+              copilot ? chordHint(t("fileViewer.copilotToggleHint"), "editorAutocomplete") : ai.autocomplete
+                ? chordHint(t("fileViewer.autocompleteOnHint"), "editorAutocomplete")
                 : t("fileViewer.autocompleteOffHint")
             }
           >
@@ -6769,13 +6778,14 @@ function FontSizeControls({
   reset: () => void;
 }) {
   const t = useT();
+  const chordHint = useChordHint();
   return (
     <div className="file-viewer-zoom file-viewer-fontsize" role="group" aria-label={t("fileViewer.textSizeGroup")}>
       <button
         className="file-viewer-zoom-btn"
         onClick={dec}
         disabled={fontSize <= EDITOR_FONT_MIN}
-        title={t("fileViewer.decreaseTextSize")}
+        title={chordHint(t("fileViewer.decreaseTextSize"), "zoomOut")}
         aria-label={t("fileViewer.decreaseTextSizeLabel")}
       >
         A−
@@ -6783,7 +6793,7 @@ function FontSizeControls({
       <button
         className="file-viewer-zoom-level file-viewer-fontsize-level"
         onClick={reset}
-        title={t("fileViewer.resetTextSize")}
+        title={chordHint(t("fileViewer.resetTextSize"), "zoomReset")}
         aria-label={t("fileViewer.resetTextSizeLabel")}
       >
         {fontSize}
@@ -6792,7 +6802,7 @@ function FontSizeControls({
         className="file-viewer-zoom-btn"
         onClick={inc}
         disabled={fontSize >= EDITOR_FONT_MAX}
-        title={t("fileViewer.increaseTextSize")}
+        title={chordHint(t("fileViewer.increaseTextSize"), "zoomIn")}
         aria-label={t("fileViewer.increaseTextSizeLabel")}
       >
         A+
@@ -10281,6 +10291,7 @@ function TexView({
               : syncNote === "unavail"
                 ? "fileViewer.syncUnavailMsg"
                 : "fileViewer.syncMissMsg",
+            { modifier: modifierLabel() },
           )}
           {syncNote === "noPdf" && <UntestedTag id="fileViewer.syncNoPdfMsg" />}
         </div>

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
 import { splitPtyId } from "../../lib/terminal/ptyId";
 import { undoAgentClear, useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
-import { useTabsStore } from "../../stores/tabs";
+import { usePaneTab } from "../tabs/paneTabContext";
 import { UntestedTag } from "../common/UntestedTag";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 
@@ -20,10 +20,10 @@ export function TerminalUndoClearCard({ host, ptyId }: { host: HTMLElement; ptyI
   const offered = useAgentClearUndoStore((state) => !!state.cleared[ptyId]);
   const [failure, setFailure] = useState<"" | "failed" | "remote">("");
   const [busy, setBusy] = useState(false);
+  const parts = splitPtyId(ptyId);
+  const tab = usePaneTab(parts?.scope, parts?.key);
   if (!offered) return null;
   const undo = async () => {
-    const parts = splitPtyId(ptyId);
-    const tab = parts && useTabsStore.getState().tabsByScope[parts.scope]?.find((entry) => entry.key === parts.key);
     if (!parts || !tab) return;
     setBusy(true);
     const result = await undoAgentClear(parts.scope, tab);

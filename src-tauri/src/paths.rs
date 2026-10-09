@@ -71,8 +71,12 @@ pub fn binary_on_path(bin: &str) -> bool {
 /// in project folders and against remote hosts, often in the background. By
 /// bare name they would resolve through [`effective_path`], which puts
 /// user-writable dirs (`~/.local/bin`, …) first — a planted `~/.local/bin/git`
-/// would then run at the next file-tree poll (#861).
-const TRUSTED_HELPERS: &[&str] = &["git", "tmux", "ssh", "scp", "sftp", "rsync"];
+/// would then run at the next file-tree poll (#861). The last three are
+/// Windows' own shells and ACL tool, which Tabtivity runs its one-liners
+/// through (agent installers, junctions, `services::private_file`); Unix has
+/// no root-owned copy of them, so nothing changes there.
+const TRUSTED_HELPERS: &[&str] =
+    &["git", "tmux", "ssh", "scp", "sftp", "rsync", "cmd", "powershell", "icacls"];
 
 /// Directories only root can add a program to on a sane Unix install. Each
 /// hit is still checked with [`root_owned_file`].
@@ -86,8 +90,29 @@ const SYSTEM_BIN_DIRS: &[&str] = &[
     "/usr/local/sbin",
 ];
 
+/// Where an administrator-installed copy of a helper lives on Windows, in
+/// lookup order: Git for Windows' launcher and tool dirs, the in-box OpenSSH,
+/// Windows PowerShell, System32. Each hit is still checked with
+/// `services::private_file::admin_locked`, so a variable pointing somewhere
+/// the user can write only ever costs the lookup. Pure over the two values.
+#[cfg(any(windows, test))]
+fn windows_system_bin_dirs(program_files: Option<&OsStr>, system_root: Option<&OsStr>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(pf) = program_files.filter(|p| !p.is_empty()) {
+        let git = Path::new(pf).join("Git");
+        dirs.push(git.join("cmd"));
+        dirs.push(git.join("bin"));
+    }
+    if let Some(root) = system_root.filter(|r| !r.is_empty()) {
+        let system32 = Path::new(root).join("System32");
+        dirs.push(system32.join("OpenSSH"));
+        dirs.push(system32.join("WindowsPowerShell").join("v1.0"));
+        dirs.push(system32);
+    }
+    dirs
+}
+
 /// The first `dir/bin` in `dirs` that `trusted` accepts. Pure over `trusted`.
-#[cfg(any(unix, test))]
 fn first_trusted_in(
     dirs: &[PathBuf],
     bin: &str,
@@ -117,15 +142,30 @@ fn root_owned_file(path: &Path) -> bool {
 }
 
 /// `bin` from the root-owned system directories only — never from `PATH` or a
-/// per-user directory. `None` when there is no such copy (always on Windows).
-/// The agent fence takes `bwrap` from here and fails closed without it.
+/// per-user directory. `None` when there is no such copy. On Windows the
+/// directories are [`windows_system_bin_dirs`], the file is `<bin>.exe`, and
+/// "root-owned" means owned by Administrators/SYSTEM/TrustedInstaller with no
+/// one else allowed to write it or its folder; a descriptor that cannot be
+/// read is `None`, never trusted. The agent fence takes `bwrap` from here and
+/// fails closed without it.
 pub fn system_executable(bin: &str) -> Option<PathBuf> {
     #[cfg(unix)]
     {
         let dirs: Vec<PathBuf> = SYSTEM_BIN_DIRS.iter().map(PathBuf::from).collect();
         first_trusted_in(&dirs, bin, &root_owned_file)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        if bin.is_empty() {
+            return None;
+        }
+        let dirs = windows_system_bin_dirs(
+            std::env::var_os("ProgramFiles").as_deref(),
+            std::env::var_os("SystemRoot").as_deref(),
+        );
+        first_trusted_in(&dirs, &format!("{bin}.exe"), &crate::services::private_file::admin_locked)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = bin;
         None
@@ -134,8 +174,8 @@ pub fn system_executable(bin: &str) -> Option<PathBuf> {
 
 /// The program to spawn for one of Tabtivity's own helpers ([`TRUSTED_HELPERS`]):
 /// its root-owned system copy when there is one. `None` for any other name,
-/// and for a helper the system lacks (Homebrew's tmux, Git for Windows), which
-/// then resolves on the effective `PATH` as before.
+/// and for a helper the system lacks (Homebrew's tmux, a per-user Git for
+/// Windows), which then resolves on the effective `PATH` as before.
 pub fn helper_program(bin: &OsStr) -> Option<PathBuf> {
     let name = bin.to_str()?;
     if !TRUSTED_HELPERS.contains(&name) {
@@ -605,14 +645,17 @@ where
 /// build keeps its tree under the old name — it holds the user's projects,
 /// and moving it is a step of its own that only the user starts — and
 /// everything else gets the current name: `~/<current>` if it exists, else
-/// `~/<old>` if that exists, else `~/<current>`.
+/// `~/<old>` if that exists, else `~/<current>`. A `~/<current>` with no file
+/// in it does not win over a `~/<old>` that has files
+/// (`brand_migration::resolve_user_tree`): a stray empty folder must not move
+/// the root workspace and orphan the root agents' conversations.
 pub fn app_home_in<F>(pair: &crate::brand::Pair, env: F, home: &Path) -> PathBuf
 where
     F: FnMut(&str) -> Option<String>,
 {
     match pair.env_in("HOME", env) {
         Some(dir) => PathBuf::from(dir),
-        None => crate::services::brand_migration::resolve_named_dir(
+        None => crate::services::brand_migration::resolve_user_tree(
             pair,
             crate::brand::Name::HOME_DIR_NAME,
             home,
@@ -949,6 +992,25 @@ mod tests {
         assert_eq!(first_trusted_in(&dirs, "", &trusted), None);
     }
 
+    #[test]
+    fn windows_helpers_are_looked_up_in_the_admin_dirs_in_order() {
+        let pf = Path::new(r"C:\Program Files");
+        let sys = Path::new(r"C:\Windows").join("System32");
+        assert_eq!(
+            windows_system_bin_dirs(Some(OsStr::new(r"C:\Program Files")), Some(OsStr::new(r"C:\Windows"))),
+            vec![
+                pf.join("Git").join("cmd"),
+                pf.join("Git").join("bin"),
+                sys.join("OpenSSH"),
+                sys.join("WindowsPowerShell").join("v1.0"),
+                sys.clone(),
+            ]
+        );
+        // An unset or empty variable drops its dirs; it never means "here".
+        assert_eq!(windows_system_bin_dirs(None, Some(OsStr::new(""))), Vec::<PathBuf>::new());
+        assert_eq!(windows_system_bin_dirs(Some(OsStr::new("")), Some(OsStr::new(r"C:\Windows"))).len(), 3);
+    }
+
     #[cfg(unix)]
     #[test]
     fn helpers_come_from_root_owned_system_dirs_only() {
@@ -985,14 +1047,13 @@ mod tests {
     }
 
     /// The leaf this machine's home tree has: the current name, or the old
-    /// one where an install made before the rename still keeps its tree there.
-    fn home_tree_leaf() -> &'static str {
-        let home = home_dir();
-        if !home.join(crate::brand::HOME_DIR_NAME).exists() && home.join(crate::brand::LEGACY_HOME_DIR_NAME).exists() {
-            crate::brand::LEGACY_HOME_DIR_NAME
-        } else {
-            crate::brand::HOME_DIR_NAME
-        }
+    /// one where an install made before the rename still keeps its tree there
+    /// (the resolution rule itself is tested on a temp home below).
+    fn home_tree_leaf() -> String {
+        let tree = app_home_in(&crate::brand::PAIR, |_| None, &home_dir());
+        let leaf = tree.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        assert!(leaf == crate::brand::HOME_DIR_NAME || leaf == crate::brand::LEGACY_HOME_DIR_NAME, "{tree:?}");
+        leaf
     }
 
     #[test]
@@ -1005,7 +1066,8 @@ mod tests {
     /// A fresh machine gets the tree under the current name; an install made
     /// under the old name keeps its tree where it is (moving the user's
     /// projects is a step only the user starts); once both exist the current
-    /// one wins; and the old variable still redirects it.
+    /// one wins unless it holds no file and the old one does; and the old
+    /// variable still redirects it.
     #[test]
     fn the_home_tree_is_the_current_name_unless_only_the_old_one_exists() {
         let pair = crate::brand::PAIR;
@@ -1019,6 +1081,18 @@ mod tests {
         std::fs::create_dir(&old).unwrap();
         assert_eq!(app_home_in(&pair, |_| None, home.path()), old);
         std::fs::create_dir(&current).unwrap();
+        assert_eq!(app_home_in(&pair, |_| None, home.path()), current);
+        // A fileless current tree (a stray `mkdir`, an empty `root/`, a box
+        // farm's symlink) loses to an old tree with the user's files in it.
+        std::fs::create_dir_all(old.join("projects").join("p")).unwrap();
+        std::fs::write(old.join("projects").join("p").join("notes.md"), "x").unwrap();
+        std::fs::create_dir_all(current.join("root")).unwrap();
+        std::fs::create_dir_all(current.join("boxes")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(old.join("projects").join("p").join("notes.md"), current.join("boxes").join("p")).unwrap();
+        assert_eq!(app_home_in(&pair, |_| None, home.path()), old);
+        // One real file in it and the current tree wins again.
+        std::fs::write(current.join("root").join("todo.txt"), "x").unwrap();
         assert_eq!(app_home_in(&pair, |_| None, home.path()), current);
         let old_var = crate::brand::LEGACY.env_name("HOME");
         assert_eq!(

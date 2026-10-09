@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
+import { modifierLabel } from "../../lib/shortcuts/shortcuts";
 import { useUse24h } from "../../lib/timeFormat";
 import { buildPromptTrail, type TrailPrompt } from "../../lib/agents/prompt/trail";
 import { useAgentPromptsStore } from "../../stores/agents/agentPrompts";
 import { usePromptTrailStore } from "../../stores/agents/promptTrail";
-import { useTabsStore } from "../../stores/tabs";
+import { usePaneTab } from "../tabs/paneTabContext";
 import { UntestedTag } from "../common/UntestedTag";
 
 /**
@@ -65,7 +66,7 @@ export function TerminalPromptStrip({
 }) {
   const t = useT();
   const use24h = useUse24h();
-  const tab = useTabsStore((state) => state.tabsByScope[scope]?.find((entry) => entry.key === tabKey));
+  const tab = usePaneTab(scope, tabKey);
   const history = useAgentPromptsStore((state) => state.historyByProject[scope]);
   const typed = usePromptTrailStore((state) => state.typedByPty[ptyId]);
   const trail = useMemo(() => (tab ? buildPromptTrail(history ?? [], typed ?? [], tab) : []), [history, typed, tab]);
@@ -233,6 +234,7 @@ export function TerminalPromptStrip({
         >
           {t(reader.open ? "terminal.reader.showTerminal" : "terminal.reader.showReader")}
           <UntestedTag id="terminal.reader" />
+          {tab?.kind === "local_agent" && <UntestedTag id="terminal.reader.localOpenCode" />}
         </button>
       )}
       {open && current && (
@@ -266,7 +268,7 @@ export function TerminalPromptStrip({
                 ))}
             </ol>
           )}
-          <div className="prompt-strip-keys">{t("terminal.promptStrip.keys")}</div>
+          <div className="prompt-strip-keys">{t("terminal.promptStrip.keys", { modifier: modifierLabel() })}</div>
         </div>
       )}
     </div>
