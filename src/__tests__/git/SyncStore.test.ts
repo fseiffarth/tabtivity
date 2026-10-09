@@ -83,6 +83,25 @@ describe("sync store actions", () => {
     expect(pullArgs).toEqual({ projectId: "p1", relPath: "src/lib.rs" });
   });
 
+  it("pull and syncWholeProject return the files left on the host as too large", async () => {
+    const skipped = [{ rel: "data/big.bin", size: 70 * 1024 * 1024 }];
+    invokeMock.mockImplementation(((cmd: string) =>
+      Promise.resolve(
+        cmd === "sync_pull" || cmd === "sync_whole_project"
+          ? { pulled: 2, skippedTooLarge: skipped }
+          : [],
+      )) as never);
+    expect(await useSyncStore.getState().pull("p1", "data")).toEqual({ pulled: 2, skippedTooLarge: skipped });
+    expect(await useSyncStore.getState().syncWholeProject("p1")).toEqual({
+      pulled: 2,
+      skippedTooLarge: skipped,
+    });
+    // An answer without the field (an older backend) reads as nothing skipped.
+    invokeMock.mockImplementation(((cmd: string) =>
+      Promise.resolve(cmd === "sync_pull" ? 3 : [])) as never);
+    expect(await useSyncStore.getState().pull("p1", "data")).toEqual({ pulled: 3, skippedTooLarge: [] });
+  });
+
   it("markSelected forwards the selection + dir flag", async () => {
     await useSyncStore.getState().markSelected("p1", ["a", "b"], false, true);
     const args = invokeMock.mock.calls.find((c) => c[0] === "sync_mark_selected")![1];

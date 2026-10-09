@@ -31,7 +31,7 @@ import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
 import { createDeckFile } from "../../lib/viewers/deck/create";
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
-import { useSyncStore, isPathExcluded, dirSyncAggregate, type SyncFileState } from "../../stores/remote/sync";
+import { useSyncStore, isPathExcluded, dirSyncAggregate, type SyncFileState, type SyncSkippedFile } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { useActivityStore } from "../../stores/activity";
 import { useFileClipboardStore } from "../../stores/fileClipboard";
@@ -78,6 +78,7 @@ import { normalizeScanPath } from "./ProjectFilesSettings";
 import { FileTreeSearch } from "./FileTreeSearch";
 import { useClampToViewport } from "../../hooks/useClampToViewport";
 import { UntestedTag } from "../common/UntestedTag";
+import { SyncSkippedLarge } from "./SyncSkippedLarge";
 import { MenuShortcut } from "../common/MenuShortcut";
 import type { ChordDescriptor } from "../../lib/shortcuts/shortcuts";
 import { IdeMenuItems } from "../projects/IdeMenuItems";
@@ -637,7 +638,12 @@ export function FileTree({
   // fading, since a one-second push must not report itself into a toast the user
   // has not looked at yet (the whole-project row in `ProjectFilesPane` strikes
   // the same bargain, with the same chrome).
-  const [syncNotice, setSyncNotice] = useState<{ text: string; bad: boolean } | null>(null);
+  const [syncNotice, setSyncNotice] = useState<{
+    text: string;
+    bad: boolean;
+    /** Files over the cap a pull left on the host (gap 35). */
+    skipped?: SyncSkippedFile[];
+  } | null>(null);
   // Whether the system clipboard holds an image when the context menu opened
   // (probed async on right-click), gating the "Paste screenshot" option.
   const [clipboardImage, setClipboardImage] = useState(false);
@@ -2637,11 +2643,15 @@ export function FileTree({
     if (!ok) return;
     setSyncNotice(null);
     try {
-      await syncPull(projectId, rel);
-      // A pull reports no per-file count, so the confirmation is that it landed
-      // at all. Silence used to be the *only* successful outcome, which reads
-      // exactly like a button that does nothing.
-      setSyncNotice({ text: t("fileTree.pullDoneNotice", { name: label }), bad: false });
+      const outcome = await syncPull(projectId, rel);
+      // The confirmation is that it landed at all. Silence used to be the
+      // *only* successful outcome, which reads exactly like a button that does
+      // nothing. Files over the cap it left on the host are named with it.
+      setSyncNotice({
+        text: t("fileTree.pullDoneNotice", { name: label }),
+        bad: false,
+        skipped: outcome.skippedTooLarge,
+      });
     } catch (err) {
       setError(String(err));
     }
@@ -2783,7 +2793,14 @@ export function FileTree({
     setPushBusy(true);
     try {
       if (action === "keep") await syncPush(projectId, rel, true);
-      else if (action === "host") await syncPull(projectId, rel);
+      else if (action === "host") {
+        // A host copy that grew past the cap is not pulled; say so rather
+        // than let the queue move on as if it had been.
+        const outcome = await syncPull(projectId, rel);
+        if (outcome.skippedTooLarge.length > 0) {
+          setSyncNotice({ text: "", bad: false, skipped: outcome.skippedTooLarge });
+        }
+      }
       // "skip" leaves both sides as-is.
     } catch (err) {
       setError(String(err));
@@ -3840,7 +3857,10 @@ export function FileTree({
           className={`project-files-sync-result${syncNotice.bad ? " project-files-sync-result--bad" : ""}`}
           role="status"
         >
-          <span>{syncNotice.text}</span>
+          <span>
+            {syncNotice.text}
+            {syncNotice.skipped && <SyncSkippedLarge files={syncNotice.skipped} lead={!!syncNotice.text} />}
+          </span>
           <button
             className="file-tree-up"
             onClick={() => setSyncNotice(null)}

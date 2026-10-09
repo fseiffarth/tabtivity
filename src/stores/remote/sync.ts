@@ -155,6 +155,36 @@ export interface SyncPushResult {
   skipped_tracked: number;
 }
 
+/** A host file a pull left on the host because it is over the 64 MiB cap. */
+export interface SyncSkippedFile {
+  /** Project-relative path. */
+  rel: string;
+  /** Host size in bytes. */
+  size: number;
+}
+
+/**
+ * What a pull did — mirrors the backend `PullOutcome`. Files over the cap used
+ * to be skipped with nothing but a log line while the pull read as done; they
+ * come back here (rsync and SFTP path alike) for the result line to name.
+ */
+export interface SyncPullOutcome {
+  /** Files that landed in the mirror. */
+  pulled: number;
+  /** Files over the cap left on the host; empty when none. */
+  skippedTooLarge: SyncSkippedFile[];
+}
+
+/** Read a pull result defensively: an older backend (or a test double) may
+ *  answer with a bare count or nothing at all. */
+function toPullOutcome(raw: unknown): SyncPullOutcome {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Partial<SyncPullOutcome>;
+  return {
+    pulled: typeof r.pulled === "number" ? r.pulled : typeof raw === "number" ? raw : 0,
+    skippedTooLarge: Array.isArray(r.skippedTooLarge) ? r.skippedTooLarge : [],
+  };
+}
+
 interface SyncStore {
   /** projectId → (project-relative path → status). */
   byProject: Record<string, Record<string, SyncEntryStatus>>;
@@ -166,9 +196,9 @@ interface SyncStore {
   /** Fetch local+host metadata for one file (backs the amber resolve popup). */
   fileMeta: (projectId: string, relPath: string) => Promise<SyncFileMeta>;
   /** Pull one file or a whole folder subtree into the mirror, then refresh. */
-  pull: (projectId: string, relPath: string) => Promise<void>;
+  pull: (projectId: string, relPath: string) => Promise<SyncPullOutcome>;
   /** Pull the whole project tree into the mirror. */
-  syncWholeProject: (projectId: string) => Promise<void>;
+  syncWholeProject: (projectId: string) => Promise<SyncPullOutcome>;
   /** Push the whole local mirror to the host, skipping host-diverged (amber)
    *  files (force=false → conflicts are returned, not clobbered). */
   pushWholeProject: (projectId: string) => Promise<SyncPushResult>;
@@ -433,13 +463,15 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     invoke<SyncFileMeta>("sync_file_meta", { projectId, relPath }),
 
   pull: async (projectId, relPath) => {
-    await invoke("sync_pull", { projectId, relPath });
+    const outcome = toPullOutcome(await invoke<unknown>("sync_pull", { projectId, relPath }));
     await get().refreshStatus(projectId);
+    return outcome;
   },
 
   syncWholeProject: async (projectId) => {
-    await invoke("sync_whole_project", { projectId });
+    const outcome = toPullOutcome(await invoke<unknown>("sync_whole_project", { projectId }));
     await get().refreshStatus(projectId);
+    return outcome;
   },
 
   // Whole-mirror push counterpart to `syncWholeProject`. Reuses `push` with an

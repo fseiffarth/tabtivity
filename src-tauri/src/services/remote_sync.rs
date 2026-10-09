@@ -664,13 +664,31 @@ pub async fn pull_file(
     mirror_root: &Path,
     rel: &str,
 ) -> Result<(u64, Option<u64>), String> {
+    pull_file_with(host_abs, host_size, mirror_root, rel, || sftp::read_file_on(sftp, host_abs)).await
+}
+
+/// [`pull_file`] with the host read passed in (`read`, called at most once and
+/// never for a file over the cap): the SFTP floor's whole per-file rule —
+/// confinement, the size cap before and after the read, the atomic write —
+/// testable without a host.
+async fn pull_file_with<R, F>(
+    host_abs: &str,
+    host_size: u64,
+    mirror_root: &Path,
+    rel: &str,
+    read: R,
+) -> Result<(u64, Option<u64>), String>
+where
+    R: FnOnce() -> F,
+    F: std::future::Future<Output = Result<Vec<u8>, String>>,
+{
     confined_mirror_path(mirror_root, rel)?;
     if host_size > MAX_SYNC_FILE_BYTES {
         return Err(format!(
             "'{host_abs}' is too large to sync ({host_size} bytes; limit {MAX_SYNC_FILE_BYTES})"
         ));
     }
-    let bytes = sftp::read_file_on(sftp, host_abs).await?;
+    let bytes = read().await?;
     if bytes.len() as u64 > MAX_SYNC_FILE_BYTES {
         return Err(format!(
             "'{host_abs}' is too large to sync ({} bytes; limit {MAX_SYNC_FILE_BYTES})",
@@ -858,6 +876,50 @@ pub fn rsync_pull_args(
 /// of the `--files-from` list (`--max-size` is the second line).
 pub fn rsync_may_transfer(host_size: u64) -> bool {
     host_size <= MAX_SYNC_FILE_BYTES
+}
+
+/// The files of a pull that may ride the rsync fast path: those within the
+/// cap ([`rsync_may_transfer`]), in walk order.
+pub fn rsync_transfer_list(files: &[HostFile]) -> Vec<HostFile> {
+    files.iter().filter(|file| rsync_may_transfer(file.size)).cloned().collect()
+}
+
+/// A host file a pull left on the host because it is over
+/// [`MAX_SYNC_FILE_BYTES`] (gap 35): project-relative path and host size.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedFile {
+    pub rel: String,
+    pub size: u64,
+}
+
+/// What a `sync_pull` / `sync_whole_project` did. The files over the cap used
+/// to be skipped with a stderr line only, and the pull still read as done;
+/// they are reported here, on the rsync and the SFTP path alike, for the UI
+/// to name. `skippedTooLarge` defaults to empty, so an older payload without
+/// it still reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullOutcome {
+    /// Files that landed in the mirror and were recorded.
+    pub pulled: usize,
+    /// Files over the cap left on the host, in walk order.
+    #[serde(default)]
+    pub skipped_too_large: Vec<SkippedFile>,
+}
+
+impl PullOutcome {
+    /// Count one file of the pull after its transport (`landed`: recorded in
+    /// the manifest). A file that did not land because the host walk listed it
+    /// over the cap is reported; one that failed for another reason (gone,
+    /// unreadable, not a regular file any more) stays a stderr line.
+    pub fn tally(&mut self, file: &HostFile, landed: bool) {
+        if landed {
+            self.pulled += 1;
+        } else if !rsync_may_transfer(file.size) {
+            self.skipped_too_large.push(SkippedFile { rel: file.rel.clone(), size: file.size });
+        }
+    }
 }
 
 /// The manifest base for a file rsync just wrote at `local`, or `None` to
@@ -1521,6 +1583,106 @@ mod tests {
         assert!(std::fs::symlink_metadata(d.join("big.bin")).is_err());
         assert!(!d.join("was_file/unlisted.txt").exists());
         assert!(!d.join("was_file/deep").exists());
+    }
+
+    /// The host tree both pull-path tests walk: two small files and one over
+    /// the cap, in walk order.
+    fn host_tree_with_a_big_file(host: &Path) -> Vec<HostFile> {
+        std::fs::create_dir_all(host.join("d")).unwrap();
+        std::fs::write(host.join("a.txt"), b"a").unwrap();
+        std::fs::write(host.join("d/b.txt"), b"bb").unwrap();
+        std::fs::File::create(host.join("d/big.bin"))
+            .unwrap()
+            .set_len(MAX_SYNC_FILE_BYTES + 1)
+            .unwrap();
+        vec![
+            HostFile { rel: "a.txt".into(), size: 1, mtime: None },
+            HostFile { rel: "d/big.bin".into(), size: MAX_SYNC_FILE_BYTES + 1, mtime: None },
+            HostFile { rel: "d/b.txt".into(), size: 2, mtime: None },
+        ]
+    }
+
+    fn big_file_skipped() -> Vec<SkippedFile> {
+        vec![SkippedFile { rel: "d/big.bin".into(), size: MAX_SYNC_FILE_BYTES + 1 }]
+    }
+
+    /// Gap 35 follow-up: the rsync fast path pulls the files within the cap
+    /// and the outcome names the one it left on the host.
+    #[cfg(unix)]
+    #[test]
+    fn a_pull_reports_files_over_the_cap_on_the_rsync_path() {
+        if !rsync_available_local() {
+            eprintln!("rsync not on PATH; skipping the local transfer check");
+            return;
+        }
+        let host = tempfile::tempdir().unwrap();
+        let mirror = tempfile::tempdir().unwrap();
+        let files = host_tree_with_a_big_file(host.path());
+        let list = rsync_transfer_list(&files);
+        assert_eq!(list.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["a.txt", "d/b.txt"]);
+        let from = rsync_files_from(&rsync_subtree_files(&list, "").unwrap()).unwrap();
+        let mut args = rsync_pull_flags(from.path());
+        args.push(format!("{}/", host.path().display()));
+        args.push(format!("{}/", mirror.path().display()));
+        let out = std::process::Command::new("rsync").args(&args).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+        let mut outcome = PullOutcome::default();
+        for file in &files {
+            let landed = rsync_pulled_base(&mirror.path().join(&file.rel), file.size).is_some();
+            outcome.tally(file, landed);
+        }
+        assert_eq!(outcome.pulled, 2);
+        assert_eq!(outcome.skipped_too_large, big_file_skipped());
+        assert_eq!(std::fs::read(mirror.path().join("a.txt")).unwrap(), b"a");
+        assert_eq!(std::fs::read(mirror.path().join("d/b.txt")).unwrap(), b"bb");
+        assert!(!mirror.path().join("d/big.bin").exists());
+    }
+
+    /// Gap 35 follow-up: the SFTP floor's per-file rule (`pull_file` minus
+    /// the wire) never reads a file over the cap, pulls the rest, and the
+    /// outcome names the skipped one.
+    #[tokio::test]
+    async fn a_pull_reports_files_over_the_cap_on_the_sftp_path() {
+        let host = tempfile::tempdir().unwrap();
+        let mirror = tempfile::tempdir().unwrap();
+        let files = host_tree_with_a_big_file(host.path());
+        let reads = std::cell::RefCell::new(Vec::new());
+        let mut outcome = PullOutcome::default();
+        for file in &files {
+            let host_abs = host.path().join(&file.rel);
+            let landed = pull_file_with(&host_abs.to_string_lossy(), file.size, mirror.path(), &file.rel, || {
+                reads.borrow_mut().push(file.rel.clone());
+                let path = host_abs.clone();
+                async move { std::fs::read(path).map_err(|e| e.to_string()) }
+            })
+            .await
+            .is_ok();
+            outcome.tally(file, landed);
+        }
+        assert_eq!(*reads.borrow(), ["a.txt", "d/b.txt"], "a file over the cap is never read");
+        assert_eq!(outcome.pulled, 2);
+        assert_eq!(outcome.skipped_too_large, big_file_skipped());
+        assert_eq!(std::fs::read(mirror.path().join("a.txt")).unwrap(), b"a");
+        assert_eq!(std::fs::read(mirror.path().join("d/b.txt")).unwrap(), b"bb");
+        assert!(!mirror.path().join("d/big.bin").exists());
+    }
+
+    /// The pull result crosses to the frontend in camelCase, and a payload
+    /// without the new field still reads (empty list).
+    #[test]
+    fn a_pull_outcome_is_camel_case_and_defaults_to_nothing_skipped() {
+        let outcome = PullOutcome { pulled: 2, skipped_too_large: big_file_skipped() };
+        let json = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(json["pulled"], 2);
+        assert_eq!(json["skippedTooLarge"][0]["rel"], "d/big.bin");
+        assert_eq!(json["skippedTooLarge"][0]["size"], MAX_SYNC_FILE_BYTES + 1);
+        let old: PullOutcome = serde_json::from_str(r#"{"pulled":3}"#).unwrap();
+        assert_eq!(old, PullOutcome { pulled: 3, skipped_too_large: Vec::new() });
+        // A file that failed for another reason is not reported as too large.
+        let mut outcome = PullOutcome::default();
+        outcome.tally(&HostFile { rel: "gone.txt".into(), size: 5, mtime: None }, false);
+        assert_eq!(outcome, PullOutcome::default());
     }
 
     #[test]
