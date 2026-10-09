@@ -442,26 +442,46 @@ describe("truncation and caps", () => {
     expect(decodeGif(small, { maxPixelBytes: 64 }).frames).toHaveLength(1);
   });
 
-  it("refuses a frame larger than the screen before decoding it (row 41)", () => {
+  it("refuses a frame claiming a huge size before decoding it (row 41)", () => {
     // A 2×2 screen whose frame claims 65535×65535: `lzwDecode` would size its
-    // index buffer from the frame's own w*h (4 GiB).
+    // index buffer from the frame's own w*h (4 GiB). A GifDecodeError, not a
+    // RangeError, so the check ran before any allocation.
     const huge = buildGif({
       width: 2,
       height: 2,
       gct: [RED, GREEN],
       frames: [{ rect: [0, 0, 65535, 65535], indices: [0] }],
     });
-    expect(() => decodeGif(huge)).toThrow(/frame larger than the screen/);
-    // After a good frame, an oversize one ends the stream as truncated.
+    expect(() => decodeGif(huge)).toThrow(GifDecodeError);
+    expect(() => decodeGif(huge)).toThrow(/frame too large/);
+    // After a good frame, a frame past the budget ends the stream as truncated.
     const tail = buildGif({
       width: 2,
       height: 2,
       gct: [RED, GREEN],
       frames: [{ indices: [0, 0, 0, 0] }, { rect: [0, 0, 3, 2], indices: [1, 1, 1, 1, 1, 1] }],
     });
-    const gif = decodeGif(tail);
-    expect(gif.frames).toHaveLength(1);
-    expect(gif.truncated).toBe(true);
+    const capped = decodeGif(tail, { maxPixelBytes: 20 });
+    expect(capped.frames).toHaveLength(1);
+    expect(capped.truncated).toBe(true);
+  });
+
+  it("animates a frame wider than the screen, drawn clipped", () => {
+    // Out of spec but real: a 3×2 frame on a 2×2 screen. Within the memory
+    // budget it decodes, and the column past the edge is clipped.
+    const gif = decodeGif(
+      buildGif({
+        width: 2,
+        height: 2,
+        gct: [RED, GREEN],
+        frames: [{ indices: [0, 0, 0, 0] }, { rect: [0, 0, 3, 2], indices: [1, 1, 1, 1, 1, 1] }],
+      }),
+    );
+    expect(gif.frames).toHaveLength(2);
+    expect(gif.truncated).toBe(false);
+    expect(px(gif, 0, 1, 1)).toEqual(opaque(RED));
+    expect(px(gif, 1, 0, 0)).toEqual(opaque(GREEN));
+    expect(px(gif, 1, 1, 1)).toEqual(opaque(GREEN));
   });
 
   it("streams frames one at a time via openGif", () => {

@@ -68,6 +68,19 @@ vi.mock("../../components/embed/OdtView", () => ({
   },
 }));
 
+// Merge resolvers that throw on any path: their header never offered "Open
+// externally", so the crash card must not either.
+vi.mock("../../components/embed/SyncMergeView", () => ({
+  SyncMergeView: () => {
+    throw new Error("sync merge broke");
+  },
+}));
+vi.mock("../../components/embed/GitMergeView", () => ({
+  GitMergeView: () => {
+    throw new Error("git merge broke");
+  },
+}));
+
 const files: Record<string, string> = {};
 
 beforeEach(() => {
@@ -199,6 +212,26 @@ describe("ViewerErrorBoundary", () => {
     });
     expect((await screen.findByText(/a: \[1, 2/)).tagName).toBe("PRE");
     expect(mockInvoke).toHaveBeenCalledWith("read_file_text", { path: "/p/x.yaml", projectId: "proj" });
+  });
+
+  it("offers no Open externally for the merge views, whose header never had it", async () => {
+    vi.resetModules();
+    const { FileViewerPane } = await import("../../components/embed/FileViewerPane");
+    for (const [viewer, message] of [
+      ["syncmerge", "sync merge broke"],
+      ["gitmerge", "git merge broke"],
+    ] as const) {
+      const { unmount } = render(<FileViewerPane viewer={viewer} path="/p/conflict.txt" projectId="proj" />);
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Open externally" })).toBeNull();
+      unmount();
+    }
+    // A file viewer's card still offers it.
+    const { unmount } = render(<FileViewerPane viewer="odt" path="/p/bad.odt" projectId="proj" />);
+    expect(await screen.findByText("Maximum call stack size exceeded")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open externally" })).toBeTruthy();
+    unmount();
   });
 
   it("keeps a throwing viewer inside its pane: other panes and their drafts survive", async () => {

@@ -734,7 +734,7 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
             resetKey={`${viewer}\u0000${effectivePath}`}
             sourcePath={TEXT_SOURCE_VIEWERS.has(viewer) ? effectivePath : null}
             projectId={projectId}
-            onOpenExternally={openExternally}
+            onOpenExternally={NO_OPEN_EXTERNALLY_VIEWERS.has(viewer) ? null : openExternally}
           >
             <Suspense fallback={null}>{view}</Suspense>
           </ViewerErrorBoundary>
@@ -751,6 +751,13 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
  *  the comparison views, whose `path` means something else, are left out. */
 const TEXT_SOURCE_VIEWERS: ReadonlySet<InternalViewer> = new Set<InternalViewer>([
   "text", "markdown", "tex", "texworkspace", "html", "yaml", "bib", "eldeck", "notebook",
+]);
+
+/** Views whose header has no "Open externally" (the merge resolvers: their
+ *  `path` names a conflict, not one file the OS should open), so the error
+ *  boundary's card does not offer it either. */
+const NO_OPEN_EXTERNALLY_VIEWERS: ReadonlySet<InternalViewer> = new Set<InternalViewer>([
+  "syncmerge", "gitmerge",
 ]);
 
 /** The file identity a `ViewerHeader` needs to offer file-scoped actions (the

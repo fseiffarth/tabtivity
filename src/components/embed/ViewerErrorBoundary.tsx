@@ -17,7 +17,10 @@ type Props = {
    *  is not text (an image, a PDF, a database), so the button is left out. */
   sourcePath: string | null;
   projectId: string | null;
-  onOpenExternally: () => void;
+  /** Hand the file to the OS; `null` for views whose header never offered it
+   *  (the merge views, whose `path` is not one file to open), so the card
+   *  leaves the button out. */
+  onOpenExternally: (() => void) | null;
   children: React.ReactNode;
 };
 
@@ -83,7 +86,7 @@ function ViewerCrashed({
   sourcePath: string | null;
   projectId: string | null;
   onRetry: () => void;
-  onOpenExternally: () => void;
+  onOpenExternally: (() => void) | null;
 }) {
   const t = useT();
   const [showSource, setShowSource] = useState(false);
@@ -107,9 +110,11 @@ function ViewerCrashed({
               {t("viewerCrash.showSource")}
             </button>
           )}
-          <button type="button" onClick={onOpenExternally}>
-            {t("viewerCrash.openExternally")}
-          </button>
+          {onOpenExternally && (
+            <button type="button" onClick={onOpenExternally}>
+              {t("viewerCrash.openExternally")}
+            </button>
+          )}
         </div>
       </div>
     </div>
