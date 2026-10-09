@@ -1076,3 +1076,75 @@ backend:stale` not run (no backend change; main agent at landing).
    the document is too large to show.
 8. The crash card itself has no in-app trigger left once 1–7 hold; it is
    covered by the unit tests only (the pill stays until the user sees it).
+
+## Agent step 6 — reviewer
+
+**Range reviewed:** `9391be71..88de8592` (code `f235b678`, handoff `88de8592`).
+
+**Findings:**
+1. **ODT budget bounded memory, not work — fixed (`739c2647`).** The
+   implementer's note that "the declared size is the real bound" holds for
+   the buffer only: fflate 0.8.3's `inflateSync` with an `out` buffer keeps
+   decoding the whole stream and drops the out-of-range writes. A part
+   declaring 1 KiB over a deflate bomb therefore decoded every byte of it;
+   measured 3.5 s of renderer main thread per 1 MiB of compressed bomb, so a
+   ~64 MiB part (it fits the `max(size, originalSize)` budget) would freeze the
+   window for minutes. `unzipOdt` now keeps pass 1 (fflate listing) and the
+   selection, then locates each chosen entry's data itself (`dataStarts`,
+   the same end-record / zip64 walk `unzipSync` makes) and inflates through
+   fflate's streaming `Inflate` in 64 KiB pieces; the first part whose real
+   output passes its declared size refuses the file (`odt.errTooLarge`).
+   Work is bounded by the budget plus one chunk's expansion (~66 MiB).
+   Stored parts are copied as before; images are still kept.
+2. YAML/JSON depth cap — no bug. Depth is `path` length (keys/indices from
+   the root), checked in `parseMap`, `parseSeq` and `parseFlowCollection`;
+   indentation columns, `- key:` items and same-indent sequences under a key
+   each add exactly one segment per real collection level, so k8s manifests,
+   workflows, OpenAPI specs and lockfiles stay far below 512. The editing
+   functions never re-enter the parser with a path offset, so surgical edits
+   are untouched; a file past the cap just falls back to Source.
+3. Error boundary — no bug. `resetKey` = viewer + effective path covers file,
+   viewer-kind and Local/Remote switches; popouts render through the same
+   `TabPane` → `FileViewerPane`. A same-path external fix needs Try again
+   (the crashed viewer is unmounted, so nothing polls) — acceptable. The card
+   is in-pane (not portaled), so it inherits the pane's colour, and copies
+   `RemotePaneHold`'s classes. Show source goes through `read_file_text`,
+   which the backend caps at 8 MiB and UTF-8, then shows ≤ 2 Mi chars.
+   Open externally calls the pane's existing `openExternally`
+   (`open_file`), the same callback every viewer header already offers for
+   the same file, behind a click — no new no-prompt launcher; files with no
+   viewer (gap 21) never reach `FileViewerPane`.
+4. GIF — no bug for valid files: exactly screen-sized frames, offset frames
+   (clipped as before) pass; a zero-size logical screen was already refused
+   before this change. A screen over the budget now throws instead of
+   ending with zero frames — both callers (`GifView`, deck `deckAssets`)
+   catch it.
+5. Markdown — the old split already held literal NULs (verified with
+   `cat -A` on `9391be71`); the `\u0000` spelling is byte-equivalent output.
+6. i18n: nine keys in all five dictionaries; `UntestedTag` id
+   `viewerCrash.title` matches its register row.
+
+**Tests added (`odtArchive.test.ts`):** a content.xml and a picture each
+declaring 1 KiB over 8 MiB of zeros are refused (both fail on `f235b678`,
+which returned a silently truncated part); content.xml plus a deflated and a
+stored incompressible picture spanning several 64 KiB pushes come out byte for
+byte.
+
+**Gates (at `739c2647`):** `npm run build` ok; `npm test` 738 files / 7580
+passed; `rtk proxy npm run lint` 0 errors, 28 advisory warnings (unchanged);
+`scripts/brand-check.sh` ok; `git diff --check` clean;
+`scripts/privacy-check.sh` (staged) clean. No Rust touched: cargo not run.
+`npm run backend:stale` not run (per instructions).
+
+**Flagged for user:**
+- GIF: a frame wider or taller than the logical screen is now refused
+  (per the plan's review note) where it used to draw clipped. Such files
+  break the GIF spec but exist; the first-frame case falls back to the native
+  `<img>` (which browsers render by growing the screen), a later frame ends
+  the animation as truncated. A looser bound (`w*h*4 ≤ maxPixelBytes`) would
+  keep them animated with the same memory bound, if wanted.
+- ODT: a part whose real size disagrees with its declared size now refuses
+  the whole document (a real archive never does that; previously it rendered
+  truncated or padded).
+- Viewers that never offered Open externally (`syncmerge`, `gitmerge`) get it
+  on the crash card, opening the pane's `path` with the OS handler on click.
