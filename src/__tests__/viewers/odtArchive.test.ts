@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { zipSync, strToU8 } from "fflate";
-import { unzipOdt, ODT_MAX_ENTRIES, ODT_MAX_INFLATED_BYTES } from "../../lib/viewers/odtArchive";
+import { unzipOdt, ODT_MAX_ENTRIES, ODT_MAX_INFLATED_BYTES, INFLATE_CHUNK } from "../../lib/viewers/odtArchive";
 import { extractOdt } from "../../lib/viewers/odt";
 
 const CONTENT = `<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"/>`;
@@ -74,6 +74,40 @@ describe("unzipOdt", () => {
     const entries = unzipOdt(zip);
     expect(Object.keys(entries).sort()).toEqual(["Pictures/ok.png", "content.xml"]);
   });
+
+  it("inflates parts spanning many stream chunks byte for byte, stored and deflated", () => {
+    // Pseudo-random bytes do not compress, so the deflated copy spans several
+    // INFLATE_CHUNK pushes.
+    const photo = new Uint8Array(5 * INFLATE_CHUNK + 123);
+    let x = 0x2545f491;
+    for (let i = 0; i < photo.length; i++) {
+      x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+      photo[i] = x & 0xff;
+    }
+    const body = CONTENT + "<!--" + "lorem ipsum ".repeat(50_000) + "-->";
+    const zip = zipSync({
+      "content.xml": strToU8(body),
+      "Pictures/deflated.png": photo,
+      "Pictures/stored.png": [photo, { level: 0 }],
+    });
+    const entries = unzipOdt(zip);
+    expect(new TextDecoder().decode(entries["content.xml"])).toBe(body);
+    expect(entries["Pictures/deflated.png"]).toEqual(photo);
+    expect(entries["Pictures/stored.png"]).toEqual(photo);
+  });
+
+  // The declared size bounds the buffer, not the work: fflate's inflateSync
+  // decodes the whole stream into a buffer that size and silently drops the
+  // rest, so a tiny declaration over a deflate bomb used to come back as a
+  // truncated part after decoding every byte of it.
+  for (const name of ["content.xml", "Pictures/bomb.png"]) {
+    it(`refuses ${name} once it inflates past its declared size`, () => {
+      const parts: Record<string, Uint8Array> = { "content.xml": strToU8(CONTENT) };
+      parts[name] = new Uint8Array(8 * 1024 * 1024); // zeros: a ~8 KiB stream
+      const zip = claimSize(zipSync(parts), name, 1024);
+      expect(() => unzipOdt(zip)).toThrow(/too large to show here/);
+    });
+  }
 
   it("refuses an archive listing more entries than any document has", () => {
     const files: Record<string, Uint8Array> = { "content.xml": strToU8(CONTENT) };
