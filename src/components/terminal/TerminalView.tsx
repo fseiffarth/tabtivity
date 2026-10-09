@@ -1628,6 +1628,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
           });
           if (cancelled) return;
           await spawn();
+          // Through: the silent-start notice speaks for this tab as for any
+          // other spawned one (it stayed "failed" — no notice — before).
+          spawnState = "spawned";
           ownsPty = true;
         } catch (retryErr) {
           if (!cancelled) writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
