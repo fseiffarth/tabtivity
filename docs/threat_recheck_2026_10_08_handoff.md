@@ -1799,3 +1799,76 @@ ok; `git diff --check` clean; `scripts/privacy-check.sh` (staged) clean.
   any message (unhandled promise), as before this range.
 - macOS/Windows branches of `rename_aside` remain unrun; CI on those
   platforms is the first real compile of the whole crate there.
+
+## Merge with develop (2026-10-09, merge `33120f2e`)
+
+`develop` at `e54adf3d` (25 commits, mostly the macOS/Windows completion run,
+osfix A1–A9) merged into the branch at `8b1e5238`; merge base `6c420e42`.
+
+**Conflicts:**
+- `agent_fence.rs` `sandbox_exec_inputs` (macOS): develop's
+  `seatbelt_git_guard(&mut inputs, …)` and `pinned` field kept, the branch's
+  `Result<(SeatbeltInputs, Vec<ControlPin>), String>` return kept
+  (`Ok((inputs, control_pins))`). Its one caller,
+  `wrap_pty_options_sandbox_exec`, still destructures the pair and runs
+  `verify_control_pins` last before the argv; develop's Seatbelt changes do
+  not touch that path.
+- `docs/context/git_push_mcp.md`: one paragraph — scope from
+  `PushBinding::fence_scope`, no scope → `fence_unavailable`, never the host
+  (gap 18), the one-shot boundary bubblewrap on Linux and develop's
+  `preflight.sb` Seatbelt profile on macOS, Windows `fence_unavailable`
+  ("push from the git bar"). Develop's "an unfenced tab's hook runs
+  unfenced" and Windows `preflight_failed` sentences are superseded by
+  gap 18 and dropped.
+- `docs/filemap_backend.md`: `home_io.rs` row is the branch's (superset);
+  `agent_turn.rs` row is develop's (process-table walk, macOS `pbi_comm` +
+  `KERN_PROCARGS2`); `agent_fence.rs` row is the branch's plus develop's
+  `one_shot_command` / Seatbelt git-guard sentence and "Linux only" on
+  `live_unfenced_by_scope`.
+- `docs/threat_model.md` Agent push row: develop's text plus the branch's
+  "built from the scope the push token recorded at spawn (no scope: refused,
+  never on the host — gap 18)"; develop's `seatbelt_git_guard` residual kept.
+  Also edited (no conflict): gap 18's residual no longer says macOS cannot
+  push a repo with a hook — macOS now runs it in the one-shot Seatbelt
+  profile in the recorded scope (not run on a Mac).
+
+**Semantic check (no further code change needed):**
+- Push preflight: develop changed only `agent_fence::one_shot_command`
+  (new macOS arm), never `git_push_mcp.rs`. The branch's `preflight_command`
+  calls `one_shot_command(scope, …)` only for `HookBoundary::Fence(scope)`,
+  so the merged result is fail-closed on every platform and uses the
+  Seatbelt one-shot on macOS when a scope is recorded. The macOS arm's
+  helpers (`cargo_credential_paths`, `settings`, `roots_for_scope`,
+  `sandbox::stage_dir`, `git_guard::guard_paths`) exist with the signatures
+  it uses; `guard_paths` now reads `commondir` / `.git` pointers through
+  `home_io::read_record` (gap 29), so the macOS one-shot inherits that.
+- `fenced_scope_of_tab` stays `#[cfg(test)]`; develop added no caller.
+- `agent_turn.rs`: develop's `ProcProbe` walk reads `/proc` (Linux) and
+  `sysstat` (macOS) — kernel process data, not agent-writable files; the
+  branch's `.turn` reads keep `home_io::read_record`. No new develop reader
+  of `.turn`/session/live records bypasses `read_record`/`open_regular`
+  (grep of every added `read_to_string`/`fs::read`/`File::open` in
+  develop's backend diff).
+- `agent_session.rs` (develop's `ps` fallback in the hook script vs the
+  branch's record readers), `terminal/mod.rs` (`cmd /D` vs spawn
+  generations), `agents.rs`, `ollama.rs`, `paths.rs`, `lib.rs`, `mod.rs`,
+  and the frontend overlaps (`FileTree.tsx`, `FileViewerPane.tsx`,
+  `tabs.ts`, i18n dicts, `untested.ts`) touch disjoint code.
+
+**Gates (at `33120f2e`):** `npm run build` ok; `npm test` 741 files / 7609
+passed; `cargo test -q` 3826 passed, 3 ignored, 0 failed (lib 3658), run
+after `npm test`; `rtk proxy npm run lint` 0 errors, 28 advisory warnings
+(unchanged); `cargo clippy --all-targets -D warnings` clean (Linux);
+`scripts/brand-check.sh` ok; `git diff --check` clean;
+`scripts/privacy-check.sh e54adf3d HEAD` clean (41 commits).
+`npm run backend:stale` not run (per instructions).
+
+**Flagged:**
+- macOS and Windows were not compiled: `cargo check --target
+  aarch64-apple-darwin` stops in `objc2-exception-helper`'s build script (no
+  Apple-capable C compiler here), `--target x86_64-pc-windows-msvc` in
+  `tauri-winres` (no `llvm-rc`) and `libsqlite3-sys` (no MSVC compiler). The
+  merged macOS fence code (`sandbox_exec_inputs`, `one_shot_command`) was
+  read-verified only; CI on those platforms is its first compile.
+- The macOS push preflight with a `pre-push` hook is now reachable for an
+  agent (scope recorded) and has never run on a Mac.
