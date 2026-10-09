@@ -1307,3 +1307,88 @@ backend:stale` not run (per instructions).
    a LuaLaTeX document whose `\directlua` does
    `io.open("/tmp/tt-escape.txt","w")`: no `/tmp/tt-escape.txt` appears; the
    PDF builds.
+
+## Agent step 7 — reviewer
+
+**Range:** `a783c001..c949f046` (code `f3260ec6`). **Fix:** `3854356d` (docs and
+a test comment only).
+
+**Findings:**
+1. **Doc overstated the preview's read confinement — fixed (`3854356d`).**
+   `openin_any=p` checks the *name* a preamble asks for, not where it lands:
+   a symlink inside the document folder (`link -> /elsewhere`, which a cloned
+   repo can carry) is still followed. On TeX Live 2025, with `openin_any=p`,
+   `\input{link/s}` read a file outside the folder. `threat_model.md` row 36
+   and the Tier-2 hover-preview row now say "by name" and list it as a
+   residual (pdfLaTeX/XeLaTeX only; writes stay confined, and LuaTeX never
+   runs on a hover). No code change: refusing symlinks is a design call (see
+   Flagged). The test doc comment that still said the wrapper goes by absolute
+   path is corrected. Docs only, so there is no regression test.
+2. **Build under `openout_any=p` — no regression found.** TeX Live's own
+   `texmf.cnf` default is already `p` (Debian TL 2025 here: `openout_any = p`,
+   `openin_any = a`), so a Build changes only for someone who overrode it to
+   `a`. The engine checks the relative name before it prepends
+   `-output-directory`, so a project or output dir under a dotted path is
+   fine. Measured with `openout_any=p`, the project in `.proj/` and latexmk
+   4.87:
+   `-outdir=<abs>/.proj/.build` with bibtex and makeindex, and
+   `-outdir=../rel-build` with `\include{sub/ch}` (latexmk makes the subdir
+   and reruns), both built every artefact.
+3. **Dotted state dir for previews — verified OK.** A wrapper named by
+   absolute path is refused under a dot dir. Named by file name, it works,
+   even with the doc folder itself dotted. A format dumped under `openin_any=p`
+   and loaded with `-fmt=<abs dotted path>` typesets. So does XeLaTeX with
+   `fontspec` and `unicode-math` in a dotted dir.
+4. **Preview engine fallback** only picks from installed, non-Lua engines.
+   An `Err` (Lua preamble) is cached by `renderTexPreview` like any failure
+   and is shown on the card. No bug.
+5. **rsync flags on old/foreign rsync — verified from source, no bug.**
+   rsync 2.6.9 `options.c` has `no-links`, `no-devices`, `no-specials`,
+   `max-size`, `from0` and `files-from`, and `--files-from` there sets
+   `xfer_dirs=1` (implied `--dirs`) and cancels `-a`'s recursion. Apple's
+   openrsync (`apple-oss-distributions/rsync`, `openrsync/main.c`) has every
+   flag used. An unknown option would exit non-zero (`ERR_SYNTAX`), and
+   `rsync_pull_dir` → `try_rsync_pull` would fall back to SFTP. So the
+   implementer's "unknown flag on macOS" caveat does not arise.
+6. **Manifest / local_loss — no bug.** An over-cap or non-regular file is
+   never recorded. A stale earlier entry is left as it was, which matches the
+   SFTP floor. Deletion propagation keys on "in manifest, missing locally",
+   and nothing here removes a local file, so a skipped file cannot turn into
+   a pushed deletion.
+7. **Inbox doc row** matches `host.rs` `global_inbox_upload` and
+   `inbox.rs`: `authenticate` plus `exact_origin` and no catalog lookup, 24
+   MiB per file, 1 GiB in total, `<stamp>-<safe name>`, `create_file`
+   (create_new), `<state_dir>/inbox`.
+8. **Tests** skip cleanly without TeX or rsync. CI installs no TeX, so the
+   engine tests run only locally.
+
+**Gates (at `3854356d`):** `npm run build` ok; `npm test` 738 files / 7580
+passed; `cargo test -q` 3789 passed, 3 ignored, 0 failed (lib 3621); `rtk
+proxy npm run lint` 0 errors, 28 advisory warnings (unchanged); `cargo clippy
+--all-targets -D warnings` clean; `scripts/brand-check.sh` ok; `git diff
+--check` clean; `scripts/privacy-check.sh` (staged) clean. `npm run
+backend:stale` not run (per instructions).
+
+**Flagged for user:**
+- **Preview reads through in-folder symlinks** (finding 1). Could be closed
+  by refusing a preview whose preamble's `\input`/`\usepackage` targets
+  resolve outside the folder, or by running previews in a fence. The
+  read lands only in the local hover card (pdfLaTeX/XeLaTeX have no network
+  or command channel there), so it is left as a documented residual.
+- **Multi-file previews degrade to the body-only fallback:**
+  `\documentclass[../main.tex]{subfiles}` (when the chapter is its own root)
+  and `\input{../preamble}` are now refused under `openin_any=p`, so such a
+  hover renders without the macros and with the fallback note. This is the
+  plan's choice; say so if it should widen to the project root instead.
+- **A Lua-only preamble gets no preview at all.** It could instead render
+  the body-only fallback document under pdfLaTeX, as other failed preambles
+  do. That is a UX choice, not a bug.
+- **Files over 64 MiB in a pulled folder are skipped silently.** Before,
+  they arrived on the rsync path. The SFTP floor already behaved this way:
+  only `eprintln!("sync_pull: skip …")`, and the pull still counts them as
+  done. The row stays "host only", but there is no toast. Research datasets
+  hit this.
+- **macOS CI** now runs the real-rsync test with Apple's rsync/openrsync.
+  The flags are supported (finding 5), but the exact exit code for a vanished
+  listed path (asserted `0 | 23`) is not checked on openrsync. Watch the
+  first macOS run.
