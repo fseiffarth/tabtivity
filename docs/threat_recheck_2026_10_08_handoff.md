@@ -950,3 +950,129 @@ not compiled.
 - The child has no `PR_SET_PDEATHSIG`. If the app is killed rather than quit,
   a running reader lives until its 30 s CPU limit or until its next stdout
   write fails. A clean quit kills it.
+
+## Agent step 6 — implementer (gaps 28, 40, 41, ODT #869)
+
+**Commit:** `f235b678` Bound viewer parsers and catch viewer render errors in
+their pane.
+
+**Files:** `src/lib/viewers/yaml.ts` (`MAX_YAML_DEPTH` = 512,
+`Parser.checkDepth` at the top of `parseMap`, `parseSeq` and
+`parseFlowCollection`, throwing the existing `Bail` with `yamlParse.tooDeep`);
+new `src/components/embed/ViewerErrorBoundary.tsx` (boundary, crash card,
+read-only source view); `FileViewerPane.tsx` (boundary around
+`<Suspense>{view}</Suspense>`, `TEXT_SOURCE_VIEWERS`); `src/lib/viewers/gif.ts`
+(screen check before the canvas, frame-larger-than-screen check before
+`lzwDecode`); new `src/lib/viewers/odtArchive.ts` (`unzipOdt`), `OdtView.tsx`
+uses it, `odt.ts` header; `src/lib/viewers/markdown.ts` (`attrText` split
+spelled with `\u0000` escapes; the file now holds no NUL bytes);
+`src/styles/viewers.css` (`.viewer-crash-source`); nine new i18n keys in all
+five dictionaries (`yamlParse.tooDeep`, `odt.errTooLarge`, `viewerCrash.*`);
+`src/lib/untested.ts` row `viewerCrash.title`. Docs: `threat_model.md` rows
+28, 40, 41 (**Fixed, not live-verified.**), the ODT tier-2 row (#869 residual
+fixed, status ✅) and the Code/YAML row; `filemap_frontend.md`
+(`FileViewerPane`, new `ViewerErrorBoundary`, `yaml.ts`, `gif.ts`, new
+`odtArchive.ts`).
+
+**Tests added:** `src/__tests__/viewers/ViewerBounds.test.tsx` — deep flow
+(`[`×100 000, and 50 000-deep strict JSON) and deep block (`- `×50 000, and
+518 indented `k:` maps) each give `yamlParse.tooDeep` with `{max: "512"}` and
+no throw; exactly 512 nested levels still parse; a deep `.json` and a deep
+`.yaml` rendered through `FileViewerPane` show the tree's notice, not the
+crash card; the boundary shows its card for a throwing child, stays on it for
+the same key, recovers on Try again and on a new `resetKey`; Show source reads
+the file through `read_file_text` into a `<pre>`; two panes side by side — the
+ODT pane (mocked viewer throwing a `RangeError`) shows the card while the YAML
+pane keeps its unsaved edit and still saves it, and the ODT pane recovers on
+the next file. `Gif.test.ts` — a <64-byte GIF claiming 65535×65535 throws
+`GifDecodeError` "screen too large" (not a RangeError, so before allocation),
+the caller's cap is honoured; a frame claiming 65535×65535 on a 2×2 screen is
+refused, after one good frame it ends the stream as truncated.
+`odtArchive.test.ts` — only `content.xml` and `Pictures/` come out; a
+`content.xml` declaring 2 GiB is refused; an extra part declaring ~4 GiB is
+never inflated and the document opens; an over-budget picture listed before
+`content.xml` is skipped without spending the body's budget; 10 001 entries are
+refused. `Markdown.test.ts` — for inline, local and remote images, no
+`md-math`, `<code>` or NUL reaches the output and `alt` is the spans' text.
+
+**Gates (at `f235b678`):** `npm run build` ok; `npm test` 738 files / 7577
+passed; `cargo test -q` 3783 passed, 3 ignored, 0 failed (lib 3615); `rtk
+proxy npm run lint` 0 errors, 28 advisory warnings (unchanged); `cargo clippy
+--all-targets -D warnings` clean; `scripts/brand-check.sh` ok; `git diff
+--check` clean; `scripts/privacy-check.sh` (staged) clean. `npm run
+backend:stale` not run (no backend change; main agent at landing).
+
+**Choices made:**
+- Depth is the node's `path` length: every parser recursion (block map, block
+  seq, `- - x`, `- key:`, bare `-`, same-indent seq, flow) adds one path
+  segment per level, so one check in the three collection entry points bounds
+  them all, and the O(depth²) `path` copies with them.
+- The boundary resets on a `resetKey` prop (`viewer` + NUL + `effectivePath`),
+  compared in `getDerivedStateFromProps`, not a React `key`: a key would
+  remount every healthy viewer (and drop its in-memory state) on each
+  Local/Remote flip. It wraps only the viewer (`Suspense` inside it), not the
+  presentation overlay.
+- It catches only render/lifecycle errors; save, autosave and reload errors
+  live in promises and handlers and never reached a boundary. On a catch React
+  unmounts the viewer subtree, so `DraftSaver.dispose` flushes the crashed
+  pane's draft when autosave is on — the same path as closing the tab.
+- "Show source" is a read-only `<pre>` of `read_file_text` (first 2 Mi chars),
+  not the code editor: nothing parses it, and it cannot write the persisted tab
+  state. Offered for text viewers only (`text`, `markdown`, `tex`,
+  `texworkspace`, `html`, `yaml`, `bib`, `eldeck`, `notebook`); binary viewers
+  and the diff/merge views (whose `path` means something else) get Try again
+  and Open externally only. Card shaped like `RemotePaneHold`
+  (`center-placeholder` + `btn-primary`).
+- **ODT deviates from the review note's "three XML parts":** `extractOdt`
+  reads only `content.xml` (plus `Pictures/` for inline images); `styles.xml`
+  and `meta.xml` are never read, so they are not inflated, and images are kept
+  — the note's set would have dropped every inline picture. One 64 MiB budget
+  from declared sizes (`max(size, originalSize)`), body first; images past it
+  are skipped, not refused. Two passes over the central directory (list, then
+  inflate by position), so a duplicated name cannot get a second copy past the
+  budget. fflate 0.8.3 inflates into a buffer of exactly the declared size and
+  never grows it (`inflt` with `st.i == 2`), so the declared size is the real
+  bound.
+- GIF: the frame check refuses only a frame wider or taller than the screen
+  (that is what makes `lzwDecode`'s buffer exceed the screen budget); an offset
+  that pushes a screen-sized frame past an edge still draws clipped, as before.
+  A refused GIF takes the existing decode-error path (native `<img>` fallback).
+
+**Gotchas:**
+- Gap 40 was already fixed: `attrText`'s split held literal NUL bytes
+  (`/(\0[CML]\d+\0)/`), which most tools print as spaces — so it read like the
+  old ` L0 ` markers. The existing test "resolves code and math in an image alt
+  to their text" already passed. The change is the escape spelling plus the
+  broader regression test; row 40 says so.
+- React 18 in development re-dispatches a caught render error to `window`,
+  and jsdom prints it with a stack; the new test file mutes it with a
+  `preventDefault` on `window` `error` plus a `console.error` spy.
+
+**Flagged for user:**
+- Row 40 was a false positive (see Gotchas); marked fixed with that
+  explanation rather than left open.
+- ODT keeps inline images (budget-limited) instead of the review note's
+  three-XML-parts list; a document whose pictures pass 64 MiB in total shows
+  the later ones as missing.
+- A crashed pane's unsaved draft survives only with autosave on (the default);
+  with autosave off it is lost with that pane, but no longer the window's.
+- New UI with an `UntestedTag`: `viewerCrash.title`.
+
+**Live click-through (not run):**
+1. In a project, create `deep.json` holding 5000 `[` then 5000 `]`, open it:
+   the Tree view says it can't read the file, nesting deeper than 512 levels;
+   Source shows the text; the window stays up.
+2. Create `deep.yaml` holding `- ` repeated 5000 times then `x`, open it: same
+   notice.
+3. With an unsaved edit in another tab (autosave off in Settings to see it
+   stay dirty), repeat 1: the other tab keeps its edit.
+4. Open a normal `.yaml`/`.json`: tree as before.
+5. Craft `big.gif` (header `GIF89a`, screen `ff ff ff ff`, a 1×1 frame) and
+   open it: the GIF viewer shows its decode-failed note with the native image
+   fallback; memory does not jump (watch with a system monitor).
+6. Open a normal animated GIF: transport works as before.
+7. Open a normal `.odt` with pictures: text and pictures render. Patch a copy's
+   central-directory size of `content.xml` to `ff ff ff 7f`: the viewer says
+   the document is too large to show.
+8. The crash card itself has no in-app trigger left once 1–7 hold; it is
+   covered by the unit tests only (the pill stays until the user sees it).
