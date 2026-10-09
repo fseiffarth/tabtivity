@@ -309,6 +309,28 @@ describe("TerminalView — sleeping terminal panes (§5.3)", () => {
     expect(holds).toEqual([true, false]);
   });
 
+  it("a launch that failed keeps holding the pane awake, so no wake re-spawns it", async () => {
+    // A failed-spawn pane that slept woke into a fresh spawn — an HPC refusal
+    // asked again — and the error it showed was gone.
+    invoke.mockImplementation((cmd: unknown) =>
+      cmd === "pty_spawn" ? Promise.reject(new Error("no such program")) : Promise.resolve(undefined),
+    );
+    const holds: boolean[] = [];
+    let unmount = () => {};
+    await act(async () => {
+      unmount = render(
+        <PaneSleepHoldContext.Provider value={(_t, on) => holds.push(on)}>{agentPane()}</PaneSleepHoldContext.Provider>,
+      ).unmount;
+    });
+    expect(calls("pty_spawn")).toHaveLength(1);
+    expect(holds).toEqual([true]);
+    // Closing the tab (or a relaunch's new lifecycle) still lifts it.
+    await act(async () => {
+      unmount();
+    });
+    expect(holds).toEqual([true, false]);
+  });
+
   it("a waking pane takes no launch hold (nothing is spawned)", async () => {
     await mountAndSleep();
     const holds: boolean[] = [];

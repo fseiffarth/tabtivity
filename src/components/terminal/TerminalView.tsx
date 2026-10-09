@@ -1655,10 +1655,18 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       spawnHeld = on;
       sleepHoldRef.current?.(spawnHoldToken, on);
     };
+    //
+    // A launch that ended without a PTY (a spawn error, a declined HPC or
+    // unfenced-platform question) keeps the hold: a woken pane would spawn
+    // again on its own — and ask again — and the error printed here would be
+    // gone. The pane stays loaded with its error until the user relaunches
+    // the tab (a new lifecycle) or closes it; the cleanup lifts the hold.
     queueMicrotask(() => {
       if (cancelled) return;
       if (!attachOnly && !waking) holdForSpawn(true);
-      void setupAndSpawn().finally(() => holdForSpawn(false));
+      void setupAndSpawn().finally(() => {
+        if (ownsPty || cancelled) holdForSpawn(false);
+      });
     });
 
     // A launch that never completes leaves the pane blank with nothing to say
