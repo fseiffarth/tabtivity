@@ -389,6 +389,58 @@ impl HomeFile {
         self.write_as(bytes, 0o644, keep)
     }
 
+    /// Replace the file's content **keeping its inode**, for a file that is
+    /// bind-mounted read-only into running fences and pinned by inode for a
+    /// spawn that is starting (`agent_fence::verify_control_pins`): a rename
+    /// over it would detach those mounts and refuse that spawn. The existing
+    /// name is opened `O_WRONLY | O_NOFOLLOW | O_NONBLOCK` relative to the
+    /// handle and written only when the opened inode is a regular file with
+    /// one link (a hard link planted there is never written through); then
+    /// the bytes go in at offset 0 and the length is cut to them. A missing
+    /// name is created `O_EXCL` (`0600`), so two writers racing to create it
+    /// end up writing the same inode. A link, FIFO, socket or hard-linked file
+    /// at the name falls back to [`HomeFile::write`], which replaces it.
+    pub fn write_in_place(&self, bytes: &[u8]) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::io::{Seek, Write};
+            let flags = libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+            for _ in 0..4 {
+                let file = match self.open_at(&self.name, flags, 0) {
+                    Ok(file) => file,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        match self.open_at(&self.name, flags | libc::O_CREAT | libc::O_EXCL, 0o600) {
+                            Ok(file) => file,
+                            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    // `ELOOP` for a link, `ENXIO` for a FIFO with no reader,
+                    // `EISDIR`, … — not a plain file to keep.
+                    Err(_) => return self.write(bytes),
+                };
+                let meta = file.metadata()?;
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if !meta.is_file() || meta.nlink() != 1 {
+                        drop(file);
+                        return self.write(bytes);
+                    }
+                }
+                let mut file = file;
+                file.seek(io::SeekFrom::Start(0))?;
+                file.write_all(bytes)?;
+                file.set_len(bytes.len() as u64)?;
+                return file.flush();
+            }
+            Err(io::Error::new(io::ErrorKind::AlreadyExists, "the file kept appearing and vanishing"))
+        }
+        #[cfg(not(unix))]
+        {
+            self.write(bytes)
+        }
+    }
+
     /// The temporary is created with `create_mode` (less the umask), then
     /// set to exactly `keep` on its descriptor before it is renamed in.
     #[cfg_attr(not(unix), allow(unused_variables))]
@@ -854,5 +906,44 @@ mod tests {
         let link = HomeFile::open(&home, ".claude/link").unwrap();
         assert!(link.set_exec_bits(0o111).is_err());
         assert_eq!(std::fs::metadata(&victim).unwrap().permissions().mode() & 0o777, 0o644);
+    }
+
+    /// `write_in_place` keeps the inode of a plain file (shorter and longer
+    /// content alike), creates a missing one, and never writes through a
+    /// link, a hard link or a FIFO: those are replaced.
+    #[cfg(unix)]
+    #[test]
+    fn an_in_place_write_keeps_the_inode_and_replaces_what_is_not_plain() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let ino = |name: &str| std::fs::symlink_metadata(home.join(name)).unwrap().ino();
+        let file = HomeFile::open(&home, "hooks.toml").unwrap();
+        file.write_in_place(b"a long first version\n").unwrap();
+        let first = ino("hooks.toml");
+        file.write_in_place(b"short\n").unwrap();
+        assert_eq!(std::fs::read(home.join("hooks.toml")).unwrap(), b"short\n");
+        file.write_in_place(b"a longer second version\n").unwrap();
+        assert_eq!(std::fs::read(home.join("hooks.toml")).unwrap(), b"a longer second version\n");
+        assert_eq!(ino("hooks.toml"), first);
+        assert_eq!(file.metadata().unwrap().mode & 0o777, 0o600);
+
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        let linked = HomeFile::open(&home, "linked").unwrap();
+        std::os::unix::fs::symlink(&victim, home.join("linked")).unwrap();
+        linked.write_in_place(b"new").unwrap();
+        assert!(linked.is_file());
+        std::fs::remove_file(home.join("linked")).unwrap();
+        std::fs::hard_link(&victim, home.join("linked")).unwrap();
+        linked.write_in_place(b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        assert_eq!(linked.read().unwrap(), b"new");
+
+        mkfifo(&home.join("fifo"));
+        let at = home.clone();
+        within_deadline(move || HomeFile::open(&at, "fifo").unwrap().write_in_place(b"x").unwrap());
+        assert!(std::fs::symlink_metadata(home.join("fifo")).unwrap().is_file());
     }
 }

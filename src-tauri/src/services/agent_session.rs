@@ -1813,7 +1813,12 @@ fn write_vibe_hooks(file: &HomeFile, app_owned: bool) -> std::io::Result<()> {
     if app_owned {
         let fresh = vibe_hook_block()?;
         if file.read().as_deref() != Some(fresh.as_bytes()) {
-            file.write(fresh.as_bytes())?;
+            // In place: the file is bind-mounted read-only into the model's
+            // running tabs and pinned by inode for one that is starting
+            // (`agent_fence::verify_control_pins`). A rename over it would
+            // detach those mounts and refuse a second tab of the model that
+            // started at the same time.
+            file.write_in_place(fresh.as_bytes())?;
         }
         return Ok(());
     }
@@ -2567,6 +2572,35 @@ mod tests {
         write_vibe_hooks(&file, true).unwrap();
         assert_eq!(std::fs::read_to_string(&hooks).unwrap(), once);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// Two tabs of one local model starting together: the second spawn's
+    /// rewrite of a stale `hooks.toml` lands between the first spawn's pin and
+    /// its verify. The rewrite keeps the inode, so the first spawn is not
+    /// refused (and running tabs keep their read-only bind).
+    #[cfg(unix)]
+    #[test]
+    fn a_hooks_rewrite_between_pin_and_verify_keeps_the_pin_valid() {
+        let state = tempfile::tempdir().unwrap();
+        let home = state.path().join("vibe_local/gemma4-e4b");
+        std::fs::create_dir_all(&home).unwrap();
+        let hooks = home.join("hooks.toml");
+        let file = HomeFile::open(&home, "hooks.toml").unwrap();
+        // First tab ever: the first spawn creates the file and pins it.
+        write_vibe_hooks(&file, true).unwrap();
+        let pins = crate::services::agent_fence::local_model_control_paths(&home).unwrap();
+        // The second spawn read stale content (an update changed the block,
+        // or it raced the creation) and rewrites the file.
+        std::fs::OpenOptions::new().write(true).truncate(true).open(&hooks).unwrap();
+        write_vibe_hooks(&file, true).unwrap();
+        crate::services::agent_fence::verify_control_pins(&pins).unwrap();
+        let fresh = std::fs::read_to_string(&hooks).unwrap();
+        assert_eq!(fresh, vibe_hook_block().unwrap());
+        // Stale content under the pins: rewritten, still the pinned inode.
+        std::fs::write(&hooks, "[[hooks]]\nname = \"planted\"\ntype = \"post_agent\"\ncommand = \"true\"\n").unwrap();
+        write_vibe_hooks(&file, true).unwrap();
+        crate::services::agent_fence::verify_control_pins(&pins).unwrap();
+        assert_eq!(std::fs::read_to_string(&hooks).unwrap(), fresh);
     }
 
     #[test]

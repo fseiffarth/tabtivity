@@ -158,6 +158,8 @@ fn run_reader(mut cmd: Command, wall: Duration) -> Result<SheetData, String> {
     }
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     crate::paths::hide_command_window(&mut cmd);
+    #[cfg(target_os = "linux")]
+    die_with_parent(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("spreadsheet reader: cannot start: {e}"))?;
@@ -193,6 +195,34 @@ fn run_reader(mut cmd: Command, wall: Duration) -> Result<SheetData, String> {
         Ok(Drained::Overflow) => Err(ERR_TOO_LARGE.to_string()),
         Ok(Drained::Bytes(bytes)) if status.success() => parse_reply(&bytes),
         _ => Err(ERR_CRASHED.to_string()),
+    }
+}
+
+/// Linux: the reader gets `SIGKILL` when the app dies. A clean quit already
+/// kills it ([`kill_all_for_exit`]); an app that is killed instead would leave
+/// it running to its CPU limit. The death signal is armed in the child between
+/// fork and exec, and the parent is checked right after, so an app that died
+/// in between is caught too (the child was reparented by then).
+///
+/// The kernel sends the signal when the *thread* that spawned the child ends,
+/// not the process: [`run_reader`] waits for the child on the spawning thread,
+/// so that thread outlives it.
+#[cfg(target_os = "linux")]
+fn die_with_parent(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    let parent = std::process::id() as libc::pid_t;
+    // SAFETY: the closure runs between fork and exec and makes only
+    // async-signal-safe syscalls; it allocates nothing.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            Ok(())
+        });
     }
 }
 
@@ -391,14 +421,11 @@ fn read_xlsx(path: &Path, sheet: Option<&str>) -> Result<SheetData, String> {
     let mut grid = Grid::default();
     match workbook.worksheet_cells_reader(&active_sheet) {
         Ok(mut reader) => {
-            // What the sheet declares is checked before a cell is read: Excel
-            // writes the used range here, so a declared area past the cap is a
-            // sheet past the cap.
-            let declared = reader.dimensions();
-            check_area(
-                span(declared.start.0, declared.end.0),
-                span(declared.start.1, declared.end.1),
-            )?;
+            // The sheet's declared `<dimension>` is not checked: Excel counts
+            // formatted blank cells in it, so a lightly filled sheet with wide
+            // formatting would be refused. The caps in `Grid` bound what is
+            // actually read, and `Grid::finish` checks the real cells' area
+            // before laying anything out.
             while let Some(cell) = reader
                 .next_cell()
                 .map_err(|e| sheet_err(&active_sheet, e))?
@@ -582,6 +609,36 @@ mod tests {
         std::process::exit(child_main(&args));
     }
 
+    /// The death signal is armed: the child is killed once the thread that
+    /// started it is gone (the kernel's notion of the parent), here a thread
+    /// that ends right after the spawn.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_reader_child_dies_with_its_parent() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut child = std::thread::spawn(|| {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("30");
+            die_with_parent(&mut cmd);
+            cmd.spawn().unwrap()
+        })
+        .join()
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(status.and_then(|s| s.signal()), Some(libc::SIGKILL));
+    }
+
     /// The test binary itself, run as the reader child on `path`.
     fn test_child(path: &Path) -> Command {
         let mut cmd = Command::new(std::env::current_exe().unwrap());
@@ -662,18 +719,16 @@ mod tests {
     }
 
     #[test]
-    fn a_sparse_a1_xfd1048576_sheet_is_refused_without_allocating() {
+    fn a_sparse_a1_xfd1048576_sheet_never_allocates_its_box() {
         // The 2026-10-08 bomb: two cells whose bounding box is ~1.7·10¹⁰ cells.
         // Read in-process on purpose — if anything built that box, this test
-        // process would abort.
+        // process would abort. The far cell is past the row cap and dropped;
+        // what is left is one cell, not a box, whatever the sheet declares.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bomb.xlsx");
         let rows = [row(1, &[num("A1", 1)]), row(1_048_576, &[num("XFD1048576", 2)])].concat();
         write_xlsx(&path, Some("A1:XFD1048576"), &rows);
-        assert_eq!(read_workbook(&path, None).unwrap_err(), ERR_TOO_LARGE);
-
-        // Without the declared dimension the far cell is past the row cap and
-        // dropped; what is left is one cell, not a box.
+        assert_eq!(read_workbook(&path, None).unwrap().rows, vec![vec!["1"]]);
         write_xlsx(&path, None, &rows);
         assert_eq!(read_workbook(&path, None).unwrap().rows, vec![vec!["1"]]);
 
@@ -682,6 +737,17 @@ mod tests {
         let wide = [row(1, &[num("A1", 1)]), row(20_000, &[num("XFD20000", 2)])].concat();
         write_xlsx(&path, Some("A1"), &wide);
         assert_eq!(read_workbook(&path, None).unwrap_err(), ERR_TOO_LARGE);
+    }
+
+    /// Excel's declared range counts formatted blank cells: a sheet declaring
+    /// far more than the cell cap but holding a few cells opens.
+    #[test]
+    fn a_huge_declared_dimension_with_few_cells_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("formatted.xlsx");
+        let rows = [row(1, &[num("A1", 1)]), row(2, &[num("B2", 2)])].concat();
+        write_xlsx(&path, Some("A1:ZZ50000"), &rows);
+        assert_eq!(read_workbook(&path, None).unwrap().rows, vec![vec!["1", ""], vec!["", "2"]]);
     }
 
     #[test]

@@ -821,9 +821,10 @@ pub(crate) fn local_model_mounts(home: Option<&Path>) -> Result<(Vec<BindMount>,
     let Some(home) = home else {
         return Ok((Vec::new(), Vec::new()));
     };
-    // Tabtivity's hook alone, whatever an earlier tab left in the file. First:
-    // the write replaces `hooks.toml`'s inode, and the pins below record the
-    // inode that is mounted.
+    // Tabtivity's hook alone, whatever an earlier tab left in the file. First,
+    // so a missing file exists before it is pinned; a rewrite goes in place
+    // (same inode), so another spawn of the model rewriting it after these
+    // pins does not refuse this one, and running tabs keep their bind.
     if let Err(e) = crate::services::agent_session::register_vibe_hook_in(home) {
         eprintln!("agent_fence: reset local vibe hooks: {e}");
     }

@@ -621,42 +621,57 @@ fn preview_env(scratch: &Path) -> Vec<(String, String)> {
     ]
 }
 
+/// How a hover preview runs: the engine, and whether the document's preamble
+/// takes part.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PreviewPlan {
+    /// The snippet under the document's preamble.
+    Preamble(String),
+    /// The preamble needs LuaTeX: the body alone in the fallback document
+    /// ({@link fallback_preview_document}), the preamble never run.
+    BodyOnly(String),
+}
+
 /// The engine a hover preview runs, or why there is none. Never LuaTeX (gap
 /// 36): hovering a formula must not hand a document's preamble Lua's `io`
 /// library — LuaTeX keeps reads open whatever `openin_any` says, and an
 /// unpatched TeX Live < 2023 runs commands from Lua (CVE-2023-32700). A
 /// preamble that asks for LuaTeX (a magic comment, `luacode`, `\directlua`, …)
-/// gets no preview, like any preview that fails; otherwise an explicit engine
-/// choice of LuaLaTeX, or a fontspec preamble that would pick it, falls to
-/// XeLaTeX where installed, else to the first other engine. A Build still runs
-/// the engine the document asks for. `hint` is asked only when the requested
-/// engine cannot serve, so a hover reads the preamble's files no more often
-/// than before.
+/// previews the body alone under pdfLaTeX (else another non-Lua engine), as a
+/// preamble that fails does; otherwise an explicit engine choice of LuaLaTeX,
+/// or a fontspec preamble that would pick it, falls to XeLaTeX where
+/// installed, else to the first other engine. A Build still runs the engine
+/// the document asks for. `hint` is asked only when the requested engine
+/// cannot serve, so a hover reads the preamble's files no more often than
+/// before.
 fn preview_engine(
     requested: Option<String>,
     hint: impl FnOnce() -> Option<EngineHint>,
     installed: &[String],
-) -> Result<String, String> {
+) -> Result<PreviewPlan, String> {
     let usable: Vec<String> = installed.iter().filter(|e| *e != "lualatex").cloned().collect();
     if let Some(e) = requested.filter(|e| usable.contains(e)) {
-        return Ok(e);
+        return Ok(PreviewPlan::Preamble(e));
     }
+    let none_usable = || {
+        if installed.is_empty() {
+            "no TeX engine found on PATH".to_string()
+        } else {
+            PREVIEW_NO_LUATEX.to_string()
+        }
+    };
     let hint = hint();
     if matches!(hint, Some(EngineHint::Lua) | Some(EngineHint::Named("lualatex"))) {
-        return Err(PREVIEW_NO_LUATEX.to_string());
+        let body_engine = usable.iter().find(|e| *e == "pdflatex").or_else(|| usable.first());
+        return body_engine.cloned().map(PreviewPlan::BodyOnly).ok_or_else(none_usable);
     }
     engine_for_hint(hint, &usable)
         .or_else(|| usable.first().cloned())
-        .ok_or_else(|| {
-            if installed.is_empty() {
-                "no TeX engine found on PATH".to_string()
-            } else {
-                PREVIEW_NO_LUATEX.to_string()
-            }
-        })
+        .map(PreviewPlan::Preamble)
+        .ok_or_else(none_usable)
 }
 
-/// What a hover says when the preamble needs LuaTeX ({@link preview_engine}).
+/// What a hover says when only LuaLaTeX is installed ({@link preview_engine}).
 const PREVIEW_NO_LUATEX: &str = "no hover preview for a LuaLaTeX preamble";
 
 /// How a preview names its wrapper `.tex` (which lives in the scratch dir) on
@@ -1929,7 +1944,10 @@ fn preview_snippet_blocking(
     // latexmk alone cannot serve this path: the preview runs the engine itself.
     // No engine chosen: the one the preamble asks for, as a build would pick —
     // except LuaTeX, which a hover never runs ({@link preview_engine}).
-    let eng = preview_engine(engine, || detect_engine_hint(&preamble, &cwd), &cap.engines)?;
+    let (eng, body_only) = match preview_engine(engine, || detect_engine_hint(&preamble, &cwd), &cap.engines)? {
+        PreviewPlan::Preamble(eng) => (eng, false),
+        PreviewPlan::BodyOnly(eng) => (eng, true),
+    };
 
     let scratch = make_preview_scratch()?;
     let stem = concat!(crate::app_slug!(), "-preview");
@@ -1954,6 +1972,23 @@ fn preview_snippet_blocking(
         let out = run_in_within_env(&cwd, &eng, &args, PREVIEW_TIMEOUT, &preview_env(&scratch))?;
         Ok(out.text)
     };
+
+    if body_only {
+        // A LuaLaTeX preamble: straight to the body-only document, no format
+        // dump and no run of the preamble under an engine it was not made for.
+        let result = run(&fallback_preview_document(&body), None);
+        let pdf_b64 = fs::read(&pdf)
+            .ok()
+            .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes));
+        let _ = fs::remove_dir_all(&scratch);
+        let log = result?;
+        return Ok(TexPreviewResult {
+            success: pdf_b64.is_some(),
+            log: tail(&log),
+            fallback: pdf_b64.is_some(),
+            pdf_b64,
+        });
+    }
 
     let wrapper = preview_document(&preamble, &body);
     let fmt = ensure_preview_fmt(&cwd, &eng, &wrapper, &scratch, &tex, &out_arg);
@@ -2907,33 +2942,40 @@ Count:2
         let all: Vec<String> = ENGINES.iter().map(|e| e.to_string()).collect();
         let only = |names: &[&str]| -> Vec<String> { names.iter().map(|e| e.to_string()).collect() };
         let never = || -> Option<EngineHint> { panic!("hint read although the request serves") };
+        let pre = |e: &str| Ok(PreviewPlan::Preamble(e.to_string()));
+        let body = |e: &str| Ok(PreviewPlan::BodyOnly(e.to_string()));
         // An explicit non-Lua engine is used as is, without reading the preamble.
-        assert_eq!(preview_engine(Some("xelatex".into()), never, &all).as_deref(), Ok("xelatex"));
-        assert_eq!(preview_engine(Some("pdflatex".into()), never, &all).as_deref(), Ok("pdflatex"));
-        // A preamble that asks for LuaTeX gets no preview, whatever was requested.
+        assert_eq!(preview_engine(Some("xelatex".into()), never, &all), pre("xelatex"));
+        assert_eq!(preview_engine(Some("pdflatex".into()), never, &all), pre("pdflatex"));
+        // A preamble that asks for LuaTeX previews the body alone under
+        // pdfLaTeX, whatever was requested; without pdfLaTeX another non-Lua
+        // engine.
         for req in [None, Some("lualatex".to_string())] {
             for hint in [EngineHint::Lua, EngineHint::Named("lualatex")] {
+                assert_eq!(preview_engine(req.clone(), || Some(hint), &all), body("pdflatex"));
                 assert_eq!(
-                    preview_engine(req.clone(), || Some(hint), &all),
+                    preview_engine(req.clone(), || Some(hint), &only(&["xelatex", "lualatex"])),
+                    body("xelatex")
+                );
+                assert_eq!(
+                    preview_engine(req.clone(), || Some(hint), &only(&["lualatex"])),
                     Err(PREVIEW_NO_LUATEX.to_string())
                 );
             }
         }
         // LuaLaTeX chosen in the engine menu, or a fontspec preamble that a
         // Build would give LuaLaTeX: XeLaTeX where installed, else another one.
-        assert_eq!(preview_engine(Some("lualatex".into()), || None, &all).as_deref(), Ok("pdflatex"));
-        assert_eq!(preview_engine(None, || Some(EngineHint::Unicode), &all).as_deref(), Ok("xelatex"));
+        assert_eq!(preview_engine(Some("lualatex".into()), || None, &all), pre("pdflatex"));
+        assert_eq!(preview_engine(None, || Some(EngineHint::Unicode), &all), pre("xelatex"));
+        assert_eq!(preview_engine(Some("lualatex".into()), || Some(EngineHint::Unicode), &all), pre("xelatex"));
         assert_eq!(
-            preview_engine(Some("lualatex".into()), || Some(EngineHint::Unicode), &all).as_deref(),
-            Ok("xelatex")
-        );
-        assert_eq!(
-            preview_engine(None, || Some(EngineHint::Unicode), &only(&["pdflatex", "lualatex"])).as_deref(),
-            Ok("pdflatex")
+            preview_engine(None, || Some(EngineHint::Unicode), &only(&["pdflatex", "lualatex"])),
+            pre("pdflatex")
         );
         // Only LuaLaTeX installed: no preview at all; nothing installed: as before.
         assert_eq!(preview_engine(None, || None, &only(&["lualatex"])), Err(PREVIEW_NO_LUATEX.to_string()));
         assert_eq!(preview_engine(None, || None, &[]), Err("no TeX engine found on PATH".to_string()));
+        assert_eq!(preview_engine(None, || Some(EngineHint::Lua), &[]), Err("no TeX engine found on PATH".to_string()));
         // A Build still follows the document to LuaLaTeX.
         assert_eq!(engine_for_hint(Some(EngineHint::Lua), &all).as_deref(), Some("lualatex"));
     }

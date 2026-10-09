@@ -237,7 +237,10 @@ running tab of that model, so its read-only control paths (`config.toml`,
 folders) are created through a handle on that home (`HomeFile::ensure`),
 pinned by inode, and re-`lstat`-ed as the fence wrapper's last step; any
 change refuses the spawn (`agent_fence::verify_control_pins`, gap 30).
-bubblewrap and Seatbelt still open the paths by name after that check: the
+Tabtivity's own reset of `hooks.toml` is written in place
+(`HomeFile::write_in_place`): a rename would give it a new inode, refusing a
+second tab of the model starting at the same time, and would detach the
+read-only bind in the model's running tabs. bubblewrap and Seatbelt still open the paths by name after that check: the
 remaining window is the gap's stated residual.
 
 A home is seeded once: the scope's existing Tabtivity-kept Codex store and
