@@ -148,7 +148,12 @@ exists nowhere else. "Not now" is always available.
 
 **Pull** (`sync_pull`, *Sync all* in the Remote tree): host bytes over the
 mirror's. For a folder, rsync is used when present on both ends, fed the exact
-file list the host walker produced; otherwise per-file SFTP. Locally edited
+file list the host walker produced; otherwise per-file SFTP. rsync lands only
+what SFTP would: `-t -c --no-links --no-devices --no-specials
+--max-size=<64 MiB>`, no `-a` and no recursion past the list
+(`remote_sync::rsync_pull_flags`), files over the cap left out of the list, and
+only a regular file within the cap recorded afterwards. Any rsync error (an old
+or foreign rsync refusing a flag included) falls back to SFTP. Locally edited
 files it overwrites are logged.
 
 **Push** (`sync_push`, *Push all* in the Local tree): for each file the host is

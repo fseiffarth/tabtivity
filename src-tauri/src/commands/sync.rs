@@ -1778,10 +1778,13 @@ async fn pull_subtree(
     for file in files {
         let host_abs = join_remote(&target.spec.remote_path, &file.rel);
         let local = mirror_local_path(project_id, &file.rel);
-        // rsync already wrote the bytes; only stat locally to capture the base.
+        // rsync already wrote the bytes; only lstat locally to capture the base,
+        // and record only a regular file within the cap (gap 35): an oversized
+        // file was left out of the transfer, and whatever else a changing host
+        // tree slipped past the walk is skipped like the floor would.
         // Otherwise pull the file over SFTP (which confines the write, #863).
         let local_base = if rsynced {
-            std::fs::metadata(&local).ok().map(|m| local_meta(&m))
+            remote_sync::rsync_pulled_base(&local, file.size)
         } else {
             remote_sync::pull_file(sftp, &host_abs, file.size, &mirror_root, &file.rel)
                 .await
@@ -1817,7 +1820,16 @@ async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::
     if !remote_sync::rsync_available_local() {
         return false;
     }
-    let Some(rsync_files) = remote_sync::rsync_subtree_files(files, rel) else {
+    // The floor refuses a file over the cap; so does the fast path (gap 35).
+    let within_cap: Vec<remote_sync::HostFile> = files
+        .iter()
+        .filter(|file| remote_sync::rsync_may_transfer(file.size))
+        .cloned()
+        .collect();
+    if within_cap.is_empty() {
+        return false;
+    }
+    let Some(rsync_files) = remote_sync::rsync_subtree_files(&within_cap, rel) else {
         return false;
     };
     let spec = target.spec.clone();

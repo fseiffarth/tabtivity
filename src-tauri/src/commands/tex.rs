@@ -461,7 +461,8 @@ fn run_in_within_env<S: AsRef<std::ffi::OsStr>>(
         // variable is ignored.
         .env("max_print_line", "1000")
         .env("error_line", "254")
-        .env("half_error_line", "238");
+        .env("half_error_line", "238")
+        .env(OPENOUT_PARANOID.0, OPENOUT_PARANOID.1);
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -590,13 +591,85 @@ fn flag_enables_shell_escape(arg: &str) -> bool {
 /// engine's final word even after the user's extra flags.
 const NO_SHELL_ESCAPE: &str = "-no-shell-escape";
 
-/// Environment for a hover preview's engine runs (#867): kpathsea's paranoid
-/// output mode — no `\openout` to an absolute path, a parent directory or a dot
-/// file. A preview runs the document's preamble on hover, with the document's
-/// folder as its working directory; it has no business writing anywhere but its
-/// scratch output directory, which `-output-directory` still reaches.
-fn preview_env() -> Vec<(String, String)> {
-    vec![("openout_any".to_string(), "p".to_string())]
+/// kpathsea's paranoid output mode, set on every engine run Tabtivity makes
+/// (builds, format dumps, previews; latexmk passes it on to the engine): no
+/// `\openout` — nor, under LuaTeX, `io.open` for writing — to an absolute path
+/// outside the output directory, a parent directory or a dot file. TeX Live's
+/// own `texmf.cnf` default is the same `p`, but a `texmf.cnf` or environment
+/// set to `a` used to let a document Build write anywhere the user can (gap 36:
+/// checked on LuaHBTeX 1.22 / TeX Live 2025, where `openout_any=a` let a
+/// Build's `io.open` and `\openout` write an absolute path and `../`, and `p`
+/// refused both). The environment outranks `texmf.cnf`. Output still reaches
+/// `-output-directory`, which the engine exports as `TEXMFOUTPUT`.
+const OPENOUT_PARANOID: (&str, &str) = ("openout_any", "p");
+
+/// Environment for a hover preview's engine runs (#867, gap 36), on top of
+/// {@link OPENOUT_PARANOID}: the paranoid *input* mode as well. A preview runs
+/// the document's preamble on hover, with the document's folder as its working
+/// directory, so it may read below that folder (a preamble's `\input{macros}`)
+/// and from the TeX trees by kpathsea search, but not an absolute path or a
+/// `../`. `TEXMFOUTPUT` — the one absolute prefix paranoid mode admits — is
+/// pinned to the preview's own `scratch` directory rather than left to whatever
+/// the user's environment holds. LuaTeX cannot
+/// run in this mode (luaotfload's font cache is an absolute path), which is
+/// one reason a preview never runs LuaTeX ({@link preview_engine}).
+fn preview_env(scratch: &Path) -> Vec<(String, String)> {
+    vec![
+        (OPENOUT_PARANOID.0.to_string(), OPENOUT_PARANOID.1.to_string()),
+        ("openin_any".to_string(), "p".to_string()),
+        ("TEXMFOUTPUT".to_string(), scratch.to_string_lossy().into_owned()),
+    ]
+}
+
+/// The engine a hover preview runs, or why there is none. Never LuaTeX (gap
+/// 36): hovering a formula must not hand a document's preamble Lua's `io`
+/// library — LuaTeX keeps reads open whatever `openin_any` says, and an
+/// unpatched TeX Live < 2023 runs commands from Lua (CVE-2023-32700). A
+/// preamble that asks for LuaTeX (a magic comment, `luacode`, `\directlua`, …)
+/// gets no preview, like any preview that fails; otherwise an explicit engine
+/// choice of LuaLaTeX, or a fontspec preamble that would pick it, falls to
+/// XeLaTeX where installed, else to the first other engine. A Build still runs
+/// the engine the document asks for. `hint` is asked only when the requested
+/// engine cannot serve, so a hover reads the preamble's files no more often
+/// than before.
+fn preview_engine(
+    requested: Option<String>,
+    hint: impl FnOnce() -> Option<EngineHint>,
+    installed: &[String],
+) -> Result<String, String> {
+    let usable: Vec<String> = installed.iter().filter(|e| *e != "lualatex").cloned().collect();
+    if let Some(e) = requested.filter(|e| usable.contains(e)) {
+        return Ok(e);
+    }
+    let hint = hint();
+    if matches!(hint, Some(EngineHint::Lua) | Some(EngineHint::Named("lualatex"))) {
+        return Err(PREVIEW_NO_LUATEX.to_string());
+    }
+    engine_for_hint(hint, &usable)
+        .or_else(|| usable.first().cloned())
+        .ok_or_else(|| {
+            if installed.is_empty() {
+                "no TeX engine found on PATH".to_string()
+            } else {
+                PREVIEW_NO_LUATEX.to_string()
+            }
+        })
+}
+
+/// What a hover says when the preamble needs LuaTeX ({@link preview_engine}).
+const PREVIEW_NO_LUATEX: &str = "no hover preview for a LuaLaTeX preamble";
+
+/// How a preview names its wrapper `.tex` (which lives in the scratch dir) on
+/// the engine's command line: by file name alone. The engine looks for a
+/// relative input in `-output-directory` first, so it opens the scratch copy
+/// even with a same-named file in the document's folder. An absolute path would
+/// be refused under `openin_any=p` wherever the scratch dir sits below a dot
+/// directory — `~/.local/share/…` on Linux — since kpathsea's paranoid mode
+/// refuses every dot component, `TEXMFOUTPUT` or not.
+fn preview_main_file(tex: &Path) -> String {
+    tex.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| tex.to_string_lossy().into_owned())
 }
 
 /// Filter user-supplied extra flags down to ones that can NEVER enable
@@ -1781,10 +1854,12 @@ fn ensure_preview_fmt(
         format!("-jobname={key}"),
         format!("&{engine}"),
         "mylatexformat.ltx".to_string(),
-        tex.to_string_lossy().into_owned(),
+        // By name, not path: found in `-output-directory` first ({@link
+        // preview_main_file}).
+        preview_main_file(tex),
     ];
     // A spawn failure is the machine's problem, not this preamble's: no marker.
-    let built = run_in_within_env(cwd, engine, &args, PREVIEW_TIMEOUT, &preview_env()).ok()?;
+    let built = run_in_within_env(cwd, engine, &args, PREVIEW_TIMEOUT, &preview_env(scratch)).ok()?;
     let out_fmt = scratch.join(format!("{key}.fmt"));
     if built.ok && out_fmt.is_file() && fs::rename(&out_fmt, &fmt).is_ok() {
         return Some(fmt);
@@ -1852,12 +1927,9 @@ fn preview_snippet_blocking(
 
     let cap = detect_capability();
     // latexmk alone cannot serve this path: the preview runs the engine itself.
-    // No engine chosen: the one the preamble asks for, as a build would pick.
-    let eng = engine
-        .filter(|e| cap.engines.iter().any(|g| g == e))
-        .or_else(|| engine_for_hint(detect_engine_hint(&preamble, &cwd), &cap.engines))
-        .or_else(|| cap.engines.first().cloned())
-        .ok_or_else(|| "no TeX engine found on PATH".to_string())?;
+    // No engine chosen: the one the preamble asks for, as a build would pick —
+    // except LuaTeX, which a hover never runs ({@link preview_engine}).
+    let eng = preview_engine(engine, || detect_engine_hint(&preamble, &cwd), &cap.engines)?;
 
     let scratch = make_preview_scratch()?;
     let stem = concat!(crate::app_slug!(), "-preview");
@@ -1872,14 +1944,14 @@ fn preview_snippet_blocking(
         // SECURITY: the same argument builder the full compile uses, so a preview
         // can no more enable shell-escape than a build can (no `extra` flags are
         // accepted here at all).
-        let mut args = engine_args(&tex.to_string_lossy(), Some(&out_arg), &[]);
+        let mut args = engine_args(&preview_main_file(&tex), Some(&out_arg), &[]);
         // …minus SyncTeX: nothing forward-searches into a hover card, and a
         // `.synctex.gz` written and thrown away per hover is pure latency.
         args.retain(|a| a != "-synctex=1");
         if let Some(f) = fmt {
             args.insert(0, format!("-fmt={}", f.display()));
         }
-        let out = run_in_within_env(&cwd, &eng, &args, PREVIEW_TIMEOUT, &preview_env())?;
+        let out = run_in_within_env(&cwd, &eng, &args, PREVIEW_TIMEOUT, &preview_env(&scratch))?;
         Ok(out.text)
     };
 
@@ -2821,7 +2893,49 @@ Count:2
         assert!(!args.iter().any(|a| flag_enables_shell_escape(a)));
         // …and turns it off outright, whatever the distribution's default (#867).
         assert!(args.iter().any(|a| a == NO_SHELL_ESCAPE), "{args:?}");
-        assert!(preview_env().iter().any(|(k, v)| k == "openout_any" && v == "p"));
+        let env = preview_env(Path::new("/scratch"));
+        assert!(env.iter().any(|(k, v)| k == "openout_any" && v == "p"));
+        // Gap 36: no reads by absolute path or `../` either, and the one
+        // absolute place it may read is its own scratch dir.
+        assert!(env.iter().any(|(k, v)| k == "openin_any" && v == "p"));
+        assert!(env.iter().any(|(k, v)| k == "TEXMFOUTPUT" && v == "/scratch"));
+        assert_eq!(OPENOUT_PARANOID, ("openout_any", "p"));
+    }
+
+    #[test]
+    fn a_hover_preview_never_runs_luatex() {
+        let all: Vec<String> = ENGINES.iter().map(|e| e.to_string()).collect();
+        let only = |names: &[&str]| -> Vec<String> { names.iter().map(|e| e.to_string()).collect() };
+        let never = || -> Option<EngineHint> { panic!("hint read although the request serves") };
+        // An explicit non-Lua engine is used as is, without reading the preamble.
+        assert_eq!(preview_engine(Some("xelatex".into()), never, &all).as_deref(), Ok("xelatex"));
+        assert_eq!(preview_engine(Some("pdflatex".into()), never, &all).as_deref(), Ok("pdflatex"));
+        // A preamble that asks for LuaTeX gets no preview, whatever was requested.
+        for req in [None, Some("lualatex".to_string())] {
+            for hint in [EngineHint::Lua, EngineHint::Named("lualatex")] {
+                assert_eq!(
+                    preview_engine(req.clone(), || Some(hint), &all),
+                    Err(PREVIEW_NO_LUATEX.to_string())
+                );
+            }
+        }
+        // LuaLaTeX chosen in the engine menu, or a fontspec preamble that a
+        // Build would give LuaLaTeX: XeLaTeX where installed, else another one.
+        assert_eq!(preview_engine(Some("lualatex".into()), || None, &all).as_deref(), Ok("pdflatex"));
+        assert_eq!(preview_engine(None, || Some(EngineHint::Unicode), &all).as_deref(), Ok("xelatex"));
+        assert_eq!(
+            preview_engine(Some("lualatex".into()), || Some(EngineHint::Unicode), &all).as_deref(),
+            Ok("xelatex")
+        );
+        assert_eq!(
+            preview_engine(None, || Some(EngineHint::Unicode), &only(&["pdflatex", "lualatex"])).as_deref(),
+            Ok("pdflatex")
+        );
+        // Only LuaLaTeX installed: no preview at all; nothing installed: as before.
+        assert_eq!(preview_engine(None, || None, &only(&["lualatex"])), Err(PREVIEW_NO_LUATEX.to_string()));
+        assert_eq!(preview_engine(None, || None, &[]), Err("no TeX engine found on PATH".to_string()));
+        // A Build still follows the document to LuaLaTeX.
+        assert_eq!(engine_for_hint(Some(EngineHint::Lua), &all).as_deref(), Some("lualatex"));
     }
 
     /// #867 end to end, where a TeX engine is installed: `shell_escape=t` in the
@@ -2831,7 +2945,8 @@ Count:2
     #[cfg(unix)]
     #[test]
     fn a_hover_preview_runs_no_shell_command_even_where_the_default_allows_it() {
-        let Some(eng) = ["pdflatex", "lualatex", "xelatex"]
+        // Previews never run LuaTeX ({@link preview_engine}).
+        let Some(eng) = ["pdflatex", "xelatex"]
             .into_iter()
             .find(|e| crate::paths::resolve_executable(e).is_some())
         else {
@@ -2855,8 +2970,8 @@ Count:2
             ),
         )
         .unwrap();
-        let args = engine_args(&tex.to_string_lossy(), Some(&out.to_string_lossy()), &[]);
-        let mut envs = preview_env();
+        let args = engine_args(&preview_main_file(&tex), Some(&out.to_string_lossy()), &[]);
+        let mut envs = preview_env(&out);
         envs.push(("shell_escape".to_string(), "t".to_string()));
         // Without the flag the plant must fire, or this test proves nothing.
         let bare: Vec<&String> = args.iter().filter(|a| *a != NO_SHELL_ESCAPE).collect();
@@ -2883,8 +2998,111 @@ Count:2
             ),
         )
         .unwrap();
-        let _ = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env());
+        let _ = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env(&out));
         assert!(!escaped.exists(), "\\openout wrote outside the preview's output dir");
+    }
+
+    /// Gap 36, where pdfLaTeX or XeLaTeX is installed: under the preview's
+    /// environment an `\input` of an absolute path outside the scratch dir or
+    /// of `../` is refused, while one relative to the document's folder still
+    /// resolves and the wrapper itself (an absolute path in the scratch dir)
+    /// opens.
+    #[cfg(unix)]
+    #[test]
+    fn a_hover_preview_reads_only_below_the_document() {
+        let Some(eng) = ["pdflatex", "xelatex"]
+            .into_iter()
+            .find(|e| crate::paths::resolve_executable(e).is_some())
+        else {
+            eprintln!("no TeX engine on PATH — skipping");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let doc = tmp.path().canonicalize().unwrap().join("doc");
+        let out = tmp.path().canonicalize().unwrap().join("out");
+        fs::create_dir_all(&doc).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let tex = out.join("p.tex");
+        let args = engine_args(&preview_main_file(&tex), Some(&out.to_string_lossy()), &[]);
+        let secret = tmp.path().canonicalize().unwrap().join("secret.tex");
+        fs::write(&secret, "\\def\\secretmacro{SECRETMARKER}").unwrap();
+        fs::write(doc.join("macros.tex"), "\\def\\localmacro{ok}").unwrap();
+        // A same-named file in the document's folder never stands in for the
+        // wrapper: the engine looks in `-output-directory` first. (`tmp` sits
+        // below a dot directory, `/tmp/.tmpXXXX`, as the state dir does on
+        // Linux — the reason the wrapper goes by name.)
+        fs::write(doc.join("p.tex"), "\\errmessage{decoy}\\end\n").unwrap();
+        let body = |input: &str| {
+            format!("\\documentclass{{article}}\\input{{macros}}\\input{{{input}}}\n\\begin{{document}}\\localmacro\\end{{document}}\n")
+        };
+        let _ = fs::remove_file(out.join("p.pdf"));
+        fs::write(&tex, body(&secret.to_string_lossy())).unwrap();
+        let run = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env(&out)).expect("engine ran");
+        assert!(!out.join("p.pdf").exists(), "an absolute \\input was read: {}", run.text);
+        assert!(run.text.contains("secret.tex"), "refused for another reason: {}", run.text);
+        assert!(!run.text.contains("SECRETMARKER"), "{}", run.text);
+        // The same read without the paranoid input mode goes through, so the
+        // refusal above is the mode's doing.
+        let open: Vec<(String, String)> = vec![("openin_any".to_string(), "a".to_string())];
+        let run = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &open).expect("engine ran");
+        assert!(out.join("p.pdf").is_file(), "control run failed: {}", run.text);
+        let _ = fs::remove_file(out.join("p.pdf"));
+        // A relative `../` is refused too.
+        fs::write(&tex, body("../secret")).unwrap();
+        let _ = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env(&out));
+        assert!(!out.join("p.pdf").exists(), "a ../ \\input was read");
+        // And a preamble that reads only below the document's folder typesets.
+        fs::write(&tex, "\\documentclass{article}\\usepackage{amsmath}\\input{macros}\n\\begin{document}\\localmacro\\end{document}\n").unwrap();
+        let run = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env(&out)).expect("engine ran");
+        assert!(out.join("p.pdf").is_file(), "a relative \\input must still work: {}", run.text);
+    }
+
+    /// Gap 36, where LuaLaTeX is installed: a Build's `io.open` for writing an
+    /// absolute path or `../` is refused even when the environment (standing in
+    /// for a user's `texmf.cnf`) says `openout_any=a`, because every engine run
+    /// sets {@link OPENOUT_PARANOID} after the inherited environment.
+    #[cfg(unix)]
+    #[test]
+    fn a_build_engine_run_confines_luatex_writes() {
+        if crate::paths::resolve_executable("lualatex").is_none() {
+            eprintln!("lualatex not on PATH — skipping");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let doc = root.join("doc");
+        let out = root.join("out");
+        fs::create_dir_all(&doc).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let abs = root.join("abs.txt");
+        fs::write(
+            doc.join("t.tex"),
+            format!(
+                "\\documentclass{{article}}\\begin{{document}}\\directlua{{\n\
+                 local f = io.open(\"{}\", \"w\") if f then f:write(\"x\") f:close() end\n\
+                 local g = io.open(\"../parent.txt\", \"w\") if g then g:write(\"x\") g:close() end\n\
+                 }}x\\end{{document}}\n",
+                abs.display()
+            ),
+        )
+        .unwrap();
+        let args = engine_args("t.tex", Some(&out.to_string_lossy()), &[]);
+        // The control: with `a` actually reaching the engine the writes land.
+        let mut cmd = crate::paths::command_no_window("lualatex");
+        cmd.args(&args).current_dir(&doc).env("openout_any", "a");
+        let _ = cmd.output();
+        if !abs.exists() {
+            eprintln!("lualatex refuses the write even with openout_any=a — skipping");
+            return;
+        }
+        fs::remove_file(&abs).unwrap();
+        let _ = fs::remove_file(root.join("parent.txt"));
+        // The same run through `run_in_within_env`: its own `openout_any=p`
+        // replaces any inherited value (`Command::env`), as it would a user's.
+        let run = run_in_within_env(&doc, "lualatex", &args, RUN_TIMEOUT, &[]).expect("engine ran");
+        assert!(out.join("t.pdf").is_file(), "the build itself must still typeset: {}", run.text);
+        assert!(!abs.exists(), "a Build's io.open wrote an absolute path");
+        assert!(!root.join("parent.txt").exists(), "a Build's io.open wrote ../");
     }
 
     #[test]

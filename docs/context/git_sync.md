@@ -110,7 +110,11 @@ the *why*.
     manifest accounting, and transferred bytes on the same path set: `.git`,
     `.tabtivity`, nested repositories, and symlinks remain outside byte-sync even
     when rsync is available on both ends. If that allowlist cannot be confined
-    to the requested subtree, the transfer falls back to the SFTP path.
+    to the requested subtree, the transfer falls back to the SFTP path. Its
+    flags hold rsync to the SFTP floor's rules against a host tree that changes
+    after the walk (gap 35): no `-a` (so no links, devices, FIFOs, modes or
+    owners), no recursion past the list, `--max-size` at the 64 MiB cap, and only
+    a regular file within the cap is recorded in the manifest afterwards.
 - **Concurrent writers are serialized at their ownership boundary.** Every
   lockstep reconcile—poll, watcher, retry, checkout, pairing, resolve, or backup
   restore—takes the same per-project async guard before touching bundle paths or

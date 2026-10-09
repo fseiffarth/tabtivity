@@ -796,12 +796,41 @@ pub fn rsync_ssh_transport(port: Option<u16>) -> String {
     parts.join(" ")
 }
 
-/// Build the full rsync argv for a host→local PULL. The caller supplies a
-/// NUL-delimited `--files-from` list produced by [`walk_host_files`], so this
-/// optimisation cannot transfer a path that the preview/manifest walker skipped
-/// (nested repos and symlinks in particular). The excludes and `--no-links` are
-/// defence in depth against a host-side tree changing between the walk and rsync.
-/// Pure, unit-tested (it never touches the network).
+/// rsync's transfer flags for a PULL, everything but the `-e` transport and the
+/// two endpoints. The caller supplies a NUL-delimited `--files-from` list
+/// produced by [`walk_host_files`], so this optimisation cannot transfer a path
+/// that the preview/manifest walker skipped (nested repos and symlinks in
+/// particular). The rest is defence in depth against a host-side tree changing
+/// between the walk and rsync (gap 35): rsync must land exactly what the SFTP
+/// floor ([`pull_file`]) would — regular files of at most
+/// [`MAX_SYNC_FILE_BYTES`], default modes.
+/// - `-t -c` (not `-a`): keep timestamps and the checksum compare; no `-p`,
+///   `-o`, `-g` (the floor writes default modes) and no `-l`/`-D`, spelled out
+///   as `--no-links --no-devices --no-specials`, so a symlink, FIFO, socket or
+///   device in the list is skipped by the receiving side.
+/// - `--max-size`: a file over the cap is skipped, as the floor refuses it.
+/// - No `-r`: `--files-from` implies `--relative` and `--dirs`, which still
+///   create each listed file's parent directories, but a listed path that has
+///   become a directory is not descended into, so unlisted files never land.
+pub fn rsync_pull_flags(files_from: &Path) -> Vec<String> {
+    vec![
+        "-t".to_string(),
+        "-c".to_string(),
+        "--no-links".to_string(),
+        "--no-devices".to_string(),
+        "--no-specials".to_string(),
+        format!("--max-size={MAX_SYNC_FILE_BYTES}"),
+        "--exclude=/.git".to_string(),
+        format!("--exclude={}", crate::brand::PROJECT_DIR),
+        "--exclude=.git".to_string(),
+        "--from0".to_string(),
+        format!("--files-from={}", files_from.to_string_lossy()),
+    ]
+}
+
+/// Build the full rsync argv for a host→local PULL: [`rsync_pull_flags`], then
+/// the ControlMaster transport and the two endpoints. Pure, unit-tested (it
+/// never touches the network).
 pub fn rsync_pull_args(
     user: &Option<String>,
     host: &str,
@@ -814,23 +843,37 @@ pub fn rsync_pull_args(
         Some(u) => format!("{u}@{host}:{host_src}"),
         None => format!("{host}:{host_src}"),
     };
-    vec![
-        "-a".to_string(),
-        "-c".to_string(),
-        "--no-links".to_string(),
-        "--exclude=/.git".to_string(),
-        format!("--exclude={}", crate::brand::PROJECT_DIR),
-        "--exclude=.git".to_string(),
-        "--from0".to_string(),
-        format!("--files-from={}", files_from.to_string_lossy()),
-        // `--files-from` changes archive mode so it no longer implies recursion.
-        // Keep it explicit for the implied parent directories in the file list.
-        "--recursive".to_string(),
+    let mut args = rsync_pull_flags(files_from);
+    args.extend([
         "-e".to_string(),
         rsync_ssh_transport(port),
         target,
         local_dest.to_string(),
-    ]
+    ]);
+    args
+}
+
+/// Whether a host file of `host_size` bytes may ride the rsync fast path at
+/// all: the same cap the SFTP floor applies. The caller leaves larger files out
+/// of the `--files-from` list (`--max-size` is the second line).
+pub fn rsync_may_transfer(host_size: u64) -> bool {
+    host_size <= MAX_SYNC_FILE_BYTES
+}
+
+/// The manifest base for a file rsync just wrote at `local`, or `None` to
+/// leave it unrecorded: only a regular file (lstat, so a symlink is not
+/// followed) within the cap counts, and only when the host walk listed it
+/// within the cap too. A FIFO, socket, device, directory or link a changing
+/// host tree slipped past the walk is never recorded as synced (gap 35).
+pub fn rsync_pulled_base(local: &Path, host_size: u64) -> Option<(u64, Option<u64>)> {
+    if !rsync_may_transfer(host_size) {
+        return None;
+    }
+    let meta = std::fs::symlink_metadata(local).ok()?;
+    if !meta.file_type().is_file() || meta.len() > MAX_SYNC_FILE_BYTES {
+        return None;
+    }
+    Some(local_meta(&meta))
 }
 
 /// Convert the project-relative files returned by [`walk_host_files`] into paths
@@ -1327,9 +1370,20 @@ mod tests {
             "/local/mirror/",
             files_from,
         );
-        assert_eq!(args[0], "-a");
+        assert_eq!(args[0], "-t");
         assert_eq!(args[1], "-c");
+        // Gap 35: nothing beyond what the SFTP floor lands — no archive mode
+        // (links, perms, owner, group, devices, specials), no recursion past
+        // the list, and the floor's size cap.
+        for banned in ["-a", "--archive", "-r", "--recursive", "-l", "--links", "-D", "-p", "-o", "-g"] {
+            assert!(!args.iter().any(|arg| arg == banned), "{banned} in {args:?}");
+        }
+        assert!(!args.iter().any(|arg| arg.starts_with('-') && !arg.starts_with("--") && arg.len() > 2),
+            "no bundled short flags may smuggle in archive or recursion: {args:?}");
         assert!(args.iter().any(|arg| arg == "--no-links"));
+        assert!(args.iter().any(|arg| arg == "--no-devices"));
+        assert!(args.iter().any(|arg| arg == "--no-specials"));
+        assert!(args.iter().any(|arg| *arg == format!("--max-size={MAX_SYNC_FILE_BYTES}")));
         assert!(args.iter().any(|arg| arg == "--exclude=/.git"));
         assert!(args.iter().any(|arg| arg == "--exclude=.git"));
         assert!(args.iter().any(|arg| arg == concat!("--exclude=.", crate::app_slug!())));
@@ -1354,6 +1408,119 @@ mod tests {
             Path::new("/tmp/list"),
         );
         assert!(args.iter().any(|arg| arg == "host.example:/srv/p/"));
+        assert!(!args.iter().any(|arg| arg == "-a" || arg == "-r" || arg == "--recursive"));
+    }
+
+    #[test]
+    fn rsync_size_gate_matches_the_floor() {
+        assert!(rsync_may_transfer(0));
+        assert!(rsync_may_transfer(MAX_SYNC_FILE_BYTES));
+        assert!(!rsync_may_transfer(MAX_SYNC_FILE_BYTES + 1));
+    }
+
+    #[test]
+    fn rsync_pulled_base_records_only_regular_files_within_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let regular = dir.path().join("a.txt");
+        std::fs::write(&regular, b"hello").unwrap();
+        assert_eq!(rsync_pulled_base(&regular, 5).map(|(size, _)| size), Some(5));
+        // Listed over the cap by the host walk: never recorded, whatever is on disk.
+        assert_eq!(rsync_pulled_base(&regular, MAX_SYNC_FILE_BYTES + 1), None);
+        // Missing, a directory, an oversized local file.
+        assert_eq!(rsync_pulled_base(&dir.path().join("gone"), 1), None);
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        assert_eq!(rsync_pulled_base(&sub, 1), None);
+        let big = dir.path().join("big.bin");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(MAX_SYNC_FILE_BYTES + 1)
+            .unwrap();
+        assert_eq!(rsync_pulled_base(&big, 1), None);
+        #[cfg(unix)]
+        {
+            // A symlink to a regular file is not followed; a FIFO is not a file.
+            let link = dir.path().join("link.txt");
+            std::os::unix::fs::symlink(&regular, &link).unwrap();
+            assert_eq!(rsync_pulled_base(&link, 5), None);
+            let fifo = dir.path().join("pipe");
+            let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+            assert_eq!(rsync_pulled_base(&fifo, 0), None);
+        }
+    }
+
+    /// Run the real pull flags local→local when rsync is installed (the
+    /// transport is the only part left out): a listed path that is a FIFO, a
+    /// symlink, a directory full of unlisted files, or a file over the cap
+    /// never lands; the listed regular file does, with its mtime.
+    #[cfg(unix)]
+    #[test]
+    fn rsync_pull_flags_land_only_listed_regular_files_within_the_cap() {
+        if !rsync_available_local() {
+            eprintln!("rsync not on PATH; skipping the local transfer check");
+            return;
+        }
+        let src = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let s = src.path();
+        std::fs::create_dir_all(s.join("d")).unwrap();
+        std::fs::write(s.join("d/ok.txt"), b"ok").unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(s.join("d/ok.txt"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        // The walker listed `swapped/inner.txt` and `was_file`; the host then
+        // turned `swapped` into a FIFO and `was_file` into a directory.
+        let fifo = s.join("swapped");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let fifo_leaf = s.join("pipe");
+        let c = std::ffi::CString::new(fifo_leaf.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        std::fs::create_dir_all(s.join("was_file/deep")).unwrap();
+        std::fs::write(s.join("was_file/unlisted.txt"), b"x").unwrap();
+        std::fs::write(s.join("was_file/deep/unlisted.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", s.join("link.txt")).unwrap();
+        std::fs::File::create(s.join("big.bin"))
+            .unwrap()
+            .set_len(MAX_SYNC_FILE_BYTES + 1)
+            .unwrap();
+        let list = rsync_files_from(&[
+            "d/ok.txt".into(),
+            "swapped/inner.txt".into(),
+            "pipe".into(),
+            "was_file".into(),
+            "link.txt".into(),
+            "big.bin".into(),
+        ])
+        .unwrap();
+        let mut args = rsync_pull_flags(list.path());
+        args.push(format!("{}/", s.display()));
+        args.push(format!("{}/", dest.path().display()));
+        let out = std::process::Command::new("rsync").args(&args).output().unwrap();
+        // rsync exits 23 for the listed path it could not find; the transfer of
+        // everything else still happens.
+        assert!(
+            matches!(out.status.code(), Some(0 | 23)),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let d = dest.path();
+        assert_eq!(std::fs::read(d.join("d/ok.txt")).unwrap(), b"ok");
+        assert_eq!(
+            std::fs::metadata(d.join("d/ok.txt")).unwrap().modified().unwrap(),
+            old
+        );
+        assert!(std::fs::symlink_metadata(d.join("swapped")).is_err());
+        assert!(std::fs::symlink_metadata(d.join("pipe")).is_err());
+        assert!(std::fs::symlink_metadata(d.join("link.txt")).is_err());
+        assert!(std::fs::symlink_metadata(d.join("big.bin")).is_err());
+        assert!(!d.join("was_file/unlisted.txt").exists());
+        assert!(!d.join("was_file/deep").exists());
     }
 
     #[test]

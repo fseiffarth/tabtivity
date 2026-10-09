@@ -46,7 +46,6 @@
 //!   not the shared root: one flat directory let a contained agent overwrite
 //!   another project's tab record and so choose which conversation another
 //!   project's agent resumes;
-//! - the shared login directories of `services::agent_auth` (rw);
 //! - `<state_dir>/hooks` and `<state_dir>/bin` **read-only** (see below);
 //! - the repo's git control files, re-mounted read-only (`services::git_guard`).
 //!
