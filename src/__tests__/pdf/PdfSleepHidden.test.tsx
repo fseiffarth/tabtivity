@@ -147,9 +147,9 @@ async function shown() {
 }
 
 /** Hide the viewer and run the clock to the release deadline. */
-async function hiddenPast(view: ReturnType<typeof render>, ms: number) {
+async function hiddenPast(view: ReturnType<typeof render>, ms: number, tabKey: string = TAB) {
   vi.useFakeTimers();
-  view.rerender(viewer(false));
+  view.rerender(viewer(false, PATH, tabKey));
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
   });
@@ -291,6 +291,49 @@ describe("a hidden PDF tab releases its document", () => {
     await hiddenPast(view, PDF_DOC_RELEASE_MS * 2);
     expect(io.docsDestroyed).toBe(0);
     expect(document.querySelectorAll(".file-viewer-pdf-page").length).toBe(2);
+  });
+
+  it("a TeX workspace's PDF pane reloads at its own persisted zoom and scroll", async () => {
+    // The pane's key is `<workspace tab>#<path>`; its position lives in the
+    // workspace tab's `texPanes`, not on a tab of its own.
+    const WS = "embed-ws";
+    useTabsStore.setState({
+      tabsByScope: {
+        p1: [
+          {
+            ...tabFor(WS, "/home/u/paper/paper.tex"),
+            viewer: "texworkspace",
+            viewerState: { texPanes: { [PATH]: { scale: 1.5, pdfFitted: false, scrollTop: 640 } } },
+          } as TabEntry,
+        ],
+      },
+    });
+    const view = render(viewer(true, PATH, `${WS}#${PATH}`));
+    await waitFor(() => expect(document.querySelectorAll(".file-viewer-pdf-page").length).toBe(2));
+    await waitFor(() => expect(zoomLabel()).toBe("150%"));
+    await hiddenPast(view, PDF_DOC_RELEASE_MS, `${WS}#${PATH}`);
+    expect(io.docsDestroyed).toBe(1);
+    vi.useRealTimers();
+    view.rerender(viewer(true, PATH, `${WS}#${PATH}`));
+    await waitFor(() => expect(document.querySelectorAll(".file-viewer-pdf-page").length).toBe(2));
+    await waitFor(() => expect(zoomLabel()).toBe("150%"));
+    await waitFor(() => expect(scroller()?.scrollTop).toBe(640));
+  });
+
+  it("stays awake for a TeX workspace's PDF pane a popout mirrors", async () => {
+    const WS = "embed-ws";
+    useTabsStore.setState({
+      tabsByScope: { p1: [{ ...tabFor(WS, "/home/u/paper/paper.tex"), viewer: "texworkspace" } as TabEntry] },
+    });
+    const view = render(viewer(true, PATH, `${WS}#${PATH}`));
+    await waitFor(() => expect(document.querySelectorAll(".file-viewer-pdf-page").length).toBe(2));
+    useTabsStore.setState({
+      detachedGroupsByScope: {
+        p1: [{ id: "g9", label: "popout-g9", subtree: { type: "group", id: "g9", tabKeys: [WS], activeKey: WS } }],
+      },
+    });
+    await hiddenPast(view, PDF_DOC_RELEASE_MS * 2, `${WS}#${PATH}`);
+    expect(io.docsDestroyed).toBe(0);
   });
 
   it("frees every document of ten hidden PDF tabs", async () => {

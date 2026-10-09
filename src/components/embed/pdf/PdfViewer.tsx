@@ -176,7 +176,7 @@ import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { pdfRasterRatio } from "./raster";
 import { PdfWorkerSlot } from "../../../lib/viewers/pdfLoad";
 import { usePaneSleepHold, useSleepWhenHidden } from "../../../lib/sleepWhenHidden";
-import { isTabInPopout, useTabsStore } from "../../../stores/tabs";
+import { isTabInPopout, splitSubPaneKey, useTabsStore } from "../../../stores/tabs";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { ArrowUpRightIcon, CommentIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
 
@@ -5469,7 +5469,10 @@ export function PdfView({
   const paneVisible = usePaneVisible();
   const [held, setHeld] = useState(false);
   const compiling = usePdfSyncStore((s) => (s.compilingByPath[path] ?? 0) > 0);
-  const mirrored = useTabsStore((s) => tabKey != null && isTabInPopout(s, tabKey));
+  // A TeX workspace's PDF pane (`<tab>#<path>`) is mirrored with its tab.
+  const mirrored = useTabsStore(
+    (s) => tabKey != null && isTabInPopout(s, splitSubPaneKey(tabKey)?.tab ?? tabKey),
+  );
   const asleep = useSleepWhenHidden({
     hidden: !paneVisible,
     afterMs: PDF_DOC_RELEASE_MS,

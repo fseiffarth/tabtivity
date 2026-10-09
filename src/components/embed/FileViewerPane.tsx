@@ -20,8 +20,8 @@ import {
   findGroupOfTab,
   findTabByKey,
   flushViewerState,
-  getDetachedViewerState,
   pendingViewerState,
+  persistedViewerState,
   useTabsStore,
   type TabEntry,
   type ViewerState,
@@ -322,9 +322,9 @@ const ImageAnnotator = lazy(() => import("./ImageAnnotator").then((m) => ({ defa
  */
 function seedViewerState(tabKey: string | undefined): ViewerState | undefined {
   if (!tabKey) return undefined;
-  const stored =
-    findTabByKey(useTabsStore.getState(), tabKey)?.viewerState ??
-    getDetachedViewerState(tabKey);
+  // A TeX workspace sub-pane's key (`<tab>#<path>`) reads its entry in the
+  // workspace tab's `texPanes`.
+  const stored = persistedViewerState(useTabsStore.getState(), tabKey);
   // A position written since the last flush (performance plan §3.1) outranks
   // the store's: a viewer remounting (a sleeping PDF waking) restores it.
   const pending = pendingViewerState(tabKey);
