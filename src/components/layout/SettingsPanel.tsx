@@ -14,6 +14,7 @@ import { RootMcpSecurity } from "./RootMcpSecurity";
 import { CopilotCompletionCard } from "./CopilotCompletionCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { SLEEP_TABS_CHOICES_MIN, SLEEP_TABS_DEFAULT_MIN } from "../../lib/sleepWhenHidden";
+import { SHELL_SCROLLBACK_CHOICES, shellScrollbackRows } from "../../lib/terminal/scrollback";
 import { experimentalEnabled } from "../../lib/experimental";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { TabCostList } from "./TabCostList";
@@ -1188,7 +1189,7 @@ const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   remoteFeatures: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"],
   vm: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"],
   mobile: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"],
-  performance: ["settings.energySaver", "settings.fastMode", "settings.sleepTabs", "settings.tabCosts"],
+  performance: ["settings.energySaver", "settings.fastMode", "settings.sleepTabs", "settings.shellScrollback", "settings.tabCosts"],
   resourceMonitor: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"],
   experimental: ["settings.debug", "settings.terminalWebgl", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug"],
   git: ["nav.git.blurb"],
@@ -2004,6 +2005,27 @@ export function SettingsDialog({
                       label: t("settings.sleepTabsMinutes", { n }),
                     })),
                   ]}
+                />
+              }
+            />
+
+            {/* Shell scrollback (`lib/terminal/scrollback`): TerminalView
+                applies it live to open shells; agent tabs keep a fixed cap. */}
+            <SettingRow
+              label={
+                <>
+                  {t("settings.shellScrollback")} <UntestedTag id="settings.shellScrollback" />
+                </>
+              }
+              help={t("settings.shellScrollbackHelp")}
+              control={
+                <Dropdown
+                  value={String(shellScrollbackRows(settings?.shell_scrollback_rows))}
+                  onChange={(v) => void updateSettings({ shell_scrollback_rows: Number(v) })}
+                  options={SHELL_SCROLLBACK_CHOICES.map((n) => ({
+                    value: String(n),
+                    label: t("settings.shellScrollbackLines", { n: n.toLocaleString() }),
+                  }))}
                 />
               }
             />

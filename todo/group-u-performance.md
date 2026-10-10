@@ -2224,7 +2224,8 @@ backend steps). Nothing here was run live.*
     - [x] 🤖 Automated test — `TabCost`, `PdfCostRegistry`,
       `TabHoverCardCost`, `TabCostList`, `PdfLoadWarningHost`
     - [ ] 🖐️ Manual test (T1.1) — Hover a busy shell tab: the "memory" row
-      reads "≈ … · N of M lines" (M = the tab's scrollback cap, 5,000 today).
+      reads "≈ … · N of M lines" (M = the tab's scrollback cap: 2,000 for a
+      shell by default — the "Shell scrollback" setting — 5,000 for an agent).
       Hover a PDF: its pages and file size. Hover a PDF hidden over 5 min:
       "Unloaded — reloads when shown". Set "Unload hidden tabs after" to 5 min
       and hover a terminal hidden that long: "the program keeps running", no
@@ -2251,7 +2252,31 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
     - [ ] 🖐️ Manual test (T1.3) — More than 2 min after start, open 8 PDFs
       one after another: one toast at the 8th, gone after ~3 s; none at the
-      9th. Close down to 5, open three more: it shows once more.
+      9th. Close down to 5, open three more: it shows once more. Then open
+      8 PDFs within 2 min of a start and leave them: one toast when the 2 min
+      are up, none after.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2416. **Shell scrollback setting.** ✅ Done on branch `perf` (T2 in
+    `docs/tab_cost_handoff.md`, plan `docs/tab_cost_plan.md` step 2),
+    code-complete and **live-unverified**. Untested pill
+    `settings.shellScrollback`. Setup: a frozen dev build of this branch.
+    - [x] 🤖 Automated test — `Scrollback`, `TerminalScrollback`, Rust
+      `shell_scrollback_rows_defaults_absent_and_round_trips`
+    - [ ] 🖐️ Manual test (T2.1) — Settings → Power & performance → "Shell
+      scrollback" reads 2,000 lines. A new shell keeps 2,000 lines: run
+      `seq 1 5000`, scroll to the top — it starts near 3000, less the
+      screen's height (the visible screen is kept on top of the 2,000). An agent tab still keeps
+      5,000. Set 1,000: the open shell drops its oldest lines at once, no
+      restart, its program still running; its tab hover card reads "of 1,000
+      lines". Reopen Settings: 1,000.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)

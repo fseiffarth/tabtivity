@@ -10,7 +10,7 @@ import { resolveTheme, useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
-import { cmdToKind, isDetachedPtyId, type TabKind } from "../../stores/tabs";
+import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
 import { isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteInput } from "../../lib/agents/promptCount";
@@ -35,7 +35,8 @@ import { isExternalFileDrag, parseDroppedFilePaths } from "../files/importDrop";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { asleepPty, killAsleepPty, parkPty, takeAsleepPty } from "../../lib/terminal/sleepingPtys";
-import { terminalSpawnKey } from "../../lib/terminal/terminalSpawn";
+import { terminalSpawnKey, terminalViewKind } from "../../lib/terminal/terminalSpawn";
+import { scrollbackRowsFor } from "../../lib/terminal/scrollback";
 import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
 import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
@@ -65,7 +66,7 @@ import { noteTypedLine, screenAtCursor } from "../../lib/agents/typedClear";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { notePromptTrailInput } from "../../stores/agents/promptTrail";
 import "@xterm/xterm/css/xterm.css";
-import { envName, storageKey } from "../../lib/brand";
+import { storageKey } from "../../lib/brand";
 
 // Hoisted to module scope: keystroke input fires this on every key, so we reuse
 // one encoder rather than allocating a `new TextEncoder()` per keystroke. The
@@ -405,6 +406,18 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   const webglWantedRef = useRef(webglWanted);
   webglWantedRef.current = webglWanted;
   const applyRendererRef = useRef<((wantWebgl: boolean) => void) | null>(null);
+  // The scrollback cap (`lib/terminal/scrollback`): the shell setting, or the
+  // agents' constant. Same bargain as the renderer flag — read through a ref
+  // when the xterm is built, applied live by its own effect below, and never a
+  // spawn input (`terminalSpawnKey`): changing it must not respawn or wake a
+  // program.
+  // `paneKind` is the spawn effect's own reading of the tab kind (one helper,
+  // see there).
+  const paneKind: TabKind = terminalViewKind({ kind: declaredKind, cmd, env });
+  const shellScrollbackSetting = useSettingsStore((s) => s.settings?.shell_scrollback_rows);
+  const scrollbackRows = scrollbackRowsFor(paneKind, shellScrollbackSetting);
+  const scrollbackRowsRef = useRef(scrollbackRows);
+  scrollbackRowsRef.current = scrollbackRows;
   const argsKey = JSON.stringify(args);
   const envKey = JSON.stringify(env);
 
@@ -451,7 +464,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     const buildTerm = (): Terminal => {
       if (term) return term;
       const built = new Terminal({
-        scrollback: 5000,
+        scrollback: scrollbackRowsRef.current,
         allowProposedApi: false,
         // macOS reads Option+click, and only Option+click, as "select even though
         // the program has grabbed the mouse" (see FORCE_SELECTION_MODIFIER) — and
@@ -815,8 +828,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // signal here that distinguishes it from the cloud agent of the same command
     // (a local model driven through `vibe` still has cmd "vibe") — TerminalView
     // is handed cmd/env, not the TabEntry's kind.
-    const localModel = env[envName("LOCAL_MODEL")] || env.VIBE_ACTIVE_MODEL;
-    const kind: TabKind = declaredKind ?? (localModel ? "local_agent" : cmdToKind(cmd));
+    const kind: TabKind = terminalViewKind({ kind: declaredKind, cmd, env });
     const agentLeaf = agentPromptLeaf({ kind, cmd, env });
     // A shell tab can be RESUMED with no initialInput to type — a tmux reattach on
     // reconnect/relaunch. tmux probes the outer terminal on attach (secondary DA,
@@ -2059,6 +2071,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     applyRendererRef.current?.(webglWanted);
   }, [webglWanted]);
 
+  // Apply the scrollback cap to a LIVE terminal when the setting (or settings
+  // arriving after the tab mounted) moves it. Not a spawn dep: the PTY and its
+  // program are untouched. Shrinking trims the buffer at once; a terminal not
+  // built yet reads the ref in `buildTerm`.
+  useEffect(() => {
+    const term = termRef.current;
+    if (term && term.options.scrollback !== scrollbackRows) term.options.scrollback = scrollbackRows;
+  }, [scrollbackRows]);
+
   // Open (first time) or re-fit when the pane becomes visible or its cell
   // geometry changes (grid layout switches). The container ResizeObserver covers
   // most resizes, but a hidden→visible transition doesn't always fire it, so
@@ -2122,8 +2143,6 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     setSignIn(null);
   };
 
-  // The spawn effect's own reading of the tab kind (see there).
-  const paneKind: TabKind = declaredKind ?? (env[envName("LOCAL_MODEL")] || env.VIBE_ACTIVE_MODEL ? "local_agent" : cmdToKind(cmd));
   const agentPane = paneKind === "agent" || paneKind === "local_agent";
 
   // Files dragged in from the OS file manager (`lib/terminal/terminalDrop`):

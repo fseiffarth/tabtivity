@@ -1,4 +1,23 @@
-import { effectiveTabLocation, remoteHostIdOf, type TabEntry } from "../../stores/tabs";
+import { cmdToKind, effectiveTabLocation, remoteHostIdOf, type TabEntry, type TabKind } from "../../stores/tabs";
+import { envName } from "../brand";
+
+/**
+ * The kind a `TerminalView` acts as: its declared `kind` prop, else a
+ * `local_agent` when its env carries a local model (the only signal that tells
+ * it from the cloud agent of the same command — a local model driven through
+ * `vibe` still has cmd "vibe"), else what its command says. One helper, so the
+ * spawn effect (usage recap, start-up handling) and the scrollback cap
+ * (`lib/terminal/scrollback`) cannot disagree.
+ */
+export function terminalViewKind(p: {
+  kind?: TabKind;
+  cmd: string;
+  env?: Record<string, string>;
+}): TabKind {
+  if (p.kind) return p.kind;
+  const env = p.env ?? {};
+  return env[envName("LOCAL_MODEL")] || env.VIBE_ACTIVE_MODEL ? "local_agent" : cmdToKind(p.cmd);
+}
 
 /** The inputs a terminal's spawn depends on — `TerminalView`'s spawn effect
  *  deps, which a change of respawns the PTY. */

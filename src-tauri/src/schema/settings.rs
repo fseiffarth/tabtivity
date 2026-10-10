@@ -794,6 +794,13 @@ pub struct Settings {
     /// frontend type declares it and it round-trips as written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep_tabs_after_min: Option<u32>,
+    /// Lines of history a shell terminal keeps (tab cost plan step 2): every
+    /// terminal but agent tabs, which keep a fixed 5,000. Absent → 2,000;
+    /// clamped to [100, 50,000]. Read entirely on the frontend
+    /// (`src/lib/terminal/scrollback.ts`); a named field so it round-trips as
+    /// written and an older settings file without it still loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_scrollback_rows: Option<u32>,
     /// Header resource-monitor row toggles. Each defaults ON when unset so the
     /// pill shows CPU/RAM/GPU by default; flip one off to hide that row. Shown in
     /// every build (independent of `debug`).
@@ -1332,6 +1339,31 @@ mod tests {
             let back: Settings =
                 serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
             assert_eq!(back.sleep_tabs_after_min, Some(n));
+        }
+    }
+
+    /// The shell scrollback is absent by default (the frontend reads 2,000),
+    /// an older settings file without it still loads, it is a real field
+    /// rather than an `extra` passenger, and a chosen value survives a round
+    /// trip.
+    #[test]
+    fn shell_scrollback_rows_defaults_absent_and_round_trips() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            !raw.contains("shell_scrollback_rows"),
+            "default settings must omit shell_scrollback_rows: {raw}"
+        );
+        let old: Settings =
+            serde_json::from_str(r#"{"sleep_tabs_after_min":10}"#).expect("parse old settings");
+        assert_eq!(old.shell_scrollback_rows, None);
+        for n in [1000u32, 10_000] {
+            let s: Settings =
+                serde_json::from_str(&format!(r#"{{"shell_scrollback_rows":{n}}}"#)).expect("parse");
+            assert_eq!(s.shell_scrollback_rows, Some(n));
+            assert!(s.extra.is_empty(), "fell through to `extra`: {:?}", s.extra.keys());
+            let back: Settings =
+                serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
+            assert_eq!(back.shell_scrollback_rows, Some(n));
         }
     }
 

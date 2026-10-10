@@ -707,6 +707,12 @@ export interface Settings {
    *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
    *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
   sleep_tabs_after_min?: number;
+  /** Lines of history a shell terminal keeps (`docs/tab_cost_plan.md` step
+   *  2): every `TerminalView` whose kind is not `agent`/`local_agent`. Unset or
+   *  invalid → 2,000; clamped to [100, 50,000]. Agent tabs keep a fixed 5,000.
+   *  Read through `shellScrollbackRows` (`lib/terminal/scrollback`), applied
+   *  live to open terminals. */
+  shell_scrollback_rows?: number;
   /** When true, the side panel is docked open (reflows layout) instead of hover-revealed. */
   side_panel_pinned?: boolean;
   /** Width of the side (files/git/search/sessions) panel in px. Set by dragging the
