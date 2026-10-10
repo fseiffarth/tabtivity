@@ -196,3 +196,50 @@ and placeholders in all five files; both untested ids rendered as pills.
   the help text); raising it does not bring trimmed lines back.
 - Help text names "5,000" for agents as a literal in all five languages; if
   `AGENT_SCROLLBACK_ROWS` ever changes, the text must too.
+
+## T2 (reviewer)
+
+Range reviewed: `8906ccc4..c501ef4d`. Bugs only; nothing run live.
+
+**Fixes**
+
+| Commit | Bug | Test |
+|---|---|---|
+| `d30eec1e` | The grace-end one-shot could be lost for good: `setTimeout` truncates the fractional `left` to whole ms and `performance.now()` is coarsened (sub-ms with jitter in WebView2), so the timer can fire on a reading just under `PDF_WARN_GRACE_MS`; `pdfWarnStep` then declines and nothing looks again on an unmoved count. The timer now rounds its delay up and reads the clock as at least the grace's end. | `PdfLoadWarningHost.test.tsx` "still looks when the grace-end timer fires on a clock reading just short of the grace" |
+| `a1bd6236` | (implementer's flag) The help hard-coded the agents' "5,000" in five languages. Now `{n}`, filled from `AGENT_SCROLLBACK_ROWS.toLocaleString()` as the sibling `…Lines` label does. | `ShellScrollbackSetting.test.tsx`: every dictionary has `{n}` and no digit; the rendered Settings row reads the constant |
+
+**Checked, no bug:** the scrollback is not in the spawn effect deps nor in
+`TerminalSpawnInputs`/`terminalSpawnKey`, so a change cannot respawn, wake or
+re-key a PTY (sleeping panes compare only the spawn key); the live effect is a
+no-op before the S4 lazy build (`buildTerm` reads the ref) and an S10 wake
+builds a fresh xterm from the ref; xterm 5.5 applies `options.scrollback` live
+(`BufferSet` resizes on the option, `trimStart` fires `onTrim`); popouts
+follow through `SETTINGS_CHANGED_EVENT`; there is one `new Terminal` in `src/`.
+`terminalViewKind` equals both old copies for every real kind: all tab panes
+pass `tab.kind` (root console, Host session, docked/overlay columns, remote,
+container tabs all go through `TabPane`), dialogs' terminals pass none (→ by
+command, `ssh` → shell). Clamp: 0/negative → 100, huge → 50,000, string/null/
+NaN → 2,000. Rust: snake_case like every `Settings` key (no `rename_all`);
+an older backend keeps the key in `extra`. StrictMode re-runs the warning
+effect with the ref kept and the first timer cleared; a crossing already
+warned is disarmed. `…One` keys present in all five files.
+
+**Gates** (worktree, after the fixes)
+- `npm run build`: ok.
+- `npm test -- --reporter=dot`: 773 files / 7809 tests, all pass (+1 file,
+  +3 tests).
+- `npm run lint`: 0 errors / 28 warnings (unchanged).
+- `scripts/brand-check.sh`, `scripts/privacy-check.sh`, `git diff --check`:
+  ok. No Rust touched.
+
+**Flagged for user**
+- A hand-edited `shell_scrollback_rows` that is not a `u32` (negative, a
+  string, > 4 294 967 295) makes the new backend refuse the whole
+  `settings.json`, as every other `Option<u32>` field already does
+  (`sleep_tabs_after_min`, …). The plan fixes the type; the app itself only
+  writes the dropdown's values.
+- `terminalViewKind` tests `if (p.kind)` where both old copies used `??`: a
+  persisted tab with `kind: ""` (never written by the app) is now classed by
+  its command instead of keeping `""`.
+- A shell tab running an agent CLI through the shim keeps the shell cap
+  (it is a shell tab); say if those should keep 5,000.
