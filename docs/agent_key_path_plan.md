@@ -119,3 +119,22 @@ refusal.
   paired device, with no keyring unlock. Residual: a daemon restart drops
   every token, so a keyed agent in a surviving tmux tab must be restarted
   (as after a desktop crash). Gates as step 1 (Rust 4143, frontend 7682).
+- **Step 3 — admin keys through the proxy: done.** `Grant::admin` names the
+  CLI whose administrator key a grant forwards with; `admin_key_for` asks the
+  keeper (`agent_keys::for_proxy`, which also requires the user's choice) and
+  caches the answer 60 s, dropped on an upstream 401; brokered → the loopback
+  broker URL with the user's broker token over a plain-HTTP loopback client;
+  admin grants are never metered against the user's own limit.
+  `agent_keys::admin_for_spawn` replaces `prepare_spawn` in both fence wraps
+  and the Host session (offer checked; no proxy in the process — the shell
+  shim — fails naming the agent tab). Removed: `apiKeyHelper`, the helper
+  socket and `--key-helper` verb (never live, so no cleanup of homes is
+  needed), `container_env`, `CONTAINER_KEY_ENV`, the raw-key carriers and the
+  registry's `api_key_env` column (`agent_logins` now says
+  `admin_key_capable`). A keyed container spawn fails before the container
+  starts (`agent_api_keys::refuse_in_container`, own and admin keys alike).
+  The keeper accepts keys only for `keys_wire::KEY_CLIS` (Claude, Gemini; a
+  test holds it to the proxy's routes). Choosing the admin key switches the
+  CLI's own API key off. A Claude on the admin key starts without Remote
+  Control, like one on an own key. On a server, tmux < 3.2 fails any keyed
+  spawn. Gates: clippy clean, Rust 4143, frontend 7682, lint 0 errors.

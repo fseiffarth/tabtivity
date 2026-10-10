@@ -694,22 +694,25 @@ per CLI which one their agents run on.
   in Manage CLIs.
 - **A user** picks per CLI in Settings → Manage CLIs → Agent logins: **Use
   the administrator's key** or **Use my own login**. While the
-  administrator's key is chosen, that CLI's agents — agent tabs, the root
-  console's Host session, the CLI typed into a shell tab, and agent tabs of a
-  project container — run on it, and your own login for that CLI is taken
-  out of the agent homes (it stays saved and comes back when you switch
-  back), so the CLI never has two credentials to choose from. Gemini and
-  Vibe get the key in their environment at start. Claude fetches it through
-  its `apiKeyHelper` setting, which Tabtivity writes into its own agent homes
-  (and removes again when you switch back): Claude asks no question about an
-  API key and stores nothing of it.
-- **What a key costs.** Every agent of a user who chose it can read the key,
-  and there is no per-user budget: usage counts against the administrator's
-  account. Withdrawing a key, or taking a user off its list, makes their next
-  agent start fail with a note to switch back to your own login; a running
-  Claude loses it within minutes, other agents already running keep it — to
-  take it from them, revoke the key at the provider. Remote agents and Codex
-  never get the administrator's key.
+  administrator's key is chosen, that CLI's agents — agent tabs and the root
+  console's Host session — run on it, your own API key for that CLI (if you
+  had switched one on) is switched off, and your own login for that CLI is
+  taken out of the agent homes (it stays saved and comes back when you switch
+  back), so the CLI never has two credentials to choose from. The key goes
+  the same way as your own API key (#2389): it never enters an agent. Each
+  tab gets a token that works only through your server session's API proxy,
+  which adds the key — or, for a brokered key, sends the request to the key
+  broker with your own broker token. Only Claude and Gemini can be offered a
+  key (Mistral Vibe has no way to point it at the proxy). A CLI typed into a
+  shell tab, and an agent tab of a project container, cannot reach the proxy:
+  they fail to start with a note saying so.
+- **What a key costs.** No agent can read the key, but every agent of a user
+  who chose it can spend through its tab's token while it runs; a directly
+  delivered key has no per-user budget (usage counts against the
+  administrator's account). Withdrawing a key, or taking a user off its list,
+  makes their next agent start fail with a note to switch back to your own
+  login, and their running agents are refused within a minute. Remote agents
+  and Codex never get the administrator's key.
 - **Removing a user rotates nothing.** `user-remove` takes the account off
   every key's list, but a copy of a directly delivered key the user saved
   while they had it still works, and once they are off the list Tabtivity
@@ -727,9 +730,7 @@ per CLI which one their agents run on.
   *name*'s token** cuts that user's running agents off at their next
   request without changing the key; **Deliver directly** goes back to
   handing out the key. Users see their own month next to the switch in
-  Manage CLIs. Project containers cannot reach the broker, so a brokered
-  Claude does not start inside one. Gemini and Vibe keys are always
-  delivered directly.
+  Manage CLIs. Gemini keys are always delivered directly.
 
 ### Hosted server: sharing projects and calendars
 

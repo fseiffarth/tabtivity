@@ -407,7 +407,7 @@ pub fn docker_create_args(
 /// readable by every local user — not only this uid.
 fn is_secret_exec_env(key: &str) -> bool {
     crate::services::ssh_exec::AGENT_AUTH_ENV.contains(&key)
-        || crate::services::server::agent_keys::key_envs().contains(&key)
+        || crate::services::agent_api_keys::credential_names().any(|name| name == key)
         || [
             crate::services::root_mcp::TOKEN_ENV,
             crate::services::root_mcp::SCHEDULE_TOKEN_ENV,
@@ -800,6 +800,14 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
         .clone()
         .ok_or_else(|| "Project container: this tab has no owning project.".to_string())?;
 
+    // A CLI on an API key (the user's own, or a server administrator's)
+    // cannot reach the API proxy from the container's network, and no key
+    // ever goes into one (#2389): refused before the container comes up.
+    crate::services::agent_api_keys::refuse_in_container(
+        &opts.cmd,
+        crate::services::agent_api_keys::is_local_model(opts)
+            || crate::services::agent_fence::runs_subcommand(&opts.args),
+    )?;
     let spec = sandbox_spec_for(&project_id);
     // The container mounts the project ROOT; a subdir tab keeps its cwd via -w.
     let project_dir = project_dir_for(&project_id).unwrap_or_else(|| opts.cwd.clone());
@@ -819,10 +827,6 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
         (opts.cmd.clone(), opts.args.clone())
     };
 
-    // A hosted server's administrator's key for an agent this user runs on
-    // it (plan §5.4): into the exec's environment, its value off the argv
-    // ([`is_secret_exec_env`]); a withdrawn key fails the spawn here.
-    crate::services::server::agent_keys::container_env(&cmd, &mut opts.env)?;
     // opts.env is already resolved (TABTIVITY_TAB_UID, resume args' env, etc.).
     let env: BTreeMap<String, String> = opts.env.clone().into_iter().collect();
     // Auth env is read at exec (not create) so rotated tokens are picked up
@@ -2334,22 +2338,17 @@ mod tests {
         assert!(!client.contains_key(crate::app_env!("TAB_UID")));
     }
 
-    /// A hosted server's administrator's keys (plan §5.4, P3b decisions):
-    /// named on the exec argv, their values only in the client's environment.
+    /// A provider credential the tab's environment carries (a user's own
+    /// `GEMINI_API_KEY`): named on the exec argv, its value only in the
+    /// client's environment. No Tabtivity key is ever put there (#2389).
     #[test]
-    fn exec_argv_carries_no_admin_key_value() {
-        let helper = crate::services::server::agent_keys::CONTAINER_KEY_ENV;
-        let envs = env(&[(helper, "admin-s3cret"), ("MISTRAL_API_KEY", "vibe-s3cret")]);
+    fn exec_argv_carries_no_provider_credential_value() {
+        let envs = env(&[("GEMINI_API_KEY", "gemini-s3cret"), ("ANTHROPIC_AUTH_TOKEN", "token-s3cret")]);
         let out = docker_exec_args(concat!(crate::app_slug!(), "-p1"), "/p", &envs, &BTreeMap::new(), "/tmp/x.pid", "claude", &[]);
         assert!(!out.iter().any(|a| a.contains("s3cret")), "{out:?}");
-        assert!(has_flag_value(&out, "-e", helper) && has_flag_value(&out, "-e", "MISTRAL_API_KEY"), "{out:?}");
+        assert!(has_flag_value(&out, "-e", "GEMINI_API_KEY") && has_flag_value(&out, "-e", "ANTHROPIC_AUTH_TOKEN"), "{out:?}");
         let client = docker_exec_client_env(&envs, &BTreeMap::new());
-        assert_eq!(client.get(helper).map(String::as_str), Some("admin-s3cret"));
-        // No legacy-named twin of the key is ever exported (it would ride the
-        // argv by value).
-        let mut tab: std::collections::HashMap<String, String> = [(helper.to_string(), "admin-s3cret".to_string())].into();
-        crate::brand::PAIR.export_both(&mut tab);
-        assert_eq!(tab.len(), 1, "{tab:?}");
+        assert_eq!(client.get("GEMINI_API_KEY").map(String::as_str), Some("gemini-s3cret"));
     }
 
     #[test]

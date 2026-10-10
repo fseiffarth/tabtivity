@@ -180,6 +180,18 @@ pub fn cli_of(cmd: &str) -> Option<&'static str> {
     crate::commands::agents::agent_id_for_bin(bin)
 }
 
+/// Whether the proxy serves CLI `id` (registry id) at all — what an API key,
+/// the user's own or a server administrator's, can run (#2389).
+pub fn proxies(id: &str) -> bool {
+    !routes_of(id).is_empty()
+}
+
+/// Every variable that carries a provider credential, by any provider: a
+/// value under one of these never rides an argv (`sandbox`'s `docker exec`).
+pub fn credential_names() -> impl Iterator<Item = &'static str> {
+    Provider::ALL.into_iter().flat_map(|p| p.credential_names().iter().copied())
+}
+
 /// The routes of CLI `id`; empty for one not in the table.
 fn routes_of(id: &str) -> &'static [Route] {
     CLI_ROUTES
@@ -287,17 +299,19 @@ pub struct Binding<'a> {
 }
 
 /// The pure core of [`inject_env`]. Nothing for a local-model tab, a CLI
-/// subcommand, or a CLI not in `enabled`; otherwise each of the CLI's routes
-/// the user did not set gets `grant(provider)` — a proxy token and base URL —
-/// when that has one: the token under its carrier with `carry`, else under
-/// the CLI's own name, the base URL under the CLI's variable. Returns the
-/// names it set.
+/// subcommand, or a CLI neither in `enabled` nor on a server administrator's
+/// key (`admin`, the CLI id `server::agent_keys::admin_for_spawn` passed);
+/// otherwise each of the CLI's routes the user did not set gets
+/// `grant(provider)` — a proxy token and base URL — when that has one: the
+/// token under its carrier with `carry`, else under the CLI's own name, the
+/// base URL under the CLI's variable. Returns the names it set.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn inject_env_with(
     cmd: &str,
     subcommand: bool,
     local_model: bool,
     enabled: &[String],
+    admin: Option<&'static str>,
     env: &mut HashMap<String, String>,
     carry: bool,
     ambient: impl Fn(&str) -> bool,
@@ -309,7 +323,7 @@ pub(crate) fn inject_env_with(
     let Some(id) = cli_of(cmd) else {
         return Vec::new();
     };
-    if !enabled.iter().any(|c| c == id) {
+    if admin != Some(id) && !enabled.iter().any(|c| c == id) {
         return Vec::new();
     }
     let mut set = Vec::new();
@@ -330,13 +344,17 @@ pub(crate) fn inject_env_with(
 
 /// Point a local agent session of `cmd` at the proxy for its keyed providers.
 /// `subcommand` is `agent_fence::runs_subcommand` of the CLI's own argv, taken
-/// before a fence rewrites it. Settings first, so a spawn of a CLI nobody
-/// switched on never touches the keyring; nothing at all where the proxy is
-/// not running (the `--agent-shim` process).
+/// before a fence rewrites it. `admin` is the CLI a hosted server's user runs
+/// on the administrator's key (`server::agent_keys::admin_for_spawn`, which
+/// checked the offer): its grants forward with that key, whatever the
+/// own-key switches say. Settings first, so a spawn of a CLI nobody switched
+/// on never touches the keyring; nothing at all where the proxy is not running
+/// (the `--agent-shim` process).
 pub fn inject_env(
     cmd: &str,
     subcommand: bool,
     local_model: bool,
+    admin: Option<&'static str>,
     binding: Binding<'_>,
     env: &mut HashMap<String, String>,
 ) -> Vec<&'static str> {
@@ -354,11 +372,56 @@ pub fn inject_env(
         subcommand,
         local_model,
         &enabled_clis(),
+        admin,
         env,
         CARRY,
         |k| std::env::var_os(k).is_some_and(|v| !v.is_empty()),
-        |provider| crate::services::api_proxy::issue(provider, binding.scope, binding.tab, binding.tmux),
+        |provider| crate::services::api_proxy::issue(provider, admin, binding.scope, binding.tab, binding.tmux),
     )
+}
+
+/// A project-container spawn of `cmd` (`sandbox`): refused when the CLI runs
+/// on an API key — the user's own (switched on, with a key saved) or a
+/// server administrator's — since the container cannot reach this process's
+/// loopback proxy and no key is ever put into one (#2389). The message names
+/// the way out. `keyless`: a spawn that never takes a key (a local-model tab,
+/// a CLI subcommand such as a sign-in). Settings first: the keychain is read
+/// only for a switched-on CLI.
+pub fn refuse_in_container(cmd: &str, keyless: bool) -> Result<(), String> {
+    if keyless {
+        return Ok(());
+    }
+    let Some(id) = cli_of(cmd).filter(|id| proxies(id)) else {
+        return Ok(());
+    };
+    let admin = crate::services::server::is_server()
+        && crate::services::server::agent_keys::chosen_in(&crate::storage::state_dir()).contains(id);
+    let own = applies_to(cmd, &settings()) && routes_of(id).iter().any(|r| has_key(r.provider));
+    if admin || own {
+        let label = crate::commands::agents::agent_label_for_id(id).unwrap_or(id);
+        return Err(format!(
+            "{label} runs on an API key, which never goes into a project container: turn the container off for this project, or switch {label} back to its own login in Settings → Manage CLIs"
+        ));
+    }
+    Ok(())
+}
+
+/// Switch CLI `id`'s own API key off (`Settings::agent_api_key_clis`): a
+/// server user choosing the administrator's key for it (one credential per
+/// CLI, `server::agent_keys::choose`).
+pub fn switch_off(id: &str) -> Result<(), String> {
+    let path = crate::storage::state_dir().join("settings.json");
+    if !settings().agent_api_key_clis.is_some_and(|on| on.iter().any(|c| c == id)) {
+        return Ok(());
+    }
+    // Under the settings file's own lock, as `patch_settings` writes it.
+    crate::storage::patch_json(&path, crate::schema::Settings::default(), |settings| {
+        if let Some(on) = settings.agent_api_key_clis.as_mut() {
+            on.retain(|c| c != id);
+        }
+        settings.rev += 1;
+        Ok(())
+    })
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -556,7 +619,31 @@ mod tests {
     }
 
     fn inject(cmd: &str, enabled: &[&str], env: &mut HashMap<String, String>) -> Vec<&'static str> {
-        inject_env_with(cmd, false, false, &on(enabled), env, false, |_| false, proxied)
+        inject_env_with(cmd, false, false, &on(enabled), None, env, false, |_| false, proxied)
+    }
+
+    /// #2389: the keeper offers administrator's keys for exactly the CLIs
+    /// this proxy serves.
+    #[test]
+    fn the_keepers_key_clis_are_the_proxys_clis() {
+        let ours: Vec<&str> = CLI_ROUTES.iter().map(|(id, _)| *id).collect();
+        assert_eq!(crate::services::server::keys_wire::KEY_CLIS, ours.as_slice());
+    }
+
+    /// #2389: a CLI a server user runs on the administrator's key gets a
+    /// grant though its own-key switch is off, and only that CLI does.
+    #[test]
+    fn a_cli_on_the_administrators_key_gets_a_grant_without_its_own_switch() {
+        let mut env = HashMap::new();
+        let set = inject_env_with("claude", false, false, &[], Some("claude"), &mut env, true, |_| false, proxied);
+        assert_eq!(set, vec![ANTHROPIC_CARRIER, ANTHROPIC_BASE_ENV]);
+        let mut env = HashMap::new();
+        assert!(inject_env_with("gemini", false, false, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
+        // A subcommand (a sign-in) or a local-model tab still gets nothing.
+        assert!(inject_env_with("claude", true, false, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
+        assert!(inject_env_with("claude", false, true, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
+        assert!(env.is_empty());
+        assert!(proxies("claude") && proxies("gemini") && !proxies("vibe") && !proxies("codex"));
     }
 
     #[test]
@@ -588,7 +675,7 @@ mod tests {
         }
         // Tabtivity's own environment counts too.
         let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, false, |k| k == ANTHROPIC_BASE_ENV, proxied);
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), None, &mut env, false, |k| k == ANTHROPIC_BASE_ENV, proxied);
         assert!(set.is_empty() && env.is_empty());
         // An empty value is not a choice.
         let mut env = HashMap::from([(ANTHROPIC_TOKEN_ENV.to_string(), String::new())]);
@@ -598,7 +685,7 @@ mod tests {
     #[test]
     fn no_grant_sets_nothing() {
         let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, |_| None);
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), None, &mut env, true, |_| false, |_| None);
         assert!(set.is_empty() && env.is_empty());
     }
 
@@ -623,8 +710,8 @@ mod tests {
     fn local_model_tabs_and_subcommands_get_nothing() {
         let mut env = HashMap::new();
         let all = on(&["claude", "gemini"]);
-        assert!(inject_env_with("claude", false, true, &all, &mut env, true, |_| false, proxied).is_empty());
-        assert!(inject_env_with("claude", true, false, &all, &mut env, true, |_| false, proxied).is_empty());
+        assert!(inject_env_with("claude", false, true, &all, None, &mut env, true, |_| false, proxied).is_empty());
+        assert!(inject_env_with("claude", true, false, &all, None, &mut env, true, |_| false, proxied).is_empty());
         assert!(env.is_empty());
         let args = vec!["auth".to_string(), "login".to_string()];
         assert!(crate::services::agent_fence::runs_subcommand(&args));
@@ -678,7 +765,7 @@ mod tests {
     #[test]
     fn a_carried_token_goes_in_under_its_carrier_and_maps_back() {
         let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, proxied);
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), None, &mut env, true, |_| false, proxied);
         assert_eq!(set, vec![ANTHROPIC_CARRIER, ANTHROPIC_BASE_ENV]);
         assert!(!env.contains_key(ANTHROPIC_TOKEN_ENV));
         assert_eq!(env[ANTHROPIC_CARRIER], "test-proxy-token-fake-anthropic");
@@ -697,7 +784,7 @@ mod tests {
         assert_eq!(m.remove.len(), 1);
         // A value the user set under the CLI's name still wins over a carrier.
         let mut env = HashMap::from([("ANTHROPIC_API_KEY".to_string(), "mine".to_string())]);
-        assert!(inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, proxied).is_empty());
+        assert!(inject_env_with("claude", false, false, &on(&["claude"]), None, &mut env, true, |_| false, proxied).is_empty());
         assert!(!env.contains_key(ANTHROPIC_CARRIER));
     }
 
@@ -708,7 +795,7 @@ mod tests {
         assert!(!crate::services::api_proxy::running());
         let mut env = HashMap::new();
         let binding = Binding { tab: "t", scope: "s", tmux: None };
-        assert!(inject_env("claude", false, false, binding, &mut env).is_empty());
+        assert!(inject_env("claude", false, false, None, binding, &mut env).is_empty());
         assert!(env.is_empty());
     }
 

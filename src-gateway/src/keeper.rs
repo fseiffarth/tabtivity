@@ -556,6 +556,9 @@ impl Keeper {
         let (Some(dir), true, true) = (self.cli_dir(cli), keys_wire::valid_key(key), wire::valid_account_name(by)) else {
             return Reply::error("invalid");
         };
+        if !keys_wire::KEY_CLIS.contains(&cli) {
+            return Reply::error("unsupported");
+        }
         let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
         let result = (|| -> std::io::Result<()> {
             match std::fs::symlink_metadata(&dir) {
@@ -916,6 +919,20 @@ mod tests {
         assert!(!audit.contains(KEY), "{audit}");
     }
 
+    /// #2389: a key is offered only for a CLI the users' API proxies serve;
+    /// Mistral Vibe (no base-URL variable) is refused and nothing is written.
+    #[test]
+    fn a_key_for_a_cli_no_proxy_serves_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let gw = keeper(dir.path(), Peer::Gateway);
+        let refused = ask_line(&gw, Request::Set { cli: "vibe".into(), key: KEY.into(), by: "admin".into() });
+        assert_eq!(refused.error.as_deref(), Some("unsupported"));
+        assert!(!dir.path().join("vibe").exists());
+        for cli in keys_wire::KEY_CLIS {
+            assert!(ask_line(&gw, Request::Set { cli: cli.to_string(), key: KEY.into(), by: "admin".into() }).ok, "{cli}");
+        }
+    }
+
     #[test]
     fn a_brokered_key_hands_each_listed_user_a_token_never_the_key() {
         let dir = tempfile::tempdir().unwrap();
@@ -971,7 +988,7 @@ mod tests {
     fn a_removed_account_leaves_every_keys_list() {
         let dir = tempfile::tempdir().unwrap();
         let gw = keeper(dir.path(), Peer::Gateway);
-        for cli in ["claude", "vibe"] {
+        for cli in ["claude", "gemini"] {
             assert!(ask_line(&gw, Request::Set { cli: cli.into(), key: KEY.into(), by: "admin".into() }).ok);
             allow(&gw, cli, &["alice", "bob"]);
         }
@@ -979,13 +996,13 @@ mod tests {
         let forget = serde_json::to_vec(&Request::Forget { user: "alice".into() }).unwrap();
         assert_eq!(gw.answer(1000, &forget).error.as_deref(), Some("refused"), "only root");
         assert!(gw.answer(0, &forget).ok);
-        for cli in ["claude", "vibe"] {
+        for cli in ["claude", "gemini"] {
             let meta = meta_in(dir.path(), cli).unwrap();
             assert_eq!(meta.users.iter().collect::<Vec<_>>(), ["bob"], "{cli}");
             assert!(meta.budgets.is_empty(), "{cli}");
         }
         let audit = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT_FILE)).unwrap();
-        assert!(audit.contains(VERB_USER_REMOVE) && audit.contains("claude/alice") && audit.contains("vibe/alice"));
+        assert!(audit.contains(VERB_USER_REMOVE) && audit.contains("claude/alice") && audit.contains("gemini/alice"));
         assert!(gw.answer(0, &forget).ok, "again: nothing left to do");
     }
 
@@ -996,22 +1013,22 @@ mod tests {
         let carol = keeper(dir.path(), Peer::User("carol".into()));
         let dave = keeper(dir.path(), Peer::User("dave".into()));
         let old = "fake-key-FIRST0123456789abcdef";
-        let never = ask_line(&carol, Request::Fingerprints { cli: "vibe".into() });
+        let never = ask_line(&carol, Request::Fingerprints { cli: "gemini".into() });
         assert_eq!((never.ok, never.error.as_deref()), (false, Some("no-key")));
-        assert!(ask_line(&gw, Request::Set { cli: "vibe".into(), key: old.into(), by: "admin".into() }).ok);
-        assert!(ask_line(&gw, Request::Set { cli: "vibe".into(), key: KEY.into(), by: "admin".into() }).ok);
-        allow(&gw, "vibe", &["carol"]);
+        assert!(ask_line(&gw, Request::Set { cli: "gemini".into(), key: old.into(), by: "admin".into() }).ok);
+        assert!(ask_line(&gw, Request::Set { cli: "gemini".into(), key: KEY.into(), by: "admin".into() }).ok);
+        allow(&gw, "gemini", &["carol"]);
         // A listed user's daemon recognises the current and earlier keys.
-        let prints = ask_line(&carol, Request::Fingerprints { cli: "vibe".into() }).fingerprints;
+        let prints = ask_line(&carol, Request::Fingerprints { cli: "gemini".into() }).fingerprints;
         assert_eq!(prints, [keys_wire::fingerprint(old), keys_wire::fingerprint(KEY)]);
         // An unlisted user gets exactly what a CLI that never had a key gets.
-        let unlisted = ask_line(&dave, Request::Fingerprints { cli: "vibe".into() });
+        let unlisted = ask_line(&dave, Request::Fingerprints { cli: "gemini".into() });
         assert_eq!(serde_json::to_value(&unlisted).unwrap(), serde_json::to_value(&never).unwrap());
-        assert_eq!(ask_line(&gw, Request::Fingerprints { cli: "vibe".into() }).error.as_deref(), Some("refused"));
-        assert!(ask_line(&gw, Request::Remove { cli: "vibe".into(), by: "admin".into() }).ok);
-        let after = ask_line(&carol, Request::Fingerprints { cli: "vibe".into() });
+        assert_eq!(ask_line(&gw, Request::Fingerprints { cli: "gemini".into() }).error.as_deref(), Some("refused"));
+        assert!(ask_line(&gw, Request::Remove { cli: "gemini".into(), by: "admin".into() }).ok);
+        let after = ask_line(&carol, Request::Fingerprints { cli: "gemini".into() });
         assert_eq!(after.error.as_deref(), Some("no-key"), "withdrawn with its list: nobody is listed any more");
-        let on_disk = std::fs::read_to_string(dir.path().join("vibe").join(PREVIOUS_FILE)).unwrap();
+        let on_disk = std::fs::read_to_string(dir.path().join("gemini").join(PREVIOUS_FILE)).unwrap();
         assert!(!on_disk.contains(old) && !on_disk.contains(KEY), "{on_disk}");
         let audit = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT_FILE)).unwrap();
         assert!(!audit.contains(VERB_DELIVERED), "asking for fingerprints is no delivery: {audit}");
@@ -1091,8 +1108,8 @@ mod tests {
         }
         assert_eq!(gw.answer(1, b"{not json").error.as_deref(), Some("invalid"));
         // A planted symlink in place of a CLI's directory is not followed.
-        std::os::unix::fs::symlink("/", dir.path().join("codex")).unwrap();
-        assert_eq!(ask_line(&gw, Request::Set { cli: "codex".into(), key: KEY.into(), by: "admin".into() }).error.as_deref(), Some("failed"));
+        std::os::unix::fs::symlink("/", dir.path().join("gemini")).unwrap();
+        assert_eq!(ask_line(&gw, Request::Set { cli: "gemini".into(), key: KEY.into(), by: "admin".into() }).error.as_deref(), Some("failed"));
     }
 
     #[tokio::test]

@@ -1,8 +1,10 @@
 //! The provider API proxy: the real key never enters an agent process
 //! (`docs/api_chat_plan.md`, Part C, C2).
 //!
-//! A user's provider key (`agent_api_keys`, OS keychain) stays inside
-//! Tabtivity. A keyed agent spawn gets two things instead:
+//! A user's provider key (`agent_api_keys`: the OS keychain, or on a hosted
+//! server the per-user vault) — or a server administrator's key, which this
+//! user's daemon asks the key keeper for (`server::agent_keys::for_proxy`,
+//! #2389) — stays inside Tabtivity. A keyed agent spawn gets two things instead:
 //!
 //! - a **proxy token**: 32 random bytes, held in memory only, bound to one
 //!   provider, one scope and one tab ([`Grant`]). It travels to the CLI as a C1
@@ -14,7 +16,9 @@
 //!
 //! The listener takes the token off the request, checks it, and forwards the
 //! request to the provider's one fixed HTTPS API host ([`upstream_host`]) with
-//! the real key in the provider's own header — only on a path that provider's
+//! the real key in the provider's own header (an administrator's key that
+//! goes through the server's key broker: to the broker's loopback URL, with
+//! this user's broker token instead — the broker swaps it for the key) — only on a path that provider's
 //! CLIs need ([`path_allowed`]), with a bounded body, never following a
 //! redirect, and with the response (Server-Sent Events included) passed back
 //! chunk by chunk as it arrives. A token that leaks — a project's CLI config
@@ -125,6 +129,11 @@ pub struct Grant {
     /// The local tmux session the agent runs in, when it does: the grant then
     /// lives as long as that session, not the PTY.
     pub tmux: Option<String>,
+    /// The CLI whose hosted-server administrator's key this grant forwards
+    /// with (`server::agent_keys`), instead of the user's own key. Such a
+    /// request is not charged to the user's own limit: a brokered key is
+    /// budgeted at the broker, a direct one has none (§5.4).
+    pub admin: Option<&'static str>,
 }
 
 /// A grant and when it was first issued: a tmux-bound one is spared by the
@@ -154,7 +163,7 @@ fn mint() -> Option<String> {
 /// [`issue`] hands a spawn — for other modules' teardown tests.
 #[cfg(test)]
 pub(crate) fn issue_for_test(scope: &str, tab: &str) -> Option<String> {
-    issue_grant(Grant { provider: Provider::Anthropic, scope: scope.to_string(), tab: tab.to_string(), tmux: None })
+    issue_grant(Grant { provider: Provider::Anthropic, scope: scope.to_string(), tab: tab.to_string(), tmux: None, admin: None })
 }
 
 /// The token for `grant`: the one it already holds (a respawn of the same tab
@@ -172,19 +181,24 @@ fn issue_grant(grant: Grant) -> Option<String> {
 
 /// A proxy token and the base URL for a keyed spawn, or `None` when the proxy
 /// is not running in this process (the `--agent-shim` process never runs it,
-/// so a CLI typed into a shell tab stays on its own login) or the provider has
-/// no key saved. Reads the keychain only on a cold cache. `tmux` is the local
-/// session the agent will run in — [`tmux_binding`] of the tab's session name,
-/// so a tab whose session name no tmux will ever create is not kept past its
-/// PTY.
-pub fn issue(provider: Provider, scope: &str, tab: &str, tmux: Option<&str>) -> Option<(String, String)> {
+/// so a CLI typed into a shell tab stays on its own login) or, for the user's
+/// own key (`admin` `None`), the provider has no key saved. Reads the keychain
+/// only on a cold cache; an administrator's key is not fetched here — the
+/// spawn checked its offer (`server::agent_keys::admin_for_spawn`) and every
+/// request asks again. `tmux` is the local session the agent will run in —
+/// [`tmux_binding`] of the tab's session name, so a tab whose session name no
+/// tmux will ever create is not kept past its PTY.
+pub fn issue(provider: Provider, admin: Option<&'static str>, scope: &str, tab: &str, tmux: Option<&str>) -> Option<(String, String)> {
     let base = base_url(provider)?;
-    key_for(provider)?;
+    if admin.is_none() {
+        key_for(provider)?;
+    }
     let token = issue_grant(Grant {
         provider,
         scope: scope.to_string(),
         tab: tab.to_string(),
         tmux: tmux.map(str::to_string),
+        admin,
     })?;
     Some((token, base))
 }
@@ -337,6 +351,50 @@ pub fn forget_key(provider: Provider) {
     cache.remove(&provider);
 }
 
+/// An administrator's key (or broker token) as the keeper last answered it
+/// for a CLI, trusted for [`ADMIN_KEY_FRESH`]: a turn makes several requests,
+/// and the keeper serves every user of the server. A withdraw, a removal from
+/// the key's list or the user's switch back reaches a running agent within
+/// that time; a 401 from upstream (a rotated key, a renewed token) drops it
+/// at once.
+struct AdminCached {
+    key: zeroize::Zeroizing<String>,
+    broker: Option<String>,
+    at: Instant,
+}
+
+const ADMIN_KEY_FRESH: Duration = Duration::from_secs(60);
+
+fn admin_keys() -> &'static Mutex<HashMap<&'static str, AdminCached>> {
+    static ADMIN: OnceLock<Mutex<HashMap<&'static str, AdminCached>>> = OnceLock::new();
+    ADMIN.get_or_init(Default::default)
+}
+
+/// `cli`'s administrator key and broker URL for this user, from the cache or
+/// the keeper. `Err` with the refusal the request gets.
+fn admin_key_for(cli: &'static str) -> Result<(zeroize::Zeroizing<String>, Option<String>), Refusal> {
+    if let Some(held) = lock(admin_keys()).get(cli).filter(|h| h.at.elapsed() < ADMIN_KEY_FRESH) {
+        return Ok((held.key.clone(), held.broker.clone()));
+    }
+    match super::server::agent_keys::for_proxy(cli) {
+        Ok(Some(found)) => {
+            let answer = (found.key.clone(), found.broker.clone());
+            lock(admin_keys()).insert(cli, AdminCached { key: found.key, broker: found.broker, at: Instant::now() });
+            Ok(answer)
+        }
+        Ok(None) => {
+            lock(admin_keys()).remove(cli);
+            Err(Refusal::AdminWithdrawn)
+        }
+        Err(_) => Err(Refusal::AdminUnavailable),
+    }
+}
+
+/// The upstream refused `cli`'s administrator key: ask the keeper anew next.
+fn forget_admin_key(cli: &str) {
+    lock(admin_keys()).remove(cli);
+}
+
 // ---------------------------------------------------------------------------
 // Runtime
 
@@ -393,6 +451,10 @@ enum KeySource {
     Keychain,
     #[cfg(test)]
     Fixed(Option<&'static str>),
+    /// An administrator's key (and broker URL) for every admin grant; the
+    /// user's own key for the rest.
+    #[cfg(test)]
+    FixedAdmin { own: Option<&'static str>, admin: Option<(&'static str, Option<String>)> },
 }
 
 impl KeySource {
@@ -404,6 +466,25 @@ impl KeySource {
                 .flatten(),
             #[cfg(test)]
             KeySource::Fixed(k) => k.map(str::to_string),
+            #[cfg(test)]
+            KeySource::FixedAdmin { own, .. } => own.map(str::to_string),
+        }
+    }
+
+    /// The key (or broker token) and broker URL an administrator-keyed grant
+    /// of `cli` forwards with.
+    async fn admin(&self, cli: &'static str) -> Result<(zeroize::Zeroizing<String>, Option<String>), Refusal> {
+        match self {
+            KeySource::Keychain => app_core::rt::spawn_blocking(move || admin_key_for(cli))
+                .await
+                .unwrap_or(Err(Refusal::AdminUnavailable)),
+            #[cfg(test)]
+            KeySource::Fixed(_) => Err(Refusal::AdminWithdrawn),
+            #[cfg(test)]
+            KeySource::FixedAdmin { admin, .. } => admin
+                .clone()
+                .map(|(key, broker)| (zeroize::Zeroizing::new(key.to_string()), broker))
+                .ok_or(Refusal::AdminWithdrawn),
         }
     }
 }
@@ -472,6 +553,10 @@ struct ProxyState {
     keys: KeySource,
     budget: Budget,
     client: reqwest::Client,
+    /// For the server's key broker only: plain HTTP on loopback, which the
+    /// provider client (HTTPS only) refuses. Never any other host — the
+    /// broker URL is checked to be loopback (`server::agent_keys`).
+    loopback: reqwest::Client,
     max_body: usize,
     /// Request body bytes held right now, over every socket.
     buffered: Arc<AtomicUsize>,
@@ -481,13 +566,14 @@ struct ProxyState {
 }
 
 impl ProxyState {
-    fn new(port: u16, upstream: Upstream, keys: KeySource, budget: Budget, client: reqwest::Client) -> Self {
+    fn new(port: u16, upstream: Upstream, keys: KeySource, budget: Budget, client: reqwest::Client, loopback: reqwest::Client) -> Self {
         ProxyState {
             port,
             upstream,
             keys,
             budget,
             client,
+            loopback,
             max_body: MAX_BODY,
             buffered: Arc::new(AtomicUsize::new(0)),
             max_buffered: MAX_BUFFERED,
@@ -538,9 +624,9 @@ fn bind_listener(preferred: Option<u16>) -> std::io::Result<std::net::TcpListene
 /// bind happens here, synchronously, so the first restored tab already finds
 /// the proxy running.
 pub fn start() {
-    let client = match client(true) {
-        Ok(c) => c,
-        Err(e) => {
+    let (client, loopback) = match (client(true), client(false)) {
+        (Ok(c), Ok(l)) => (c, l),
+        (Err(e), _) | (_, Err(e)) => {
             eprintln!("[api-proxy] {e}");
             return;
         }
@@ -568,7 +654,7 @@ pub fn start() {
                 return;
             }
         };
-        let state = ProxyState::new(port, Upstream::Provider, KeySource::Keychain, Budget::app(), client);
+        let state = ProxyState::new(port, Upstream::Provider, KeySource::Keychain, Budget::app(), client, loopback);
         if let Err(e) = serve(listener, state, async { SHUTDOWN.notified().await }).await {
             eprintln!("[api-proxy] server stopped: {e}");
         }
@@ -778,19 +864,25 @@ enum Refusal {
     /// A key is saved but no monthly limit (a key from before limits
     /// existed): refused until one is set.
     NoBudget,
+    /// An administrator-keyed grant whose key is no longer this user's: the
+    /// administrator withdrew it or took them off its list, or they switched
+    /// the CLI back to their own login.
+    AdminWithdrawn,
+    /// The key keeper could not be asked for the administrator's key.
+    AdminUnavailable,
 }
 
 impl Refusal {
     fn status(self) -> StatusCode {
         match self {
-            Refusal::Unauthorized | Refusal::NoKey => StatusCode::UNAUTHORIZED,
+            Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => StatusCode::UNAUTHORIZED,
             Refusal::Forbidden => StatusCode::FORBIDDEN,
             Refusal::NotFound => StatusCode::NOT_FOUND,
             Refusal::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Refusal::BodyTimeout => StatusCode::REQUEST_TIMEOUT,
             Refusal::BadBody => StatusCode::BAD_REQUEST,
             Refusal::Upstream => StatusCode::BAD_GATEWAY,
-            Refusal::Busy => StatusCode::SERVICE_UNAVAILABLE,
+            Refusal::Busy | Refusal::AdminUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => StatusCode::TOO_MANY_REQUESTS,
         }
     }
@@ -846,13 +938,18 @@ impl Refusal {
             ),
             Refusal::Upstream => concat!(crate::app_name!(), " API proxy: the provider's API could not be reached"),
             Refusal::Busy => concat!(crate::app_name!(), " API proxy: too many large requests at once; try again"),
+            Refusal::AdminWithdrawn => concat!(
+                "the administrator no longer offers you this API key (withdrawn, or you were taken off its list), or you switched this CLI",
+                " back to your own login — open a new tab after choosing in Manage CLIs"
+            ),
+            Refusal::AdminUnavailable => concat!(crate::app_name!(), " API proxy: the administrator's API key could not be fetched; try again"),
         }
     }
 
     /// Whether the CLI should try again: only for a transport failure or a
     /// momentary memory bound.
     fn retryable(self) -> bool {
-        matches!(self, Refusal::Upstream | Refusal::Busy)
+        matches!(self, Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable)
     }
 }
 
@@ -863,12 +960,12 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
     let body = match provider {
         Some(Provider::Gemini) => serde_json::json!({
             "error": { "code": status.as_u16(), "message": message, "status": match refusal {
-                Refusal::Unauthorized | Refusal::NoKey => "UNAUTHENTICATED",
+                Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => "UNAUTHENTICATED",
                 Refusal::Forbidden => "PERMISSION_DENIED",
                 Refusal::NotFound => "NOT_FOUND",
                 Refusal::TooLarge | Refusal::BadBody => "INVALID_ARGUMENT",
                 Refusal::BodyTimeout => "DEADLINE_EXCEEDED",
-                Refusal::Upstream | Refusal::Busy => "UNAVAILABLE",
+                Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable => "UNAVAILABLE",
                 Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "RESOURCE_EXHAUSTED",
             } }
         }),
@@ -876,12 +973,12 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
         _ => serde_json::json!({
             "type": "error",
             "error": { "type": match refusal {
-                Refusal::Unauthorized | Refusal::NoKey => "authentication_error",
+                Refusal::Unauthorized | Refusal::NoKey | Refusal::AdminWithdrawn => "authentication_error",
                 Refusal::Forbidden => "permission_error",
                 Refusal::NotFound => "not_found_error",
                 Refusal::TooLarge => "request_too_large",
                 Refusal::BodyTimeout | Refusal::BadBody => "invalid_request_error",
-                Refusal::Upstream | Refusal::Busy => "api_error",
+                Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable => "api_error",
                 Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "rate_limit_error",
             }, "message": message }
         }),
@@ -1113,16 +1210,29 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     if !path_allowed(provider, &parts.method, rest) {
         return refuse(Some(provider), Refusal::NotFound);
     }
-    let Some(key) = state.keys.key(provider).await else {
-        return refuse(Some(provider), Refusal::NoKey);
+    // The key and where it goes: the user's own to the provider; an
+    // administrator's to the provider, or (brokered) this user's broker
+    // token to the server's key broker.
+    let (key, broker) = match grant.admin {
+        None => match state.keys.key(provider).await {
+            Some(key) => (zeroize::Zeroizing::new(key), None),
+            None => return refuse(Some(provider), Refusal::NoKey),
+        },
+        Some(cli) => match state.keys.admin(cli).await {
+            Ok(found) => found,
+            Err(refusal) => return refuse(Some(provider), refusal),
+        },
     };
     let Ok(mut key_value) = HeaderValue::from_str(&key) else {
         return refuse(Some(provider), Refusal::NoKey);
     };
     key_value.set_sensitive(true);
-    // The spending limit (C3): only a request that costs money is metered and
-    // can be refused; token counting and model reads pass.
+    // The spending limit (C3): only a request that costs money on the user's
+    // own key is metered and can be refused; token counting and model reads
+    // pass, and an administrator's key is budgeted at the broker or not at
+    // all (§5.4), never against the user's own limit.
     let mut meter = super::api_meter::billing(provider, parts.method.as_str(), rest)
+        .filter(|_| grant.admin.is_none())
         .map(|billing| super::api_meter::Meter::new(provider, billing));
     if meter.is_some() {
         if let Some(refusal) = state.budget.refusal(provider) {
@@ -1148,7 +1258,8 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
             Err(refusal) => return refuse(Some(provider), refusal),
         }
     }
-    let url = format!("{}{}{}", state.upstream.base(provider), rest, forwarded_query(provider, query));
+    let base = broker.clone().unwrap_or_else(|| state.upstream.base(provider));
+    let url = format!("{base}{rest}{}", forwarded_query(provider, query));
     let mut headers = copy_headers(&parts.headers, DROP_REQUEST);
     headers.insert(auth_header(provider), key_value);
     // Plain bytes, said outright: a request with no `accept-encoding` lets a
@@ -1163,7 +1274,8 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
         started: Instant::now(),
         reservation,
     }));
-    let upstream = state.client.request(parts.method, url).headers(headers).body(body).send().await;
+    let client = if broker.is_some() { &state.loopback } else { &state.client };
+    let upstream = client.request(parts.method, url).headers(headers).body(body).send().await;
     // The body has been sent (or never will be): its bytes leave the budget.
     drop(held);
     let upstream = match upstream {
@@ -1178,6 +1290,11 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
             return refuse(Some(provider), Refusal::Upstream);
         }
     };
+    if let Some(cli) = grant.admin.filter(|_| upstream.status() == StatusCode::UNAUTHORIZED) {
+        // A rotated key or a renewed broker token: the next request asks the
+        // keeper anew.
+        forget_admin_key(cli);
+    }
     relay(upstream, Tap::new(grant, busy, metered.0.take()))
 }
 
@@ -1378,7 +1495,7 @@ mod tests {
     const FAKE_KEY: &str = "sk-test-proxy-fake";
 
     fn grant(provider: Provider, tab: &str, tmux: Option<&str>) -> Grant {
-        Grant { provider, scope: "p1".into(), tab: tab.into(), tmux: tmux.map(str::to_string) }
+        Grant { provider, scope: "p1".into(), tab: tab.into(), tmux: tmux.map(str::to_string), admin: None }
     }
 
     #[test]
@@ -1704,7 +1821,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let mut state =
-            ProxyState::new(port, Upstream::Test(upstream), KeySource::Fixed(key), test_budget(ROOMY), client(false).unwrap());
+            ProxyState::new(port, Upstream::Test(upstream), KeySource::Fixed(key), test_budget(ROOMY), client(false).unwrap(), client(false).unwrap());
         tune(&mut state);
         let buffered = state.buffered.clone();
         tokio::spawn(serve(listener, state, std::future::pending()));
@@ -2071,6 +2188,114 @@ mod tests {
         assert!(requests.iter().any(|(m, u, _, _)| m == "POST" && u.starts_with("/v1/messages")));
         drop(requests);
         on_tab_gone("e2e:claude");
+    }
+
+    // ---- a hosted server administrator's key (#2389) -----------------------
+
+    fn admin_grant(tab: &str) -> Grant {
+        Grant { admin: Some("claude"), ..grant(Provider::Anthropic, tab, None) }
+    }
+
+    /// Direct delivery: the request goes to the provider with the
+    /// administrator's key, the user's own key is not needed, and nothing is
+    /// charged to (or refused by) the user's own limit.
+    #[tokio::test]
+    async fn an_admin_grant_forwards_with_the_administrators_key_outside_the_own_limit() {
+        let seen = Arc::new(Seen::default());
+        let release = Arc::new(tokio::sync::Semaphore::new(16));
+        let upstream = stub_upstream(seen.clone(), release).await;
+        let budget = test_budget(None);
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(upstream, None, |s| {
+            s.keys = KeySource::FixedAdmin { own: None, admin: Some(("fake-admin-key", None)) };
+            s.budget = budget;
+        })
+        .await;
+        let token = issue_grant(admin_grant("e2e:admin-direct")).unwrap();
+        let r = plain_client()
+            .post(format!("{}/v1/messages", base_url_on(port, Provider::Anthropic)))
+            .header("authorization", format!("Bearer {token}"))
+            .body(r#"{"model":"claude-test","max_tokens":10}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200, "no own key and no own limit, still forwarded");
+        let _ = r.bytes().await.unwrap();
+        {
+            let requests = lock(&seen.requests);
+            let (_, uri, headers, _) = &requests[0];
+            assert_eq!(uri, "/v1/messages");
+            assert_eq!(headers["x-api-key"], "fake-admin-key");
+        }
+        ended("e2e:admin-direct").await;
+        assert_eq!(book.billed(Provider::Anthropic, chrono::Utc::now()), 0, "never on the user's own ledger");
+        assert!(book.snapshot(chrono::Utc::now()).providers.is_empty());
+        on_tab_gone("e2e:admin-direct");
+    }
+
+    /// Brokered delivery: the request goes to the broker's URL (plain HTTP on
+    /// loopback) with the user's broker token, never to the provider.
+    #[tokio::test]
+    async fn a_brokered_admin_grant_goes_to_the_broker_with_the_users_token() {
+        let seen = Arc::new(Seen::default());
+        let release = Arc::new(tokio::sync::Semaphore::new(16));
+        let broker = stub_upstream(seen.clone(), release).await;
+        let provider_seen = Arc::new(Seen::default());
+        let provider = stub_upstream(provider_seen.clone(), Arc::new(tokio::sync::Semaphore::new(16))).await;
+        let (port, _) = proxy_with(provider, None, |s| {
+            s.keys = KeySource::FixedAdmin { own: None, admin: Some(("broker-fake-token", Some(format!("{broker}/claude")))) };
+        })
+        .await;
+        let token = issue_grant(admin_grant("e2e:admin-broker")).unwrap();
+        let r = plain_client()
+            .post(format!("{}/v1/messages?beta=true", base_url_on(port, Provider::Anthropic)))
+            .header("authorization", format!("Bearer {token}"))
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        let _ = r.bytes().await.unwrap();
+        {
+            let requests = lock(&seen.requests);
+            let (_, uri, headers, _) = &requests[0];
+            assert_eq!(uri, "/claude/v1/messages?beta=true");
+            assert_eq!(headers["x-api-key"], "broker-fake-token");
+            for (_, value) in headers.iter() {
+                assert!(!value.to_str().unwrap_or("").contains(&token), "the proxy token never travels on");
+            }
+        }
+        assert_eq!(provider_seen.hits.load(Ordering::SeqCst), 0, "the provider is never called directly");
+        on_tab_gone("e2e:admin-broker");
+    }
+
+    /// Withdrawn (or the user switched back): refused in the provider's
+    /// shape, naming the way back, and nothing reaches the provider. An own
+    /// grant on the same proxy is not affected.
+    #[tokio::test]
+    async fn a_withdrawn_admin_key_is_refused_and_an_own_grant_still_works() {
+        let seen = Arc::new(Seen::default());
+        let release = Arc::new(tokio::sync::Semaphore::new(16));
+        let upstream = stub_upstream(seen.clone(), release).await;
+        let (port, _) = proxy_with(upstream, None, |s| {
+            s.keys = KeySource::FixedAdmin { own: Some(FAKE_KEY), admin: None };
+        })
+        .await;
+        let token = issue_grant(admin_grant("e2e:admin-gone")).unwrap();
+        let url = format!("{}/v1/messages", base_url_on(port, Provider::Anthropic));
+        let r = plain_client().post(&url).header("x-api-key", token).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 401);
+        assert_eq!(r.headers()["x-should-retry"], "false");
+        let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+        assert_eq!(json["error"]["type"], "authentication_error");
+        assert!(json["error"]["message"].as_str().unwrap().contains("no longer offers you"));
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 0);
+        on_tab_gone("e2e:admin-gone");
+        let own = issue_grant(grant(Provider::Anthropic, "e2e:own-beside", None)).unwrap();
+        let r = plain_client().post(format!("{url}/count_tokens")).header("x-api-key", own).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        let _ = r.bytes().await.unwrap();
+        on_tab_gone("e2e:own-beside");
     }
 
     // ---- the spending limit (C3) ------------------------------------------

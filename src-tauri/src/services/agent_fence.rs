@@ -1378,13 +1378,10 @@ pub fn wrap_pty_options_bwrap(
     // project's, read-only (plan §6.3); a no-op everywhere else.
     crate::services::server::share::apply_fence(&mut args, roots);
     // A hosted server's administrator's key, for a CLI this user runs on it
-    // (plan §5.4); a no-op everywhere else. A variable CLI gets it in its
-    // environment below; a helper CLI (Claude's `apiKeyHelper`) gets the
-    // daemon's helper directory, read-only at its own path, after the state
-    // mask — this one directory, in this CLI's fences only.
-    if let Some(dir) = crate::services::server::agent_keys::prepare_spawn(&agent_cmd, &mut opts.env)? {
-        bind_read_only_last(&mut args, &dir);
-    }
+    // (plan §5.4): checked against the keeper's offer here (a withdrawn key
+    // fails the spawn), delivered below as a proxy grant like the user's own
+    // key (#2389); a no-op everywhere else.
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
     let filter = write_keyring_filter()?;
     opts.env
         .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
@@ -1404,7 +1401,7 @@ pub fn wrap_pty_options_bwrap(
     // environment carries something.
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, admin, binding, &mut opts.env);
     let step = launcher_step(
         crate::services::fence_scope::helper_for(&bwrap),
         crate::services::agent_exec::has_carriers(&opts.env),
@@ -1420,15 +1417,6 @@ pub fn wrap_pty_options_bwrap(
         args,
     );
     Ok(())
-}
-
-/// Bind `dir` read-only at its own path after every other mount (just before
-/// the `--` that ends bwrap's options), so no mask laid earlier hides it.
-#[cfg(any(target_os = "linux", test))]
-fn bind_read_only_last(args: &mut Vec<String>, dir: &Path) {
-    let dir = dir.to_string_lossy().into_owned();
-    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
-    args.splice(separator..separator, ["--ro-bind".to_string(), dir.clone(), dir]);
 }
 
 /// Everything the macOS profile needs to know, resolved by
@@ -1744,9 +1732,9 @@ pub fn wrap_pty_options_sandbox_exec(
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
-    // A hosted server's administrator's key (plan §5.4) — a server is Linux,
-    // so the helper directory a Linux fence binds has no Seatbelt rule here.
-    let _ = crate::services::server::agent_keys::prepare_spawn(&agent_cmd, &mut opts.env)?;
+    // A hosted server's administrator's key (plan §5.4) — a server is
+    // Linux, so this is a no-op; kept for the one spawn path.
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
     // A proxy token and base URL for a CLI the user switched on for a key
     // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier;
     // `agent_exec` in front of sandbox-exec maps it to the CLI's variable, and
@@ -1754,7 +1742,7 @@ pub fn wrap_pty_options_sandbox_exec(
     // Seatbelt profile, which need not grant Tabtivity's binary.
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, admin, binding, &mut opts.env);
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
 }
@@ -2701,27 +2689,6 @@ mod tests {
         assert!(args.iter().rposition(|a| a == &hook).unwrap() > mask);
         assert!(args.iter().position(|a| a == "--").unwrap() > mask);
         assert!(private_state_paths(&state).contains(&state.join("calendar.json")));
-    }
-
-    /// The administrator's-key helper directory (a hosted server's Claude)
-    /// pierces the state mask read-only, after it, and nothing else does.
-    #[test]
-    fn the_key_helper_dir_is_bound_read_only_after_the_state_mask() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("state");
-        let helper = state.join(crate::services::server::agent_keys::HELPER_DIR);
-        std::fs::create_dir_all(&helper).unwrap();
-        let mut args = bwrap_args("/home/u", None, "/p", "claude", &["--x".into()], &[], &[], &[]);
-        mask_private_state(&mut args, &state, &[]);
-        bind_read_only_last(&mut args, &helper);
-        let helper_s = helper.to_string_lossy();
-        let state_s = state.to_string_lossy();
-        let mask = args.windows(2).rposition(|w| w[0] == "--tmpfs" && w[1] == state_s).unwrap();
-        let bind = args.windows(3).position(|w| w[0] == "--ro-bind" && w[1] == helper_s && w[2] == helper_s).unwrap();
-        let end = args.iter().position(|a| a == "--").unwrap();
-        assert!(mask < bind && bind < end, "{args:?}");
-        assert_eq!(&args[end + 1..], ["claude", "--x"]);
-        assert!(!args.windows(2).any(|w| w[0] == "--bind" && w[1] == helper_s), "never writable");
     }
 
     #[test]

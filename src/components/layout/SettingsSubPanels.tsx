@@ -720,7 +720,8 @@ interface AgentLogin {
   shared: boolean;
   /** The variable this CLI takes an API key in; `null`: an administrator's
    *  key cannot reach it. */
-  api_key_env?: string | null;
+  /** The API proxy serves this CLI: a server's administrator can offer a key. */
+  admin_key_capable?: boolean;
   /** A hosted server's administrator offers a key for this CLI. */
   admin_key_offered?: boolean;
   /** This user's agents run on that key instead of their own login. */
@@ -785,7 +786,7 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
         const own = !l.api_key ? login : l.signed_in ? `${login} · ${keyLabel}` : keyLabel;
         // A hosted server's administrator's key (plan §5.2): the user's own
         // choice per CLI, only where one is on offer (or still chosen).
-        const adminKey = !!l.api_key_env && (!!l.admin_key_offered || !!l.uses_admin_key);
+        const adminKey = !!l.admin_key_capable && (!!l.admin_key_offered || !!l.uses_admin_key);
         const state = l.uses_admin_key
           ? l.admin_key_offered
             ? t("settings.agentLoginAdminKey")
@@ -821,23 +822,11 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
               {adminKey && (
                 <>
                   <UntestedTag id="agents.adminKey" />{" "}
-                  {l.id === "claude" && (
-                    <>
-                      <UntestedTag id="agents.adminKey.helper" />{" "}
-                    </>
-                  )}
                   <button
                     type="button"
                     className="ollama-action-btn"
                     disabled={busy === l.id}
-                    title={
-                      l.uses_admin_key
-                        ? undefined
-                        : l.id === "claude"
-                          ? // Claude takes it through its apiKeyHelper, never its env var.
-                            t("settings.agentLoginAdminKeyHelpClaude")
-                          : t("settings.agentLoginAdminKeyHelp", { env: l.api_key_env ?? "" })
-                    }
+                    title={l.uses_admin_key ? undefined : t("settings.agentLoginAdminKeyHelp")}
                     onClick={() => run(l.id, "agent_login_use_admin_key", !l.uses_admin_key)}
                   >
                     {t(l.uses_admin_key ? "settings.agentLoginUseOwn" : "settings.agentLoginUseAdminKey")}

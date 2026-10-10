@@ -53,9 +53,9 @@ pub struct Mapping {
 }
 
 /// The variables a carrier may set: the CLIs' credential variables that carry
-/// an API proxy token (`agent_api_keys::ENV_VARS`) and the registry's
-/// `api_key_env` column, under which a hosted server's administrator's key
-/// travels (`server::agent_keys`), nothing else. The step runs *outside* the
+/// an API proxy token (`agent_api_keys::ENV_VARS`) — the user's own key's or a
+/// hosted server administrator's, which reach agents only through the proxy
+/// (#2389) — nothing else. The step runs *outside* the
 /// fence, in front of bwrap or `sandbox-exec` (and of an unfenced Host
 /// session's CLI), so a carrier able to name any variable would be an
 /// environment-injection lever there: `LD_PRELOAD`, `PATH`, `BASH_ENV` or
@@ -64,13 +64,7 @@ pub struct Mapping {
 /// running_binary`, `/proc/<pid>/exe` once replaced), the same build that
 /// injected the carrier. A name a later build adds is added here with it.
 pub fn targets() -> Vec<&'static str> {
-    let mut out = crate::services::agent_api_keys::ENV_VARS.to_vec();
-    for var in crate::commands::agents::api_key_envs() {
-        if !out.contains(&var) {
-            out.push(var);
-        }
-    }
-    out
+    crate::services::agent_api_keys::ENV_VARS.to_vec()
 }
 
 /// Whether `key` is a carrier, by bytes: a name that is not UTF-8 still
@@ -238,8 +232,7 @@ mod tests {
         let m = map(&pairs);
         assert_eq!(m.remove.len(), pairs.len());
         assert!(m.set.is_empty(), "{:?}", m.set);
-        // Every key variable a spawn can carry is a target: the proxy tokens'
-        // and the registry's `api_key_env`s (a hosted server's admin keys).
+        // Every key variable a spawn can carry is a target: the proxy tokens'.
         for var in targets() {
             let carrier = carrier_name(var);
             assert_eq!(map(&[(&carrier, "fake")]).set, vec![(OsString::from(var), OsString::from("fake"))]);

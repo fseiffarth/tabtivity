@@ -74,6 +74,12 @@ pub enum Request {
     Forget { user: String },
 }
 
+/// The CLIs an administrator's key can be offered for: the ones each user's
+/// daemon reaches through its API proxy (the daemon's `agent_api_keys`
+/// routes — a test there holds the two lists together, #2389). Mistral Vibe
+/// is not one: no variable points it at the proxy.
+pub const KEY_CLIS: &[&str] = &["claude", "gemini"];
+
 /// The port of the key broker (plan §5.4, P5) on loopback: next to the
 /// gateway's 8740/8741, below the desktop sidecar's 8742/8743.
 pub const BROKER_PORT: u16 = 8739;

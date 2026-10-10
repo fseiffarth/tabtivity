@@ -15,14 +15,14 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(()
 import { ServerAgentKeys } from "../../components/server/ServerAgentKeys";
 import { AgentLoginsRows } from "../../components/layout/SettingsSubPanels";
 
-const login = (id: string, env: string | null, extra: Record<string, unknown> = {}) => ({
+const login = (id: string, capable: boolean, extra: Record<string, unknown> = {}) => ({
   id,
   signed_in: true,
   account: null,
   importable: false,
   blocked: null,
   shared: true,
-  api_key_env: env,
+  admin_key_capable: capable,
   admin_key_offered: false,
   uses_admin_key: false,
   ...extra,
@@ -41,7 +41,7 @@ describe("ServerAgentKeys (administrator)", () => {
 
   it("offers and withdraws per CLI and never shows a key", async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) =>
-      Promise.resolve(cmd === "agent_logins" ? [login("claude", "ANTHROPIC_API_KEY"), login("codex", null), login("gemini", "GEMINI_API_KEY")] : null),
+      Promise.resolve(cmd === "agent_logins" ? [login("claude", true), login("codex", false), login("gemini", true)] : null),
     );
     const fetch = vi.fn((_url: string, init?: RequestInit) => {
       if (!init?.method) return answer({ keys: [{ cli: "claude", updated: 1, by: "alice", users: ["bob"] }] });
@@ -49,8 +49,10 @@ describe("ServerAgentKeys (administrator)", () => {
     });
     vi.stubGlobal("fetch", fetch);
     render(<ServerAgentKeys />);
-    expect(await screen.findByText("ANTHROPIC_API_KEY")).toBeTruthy();
-    expect(screen.getByText("GEMINI_API_KEY")).toBeTruthy();
+    // The CLIs the users' API proxies serve: one row each, no variable shown.
+    await waitFor(() => expect(document.getElementById("server-agent-key-claude")).toBeTruthy());
+    expect(document.getElementById("server-agent-key-gemini")).toBeTruthy();
+    expect(screen.queryByText(/_API_KEY/)).toBeNull();
     expect(screen.queryByText(/Codex/)).toBeNull();
     expect(screen.getByText(/used lately by bob/)).toBeTruthy();
     expect(screen.getByText(/not offered/)).toBeTruthy();
@@ -70,7 +72,7 @@ describe("ServerAgentKeys (administrator)", () => {
 
   it("lists who may use a key, nobody at first, and changes it from the account table", async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) =>
-      Promise.resolve(cmd === "agent_logins" ? [login("claude", "ANTHROPIC_API_KEY"), login("gemini", "GEMINI_API_KEY")] : null),
+      Promise.resolve(cmd === "agent_logins" ? [login("claude", true), login("gemini", true)] : null),
     );
     const fetch = vi.fn((_url: string, init?: RequestInit) => {
       if (!init?.method)
@@ -109,7 +111,7 @@ describe("ServerAgentKeys (administrator)", () => {
 
   it("switches a Claude key to the broker, budgets it and renews a user's token (P5)", async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) =>
-      Promise.resolve(cmd === "agent_logins" ? [login("claude", "ANTHROPIC_API_KEY"), login("gemini", "GEMINI_API_KEY")] : null),
+      Promise.resolve(cmd === "agent_logins" ? [login("claude", true), login("gemini", true)] : null),
     );
     const fetch = vi.fn((_url: string, init?: RequestInit) => {
       if (!init?.method)
@@ -166,7 +168,7 @@ describe("ServerAgentKeys (administrator)", () => {
   });
 
   it("renders nothing for a non-admin and says so when the keeper is down", async () => {
-    vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", "ANTHROPIC_API_KEY")]));
+    vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", true)]));
     vi.stubGlobal("fetch", vi.fn(() => answer({ error: "admin" }, 403)));
     const { container } = render(<ServerAgentKeys />);
     await act(async () => {
@@ -188,9 +190,9 @@ describe("Agent logins: the administrator's key per CLI (a user)", () => {
 
   it("offers the switch only where a key is on offer and sends the choice", async () => {
     let rows = [
-      login("claude", "ANTHROPIC_API_KEY", { admin_key_offered: true }),
-      login("gemini", "GEMINI_API_KEY"),
-      login("codex", null, { admin_key_offered: true }),
+      login("claude", true, { admin_key_offered: true }),
+      login("gemini", true),
+      login("codex", false, { admin_key_offered: true }),
     ];
     vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === "agent_logins") return Promise.resolve(rows);
@@ -213,7 +215,7 @@ describe("Agent logins: the administrator's key per CLI (a user)", () => {
   it("shows this month's brokered use beside a key the user runs on (P5)", async () => {
     vi.mocked(invoke).mockImplementation(() =>
       Promise.resolve([
-        login("claude", "ANTHROPIC_API_KEY", { admin_key_offered: true, uses_admin_key: true, admin_key_broker: { month: "2026-10", billed: 1234, budget: 5000 } }),
+        login("claude", true, { admin_key_offered: true, uses_admin_key: true, admin_key_broker: { month: "2026-10", billed: 1234, budget: 5000 } }),
       ]),
     );
     render(<AgentLoginsRows />);
@@ -221,12 +223,12 @@ describe("Agent logins: the administrator's key per CLI (a user)", () => {
   });
 
   it("names a withdrawn key and offers nothing on the desktop", async () => {
-    vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", "ANTHROPIC_API_KEY", { uses_admin_key: true })]));
+    vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", true, { uses_admin_key: true })]));
     render(<AgentLoginsRows />);
     expect(await screen.findByText(/no longer offered to you \(withdrawn, or you were taken off its list\)/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Use my own login" })).toBeTruthy();
     cleanup();
-    vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", "ANTHROPIC_API_KEY")]));
+    vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", true)]));
     render(<AgentLoginsRows />);
     await screen.findByText(/Claude/);
     expect(screen.queryByRole("button", { name: /administrator/ })).toBeNull();

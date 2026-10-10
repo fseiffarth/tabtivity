@@ -485,11 +485,6 @@ fn reconcile_home_with(state_dir: &Path, home: &Path, step: Step, holds_key: &Ho
             link_claude_identity(&store_dir, home);
         }
     }
-    // Claude's `apiKeyHelper` follows the same choice (hosted plan §5.4):
-    // set while it runs on the administrator's key, gone (only ours) after.
-    if step.places() {
-        crate::services::server::agent_keys::sync_helper_settings(state_dir, home, &on_admin_key);
-    }
 }
 
 /// A CLI this user runs on the administrator's API key (hosted plan §5.2,
@@ -642,9 +637,10 @@ pub struct LoginStatus {
     /// This CLI keeps its login somewhere Tabtivity cannot share (a keyring, a
     /// database mixed with other state): one login per scope.
     pub shared: bool,
-    /// The environment variable this CLI takes an API key in (the registry's
-    /// `api_key_env`), `None` when an administrator's key cannot reach it.
-    pub api_key_env: Option<String>,
+    /// The CLI can run on an API key at all — the API proxy serves it
+    /// (`agent_api_keys::proxies`): what a server's administrator can offer
+    /// a key for.
+    pub admin_key_capable: bool,
     /// A hosted server's administrator offers an API key for this CLI.
     pub admin_key_offered: bool,
     /// This user's agents run on the administrator's key for this CLI, not
@@ -699,7 +695,7 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
                 importable,
                 blocked,
                 shared: !paths.is_empty(),
-                api_key_env: crate::commands::agents::api_key_env(cli).map(str::to_string),
+                admin_key_capable: crate::services::agent_api_keys::proxies(cli),
                 admin_key_offered: offered.contains(cli),
                 uses_admin_key: on_admin_key.contains(cli),
                 admin_key_broker: None,
@@ -1207,9 +1203,11 @@ mod tests {
         assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":3}", "switching back places the login again");
         let rows = status_with(&state, tmp.path(), &["claude".to_string()].into_iter().collect());
         let claude = rows.iter().find(|r| r.id == "claude").unwrap();
-        assert_eq!((claude.api_key_env.as_deref(), claude.admin_key_offered, claude.uses_admin_key), (Some("ANTHROPIC_API_KEY"), true, false));
+        assert_eq!((claude.admin_key_capable, claude.admin_key_offered, claude.uses_admin_key), (true, true, false));
         let codex = rows.iter().find(|r| r.id == "codex").unwrap();
-        assert_eq!((codex.api_key_env.as_deref(), codex.admin_key_offered), (None, false));
+        assert_eq!((codex.admin_key_capable, codex.admin_key_offered), (false, false));
+        let vibe = rows.iter().find(|r| r.id == "vibe").unwrap();
+        assert!(!vibe.admin_key_capable, "no base-URL variable: no API key through the proxy (#2389)");
     }
 
     #[test]

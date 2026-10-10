@@ -360,8 +360,7 @@ fn trailing_shell(fenced: bool, carries: bool) -> String {
         if !carries {
             return "exec \"${SHELL:-/bin/bash}\" -l".to_string();
         }
-        // Every carrier `SECRET_ENV` knows: the proxy tokens' and the
-        // administrator's keys' (`server::agent_keys`), not only the first two.
+        // Every carrier `SECRET_ENV` knows: the proxy tokens'.
         let unset: String = SECRET_ENV
             .iter()
             .filter(|k| k.starts_with(crate::services::agent_exec::CARRIER_PREFIX))
@@ -452,12 +451,9 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     // raw keys in slots 8636–8639; none of them shipped.)
     crate::services::agent_api_keys::ANTHROPIC_CARRIER,
     crate::services::agent_api_keys::GEMINI_CARRIER,
-    // The carriers of the registry's other `api_key_env`s (`GEMINI_API_KEY`'s
-    // is the one above), under which a hosted server hands an agent the
-    // administrator's key (`server::agent_keys`; a test keeps the lists in
-    // step). Never the CLI's own name: see the carriers above.
-    crate::app_env!("AGENT_SECRET_ANTHROPIC_API_KEY"),
-    crate::app_env!("AGENT_SECRET_MISTRAL_API_KEY"),
+    // (A hosted server's administrator's key reaches agents through the same
+    // proxy tokens since #2389; the two raw-key carrier slots that followed
+    // here never shipped.)
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -1065,8 +1061,8 @@ mod tests {
     }
 
     /// The shell after an unfenced command that carried a key (the Host
-    /// session) loses every carrier — the administrator's key's as much as
-    /// the proxy token's (merge review 2026-10-07) — and nothing else.
+    /// session) loses every carrier — every proxy token's, the user's own
+    /// key's and the administrator's alike (#2389) — and nothing else.
     #[test]
     fn the_shell_after_a_carrying_host_command_drops_every_carrier() {
         let line = trailing_shell(false, true);
@@ -1074,7 +1070,7 @@ mod tests {
             let carrier = key.starts_with(crate::services::agent_exec::CARRIER_PREFIX);
             assert_eq!(line.contains(&format!("-u {key} ")), carrier, "{key}");
         }
-        assert!(line.contains(&format!("-u {} ", crate::services::agent_exec::carrier_name("MISTRAL_API_KEY"))));
+        assert!(line.contains(&format!("-u {} ", crate::services::agent_api_keys::GEMINI_CARRIER)));
         assert!(!line.contains("stty"), "{line}");
         assert_eq!(trailing_shell(false, false), "exec \"${SHELL:-/bin/bash}\" -l");
     }
@@ -1174,7 +1170,7 @@ mod tests {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
             assert_eq!(SECRET_UPDATE_ENV_SLOT + at, 8636 + i, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 10);
+        assert_eq!(SECRET_ENV.len(), 8);
         for var in crate::services::agent_api_keys::ENV_VARS {
             assert!(!SECRET_ENV.contains(var), "{var}");
         }
@@ -1242,13 +1238,13 @@ mod tests {
             (crate::services::root_mcp::HELP_TOKEN_ENV, "help-s3cret"),
             (crate::services::root_mcp::MARKUP_TOKEN_ENV, "markup-s3cret"),
             (crate::services::copilot_auth::TOKEN_ENV, "gho_copilot-s3cret"),
-            (&crate::services::agent_exec::carrier_name("MISTRAL_API_KEY"), "admin-key-s3cret"),
             (crate::services::agent_api_keys::ANTHROPIC_CARRIER, "sk-test-anthropic-s3cret"),
+            (crate::services::agent_api_keys::GEMINI_CARRIER, "gemini-token-s3cret"),
         ]);
-        // Every carrier an administrator's API key is delivered under is a
-        // secret; the CLI's own name never is (it would cost the user's own
-        // tmux sessions theirs).
-        for var in crate::commands::agents::api_key_envs() {
+        // Every carrier a proxy token is delivered under is a secret; the
+        // CLI's own name never is (it would cost the user's own tmux sessions
+        // theirs).
+        for var in crate::services::agent_exec::targets() {
             let carrier = crate::services::agent_exec::carrier_name(var);
             assert!(SECRET_ENV.contains(&carrier.as_str()), "{carrier} must never ride an argv");
             assert!(!SECRET_ENV.contains(&var), "{var}");

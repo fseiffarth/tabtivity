@@ -108,9 +108,12 @@ fn settings_agent_remote_control() -> bool {
 fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> {
     let subcommand = crate::services::agent_fence::runs_subcommand(&opts.args);
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
+    // A hosted server's administrator's key (the Host session), checked
+    // against the keeper's offer: a withdrawn key fails the spawn.
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&opts.cmd)?;
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, binding, &mut opts.env);
+    crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, admin, binding, &mut opts.env);
     #[cfg(unix)]
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
@@ -124,10 +127,10 @@ fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> 
 /// own name is the user's, and is not touched here), so one the tab brought
 /// itself would have no business riding the argv either. The `agent_exec`
 /// step may still be in front of the command; with nothing to map it only
-/// execs. Names only in the log. On a hosted server the administrator's key
-/// (`server::agent_keys`, the registry's `api_key_env` carriers) is never
-/// dropped silently — the home holds no login to fall back to — so such a
-/// spawn fails naming the way back (the server's tmux must be 3.2 or newer).
+/// execs. Names only in the log. On a hosted server a proxy token is never
+/// dropped silently — a CLI on the administrator's key has no login in its
+/// home to fall back to — so such a spawn fails naming the way back (the
+/// server's tmux must be 3.2 or newer).
 #[cfg(unix)]
 fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
     if opts.tmux_session.is_none()
@@ -141,17 +144,10 @@ fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
         return Ok(());
     }
     if crate::services::server::is_server() {
-        let admin_keys: Vec<&str> = dropped
-            .iter()
-            .filter_map(|c| c.strip_prefix(crate::services::agent_exec::CARRIER_PREFIX))
-            .filter(|var| crate::commands::agents::api_key_envs().contains(var))
-            .collect();
-        if !admin_keys.is_empty() {
-            return Err(format!(
-                "the administrator's API key ({}) needs tmux 3.2 or newer on this server, which keeps it off the tmux argv; ask the administrator to update tmux, or switch to your own login in Settings → Manage CLIs",
-                admin_keys.join(", ")
-            ));
-        }
+        return Err(format!(
+            "an API key ({}) needs tmux 3.2 or newer on this server, which keeps its token off the tmux argv; ask the administrator to update tmux, or switch to your own login in Settings → Manage CLIs",
+            dropped.join(", ")
+        ));
     }
     eprintln!(
         "launch_prep: tmux < 3.2 cannot keep {} off its argv; tab '{}' starts without it",
@@ -186,18 +182,22 @@ fn drop_carriers(env: &mut std::collections::HashMap<String, String>) -> Vec<Str
     dropped
 }
 
-/// Whether this `claude` spawn runs here, as a session, on the user's stored
-/// Anthropic key through the API proxy (`agent_api_keys::keyed`): Claude
-/// switched on in Manage CLIs → API keys, the proxy running, a key saved, and
-/// a local, non-container, non-local-model tab. Reads the keychain (once, then
-/// the proxy's cache) only when Claude is switched on.
+/// Whether this `claude` spawn runs here, as a session, on an Anthropic key
+/// through the API proxy: the user's stored one (`agent_api_keys::keyed`:
+/// Claude switched on in Manage CLIs → API keys, the proxy running, a key
+/// saved) or a hosted server administrator's that this user chose for Claude
+/// (#2389) — in a local, non-container, non-local-model tab. Reads the
+/// keychain (once, then the proxy's cache) only when Claude is switched on.
 fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
     if remote_agent_run || opts.sandbox || crate::services::agent_api_keys::is_local_model(opts) {
         return false;
     }
     let settings: crate::schema::Settings =
         storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default();
-    crate::services::agent_api_keys::keyed(&opts.cmd, &settings)
+    let admin = crate::services::server::is_server()
+        && crate::services::agent_api_keys::cli_of(&opts.cmd) == Some("claude")
+        && crate::services::server::agent_keys::chosen_in(&storage::state_dir()).contains("claude");
+    admin || crate::services::agent_api_keys::keyed(&opts.cmd, &settings)
 }
 
 /// Whether Claude agent tabs of `project_id` should spawn with
@@ -950,9 +950,6 @@ pub async fn prepare(
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
-                // Unfenced: a helper CLI reaches the daemon's helper socket
-                // at its own path, no directory to bind.
-                let _ = crate::services::server::agent_keys::prepare_spawn(&opts.cmd, &mut opts.env)?;
                 opts.env.insert(crate::app_env!("HOST_SESSION").into(), "1".into());
                 // Last: it may put `agent_exec` in front of the CLI.
                 inject_api_keys(&mut opts, &scope_id)?;

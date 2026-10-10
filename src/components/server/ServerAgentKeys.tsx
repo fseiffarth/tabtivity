@@ -7,8 +7,8 @@
  * Talks to the gateway's `/gateway/v1/agent-keys`, which hands keys to the
  * key keeper (`<slug>-auth`) and lists what is on offer — never a key: once
  * saved a key is not shown again, only when, by whom and who used it lately.
- * Which CLIs can take one comes from the daemon's own registry
- * (`agent_logins`' `api_key_env`). Rendered inside the administrator's
+ * Which CLIs can take one comes from the daemon (`agent_logins`'
+ * `admin_key_capable`: the CLIs its API proxy serves, #2389). Rendered inside the administrator's
  * Server settings only; nothing without a gateway.
  *
  * P5: a CLI the key broker serves can be switched to broker delivery —
@@ -62,7 +62,7 @@ function parseBudget(text: string): number | null | undefined {
 
 interface LoginRow {
   id: string;
-  api_key_env?: string | null;
+  admin_key_capable?: boolean;
 }
 
 export function ServerAgentKeys() {
@@ -71,7 +71,7 @@ export function ServerAgentKeys() {
   const [accounts, setAccounts] = useState<string[]>([]);
   const [picks, setPicks] = useState<Record<string, string>>({});
   const [unreachable, setUnreachable] = useState(false);
-  const [clis, setClis] = useState<{ id: string; env: string }[]>([]);
+  const [clis, setClis] = useState<{ id: string }[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -97,7 +97,7 @@ export function ServerAgentKeys() {
   useEffect(() => {
     refresh();
     invoke<LoginRow[]>("agent_logins")
-      .then((rows) => setClis((rows ?? []).filter((r) => r.api_key_env).map((r) => ({ id: r.id, env: r.api_key_env as string }))))
+      .then((rows) => setClis((rows ?? []).filter((r) => r.admin_key_capable).map((r) => ({ id: r.id }))))
       .catch(() => setClis([]));
   }, []);
 
@@ -199,14 +199,14 @@ export function ServerAgentKeys() {
       <p className="settings-help">{t("server.agentKeys.help")}</p>
       {unreachable && <p className="settings-help">{t("server.agentKeys.unreachable")}</p>}
       {!unreachable &&
-        clis.map(({ id, env }) => {
+        clis.map(({ id }) => {
           const offered = byCli.get(id);
           const label = labels.get(id) ?? id;
           const draft = drafts[id] ?? "";
           return (
             <SettingsCard key={id}>
               <label className="settings-card-label" htmlFor={`server-agent-key-${id}`}>
-                {label} · <code>{env}</code>
+                {label}
               </label>
               <p className="settings-help">
                 {offered
