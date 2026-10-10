@@ -215,7 +215,7 @@ back-reference on a board card; CalDAV merges preserve it beside mail/event.
 | File | Purpose |
 |------|---------|
 | `projects.rs` / `project.rs` | `projects.json` entries + per-project `project.json`. |
-| `settings.rs` | `settings.json`; `rev` is the file's revision, moved by every write (H1). |
+| `settings.rs` | `settings.json`; `rev` is the file's revision, moved by every write (H1). `experimental()` is the one Rust spelling of the experimental-flag rule (unset is off once `experimental_explicit` marks the profile, else follows `debug`); `copilot_completion()` is what the Copilot policy and `invalidate_copilot` read. |
 | `default_apps.rs` | `default_apps.json`. |
 | `time_log.rs` | `time_log.json` (unbounded `Vec`; Efficiency #2/#12). |
 | `usage_stats.rs` | `usage_stats.json`: rolling hour+day usage counters behind the daily recap. Same bucket/prune shape as `net_usage`, but an **open** metric-key → count map (`metric` module) so a new stat needs no migration. |

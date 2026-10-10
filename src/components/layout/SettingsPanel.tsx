@@ -1191,7 +1191,7 @@ const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   mobile: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"],
   performance: ["settings.energySaver", "settings.fastMode", "settings.sleepTabs", "settings.shellScrollback", "settings.tabCosts"],
   resourceMonitor: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"],
-  experimental: ["settings.debug", "settings.terminalWebgl", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug"],
+  experimental: ["settings.debug", "settings.terminalWebgl", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter"],
   git: ["nav.git.blurb"],
   vpn: ["nav.vpn.blurb"],
   remoteHosts: ["nav.remoteHosts.blurb"],
@@ -2078,19 +2078,21 @@ export function SettingsDialog({
               anchor="settings-anchor-experimental" title={t("settings.experimental")}
               help={
                 <>
-                  {t("settings.experimentalHelp1")}{" "}
-                  <b>{t("settings.experimentalHelpBold")}</b> {t("settings.experimentalHelp2")}{" "}
+                  {t("settings.experimentalHelp1")} {t("settings.experimentalHelp2")}{" "}
                   {t("settings.experimentalHelp3")}
                 </>
               }
             />
 
-            {/* Debug mode sits with the experiments because it is their fallback
-                gate: an unset experiment flag follows it (`lib/experimental`). */}
+            {/* Debug mode sits with the experiments because it used to be their
+                fallback gate. It no longer is: an unset flag is off once the
+                profile is migrated to explicit ticks (`lib/experimental`), and the
+                help says so for anyone who still expects the old behaviour. */}
             <ToggleCard
-              label={t("settings.debug")}
+              label={<>{t("settings.debug")} <UntestedTag id="settings.debugNoExperiments" /></>}
               checked={settings?.debug ?? false}
               onChange={(e) => void updateSettings({ debug: e.target.checked })}
+              help={t("settings.debugHelp")}
             />
 
 
@@ -2181,6 +2183,15 @@ export function SettingsDialog({
                   {t("settings.webBrowserHelp2")}
                 </>
               }
+            />
+
+            {/* The deck presenter's one switch. It had none while Debug mode
+                carried it; without that default a profile could not reach it. */}
+            <ToggleCard
+              label={<>{t("settings.deckPresenter")} <UntestedTag id="settings.deckPresenter" /></>}
+              checked={experimentalEnabled(settings, "deck_presenter")}
+              onChange={(e) => void updateSettings({ deck_presenter: e.target.checked })}
+              help={t("settings.deckPresenterHelp")}
             />
 
             <ToggleCard

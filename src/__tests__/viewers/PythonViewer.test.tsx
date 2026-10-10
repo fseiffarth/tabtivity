@@ -329,12 +329,23 @@ describe("the experimental gate (`python_run_debug`, default off)", () => {
     expect(screen.queryByLabelText("Break on line 3")).toBeNull();
   });
 
-  it("debug mode turns it on with no toggle to tick", async () => {
+  it("debug mode turns it on with no toggle to tick, while the profile is unmarked", async () => {
     settingsState.settings.debug = true;
     await renderViewer();
     expect(screen.queryByLabelText("Run file")).not.toBeNull();
     expect(screen.queryByLabelText("Break on line 3")).not.toBeNull();
     delete settingsState.settings.debug;
+  });
+
+  it("debug mode no longer turns it on once the profile is marked", async () => {
+    settingsState.settings.debug = true;
+    settingsState.settings.experimental_explicit = true;
+    await renderViewer();
+    expect(screen.queryByLabelText("Run file")).not.toBeNull();
+    expect(screen.queryByLabelText("Debug file")).toBeNull();
+    expect(screen.queryByLabelText("Break on line 3")).toBeNull();
+    delete settingsState.settings.debug;
+    delete settingsState.settings.experimental_explicit;
   });
 
   it("an explicit off still wins inside debug mode", async () => {

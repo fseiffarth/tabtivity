@@ -1248,8 +1248,9 @@ mod tests {
     }
 
     /// The live window is opt-in, and its default must be OFF **in a debug build
-    /// too** — unlike every other experimental flag, whose unset-means-on-in-debug
-    /// rule is exactly wrong here. A debug build is what the author runs all day,
+    /// too** — unlike an experimental flag on a profile not yet marked
+    /// `experimental_explicit`, whose unset-means-on-in-debug rule is exactly
+    /// wrong here. A debug build is what the author runs all day,
     /// and this is the surface whose central security claim does not hold.
     #[test]
     fn live_pages_are_off_until_asked_for() {
@@ -1277,10 +1278,17 @@ mod tests {
         };
         assert!(asked.browser_live_pages());
 
-        // And the browser itself still follows the ordinary rule, so the two
-        // switches are visibly different things.
+        // And the browser itself still follows the experimental rule — on an
+        // unmarked debug profile, unset follows Debug mode — so the two switches
+        // are visibly different things. Once marked, neither is on unasked.
         assert!(Settings {
             debug: Some(true),
+            ..Default::default()
+        }
+        .web_browser());
+        assert!(!Settings {
+            debug: Some(true),
+            experimental_explicit: Some(true),
             ..Default::default()
         }
         .web_browser());

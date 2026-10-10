@@ -103,8 +103,8 @@ let composeSeq = 0;
  *     "Check mail" button. `checkMail` and a typed folder search can reach a server.
  *     It is called from a click — with exactly one exception, and that one is an
  *     opt-in: the header's mail button (`MailIndicator`) runs it on a timer once
- *     `mail_client` is on — off for everyone outside debug mode, which is what
- *     keeps this rule true by default. Nothing else, and nothing at launch,
+ *     `mail_client` is on — off until ticked, which is what keeps this rule
+ *     true by default. Nothing else, and nothing at launch,
  *     ever starts it. The header's unread badge is *not* an exception: it is
  *     derived from the local folder counts (`refreshUnread`), so it can be right
  *     at launch without anything dialling out.

@@ -7434,7 +7434,7 @@ function TextView({
   // `if __name__ == "__main__":` guard — not for every importable .py module,
   // which has nothing useful to execute. Debug (pdb) and the breakpoint gutter
   // that only exists to feed it sit behind the experimental `python_run_debug`
-  // flag — off by default, on in debug mode (`lib/experimental.ts`).
+  // flag — off until ticked in Settings → Experimental (`lib/experimental.ts`).
   // Go-to-definition is deliberately NOT gated: it reads, it never runs anything.
   const isPy = useMemo(() => isPythonPath(path), [path]);
   const pyDebugEnabled = useExperimental("python_run_debug");

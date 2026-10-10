@@ -80,8 +80,8 @@ import { NAMES } from "./brand";
  * physically light up.
  *
  * The mail store's "nothing connects on its own" rule survives intact: this
- * default applies only once `mail_client` is on (an explicit act, off for
- * everyone outside debug mode), and an explicit `0` — *Never — only when I ask*
+ * default applies only once `mail_client` is on (an explicit act, off until
+ * ticked), and an explicit `0` — *Never — only when I ask*
  * — is still honoured, because a stored 0 is a choice and only an absent value
  * is unset.
  */

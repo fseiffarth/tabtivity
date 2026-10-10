@@ -25,8 +25,9 @@
  * `closeTabsOfKinds`.
  *
  * Installed once per window at startup (`AppShell`), and re-run on every settings
- * change: the flag can go off from the Settings panel, from Debug mode being
- * turned off (unset flags follow it), or from settings simply arriving late.
+ * change: the flag can go off from the Settings panel, from another window's
+ * write, from Debug mode being turned off on a profile not yet migrated to
+ * explicit flags (`lib/experimental`), or from settings simply arriving late.
  * Running it repeatedly is free — after the first pass there is nothing to close.
  */
 

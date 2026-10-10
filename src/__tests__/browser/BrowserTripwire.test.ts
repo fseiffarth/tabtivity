@@ -634,8 +634,9 @@ describe("live pages are opt-in, and stay opt-in", () => {
   /**
    * The one browser switch that must be OFF in a debug build too.
    *
-   * Every other experimental flag follows "unset means on in debug", which is
-   * right for a surface that is merely unfinished and wrong for this one: a live
+   * An experimental flag on a profile not yet marked `experimental_explicit`
+   * still follows "unset means on in debug", which is tolerable for a surface
+   * that is merely unfinished and wrong for this one: a live
    * page can reach a loopback service by way of any hostname that resolves
    * there, and `ws://` reaches one regardless of the scheme allowlist because a
    * WebSocket is not a navigation. Neither is fixable from app code. A debug

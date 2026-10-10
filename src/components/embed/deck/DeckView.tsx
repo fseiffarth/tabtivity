@@ -519,8 +519,9 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
   // **History is pushed OUTSIDE the state updater.** `commit` used to mutate
   // `past.current` inside a `setDeck` callback, and `undo`/`redo` `pop()`ed
   // inside theirs — but React 18 StrictMode is on (`main.tsx`) and double-invokes
-  // updaters in development, which is precisely the build where the
-  // `deck_presenter` flag defaults on. So anyone who could try the feature saw
+  // updaters in development, which is precisely the build the feature was
+  // tried in (the `deck_presenter` flag used to default on in Debug mode). So
+  // anyone who could try the feature saw
   // doubled or broken undo (TODO V #104). Every mutation now computes its next
   // deck from `deckRef` and calls `setDeck` non-functionally, which makes the
   // updater pure and running it twice harmless.

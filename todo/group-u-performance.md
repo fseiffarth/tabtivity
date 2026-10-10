@@ -2285,3 +2285,44 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2417. **Experimental features no longer follow Debug mode.** ✅ Done on branch
+    `perf` (T3 in `docs/tab_cost_handoff.md`, plan `docs/tab_cost_plan.md`
+    step 3), code-complete and **live-unverified**. Untested pills
+    `settings.debugNoExperiments`, `settings.deckPresenter`. Setup: a frozen
+    dev build of this branch; for T3.1 a profile whose `settings.json` has
+    `"debug": true` and no `experimental_explicit` (any profile that ran Debug
+    mode before this build).
+    - [x] 🤖 Automated test — `ExperimentalExplicit`, `Experimental`,
+      `ExperimentalSweep`, `ExperimentalTabWithdraw`, `PythonViewer`,
+      `DeckPresenterSetting`; Rust `unmarked_experimental_flags_default_to_debug_mode`,
+      `marked_experimental_flags_are_off_unless_ticked`,
+      `experimental_explicit_defaults_absent_and_round_trips`, policy
+      `marked_profile_needs_the_flag_ticked`
+    - [ ] 🖐️ Manual test (T3.1) — On the Debug-mode profile, with a browser
+      tab open, start the new build: the browser tab is still there, the ✉
+      mail button is still in the header, and Settings → Experimental shows
+      every experiment that was on ticked (the WebGL renderer stays as it
+      was). Untick Mail: the ✉ button goes; toggle Debug mode off and on
+      again: it does not come back. Restart: nothing changes.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (T3.2) — On a profile with Debug mode off, turn
+      Debug mode on: no experiment appears (no ✉ button, no browser entry in
+      the new-tab menu). Tick the new "Deck presenter" switch: an open PDF's
+      toolbar shows Present, and "New Presentation" appears in the file
+      tree's new-file menu; untick it: both go.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

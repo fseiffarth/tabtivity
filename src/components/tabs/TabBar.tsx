@@ -509,7 +509,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const duplicateTab = useTabsStore((s) => s.duplicateTab);
   const storeEnsureTab = useTabsStore((s) => s.ensureTab);
   const setTabLocation = useTabsStore((s) => s.setTabLocation);
-  // Experimental — off for users, on in debug: the in-app browser (#61). This is
+  // Experimental — off until ticked: the in-app browser (#61). This is
   // the entry-point half of the gate; the other half is the withdrawal
   // (`lib/experimentalSweep`), which closes any browser tab already open when the
   // flag goes off, so hiding the menu entry here is never the whole story.

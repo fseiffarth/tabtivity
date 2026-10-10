@@ -95,6 +95,7 @@ import { listenSyncProgress } from "../../stores/remote/sync";
 import { autoConnectVpnOnLaunch } from "../../lib/remote/vpn/vpnAutoConnect";
 import { initRemoteAutoReconnect } from "../../lib/remote/remoteAutoReconnect";
 import { initExperimentalSweep } from "../../lib/experimentalSweep";
+import { migrateExperimentalOnce } from "../../lib/experimental";
 import { initMachineSync } from "../../lib/remote/machineSync";
 import { installWindowsEvents } from "../../stores/windows";
 import { listenEditorJump } from "../../stores/viewers/editorJump";
@@ -422,7 +423,11 @@ export function AppShell() {
   const panelCloseTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    loadSettings();
+    // Load settings, then move this profile's experimental flags onto the
+    // explicit rule, once (`lib/experimental`). Main window only — popouts never
+    // mount AppShell — and only after a load that succeeded: a rejected load
+    // never reaches it (and stays an unhandled rejection, as before).
+    void Promise.resolve(loadSettings()).then(() => migrateExperimentalOnce());
     loadProjects();
     // Startup window geometry — which monitor, what size, maximized or not — is
     // owned ENTIRELY by the backend now (`restore_main_window` in lib.rs), which
@@ -613,7 +618,7 @@ export function AppShell() {
   // Withdraw the tabs (and live browser windows) of any experiment that is
   // switched off — now and on every settings change. Installed here rather than
   // in the Settings panel because a flag can go off without that panel being
-  // open: Debug mode carries every unset flag with it, and settings arrive
+  // open (another window's write reaches this one's store), and settings arrive
   // asynchronously at launch. See lib/experimentalSweep.
   useEffect(() => initExperimentalSweep(), []);
 
