@@ -111,33 +111,31 @@ are not offered: no environment variable points them at Tabtivity's proxy (use
 instead; Codex's and OpenCode's login files are shared like any other, Vibe's
 `.env` is per project).
 
-**Monthly spending limit.** Every key needs a monthly limit in US dollars
-(20 is proposed); Save stays greyed out without one. Tabtivity reads what each
-answer used from the provider's own usage report, prices it, and shows per
-provider how much of the limit this month has spent and when the count starts
-again (the first day of the next month, UTC). Once the limit is reached, new
-requests are refused — Claude shows "Tabtivity monthly API budget for Anthropic
+**Monthly limit.** Every key needs a monthly limit in **billed tokens**, typed
+in millions (5 is proposed); Save stays greyed out without one. Input, cache
+writes and output count in full, cache reads at a tenth — the same unit a
+server's administrator budgets in. Tabtivity reads what each answer used from the
+provider's own usage report and shows per provider how many billed tokens this
+month has used of the limit, an **≈ $** estimate beside it, and when the count
+starts again (the first day of the next month, UTC). Once the limit is reached,
+new requests are refused — Claude shows "Tabtivity monthly API budget for Anthropic
 reached", Gemini a "resource exhausted" error with the same text — until the
 next month or until you raise the limit with **Set limit** (it takes effect at
 once, no restart). A request that is still running counts with the most it
-could cost (its whole output cap) until it ends, so a new request that could
+could use (its whole output cap) until it ends, so a new request that could
 take the month past the limit is refused too — near the limit, wait for the
-running turns or raise it. A month goes over only by what a running request
-costs beyond that estimate (Anthropic web searches, more Google searches than
-expected). Token counting and model lists are never refused. The shared-logins row
-(and the phone's sign-in list) then says **API budget reached**. A key saved by
-a build without limits shows "no monthly limit" and is refused until you set
-one. The cost is an **estimate**: the price table inside Tabtivity is dated
-(Manage CLIs shows the date), and a model it does not know — a newer one — is
-counted at that provider's most expensive rate and listed under the provider.
+running turns or raise it. Token counting and model lists are never refused.
+The shared-logins row (and the phone's sign-in list) then says **API budget
+reached**. A key saved before limits were in tokens shows "no monthly limit",
+names the dollar limit it had, and is refused until you set a token limit. The
+dollar figure is only an **estimate**: the price table inside Tabtivity is dated
+(Manage CLIs shows the date), a model it does not know is estimated at that
+provider's most expensive rate and listed under the provider, and Gemini's
+Google Search grounding costs money that billed tokens do not count.
 A turn that ends before the provider reports its final count — you cancel it,
 or the connection drops — is counted generously (by how long it ran, up to its
-output cap), since the provider bills what it generated: a cancelled turn costs
-a little more here than on the provider's bill. Gemini's Google Search (and
-Maps) grounding is counted per search query at the provider's rate, without
-its free allowance; a grounded turn cut off before it lists its searches
-counts as ten. Not counted: anything spent outside Tabtivity with the same
-key. So also **set a spending limit with the provider**
+output cap), since the provider bills what it generated. Not counted: anything
+used outside Tabtivity with the same key. So also **set a spending limit with the provider**
 (Anthropic Console → Limits, Google AI Studio / Cloud billing budgets): it is
 the one that holds whatever happens on this computer. The record is kept in
 `agent-api-usage.json` in Tabtivity's state folder (no key in it); if it ever

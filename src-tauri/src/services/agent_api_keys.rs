@@ -366,11 +366,16 @@ pub fn inject_env(
 pub struct ProviderStatus {
     pub id: &'static str,
     pub saved: bool,
-    /// The monthly limit in US dollars (`Settings::agent_api_limits`), if a
-    /// valid one is set.
-    pub limit_usd: Option<f64>,
-    /// Spent this month, by `api_prices` (an estimate).
+    /// The monthly limit in billed tokens (`Settings::agent_api_token_limits`),
+    /// if a valid one is set.
+    pub limit_tokens: Option<u64>,
+    /// Billed tokens this month (the limit's unit).
+    pub billed: u64,
+    /// What they cost by `api_prices`: an estimate, shown beside the tokens.
     pub spent_usd: f64,
+    /// An older build's dollar limit, while no token limit is set: a hint
+    /// for choosing one, never enforced.
+    pub legacy_limit_usd: Option<f64>,
     /// `api_usage::Verdict::id`: `open`, `reached`, or `noLimit` (requests
     /// are refused until a limit is set).
     pub budget: &'static str,
@@ -417,20 +422,23 @@ fn status_with(
     readable: bool,
     saved: impl Fn(Provider) -> bool,
     enabled: &[String],
-    limits: &std::collections::BTreeMap<String, f64>,
+    limits: &std::collections::BTreeMap<String, u64>,
+    legacy_usd: &std::collections::BTreeMap<String, f64>,
     ledger: &crate::services::api_usage::Ledger,
 ) -> ApiKeyStatus {
     let providers: Vec<ProviderStatus> = Provider::ALL
         .into_iter()
         .map(|p| {
-            let limit_usd = limits.get(p.id()).copied();
-            let spent_usd = ledger.spent(p);
+            let limit_tokens = limits.get(p.id()).copied();
+            let billed = ledger.billed(p);
             ProviderStatus {
                 id: p.id(),
                 saved: saved(p),
-                limit_usd,
-                spent_usd,
-                budget: crate::services::api_usage::Verdict::of(spent_usd, limit_usd).id(),
+                limit_tokens,
+                billed,
+                spent_usd: ledger.spent_usd(p),
+                legacy_limit_usd: limit_tokens.is_none().then(|| legacy_usd.get(p.id()).copied()).flatten(),
+                budget: crate::services::api_usage::Verdict::of(billed, limit_tokens).id(),
                 unknown_models: ledger.unknown_models(p),
             }
         })
@@ -483,6 +491,7 @@ pub fn status() -> ApiKeyStatus {
         has_key,
         &settings.agent_api_key_clis.clone().unwrap_or_default(),
         &crate::services::api_usage::limits_in(&settings),
+        &crate::services::api_usage::legacy_usd_limits_in(&settings),
         &crate::services::api_usage::book().snapshot(chrono::Utc::now()),
     )
 }
@@ -498,7 +507,7 @@ pub fn budget_blocked_clis(ready: &[&'static str]) -> Vec<&'static str> {
 
 fn budget_blocked_with(
     ready: &[&'static str],
-    limits: &std::collections::BTreeMap<String, f64>,
+    limits: &std::collections::BTreeMap<String, u64>,
     ledger: &crate::services::api_usage::Ledger,
 ) -> Vec<&'static str> {
     ready
@@ -508,7 +517,7 @@ fn budget_blocked_with(
             let routes = routes_of(id);
             !routes.is_empty()
                 && routes.iter().all(|r| {
-                    crate::services::api_usage::Verdict::of(ledger.spent(r.provider), limits.get(r.provider.id()).copied())
+                    crate::services::api_usage::Verdict::of(ledger.billed(r.provider), limits.get(r.provider.id()).copied())
                         != crate::services::api_usage::Verdict::Open
                 })
         })
@@ -516,9 +525,9 @@ fn budget_blocked_with(
 }
 
 /// The monthly limit saving `provider`'s key requires: refused without one.
-pub fn require_limit(provider: Provider) -> Result<f64, String> {
+pub fn require_limit(provider: Provider) -> Result<u64, String> {
     crate::services::api_usage::limit_for(provider)
-        .ok_or_else(|| "set a monthly spending limit for this provider before saving its key".to_string())
+        .ok_or_else(|| "set a monthly token limit for this provider before saving its key".to_string())
 }
 
 #[cfg(test)]
@@ -709,7 +718,7 @@ mod tests {
     #[test]
     fn status_is_ready_only_for_a_switched_on_cli_with_a_key() {
         let ledger = crate::services::api_usage::Ledger { month: "2026-10".into(), ..Default::default() };
-        let s = status_with(true, |p| p == Provider::Anthropic, &on(&["claude", "gemini"]), &Default::default(), &ledger);
+        let s = status_with(true, |p| p == Provider::Anthropic, &on(&["claude", "gemini"]), &Default::default(), &Default::default(), &ledger);
         let cli = |id: &str| s.clis.iter().find(|c| c.id == id).unwrap().clone();
         assert!(cli("claude").ready);
         assert!(!cli("gemini").ready, "on, but no Gemini key");
@@ -729,36 +738,40 @@ mod tests {
         use crate::services::api_prices::Charge;
         use crate::services::api_usage::Ledger;
         let mut ledger = Ledger { month: "2026-10".into(), ..Default::default() };
-        let charge = |model: &str, usd: f64, known: bool| Charge {
+        // `output` tokens billed in full; `usd` the estimate beside them.
+        let charge = |model: &str, output: u64, usd: f64, known: bool| Charge {
             model: model.into(),
             known,
-            input: 1,
-            output: 1,
-            cache_write: 0,
-            cache_read: 0,
-            web_searches: 0,
+            output,
             usd,
+            ..Charge::default()
         };
-        ledger.add(Provider::Anthropic, &charge("claude-opus-5-5", 12.0, true));
-        ledger.add(Provider::Anthropic, &charge("claude-new", 8.0, false));
-        ledger.add(Provider::Gemini, &charge("gemini-2.5-pro", 1.0, true));
+        ledger.add(Provider::Anthropic, &charge("claude-opus-5-5", 12_000, 12.0, true));
+        ledger.add(Provider::Anthropic, &charge("claude-new", 8_000, 8.0, false));
+        ledger.add(Provider::Gemini, &charge("gemini-2.5-pro", 1_000, 1.0, true));
         ledger.restarted = Some("2026-10-04T12:00:00Z".into());
-        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 20.0)]);
-        let s = status_with(true, |_| true, &on(&["claude", "gemini"]), &limits, &ledger);
+        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 20_000)]);
+        // An older build's dollar limits: shown only where no token limit is.
+        let legacy = std::collections::BTreeMap::from([("anthropic".to_string(), 20.0), ("gemini".to_string(), 7.5)]);
+        let s = status_with(true, |_| true, &on(&["claude", "gemini"]), &limits, &legacy, &ledger);
         let anthropic = &s.providers[0];
-        assert_eq!((anthropic.id, anthropic.limit_usd, anthropic.budget), ("anthropic", Some(20.0), "reached"));
+        assert_eq!((anthropic.id, anthropic.limit_tokens, anthropic.budget), ("anthropic", Some(20_000), "reached"));
+        assert_eq!(anthropic.billed, 20_000);
         assert!((anthropic.spent_usd - 20.0).abs() < 1e-9);
+        assert_eq!(anthropic.legacy_limit_usd, None, "a token limit is set");
         assert_eq!(anthropic.unknown_models, ["claude-new"]);
         let gemini = &s.providers[1];
-        assert_eq!((gemini.limit_usd, gemini.budget), (None, "noLimit"));
+        assert_eq!((gemini.limit_tokens, gemini.budget, gemini.legacy_limit_usd), (None, "noLimit", Some(7.5)));
         assert_eq!(s.ledger_restarted.as_deref(), Some("2026-10-04T12:00:00Z"));
         let json = serde_json::to_value(&s).unwrap();
-        assert_eq!(json["providers"][0]["limitUsd"], 20.0);
+        assert_eq!(json["providers"][0]["limitTokens"], 20_000);
+        assert_eq!(json["providers"][0]["billed"], 20_000);
+        assert_eq!(json["providers"][1]["legacyLimitUsd"], 7.5);
         assert_eq!(json["providers"][1]["budget"], "noLimit");
         // Claude's only provider is out of budget, Gemini's has no limit:
         // both are blocked; with a limit and room, Gemini is not.
         assert_eq!(budget_blocked_with(&["claude", "gemini"], &limits, &ledger), vec!["claude", "gemini"]);
-        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 50.0), ("gemini".to_string(), 5.0)]);
+        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 50_000), ("gemini".to_string(), 5_000)]);
         assert!(budget_blocked_with(&["claude", "gemini"], &limits, &ledger).is_empty());
     }
 

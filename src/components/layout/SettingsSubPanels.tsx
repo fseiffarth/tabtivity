@@ -880,10 +880,15 @@ interface AgentApiKeyStatus {
   providers: {
     id: string;
     saved: boolean;
-    /** The monthly limit (`agent_api_limits`) as the backend reads it. */
-    limitUsd?: number | null;
-    /** Spent this month by the price table — an estimate. */
+    /** The monthly limit in billed tokens (`agent_api_token_limits`) as the
+     *  backend reads it. */
+    limitTokens?: number | null;
+    /** Billed tokens this month: what the limit counts. */
+    billed?: number;
+    /** Their cost by the price table — an estimate, shown only. */
     spentUsd?: number;
+    /** An older build's dollar limit while no token limit is set: a hint. */
+    legacyLimitUsd?: number | null;
     /** `open`, `reached`, or `noLimit` (refused until a limit is set). */
     budget?: "open" | "reached" | "noLimit";
     /** Models priced at the provider's highest rate (not in the table). */
@@ -899,18 +904,27 @@ interface AgentApiKeyStatus {
   pricesDate?: string;
 }
 
-/** The monthly limit a new key's row proposes, in US dollars. */
-export const DEFAULT_API_LIMIT_USD = 20;
-/** The backend's `api_usage::MAX_LIMIT`. */
-const MAX_API_LIMIT_USD = 1_000_000;
+/** The monthly limit a new key's row proposes, in million billed tokens. */
+export const DEFAULT_API_LIMIT_MTOK = 5;
+/** The backend's `api_usage::MAX_LIMIT`, billed tokens. */
+const MAX_API_LIMIT_TOKENS = 1_000_000_000_000;
+const MILLION = 1_000_000;
 
-/** A typed limit as dollars, or `null` when it is not a usable one. */
+/** A typed limit (million billed tokens) as whole billed tokens, or `null`
+ *  when it is not a usable one. */
 function parseApiLimit(text: string): number | null {
   const n = Number(text.trim());
-  return text.trim() !== "" && Number.isFinite(n) && n > 0 && n <= MAX_API_LIMIT_USD ? n : null;
+  if (text.trim() === "" || !Number.isFinite(n)) return null;
+  const tokens = Math.round(n * MILLION);
+  return tokens > 0 && tokens <= MAX_API_LIMIT_TOKENS ? tokens : null;
 }
 
+/** Billed tokens as the limit field shows them: millions, no trailing zeros. */
+const asMillions = (tokens: number) => String(Number((tokens / MILLION).toFixed(6)));
+
 const usd = (n: number) => `$${n.toFixed(2)}`;
+const tokenCount = (n: number) =>
+  new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
 /** Provider names as their vendors spell them. */
 const API_KEY_PROVIDERS: Record<string, string> = {
@@ -948,12 +962,14 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
   if (!status) return null;
   const saved = new Set(status.providers.filter((p) => p.saved).map((p) => p.id));
   const enabled = settings?.agent_api_key_clis ?? [];
-  const limits = settings?.agent_api_limits ?? {};
+  const limits = settings?.agent_api_token_limits ?? {};
   // A new key's row proposes the default; a saved key's shows its limit.
-  const limitDraft = (id: string, current?: number | null) =>
-    limitDrafts[id] ?? String(current ?? limits[id] ?? DEFAULT_API_LIMIT_USD);
+  const limitDraft = (id: string, current?: number | null) => {
+    const tokens = current ?? limits[id];
+    return limitDrafts[id] ?? (tokens != null ? asMillions(tokens) : String(DEFAULT_API_LIMIT_MTOK));
+  };
   const writeLimit = (id: string, limit: number) =>
-    updateSettings({ agent_api_limits: { ...limits, [id]: limit } });
+    updateSettings({ agent_api_token_limits: { ...limits, [id]: limit } });
   const act = (id: string, call: () => Promise<unknown>) => {
     setError(null);
     setBusy(id);
@@ -1013,16 +1029,24 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
       {status.providers.map((p) => {
         const name = API_KEY_PROVIDERS[p.id] ?? p.id;
         const draft = drafts[p.id] ?? "";
-        const limitText = limitDraft(p.id, p.limitUsd);
+        const limitText = limitDraft(p.id, p.limitTokens);
         const limitOk = parseApiLimit(limitText) !== null;
-        const spent = usd(p.spentUsd ?? 0);
+        const spent = tokenCount(p.billed ?? 0);
         const budget = !p.saved
           ? null
-          : p.budget === "noLimit" || p.limitUsd == null
+          : p.budget === "noLimit" || p.limitTokens == null
             ? t("settings.agentApiNoLimit")
             : p.budget === "reached"
-              ? t("settings.agentApiBudgetReached", { spent, limit: usd(p.limitUsd), date: status.resetsOn ?? "" })
-              : t("settings.agentApiSpent", { spent, limit: usd(p.limitUsd) });
+              ? t("settings.agentApiBudgetReached", {
+                  spent,
+                  limit: tokenCount(p.limitTokens),
+                  date: status.resetsOn ?? "",
+                })
+              : t("settings.agentApiSpent", {
+                  spent,
+                  limit: tokenCount(p.limitTokens),
+                  usd: usd(p.spentUsd ?? 0),
+                });
         const state = !status.readable
           ? t("settings.agentApiKeyLocked")
           : p.saved
@@ -1031,7 +1055,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
         const limitInput = (
           <input
             type="number"
-            min={0.01}
+            min={0.000001}
             step="any"
             value={limitText}
             aria-label={t("settings.agentApiLimitLabel", { provider: name })}
@@ -1061,7 +1085,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                     <button
                       type="button"
                       className="ollama-action-btn"
-                      disabled={busy === p.id || !limitOk || parseApiLimit(limitText) === p.limitUsd}
+                      disabled={busy === p.id || !limitOk || parseApiLimit(limitText) === p.limitTokens}
                       onClick={() => setLimit(p.id)}
                     >
                       {t("settings.agentApiLimitSet")}
@@ -1108,6 +1132,11 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                 )}
               </span>
             </div>
+            {p.saved && p.limitTokens == null && p.legacyLimitUsd != null && (
+              <p className="settings-help pill-fence-live-note">
+                {t("settings.agentApiOldUsdLimit", { usd: usd(p.legacyLimitUsd) })}
+              </p>
+            )}
             {p.saved && (p.unknownModels?.length ?? 0) > 0 && (
               <p className="settings-help">
                 {t("settings.agentApiUnknownModels", { provider: name, models: (p.unknownModels ?? []).join(", ") })}

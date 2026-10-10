@@ -10,11 +10,12 @@
  *     settings (`agent_api_key_clis`).
  *  3. **A locked keyring is said, not hidden.** It reads every key as absent,
  *     so the rows say "locked" and offer the unlock — never "not saved".
- *  4. **No key without a monthly limit** (`services::api_usage`). Save needs
- *     a valid limit and writes it before the key; a saved key's row shows
- *     what was spent of it, says when the budget is reached (and when the
- *     count restarts), names models priced at the fallback rate, and lets the
- *     limit be raised.
+ *  4. **No key without a monthly limit** (`services::api_usage`), in billed
+ *     tokens (#2389), typed in millions. Save needs a valid limit and writes
+ *     it before the key; a saved key's row shows the tokens billed of it and
+ *     the dollar estimate, says when the budget is reached (and when the
+ *     count restarts), names models priced at the fallback rate, lets the
+ *     limit be raised, and shows an older build's dollar limit as a hint.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -36,7 +37,14 @@ const calls = (cmd: string) => invokeMock.mock.calls.filter(([name]) => name ===
 // Placeholder words only: never a real-looking key shape.
 const FAKE_KEY = "sk-test-fake-key";
 
-type ProviderExtra = { limitUsd?: number | null; spentUsd?: number; budget?: string; unknownModels?: string[] };
+type ProviderExtra = {
+  limitTokens?: number | null;
+  billed?: number;
+  spentUsd?: number;
+  legacyLimitUsd?: number | null;
+  budget?: string;
+  unknownModels?: string[];
+};
 let extra: Record<string, ProviderExtra> = {};
 
 function status(saved: string[], readable = true) {
@@ -104,8 +112,8 @@ describe("API keys for agent CLIs", () => {
     await waitFor(() => expect(calls("agent_api_key_set")).toHaveLength(1));
     expect(calls("agent_api_key_set")[0][1]).toEqual({ provider: "anthropic", key: FAKE_KEY });
     // The proposed monthly limit went in first.
-    expect(updateSettings).toHaveBeenCalledWith({ agent_api_limits: { anthropic: 20 } });
-    expect(order).toEqual(["settings:agent_api_limits", "key"]);
+    expect(updateSettings).toHaveBeenCalledWith({ agent_api_token_limits: { anthropic: 5_000_000 } });
+    expect(order).toEqual(["settings:agent_api_token_limits", "key"]);
     // The row now says "saved", offers Remove, and holds no key anywhere.
     await waitFor(() => expect(screen.queryByLabelText("Paste the Anthropic API key")).toBeNull());
     expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
@@ -157,14 +165,15 @@ describe("API keys for agent CLIs", () => {
   });
 
   it("needs a valid monthly limit before a key can be saved", async () => {
-    useSettingsStore.setState({ settings: { agent_api_limits: { gemini: 5 } } as Settings });
+    useSettingsStore.setState({ settings: { agent_api_token_limits: { gemini: 5_000_000 } } as Settings });
     render(<AgentApiKeysRows />);
     const key = await screen.findByLabelText<HTMLInputElement>("Paste the Anthropic API key");
-    const limit = screen.getByLabelText<HTMLInputElement>("Monthly limit for Anthropic, US dollars");
-    expect(limit.value).toBe("20");
+    const limit = screen.getByLabelText<HTMLInputElement>("Monthly limit for Anthropic, million billed tokens");
+    expect(limit.value).toBe("5");
     fireEvent.change(key, { target: { value: FAKE_KEY } });
     const save = screen.getAllByRole("button", { name: "Save" })[0] as HTMLButtonElement;
     expect(save.disabled).toBe(false);
+    // Past the backend's cap (10^12 tokens) is as bad as nothing.
     for (const bad of ["", "0", "-5", "abc", "2000000"]) {
       fireEvent.change(limit, { target: { value: bad } });
       expect(save.disabled, bad).toBe(true);
@@ -176,46 +185,59 @@ describe("API keys for agent CLIs", () => {
     fireEvent.click(save);
     await waitFor(() => expect(calls("agent_api_key_set")).toHaveLength(1));
     // Merged with the other provider's limit, written before the key.
-    expect(updateSettings).toHaveBeenCalledWith({ agent_api_limits: { gemini: 5, anthropic: 35 } });
-    expect(order).toEqual(["settings:agent_api_limits", "key"]);
+    expect(updateSettings).toHaveBeenCalledWith({ agent_api_token_limits: { gemini: 5_000_000, anthropic: 35_000_000 } });
+    expect(order).toEqual(["settings:agent_api_token_limits", "key"]);
   });
 
-  it("shows the month's spending, the budget reached and models priced at the top rate", async () => {
+  it("shows the month's billed tokens, the budget reached and models priced at the top rate", async () => {
     saved = ["anthropic", "gemini"];
     extra = {
-      anthropic: { limitUsd: 20, spentUsd: 20.5, budget: "reached", unknownModels: ["claude-next"] },
-      gemini: { limitUsd: 10, spentUsd: 1.234, budget: "open", unknownModels: [] },
+      anthropic: { limitTokens: 20_000_000, billed: 20_500_000, spentUsd: 20.5, budget: "reached", unknownModels: ["claude-next"] },
+      gemini: { limitTokens: 10_000_000, billed: 1_234_000, spentUsd: 1.234, budget: "open", unknownModels: [] },
     };
-    useSettingsStore.setState({ settings: { agent_api_limits: { anthropic: 20, gemini: 10 } } as Settings });
+    useSettingsStore.setState({
+      settings: { agent_api_token_limits: { anthropic: 20_000_000, gemini: 10_000_000 } } as Settings,
+    });
     render(<AgentApiKeysRows />);
     expect(
-      await screen.findByText(/budget reached \(\$20\.50 of \$20\.00\) — new requests are refused until 2026-11-01 or a higher limit/),
+      await screen.findByText(
+        /budget reached \(20\.5M of 20M billed tokens\) — new requests are refused until 2026-11-01 or a higher limit/,
+      ),
     ).toBeTruthy();
-    expect(screen.getByText(/\$1\.23 of \$10\.00 spent this month/)).toBeTruthy();
+    expect(screen.getByText(/1\.2M of 10M billed tokens this month \(≈ \$1\.23\)/)).toBeTruthy();
     expect(screen.getByText(/highest Anthropic rate: claude-next/)).toBeTruthy();
     expect(screen.getByText(/starts again on 2026-11-01 \(UTC\)/)).toBeTruthy();
     expect(screen.getByText(/price table dated 2026-10-04/)).toBeTruthy();
     // Raise it: the saved row offers the limit, unchanged until edited.
-    const limit = screen.getByLabelText<HTMLInputElement>("Monthly limit for Anthropic, US dollars");
+    const limit = screen.getByLabelText<HTMLInputElement>("Monthly limit for Anthropic, million billed tokens");
     expect(limit.value).toBe("20");
     const set = screen.getAllByRole("button", { name: "Set limit" })[0] as HTMLButtonElement;
     expect(set.disabled).toBe(true);
     fireEvent.change(limit, { target: { value: "50" } });
     expect(set.disabled).toBe(false);
     fireEvent.click(set);
-    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_limits: { anthropic: 50, gemini: 10 } }));
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        agent_api_token_limits: { anthropic: 50_000_000, gemini: 10_000_000 },
+      }),
+    );
     expect(calls("agent_api_key_set")).toHaveLength(0);
   });
 
-  it("says a key saved without a limit is refused until one is set", async () => {
+  it("says a key saved without a token limit is refused until one is set, naming an old dollar limit", async () => {
     saved = ["anthropic"];
-    extra = { anthropic: { limitUsd: null, spentUsd: 0, budget: "noLimit", unknownModels: [] } };
+    extra = {
+      anthropic: { limitTokens: null, billed: 0, spentUsd: 0, legacyLimitUsd: 20, budget: "noLimit", unknownModels: [] },
+    };
+    useSettingsStore.setState({ settings: { agent_api_limits: { anthropic: 20 } } as Settings });
     render(<AgentApiKeysRows />);
     expect(await screen.findByText(/no monthly limit — requests are refused until you set one/)).toBeTruthy();
-    const limit = screen.getByLabelText<HTMLInputElement>("Monthly limit for Anthropic, US dollars");
-    expect(limit.value).toBe("20");
+    expect(screen.getByText(/your earlier limit was \$20\.00 a month/)).toBeTruthy();
+    const limit = screen.getByLabelText<HTMLInputElement>("Monthly limit for Anthropic, million billed tokens");
+    expect(limit.value).toBe("5");
     fireEvent.click(screen.getAllByRole("button", { name: "Set limit" })[0]);
-    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_limits: { anthropic: 20 } }));
+    // The dollar map stays as it was; the token one is written.
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_token_limits: { anthropic: 5_000_000 } }));
   });
 
   it("says in the shared-logins row when a keyed CLI is out of budget", async () => {

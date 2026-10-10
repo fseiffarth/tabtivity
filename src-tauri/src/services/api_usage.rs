@@ -3,8 +3,12 @@
 //! proxy, and the limit the proxy enforces.
 //!
 //! **Ledger** — `<state_dir>/agent-api-usage.json`, no secrets: the UTC
-//! calendar month, and per provider the US dollars spent (priced by
-//! `api_prices`, an estimate) and per model the tokens and requests. Held in
+//! calendar month, and per provider the **billed tokens** (the limit's unit,
+//! `keys_wire::billed_tokens`: input, cache writes and output in full, cache
+//! reads at a tenth — the key broker's budget unit, #2389), the US dollars
+//! they cost by `api_prices` (an estimate, shown only), and per model the
+//! tokens and requests. A version-1 file (dollars only) gets its billed
+//! tokens recomputed from its token counts on load ([`Ledger::upgrade`]). Held in
 //! memory, written atomically at most every [`FLUSH_DELAY`] after a change
 //! (never per chunk) and once more in the `RunEvent::Exit` teardown
 //! (`api_proxy::stop_for_exit`). Tolerant on the way in:
@@ -19,22 +23,22 @@
 //! - a ledger whose month lies ahead of the clock (the clock went back) keeps
 //!   counting into that month instead of being reset.
 //!
-//! **Limit** — `Settings::agent_api_limits` (provider id → USD per month),
-//! read from `settings.json` and re-read when the file changes
-//! ([`limit_for`]). Saving a key requires one (`agent_api_key_set`); a key
-//! saved before limits existed has none, and its provider is refused until
-//! one is set ([`Verdict::NoLimit`]). Once spent ≥ limit
-//! ([`Verdict::Reached`]) the proxy refuses new billed requests.
+//! **Limit** — `Settings::agent_api_token_limits` (provider id → billed
+//! tokens per month), read from `settings.json` and re-read when the file
+//! changes ([`limit_for`]). Saving a key requires one (`agent_api_key_set`);
+//! a key saved before token limits existed has none — an older build's
+//! dollar limit (`agent_api_limits`) is only shown as a hint — and its
+//! provider is refused until one is set ([`Verdict::NoLimit`]). Once billed ≥
+//! limit ([`Verdict::Reached`]) the proxy refuses new billed requests.
 //!
 //! **Requests in flight count** (gap 9): before forwarding, the proxy
-//! reserves each billed request's worst-case cost (`api_meter::Meter::
-//! worst_case`) with [`Book::reserve`], refused when spent + every reservation
+//! reserves each billed request's worst case in billed tokens (`api_meter::
+//! Meter::worst_case_billed`) with [`Book::reserve`], refused when billed + every reservation
 //! held + this one would pass the limit. The [`Reservation`] is released when
 //! it drops — after the answer's actual cost is recorded, or when the request
 //! fails or its client leaves — so none can leak. Reservations live in memory
-//! only (in micro-dollars, so release is exact); the file never holds them.
-//! An answer can still cost more than its reservation (Anthropic web
-//! searches, more grounding queries than the estimate, input the body only
+//! only; the file never holds them.
+//! An answer can still bill more than its reservation (input the body only
 //! points to — a document URL, a Gemini file URI or cached content — or that
 //! server tools add during the turn, since input is reserved by the body's
 //! size): the month can overshoot by that difference, not by whole turns.
@@ -54,8 +58,8 @@ use super::api_prices::Charge;
 
 /// A change reaches the file at most this long after it was made.
 pub const FLUSH_DELAY: Duration = Duration::from_secs(5);
-/// Highest monthly limit accepted, USD.
-pub const MAX_LIMIT: f64 = 1_000_000.0;
+/// Highest monthly limit accepted, billed tokens.
+pub const MAX_LIMIT: u64 = 1_000_000_000_000;
 /// Models kept apart per provider per month; more are summed under
 /// [`OTHER_MODELS`].
 const MAX_MODELS: usize = 32;
@@ -73,6 +77,9 @@ pub struct ModelUsage {
     pub cache_read: u64,
     pub web_searches: u64,
     pub requests: u64,
+    /// Billed tokens (the limit's unit).
+    pub billed: u64,
+    /// What they cost by the price table: an estimate, shown only.
     pub usd: f64,
     /// Not in the price table: priced at the provider's highest rate.
     pub unknown: bool,
@@ -82,6 +89,9 @@ pub struct ModelUsage {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderUsage {
+    /// Billed tokens this month: what the limit is held against.
+    pub billed: u64,
+    /// Their cost by the price table: an estimate, shown only.
     pub spent_usd: f64,
     pub models: BTreeMap<String, ModelUsage>,
 }
@@ -92,6 +102,8 @@ pub struct ProviderUsage {
 pub struct PreviousMonth {
     pub month: String,
     pub spent_usd: BTreeMap<String, f64>,
+    /// Billed tokens by provider id (absent in a version-1 file).
+    pub billed: BTreeMap<String, u64>,
 }
 
 /// `agent-api-usage.json`.
@@ -134,7 +146,24 @@ fn valid_month(month: &str) -> bool {
 }
 
 impl Ledger {
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
+
+    /// A version-1 ledger (dollars only) gets its billed tokens from its
+    /// token counts. Returns whether anything changed.
+    pub fn upgrade(&mut self) -> bool {
+        if self.version >= Self::VERSION {
+            return false;
+        }
+        for usage in self.providers.values_mut() {
+            usage.billed = 0;
+            for m in usage.models.values_mut() {
+                m.billed = crate::services::server::keys_wire::billed_tokens(m.input, m.cache_write, m.output, m.cache_read);
+                usage.billed = usage.billed.saturating_add(m.billed);
+            }
+        }
+        self.version = Self::VERSION;
+        true
+    }
 
     /// Move to `now`'s month if it is later than the ledger's. Returns whether
     /// anything changed.
@@ -151,7 +180,8 @@ impl Ledger {
             return false;
         }
         let spent = self.providers.iter().map(|(p, u)| (p.clone(), u.spent_usd)).collect();
-        self.previous = Some(PreviousMonth { month: std::mem::take(&mut self.month), spent_usd: spent });
+        let billed = self.providers.iter().map(|(p, u)| (p.clone(), u.billed)).collect();
+        self.previous = Some(PreviousMonth { month: std::mem::take(&mut self.month), spent_usd: spent, billed });
         self.providers.clear();
         self.restarted = None;
         self.month = current;
@@ -159,12 +189,20 @@ impl Ledger {
         true
     }
 
-    pub fn spent(&self, provider: Provider) -> f64 {
+    /// Billed tokens this month: what the limit counts.
+    pub fn billed(&self, provider: Provider) -> u64 {
+        self.providers.get(provider.id()).map_or(0, |u| u.billed)
+    }
+
+    /// The dollar estimate of this month's use (shown beside the tokens).
+    pub fn spent_usd(&self, provider: Provider) -> f64 {
         self.providers.get(provider.id()).map_or(0.0, |u| u.spent_usd)
     }
 
     pub fn add(&mut self, provider: Provider, charge: &Charge) {
+        let billed = charge.billed();
         let usage = self.providers.entry(provider.id().to_string()).or_default();
+        usage.billed = usage.billed.saturating_add(billed);
         usage.spent_usd += charge.usd.max(0.0);
         let mut name = model_name(&charge.model);
         if !usage.models.contains_key(&name) && usage.models.len() >= MAX_MODELS {
@@ -178,6 +216,7 @@ impl Ledger {
         m.cache_read = m.cache_read.saturating_add(charge.cache_read);
         m.web_searches = m.web_searches.saturating_add(charge.web_searches);
         m.requests = m.requests.saturating_add(1);
+        m.billed = m.billed.saturating_add(billed);
         m.usd += charge.usd.max(0.0);
         m.unknown |= !charge.known;
     }
@@ -208,11 +247,12 @@ pub enum Verdict {
     /// No limit is set (a key saved before limits existed): refused until
     /// one is.
     NoLimit,
-    Reached { spent: f64, limit: f64 },
+    /// `spent` and `limit` in billed tokens.
+    Reached { spent: u64, limit: u64 },
 }
 
 impl Verdict {
-    pub fn of(spent: f64, limit: Option<f64>) -> Self {
+    pub fn of(spent: u64, limit: Option<u64>) -> Self {
         match limit.filter(|l| valid_limit(*l)) {
             None => Verdict::NoLimit,
             Some(limit) if spent >= limit => Verdict::Reached { spent, limit },
@@ -229,8 +269,8 @@ impl Verdict {
     }
 }
 
-pub fn valid_limit(usd: f64) -> bool {
-    usd.is_finite() && usd > 0.0 && usd <= MAX_LIMIT
+pub fn valid_limit(tokens: u64) -> bool {
+    tokens > 0 && tokens <= MAX_LIMIT
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +281,7 @@ struct BookState {
     loaded: bool,
     dirty: bool,
     flush_scheduled: bool,
-    /// Micro-dollars held by requests in flight, per provider
+    /// Billed tokens held by requests in flight, per provider
     /// ([`Provider::ALL`] order).
     reserved: [u64; 2],
 }
@@ -253,29 +293,18 @@ fn slot(provider: Provider) -> usize {
     }
 }
 
-const MICROS: f64 = 1_000_000.0;
-
-/// `usd` in whole micro-dollars, rounded up; a value that is not a number
-/// holds everything.
-fn micros(usd: f64) -> u64 {
-    if usd.is_nan() {
-        return u64::MAX;
-    }
-    // `as` saturates: negative → 0, huge → `u64::MAX`.
-    (usd * MICROS).ceil() as u64
-}
-
 /// One billed request's hold on the monthly limit while it is in flight
 /// ([`Book::reserve`]); released when dropped.
 pub struct Reservation {
     book: Arc<Book>,
     provider: Provider,
-    micros: u64,
+    tokens: u64,
 }
 
 impl Reservation {
-    pub fn usd(&self) -> f64 {
-        self.micros as f64 / MICROS
+    /// The billed tokens it holds.
+    pub fn tokens(&self) -> u64 {
+        self.tokens
     }
 }
 
@@ -283,7 +312,7 @@ impl Drop for Reservation {
     fn drop(&mut self) {
         let mut s = lock(&self.book.state);
         let held = &mut s.reserved[slot(self.provider)];
-        *held = held.saturating_sub(self.micros);
+        *held = held.saturating_sub(self.tokens);
     }
 }
 
@@ -337,28 +366,29 @@ impl Book {
         f(&mut state)
     }
 
-    pub fn spent(&self, provider: Provider, now: DateTime<Utc>) -> f64 {
-        self.with(now, |s| s.ledger.spent(provider))
+    /// Billed tokens this month.
+    pub fn billed(&self, provider: Provider, now: DateTime<Utc>) -> u64 {
+        self.with(now, |s| s.ledger.billed(provider))
     }
 
-    /// What requests in flight for `provider` hold right now, USD.
-    pub fn reserved(&self, provider: Provider) -> f64 {
-        lock(&self.state).reserved[slot(provider)] as f64 / MICROS
+    /// What requests in flight for `provider` hold right now, billed tokens.
+    pub fn reserved(&self, provider: Provider) -> u64 {
+        lock(&self.state).reserved[slot(provider)]
     }
 
     /// Whether a billed request for `provider` may start under `limit`:
-    /// [`Verdict::Open`] while spent + what requests in flight hold stays
-    /// below it. `Reached` carries what was spent (without reservations).
-    pub fn verdict(&self, provider: Provider, limit: Option<f64>, now: DateTime<Utc>) -> Verdict {
+    /// [`Verdict::Open`] while billed + what requests in flight hold stays
+    /// below it. `Reached` carries what was billed (without reservations).
+    pub fn verdict(&self, provider: Provider, limit: Option<u64>, now: DateTime<Utc>) -> Verdict {
         self.with(now, |s| Self::check(s, provider, None, limit))
     }
 
-    /// Hold `usd` (a request's worst-case cost) against `provider`'s
+    /// Hold `tokens` (a request's worst case, billed) against `provider`'s
     /// `limit` until the returned [`Reservation`] drops. Refused — `Err` with
-    /// the verdict — without a valid limit, once spent + held ≥ limit, or
-    /// when spent + held + `usd` would pass it.
-    pub fn reserve(self: &Arc<Self>, provider: Provider, usd: f64, limit: Option<f64>, now: DateTime<Utc>) -> Result<Reservation, Verdict> {
-        let want = micros(usd);
+    /// the verdict — without a valid limit, once billed + held ≥ limit, or
+    /// when billed + held + `tokens` would pass it.
+    pub fn reserve(self: &Arc<Self>, provider: Provider, tokens: u64, limit: Option<u64>, now: DateTime<Utc>) -> Result<Reservation, Verdict> {
+        let want = tokens;
         self.with(now, |s| {
             match Self::check(s, provider, Some(want), limit) {
                 Verdict::Open => {}
@@ -366,20 +396,20 @@ impl Book {
             }
             let held = &mut s.reserved[slot(provider)];
             *held = held.saturating_add(want);
-            Ok(Reservation { book: Arc::clone(self), provider, micros: want })
+            Ok(Reservation { book: Arc::clone(self), provider, tokens: want })
         })
     }
 
-    fn check(s: &BookState, provider: Provider, want: Option<u64>, limit: Option<f64>) -> Verdict {
-        let spent = s.ledger.spent(provider);
-        let held = s.reserved[slot(provider)] as f64 / MICROS;
-        match Verdict::of(spent + held, limit) {
+    fn check(s: &BookState, provider: Provider, want: Option<u64>, limit: Option<u64>) -> Verdict {
+        let spent = s.ledger.billed(provider);
+        let held = spent.saturating_add(s.reserved[slot(provider)]);
+        match Verdict::of(held, limit) {
             Verdict::Open => {}
             Verdict::Reached { limit, .. } => return Verdict::Reached { spent, limit },
             Verdict::NoLimit => return Verdict::NoLimit,
         }
         match (want, limit) {
-            (Some(want), Some(limit)) if spent + held + want as f64 / MICROS > limit => Verdict::Reached { spent, limit },
+            (Some(want), Some(limit)) if held.saturating_add(want) > limit => Verdict::Reached { spent, limit },
             _ => Verdict::Open,
         }
     }
@@ -440,7 +470,10 @@ fn load(path: &Path, now: DateTime<Utc>) -> (Ledger, bool) {
     match std::fs::read(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Ledger::default(), false),
         Ok(bytes) => match serde_json::from_slice::<Ledger>(&bytes) {
-            Ok(ledger) => (ledger, false),
+            Ok(mut ledger) => {
+                let upgraded = ledger.upgrade();
+                (ledger, upgraded)
+            }
             Err(_) => (restarted(path, now, true), true),
         },
         // Unreadable (permissions, I/O): counted from zero, said so, and kept
@@ -484,20 +517,32 @@ pub fn flush_for_exit() {
 // ---------------------------------------------------------------------------
 // Limits
 
-/// Every valid limit in `settings`, by provider id.
-pub fn limits_in(settings: &crate::schema::Settings) -> BTreeMap<String, f64> {
+/// Every valid limit in `settings`, by provider id, in billed tokens.
+pub fn limits_in(settings: &crate::schema::Settings) -> BTreeMap<String, u64> {
+    settings
+        .agent_api_token_limits
+        .iter()
+        .flatten()
+        .filter(|(p, tokens)| Provider::from_id(p).is_some() && valid_limit(**tokens))
+        .map(|(p, tokens)| (p.clone(), *tokens))
+        .collect()
+}
+
+/// An older build's dollar limits in `settings` (`agent_api_limits`), by
+/// provider id: shown as a hint where no token limit is set, never enforced.
+pub fn legacy_usd_limits_in(settings: &crate::schema::Settings) -> BTreeMap<String, f64> {
     settings
         .agent_api_limits
         .iter()
         .flatten()
-        .filter(|(p, usd)| Provider::from_id(p).is_some() && valid_limit(**usd))
+        .filter(|(p, usd)| Provider::from_id(p).is_some() && usd.is_finite() && **usd > 0.0)
         .map(|(p, usd)| (p.clone(), *usd))
         .collect()
 }
 
 type Stamp = Option<(SystemTime, u64)>;
 /// The file's stamp, when it was read, and its limits.
-type CachedLimits = (Stamp, std::time::Instant, BTreeMap<String, f64>);
+type CachedLimits = (Stamp, std::time::Instant, BTreeMap<String, u64>);
 
 /// A cached read of the limits is trusted this long even when the file's
 /// stamp did not change (a write within the stamp's resolution keeping the
@@ -507,7 +552,7 @@ const LIMITS_FRESH: Duration = Duration::from_secs(10);
 /// `provider`'s monthly limit from `settings.json`, re-read when the file's
 /// modification time or size changed, or [`LIMITS_FRESH`] after the last
 /// read (the proxy asks per request).
-pub fn limit_for(provider: Provider) -> Option<f64> {
+pub fn limit_for(provider: Provider) -> Option<u64> {
     static CACHE: Mutex<Option<CachedLimits>> = Mutex::new(None);
     let path = crate::storage::state_dir().join("settings.json");
     let stamp: Stamp = std::fs::metadata(&path).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
@@ -522,7 +567,7 @@ pub fn limit_for(provider: Provider) -> Option<f64> {
 
 /// What the proxy may do with `provider`'s next billed request now.
 pub fn verdict(provider: Provider) -> Verdict {
-    Verdict::of(book().spent(provider, Utc::now()), limit_for(provider))
+    Verdict::of(book().billed(provider, Utc::now()), limit_for(provider))
 }
 
 #[cfg(test)]
@@ -534,8 +579,16 @@ mod tests {
         Utc.with_ymd_and_hms(y, m, d, 12, 0, 0).unwrap()
     }
 
+    /// A charge of `billed` billed tokens (all output) costing `usd`.
     fn charge(model: &str, usd: f64, known: bool) -> Charge {
-        Charge { model: model.into(), known, input: 10, output: 20, cache_write: 3, cache_read: 4, web_searches: 1, usd }
+        Charge { model: model.into(), known, input: 10, output: 20, cache_write: 3, cache_read: 40, web_searches: 1, usd }
+    }
+
+    /// [`charge`]'s billed tokens: 10 + 3 + 20 + 40 / 10.
+    const BILLED: u64 = 37;
+
+    fn billed_charge(billed: u64) -> Charge {
+        Charge { model: "m".into(), known: true, output: billed, usd: billed as f64 / 1e6, ..Charge::default() }
     }
 
     #[test]
@@ -555,10 +608,12 @@ mod tests {
         l.add(Provider::Anthropic, &charge("claude-opus-5-5", 0.5, true));
         l.add(Provider::Anthropic, &charge("claude-new", 2.0, false));
         l.add(Provider::Gemini, &charge("gemini-2.5-pro", 0.25, true));
-        assert!((l.spent(Provider::Anthropic) - 4.0).abs() < 1e-9);
+        assert!((l.spent_usd(Provider::Anthropic) - 4.0).abs() < 1e-9);
+        assert_eq!(l.billed(Provider::Anthropic), 3 * BILLED);
         assert_eq!(l.unknown_models(Provider::Anthropic), ["claude-new"]);
         let m = &l.providers["anthropic"].models["claude-opus-5-5"];
-        assert_eq!((m.input, m.output, m.cache_write, m.cache_read, m.web_searches, m.requests), (20, 40, 6, 8, 2, 2));
+        assert_eq!((m.input, m.output, m.cache_write, m.cache_read, m.web_searches, m.requests), (20, 40, 6, 80, 2, 2));
+        assert_eq!(m.billed, 2 * BILLED);
         let json = serde_json::to_string(&l).unwrap();
         assert!(!json.contains("restarted"));
         let back: Ledger = serde_json::from_str(&json).unwrap();
@@ -566,7 +621,32 @@ mod tests {
         // Unknown fields from a newer build and missing ones from an older
         // one are both fine.
         let older: Ledger = serde_json::from_str(r#"{"month":"2026-10","providers":{"gemini":{"spent_usd":1.0}},"future":1}"#).unwrap();
-        assert!((older.spent(Provider::Gemini) - 1.0).abs() < 1e-9);
+        assert!((older.spent_usd(Provider::Gemini) - 1.0).abs() < 1e-9);
+    }
+
+    /// #2389: a version-1 ledger (dollars only) gets its billed tokens from
+    /// its token counts when it is loaded, and is written back as version 2.
+    #[test]
+    fn a_version_one_ledger_gets_its_billed_tokens_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-api-usage.json");
+        std::fs::write(
+            &path,
+            br#"{"version":1,"month":"2026-10","providers":{"anthropic":{"spent_usd":2.5,"models":{"claude-opus-5-5":{"input":100,"output":50,"cache_write":10,"cache_read":1000,"requests":3,"usd":2.5}}}}}"#,
+        )
+        .unwrap();
+        let book = Book::new(Some(path.clone()));
+        let now = at(2026, 10, 9);
+        assert_eq!(book.billed(Provider::Anthropic, now), 100 + 50 + 10 + 100);
+        let snap = book.snapshot(now);
+        assert_eq!(snap.version, 2);
+        assert!((snap.spent_usd(Provider::Anthropic) - 2.5).abs() < 1e-9, "the dollar estimate is kept");
+        book.flush();
+        let on_disk: Ledger = crate::storage::read_json(&path).unwrap();
+        assert_eq!((on_disk.version, on_disk.billed(Provider::Anthropic)), (2, 260));
+        // A version-2 file is read as it is.
+        let mut v2 = on_disk.clone();
+        assert!(!v2.upgrade());
     }
 
     #[test]
@@ -592,14 +672,15 @@ mod tests {
         l.restarted = Some("x".into());
         assert!(!l.roll(at(2026, 10, 31)));
         assert!(!l.roll(at(2026, 9, 30)), "an earlier clock keeps the month");
-        assert!((l.spent(Provider::Anthropic) - 3.0).abs() < 1e-9);
+        assert_eq!(l.billed(Provider::Anthropic), BILLED);
         assert!(l.roll(at(2026, 11, 1)));
         assert_eq!(l.month, "2026-11");
-        assert_eq!(l.spent(Provider::Anthropic), 0.0);
+        assert_eq!(l.billed(Provider::Anthropic), 0);
         assert_eq!(l.restarted, None);
         let prev = l.previous.as_ref().unwrap();
         assert_eq!(prev.month, "2026-10");
         assert!((prev.spent_usd["anthropic"] - 3.0).abs() < 1e-9);
+        assert_eq!(prev.billed["anthropic"], BILLED);
         // A year boundary.
         let mut l = Ledger { month: "2026-12".into(), ..Default::default() };
         assert!(l.roll(at(2027, 1, 1)));
@@ -609,17 +690,17 @@ mod tests {
         l.add(Provider::Gemini, &charge("m", 1.0, true));
         assert!(l.roll(at(2026, 10, 4)));
         assert_eq!(l.month, "2026-10");
-        assert!((l.spent(Provider::Gemini) - 1.0).abs() < 1e-9);
+        assert_eq!(l.billed(Provider::Gemini), BILLED);
     }
 
     #[test]
     fn verdicts() {
-        assert_eq!(Verdict::of(0.0, None), Verdict::NoLimit);
-        assert_eq!(Verdict::of(0.0, Some(0.0)), Verdict::NoLimit);
-        assert_eq!(Verdict::of(0.0, Some(f64::NAN)), Verdict::NoLimit);
-        assert_eq!(Verdict::of(19.99, Some(20.0)), Verdict::Open);
-        assert_eq!(Verdict::of(20.0, Some(20.0)), Verdict::Reached { spent: 20.0, limit: 20.0 });
-        assert!(!valid_limit(-1.0) && !valid_limit(f64::INFINITY) && !valid_limit(MAX_LIMIT * 2.0));
+        assert_eq!(Verdict::of(0, None), Verdict::NoLimit);
+        assert_eq!(Verdict::of(0, Some(0)), Verdict::NoLimit);
+        assert_eq!(Verdict::of(0, Some(MAX_LIMIT + 1)), Verdict::NoLimit);
+        assert_eq!(Verdict::of(19_999, Some(20_000)), Verdict::Open);
+        assert_eq!(Verdict::of(20_000, Some(20_000)), Verdict::Reached { spent: 20_000, limit: 20_000 });
+        assert!(valid_limit(1) && valid_limit(MAX_LIMIT) && !valid_limit(0));
     }
 
     #[test]
@@ -633,13 +714,13 @@ mod tests {
         assert!(!path.exists());
         book.flush();
         let on_disk: Ledger = crate::storage::read_json(&path).unwrap();
-        assert!((on_disk.spent(Provider::Anthropic) - 1.25).abs() < 1e-9);
+        assert_eq!(on_disk.billed(Provider::Anthropic), BILLED);
         assert_eq!(on_disk.month, "2026-10");
         // A fresh book (the next run) picks it up.
         let again = Book::new(Some(path.clone()));
-        assert!((again.spent(Provider::Anthropic, now) - 1.25).abs() < 1e-9);
+        assert_eq!(again.billed(Provider::Anthropic, now), BILLED);
         // And the next month starts from zero, writing the rollover back.
-        assert_eq!(again.spent(Provider::Anthropic, at(2026, 11, 2)), 0.0);
+        assert_eq!(again.billed(Provider::Anthropic, at(2026, 11, 2)), 0);
         again.flush();
         let on_disk: Ledger = crate::storage::read_json(&path).unwrap();
         assert_eq!(on_disk.month, "2026-11");
@@ -648,7 +729,7 @@ mod tests {
         book.record(Provider::Gemini, &charge("gemini-2.5-pro", 0.5, true), now);
         std::thread::sleep(FLUSH_DELAY + Duration::from_millis(500));
         let on_disk: Ledger = crate::storage::read_json(&path).unwrap();
-        assert!((on_disk.spent(Provider::Gemini) - 0.5).abs() < 1e-9);
+        assert_eq!(on_disk.billed(Provider::Gemini), BILLED);
     }
 
     #[test]
@@ -659,7 +740,7 @@ mod tests {
         let book = Book::new(Some(path.clone()));
         let now = at(2026, 10, 4);
         let snap = book.snapshot(now);
-        assert_eq!(snap.spent(Provider::Anthropic), 0.0);
+        assert_eq!(snap.billed(Provider::Anthropic), 0);
         assert_eq!(snap.restarted.as_deref(), Some("2026-10-04T12:00:00Z"));
         let aside = dir.path().join("agent-api-usage.corrupt.json");
         assert_eq!(std::fs::read(&aside).unwrap(), b"{\"month\":\"2026-10\",\"providers\":{tru");
@@ -680,7 +761,7 @@ mod tests {
         book.closing.store(true, std::sync::atomic::Ordering::Release);
         book.record(Provider::Anthropic, &charge("claude-opus-5-5", 2.0, true), now);
         let on_disk: Ledger = crate::storage::read_json(&path).unwrap();
-        assert!((on_disk.spent(Provider::Anthropic) - 2.0).abs() < 1e-9);
+        assert_eq!(on_disk.billed(Provider::Anthropic), BILLED);
     }
 
     #[test]
@@ -691,50 +772,57 @@ mod tests {
         ledger.add(Provider::Anthropic, &big);
         ledger.add(Provider::Anthropic, &big);
         assert_eq!(ledger.providers["anthropic"].models["m"].input, u64::MAX);
-        assert!((ledger.spent(Provider::Anthropic) - 2.0).abs() < 1e-9);
+        assert_eq!(ledger.billed(Provider::Anthropic), u64::MAX);
+        assert!((ledger.spent_usd(Provider::Anthropic) - 2.0).abs() < 1e-9);
     }
 
     #[test]
     fn limits_come_from_settings_and_only_valid_ones_count() {
-        let s: crate::schema::Settings =
-            serde_json::from_str(r#"{"agent_api_limits":{"anthropic":20,"gemini":-1,"openai":5}}"#).unwrap();
+        let s: crate::schema::Settings = serde_json::from_str(
+            r#"{"agent_api_limits":{"anthropic":20,"gemini":-1},"agent_api_token_limits":{"anthropic":5000000,"gemini":0,"openai":5}}"#,
+        )
+        .unwrap();
         let limits = limits_in(&s);
         assert_eq!(limits.len(), 1);
-        assert_eq!(limits["anthropic"], 20.0);
+        assert_eq!(limits["anthropic"], 5_000_000);
+        // The older dollar limits are a hint only, the valid ones of them.
+        let usd = legacy_usd_limits_in(&s);
+        assert_eq!(usd.len(), 1);
+        assert_eq!(usd["anthropic"], 20.0);
     }
 
     #[test]
     fn reservations_count_against_the_limit_until_they_drop() {
         let book = Arc::new(Book::new(None));
         let now = at(2026, 10, 4);
-        book.record(Provider::Anthropic, &charge("claude-opus-5-5", 1.0, true), now);
-        let a = book.reserve(Provider::Anthropic, 0.75, Some(2.0), now).unwrap();
-        assert!((a.usd() - 0.75).abs() < 1e-12);
-        // 1 spent + 0.75 held + 0.5 would pass 2.
+        book.record(Provider::Anthropic, &billed_charge(1_000), now);
+        let a = book.reserve(Provider::Anthropic, 750, Some(2_000), now).unwrap();
+        assert_eq!(a.tokens(), 750);
+        // 1000 billed + 750 held + 500 would pass 2000.
         assert_eq!(
-            book.reserve(Provider::Anthropic, 0.5, Some(2.0), now).err(),
-            Some(Verdict::Reached { spent: 1.0, limit: 2.0 })
+            book.reserve(Provider::Anthropic, 500, Some(2_000), now).err(),
+            Some(Verdict::Reached { spent: 1_000, limit: 2_000 })
         );
-        let b = book.reserve(Provider::Anthropic, 0.25, Some(2.0), now).unwrap();
+        let b = book.reserve(Provider::Anthropic, 250, Some(2_000), now).unwrap();
         // Held to the limit: nothing more starts, not even a free one.
-        assert_eq!(book.verdict(Provider::Anthropic, Some(2.0), now), Verdict::Reached { spent: 1.0, limit: 2.0 });
-        assert!(book.reserve(Provider::Anthropic, 0.0, Some(2.0), now).is_err());
+        assert_eq!(book.verdict(Provider::Anthropic, Some(2_000), now), Verdict::Reached { spent: 1_000, limit: 2_000 });
+        assert!(book.reserve(Provider::Anthropic, 0, Some(2_000), now).is_err());
         // The other provider is not held.
-        assert_eq!(book.verdict(Provider::Gemini, Some(2.0), now), Verdict::Open);
+        assert_eq!(book.verdict(Provider::Gemini, Some(2_000), now), Verdict::Open);
         drop(a);
-        assert!((book.reserved(Provider::Anthropic) - 0.25).abs() < 1e-12);
-        assert_eq!(book.verdict(Provider::Anthropic, Some(2.0), now), Verdict::Open);
+        assert_eq!(book.reserved(Provider::Anthropic), 250);
+        assert_eq!(book.verdict(Provider::Anthropic, Some(2_000), now), Verdict::Open);
         drop(b);
-        assert_eq!(book.reserved(Provider::Anthropic), 0.0, "released exactly");
+        assert_eq!(book.reserved(Provider::Anthropic), 0, "released exactly");
         // No limit, or a spent limit, refuses as before.
-        assert_eq!(book.reserve(Provider::Anthropic, 0.1, None, now).err(), Some(Verdict::NoLimit));
+        assert_eq!(book.reserve(Provider::Anthropic, 100, None, now).err(), Some(Verdict::NoLimit));
         assert_eq!(
-            book.reserve(Provider::Anthropic, 0.1, Some(1.0), now).err(),
-            Some(Verdict::Reached { spent: 1.0, limit: 1.0 })
+            book.reserve(Provider::Anthropic, 100, Some(1_000), now).err(),
+            Some(Verdict::Reached { spent: 1_000, limit: 1_000 })
         );
-        // A cost that is not a number holds everything.
-        assert!(book.reserve(Provider::Anthropic, f64::NAN, Some(1e6), now).is_err());
-        assert_eq!(book.reserved(Provider::Anthropic), 0.0);
+        // A worst case past every limit holds nothing and starts nothing.
+        assert!(book.reserve(Provider::Anthropic, u64::MAX, Some(MAX_LIMIT), now).is_err());
+        assert_eq!(book.reserved(Provider::Anthropic), 0);
         // Never written: the file's shape is unchanged.
         let json = serde_json::to_value(book.snapshot(now)).unwrap();
         assert!(!json.to_string().contains("reserv"));

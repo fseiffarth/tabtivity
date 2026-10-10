@@ -418,10 +418,10 @@ struct Budget {
 
 #[derive(Clone)]
 enum Limits {
-    /// `Settings::agent_api_limits`.
+    /// `Settings::agent_api_token_limits`.
     Settings,
     #[cfg(test)]
-    Fixed(Option<f64>),
+    Fixed(Option<u64>),
 }
 
 impl Budget {
@@ -430,7 +430,7 @@ impl Budget {
         Budget { book: super::api_usage::book(), limits: Limits::Settings }
     }
 
-    fn limit(&self, provider: Provider) -> Option<f64> {
+    fn limit(&self, provider: Provider) -> Option<u64> {
         match &self.limits {
             Limits::Settings => super::api_usage::limit_for(provider),
             #[cfg(test)]
@@ -445,11 +445,11 @@ impl Budget {
         Self::refusal_for(verdict)
     }
 
-    /// Hold `usd`, the request's worst-case cost, against the limit while
-    /// it is in flight (gap 9).
-    fn reserve(&self, provider: Provider, usd: f64) -> Result<super::api_usage::Reservation, Refusal> {
+    /// Hold `tokens`, the request's worst case in billed tokens, against the
+    /// limit while it is in flight (gap 9).
+    fn reserve(&self, provider: Provider, tokens: u64) -> Result<super::api_usage::Reservation, Refusal> {
         self.book
-            .reserve(provider, usd, self.limit(provider), chrono::Utc::now())
+            .reserve(provider, tokens, self.limit(provider), chrono::Utc::now())
             .map_err(|verdict| Self::refusal_for(verdict).unwrap_or(Refusal::WouldPass))
     }
 
@@ -1142,7 +1142,7 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     let mut reservation = None;
     if let Some(meter) = meter.as_mut() {
         meter.request(&body);
-        let worst = meter.worst_case(&super::api_usage::month_of(chrono::Utc::now()));
+        let worst = meter.worst_case_billed(&super::api_usage::month_of(chrono::Utc::now()));
         match state.budget.reserve(provider, worst) {
             Ok(held) => reservation = Some(held),
             Err(refusal) => return refuse(Some(provider), refusal),
@@ -1704,7 +1704,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let mut state =
-            ProxyState::new(port, Upstream::Test(upstream), KeySource::Fixed(key), test_budget(Some(1e6)), client(false).unwrap());
+            ProxyState::new(port, Upstream::Test(upstream), KeySource::Fixed(key), test_budget(ROOMY), client(false).unwrap());
         tune(&mut state);
         let buffered = state.buffered.clone();
         tokio::spawn(serve(listener, state, std::future::pending()));
@@ -2075,21 +2075,21 @@ mod tests {
 
     // ---- the spending limit (C3) ------------------------------------------
 
-    /// A memory-only ledger with a fixed monthly limit.
-    fn test_budget(limit: Option<f64>) -> Budget {
+    /// A memory-only ledger with a fixed monthly limit in billed tokens.
+    fn test_budget(limit: Option<u64>) -> Budget {
         Budget { book: Arc::new(super::super::api_usage::Book::new(None)), limits: Limits::Fixed(limit) }
     }
 
-    fn spent_charge(usd: f64) -> super::super::api_prices::Charge {
+    /// Plenty of room: no test request comes near it.
+    const ROOMY: Option<u64> = Some(20_000_000);
+
+    /// A charge of `billed` billed tokens.
+    fn spent_charge(billed: u64) -> super::super::api_prices::Charge {
         super::super::api_prices::Charge {
             model: "claude-opus-5-5".into(),
             known: true,
-            input: 1,
-            output: 1,
-            cache_write: 0,
-            cache_read: 0,
-            web_searches: 0,
-            usd,
+            output: billed,
+            ..Default::default()
         }
     }
 
@@ -2098,7 +2098,7 @@ mod tests {
         let seen = Arc::new(Seen::default());
         let release = Arc::new(tokio::sync::Semaphore::new(16));
         let upstream = stub_upstream(seen.clone(), release).await;
-        let budget = test_budget(Some(20.0));
+        let budget = test_budget(ROOMY);
         let book = budget.book.clone();
         let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
         let token = issue_grant(grant(Provider::Anthropic, "e2e:metered", None)).unwrap();
@@ -2112,7 +2112,10 @@ mod tests {
         let m = &models["claude-stub"];
         assert!(m.unknown);
         assert_eq!((m.input, m.output, m.requests), (5, 3, 1));
-        assert!((ledger.spent(Provider::Anthropic) - (5.0 * 10.0 + 3.0 * 50.0) / 1e6).abs() < 1e-12);
+        // Billed tokens are what the limit counts; the dollars an estimate.
+        assert_eq!(m.billed, crate::services::server::keys_wire::billed_tokens(m.input, m.cache_write, m.output, m.cache_read));
+        assert_eq!(ledger.billed(Provider::Anthropic), m.billed);
+        assert!((ledger.spent_usd(Provider::Anthropic) - (5.0 * 10.0 + 3.0 * 50.0) / 1e6).abs() < 1e-12);
         // Token counting costs nothing and is not metered.
         let r = plain_client()
             .post(format!("{url}/count_tokens"))
@@ -2132,9 +2135,9 @@ mod tests {
         let seen = Arc::new(Seen::default());
         let release = Arc::new(tokio::sync::Semaphore::new(16));
         let upstream = stub_upstream(seen.clone(), release).await;
-        let budget = test_budget(Some(20.0));
-        budget.book.record(Provider::Anthropic, &spent_charge(20.0), chrono::Utc::now());
-        budget.book.record(Provider::Gemini, &spent_charge(25.0), chrono::Utc::now());
+        let budget = test_budget(Some(20_000));
+        budget.book.record(Provider::Anthropic, &spent_charge(20_000), chrono::Utc::now());
+        budget.book.record(Provider::Gemini, &spent_charge(25_000), chrono::Utc::now());
         let (port, _) = proxy_with(upstream.clone(), Some(FAKE_KEY), |s| s.budget = budget).await;
         let token = issue_grant(grant(Provider::Anthropic, "e2e:limit", None)).unwrap();
         let anthropic = base_url_on(port, Provider::Anthropic);
@@ -2207,7 +2210,7 @@ mod tests {
         // The stub sends `message_start` and holds the rest back.
         let release = Arc::new(tokio::sync::Semaphore::new(0));
         let upstream = stub_upstream(seen.clone(), release).await;
-        let budget = test_budget(Some(20.0));
+        let budget = test_budget(ROOMY);
         let book = budget.book.clone();
         let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
         let token = issue_grant(grant(Provider::Anthropic, "e2e:hangup", None)).unwrap();
@@ -2239,7 +2242,7 @@ mod tests {
             std::future::pending::<Response>().await
         });
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let budget = test_budget(Some(20.0));
+        let budget = test_budget(ROOMY);
         let book = budget.book.clone();
         let (port, _) = proxy_with(format!("http://{addr}"), Some(FAKE_KEY), |s| s.budget = budget).await;
         let token = issue_grant(grant(Provider::Anthropic, "e2e:left", None)).unwrap();
@@ -2260,10 +2263,10 @@ mod tests {
         on_tab_gone("e2e:left");
     }
 
-    /// Waits up to 5 s for `provider`'s reservations to come to `usd`.
-    async fn reserved_comes_to(book: &super::super::api_usage::Book, provider: Provider, usd: f64) -> f64 {
+    /// Waits up to 5 s for `provider`'s reservations to come to `tokens`.
+    async fn reserved_comes_to(book: &super::super::api_usage::Book, provider: Provider, tokens: u64) -> u64 {
         for _ in 0..100 {
-            if (book.reserved(provider) - usd).abs() < 1e-9 {
+            if book.reserved(provider) == tokens {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2281,11 +2284,11 @@ mod tests {
         let worst = {
             let mut m = super::super::api_meter::Meter::new(Provider::Anthropic, super::super::api_meter::Billing::Usage { model: None });
             m.request(body.as_bytes());
-            m.worst_case(&super::super::api_usage::month_of(chrono::Utc::now()))
+            m.worst_case_billed(&super::super::api_usage::month_of(chrono::Utc::now()))
         };
         // Room for two worst cases, not three.
-        let held_one = (worst * 1e6).ceil() / 1e6;
-        let budget = test_budget(Some(worst * 2.5));
+        let held_one = worst;
+        let budget = test_budget(Some(worst * 5 / 2));
         let book = budget.book.clone();
         let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
         let token = issue_grant(grant(Provider::Anthropic, "e2e:inflight", None)).unwrap();
@@ -2295,7 +2298,7 @@ mod tests {
         let mut a = send().await.unwrap();
         let mut b = send().await.unwrap();
         assert!(a.chunk().await.unwrap().is_some() && b.chunk().await.unwrap().is_some());
-        assert!((book.reserved(Provider::Anthropic) - 2.0 * held_one).abs() < 1e-9);
+        assert_eq!(book.reserved(Provider::Anthropic), 2 * held_one);
         // A third is refused before the provider sees it, though nothing is
         // spent yet.
         let r = send().await.unwrap();
@@ -2306,11 +2309,11 @@ mod tests {
         let message = json["error"]["message"].as_str().unwrap();
         assert!(message.starts_with(crate::app_name!()) && message.contains("in flight"), "{message}");
         assert_eq!(seen.hits.load(Ordering::SeqCst), 2);
-        assert_eq!(book.spent(Provider::Anthropic, chrono::Utc::now()), 0.0);
+        assert_eq!(book.billed(Provider::Anthropic, chrono::Utc::now()), 0);
 
         // One ends cleanly: its hold is released and its real cost charged.
         release.add_permits(1);
-        assert!((reserved_comes_to(&book, Provider::Anthropic, held_one).await - held_one).abs() < 1e-9);
+        assert_eq!(reserved_comes_to(&book, Provider::Anthropic, held_one).await, held_one);
         let models = charged(&book, Provider::Anthropic).await;
         assert_eq!(models["claude-stub"].requests, 1);
         assert_eq!((models["claude-stub"].input, models["claude-stub"].output), (5, 3));
@@ -2319,13 +2322,13 @@ mod tests {
         let mut d = send().await.unwrap();
         assert_eq!(d.status(), 200);
         assert!(d.chunk().await.unwrap().is_some());
-        assert!((book.reserved(Provider::Anthropic) - 2.0 * held_one).abs() < 1e-9);
+        assert_eq!(book.reserved(Provider::Anthropic), 2 * held_one);
         drop(d);
-        assert!((reserved_comes_to(&book, Provider::Anthropic, held_one).await - held_one).abs() < 1e-9);
+        assert_eq!(reserved_comes_to(&book, Provider::Anthropic, held_one).await, held_one);
 
         // The provider breaks the last one off: released.
         release.close();
-        assert_eq!(reserved_comes_to(&book, Provider::Anthropic, 0.0).await, 0.0);
+        assert_eq!(reserved_comes_to(&book, Provider::Anthropic, 0).await, 0);
         // Both read to their end (one completed, one broke off).
         let _ = a.bytes().await;
         let _ = b.bytes().await;
@@ -2336,7 +2339,7 @@ mod tests {
         let dead = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let dead_addr = dead.local_addr().unwrap();
         drop(dead);
-        let budget = test_budget(Some(20.0));
+        let budget = test_budget(ROOMY);
         let book = budget.book.clone();
         let (port, _) = proxy_with(format!("http://{dead_addr}"), Some(FAKE_KEY), |s| s.budget = budget).await;
         let token = issue_grant(grant(Provider::Anthropic, "e2e:inflight-dead", None)).unwrap();
@@ -2348,8 +2351,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.status(), 502);
-        assert_eq!(book.reserved(Provider::Anthropic), 0.0);
-        assert_eq!(book.spent(Provider::Anthropic, chrono::Utc::now()), 0.0);
+        assert_eq!(book.reserved(Provider::Anthropic), 0);
+        assert_eq!(book.billed(Provider::Anthropic, chrono::Utc::now()), 0);
         on_tab_gone("e2e:inflight-dead");
     }
 }

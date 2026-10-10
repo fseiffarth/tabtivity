@@ -111,7 +111,13 @@ pub fn broker_url(port: u16, cli: &str) -> String {
 /// full, cache reads at a tenth (they cost about a tenth of an input token
 /// at Anthropic's prices). One number per request whatever the model.
 pub fn billed(usage: &Usage) -> u64 {
-    usage.input.saturating_add(usage.cache_write).saturating_add(usage.output).saturating_add(usage.cache_read / 10)
+    billed_tokens(usage.input, usage.cache_write, usage.output, usage.cache_read)
+}
+
+/// [`billed`] over bare counts: also the unit of the daemon's and the
+/// desktop's own-key limit (`services::api_usage`), for every provider.
+pub fn billed_tokens(input: u64, cache_write: u64, output: u64, cache_read: u64) -> u64 {
+    input.saturating_add(cache_write).saturating_add(output).saturating_add(cache_read / 10)
 }
 
 /// Token counts of brokered requests.

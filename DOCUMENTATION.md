@@ -1218,16 +1218,21 @@ runs without Remote Control. A project's CLI config can still point the CLI at
 another host, which then receives only the token — worthless off this machine.
 
 **Spending limit** (`services/api_usage.rs`, `services/api_meter.rs`,
-`services/api_prices.rs`, Part C, C3). Saving a key requires a monthly limit in
-US dollars per provider (`Settings::agent_api_limits`). The proxy reads each
+`services/api_prices.rs`, Part C, C3; tokens since #2389). Saving a key requires
+a monthly limit in billed tokens per provider (`Settings::agent_api_token_limits`;
+input, cache writes and output in full, cache reads at a tenth —
+`keys_wire::billed_tokens`, the key broker's unit; an older build's USD
+`agent_api_limits` is kept and shown as a hint only). The proxy reads each
 billed answer's usage as it relays it — Anthropic's `message_start` /
 `message_delta` usage (cache writes and reads, web searches, fast mode and
 US-only inference included) or a plain message's; Gemini's cumulative
 `usageMetadata` from SSE, JSON-array or plain answers — with a bounded streaming
-scanner that keeps nothing else, prices it from a dated per-model table (an
-unknown model at the provider's highest rate, flagged), and adds it to
-`<state_dir>/agent-api-usage.json` (UTC month, spend per provider, tokens per
-model; written atomically every few seconds and at quit; a corrupt file is set
+scanner that keeps nothing else, counts its billed tokens and prices it from a
+dated per-model table for the ≈ $ estimate (an unknown model at the provider's
+highest rate, flagged), and adds it to `<state_dir>/agent-api-usage.json`
+(version 2: UTC month, billed tokens and estimated dollars per provider, tokens
+per model; a version-1 file gets its billed tokens from its token counts on
+load; written atomically every few seconds and at quit; a corrupt file is set
 aside and the restart shown). An answer that ends before its final count — the
 client hangs up mid-stream or before the answer begins, the stream breaks, a
 usage object cannot be read — is charged an estimate on top of what it
