@@ -4,7 +4,7 @@ The front door for everything about the server version: where it stands,
 what the user decided, what is open, and which document holds the detail.
 Read this first; keep it current when a decision or an open point changes.
 
-## Status (2026-10-07)
+## Status (2026-10-10)
 
 - **Built, reviewed, unmerged, never run live.** Branch `hosted`
   (`.claude/worktrees/hosted`), `f3efd50b..` — every phase of the plan
@@ -19,6 +19,10 @@ Read this first; keep it current when a decision or an open point changes.
   `hosted` → `develop`, is still owed (#2386). Merged again 2026-10-10
   (`develop` `6754d5cd`, 13 conflicted files; § "Merge `develop` → `hosted`
   (2026-10-10)").
+- **One agent-API-key path built (2026-10-10, #2389).** Admin keys, a
+  server user's own key and the desktop's own key all reach agents through
+  `api_proxy`; limits in billed tokens; one "runs on" control per CLI.
+  `docs/agent_key_path_plan.md` (steps 1–5, `1db2a95a..`).
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
 
@@ -85,10 +89,10 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
   server-wide root; CLI self-updaters never install per user.
 - Admin API keys: offered per CLI to a per-key list of users (a new or
   re-offered key starts with nobody); a withdrawn key fails the next start
-  with a message; a running Claude loses it within ~5 min after a withdraw,
-  a removal from the list or the user's own switch back. Claude gets it
-  through `apiKeyHelper`; container agents get it; remote agents and Codex
-  never do. Removing a user does not rotate a key — the admin replaces it.
+  with a message; running agents lose it within a minute of a withdraw, a
+  removal from the list or the user's own switch back. Remote agents and
+  Codex never get it. Removing a user does not rotate a key — the admin
+  replaces it. (Delivery as amended by #2389, below.)
 - Key broker: Claude only, budgets in billed tokens per UTC month (cache
   reads at a tenth), 403 when spent.
 - Shared consumer login (one subscription for several users): dropped.
@@ -96,7 +100,10 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
   the one delivery path, desktop and server alike. On a server its keys
   come from the keeper/broker (the admin's key) or the user's per-user
   vault (their own key), never an OS keychain. One budget model: billed
-  tokens per UTC month (the broker's). Not built yet.
+  tokens per UTC month (the broker's); the desktop's USD figure stays only
+  as an estimate. Mistral Vibe admin keys are dropped (no base-URL
+  variable). A keyed container spawn fails, naming the way out. Built
+  2026-10-10 (`docs/agent_key_path_plan.md`).
 
 **Secrets and mail**
 - Same-user unfenced processes can read the vault key; accepted and
@@ -132,25 +139,11 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
 
 ## Open problems
 
-1. **Two agent-API-key systems for the same CLIs (#2389).** `develop` now
-   has the desktop's own agent API keys (`b0143c80`, `docs/api_chat_plan.md`
-   Part A: a key per provider in the OS keychain, the loopback
-   `services::api_proxy` with per-tab tokens in `ANTHROPIC_AUTH_TOKEN` +
-   `ANTHROPIC_BASE_URL`, a monthly limit in USD from a price table). This
-   branch has the server's admin keys (keeper, Claude via `apiKeyHelper`)
-   and the key broker (`ANTHROPIC_BASE_URL` → `127.0.0.1:8739`, budgets in
-   tokens). Both set Claude's base URL and both decide which credential an
-   agent runs on; the server's "never both" logic (own login vs admin key)
-   knows nothing of a user's own keychain key; the server daemon has no OS
-   keychain at all (the `desktop` feature is off), so the desktop path
-   cannot work there as built; and the two budgets count differently.
-   Must be settled before `hosted` → `develop`: one credential path per CLI
-   on a server, one budget model, and the user rule "no redundant
-   variants" says extend one, don't keep two. The 2026-10-07 merge settled
-   the one collision that broke tests: the administrator's key for Gemini
-   and Vibe now rides develop's app-named secret carriers on tmux (never a
-   CLI's common variable), and develop's three `agent_api_key_*` commands are
-   `off` on a server. Everything else of #2389 stays open.
+1. **Two agent-API-key systems (#2389): settled and built 2026-10-10.**
+   One path (`api_proxy`) for every key, one budget unit (billed tokens),
+   one credential choice per CLI — `docs/agent_key_path_plan.md`. Left as
+   a known residual: a daemon restart drops every proxy token, so a keyed
+   agent in a tmux tab that outlived it must be restarted. Never run live.
 2. **The merge (#2386).** `develop` → `hosted` done 2026-10-07 (39
    conflicts, class rows and desktop-feature attributes for develop's new
    commands included; TODO numbers did not collide). Owed: `hosted` →

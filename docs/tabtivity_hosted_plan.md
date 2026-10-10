@@ -621,7 +621,7 @@ The consequences:
 | **A prompt-injected agent** | Everything its fence allows, as its user | The fence (scope), the uid (user); the fence hides `/srv/tabtivity/shared` except its own project's hub (§6.3) | The user's own data in that scope, as today |
 | **Another user, about your agent logins, mail, private calendars and tasks** | Nothing beyond "another user" above | They live only in your `0700` `state_dir`; presence, audit and admin status never carry them (§6.7) | None beyond the host-channel row |
 | **A user you opened a calendar or todo list to** | Read it (viewer), or add, edit and delete its events and tasks (editor) | `tabtivity-calendar`'s per-uid ACL; mail and file links stripped; their text rendered as plain text with size limits; agents read-only (§6.7) | What they copied before a revoke; an editor can vandalise the shared calendar |
-| **Any user, about an admin-provided credential** (only if the admin offers one, §5.4) | Read the key or login replica their own agents are given | Nothing: the CLI must read it. Broker tokens (P5) or access-only replicas bound it | Per-use cost on the admin's key; a shared consumer login's terms (§5.4) |
+| **Any user, about an admin-provided credential** (only if the admin offers one, §5.4) | Read the key or login replica their own agents are given | Since #2389 no agent holds the key or a broker token, only its tab's proxy token (the user's daemon adds the key); a listed user's own unfenced processes can still ask the keeper for it. Broker tokens (P5) bound what that buys | Per-use cost on the admin's key; a shared consumer login's terms (§5.4) |
 | **A compromised gateway** | Intercept and act inside live sessions; see every device's traffic | Daemons verify device signatures themselves (§3.1); the gateway links no core services and runs no root verbs directly | Live-session interception while connected |
 | **Server admin** | Everything | Nothing technical, except for mail and saved passwords: they are sealed with a key the user's devices release (§6.8), so the admin reads them only while the user's daemon holds the key unlocked | The admin can read everything else, and enrolment says so in one sentence |
 | **The public internet** | Whatever the gateway port exposes | TLS, pairing-only enrolment, rate limits (`limits.rs`) | Gateway bugs. Keep it small, in a memory-safe language, with no core services linked in. |
@@ -747,6 +747,14 @@ credentials** panel. Users opt in per CLI (§5.2).
     - The keeper caps connections per caller uid (4) and each exchange at
       2 s; it remembers earlier keys as fingerprints only, so a rotated key
       in a login file is never adopted as the user's own.
+  - *Superseded (user, 2026-10-10, #2389 — `docs/agent_key_path_plan.md`):*
+    the administrator's key reaches agents only through each user's
+    daemon's **API proxy**, the desktop's own-key path: a proxy token + base
+    URL in the agent, the key (or the broker token) added by the proxy. The
+    `apiKeyHelper` socket, the env-carrier delivery and container delivery
+    are gone; a keyed container spawn fails; only proxy-served CLIs (Claude,
+    Gemini) can be offered a key — Mistral Vibe is dropped. A user may also
+    run a CLI on their own key (kept in the vault); one credential per CLI.
 - **API key through a broker (P5).** `tabtivity-keybroker`, running as
   `tabtivity-auth`, holds the key. Agents get a base URL pointing at the broker
   plus a **per-user broker token** (for Claude Code, `ANTHROPIC_BASE_URL`).
@@ -765,9 +773,9 @@ credentials** panel. Users opt in per CLI (§5.2).
     `127.0.0.1:8739`, the port held by `<slug>-keybroker.socket` from boot
     (no squatting). Per key, the administrator picks direct or broker
     delivery (broker only for a CLI with a documented base-URL override:
-    Claude). The keeper mints a token per listed user and hands it out
-    through the existing channel (Claude's `apiKeyHelper`); the spawn sets
-    `ANTHROPIC_BASE_URL`. Budgets are monthly billed tokens per user or a
+    Claude). The keeper mints a token per listed user and hands it to the
+    user's daemon, whose API proxy forwards to the broker with it (#2389;
+    first built through Claude's `apiKeyHelper`). Budgets are monthly billed tokens per user or a
     key default; usage is metered from the provider's answers into per-user
     month files the user's daemon reads back. Only the messages, token
     counting and model paths are forwarded. Containers cannot reach it

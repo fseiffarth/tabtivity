@@ -1,7 +1,8 @@
 # One agent-API-key path (#2389)
 
-*Status: in progress on branch `hosted` (2026-10-10). Settles open problem 1
-of `docs/server.md` before `hosted` → `develop` (#2386).*
+*Status: built on branch `hosted` (2026-10-10, steps 1–5), never run live.
+Settles open problem 1 of `docs/server.md` before `hosted` → `develop`
+(#2386).*
 
 ## Why
 
@@ -147,3 +148,14 @@ refusal.
   `usesAdmin`, `adminBroker`; `LoginStatus` dropped `admin_key_broker`.
   Switching writes the own switch first, then `agent_login_use_admin_key`.
   Gates: clippy clean, Rust 4143, frontend 7682, lint 0 errors.
+- **Step 5 — docs: done.** `context/server_gateway.md` (admin keys and
+  broker sections), `server.md`, the hosted plan's §5.4 amendment and threat
+  row, `api_chat_plan.md` (#2389 notes), `threat_model.md`, TODO #2389,
+  `hosted_handoff.md` § "#2389" with the live steps owed.
+
+Additional decisions made while building (mine): the `--agent-shim` process
+runs no proxy, so a shell-typed CLI on the administrator's key fails naming
+the agent tab; the helper path is removed without a home cleanup (it never
+ran live); on a server a tmux < 3.2 fails any keyed spawn; the keeper
+refuses keys for CLIs outside `KEY_CLIS`; Claude on the admin key starts
+without Remote Control.

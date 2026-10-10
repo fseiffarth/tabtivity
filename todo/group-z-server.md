@@ -933,7 +933,7 @@ the desktop groundwork the hosted plan's P1 builds on.*
     Commit it beside them, or add it to `.gitignore` so cross-checks stop
     leaving it behind. (Open points, 2026-10-05.)
 
-2389. **One agent-API-key path per CLI on a server (desktop keys vs admin keys).**
+2389. **One agent-API-key path per CLI on a server (desktop keys vs admin keys).** ✅ **Done** (2026-10-10, `1db2a95a..`, never live; `docs/agent_key_path_plan.md`): `api_proxy` delivers every key — the desktop's own, a server user's own (vault) and the administrator's (keeper; broker token to the key broker) — limits in billed tokens with a ≈ $ estimate, one "runs on" control per CLI, Vibe admin keys dropped, keyed container spawns fail. Was:
     `develop`'s desktop agent API keys (`b0143c80`, `docs/api_chat_plan.md`
     Part A: a key per provider in the OS keychain, the loopback
     `services::api_proxy` handing each tab a token in `ANTHROPIC_AUTH_TOKEN`

@@ -3639,3 +3639,45 @@ Gates: `cargo check`/`clippy --workspace --all-targets -D warnings` clean;
 133; `npm run build`; `npm test` 755 files / 7681 tests; `npm run lint` 0
 errors, 28 warnings (= develop); `brand-check` ok. Not run: the
 Windows/macOS cross-checks and the serverd `ldd`. Nothing run live.
+
+## #2389: one agent-API-key path (2026-10-10)
+
+User decisions (2026-10-10): `api_proxy` is the one delivery path; server
+keys from the keeper/broker or the per-user vault; one budget model in
+billed tokens (the USD figure an estimate only); Mistral Vibe admin keys
+dropped; a keyed container spawn fails naming the way out; `pty_drop_files`
+stays `Client`; `hosted` → `develop` waits. Built in the main session, no
+subagents, five steps — plan and progress in `docs/agent_key_path_plan.md`:
+
+1. `1db2a95a` token budget (ledger v2, token reservations, the old USD limit
+   as a hint, Manage CLIs in million billed tokens).
+2. `25a4e8b6` the daemon runs `api_proxy`; the API-key commands are `Core`;
+   a locked vault says so.
+3. `4314db72` admin keys through the proxy (`Grant::admin`, `for_proxy`,
+   broker forwarding); the `apiKeyHelper` path, raw-key carriers, container
+   key delivery and the registry's `api_key_env` column removed; the keeper
+   offers keys only for `KEY_CLIS`.
+4. `78713cab` one "runs on" control per CLI.
+5. Docs: `server_gateway.md` (admin keys, broker), `server.md`, the hosted
+   plan's §5.4 amendment, `api_chat_plan.md`, `threat_model.md`, TODO #2389.
+
+Gates at each step: clippy (workspace, all targets) clean; Rust tests 4143;
+frontend 7682 (755 files); lint 0 errors / 28 warnings; build; brand-check.
+Not run: the Windows/macOS cross-checks, the serverd `ldd`. Nothing live.
+
+**Live steps owed** (a test server with the gateway, keeper and broker):
+1. Desktop: save an Anthropic key with a 5 M-token limit, set Claude to
+   "my API key", run a prompt: the count moves in billed tokens with an
+   ≈ $ figure; lower the limit below it → the next prompt is refused.
+2. Server, own key: a user saves a key (vault unlocked) and runs Claude on
+   it; lock the vault → the rows say "sign in on a paired device".
+3. Server, admin key direct: the admin offers a Claude key to Bob; Bob
+   picks "the administrator's API key" → his own-key choice turns off, a
+   new tab runs, `/proc/<pid>/environ` of the agent holds only the proxy
+   token. Withdraw → his running Claude is refused within a minute, a new
+   tab fails naming the way back.
+4. Server, brokered: switch the key to the broker → Bob's prompts reach the
+   broker with his token (the broker's usage file counts them), the row
+   shows his month; Renew his token → one request fails, the next works.
+5. A container project with Claude on a key → the tab fails naming the way
+   out; a shell-typed `claude` on the admin key → fails naming the agent tab.

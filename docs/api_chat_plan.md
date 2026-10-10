@@ -1276,3 +1276,23 @@ Not fixed, with reason:
   is the guard there.
 - **Lint**: `npm run lint` reports 31 warnings, all in files neither C3 nor
   this review touched (the same tree's pre-existing state).
+
+## #2389 notes (2026-10-10, branch `hosted`)
+
+One key path for desktop and server (`docs/agent_key_path_plan.md`):
+
+- **C3's limit is in billed tokens now**, the key broker's unit
+  (`keys_wire::billed_tokens`: input, cache writes, output in full, cache
+  reads at a tenth), per provider and UTC month
+  (`Settings::agent_api_token_limits`, typed in millions). The price table
+  stays for an "≈ $" estimate beside the count only. The ledger is version
+  2 (a v1 file's billed tokens are recomputed from its counts); an older
+  build's `agent_api_limits` (USD) is kept and shown as a hint, never
+  enforced — such a key is refused until a token limit is set.
+- **The proxy also runs in a hosted server's per-user daemon** (own keys in
+  the vault through `remote_credentials`), and carries the administrator's
+  keys: `Grant::admin`, the key (or the user's broker token and the loopback
+  broker URL) from the keeper per request, never metered against the user's
+  own limit.
+- **Containers:** a container spawn of a CLI on an API key now fails (it
+  used to fall back to the login silently).

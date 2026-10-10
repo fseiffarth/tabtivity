@@ -318,7 +318,7 @@ keyring. `services::server::vault` wires them:
   the gateway in clear on `recover` (not on re-pin). The "mail locked
   since reboot" push is not built.
 
-## Admin-provided API keys (P3b, §5.2, §5.4)
+## Admin-provided API keys (P3b, §5.2, §5.4; through the API proxy since #2389)
 
 ```
 admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, role check)
@@ -328,10 +328,9 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
                                                         │ /var/lib/<slug>-auth/<cli>/api-key 0600
                                                         │ meta.json: who may use it
                                                         ▲ get, by uid, if on the list
-   user's daemon / shim (user's uid) ── at each local agent spawn of a chosen CLI
-        ▲ <state>/key-helper/claude.sock (0600 in 0700), asked per call
-   Claude's apiKeyHelper: <slug>-serverd --key-helper <socket>
-        (inside the fence: that one directory bound read-only)
+   user's daemon (user's uid): api_proxy on 127.0.0.1:<port>, per request
+        ▲ proxy token + base URL (ANTHROPIC_AUTH_TOKEN / GEMINI_API_KEY)
+   the user's agent tab (fenced) — never the key, never a broker token
 ```
 
 - **A keeper of its own, not the gateway.** The plan puts the keys under
@@ -363,11 +362,19 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
   keeper audits each user added or removed (`agent-key-user-add`/`-remove`,
   the admin as user, `<cli>/<name>` as resource); the gateway one row per
   change.
-- **The choice is the user's own** (`<state>/agent-auth/admin-keys.json`),
-  written only by `agent_login_use_admin_key`, which refuses off a server
-  and, switching on, without a key on offer to that user. A user taken off
-  the list keeps the choice; their next spawn fails with the withdrawn
-  message, which names both causes.
+- **Which CLIs** (#2389): only those the daemon's API proxy serves
+  (`keys_wire::KEY_CLIS`: Claude, Gemini; a test holds the list to
+  `agent_api_keys`' routes). The keeper refuses `set` for any other CLI
+  (`unsupported`): Mistral Vibe has no base-URL variable, so its key could
+  only go into the agent, which the one-path decision rules out.
+- **The choice is the user's own, one credential per CLI**
+  (`<state>/agent-auth/admin-keys.json`), written only by `choose`
+  (`agent_login_use_admin_key`), which refuses off a server and, switching
+  on, without a key on offer to that user — and switches the CLI's own API
+  key off (`Settings::agent_api_key_clis`). Manage CLIs shows the three
+  choices in one **runs on** control. A user taken off the list keeps the
+  choice; their next spawn fails with the withdrawn message, which names both
+  causes.
 - **Never both.** For a chosen CLI `agent_auth`'s place step removes the
   user's own login copies (and Claude's `oauthAccount`) from every home
   instead of placing them; the store keeps them, switching back places
@@ -386,92 +393,54 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
   theirs — withdrawing someone is a reason to rotate the key. Such an undecidable file also stays in the home until
   it can be told (it may be the only copy of a rotated refresh token); the
   same keeper answer fails every new spawn meanwhile (P3b review).
-- **Delivery at spawn, never stored.** `agent_keys::prepare_spawn` runs in
-  the Linux and macOS fence wraps (so an agent tab *and* the shell tabs'
-  shim, which builds the same fence), and the root console's Host session.
-  For Gemini and Vibe it fetches the key per spawn (no cache: a withdraw or
-  rotation applies to the next spawn) into the registry's `api_key_env`.
-- **Claude: `apiKeyHelper`, not its environment** (user decision
-  2026-10-03). An environment key makes Claude ask once per home whether to
-  use it and store the key's last 20 characters in `.claude.json`; the
-  helper does neither. While the user runs Claude on the admin's key,
-  `agent_auth`'s place step (every spawn, and `choose`) writes
-  `apiKeyHelper` into the agent home's `.claude/settings.json` (Tabtivity's
-  homes only; removed again on switching back, and only when the value is
-  ours — a user's own helper is never touched): a POSIX `sh` line that
-  prints `<PREFIX>ADMIN_KEY_SECRET` when that is set (a container) and
-  otherwise execs `<slug>-serverd --key-helper
-  <state>/key-helper/claude.sock` (`agent_keys::helper_command`).
-  The daemon serves that socket (`serve_helpers`, `0600` in a `0700` dir,
-  same uid by `SO_PEERCRED`) and answers each connection by asking the
-  keeper anew — the choice still on and the user still on the list — so a
-  withdraw or removal also reaches a running Claude at its next helper call
-  (Claude re-runs it every few minutes and on a 401). **Through the
-  fence:** the fence hides `/run` (no keeper) and masks the state dir, so a
-  chosen Claude spawn's `prepare_spawn` returns the helper directory and
-  the fence binds it read-only at its own path after the state mask
-  (`agent_fence::bind_read_only_last`; connecting to a socket needs no
-  write access to its mount). Only that CLI's fences get it — a Gemini
-  agent of the same user cannot ask for Claude's key, nor another user's
-  anything (their state dir). Per CLI, not per spawn: a server's tmux tabs
-  outlive a daemon restart, and the restarted daemon's new socket shows up
-  in the bound directory, where a per-spawn socket would have died with the
-  old daemon. The `--key-helper` verb runs first in `main` (desktop binary
-  too), prints the key and nothing else, touches no state. The spawn still
-  checks `offered` first, so a withdrawn key fails the start.
-- **Project containers** (decision 4): `sandbox::wrap_pty_options_docker`
-  calls `agent_keys::container_env` — the CLI's variable for Gemini/Vibe,
-  `<PREFIX>ADMIN_KEY_SECRET` for Claude, whose helper prints it there (the
-  container shares the scope home's settings). `is_secret_exec_env` names
-  every such variable bare on the `docker exec` argv; the value is in the
-  docker client's own environment (`0400`, same uid), not in the image, the
-  container's create-time config or `docker inspect`. Residual: the value is
-  in the exec'd process's environment inside the container (the agent and
-  whatever it starts, as on the host) and in the docker client's environ.
-  `SECRET` in the name means `brand::Pair::export_both` never makes a
-  legacy-named twin that would ride the argv by value. Remote agents and
-  Codex get nothing (decided, #2359/#2361). The three variables are in `tmux_local::SECRET_ENV`, so
-  tmux ≥ 3.2 copies them from the client's environment (`0400`), never an
-  argv or a launcher script. Their global `update-environment` slots are
-  claimed only on the app's own tmux server (`-L <slug>`, a server's) or by
-  a tab carrying one: a desktop's tmux server is the user's own, where
-  listing `ANTHROPIC_API_KEY` would copy or drop the user's own key at every
-  attach (P3b review). Withdrawn, taken off the list or keeper down → the
-  spawn fails naming the way back; never a silent fall-back to a login the
-  home no longer has.
+- **Delivery: the API proxy, as for the user's own key** (user decision
+  2026-10-10, #2389). Every local agent spawn of a chosen CLI — the fence
+  wraps and the root console's Host session — passes
+  `agent_keys::admin_for_spawn` (the keeper's `offered` names the CLI, else
+  the spawn fails naming the way back) and gets an `api_proxy` grant marked
+  with the CLI (`Grant::admin`): a proxy token under its app-named carrier
+  and the CLI's base-URL variable, exactly what an own key gets. The proxy,
+  in the user's daemon, asks the keeper for the key per request
+  (`agent_keys::for_proxy`: the choice still on, then `get`), keeps the
+  answer 60 s and drops it on an upstream 401, and forwards with it — so no
+  key enters an agent process, its environment, its home, a file or a
+  container, and Claude asks no API-key question (the token is
+  `ANTHROPIC_AUTH_TOKEN`). A withdraw, a removal from the list or the user's
+  switch back reaches running agents within that minute.
+- **What has no proxy, has no key.** A CLI typed into a shell tab runs in
+  the `--agent-shim` process, which runs no proxy: a chosen CLI fails there,
+  naming the agent tab. A project container cannot reach the daemon's
+  loopback: a container spawn of a CLI on any API key fails before the
+  container starts (`agent_api_keys::refuse_in_container`). Remote agents and
+  Codex get nothing (decided, #2359/#2361). On a server, a tmux older than
+  3.2 fails a keyed spawn (it cannot keep the token off its argv).
+- **Not charged to the user's own limit.** An admin grant is never metered
+  into the user's own ledger: a brokered key is budgeted at the broker, a
+  direct one has no per-user budget (§5.4).
+- *History:* P3b first delivered Claude's key through its `apiKeyHelper`
+  (a helper socket per daemon, bound read-only into Claude's fence),
+  Gemini's and Vibe's as env carriers, and every chosen CLI's into project
+  containers; none of it shipped, and #2389 replaced it all with the proxy.
 - **Fair share at the keeper** (P3b review finding 6): at most 32
   connections, at most 4 per caller uid (counted at accept, by
   `SO_PEERCRED`), each exchange 2 s; a connection over a cap is closed
   unanswered. One user holding connections open leaves the other 28 slots
   to everyone else. The daemon's own requests only read, so one closed
   unanswered is sent again up to 3 times (150/300/450 ms apart): a burst of
-  the user's own spawns and Claude helper calls must not fail a start. The
-  daemon's helper socket answers at most 8 calls at once (anything in a
-  chosen Claude's fence can connect; a flood gets closed connections, not
-  a thread each). (P3b decisions review.)
-- **Shims on a server.** The daemon now writes the shell tabs' agent shims
-  (`agent_bin::install`, in `main`), and `<slug>-serverd --agent-shim`
-  marks server mode for that process only (`mark_server_process`): a tab
-  in tmux has tmux's environment, not the unit's, and a marker in the
-  environment would leak into a desktop app started from that tab. A
-  server's tmux is its own unit's, so panes inherited systemd's PATH and
-  never saw the shims; in server mode a tmux-wrapped local tab now carries
-  the daemon's effective PATH (shims first) in its session env
-  (`launch_prep`, `a368b3bc`).
+  the user's own spawns must not fail a start; the proxy's minute cache
+  keeps per-request asks off the keeper. (P3b decisions review.)
 - **Audit.** The keeper's `audit.jsonl` (set, remove, and fetches at most
   once per user and CLI per 10 minutes, so a user cannot flood the log)
   and the gateway's own rows for the admin's requests; no key, no
   fragment. The admin panel's "used lately by" is read from the keeper's
   rows (30 days).
-- **Residuals, as §5.4 accepts them.** Every agent of a user who chose the
-  key can read it (its environment, or by running the helper). A listed
-  user's own unfenced processes can fetch it from the keeper, chosen or
-  not: the choice picks what the agents run on; the admin's list is the
-  access control. Direct mode has no per-user budget (the broker is P5). A
-  withdraw does not reach Gemini/Vibe agents already running — rotate the
-  key at the provider. Gemini/Vibe first-use prompts unverified (#2360).
-  The helper verb needs the daemon binary outside `$HOME` (a system
-  install); a dev build run from the home is hidden by the fence.
+- **Residuals, as §5.4 accepts them.** No agent can read the key, but
+  every agent of a user who chose it can spend through its tab's token while
+  the tab lives (as with an own key). A listed user's own unfenced processes
+  can fetch the key from the keeper, chosen or not: the choice picks what
+  the agents run on; the admin's list is the access control. Direct mode has
+  no per-user budget (the broker is P5). A daemon restart drops every token,
+  so a keyed agent in a tmux tab that outlived it must be restarted.
 
 ## The key broker (P5, §5.4)
 
@@ -496,10 +465,12 @@ agent (fenced, host netns) ─ANTHROPIC_BASE_URL=http://127.0.0.1:8739/claude─
   switches a key's delivery to the broker (per CLI, Agent credentials
   panel); the keeper then answers a listed user's `get` with that user's
   **broker token** (minted at the first fetch, `<cli>/tokens.json` `0600`)
-  plus the broker's URL, and its `offered` names the URL. The daemon sets
-  the CLI's base-URL variable at spawn (Claude's `ANTHROPIC_BASE_URL`,
-  not a secret) and the existing helper channel hands out the token where
-  it handed out the key. The key never leaves `<slug>-auth`.
+  plus the broker's URL, and its `offered` names the URL. The user's
+  daemon's API proxy then forwards that user's requests to the broker URL
+  with the token in `x-api-key` (over a plain-HTTP client for loopback
+  only; the URL is checked to be `http://127.0.0.1:<port>/<cli>`) — the
+  agent holds only its proxy token (#2389). The key never leaves
+  `<slug>-auth`, the broker token never leaves the daemon.
 - **Which CLIs**: only rows of `keys_wire::BROKER_CLIS`, i.e. a CLI whose
   base-URL override the vendor documents (Q2's broker question): Claude.
   Gemini CLI and Mistral Vibe stay direct-only until their overrides are
@@ -543,8 +514,9 @@ agent (fenced, host netns) ─ANTHROPIC_BASE_URL=http://127.0.0.1:8739/claude─
 - **Revocation without rotating the key**: taking a user off the list,
   **Renew token** (drops one user's token), withdrawing the key or
   switching back to direct delivery all remove tokens; the broker looks the
-  token up per request, so the next request is a `401` — and Claude runs its
-  `apiKeyHelper` again on a 401, getting the user's current answer.
+  token up per request, so the next request is a `401` — on which the
+  daemon's proxy drops its cached token and asks the keeper again, getting
+  the user's current answer for the request after it.
 - **Fair share**: 256 requests in flight in all, 16 per user (`429
   rate_limit_error` beyond, which the CLI retries); 32 MiB per request
   body; 10-minute read timeout towards the provider.
@@ -554,9 +526,9 @@ agent (fenced, host netns) ─ANTHROPIC_BASE_URL=http://127.0.0.1:8739/claude─
   (it calls the provider). TLS through the app's own `reqwest`/rustls stack
   with the platform verifier; redirects never followed.
 - **Containers**: a project container's network namespace does not reach
-  the host's loopback, so a brokered CLI's container spawn fails, naming the
-  way out (container off, or the user's own login). Direct keys still go to
-  containers as decided in § P3b decisions.
+  the host's loopback, so a container spawn of a CLI on any API key — brokered,
+  direct or the user's own — fails, naming the way out (container off, or the
+  user's own login; #2389).
 - **Audit**: the broker appends to the keeper's `audit.jsonl` — a user's
   brokered use at most once per 10 minutes per CLI
   (`agent-key-brokered`), a budget refusal likewise
