@@ -60,7 +60,7 @@ projects in `~/<slug>-server`, apart from the desktop app's.
 
 ## The user's decisions
 
-All answered 2026-09-29 … 2026-10-04; the plan's §12 holds Q1–Q14.
+All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
 
 **Who and how**
 - A few trusted users; tailnet only via Tailscale Serve (Q1, Q8).
@@ -92,6 +92,11 @@ All answered 2026-09-29 … 2026-10-04; the plan's §12 holds Q1–Q14.
 - Key broker: Claude only, budgets in billed tokens per UTC month (cache
   reads at a tenth), 403 when spent.
 - Shared consumer login (one subscription for several users): dropped.
+- **One agent-API-key path (#2389, 2026-10-10):** develop's `api_proxy` is
+  the one delivery path, desktop and server alike. On a server its keys
+  come from the keeper/broker (the admin's key) or the user's per-user
+  vault (their own key), never an OS keychain. One budget model: billed
+  tokens per UTC month (the broker's). Not built yet.
 
 **Secrets and mail**
 - Same-user unfenced processes can read the vault key; accepted and
@@ -102,12 +107,17 @@ All answered 2026-09-29 … 2026-10-04; the plan's §12 holds Q1–Q14.
 
 **Browser, terminals, files**
 - Recent Downloads are always the client device's own.
+- Dropping OS files onto a terminal tab (`pty_drop_files`) is `Client`
+  (2026-10-10): the paths are the client machine's; a browser client has
+  none.
 - Each client gets its own terminal attachment; tmux `window-size latest`
   (desktop sessions too).
 - Content origin on the main port + 1. Crate split kept as a `desktop`
   cargo feature; the core crate stays `app-core`.
 - Connect mode (desktop app as a client) runs its own local frontend, keeps
   its pairing key in a 0600 file, and is narrowed to its own commands.
+  `open_external_url` is dropped from it (#2387, 2026-10-10): links in
+  server content never reach the client's OS browser handler. Not built yet.
 - Server containers are rootless Podman per user, off by default (admin
   switch).
 
@@ -157,9 +167,10 @@ All answered 2026-09-29 … 2026-10-04; the plan's §12 holds Q1–Q14.
 
 ## Open decisions
 
-- **#2389:** which agent-API-key path a server keeps (see open problem 1).
-- **#2387:** keep `open_external_url` in the Connect window (links from
-  server content open in the system browser) or drop it.
+None. #2389 and #2387 were answered 2026-10-10 (see the decisions above);
+both still need building. `hosted` → `develop` (#2386) waits by the user's
+call (2026-10-10) while heavy work continues on `develop`; re-merge
+`develop` → `hosted` as needed.
 
 ## Live runs owed, in order
 

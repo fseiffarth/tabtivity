@@ -923,6 +923,9 @@ the desktop groundwork the hosted plan's P1 builds on.*
     browser (without it they fall back to `window.open`). It is a sixth
     command class the user did not list. Keep it, or drop it and accept
     that links may not open. (Open points, 2026-10-05.)
+    **Decided 2026-10-10 (user): drop it** — remove `open_external_url` from
+    the Connect window's command manifest; links in server content fall
+    back to `window.open`. To build.
 
 2388. **Commit or ignore `src-tauri/gen/schemas/macOS-schema.json`.** The
     macOS all-targets check generates it; the Linux and Windows schemas are
@@ -949,3 +952,8 @@ the desktop groundwork the hosted plan's P1 builds on.*
     per-tab token path with the keeper/broker as its key source on a
     server, one budget model, one Manage CLIs control. Before or during
     #2386. (Open problems, `docs/server.md`, 2026-10-06.)
+    **Decided 2026-10-10 (user):** `api_proxy` is the one per-tab token path
+    everywhere; on a server its keys come from the keeper/broker (admin
+    key) or the user's per-user vault (own key, so yes, a user may bring
+    one), never an OS keychain; one budget model in billed tokens per UTC
+    month. To build on `hosted` before `hosted` → `develop`.
