@@ -44,6 +44,9 @@ function hostWith(files: boolean, tickets = true) {
       return new Response(JSON.stringify({ url: `${target}&ticket=t1` }), { status: 200 });
     }
     if (url === "/api/v1/projects/p1/outbox") return new Response(JSON.stringify({ files: [] }), { status: 200 });
+    if (url === "/api/v1/projects/p1/git") return new Response(JSON.stringify({
+      repo: false, worktrees: [], worktrees_total: 0, branches: [], branches_total: 0, remote_branches: [], remote_total: 0,
+    }), { status: 200 });
     if (url === "/api/v1/projects/p1/files") return new Response(JSON.stringify(ROOT), { status: 200 });
     if (url === "/api/v1/projects/p1/files?dir=tok-src") return new Response(JSON.stringify(SRC), { status: 200 });
     if (url === "/api/v1/projects/p1/files/raw?f=tok-notes") return new Response("# Hello\n", { status: 200 });
