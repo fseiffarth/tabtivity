@@ -2831,8 +2831,12 @@ mod tests {
         // The whole state dir and the Cargo token are hidden, and nothing is
         // restored after them: no agent home, no tool mount.
         pos("(deny file-read* file-write* (subpath \"/Users/a/state\"))");
-        // Joined as the profile joins it (`\` when this test runs on Windows).
-        pos(&format!("(deny file-read* file-write* (subpath \"{}\"))", state.join("settings.json").display()));
+        // Joined and quoted as the profile does it (on Windows the join adds a
+        // `\`, which the Scheme string literal doubles).
+        pos(&format!(
+            "(deny file-read* file-write* (subpath {}))",
+            sbpl_string(&state.join("settings.json").to_string_lossy())
+        ));
         pos("(deny file-read* file-write* (subpath \"/Users/a/.cargo/credentials.toml\"))");
         assert!(!profile.contains("(allow file-read* file-write*"), "{profile}");
         assert!(lines.last().unwrap().starts_with("(deny file-read* file-write*"));
