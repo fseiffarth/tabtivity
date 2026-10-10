@@ -68,7 +68,7 @@ describe("TabCostList", () => {
     // agent-1 (asleep) and embed-unloaded have a line but no estimate; the
     // calendar has none at all.
     expect(screen.getByText("2 more tabs hold nothing loaded")).toBeTruthy();
-    expect(screen.getByText(/1 PDFs open outside a tab/)).toBeTruthy();
+    expect(screen.getByText(/1 PDF open outside a tab/)).toBeTruthy();
     expect(screen.getByText(/PDFs loaded now: 4\./)).toBeTruthy();
   });
 
@@ -94,7 +94,7 @@ describe("TabCostList", () => {
     expect(rowKeys()).toEqual(["embed-big", "embed-other", "embed-small"]);
     fireEvent.click(screen.getByText("Refresh"));
     expect(rowKeys()).toEqual(["embed-unloaded", "embed-big", "embed-other", "embed-small"]);
-    expect(screen.getByText("1 more tabs hold nothing loaded")).toBeTruthy();
+    expect(screen.getByText("1 more tab holds nothing loaded")).toBeTruthy();
   });
 });
 
@@ -145,7 +145,7 @@ describe("TabCostList after Close", () => {
 
     expect(rowKeys()).toEqual(["embed-small"]);
     // The closed tab's document is gone, not re-listed "outside a tab".
-    expect(screen.getByText(/1 PDFs open outside a tab/)).toBeTruthy();
+    expect(screen.getByText(/1 PDF open outside a tab/)).toBeTruthy();
     expect(screen.getByText(/PDFs loaded now: 2\./)).toBeTruthy();
   });
 });

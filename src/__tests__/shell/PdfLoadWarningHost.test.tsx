@@ -9,15 +9,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
 
 import { PdfLoadWarningHost } from "../../components/layout/PdfLoadWarningHost";
-import { PDF_WARN_GRACE_MS, _clearTabCostForTest, registerPdfDoc, updatePdfDoc } from "../../lib/tabCost";
+import {
+  PDF_WARN_GRACE_MS,
+  _clearTabCostForTest,
+  registerPdfDoc,
+  unregisterPdfDoc,
+  updatePdfDoc,
+} from "../../lib/tabCost";
 import { readAppStylesheet } from "../helpers/cssCorpus";
 
-function loadPdf(i: number) {
+function loadPdf(i: number): object {
   const token = {};
   act(() => {
     registerPdfDoc(token, { tabKey: `embed-${i}`, path: `/p/${i}.pdf` });
     updatePdfDoc(token, { pages: 1, bytes: 10 });
   });
+  return token;
 }
 
 const toasts = () => document.querySelectorAll("[data-pdf-warn]");
@@ -57,6 +64,53 @@ describe("PdfLoadWarningHost", () => {
     render(<PdfLoadWarningHost />);
     for (let i = 1; i <= 9; i++) loadPdf(i);
     expect(toasts()).toHaveLength(0);
+  });
+
+  it("shows once when the grace ends on a crossing made inside it that never moved again", () => {
+    vi.useFakeTimers();
+    const now = vi.spyOn(performance, "now").mockReturnValue(PDF_WARN_GRACE_MS - 1000);
+    render(<PdfLoadWarningHost />);
+    for (let i = 1; i <= 9; i++) loadPdf(i);
+    expect(toasts()).toHaveLength(0);
+    // The one-shot grace-end check is the only timer.
+    expect(vi.getTimerCount()).toBe(1);
+    now.mockReturnValue(PDF_WARN_GRACE_MS);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(toasts()).toHaveLength(1);
+    expect(toasts()[0].textContent).toContain("9 PDFs are loaded at once.");
+    act(() => {
+      vi.advanceTimersByTime(3200);
+    });
+    expect(toasts()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+    // Same crossing: no second notice on the next change.
+    loadPdf(10);
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it("stays quiet when the grace ends below the threshold", () => {
+    vi.useFakeTimers();
+    const now = vi.spyOn(performance, "now").mockReturnValue(PDF_WARN_GRACE_MS - 1000);
+    render(<PdfLoadWarningHost />);
+    const tokens = Array.from({ length: 9 }, (_, i) => loadPdf(i + 1));
+    act(() => {
+      for (const tok of tokens.slice(0, 3)) unregisterPdfDoc(tok);
+    });
+    now.mockReturnValue(PDF_WARN_GRACE_MS);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(toasts()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("sets no grace timer in a window older than the grace", () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockReturnValue(PDF_WARN_GRACE_MS + 1);
+    render(<PdfLoadWarningHost />);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

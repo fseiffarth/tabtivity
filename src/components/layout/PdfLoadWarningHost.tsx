@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
-import { PDF_WARN_INITIAL, pdfWarnStep, subscribeLoadedPdfCount, type PdfWarnState } from "../../lib/tabCost";
+import {
+  loadedPdfCount,
+  PDF_WARN_INITIAL,
+  pdfWarnGraceLeft,
+  pdfWarnStep,
+  subscribeLoadedPdfCount,
+  type PdfWarnState,
+} from "../../lib/tabCost";
 
 /** How long the notice stays: the `.conn-toast` animation's length. */
 const TOAST_MS = 3200;
@@ -19,15 +26,24 @@ export function PdfLoadWarningHost() {
   const [toast, setToast] = useState<{ n: number; id: number } | null>(null);
   const warn = useRef<PdfWarnState>(PDF_WARN_INITIAL);
 
-  useEffect(
-    () =>
-      subscribeLoadedPdfCount((n) => {
-        const step = pdfWarnStep(warn.current, n, performance.now());
-        warn.current = step.state;
-        if (step.fire) setToast((prev) => ({ n, id: (prev?.id ?? 0) + 1 }));
-      }),
-    [],
-  );
+  useEffect(() => {
+    const check = (n: number) => {
+      const step = pdfWarnStep(warn.current, n, performance.now());
+      warn.current = step.state;
+      if (step.fire) setToast((prev) => ({ n, id: (prev?.id ?? 0) + 1 }));
+    };
+    const unsubscribe = subscribeLoadedPdfCount(check);
+    // One look when the start-up grace ends: a count that crossed the
+    // threshold inside it and has not moved since gets no other chance. A
+    // one-shot timeout, gone once it ran; an already-warned crossing is
+    // disarmed, so this cannot show the notice twice.
+    const left = pdfWarnGraceLeft(performance.now());
+    const graceEnd = left === null ? undefined : window.setTimeout(() => check(loadedPdfCount()), left);
+    return () => {
+      unsubscribe();
+      if (graceEnd !== undefined) window.clearTimeout(graceEnd);
+    };
+  }, []);
 
   useEffect(() => {
     if (!toast) return;

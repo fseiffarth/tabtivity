@@ -117,11 +117,17 @@ export function TabCostList({ onClose }: { onClose: () => void }) {
       ))}
       {snap.untabbed && (
         <p className="settings-help">
-          {t("settings.tabCostsUntabbed", { n: snap.untabbed.docs })}{" "}
+          {t(snap.untabbed.docs === 1 ? "settings.tabCostsUntabbedOne" : "settings.tabCostsUntabbed", {
+            n: snap.untabbed.docs,
+          })}{" "}
           {describeTabCost({ kind: "pdf", ...snap.untabbed }, t)}
         </p>
       )}
-      {others > 0 && <p className="settings-help">{t("settings.tabCostsOthers", { n: others })}</p>}
+      {others > 0 && (
+        <p className="settings-help">
+          {t(others === 1 ? "settings.tabCostsOthersOne" : "settings.tabCostsOthers", { n: others })}
+        </p>
+      )}
     </SettingsCard>
   );
 }

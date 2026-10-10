@@ -51,7 +51,8 @@ export const PDF_WARN_INITIAL: PdfWarnState = { armed: true };
  * One hysteresis step of the loaded-PDF notice, on a count change. Fires when
  * the count is at or over {@link PDF_LOADED_WARN_AT} while armed (then
  * disarms); re-arms at or under {@link PDF_LOADED_REARM_AT}. Inside the grace
- * period it never fires and stays armed, so the next change after it fires if
+ * period it never fires and stays armed, so the next change after it — or the
+ * host's one look when the grace ends ({@link pdfWarnGraceLeft}) — fires if
  * the count is still high. `nowMs` is the window's age (`performance.now()`).
  */
 export function pdfWarnStep(
@@ -66,6 +67,17 @@ export function pdfWarnStep(
     return { state: { armed: false }, fire: true };
   }
   return { state, fire: false };
+}
+
+/**
+ * Milliseconds until the grace period ends, or null once it has. The notice
+ * host checks the count once then: a restore that crossed
+ * {@link PDF_LOADED_WARN_AT} inside the grace and stays there would otherwise
+ * never see another count change, and never warn.
+ */
+export function pdfWarnGraceLeft(nowMs: number): number | null {
+  const left = PDF_WARN_GRACE_MS - nowMs;
+  return left > 0 ? left : null;
 }
 
 // ── PDF document registry ────────────────────────────────────────────────────
@@ -294,7 +306,7 @@ export function describeTabCost(
         cap: (cost.cap ?? 0).toLocaleString(),
       });
     case "pdf":
-      return t("tabCost.pdf", {
+      return t(cost.pages === 1 ? "tabCost.pdfOne" : "tabCost.pdf", {
         size: formatBytes(cost.estBytes),
         pages: cost.pages.toLocaleString(),
         file: formatBytes(cost.bytes),

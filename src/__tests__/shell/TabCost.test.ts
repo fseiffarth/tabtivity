@@ -16,8 +16,10 @@ import {
   PDF_WARN_INITIAL,
   _clearTabCostForTest,
   costBytes,
+  describeTabCost,
   loadedPdfCount,
   pdfCostFor,
+  pdfWarnGraceLeft,
   pdfWarnStep,
   rankTabCosts,
   registerPdfDoc,
@@ -32,6 +34,11 @@ import {
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { _clearAsleepPtysForTest, markPtyAsleep } from "../../lib/terminal/sleepingPtys";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { en, translate, type Dict, type TranslationKey } from "../../lib/i18n";
+import { dict as de } from "../../lib/i18nDicts/de";
+import { dict as es } from "../../lib/i18nDicts/es";
+import { dict as fr } from "../../lib/i18nDicts/fr";
+import { dict as it_ } from "../../lib/i18nDicts/it";
 
 function fakeTerm(length: number, cols: number, rows: number, scrollback: number): Terminal {
   return {
@@ -199,5 +206,41 @@ describe("pdfWarnStep", () => {
     expect(early.fired).toEqual([]);
     expect(early.state.armed).toBe(true);
     expect(run([10], AFTER, early.state).fired).toEqual([10]);
+  });
+});
+
+describe("pdfWarnGraceLeft", () => {
+  it("counts down to the end of the grace, then is null", () => {
+    expect(pdfWarnGraceLeft(0)).toBe(PDF_WARN_GRACE_MS);
+    expect(pdfWarnGraceLeft(PDF_WARN_GRACE_MS - 250)).toBe(250);
+    expect(pdfWarnGraceLeft(PDF_WARN_GRACE_MS)).toBeNull();
+    expect(pdfWarnGraceLeft(PDF_WARN_GRACE_MS + 1)).toBeNull();
+  });
+});
+
+describe("describeTabCost plurals", () => {
+  const t = (key: TranslationKey, params?: Record<string, string | number>) => translate("en", key, params);
+  const pdf = (pages: number) =>
+    describeTabCost({ kind: "pdf", entries: 1, docs: 1, pages, bytes: 1024, estBytes: 2048 }, t);
+
+  it("says 1 page, not 1 pages", () => {
+    expect(pdf(1)).toContain("1 page,");
+    expect(pdf(1)).not.toContain("pages");
+    expect(pdf(2)).toContain("2 pages,");
+  });
+
+  it("has a singular form in every language for each counted line", () => {
+    const dicts: Dict[] = [en, de, es, fr, it_];
+    for (const d of dicts) {
+      for (const [one, many] of [
+        ["settings.tabCostsOthersOne", "settings.tabCostsOthers"],
+        ["settings.tabCostsUntabbedOne", "settings.tabCostsUntabbed"],
+        ["tabCost.pdfOne", "tabCost.pdf"],
+      ] as const) {
+        expect(d[one]).toBeTruthy();
+        expect(d[one]).not.toBe(d[many]);
+        expect(d[one]).not.toContain("{n}");
+      }
+    }
   });
 });
