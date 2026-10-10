@@ -858,9 +858,17 @@ mod tests {
         let path = dir.path().join("bomb.xls");
         write_dimensions_bomb(&path);
         // This test process is still here to compare the result.
-        assert_eq!(
-            run_reader(test_child(&path), Duration::from_secs(60)).unwrap_err(),
-            ERR_CRASHED
+        let got = run_reader(test_child(&path), Duration::from_secs(60));
+        // Linux caps the child's address space, so the reservation aborts it.
+        #[cfg(target_os = "linux")]
+        assert_eq!(got.unwrap_err(), ERR_CRASHED);
+        // macOS enforces no `RLIMIT_AS`: the reservation can succeed (the arm64
+        // runner's does) and the sheet is just empty. Either way the child, not
+        // this process, took it.
+        #[cfg(not(target_os = "linux"))]
+        assert!(
+            got.as_ref().err().is_some_and(|e| e == ERR_CRASHED) || got.as_ref().is_ok_and(|d| d.rows.is_empty()),
+            "{got:?}"
         );
     }
 
