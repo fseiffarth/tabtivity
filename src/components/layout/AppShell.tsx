@@ -117,6 +117,7 @@ import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePan
 import type { FilesPanelView } from "../../types";
 import { noteTerminalOutputChars } from "../../dev/terminalOutputRate";
 import { BRAND } from "../../lib/brand";
+import { PdfLoadWarningHost } from "./PdfLoadWarningHost";
 
 // Dev-only perf panel (src/dev/). The ternary is statically resolved at build
 // time (`import.meta.env.DEV` → false), so in a shipped bundle the lazy() —
@@ -1244,6 +1245,7 @@ export function AppShell() {
       {panelsHiddenToast != null && (
         <div key={panelsHiddenToast} className="project-switch-toast">{panelsHiddenToast}</div>
       )}
+      <PdfLoadWarningHost />
       <div
         className={`app-body${
           revealPanel && panelPinned

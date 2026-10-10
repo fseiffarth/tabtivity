@@ -2215,3 +2215,48 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2415. **Per-tab cost readout and the loaded-PDF notice.** ✅ Done on branch
+    `perf` (T1 in `docs/tab_cost_handoff.md`, plan `docs/tab_cost_plan.md`
+    step 1), code-complete and **live-unverified**. Untested pills
+    `tabCost.hover` and `settings.tabCosts` (its row also covers the toast).
+    Setup: a frozen dev build of this branch.
+    - [x] 🤖 Automated test — `TabCost`, `PdfCostRegistry`,
+      `TabHoverCardCost`, `TabCostList`, `PdfLoadWarningHost`
+    - [ ] 🖐️ Manual test (T1.1) — Hover a busy shell tab: the "memory" row
+      reads "≈ … · N of M lines" (M = the tab's scrollback cap, 5,000 today).
+      Hover a PDF: its pages and file size. Hover a PDF hidden over 5 min:
+      "Unloaded — reloads when shown". Set "Unload hidden tabs after" to 5 min
+      and hover a terminal hidden that long: "the program keeps running", no
+      size. A calendar tab's card has no memory row.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (T1.2) — Settings → Power & performance → "What
+      open tabs hold": largest first; Show jumps to the tab and closes
+      Settings (only offered for the current project's tabs); Close closes it;
+      Refresh updates the list after opening another PDF.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (T1.3) — More than 2 min after start, open 8 PDFs
+      one after another: one toast at the 8th, gone after ~3 s; none at the
+      9th. Close down to 5, open three more: it shows once more.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

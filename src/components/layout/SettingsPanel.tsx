@@ -15,6 +15,8 @@ import { CopilotCompletionCard } from "./CopilotCompletionCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { SLEEP_TABS_CHOICES_MIN, SLEEP_TABS_DEFAULT_MIN } from "../../lib/sleepWhenHidden";
 import { experimentalEnabled } from "../../lib/experimental";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { TabCostList } from "./TabCostList";
 import { usePowerStore, useEnergySaver } from "../../stores/power";
 import { useProjectsStore } from "../../stores/projects";
 import { DEFAULT_MIN_SUBWINDOW_PX } from "../../stores/tabs";
@@ -1186,7 +1188,7 @@ const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   remoteFeatures: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"],
   vm: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"],
   mobile: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"],
-  performance: ["settings.energySaver", "settings.fastMode", "settings.sleepTabs"],
+  performance: ["settings.energySaver", "settings.fastMode", "settings.sleepTabs", "settings.tabCosts"],
   resourceMonitor: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"],
   experimental: ["settings.debug", "settings.terminalWebgl", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug"],
   git: ["nav.git.blurb"],
@@ -2005,6 +2007,10 @@ export function SettingsDialog({
                 />
               }
             />
+
+            {/* What each open tab holds (`lib/tabCost`), main window only: a
+                popout's registries know only its own tabs. */}
+            {!isDetachedWindow() && <TabCostList onClose={onClose} />}
             </>)}
 
             {section === "resourceMonitor" && (<>

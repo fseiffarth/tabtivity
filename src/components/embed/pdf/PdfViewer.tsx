@@ -81,6 +81,7 @@ import {
   markedSheetCount,
   type Rect,
 } from "../../../lib/viewers/redact";
+import { registerPdfDoc, unregisterPdfDoc, updatePdfDoc } from "../../../lib/tabCost";
 import {
   openSource,
   sourceBytes,
@@ -4161,16 +4162,41 @@ function PdfCanvas({
   // It also owns the viewer's pdf.js worker (`PdfWorkerSlot`), created here rather
   // than at render so a StrictMode remount gets a live one, and ended only once the
   // documents on it have been torn down.
+  //
+  // The slot doubles as this viewer's token in the tab cost registry
+  // (`lib/tabCost`): registered with it, unregistered beside its disposal.
+  const costMeta = useRef({ tabKey, path });
+  costMeta.current = { tabKey, path };
   useEffect(() => {
     const slot = new PdfWorkerSlot();
     workerSlot.current = slot;
+    registerPdfDoc(slot, costMeta.current);
     return () => {
       const pending = [...sourcesRef.current.values()].map((s) => s.doc.loadingTask.destroy());
       sourcesRef.current = new Map();
       if (workerSlot.current === slot) workerSlot.current = null;
+      unregisterPdfDoc(slot);
       slot.dispose(pending);
     };
   }, []);
+
+  // What this viewer holds, for the tab cost readout: pages over every open
+  // source, the viewed file's bytes plus any merged source's own copy. No
+  // document on screen (a file switch in flight, a failed load) counts as none.
+  // Read off state the load path already sets; the load itself is untouched.
+  useEffect(() => {
+    const slot = workerSlot.current;
+    if (!slot) return;
+    let pages = 0;
+    let bytes = doc ? (docBytes ?? 0) : 0;
+    if (doc) {
+      for (const [id, src] of sources) {
+        pages += src.doc.numPages;
+        if (id !== SELF) bytes += src.bytes?.byteLength ?? 0;
+      }
+    }
+    updatePdfDoc(slot, { pages, bytes, tabKey, path });
+  }, [sources, docBytes, doc, tabKey, path]);
 
   // Intrinsic (scale-1) CSS dimensions of every page, computed once per document
   // load. Lets each PdfPageCanvas reserve its true size before rendering so the
