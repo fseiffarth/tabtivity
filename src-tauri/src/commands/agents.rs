@@ -2519,17 +2519,15 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_installer_command_picks_interpreter_per_command() {
-        use std::ffi::OsStr;
+        // The program is the System32 path `paths::helper_program` resolves,
+        // so only its stem is compared.
+        let stem = |c: std::process::Command| {
+            std::path::Path::new(c.get_program()).file_stem().unwrap().to_string_lossy().to_ascii_lowercase()
+        };
         let claude = find_spec("claude").unwrap(); // irm | iex
-        assert_eq!(
-            installer_command(claude).unwrap().get_program(),
-            OsStr::new("powershell")
-        );
+        assert_eq!(stem(installer_command(claude).unwrap()), "powershell");
         let gemini = find_spec("gemini").unwrap(); // npm install -g …
-        assert_eq!(
-            installer_command(gemini).unwrap().get_program(),
-            OsStr::new("cmd")
-        );
+        assert_eq!(stem(installer_command(gemini).unwrap()), "cmd");
         let vibe = find_spec("vibe").unwrap(); // no Windows installer
         assert!(installer_command(vibe).is_err());
     }

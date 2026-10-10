@@ -2508,7 +2508,8 @@ mod tests {
         fs::write(project.join("docs/plan.md"), "x").unwrap();
         fs::write(tmp.path().join("secret.txt"), "x").unwrap();
         let base = project.to_string_lossy().to_string();
-        let abs_inside = project.join("docs/plan.md").to_string_lossy().to_string();
+        // Per component: Windows keeps a joined `/`, the resolved path has `\`.
+        let abs_inside = project.join("docs").join("plan.md").to_string_lossy().to_string();
         let abs_outside = tmp.path().join("secret.txt").to_string_lossy().to_string();
         let got = resolve_text_paths(
             vec![base],

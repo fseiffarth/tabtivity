@@ -2831,7 +2831,8 @@ mod tests {
         // The whole state dir and the Cargo token are hidden, and nothing is
         // restored after them: no agent home, no tool mount.
         pos("(deny file-read* file-write* (subpath \"/Users/a/state\"))");
-        pos("(deny file-read* file-write* (subpath \"/Users/a/state/settings.json\"))");
+        // Joined as the profile joins it (`\` when this test runs on Windows).
+        pos(&format!("(deny file-read* file-write* (subpath \"{}\"))", state.join("settings.json").display()));
         pos("(deny file-read* file-write* (subpath \"/Users/a/.cargo/credentials.toml\"))");
         assert!(!profile.contains("(allow file-read* file-write*"), "{profile}");
         assert!(lines.last().unwrap().starts_with("(deny file-read* file-write*"));
@@ -3302,10 +3303,12 @@ mod tests {
         std::fs::remove_dir(home.join("plugins")).unwrap();
         std::os::unix::fs::symlink(&outside, home.join("plugins")).unwrap();
         assert!(verify_control_pins(&pins).unwrap_err().contains("plugins"));
-        // A different real file (a new inode) is a swap too.
+        // A different real file (a new inode) is a swap too. Made while the old
+        // one still exists and renamed over it: remove-then-create can be handed
+        // the freed inode straight back (ext4 on CI does).
         let pins = local_model_control_paths(&home).unwrap();
-        std::fs::remove_file(home.join(".env")).unwrap();
-        std::fs::write(home.join(".env"), "").unwrap();
+        std::fs::write(home.join(".env.new"), "").unwrap();
+        std::fs::rename(home.join(".env.new"), home.join(".env")).unwrap();
         assert!(verify_control_pins(&pins).unwrap_err().contains(".env"));
         // Gone altogether: refused.
         let pins = local_model_control_paths(&home).unwrap();

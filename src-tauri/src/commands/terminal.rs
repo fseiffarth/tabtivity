@@ -517,7 +517,8 @@ mod tests {
     #[test]
     fn shell_drop_hands_back_the_path_and_copies_nothing() {
         let tab = tempfile::tempdir().unwrap();
-        let path = "/somewhere/a file.txt".to_string();
+        // Absolute on this OS: a leading `/` alone is relative on Windows.
+        let path = if cfg!(windows) { r"C:\somewhere\a file.txt" } else { "/somewhere/a file.txt" }.to_string();
         let dropped = drop_files(tab.path(), std::slice::from_ref(&path), false);
         assert_eq!(dropped, PtyDropped { items: vec![path], error: None });
         assert!(!tab.path().join(inbox::INBOX_DIR).exists());

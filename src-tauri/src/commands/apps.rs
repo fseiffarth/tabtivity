@@ -3028,13 +3028,18 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_script_command_picks_interpreter_by_extension() {
-        // .ps1 → PowerShell; .bat / .cmd / everything else → cmd /C.
+        // .ps1 → PowerShell; .bat / .cmd / everything else → cmd /C. The
+        // program is the System32 path `paths::helper_program` resolves, so
+        // only its stem is compared.
+        let stem = |c: &std::process::Command| {
+            Path::new(c.get_program()).file_stem().unwrap().to_string_lossy().to_ascii_lowercase()
+        };
         let ps1 = windows_script_command(r"C:\tmp\build.ps1", None);
-        assert_eq!(ps1.get_program().to_string_lossy(), "powershell");
+        assert_eq!(stem(&ps1), "powershell");
 
         for script in [r"C:\tmp\build.bat", r"C:\tmp\run.cmd", r"C:\tmp\go.sh"] {
             let cmd = windows_script_command(script, Some("--x 1"));
-            assert_eq!(cmd.get_program().to_string_lossy(), "cmd");
+            assert_eq!(stem(&cmd), "cmd");
             // `/D`: no AutoRun from the user's registry before the script.
             let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
             assert_eq!(&args[..2], ["/D", "/C"]);

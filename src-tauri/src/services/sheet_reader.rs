@@ -803,6 +803,7 @@ mod tests {
     }
 
     /// A BIFF8 record: type, length, body.
+    #[cfg(unix)]
     fn record(typ: u16, body: &[u8]) -> Vec<u8> {
         let mut out = typ.to_le_bytes().to_vec();
         out.extend((body.len() as u16).to_le_bytes());
@@ -813,6 +814,7 @@ mod tests {
     /// An `.xls` whose one sheet declares 1 048 576 × 16 384 cells in its
     /// DIMENSIONS record: calamine reserves that many cells while *opening*
     /// the workbook, and the failed allocation aborts.
+    #[cfg(unix)]
     fn write_dimensions_bomb(path: &Path) {
         let bof = |dt: u16| {
             let mut body = 0x0600u16.to_le_bytes().to_vec();
