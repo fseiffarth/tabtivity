@@ -3921,6 +3921,15 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, phone — markups are cards among the project's tabs (2026-10-10; untested id `mobile.markup.tabs`; ✅ automated: `MobileMarkupTabs.test.tsx`; ⚠️ never run on a phone; frontend only — `npm run mobile:bundle`, then the dev build). Mark up a picture from the project screen's 🖼 gallery, draw two strokes, close it → back on the project screen a card for it sits after the tabs: its name (the original, without the date stamp), Files from the agent, **2 marks not sent**. Tap it → it opens straight in Mark up. Submit → a new default-agent tab opens; close the view → the card now also reads **Marks go to <that tab>** with its ▶/?/✓ on the card's left border. Open the card again and Submit another mark → it goes to that same tab (the line Marks go to the <tab> tab · Open tab; no second tab opens). Mark up a PDF in an agent tab's chat and Submit → back on the project screen it has a card naming that agent tab. A PDF from the 📁 drawer you mark up: its card gains the same lines. Close the linked agent tab → the card drops the tab line, and its next Submit opens a new tab. ✕ (or a right→left swipe) forgets the card; open the file again → its marks are still there and the card comes back. With the desktop's Project files on the phone switch off, the outbox cards still show, the drawer's PDF cards do not.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31bu — A plain `opencode` tab's chat fills its facts and shows it working** (2026-10-01;
   ✅ code-complete, automated tests passing — `MobileOpenCodeMini.test.ts`

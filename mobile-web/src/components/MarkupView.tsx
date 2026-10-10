@@ -17,6 +17,7 @@ import { layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } fr
 import { canApply, canUndo, followRound, holdsUndo, nextCheck, startRound, stepRound, undoneRound, undoSummary, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
 import { DEFAULT_MARKUP_APPLY, DEFAULT_MARKUP_ASK, markupForSubagent, markupUndoNote, readMarkupApply, readMarkupAsk, readMarkupDirect, readMarkupInstruction } from "../markupInstruction";
 import { readMarkupOpen } from "../markupOpen";
+import { keepMarkupTab, type FileTabFile } from "../filesPlace";
 import { sizeLabel } from "../terminal/fileLabels";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
 import type { MarkupNewTab, MarkupSend } from "./OutboxViewer";
@@ -293,7 +294,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * the new marks. Once the agent has finished, **Reload PDF** draws the file
  * as it is now (or its newer copy, `refresh`) under the same layer.
  */
-export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, onSend, newTab, agent: givenAgent = "idle", refresh, onClose, reader, adoptFrom }: {
+export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, dialog, refresh, onClose, reader, adoptFrom, toChat }: {
   tabId?: string;
   /** The project the file belongs to — the phone-side layer's key. */
   projectId?: string;
@@ -302,6 +303,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** A project file's folder trail (names), for its layer's key: a file
    * token is sealed afresh with every listing. */
   place?: string;
+  /** The token of that file's folder (none at the root), which the file's
+   * card among the project's tabs lists it again by (`keepMarkupTab`). */
+  folder?: string;
   /** Sends the desktop's prompt into the chat: `"queued"` behind the
    * agent's current step, `"sent"` straight in, `false` when it could not.
    * Absent, nothing can be marked — unless `newTab` is given. */
@@ -312,6 +316,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   newTab?: MarkupNewTab;
   /** What the agent is doing now, for the round's pill. */
   agent?: AgentSignal;
+  /** The model the host's tab runs, by its first word, for "Opus is working…". */
+  model?: string;
+  /** The question line of a dialog the host tab's CLI waits on, for the pill
+   * while the round is at a question: shown here, answered in the chat. */
+  dialog?: string;
   /** The file as it is now, for Reload — its fresh row or a newer copy; the
    * view keeps the file it shows itself, so its host never remounts it. */
   refresh?: (file: OutboxFile) => Promise<OutboxFile | null>;
@@ -323,6 +332,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * (`OutboxViewer`): marks drawn on the copy before the swap move over once,
    * while the project file has none of its own — never merged into some. */
   adoptFrom?: string;
+  /** Tucks the view away behind the host tab's chat, still mounted, with the
+   * file's name for the chat's way back (`Terminal`'s `markupAway`). */
+  toChat?: (name: string) => void;
 }) {
   const t = useT();
   /** The file shown — the host's, until a Reload finds a newer one. */
@@ -337,6 +349,29 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     [projectId, scope, place],
   );
   const key = useMemo(() => keyOf(file.name), [keyOf, file.name]);
+  /** The file as its card among the project screen's tabs knows it
+   * (`filesPlace.ts`) — none for a tab without a project. */
+  const cardFile = useMemo<FileTabFile | null>(
+    () => !canMark || !projectId || projectId.startsWith("tab:") ? null
+      : "files" in scope ? { place: place ?? "", name: file.name } : { from: "outbox", place: "", name: file.name },
+    [canMark, projectId, scope, place, file.name],
+  );
+  /** A file with marks — or one whose round just went to `tab` — keeps a
+   * card among the project's tabs, so the markup is found again there. */
+  const keepCard = (tab?: string) => {
+    if (!cardFile) return;
+    keepMarkupTab(projectId, {
+      ...cardFile,
+      token: cardFile.from === "outbox" ? file.name : file.ref ?? "",
+      kind: file.kind,
+      size: file.size,
+      modified: file.modified,
+      ...(cardFile.from === "outbox" ? { label: sentName(file) !== file.name ? sentName(file) : undefined } : { folder }),
+      ...(tab ? { tab } : {}),
+    });
+  };
+  const keepCardRef = useRef(keepCard);
+  keepCardRef.current = keepCard;
   const fingerprint = useMemo<Fingerprint>(() => ({ size: file.size, modified: file.modified }), [file.size, file.modified]);
   const fingerprintRef = useRef(fingerprint);
   fingerprintRef.current = fingerprint;
@@ -383,12 +418,17 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** The tab a `newTab` Submit opened, and the key its create went out with:
    * a retry after a later step failed, and every later round, sends to that
    * tab, not a second one. The ref is read mid-Submit; the state renders. */
-  const markupTab = useRef<TabRow | null>(null);
+  /** The agent tab this file's card says its rounds went to, while that tab
+   * is still open: the next Submit goes there too, not to a second new tab. */
+  const [linkedTab] = useState<TabRow | null>(() => (!onSend && cardFile && newTab?.linked?.(cardFile)) || null);
+  const markupTab = useRef<TabRow | null>(linkedTab);
   const markupTabKey = useRef(crypto.randomUUID());
-  const [openedTab, setOpenedTab] = useState<TabRow | null>(null);
-  const openedAgent = useOpenedTabAgent(newTab?.projectId ?? projectId, onSend ? undefined : openedTab?.id);
-  /** What the agent the marks go to is doing: the host's, or the opened tab's. */
-  const agent: AgentSignal = onSend || !openedTab ? givenAgent : openedAgent;
+  const [openedTab, setOpenedTab] = useState<TabRow | null>(linkedTab);
+  const openedRow = useOpenedTabAgent(newTab?.projectId ?? projectId, onSend ? undefined : openedTab?.id);
+  /** What the agent the marks go to is doing, and its model: the host's, or
+   * the opened tab's. */
+  const agent: AgentSignal = onSend || !openedTab ? givenAgent : openedRow.agent;
+  const agentModel = onSend || !openedTab ? givenModel : openedRow.model;
   const [roundTick, setRoundTick] = useState(0);
   /** What the look at the file found when the agent finished. */
   const [check, setCheck] = useState<"changed" | "unchanged" | null>(null);
@@ -572,6 +612,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         setHistory(startHistory(stored.layer));
         setChanged(stale(stored, fingerprintRef.current));
         if (opensOnMarks.current && !isEmpty(stored.layer)) setMarking(true);
+        if (!isEmpty(stored.layer) || hasSent(stored.layer)) keepCardRef.current();
       }
       opensOnMarks.current = false;
       setLoaded(true);
@@ -583,7 +624,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   useEffect(() => {
     if (!loaded || !canMark) return;
     if (skipSave.current) { skipSave.current = false; return; }
-    void saveLayer(key, history.present, fingerprint).then((ok) => setStorage(ok ? "saved" : "unsaved"));
+    const layer = history.present;
+    void saveLayer(key, layer, fingerprint).then((ok) => {
+      setStorage(ok ? "saved" : "unsaved");
+      if (ok && (!isEmpty(layer) || hasSent(layer))) keepCardRef.current();
+    });
   }, [loaded, canMark, key, history.present, fingerprint]);
 
   useLayoutEffect(() => {
@@ -1151,6 +1196,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         ...(ask !== DEFAULT_MARKUP_ASK ? { ask } : {}),
         mode: direct ? "apply" : "list",
         round: roundId,
+        // No chat to send to: the reader is at the PDF, so the agent must ask
+        // through `markup_ask`, whose card shows here.
+        ...(onSend ? {} : { origin: "viewer" as const }),
       });
       prompt = answer.prompt;
       if (subagents) prompt = markupForSubagent(prompt);
@@ -1203,6 +1251,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     setUndoSheet(null);
     setSubmitted(startRound(sent === "queued", Date.now(), false, undo ? { id: undo, state: "ready" } : undefined));
     setSending(null);
+    keepCard(tabId);
   };
 
   /** A line into the agent's chat that is not a round — the note after an
@@ -1507,7 +1556,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const canReload = isPdf && canMark && (submitted !== null || sentShown) && !nothingNew;
   const roundWords = submitted && (submitted.phase === "finished"
     ? t(check === "changed" ? "mobile.markup.round.finishedChanged" : check === "unchanged" ? "mobile.markup.round.finishedUnchanged" : "mobile.markup.round.finished")
-    : t(ROUND_KEYS[submitted.phase]));
+    : submitted.phase === "working" && agentModel
+      ? t("mobile.markup.round.workingModel", { model: agentModel })
+      : t(ROUND_KEYS[submitted.phase]));
   /** Reload as the pill's own button: the agent is done, or nothing says
    * what it does — primary unless the file is known to be unchanged. */
   const pillReload = canReload && submitted && (submitted.phase === "finished" || submitted.phase === "unconfirmed");
@@ -1516,6 +1567,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const undoNow = canMark && canUndo(submitted) && asks.length === 0;
   const reloadPrimary = submitted?.phase === "finished" && check !== "unchanged" && !reloaded && (!applyNow || check === "changed");
   const glyph = submitted ? ROUND_GLYPH[submitted.phase] : undefined;
+  /** The round waits on a dialog of the tab's CLI (a permission prompt, its
+   * own question picker): the way to the chat leads, where it is answered. */
+  const asking = submitted?.phase === "question";
   /** The questions' pins, by page: at the quote's first box once the frame
    * found it, else in the page's top margin, one slot each. A picture has
    * no text to find, so its questions stay in the card. */
@@ -1711,6 +1765,12 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         {glyph && <span className={`agent-status ${glyph}`} aria-hidden="true"><span className="agent-status-glyph">{AGENT_STATUS_GLYPH[glyph]}</span></span>}
         <span className="markup-round-words">{roundWords}</span>
         {roundUntested && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        {asking && dialog && <span className="markup-round-dialog">{t("mobile.markup.round.dialog", { line: dialog })}</span>}
+        {onSend && toChat && <button className={asking ? "markup-submit markup-chat" : "outbox-action markup-chat"} onClick={() => toChat(sentName(file))}
+          title={t(asking ? "mobile.markup.answerInChatTitle" : "mobile.markup.toChatTitle")}>
+          {t(asking ? "mobile.markup.answerInChat" : "mobile.markup.toChat")}
+          {(asking ? isUntested("mobile.markup.tabDialog") : isUntested("mobile.markup.chatLink")) && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </button>}
         {applyNow && <button className={reloadPrimary ? "outbox-action markup-apply" : "markup-submit markup-apply"} disabled={reloading || sending !== null || !online}
           onClick={() => void apply()} title={t("mobile.markup.applyTitle")}>{t("mobile.markup.apply")}{isUntested("mobile.markup.apply") && <span className="untested">{t("mobile.outbox.untested")}</span>}</button>}
         {undoNow && <button className={reloadPrimary ? "outbox-action markup-apply" : "markup-submit markup-apply"} disabled={undoBusy || reloading || sending !== null || !online}
@@ -1731,10 +1791,14 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       {storage === "unsaved" && <p role="status">{t("mobile.markup.unsaved")}</p>}
       {changed && <p role="status">{t("mobile.markup.changed")}</p>}
       {marking && !onSend && newTab && !openedTab && <p role="status">{t("mobile.markup.newTabNote")}{isUntested("mobile.markup.newTab") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
-      {!onSend && newTab && openedTab && <p role="status" className="markup-opened-tab">
-        {t("mobile.markup.newTabOpened", { label: openedTab.label })}
-        <button className="outbox-action" onClick={() => newTab.show(openedTab)}>{t("mobile.markup.openNewTab")}</button>
-        {isUntested("mobile.markup.newTab") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+      {/* The tab the card's earlier rounds went to says so while marking, as
+          a tab this view opened says it from its Submit on. */}
+      {!onSend && newTab && openedTab && (openedTab !== linkedTab || marking || submitted) && <p role="status" className="markup-opened-tab">
+        {openedTab === linkedTab
+          ? t("mobile.markup.linkedTab", { label: openedTab.label })
+          : t("mobile.markup.newTabOpened", { label: openedTab.label })}
+        <button className={asking ? "markup-submit" : "outbox-action"} onClick={() => newTab.show(openedTab)}>{t("mobile.markup.openNewTab")}</button>
+        {(openedTab === linkedTab ? isUntested("mobile.markup.tabs") : isUntested("mobile.markup.newTab")) && <span className="untested">{t("mobile.outbox.untested")}</span>}
       </p>}
       {marking && leftOut > 0 && <p role="status">{t(leftOut === 1 ? "mobile.markup.leftOutOne" : "mobile.markup.leftOut", { count: leftOut })}</p>}
       {limitHit && <p role="alert">{t("mobile.markup.limit")}</p>}

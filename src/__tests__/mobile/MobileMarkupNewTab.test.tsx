@@ -134,7 +134,11 @@ describe("MarkupView · Submit with no agent tab", () => {
     const tabCalls = calls.filter((call) => call.url.startsWith("/api/v1/tabs/")).map((call) => call.url.split("?")[0]);
     expect(tabCalls.every((url) => url.startsWith("/api/v1/tabs/tab-new/"))).toBe(true);
     expect(tabCalls).toContain("/api/v1/tabs/tab-new/markup");
-    const held = calls.find((call) => call.url === "/api/v1/tabs/tab-new/held")!;
+    // Not from a chat: the desktop words the prompt so the agent asks only
+    // through `markup_ask`, whose card shows in this view.
+    const markup = calls.find((call) => call.url === "/api/v1/tabs/tab-new/markup")!;
+    expect(JSON.parse(String(markup.body)).origin).toBe("viewer");
+    const held =calls.find((call) => call.url === "/api/v1/tabs/tab-new/held")!;
     expect(JSON.parse(String(held.body))).toEqual({ message: "Look at the marks" });
     // The round's marks move to the sent side, as after a Submit into a chat.
     await waitFor(() => expect(hasSent(store.saveLayer.mock.calls[store.saveLayer.mock.calls.length - 1][1] as Layer)).toBe(true));

@@ -314,7 +314,8 @@ mod tests {
         assert_eq!(fs::metadata(root.join("docs/draft.pdf")).unwrap().modified().unwrap(), before);
         assert!(done.prompt.starts_with("I marked these changes by hand on `docs/draft.pdf`."));
         assert!(done.prompt.contains("- p3: \"use the 2024 numbers\""));
-        assert!(done.prompt.ends_with(&format!("{}\n{}", markup::DEFAULT_INSTRUCTION, markup::ask_line(None))), "desktop: default instruction and asking line, no send-back line");
+        assert!(done.prompt.ends_with(&format!("{}\n{}", markup::DEFAULT_INSTRUCTION, markup::ask_line(None, markup::Origin::Viewer))), "desktop: default instruction and its viewer asking line, no send-back line");
+        assert!(done.prompt.contains(markup::VIEWER_ASK_ONLY) && !done.prompt.contains("if you have it"), "the desktop viewer is never the chat");
         assert!(!done.prompt.contains(&root.to_string_lossy().to_string()), "no absolute path in the prompt");
     }
 
@@ -326,7 +327,7 @@ mod tests {
         assert!(done.prompt.ends_with(&format!("Fix only the typos.\n{}", markup::ASK_LINES[4])));
         assert!(!done.prompt.contains(markup::DEFAULT_INSTRUCTION));
         let blank = submit_in_with(&root, &path, vec![page(1)], Some("  \n ".into()), None, None).unwrap();
-        assert!(blank.prompt.ends_with(&format!("{}\n{}", markup::DEFAULT_INSTRUCTION, markup::ask_line(None))));
+        assert!(blank.prompt.ends_with(&format!("{}\n{}", markup::DEFAULT_INSTRUCTION, markup::ask_line(None, markup::Origin::Viewer))));
         let before = inbox_names(&root).len();
         let long = "x".repeat(markup::MAX_INSTRUCTION + 1);
         assert_eq!(submit_in_with(&root, &path, vec![page(1)], Some(long), None, None), Err("invalid_markup".into()));
@@ -357,6 +358,8 @@ mod tests {
             ask: None,
             round: None,
             mode: markup::Mode::List,
+            // The phone's markup view without a chat to send to, like the desktop's.
+            origin: markup::Origin::Viewer,
         };
         markup::validate(&phone).unwrap();
         let sidecar = markup::submit(&root, &markup::ResolvedSource::Files("docs/draft.pdf".into()), &phone, false).unwrap();
@@ -465,6 +468,7 @@ mod tests {
             sources: &Default::default(),
             instruction: None,
             ask: None,
+            origin: markup::Origin::Chat,
             round: None,
             send_back: true,
         });

@@ -24,6 +24,16 @@ sentence then costs nothing. It used to be one fixed sentence in
 `DEFAULT_INSTRUCTION` ("if a mark leaves you a choice, ask"), and agents read
 it as a question per mark; the dial exists so a long markup is not a quiz.
 
+That "if you have it" wording is for a round sent from an agent tab's chat,
+where the reader also sees a question asked in prose. A round started
+elsewhere (`markup::Origin::Viewer`: every desktop viewer Submit, and the
+phone's `MarkupView` with no `onSend`, sent as `origin: "viewer"`) gets
+`VIEWER_ASK_LINES` + `VIEWER_ASK_ONLY` instead: ask only with `markup_ask`,
+never in the reply or the CLI's own picker (AskUserQuestion), and without
+the tool say so and list the questions in the reply. Agents told "if you have
+it" often asked in their chat, which the reader at the PDF never saw. An
+older phone bundle sends no `origin`: the chat wording.
+
 ## Why it is shaped this way
 
 - **The ask does not block; the answer is a prompt.** A person needs
@@ -230,8 +240,19 @@ automatically" rule stands.
   the file browser is switched on (`file_row`); otherwise it names the file.
 - Pictures get no pins. A picture opened from the banner needs a tap on Mark
   up before the card shows.
-- Out of v1: on-screen CLI question dialogs inside the markup view, mark ids,
-  remote/VM/container tabs, a push notification for a new ask.
+- Out of v1: mark ids, remote/VM/container tabs, a push notification for a
+  new ask.
+- **A dialog of the CLI's own is never answered from the markup view** — a
+  permission prompt (Allow / Deny), the CLI's question picker. Approving a
+  command needs the whole dialog and what it was drawn onto, which only the
+  tab shows, and the screen parse that would carry it is a guess per CLI
+  version. While a round waits on one, the pill shows its question line
+  read-only (`submitState` `dialogLine`) and a leading way there: desktop
+  **Answer in tab** (`showTarget`; the line comes from
+  `lib/agents/tabDialog.ts`, which redraws the hidden tab's retained output —
+  `pty_scrollback` — offscreen, since a hidden pane's xterm is not fed),
+  phone **Answer in chat** (`toChat`; the Focus screen's own `liveQuestion`)
+  or, for a round sent to a new tab, its **Open tab**.
 
 ## User-run live QA
 

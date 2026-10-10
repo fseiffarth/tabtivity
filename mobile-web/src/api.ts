@@ -1153,8 +1153,13 @@ export interface MarkupPageBody { n: number; size: [number, number]; marks: Mark
  * its asking dial (0–4), absent at the default stop; `mode` what **Apply
  * marks directly** asks for (absent = `list`); `round` this Submit's id
  * (`mintRound`), which the prompt names its marks under for the agent's
- * ticks (`markup_done`, `docs/markup_tick_approve_plan.md`). */
-export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string; ask?: number; mode?: MarkupMode; round?: string }
+ * ticks (`markup_done`, `docs/markup_tick_approve_plan.md`); `origin`
+ * `viewer` when the markup view has no agent chat to send to, so the prompt
+ * tells the agent to ask only through `markup_ask` (absent = `chat`). */
+export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string; ask?: number; mode?: MarkupMode; round?: string; origin?: MarkupOrigin }
+/** Where a markup round was started: an agent tab's chat, or a viewer whose
+ * reader is looking at the PDF rather than the chat (`markup::Origin`). */
+export type MarkupOrigin = "chat" | "viewer";
 /** `apply`: the agent makes the changes and an undo snapshot backs them;
  * `list`: it lists them first (**Make these changes**). */
 export type MarkupMode = "apply" | "list";

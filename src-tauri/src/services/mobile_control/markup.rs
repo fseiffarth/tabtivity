@@ -73,6 +73,21 @@ pub enum Mode {
     Apply,
 }
 
+/// Where a Submit's round was started, which decides where the agent's
+/// questions must go (`ask_line`): from an agent tab's chat (`chat`, the
+/// phone's markup view with somewhere to send to) the reader is in the chat
+/// and sees a question asked there; from a viewer (`viewer`: the desktop PDF
+/// viewer, the phone's project files with a new tab) the reader is looking at
+/// the PDF, so a question asked in the chat goes unseen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    /// Absent on the wire (an older phone bundle): today's wording.
+    #[default]
+    Chat,
+    Viewer,
+}
+
 /// Where an `apply` Submit's undo snapshot goes and whose it is
 /// (`services::markup_rounds`) — not the view's own round id
 /// (`MarkupRequest::round`).
@@ -95,6 +110,21 @@ pub const ASK_LINES: [&str; 5] = [
     "Ask me only about a mark you cannot act on at all without my answer — with the `markup_ask` tool if you have it, giving the page and the words the mark is on. Decide everything else yourself and say what you decided.",
     "Do not ask me anything about the marks. Decide every unclear mark yourself and list what you decided and why.",
 ];
+/// `ASK_LINES` for a round started outside the chat (`Origin::Viewer`), stops
+/// 0–3 (stop 4 asks nothing, from anywhere): the same dial, but the question
+/// must come as a `markup_ask` card, followed by `VIEWER_ASK_ONLY`. Agents
+/// given "if you have it" often asked in their reply or with their CLI's own
+/// question picker instead, which the reader at the PDF never sees.
+pub const VIEWER_ASK_LINES: [&str; 4] = [
+    "Ask me about every mark before you count it as a change, with the `markup_ask` tool (give the page and the words the mark is on, up to four marks per ask).",
+    "If a mark leaves you any choice or you are not sure what it asks, ask me with the `markup_ask` tool, giving the page and the words the mark is on.",
+    "Ask me only about a mark you cannot read or that leaves a real choice where a wrong guess would change what the text says — with the `markup_ask` tool, giving the page and the words the mark is on. For every other mark, take the obvious reading and say which one you took.",
+    "Ask me only about a mark you cannot act on at all without my answer — with the `markup_ask` tool, giving the page and the words the mark is on. Decide everything else yourself and say what you decided.",
+];
+/// What follows a `VIEWER_ASK_LINES` line: where the reader is, and what to do
+/// without the tool (a remote tab, the switch off) — say so and list the
+/// questions in the reply, the one place left.
+pub const VIEWER_ASK_ONLY: &str = "I am looking at the PDF, not at this chat, so ask only with `markup_ask` and then end your turn — never ask in your reply, and never with your own question tool or picker (such as AskUserQuestion). If you do not have the `markup_ask` tool, say so and list your questions in your reply.";
 /// The dial's stop while the reader has not moved it.
 pub const DEFAULT_ASK: u8 = 2;
 /// The longest round id a view may mint for a Submit (`valid_round`).
@@ -120,9 +150,16 @@ fn tick_line(round: &str, picture: bool) -> String {
 }
 
 /// The asking line for a dial stop; `None` (or out of range, which
-/// `validate_body` refuses before this is reached) is `DEFAULT_ASK`.
-pub fn ask_line(ask: Option<u8>) -> &'static str {
-    ASK_LINES.get(usize::from(ask.unwrap_or(DEFAULT_ASK))).copied().unwrap_or(ASK_LINES[usize::from(DEFAULT_ASK)])
+/// `validate_body` refuses before this is reached) is `DEFAULT_ASK`. A round
+/// started outside the chat (`Origin::Viewer`) gets the stop's
+/// `VIEWER_ASK_LINES` wording and `VIEWER_ASK_ONLY`, unless it never asks.
+pub fn ask_line(ask: Option<u8>, origin: Origin) -> String {
+    let stop = usize::from(ask.unwrap_or(DEFAULT_ASK));
+    let stop = if stop < ASK_LINES.len() { stop } else { usize::from(DEFAULT_ASK) };
+    match (origin, VIEWER_ASK_LINES.get(stop)) {
+        (Origin::Viewer, Some(line)) => format!("{line} {VIEWER_ASK_ONLY}"),
+        _ => ASK_LINES[stop].to_string(),
+    }
 }
 /// How far outside its page a mark may reach, in page units — a stroke that
 /// leaves the edge by a hair is still the reader's.
@@ -244,6 +281,10 @@ pub struct MarkupRequest {
     /// `list` (`docs/pdf_markup_direct_apply_plan.md` §2.1).
     #[serde(default)]
     pub mode: Mode,
+    /// Where the round was started (`Origin`): the phone sends `viewer` when
+    /// its markup view has no chat to send to; absent is `chat`.
+    #[serde(default)]
+    pub origin: Origin,
 }
 
 /// Why a submit was refused, as the phone's wire code.
@@ -576,6 +617,7 @@ fn bake_and_prompt(
         sources: &sources,
         instruction,
         ask: request.ask,
+        origin: request.origin,
         round: request.round.as_deref(),
         send_back,
     });
@@ -763,6 +805,8 @@ pub fn submit_local_with_undo(
         ask,
         round,
         mode: undo.mode,
+        // The desktop viewer is never the agent's chat.
+        origin: Origin::Viewer,
     };
     validate_body(&request)?;
     let mut total = 0usize;
@@ -804,6 +848,9 @@ pub struct Prompt<'a> {
     pub round: Option<&'a str>,
     /// The asking dial's stop (`ask_line`); `None` is `DEFAULT_ASK`.
     pub ask: Option<u8>,
+    /// Where the round was started: outside the chat, questions go only
+    /// through `markup_ask` (`ask_line`).
+    pub origin: Origin,
     pub send_back: bool,
 }
 
@@ -812,7 +859,9 @@ pub struct Prompt<'a> {
 /// known about, which the page's picture shows anyway.
 ///
 /// `index` is the mark's place in its page's `marks`, given when the Submit
-/// has a round: the line then names it `p<page> m<index + 1>` for `markup_done`.
+/// has a round: the line then names it `p<page> m<index + 1>` for `markup_done`,
+/// and a stroke nothing is known about is listed too, pointing at the picture —
+/// unlisted, it has no reference and the agent could never tick it off.
 fn mark_line(n: Option<u32>, index: Option<usize>, mark: &Mark, anchor: Option<&Anchor>, source: Option<&String>) -> Option<String> {
     let words = anchor.map(|a| format!("\"{}\"", a.words));
     let what = match mark {
@@ -828,6 +877,7 @@ fn mark_line(n: Option<u32>, index: Option<usize>, mark: &Mark, anchor: Option<&
         Mark::Box { .. } => match words {
             Some(words) => format!("highlight on {words}"),
             None if source.is_some() => "highlight".into(),
+            None if index.is_some() => "highlight (see the page picture)".into(),
             None => return None,
         },
         Mark::Ink { .. } => match (anchor, words) {
@@ -842,6 +892,7 @@ fn mark_line(n: Option<u32>, index: Option<usize>, mark: &Mark, anchor: Option<&
                 }
             ),
             _ if source.is_some() => "pen mark".into(),
+            _ if index.is_some() => "pen mark (see the page picture)".into(),
             _ => return None,
         },
     };
@@ -921,7 +972,7 @@ pub fn prompt(parts: &Prompt) -> String {
         "What each mark is on, in the page's own words, and the source line SyncTeX gives for it:"
     };
     let instruction = parts.instruction.map(str::trim).filter(|text| !text.is_empty());
-    let mut tail = vec![instruction.unwrap_or(DEFAULT_INSTRUCTION).to_string(), ask_line(parts.ask).to_string()];
+    let mut tail = vec![instruction.unwrap_or(DEFAULT_INSTRUCTION).to_string(), ask_line(parts.ask, parts.origin)];
     if let Some(round) = parts.round.filter(|_| !marks.is_empty()) {
         tail.push(tick_line(round, parts.picture));
     }
@@ -1069,7 +1120,7 @@ mod tests {
     }
 
     fn request(source: MarkupSource, pages: Vec<MarkupPage>) -> MarkupRequest {
-        MarkupRequest { source, pages, picture: None, instruction: None, ask: None, round: None, mode: Mode::List }
+        MarkupRequest { source, pages, picture: None, instruction: None, ask: None, round: None, mode: Mode::List, origin: Origin::Chat }
     }
 
     fn project() -> tempfile::TempDir {
@@ -1243,7 +1294,7 @@ mod tests {
     #[test]
     fn the_prompt_is_deterministic_and_ordered() {
         let pages = vec![page(7, concat!(".", crate::app_slug!(), "/inbox/b.png")), page(3, concat!(".", crate::app_slug!(), "/inbox/a.png"))];
-        let parts = Prompt { source: "docs/paper/draft.pdf", picture: false, marked: Some(concat!(".", crate::app_slug!(), "/inbox/m.pdf")), failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: None, send_back: true };
+        let parts = Prompt { source: "docs/paper/draft.pdf", picture: false, marked: Some(concat!(".", crate::app_slug!(), "/inbox/m.pdf")), failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: None, origin: Origin::Chat, send_back: true };
         let text = prompt(&parts);
         assert_eq!(text, prompt(&parts));
         assert_eq!(
@@ -1268,11 +1319,14 @@ mod tests {
         let mut seventh = page(7, concat!(".", crate::app_slug!(), "/inbox/b.png"));
         seventh.marks = vec![note("three")];
         let pages = vec![seventh, third];
-        let mut parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: Some("abc123"), send_back: false };
+        let mut parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: Some("abc123"), origin: Origin::Chat, send_back: false };
         let text = prompt(&parts);
-        // The unread stroke is not listed, yet keeps its place in the count:
+        // The unread stroke is listed by its place, pointing at the picture —
         // the views map `m<n>` to index n − 1 of the page's submitted marks.
-        assert!(text.contains("- p3 m1: \"one\"\n- p3 m3: \"two\"\n- p7 m1: \"three\"\n"), "{text}");
+        assert!(
+            text.contains("- p3 m1: \"one\"\n- p3 m2: pen mark (see the page picture)\n- p3 m3: \"two\"\n- p7 m1: \"three\"\n"),
+            "{text}"
+        );
         assert!(text.contains("This is markup round `abc123`; each mark above has its reference (`p<page> m<mark>`)."), "{text}");
         // A picture's marks carry no page; the agent is told they are page 1.
         let mut picture = page(1, concat!(".", crate::app_slug!(), "/inbox/c.png"));
@@ -1364,7 +1418,7 @@ mod tests {
     #[test]
     fn the_phone_instruction_replaces_the_default() {
         let pages = vec![page(1, concat!(".", crate::app_slug!(), "/inbox/a.png"))];
-        let mut parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: Some("  Fix only the typos.\nAsk me first.  "), ask: None, round: None, send_back: false };
+        let mut parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: Some("  Fix only the typos.\nAsk me first.  "), ask: None, round: None, origin: Origin::Chat, send_back: false };
         let text = prompt(&parts);
         assert!(text.ends_with(&format!("Page 1: @.{}/inbox/a.png\nFix only the typos.\nAsk me first.\n{}", crate::app_slug!(), ASK_LINES[2])), "{text}");
         assert!(!text.contains(DEFAULT_INSTRUCTION));
@@ -1376,7 +1430,7 @@ mod tests {
     fn the_ask_dial_picks_its_line_after_the_instruction() {
         let pages = vec![page(1, concat!(".", crate::app_slug!(), "/inbox/a.png"))];
         for (stop, line) in ASK_LINES.iter().enumerate() {
-            let parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, round: None, ask: Some(stop as u8), send_back: true };
+            let parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, round: None, ask: Some(stop as u8), origin: Origin::Chat, send_back: true };
             let text = prompt(&parts);
             assert!(text.contains(&format!("{DEFAULT_INSTRUCTION}\n{line}\n")), "{text}");
             assert_eq!(ASK_LINES.iter().filter(|other| text.contains(*other)).count(), 1, "one asking line per prompt");
@@ -1387,6 +1441,41 @@ mod tests {
         assert_eq!(validate(&req), Ok(()));
         req.ask = Some(5);
         assert_eq!(validate(&req), Err(MarkupError::Invalid));
+    }
+
+    #[test]
+    fn a_round_from_outside_the_chat_asks_only_through_markup_ask() {
+        let pages = vec![page(1, concat!(".", crate::app_slug!(), "/inbox/a.png"))];
+        for (stop, chat_line) in ASK_LINES.iter().enumerate() {
+            let mut parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, round: None, ask: Some(stop as u8), origin: Origin::Viewer, send_back: false };
+            let viewer = prompt(&parts);
+            parts.origin = Origin::Chat;
+            let chat = prompt(&parts);
+            assert!(chat.ends_with(&format!("{DEFAULT_INSTRUCTION}\n{chat_line}")), "the chat's wording is unchanged: {chat}");
+            match VIEWER_ASK_LINES.get(stop) {
+                Some(line) => {
+                    assert!(viewer.ends_with(&format!("{DEFAULT_INSTRUCTION}\n{line} {VIEWER_ASK_ONLY}")), "{viewer}");
+                    assert!(!viewer.contains("if you have it") && !viewer.contains("rather than in prose"), "{viewer}");
+                    assert!(line.contains("markup_ask"), "every asking stop names the tool");
+                }
+                // Never asking is the same from anywhere.
+                None => assert_eq!(viewer, chat),
+            }
+        }
+        assert_eq!(VIEWER_ASK_LINES.len() + 1, ASK_LINES.len(), "one viewer line per asking stop");
+        for words in ["never ask in your reply", "AskUserQuestion", "say so and list your questions in your reply"] {
+            assert!(VIEWER_ASK_ONLY.contains(words), "{words}");
+        }
+    }
+
+    #[test]
+    fn the_origin_is_chat_unless_the_phone_says_viewer() {
+        let wire = r#"{"source":{"outbox":"20261001-090000-paper.pdf"},"pages":[]}"#;
+        let older: MarkupRequest = serde_json::from_str(wire).unwrap();
+        assert_eq!(older.origin, Origin::Chat, "an older phone bundle keeps today's wording");
+        let viewer: MarkupRequest = serde_json::from_str(&wire.replace("\"pages\"", "\"origin\":\"viewer\",\"pages\"")).unwrap();
+        assert_eq!(viewer.origin, Origin::Viewer);
+        assert!(serde_json::from_str::<MarkupRequest>(&wire.replace("\"pages\"", "\"origin\":\"desk\",\"pages\"")).is_err());
     }
 
     #[test]
