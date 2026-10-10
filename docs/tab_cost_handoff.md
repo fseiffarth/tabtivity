@@ -3,6 +3,9 @@
 Plan: `docs/tab_cost_plan.md`. Branch `perf` (worktree
 `.claude/worktrees/perf`). Nothing here was run live.
 
+Status: T1–T3 implemented + reviewed, final review done 2026-10-10. Not
+landed on `develop`, not run live.
+
 ## T1 (implementer)
 
 **Commit:** `79c9080a` — Show what each tab holds and warn when many PDFs are
@@ -387,3 +390,126 @@ Range `e322f1c7..6fe52775` (main commit `1ed60f08`), bugs only.
   would be overwritten with `true`. No such writer exists at startup today,
   so not fixed; a backend-side "set if absent" would close it.
 - Not run live (QA row 2417 stands).
+
+## Final review (2026-10-10)
+
+Whole range `7746648d..ee2262a0`: the S13 follow-ups and their review
+(`docs/performance_handoff.md` `### S13`) plus T1–T3 and their reviews.
+Cross-step integration, leftovers and bookkeeping; nothing run live.
+
+**Checked**
+- T1 readout × T2 live scrollback × S10 × S13: `terminalCost` reads the PTY
+  id `<scope>:<key>` that `tabTerminalSpawn` gives every tab pane (box scopes
+  included); an S10 sleeping pane reads "asleep" before any registry look, and
+  its wake builds a fresh xterm from `scrollbackRowsRef`, so the readout's cap is
+  the current setting; the live-cap effect is a no-op on an unbuilt or sleeping
+  pane; an S13 failed-spawn pane keeps its xterm (and hold) and reads as a live
+  terminal with its error text. Remote/Host-session holds have no xterm →
+  "Not drawn yet", never a size.
+- T1 PDF registry × S13 `texPanes` × §4.3 × popouts: TeX sub-pane viewers
+  register under `<tab>#<path>` and sum under the tab (`pdfCostFor`'s `#`
+  prefix cannot match `pdf-10` for `pdf-1`); `untabbedPdfCost` splits the same
+  key. The §4.3 release unmounts `PdfCanvas` → entry gone; S13's
+  `splitSubPaneKey` mirror hold keeps a popped-out workspace's main PDF pane
+  loaded, so it is counted there (as T1 documented for plain PDFs). Registries
+  and the toast host are per window; popouts never toast, the Settings list is
+  main-window only. Sub-pane positions staged at hide are not flushed by
+  `FileViewerPane`'s per-key flush, but a remount seeds from
+  `pendingViewerState` and every save folds them (`savedViewerState`) — no loss.
+- T3 × T1/T2: nothing T1/T2 added sits behind an experimental flag. All eight
+  `EXPERIMENTAL_FLAGS` have a Settings switch (Deck presenter was the missing
+  one). No direct `settings.debug` gate left besides the project-settings
+  Debug section (deliberate); Rust reads every flag through `experimental()`.
+- Settings page: search keys for `settings.shellScrollback`,
+  `settings.tabCosts`, `settings.deckPresenter`; the two new Performance rows
+  sit after the sleep-tabs row; all five new pills (`tabCost.hover`,
+  `settings.tabCosts`, `settings.shellScrollback`,
+  `settings.debugNoExperiments`, `settings.deckPresenter`) render and have
+  `untested.ts` rows (`npm run untested -- list` shows them).
+- Leftovers: no TODO/FIXME, debug logging, `any` or `dbg!` in added lines;
+  every new export is used in production code or is a test seam
+  (`_clearTabCostForTest`, `TEX_PANES_CAP`, `explicitExperimentalPatch`).
+- i18n: all 31 added/rewritten English keys exist in de/es/fr/it;
+  `experimentalHelpBold` is gone everywhere; no hard-coded display text in
+  the added JSX.
+- File maps: rows for `tabCost.ts`, `TabCostList.tsx`, `PdfLoadWarningHost.tsx`,
+  `lib/terminal/scrollback.ts`, `experimental.ts`, `TerminalView.tsx`,
+  `terminalSpawn.ts`, `PdfViewer.tsx`, `tabs.ts`, backend `settings.rs`. The
+  `PdfLoadWarningHost.tsx` row predated the T1/T2 review fixes (own toast slot,
+  grace-end look); updated.
+- QA rows 2414 (S13.1–4), 2415 (T1.1–3), 2416 (T2.1), 2417 (T3.1–2): every
+  manual box has the four platform pairs.
+- Persisted JSON: `shell_scrollback_rows` and `experimental_explicit` are
+  named Rust fields, omitted when unset, parsed from files without them
+  (Rust tests); an older backend carries both in `extra`. `viewerState.texPanes`
+  rides the backend's opaque `viewerState`; an older frontend's
+  `{ ...viewerState, ...patch }` writes keep it.
+- Quit: the only new timers are `PdfLoadWarningHost`'s grace-end and toast
+  timeouts (cleared on unmount) and the existing one-shot viewer flush; no new
+  process, listener or interval.
+
+**Fixes**
+
+| Commit | Bug | Test |
+|---|---|---|
+| — | No confirmed bug found. | — |
+
+Doc only: the `PdfLoadWarningHost.tsx` file-map row; status lines here and in
+the plan.
+
+**Gates** (worktree, at `ee2262a0` + this doc commit)
+- `npm run build`: ok (tsc + both bundles).
+- `npm test -- --reporter=dot`: 776 files / 7831 tests, all pass.
+- `npm run lint`: 0 errors / 28 warnings (unchanged).
+- `cargo test -q`: all pass (lib 3657 passed, 3 ignored). `cargo clippy
+  --all-targets -D warnings`: clean. Windows `cargo check --target
+  x86_64-pc-windows-msvc`: ok.
+- `scripts/brand-check.sh`, `scripts/privacy-check.sh 7746648d..HEAD`,
+  `git diff --check 7746648d HEAD`: ok.
+
+**Flagged for user — consolidated (T1–T3 implementer/reviewer and S13; fixed
+ones marked)**
+- Nothing in this range was run live: QA rows 2414–2417 are the manual checks,
+  including the `+108px` toast slot (T1.3 after a project switch) and the 0.9
+  glass fill (S13.4, picked without a live look).
+- ~~Hover row showed the old 5,000 cap until T2~~ — fixed by T2 (`a5ef5292`).
+- ~~Toast sat on the connection toast~~ — fixed `4c083d49`.
+- ~~A crossing of 8 inside the 2-min grace never toasted on an unmoved count~~
+  — fixed `5501a9da` (grace-end look) and `d30eec1e` (timer firing early).
+- ~~"1 PDFs" / "1 more tabs" / "1 pages"~~ — fixed `5501a9da`.
+- ~~Help text hard-coded the agents' "5,000"~~ — fixed `a1bd6236`.
+- ~~No test drove AppShell's load → migrate wiring~~ — added `ee2262a0`.
+- ~~HPC connect-then-spawn retry left `spawnState` "failed"~~ — fixed
+  `34459a71`.
+- Threshold 8 / re-arm 5 / grace 2 min are constants, not settings.
+- "N more tabs hold nothing loaded" also counts asleep terminals (program
+  running) and popped-out tabs — wording only.
+- A PDF or TeX workspace tab whose viewer has not mounted yet (never shown its
+  PDF) reads "Unloaded — reloads when shown".
+- New (final review): the toast's second line is 90–112 characters in the five
+  languages and `.project-switch-toast.multiline` is `white-space: pre` with
+  an ellipsis, so a window narrower than roughly 950 px clips it. Cosmetic,
+  not changed.
+- Lowering the shell scrollback trims open shells at once; raising it does not
+  bring lines back (by design, said in the help).
+- A shell tab running an agent CLI through the shim keeps the shell cap.
+- A hand-edited non-`u32` `shell_scrollback_rows` makes the backend refuse the
+  whole `settings.json`, like every other `Option<u32>` field.
+- `terminalViewKind` tests `if (p.kind)`: a persisted `kind: ""` (never
+  written by the app) is now classed by its command.
+- On an older backend (stale window) Rust `experimental()` ignores the marker:
+  a marked profile that turns Debug on later with `copilot_completion` unset
+  would pass the old binary's Copilot policy.
+- A Debug-mode profile keeps every migrated experiment ticked; Debug off no
+  longer turns them off (user decision).
+- The migration's patch comes from the first `get_settings` snapshot; a write
+  from another window or the phone in the few ms before it lands would be
+  overwritten with `true` (no such writer at startup today; a backend
+  "set if absent" would close it).
+- S13: a sub-pane's per-tab settings (child `fontSize`, AI toggles,
+  breakpoints) now persist in `texPanes` too; entries for files no longer in
+  the structure stay until they age out of the 32 cap.
+- S13: every sub-pane flush re-renders the TeX workspace once (≤ every 5 s
+  while scrolling), not measured.
+- S13: a failed-spawn pane stays awake until relaunch/close, including a
+  declined HPC question; a later Connect does not retry that tab (by decision).

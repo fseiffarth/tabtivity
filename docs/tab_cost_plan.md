@@ -1,8 +1,10 @@
 # Tab cost readout, PDF warning, scrollback, experimental default — plan
 
-Status: plan only (2026-10-09, reviewed 2026-10-10). Not implemented, not run
-live. Follows the four items of `docs/performance_plan.md` §10 on branch `perf`
-(S1–S13 landed). Code read at `df4df1fa`; line refs are from there.
+Status: implemented + reviewed (T1–T3, each step reviewed; final review
+2026-10-10, `docs/tab_cost_handoff.md`) on branch `perf`. Not landed on
+`develop`, not run live. Follows the four items of
+`docs/performance_plan.md` §10 on branch `perf` (S1–S13 landed).
+Code read at `df4df1fa`; line refs are from there.
 
 ## Why
 
