@@ -115,3 +115,84 @@ and placeholders in all five files; both untested ids rendered as pills.
   reloads when shown" though it never loaded one (plan's rule for `texworkspace`).
 - New toast slot position (`+108px`) is computed from the CSS, not seen live:
   QA row 2415 should glance at a project switch that lands on ≥ 8 PDFs.
+
+## T2 (implementer)
+
+**Commits** (base `8906ccc4`)
+- `5501a9da` — T1 leftovers: the loaded-PDF notice looks once when the
+  start-up grace ends; singular forms for the cost list/readout.
+- `a5ef5292` — Shell scrollback setting (plan step 2).
+
+**T1 leftovers**
+- Grace end: `pdfWarnGraceLeft(nowMs)` in `tabCost.ts` (ms left, or null
+  once over). `PdfLoadWarningHost` sets one `setTimeout` for that long at
+  mount (none in a window older than the grace), which runs the same
+  `pdfWarnStep` on `loadedPdfCount()`; cleared on unmount. A crossing already
+  warned is disarmed, so no double notice. Tests: three new cases in
+  `PdfLoadWarningHost.test.tsx` (shows once at grace end on an unmoved
+  crossing; quiet if the count fell below 8; no timer when past the grace),
+  plus `pdfWarnGraceLeft` in `TabCost.test.ts`.
+- Plurals: the codebase's pattern is a separate `…One` key picked with
+  `n === 1 ? "…One" : "…"` (no ICU). Added `settings.tabCostsOthersOne`,
+  `settings.tabCostsUntabbedOne` and — a sibling of the same bug —
+  `tabCost.pdfOne` ("1 page") in all five files. `TabCostList.test.tsx`
+  assertions now expect "1 more tab holds…" / "1 PDF open…"; `TabCost.test.ts`
+  checks "1 page" and that every dictionary has a distinct `One` form.
+
+**T2 choices**
+- `src/lib/terminal/scrollback.ts`: `SHELL_SCROLLBACK_DEFAULT` 2000,
+  `SHELL_SCROLLBACK_CHOICES` [1000, 2000, 5000, 10000], `…_MIN`/`…_MAX`
+  100/50000, `AGENT_SCROLLBACK_ROWS` 5000, `shellScrollbackRows` (non-finite →
+  default, else floor + clamp), `scrollbackRowsFor(kind, setting)`.
+- The shared kind helper is `terminalViewKind({ kind, cmd, env })` in
+  `lib/terminal/terminalSpawn.ts` (beside the spawn identity, which already
+  imports `stores/tabs`). `TerminalView` computes `paneKind` once at the top
+  of the component; the spawn effect calls the same helper (it cannot read a
+  render value without adding a dep). The old duplicated derivation at the
+  render site is gone, as are the now-unused `cmdToKind`/`envName` imports.
+- `TerminalView`: `scrollbackRowsRef` read in `buildTerm`; a separate
+  `useEffect([scrollbackRows])` sets `termRef.current.options.scrollback`. Not
+  in the spawn deps, not in `TerminalSpawnInputs`/`terminalSpawnKey`.
+- Settings row after the sleep-tabs row, same `SettingRow` + `Dropdown`
+  shape; value shown is the effective (clamped) cap, so a hand-edited value
+  off the list shows unselected (as the sleep-tabs row does). Search key
+  `settings.shellScrollback` added. Help text says agents keep 5,000 and a
+  lower value drops open shells' oldest lines at once.
+- Readout: `terminalCost` already reads `term.options.scrollback`, so "N of M
+  lines" is the real cap now; `TerminalScrollback.test.tsx` pins it (2,000,
+  then 1,000 after a live change). QA 2415 T1.1 text updated.
+- Rust: `shell_scrollback_rows: Option<u32>` named field with
+  `#[serde(default, skip_serializing_if)]` after `sleep_tabs_after_min`; test
+  `shell_scrollback_rows_defaults_absent_and_round_trips` also parses an old
+  settings JSON without the key.
+- UntestedTag `settings.shellScrollback` + `untested.ts` row; filemap rows:
+  `TerminalView.tsx` clause, `terminalSpawn.ts` clause, new
+  `lib/terminal/scrollback.ts` row; QA row 2416 (T2.1, four platform pairs).
+
+**Gotchas**
+- The xterm mock in `TerminalSleepWake.test.tsx` ignores constructor options
+  and has no `buffer.normal`; `TerminalScrollback.test.tsx` has its own mock
+  that keeps `options` and gives `buffer.normal` so `terminalCost` works.
+- `seq 1 5000` in a 2,000-line shell starts near 3000 minus the screen
+  height: xterm keeps the viewport on top of the scrollback (QA text says so).
+
+**Gates** (worktree, after `a5ef5292`)
+- `npm run build`: ok.
+- `npm test -- --reporter=dot`: 772 files / 7806 tests, all pass (baseline
+  770 / 7789; part A +6 tests → 7795, part B +2 files / +11 tests).
+- `npm run lint`: 0 errors / 28 warnings (unchanged).
+- `cargo test -q`: all pass (lib 3654 passed, 3 ignored). `cargo clippy
+  --all-targets -D warnings`: clean. Windows `cargo check --target
+  x86_64-pc-windows-msvc`: ok.
+- `scripts/brand-check.sh`, `scripts/privacy-check.sh`, `git diff --check`: ok.
+- `npm run backend:stale`: the open window and its embedded phone bundle
+  predate the current build (it is not running this branch). An older backend
+  keeps `shell_scrollback_rows` in `Settings.extra`, so it round-trips; the
+  setting itself is read entirely by the frontend.
+
+**Flagged for user**
+- Not run live. QA rows 2415 (updated) and 2416 are the manual checks.
+- Lowering the setting trims open shells' history at once (by design, said in
+  the help text); raising it does not bring trimmed lines back.
+- Help text names "5,000" for agents as a literal in all five languages; if
+  `AGENT_SCROLLBACK_ROWS` ever changes, the text must too.
