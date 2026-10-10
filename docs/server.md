@@ -16,7 +16,9 @@ Read this first; keep it current when a decision or an open point changes.
   past the branch base, incl. #2339 and the desktop's own agent API keys) is
   merged into `hosted`; 39 conflicted files, how each was resolved is in
   `hosted_handoff.md` § "Merge `develop` → `hosted`". The other direction,
-  `hosted` → `develop`, is still owed (#2386).
+  `hosted` → `develop`, is still owed (#2386). Merged again 2026-10-10
+  (`develop` `6754d5cd`, 13 conflicted files; § "Merge `develop` → `hosted`
+  (2026-10-10)").
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
 

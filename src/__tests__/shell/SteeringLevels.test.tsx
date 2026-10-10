@@ -154,6 +154,48 @@ describe("steering levels", () => {
     expect(steering().active).toBe(false);
   });
 
+  it("Shift+←/→ on the tabs switches the subwindow and stays on the tabs", () => {
+    const { a, b } = twoPanes();
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "F", shiftKey: true });
+    expect(useTabsStore.getState().focusedGroupId).toBe(b);
+    expect(steering().level).toBe("tabs");
+    press({ key: "ArrowLeft", shiftKey: true });
+    expect(useTabsStore.getState().focusedGroupId).toBe(a);
+    expect(steering().level).toBe("tabs");
+  });
+
+  it("←/→ on the tabs run on past the last tab into the next subwindow and back", () => {
+    const { a, b } = twoPanes();
+    const [a1, a2] = allGroups(useTabsStore.getState().layout).find((g) => g.id === a)!.tabKeys;
+    const [b1] = allGroups(useTabsStore.getState().layout).find((g) => g.id === b)!.tabKeys;
+    useTabsStore.getState().setGroupActive(a, a2);
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "ArrowRight" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
+    expect(steering().level).toBe("tabs");
+    press({ key: "s" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a2 });
+    press({ key: "s" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a1 });
+    // Before the first tab of all: the last subwindow's last tab.
+    press({ key: "s" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
+  });
+
+  it("carries a fullscreen subwindow along when the focus moves", () => {
+    const { a, b } = twoPanes();
+    useTabsStore.getState().toggleFullscreen(a);
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "ArrowUp" });
+    press({ key: "ArrowRight" });
+    expect(useTabsStore.getState().focusedGroupId).toBe(b);
+    expect(useTabsStore.getState().fullscreenGroupId).toBe(b);
+  });
+
   it("leaves Shift+Space to the text in the middle of a typing burst", () => {
     vi.useFakeTimers();
     try {
@@ -262,7 +304,7 @@ describe("steering levels", () => {
     }
   });
 
-  it("digits on the project level jump stations and stay in the mode", () => {
+  it("digits on the project level jump stations and land on its tabs", () => {
     render(<Harness />);
     const setActive = vi.fn().mockResolvedValue(undefined);
     useProjectsStore.setState({
@@ -274,7 +316,36 @@ describe("steering levels", () => {
     press({ key: "ArrowUp" });
     press({ key: "2" });
     expect(setActive).toHaveBeenCalledWith("x");
-    expect(steering()).toMatchObject({ active: true, level: "projects" });
+    expect(steering()).toMatchObject({ active: true, level: "tabs" });
+  });
+
+  it("←/→ on the project level switch and land on the tabs; ↑ goes back out", () => {
+    render(<Harness />);
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({
+      activeId: null,
+      setActive,
+      projects: [{ id: "x", name: "x", status: "active", position: 0, local_file: "/x/project.json" }],
+    });
+    press({ key: " ", shiftKey: true });
+    press({ key: "ArrowUp" });
+    expect(steering().level).toBe("projects");
+    press({ key: "ArrowRight" });
+    expect(setActive).toHaveBeenCalledWith("x");
+    expect(steering()).toMatchObject({ active: true, level: "tabs" });
+    press({ key: "ArrowUp" });
+    expect(steering().level).toBe("projects");
+  });
+
+  it("←/→ with no other project to switch to stay on the project level", () => {
+    render(<Harness />);
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({ activeId: null, setActive, projects: [] });
+    press({ key: " ", shiftKey: true });
+    press({ key: "ArrowUp" });
+    press({ key: "ArrowRight" });
+    expect(setActive).not.toHaveBeenCalled();
+    expect(steering().level).toBe("projects");
   });
 
   it("Q / R / X jump to the next tab in that state and land on the tab level", () => {
@@ -427,6 +498,21 @@ describe("legend table", () => {
     expect(labels({ level: "tabs", multiPane: true })).toContain("steering.tabs.label");
   });
 
+  it("says where ↑ goes from the tabs, and offers Shift+←/→ there with two subwindows", () => {
+    const multi = labels({ level: "tabs", multiPane: true });
+    expect(multi).toEqual(expect.arrayContaining(["steering.upPanes.label", "steering.focusShift.label"]));
+    expect(multi).not.toContain("steering.up.label");
+    const single = labels({ level: "tabs" });
+    expect(single).toContain("steering.up.label");
+    expect(single).not.toContain("steering.upPanes.label");
+    expect(single).not.toContain("steering.focusShift.label");
+    expect(labels({ level: "panes", multiPane: true })).toContain("steering.up.label");
+    const shiftRow = steeringKeysFor({ ...base, level: "tabs", multiPane: true }).find(
+      (k) => k.labelKey === "steering.focusShift.label",
+    )!;
+    expect(steeringRowLabel(shiftRow, null)).toBe("Shift+S F / ← →");
+  });
+
   it("shows the new-tab keys inside a pane and the status jumps only when something is in that state", () => {
     expect(labels({ level: "panes" })).toEqual(
       expect.arrayContaining(["steering.newShell.label", "steering.newAgent.label", "steering.newTabMenu.label"]),
@@ -441,6 +527,7 @@ describe("legend table", () => {
       { level: "panes", multiPane: true },
       { level: "panes" },
       { level: "tabs" },
+      { level: "tabs", multiPane: true },
       { level: "region", sideRegion: true },
     ];
     for (const s of states) {

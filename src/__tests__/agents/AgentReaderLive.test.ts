@@ -47,7 +47,55 @@ const AGENT_QUESTION = [
   "Enter to select · ↑/↓ to navigate · Esc to cancel",
 ];
 
+/** The same kind of question beside Claude Code 2.1.292's fullscreen diff
+ * panel (`/diff`), as a 130-column pane drew it: a `│` at column 72 down every
+ * row, the panel's file block beside the question and its first row. */
+const pane = (left: string, right = "") => `${left.padEnd(72)}│${right}`;
+const DIFF_PANEL_QUESTION = [
+  pane("● Write(docs/local_drivers_pi_cline_plan.md)", "1 file changed                         source: Current"),
+  pane("  ⎿  Wrote 1 line to docs/local_drivers_pi_cline_plan.md"),
+  pane("      1 x", "docs/local_drivers_pi_cline_plan.md"),
+  `${"─".repeat(72)}│`,
+  pane(" ☐ Login sync", "─".repeat(57)),
+  pane("", "docs/local_drivers_pi_cline_plan.md (untracked)"),
+  pane("│ How should local-model agent homes (<scope>.local) take part in login", "─".repeat(57)),
+  pane("│ syncing, so `ollama launch cline` can't push its Ollama setting into", "New file not yet staged."),
+  pane("│ your normal Cline tabs?", "Run `git add :/docs/local_drivers_pi_cline_plan.md` to"),
+  pane("", "see line counts."),
+  pane("❯ 1. Receive-only, all CLIs (Recommended)"),
+  pane("     Local-model homes still receive your logins, but nothing written", "+1 file edited before this session (show)"),
+  pane("     there ever goes back to other tabs. Cline providers.json is also"),
+  pane("     never overwritten there, so the Ollama setting stays put."),
+  pane("  2. Skip only Cline"),
+  pane("     Narrowest change: only Cline providers.json is skipped in"),
+  pane("     local-model homes, in both directions. Every other CLI keeps"),
+  pane("     syncing both ways, as it does today."),
+  pane("  3. Type something."),
+  `${"─".repeat(72)}│`,
+  pane("  4. Chat about this"),
+  pane(""),
+  pane("Enter to select · ↑/↓ to navigate · Esc to cancel"),
+];
+
 describe("the desktop Reader's live screen", () => {
+  it("reads a question beside the fullscreen diff panel without the panel", () => {
+    const live = readReaderLive(plainBuffer(DIFF_PANEL_QUESTION), "Claude", 130);
+    expect(live.tabs).toEqual([{ label: "Login sync", answered: false }]);
+    expect(live.ask).toEqual([
+      "How should local-model agent homes (<scope>.local) take part in login syncing, so `ollama launch cline` can't push its Ollama setting into your normal Cline tabs?",
+    ]);
+    expect(live.question?.options.slice(0, 2)).toMatchObject([
+      {
+        label: "Receive-only, all CLIs (Recommended)",
+        description: "Local-model homes still receive your logins, but nothing written there ever goes back to other tabs. Cline providers.json is also never overwritten there, so the Ollama setting stays put.",
+      },
+      {
+        label: "Skip only Cline",
+        description: "Narrowest change: only Cline providers.json is skipped in local-model homes, in both directions. Every other CLI keeps syncing both ways, as it does today.",
+      },
+    ]);
+  });
+
   it("reads a permission prompt as its question, its context and its options", () => {
     const live = readReaderLive(plainBuffer(PERMISSION), "Claude");
     expect(live.question?.options.map((option) => option.label)).toEqual([

@@ -171,6 +171,7 @@ import {
   type CaretPhrase,
 } from "../../../lib/viewers/tex/tex";
 import { useT, type TranslationKey } from "../../../lib/i18n";
+import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { pdfRasterRatio } from "./raster";
 import { PdfWorkerSlot } from "../../../lib/viewers/pdfLoad";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
@@ -1682,6 +1683,7 @@ function PdfCanvas({
   onReverseSource?: (src: SyncSource, anchor: string) => void;
 }) {
   const t = useT();
+  const chordHint = useChordHint();
   const scope = useFileScope();
   const paneVisible = usePaneVisible();
 
@@ -4264,7 +4266,7 @@ function PdfCanvas({
           <button
             className="file-viewer-zoom-btn"
             onClick={linkGoBack}
-            title={t("pdfLinks.backTitle")}
+            title={chordHint(t("pdfLinks.backTitle"), { key: "ArrowLeft", alt: true })}
             aria-label={t("pdfLinks.backLabel")}
           >
             ←
@@ -4331,7 +4333,7 @@ function PdfCanvas({
             <button
               className="file-viewer-zoom-btn file-viewer-pdf-pagenum"
               onClick={openPageJump}
-              title={t("pdfViewer.goToPageTitle")}
+              title={chordHint(t("pdfViewer.goToPageTitle"), { key: "g", ctrl: true })}
               aria-label={t("pdfViewer.goToPageLabel")}
             >
               {visiblePage} / {pages.length}
@@ -4342,7 +4344,7 @@ function PdfCanvas({
           className={`file-viewer-zoom-btn${findOpen ? " active" : ""}`}
           onClick={() => (findOpen ? closeFind() : openFind())}
           disabled={!doc}
-          title={t("pdfViewer.findTitle")}
+          title={chordHint(t("pdfViewer.findTitle"), { key: "f", ctrl: true })}
           aria-label={t("pdfViewer.findLabel")}
           aria-pressed={findOpen}
         >
@@ -4458,7 +4460,7 @@ function PdfCanvas({
           className="file-viewer-zoom-btn"
           onClick={undo}
           disabled={past.length === 0 || marking}
-          title={t("pdfViewer.undoTitle")}
+          title={chordHint(t("pdfViewer.undoTitle"), { key: "z", ctrl: true })}
           aria-label={t("common.undo")}
         >
           ↶
@@ -4467,7 +4469,7 @@ function PdfCanvas({
           className="file-viewer-zoom-btn"
           onClick={redo}
           disabled={future.length === 0 || marking}
-          title={t("pdfViewer.redoTitle")}
+          title={chordHint(t("pdfViewer.redoTitle"), { key: "z", ctrl: true, shift: true })}
           aria-label={t("common.redo")}
         >
           ↷
@@ -4476,7 +4478,7 @@ function PdfCanvas({
           isDirty={dirty}
           saving={saving}
           save={() => void handleSave()}
-          title={dirty ? t("pdfViewer.saveDirtyTitle") : t("pdfViewer.saveCleanTitle")}
+          title={dirty ? chordHint(t("pdfViewer.saveDirtyTitle"), { key: "s", ctrl: true }) : t("pdfViewer.saveCleanTitle")}
         />
         {/* Pending remarks (#pdf-notes), beside the Save that writes them. Shown by
             the number of SHEETS being rewritten rather than of remarks, because
@@ -4493,7 +4495,7 @@ function PdfCanvas({
           className={`file-viewer-print file-viewer-pdf-print${printing ? " is-busy" : ""}`}
           onClick={() => void handlePrint()}
           disabled={!doc || printing}
-          title={printing ? t("pdfViewer.preparing") : t("pdfViewer.printTitle")}
+          title={printing ? t("pdfViewer.preparing") : chordHint(t("pdfViewer.printTitle"), { key: "p", ctrl: true })}
           aria-label={t("pdfViewer.printLabel")}
         >
           {printing ? (

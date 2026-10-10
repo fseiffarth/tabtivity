@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { readAgentUsage } from "../../lib/agents/agentUsage";
-import { OPENCODE_MODEL_KEYS, isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
-import { modelPickKeys, readModelPicker, type ReaderLive } from "../../lib/agents/readerLive";
+import type { ReaderLive } from "../../lib/agents/readerLive";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { shortPath } from "../../lib/agents/agentReader";
 import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
@@ -12,32 +11,23 @@ import { UntestedTag } from "../common/UntestedTag";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
-import { sameSelectStep, type SelectPrompt, type SelectStep } from "../../../mobile-web/src/terminal/selectPrompt";
 import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../../../mobile-web/src/terminal/agentModes";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
 import { TerminalReaderStatus } from "./TerminalReaderStatus";
+import { CLAUDE_EFFORTS, useSessionPicker } from "../../hooks/useSessionPicker";
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
  * backend floors it besides), and how often the reset countdowns tick. */
 const LIMITS_POLL_MS = 120_000;
 const CLOCK_MS = 30_000;
-/** How often the picker is read while it is open, how long a picker that is
- * never drawn (or an answer that never lands) is waited for, and how long an
- * answered step is given to draw the next one (Codex's reasoning level). */
-const PICKER_POLL_MS = 150;
-const PICKER_WAIT_MS = 6_000;
-const NEXT_STEP_WAIT_MS = 700;
 /** The phone's mode walk (`mobile-web` `Terminal.tsx` `applyMode`): how long a
  * Shift+Tab is given to redraw the mode line, and how many presses a lap may
  * take before the walk gives up. */
 const MODE_SETTLE_MS = 340;
 const MODE_CYCLE_LIMIT = 6;
-/** The levels Claude Code's `/effort` takes (2.1.288); the session lowers one
- * its model does not support and says so. `auto` hands it back to the model. */
-const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
 
 /**
  * The Reader's facts row — the phone's (`mobile-web` `Terminal.tsx`
@@ -118,93 +108,19 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   }, [visible]);
 
   // --- The session's model / permission picker -------------------------------
-  const [picking, setPicking] = useState(false);
-  const [pickerCommand, setPickerCommand] = useState<"/model" | "/permissions">("/model");
-  const permissionPicking = picking && pickerCommand === "/permissions";
+  const session = useSessionPicker({ tab, ptyId, agentLabel, typeKeys });
+  const { picking, picker, step, shownStep, busy, choose, close } = session;
+  const permissionPicking = picking && session.command === "/permissions";
   const modelPicking = picking && !permissionPicking;
   const codex = isCodexCommand(tab.cmd);
-  const [picker, setPicker] = useState<SelectPrompt | null>(null);
-  const [answered, setAnswered] = useState<SelectStep | null>(null);
-  const sawPicker = useRef(false);
   useEffect(() => { onPicking(picking); }, [picking, onPicking]);
-
-  useEffect(() => {
-    if (!picking) return;
-    const read = () => {
-      const term = terminalFor(ptyId);
-      const next = term ? readModelPicker(term.buffer.active, agentLabel) : null;
-      setPicker((previous) => (previous && next && sameSelectStep(previous, next) && previous.current === next.current ? previous : next));
-    };
-    read();
-    const timer = setInterval(read, PICKER_POLL_MS);
-    return () => clearInterval(timer);
-  }, [picking, ptyId, agentLabel]);
-
-  const finish = useCallback(() => {
-    setPicking(false);
-    setPicker(null);
-    setAnswered(null);
-  }, []);
-
-  // The step on screen, unless it is the one just answered and the session
-  // has not redrawn yet.
-  const step = picker && answered && sameSelectStep(answered, picker) ? null : picker;
-  useEffect(() => {
-    if (!picking) return;
-    if (step) {
-      sawPicker.current = true;
-      if (answered) setAnswered(null);
-      return;
-    }
-    // The answered list is still up: the keys have not landed. Give it back
-    // if they never do.
-    if (answered && picker) {
-      const stuck = setTimeout(() => setAnswered(null), PICKER_WAIT_MS);
-      return () => clearTimeout(stuck);
-    }
-    if (sawPicker.current) {
-      // Gone: answered (a next step may still come), picked in the terminal,
-      // or dismissed there.
-      if (!answered) {
-        finish();
-        return;
-      }
-      const next = setTimeout(finish, NEXT_STEP_WAIT_MS);
-      return () => clearTimeout(next);
-    }
-    // Never drawn: the session may have no picker, or was busy.
-    const never = setTimeout(finish, PICKER_WAIT_MS);
-    return () => clearTimeout(never);
-  }, [picking, step, picker, answered, finish]);
 
   const openPicker = (command: "/model" | "/permissions" = "/model") => {
     if (picking) return;
     onStatusClose();
     closeModes();
     closeEffort();
-    setPickerCommand(command);
-    sawPicker.current = false;
-    setAnswered(null);
-    setPicker(null);
-    const sent = isOpenCodeTab(agentLabel)
-      ? typeKeys(OPENCODE_MODEL_KEYS)
-      : tab.scheduleTargetId
-        ? submitScheduledAgentCommand(tab.scheduleTargetId, command)
-        : Promise.reject(new Error("no agent input"));
-    setPicking(true);
-    void sent.catch(finish);
-  };
-  const choose = (index: number) => {
-    if (!step) return;
-    const option = step.options.find((entry) => entry.index === index);
-    if (!option) return;
-    setAnswered({ title: step.title, options: step.options });
-    void typeKeys(modelPickKeys(step, option, agentLabel)).catch(() => setAnswered(null));
-  };
-  const close = () => {
-    // The picker is the session's own: close it there too.
-    if (picker) void typeKeys(["\u001b"]).catch(() => {});
-    finish();
+    session.open(command);
   };
 
   // --- The permission mode ---------------------------------------------------
@@ -351,8 +267,6 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const shownPath = status?.path ?? path;
   const worktree = worktreeOfPath(shownPath);
   const failedMode = modes.find((choice) => choice.value === switchFailed);
-  const shownStep = step ?? (answered && picker ? answered : null);
-  const busy = !!answered || !step;
 
   return (
     <div className="terminal-reader-facts-wrap">

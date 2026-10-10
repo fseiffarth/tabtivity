@@ -389,6 +389,58 @@ impl HomeFile {
         self.write_as(bytes, 0o644, keep)
     }
 
+    /// Replace the file's content **keeping its inode**, for a file that is
+    /// bind-mounted read-only into running fences and pinned by inode for a
+    /// spawn that is starting (`agent_fence::verify_control_pins`): a rename
+    /// over it would detach those mounts and refuse that spawn. The existing
+    /// name is opened `O_WRONLY | O_NOFOLLOW | O_NONBLOCK` relative to the
+    /// handle and written only when the opened inode is a regular file with
+    /// one link (a hard link planted there is never written through); then
+    /// the bytes go in at offset 0 and the length is cut to them. A missing
+    /// name is created `O_EXCL` (`0600`), so two writers racing to create it
+    /// end up writing the same inode. A link, FIFO, socket or hard-linked file
+    /// at the name falls back to [`HomeFile::write`], which replaces it.
+    pub fn write_in_place(&self, bytes: &[u8]) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::io::{Seek, Write};
+            let flags = libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+            for _ in 0..4 {
+                let file = match self.open_at(&self.name, flags, 0) {
+                    Ok(file) => file,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        match self.open_at(&self.name, flags | libc::O_CREAT | libc::O_EXCL, 0o600) {
+                            Ok(file) => file,
+                            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    // `ELOOP` for a link, `ENXIO` for a FIFO with no reader,
+                    // `EISDIR`, … — not a plain file to keep.
+                    Err(_) => return self.write(bytes),
+                };
+                let meta = file.metadata()?;
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if !meta.is_file() || meta.nlink() != 1 {
+                        drop(file);
+                        return self.write(bytes);
+                    }
+                }
+                let mut file = file;
+                file.seek(io::SeekFrom::Start(0))?;
+                file.write_all(bytes)?;
+                file.set_len(bytes.len() as u64)?;
+                return file.flush();
+            }
+            Err(io::Error::new(io::ErrorKind::AlreadyExists, "the file kept appearing and vanishing"))
+        }
+        #[cfg(not(unix))]
+        {
+            self.write(bytes)
+        }
+    }
+
     /// The temporary is created with `create_mode` (less the umask), then
     /// set to exactly `keep` on its descriptor before it is renamed in.
     #[cfg_attr(not(unix), allow(unused_variables))]
@@ -458,6 +510,103 @@ impl HomeFile {
         Ok(())
     }
 
+    /// Move the name aside within its directory to `<name><suffix>`, or
+    /// `<name><suffix>.1`, `.2`, … when that is taken; returns the new name.
+    /// Relative to the handle, so a link at the name is moved, never
+    /// followed, and an existing name is never replaced (`RENAME_NOREPLACE`
+    /// on Linux, `RENAME_EXCL` on macOS; on a filesystem without either, a
+    /// hard link then an unlink, see [`HomeFile::link_aside`]; on Windows,
+    /// which has no fence, a check just before the rename).
+    pub fn rename_aside(&self, suffix: &str) -> io::Result<String> {
+        let name = self.name.to_string_lossy().into_owned();
+        for n in 0..1000u32 {
+            let to = if n == 0 { format!("{name}{suffix}") } else { format!("{name}{suffix}.{n}") };
+            if components(&to).is_none_or(|p| p.len() != 1 || p[0] != to) {
+                return Err(io::Error::from(io::ErrorKind::InvalidInput));
+            }
+            match self.rename_noreplace(std::ffi::OsStr::new(&to)) {
+                Ok(()) => return Ok(to),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free name to move the file aside to"))
+    }
+
+    #[cfg(unix)]
+    fn rename_noreplace(&self, to: &OsStr) -> io::Result<()> {
+        let (from_c, to_c) = (cstr(&self.name)?, cstr(to)?);
+        #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
+        let fd = self.dir.fd.as_raw_fd();
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            // SAFETY: valid C strings and descriptor.
+            if unsafe { libc::renameat2(fd, from_c.as_ptr(), fd, to_c.as_ptr(), libc::RENAME_NOREPLACE) } == 0 {
+                return Ok(());
+            }
+            let e = io::Error::last_os_error();
+            if !matches!(e.raw_os_error(), Some(libc::EINVAL) | Some(libc::ENOSYS)) {
+                return Err(e);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // SAFETY: valid C strings and descriptor.
+            if unsafe { libc::renameatx_np(fd, from_c.as_ptr(), fd, to_c.as_ptr(), libc::RENAME_EXCL) } == 0 {
+                return Ok(());
+            }
+            let e = io::Error::last_os_error();
+            if !matches!(e.raw_os_error(), Some(libc::EINVAL) | Some(libc::ENOTSUP)) {
+                return Err(e);
+            }
+        }
+        self.link_aside(&from_c, &to_c)
+    }
+
+    /// The no-replace move on a filesystem without an atomic flag for it
+    /// (NFS answers `RENAME_NOREPLACE` with `EINVAL`): hard-link `from` to
+    /// `to`, which fails on an existing name, then drop `from` if it is still
+    /// the same file. Never a replacing rename: a filesystem without hard
+    /// links refuses the move, and the caller keeps what it has. If `from`
+    /// was replaced in between, the newcomer stays where it is and the file
+    /// that was there is the one at `to`.
+    #[cfg(unix)]
+    fn link_aside(&self, from: &std::ffi::CStr, to: &std::ffi::CStr) -> io::Result<()> {
+        let fd = self.dir.fd.as_raw_fd();
+        // SAFETY: valid C strings and descriptor; flags 0 links a symlink
+        // itself, never what it points at.
+        if unsafe { libc::linkat(fd, from.as_ptr(), fd, to.as_ptr(), 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let id = |name: &std::ffi::CStr| {
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            // SAFETY: valid C string, descriptor and out-pointer.
+            let r = unsafe { libc::fstatat(fd, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
+            (r == 0).then_some((st.st_dev, st.st_ino))
+        };
+        if id(from).is_none_or(|a| Some(a) != id(to)) {
+            return Ok(());
+        }
+        // SAFETY: valid C string and descriptor.
+        if unsafe { libc::unlinkat(fd, from.as_ptr(), 0) } != 0 {
+            let e = io::Error::last_os_error();
+            // Not left under two names: drop the link just made.
+            // SAFETY: valid C string and descriptor.
+            unsafe { libc::unlinkat(fd, to.as_ptr(), 0) };
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn rename_noreplace(&self, to: &std::ffi::OsStr) -> io::Result<()> {
+        let target = self.dir.path.join(to);
+        if std::fs::symlink_metadata(&target).is_ok() {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        std::fs::rename(self.path(), target)
+    }
+
     /// Remove the name (a file or a link; never what a link points at).
     pub fn remove(&self) -> io::Result<()> {
         #[cfg(unix)]
@@ -494,6 +643,165 @@ impl HomeFile {
             Ok(())
         }
     }
+
+    /// Make the name a folder (`dir`) or a regular file, created empty where
+    /// missing. A link or any other special file there (a FIFO, a socket) is
+    /// removed first — never what a link points at; a regular file or folder
+    /// already there is kept, whichever was asked for. The [`Meta`] returned
+    /// is read off a handle opened without following a link, so its `ino` is
+    /// the inode now at the name: a caller that later uses the *path* can
+    /// re-`lstat` it and compare (`agent_fence::verify_control_pins`).
+    pub fn ensure(&self, dir: bool) -> io::Result<Meta> {
+        #[cfg(unix)]
+        {
+            if self.metadata().is_some_and(|m| !(m.is_file || m.is_dir)) {
+                if let Err(e) = self.unlink_in_dir(&self.name) {
+                    if e.kind() != io::ErrorKind::NotFound {
+                        return Err(e);
+                    }
+                }
+            }
+            if !self.exists() {
+                if dir {
+                    let c = cstr(&self.name)?;
+                    // SAFETY: valid C string and descriptor.
+                    if unsafe { libc::mkdirat(self.dir.fd.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
+                        let e = io::Error::last_os_error();
+                        if e.kind() != io::ErrorKind::AlreadyExists {
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    // No `O_TRUNC`: a file that appeared meanwhile is kept; a
+                    // link that did fails `ELOOP`, a FIFO `ENXIO`.
+                    self.open_at(&self.name, libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_NONBLOCK, 0o600)?;
+                }
+            }
+            let held = self.open_at(&self.name, libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK, 0)?;
+            let meta = meta_of(&held.metadata()?);
+            if !(meta.is_file || meta.is_dir) {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "neither a regular file nor a folder"));
+            }
+            Ok(meta)
+        }
+        #[cfg(not(unix))]
+        {
+            let path = self.path();
+            if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink() || !(m.is_file() || m.is_dir())) {
+                let _ = std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path));
+            }
+            if std::fs::symlink_metadata(&path).is_err() {
+                if dir {
+                    if let Err(e) = std::fs::create_dir(&path) {
+                        if e.kind() != io::ErrorKind::AlreadyExists {
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    std::fs::OpenOptions::new().append(true).create(true).open(&path)?;
+                }
+            }
+            match self.metadata() {
+                Some(meta) if !meta.is_symlink && (meta.is_file || meta.is_dir) => Ok(meta),
+                Some(_) => Err(io::Error::new(io::ErrorKind::InvalidInput, "neither a regular file nor a folder")),
+                None => Err(io::Error::from(io::ErrorKind::NotFound)),
+            }
+        }
+    }
+}
+
+/// [`Meta`] of an open handle's `fstat`.
+#[cfg(unix)]
+fn meta_of(m: &std::fs::Metadata) -> Meta {
+    use std::os::unix::fs::MetadataExt;
+    Meta {
+        is_file: m.file_type().is_file(),
+        is_dir: m.file_type().is_dir(),
+        is_symlink: m.file_type().is_symlink(),
+        len: m.len(),
+        mode: m.mode() & 0o7777,
+        ino: Some((m.dev(), m.ino())),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agent-written records, read by path (threat model gap 29)
+// ---------------------------------------------------------------------------
+//
+// The live-session slice a fenced agent's hook writes (`<uid>`, `.turn`,
+// `.src`, `.mode`, `.prev`), a project's `.git/commondir` and `.git` pointer,
+// a CLI's session metadata and its transcripts are all files an agent can
+// replace with a FIFO, a link or something huge. A plain `read_to_string`
+// blocks forever on the FIFO — on the turn watcher's one thread, that stops
+// turn state for every tab — so these reads go through here.
+
+/// The most an agent-written record is read: a session id, a turn word, a
+/// `.git` pointer, a CLI's `meta.json` are all far below it.
+pub const RECORD_CAP: u64 = 64 * 1024;
+
+/// Open `path` for reading the way the host must open a file an agent can
+/// write: never through a link at its last component, never blocking on a
+/// planted FIFO (`O_NONBLOCK`), and only when the *opened* inode is a regular
+/// file. The folders above it are the caller's to vouch for. Windows has no
+/// FIFOs to plant and no fence; it keeps the `lstat` check.
+pub fn open_regular(path: &Path) -> Option<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+            .ok()?;
+        file.metadata().ok()?.is_file().then_some(file)
+    }
+    #[cfg(not(unix))]
+    {
+        if !std::fs::symlink_metadata(path).ok()?.is_file() {
+            return None;
+        }
+        std::fs::File::open(path).ok()
+    }
+}
+
+/// An agent-written record at `path`, whole, as text: [`open_regular`]'s
+/// checks, and `None` past [`RECORD_CAP`] bytes or for non-UTF-8.
+pub fn read_record(path: &Path) -> Option<String> {
+    read_record_capped(path, RECORD_CAP)
+}
+
+/// [`read_record`] with a caller's own cap, for an agent-written file that is
+/// legitimately bigger than a record (Vibe's `meta.json` embeds the system
+/// prompt and every tool schema).
+pub fn read_record_capped(path: &Path, cap: u64) -> Option<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    open_regular(path)?.take(cap + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > cap {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Run `f` on its own thread and fail the test if it has not returned within
+/// a few seconds — a reader that blocks on a FIFO fails instead of hanging the
+/// suite (the stuck thread is left behind).
+#[cfg(all(test, unix))]
+pub(crate) fn within_deadline<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the read blocked: it must never wait on a FIFO")
+}
+
+/// Plant a FIFO at `path`.
+#[cfg(all(test, unix))]
+pub(crate) fn mkfifo(path: &Path) {
+    let c = std::ffi::CString::new(path.to_string_lossy().into_owned()).unwrap();
+    // SAFETY: a valid C string.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0, "mkfifo {}", path.display());
 }
 
 #[cfg(test)]
@@ -604,6 +912,78 @@ mod tests {
         dir.set_private().unwrap();
     }
 
+    #[test]
+    fn a_record_reads_whole_up_to_the_cap_and_not_past_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rec = tmp.path().join("rec");
+        std::fs::write(&rec, "abc\n").unwrap();
+        assert_eq!(read_record(&rec).as_deref(), Some("abc\n"));
+        assert!(open_regular(&rec).is_some());
+        std::fs::write(&rec, vec![b'a'; RECORD_CAP as usize]).unwrap();
+        assert_eq!(read_record(&rec).map(|s| s.len()), Some(RECORD_CAP as usize));
+        std::fs::write(&rec, vec![b'a'; RECORD_CAP as usize + 1]).unwrap();
+        assert_eq!(read_record(&rec), None, "an oversized record is refused");
+        assert_eq!(read_record_capped(&rec, 4), None);
+        assert_eq!(read_record(&tmp.path().join("missing")), None);
+        assert_eq!(read_record(tmp.path()), None, "a folder is not a record");
+        assert!(open_regular(tmp.path()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_is_never_read_through_a_link_or_from_a_fifo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "secret").unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        assert_eq!(read_record(&link), None);
+        assert!(open_regular(&link).is_none());
+        let fifo = tmp.path().join("fifo");
+        mkfifo(&fifo);
+        assert_eq!(within_deadline(move || read_record(&fifo)), None);
+        let fifo = tmp.path().join("fifo");
+        assert!(within_deadline(move || open_regular(&fifo).is_none()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_replaces_a_link_or_fifo_and_keeps_what_is_real() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let dir = HomeDir::open_existing(&home, "").unwrap();
+        // Missing: created, as asked.
+        let made = dir.file("config.toml").unwrap().ensure(false).unwrap();
+        assert!(made.is_file && made.len == 0);
+        assert!(dir.file("tools").unwrap().ensure(true).unwrap().is_dir);
+        // A link is replaced, its target untouched.
+        std::fs::write(outside.join("x"), "keep").unwrap();
+        std::os::unix::fs::symlink(outside.join("x"), home.join(".env")).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("skills")).unwrap();
+        assert!(dir.file(".env").unwrap().ensure(false).unwrap().is_file);
+        assert!(dir.file("skills").unwrap().ensure(true).unwrap().is_dir);
+        assert!(!std::fs::symlink_metadata(home.join(".env")).unwrap().file_type().is_symlink());
+        assert!(!std::fs::symlink_metadata(home.join("skills")).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(outside.join("x")).unwrap(), "keep");
+        // A FIFO is replaced without blocking.
+        mkfifo(&home.join("hooks.toml"));
+        let fifo_home = home.clone();
+        let meta = within_deadline(move || {
+            HomeDir::open_existing(&fifo_home, "").unwrap().file("hooks.toml").unwrap().ensure(false).unwrap()
+        });
+        assert!(meta.is_file);
+        // An existing file keeps its contents, and the identity is its inode.
+        std::fs::write(home.join("AGENTS.md"), "mine").unwrap();
+        let meta = dir.file("AGENTS.md").unwrap().ensure(false).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join("AGENTS.md")).unwrap(), "mine");
+        use std::os::unix::fs::MetadataExt;
+        let st = std::fs::symlink_metadata(home.join("AGENTS.md")).unwrap();
+        assert_eq!(meta.ino, Some((st.dev(), st.ino())));
+    }
+
     #[cfg(unix)]
     #[test]
     fn exec_bits_are_set_on_a_file_and_never_through_a_link() {
@@ -623,5 +1003,108 @@ mod tests {
         let link = HomeFile::open(&home, ".claude/link").unwrap();
         assert!(link.set_exec_bits(0o111).is_err());
         assert_eq!(std::fs::metadata(&victim).unwrap().permissions().mode() & 0o777, 0o644);
+    }
+
+    /// `write_in_place` keeps the inode of a plain file (shorter and longer
+    /// content alike), creates a missing one, and never writes through a
+    /// link, a hard link or a FIFO: those are replaced.
+    #[cfg(unix)]
+    #[test]
+    fn an_in_place_write_keeps_the_inode_and_replaces_what_is_not_plain() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let ino = |name: &str| std::fs::symlink_metadata(home.join(name)).unwrap().ino();
+        let file = HomeFile::open(&home, "hooks.toml").unwrap();
+        file.write_in_place(b"a long first version\n").unwrap();
+        let first = ino("hooks.toml");
+        file.write_in_place(b"short\n").unwrap();
+        assert_eq!(std::fs::read(home.join("hooks.toml")).unwrap(), b"short\n");
+        file.write_in_place(b"a longer second version\n").unwrap();
+        assert_eq!(std::fs::read(home.join("hooks.toml")).unwrap(), b"a longer second version\n");
+        assert_eq!(ino("hooks.toml"), first);
+        assert_eq!(file.metadata().unwrap().mode & 0o777, 0o600);
+
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        let linked = HomeFile::open(&home, "linked").unwrap();
+        std::os::unix::fs::symlink(&victim, home.join("linked")).unwrap();
+        linked.write_in_place(b"new").unwrap();
+        assert!(linked.is_file());
+        std::fs::remove_file(home.join("linked")).unwrap();
+        std::fs::hard_link(&victim, home.join("linked")).unwrap();
+        linked.write_in_place(b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        assert_eq!(linked.read().unwrap(), b"new");
+
+        mkfifo(&home.join("fifo"));
+        let at = home.clone();
+        within_deadline(move || HomeFile::open(&at, "fifo").unwrap().write_in_place(b"x").unwrap());
+        assert!(std::fs::symlink_metadata(home.join("fifo")).unwrap().is_file());
+    }
+
+    /// `rename_aside` moves the name (a link as a link) to the first free
+    /// `<name><suffix>[.N]`, never replacing or following anything.
+    #[cfg(unix)]
+    #[test]
+    fn a_rename_aside_takes_a_free_name_and_never_follows_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(home.join(".vibe")).unwrap();
+        std::fs::write(home.join(".vibe/.env"), "mine").unwrap();
+        let file = HomeFile::open_existing(&home, ".vibe/.env").unwrap();
+        assert_eq!(file.rename_aside(".old").unwrap(), ".env.old");
+        assert!(!home.join(".vibe/.env").exists());
+        assert_eq!(std::fs::read_to_string(home.join(".vibe/.env.old")).unwrap(), "mine");
+
+        std::fs::write(home.join(".vibe/.env"), "second").unwrap();
+        assert_eq!(file.rename_aside(".old").unwrap(), ".env.old.1");
+        assert_eq!(std::fs::read_to_string(home.join(".vibe/.env.old")).unwrap(), "mine");
+        assert_eq!(std::fs::read_to_string(home.join(".vibe/.env.old.1")).unwrap(), "second");
+
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        std::os::unix::fs::symlink(&victim, home.join(".vibe/.env")).unwrap();
+        assert_eq!(file.rename_aside(".old").unwrap(), ".env.old.2");
+        assert!(std::fs::symlink_metadata(home.join(".vibe/.env.old.2")).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        assert!(!tmp.path().join("victim.old").exists());
+
+        // Nothing at the name: an error, nothing created.
+        assert!(file.rename_aside(".old").is_err());
+        assert!(!home.join(".vibe/.env.old.3").exists());
+    }
+
+    /// The fallback for a filesystem without `RENAME_NOREPLACE` (NFS) is a
+    /// hard link then an unlink, never a replacing rename: a taken name is
+    /// refused with both files intact, a link is moved as a link.
+    #[cfg(unix)]
+    #[test]
+    fn the_link_fallback_never_replaces_and_never_follows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(home.join(".vibe")).unwrap();
+        std::fs::write(home.join(".vibe/.env"), "mine").unwrap();
+        std::fs::write(home.join(".vibe/.env.old"), "older").unwrap();
+        let file = HomeFile::open_existing(&home, ".vibe/.env").unwrap();
+        let c = |s: &str| std::ffi::CString::new(s).unwrap();
+
+        let err = file.link_aside(&c(".env"), &c(".env.old")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(home.join(".vibe/.env")).unwrap(), "mine");
+        assert_eq!(std::fs::read_to_string(home.join(".vibe/.env.old")).unwrap(), "older");
+
+        file.link_aside(&c(".env"), &c(".env.old.1")).unwrap();
+        assert!(!home.join(".vibe/.env").exists());
+        assert_eq!(std::fs::read_to_string(home.join(".vibe/.env.old.1")).unwrap(), "mine");
+
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        std::os::unix::fs::symlink(&victim, home.join(".vibe/.env")).unwrap();
+        file.link_aside(&c(".env"), &c(".env.old.2")).unwrap();
+        assert!(std::fs::symlink_metadata(home.join(".vibe/.env")).is_err());
+        assert!(std::fs::symlink_metadata(home.join(".vibe/.env.old.2")).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
     }
 }

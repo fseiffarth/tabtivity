@@ -713,6 +713,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["local_tmux_rename", "core"],
   ["local_tmux_screen", "core"],
   ["project_cpu_percent", "core"],
+  ["pty_drop_files", "client"],
   ["pty_kill", "core"],
   ["pty_kill_scope", "core"],
   ["pty_remove_view", "core"],

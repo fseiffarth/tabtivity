@@ -111,6 +111,16 @@ describe(`${BRAND.display} Mobile Focus swipe listeners`, () => {
       expect(onSwipeRight).toHaveBeenCalledTimes(1);
     });
 
+    it("tells the handler where the swipe landed and on what", () => {
+      install();
+      const label = document.createElement("span");
+      row.appendChild(label);
+      swipe(label, 260, 100);
+      expect(onSwipeLeft).toHaveBeenCalledWith(expect.objectContaining({ x: 260, y: 300 }), label);
+      swipe(label, 100, 260);
+      expect(onSwipeRight).toHaveBeenCalledWith(expect.objectContaining({ x: 100, y: 300 }), label);
+    });
+
     it("listens passively and never prevents the gesture", () => {
       const add = vi.spyOn(host, "addEventListener");
       install();

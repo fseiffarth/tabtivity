@@ -7,6 +7,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { openTabInRootConsole } from "../../stores/rootOverlay";
 import { shellQuote } from "../../lib/terminal/shellScriptRun";
 import { useT } from "../../lib/i18n";
+import { IS_WINDOWS } from "../../lib/platform";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
 import { PauseIcon } from "../common/icons/Icon";
@@ -381,9 +382,13 @@ export function DevBuildIndicator() {
                   <UntestedTag id="devBuild.buildNow" />
                 </button>
               )}
-              <button type="button" className="vpn-indicator-connect" onClick={followLog}>
-                {t("devBuild.openLog")}
-              </button>
+              {/* `tail -F` in a shell tab: the dev-build chain is bash-only, so
+                  there is no log to follow on Windows. */}
+              {!IS_WINDOWS && (
+                <button type="button" className="vpn-indicator-connect" onClick={followLog}>
+                  {t("devBuild.openLog")}
+                </button>
+              )}
             </div>
           </div>
         </div>

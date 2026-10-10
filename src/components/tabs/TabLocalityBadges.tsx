@@ -14,7 +14,7 @@ import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
 import { UntestedTag } from "../common/UntestedTag";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useT } from "../../lib/i18n";
-import { CloudIcon, HomeIcon } from "../common/icons/Icon";
+import { CloudIcon, HomeIcon, PlayMark } from "../common/icons/Icon";
 import { useAgentModelsStore, agentTabLabel, tabModeMarks } from "../../stores/agents/agentModels";
 import { screenModeMarks } from "../../lib/agents/agentModel";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
@@ -363,19 +363,6 @@ export function RunHostPicker({
  *  one per colour: the two things are happening at once, and a single glyph
  *  could only name one of them. (The tool call an agent waits on is not a second
  *  thing — it IS the turn.) */
-/** The working mark's ▶, drawn rather than typed. As a character it was
- *  whatever the window's font fallback found: the U+FE0E text-presentation pin
- *  held in the main window, but a popout's WebKitGTK still reached the colour
- *  emoji font, which ignores the ring's colour. A filled triangle in
- *  `currentColor`, glyph-sized, needs no font at all. */
-function PlayMark() {
-  return (
-    <svg viewBox="0 0 10 10" width="1em" height="1em" aria-hidden="true" focusable="false" style={{ display: "inline-block", verticalAlign: "-0.05em" }}>
-      <path d="M2 1v8l7-4z" fill="currentColor" />
-    </svg>
-  );
-}
-
 export function TabStatusMark({ stateClass }: { stateClass: string }) {
   const t = useT();
   const state = stateClass.includes("working")

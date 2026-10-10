@@ -18,10 +18,29 @@ export type { SessionTranscript };
  * `unsupported` there. The phone bridge's list (`MobileBridgeHost`). */
 const READER_AGENTS = new Set(["claude", "codex", "opencode"]);
 
+/** A local-model tab's driver (`list_local_drivers` id): the one it was
+ * started with, or the one its saved launch line names. Empty for any other
+ * tab, and for a local tab started before the driver was recorded. */
+export function localTabDriver(tab: Pick<TabEntry, "kind" | "localDriver" | "localLaunch">): string {
+  return tab.kind === "local_agent" ? tab.localDriver ?? tab.localLaunch?.driver ?? "" : "";
+}
+
+/** The agent whose transcript `tab` keeps, as `agent_tab_transcript` names
+ * it: a local-model tab runs its driver through `ollama launch <driver>`, so
+ * its `cmd` names no agent. Only an OpenCode driver is readable there:
+ * OpenCode is found by folder, while Claude's and Codex's transcripts need
+ * the launch id a local tab never mints. */
+export function readerAgent(tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch">): string {
+  if (tab.kind !== "local_agent") return tab.cmd;
+  return localTabDriver(tab) === "opencode" ? "opencode" : "";
+}
+
 /** Whether `tab` can be shown as a Reader: an agent tab whose CLI keeps a
- * transcript Tabtivity reads. A local-model tab keeps none. */
-export function readerOffered(tab: Pick<TabEntry, "kind" | "cmd"> | undefined): boolean {
-  return !!tab && tab.kind === "agent" && READER_AGENTS.has(tab.cmd);
+ * transcript Tabtivity reads — a local-model tab only when OpenCode drives it. */
+export function readerOffered(
+  tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch"> | undefined,
+): boolean {
+  return !!tab && (tab.kind === "agent" || tab.kind === "local_agent") && READER_AGENTS.has(readerAgent(tab));
 }
 
 /** How many turns a read asks for first, and how many more each "earlier". */
@@ -31,26 +50,30 @@ export const READER_STEP = 60;
  * bridge's resolution: OpenCode's session is the newest one of the folder the
  * tab runs in, begun since it launched unless it was restored with
  * `--continue`. Null for a tab with no session id yet (the agent's hook has
- * not recorded one): there is no transcript to name. `subagent` is the handle
- * on one of its `agent` entries, whose own conversation is read instead. */
+ * not recorded one): there is no transcript to name — except a local-model
+ * OpenCode tab, which never gets one and is read by folder from the scope's
+ * local-model home (`localModel`). `subagent` is the handle on one of its
+ * `agent` entries, whose own conversation is read instead. */
 export function readerRequest(
   scope: string,
-  tab: Pick<TabEntry, "cmd" | "sessionId" | "launchedAt" | "args" | "cwd">,
+  tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch" | "sessionId" | "launchedAt" | "args" | "cwd">,
   cwd: string | undefined,
   version: string | undefined,
   limit: number,
   subagent?: string,
 ): Record<string, unknown> | null {
-  if (!tab.sessionId) return null;
+  const localModel = tab.kind === "local_agent";
+  if (!tab.sessionId && !localModel) return null;
   return {
-    agent: tab.cmd,
+    agent: readerAgent(tab),
     projectId: scope === "root" ? null : scope,
     tabDir: tab.cwd || cwd || null,
     since: tab.launchedAt && !tab.args?.includes("--continue") ? tab.launchedAt : null,
-    sessionId: tab.sessionId,
+    sessionId: tab.sessionId ?? "",
     subagent: subagent ?? null,
     version: version ?? null,
     limit,
+    localModel,
   };
 }
 

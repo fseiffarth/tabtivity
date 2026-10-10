@@ -82,6 +82,13 @@ resumed after a crash never starts out "working" from a stale file. Codex's
 new hooks need the same one-time `/hooks` trust as its `SessionStart` one;
 until then a Codex tab stays on the byte heuristic.
 
+Every record in the slice is written by the agent's hook, and a fenced agent
+can replace it with a FIFO, a link or a huge file. The host reads them all
+(`<key>`, `.turn`, `.src`, `.mode`, `.prev`, on the watcher thread and at
+spawn) through `home_io::read_record`: no link at the name, `O_NONBLOCK`, a
+regular file, at most 64 KiB, else "no record" (threat model gap 29). One
+FIFO used to stop turn state for every tab until restart.
+
 For Claude the key is its launch id (`--session-id`); Codex mints its own id so
 the key is a separate per-tab uuid and the backend injects
 `codex resume <live-id>`. **Codex caveat:** user-level Codex hooks need a
@@ -143,10 +150,10 @@ conversation, and that question has two answers in the field:
 
 - the **rollout log** at
   `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`, which is what
-  every release up to 0.153.4 wrote;
-- the **thread store** `~/.codex/state_<n>.sqlite`, which is where 0.153.4 puts
-  it instead. Rows there still *name* a `rollout_path`, but no such file is
-  created any more — `~/.codex/sessions/` does not exist on a fresh install.
+  older releases wrote and Codex 0.160.1 writes again;
+- the **thread store** `~/.codex/state_<n>.sqlite`, where 0.153.4 could keep a
+  thread without writing its named rollout. Its archive flag is authoritative:
+  a retained rollout cannot make an archived conversation resumable.
 
 Asking only the first is how Codex resume failed silently: the hook kept
 recording live thread ids, the walk kept finding no file for any of them, and

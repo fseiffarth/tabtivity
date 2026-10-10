@@ -1535,7 +1535,7 @@ fn resolve_detached_window_id(app: &AppHandle, label: &str, _title: &str) -> Opt
         let id = on_main
             .ns_window()
             .ok()
-            .and_then(|ns| crate::platform::macos::ns_window_id(ns as *mut std::ffi::c_void));
+            .and_then(crate::platform::macos::ns_window_id);
         let _ = tx.send(id);
     })
     .ok()?;

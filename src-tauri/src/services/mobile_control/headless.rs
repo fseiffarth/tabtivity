@@ -431,7 +431,7 @@ pub(super) fn turn_record(state_dir: &Path, project_id: &str, uid: &str) -> Opti
     [live.join(&name), live.join(storage::project_key(project_id)).join(&name)]
         .iter()
         .filter_map(|path| {
-            let text = std::fs::read_to_string(path).ok()?;
+            let text = crate::services::home_io::read_record(path)?;
             let state = parse_turn_record(&text)?;
             let at = text.split_whitespace().nth(1).and_then(|s| s.parse::<u64>().ok());
             Some((state, at))
@@ -737,7 +737,17 @@ pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
 /// window's `TerminalView` hands `pty_spawn`, at a fixed
 /// [`HEADLESS_COLS`]×[`HEADLESS_ROWS`]. `project_id` is the raw scope id (a
 /// project's or a box's).
+///
+/// The record is read raw, past the load sanitizer, so its `env` goes
+/// through the same filter here (`terminal_service::strip_persisted_env`):
+/// no loader or control variable from a stored layout reaches the spawn.
 pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
+    let mut filtered = tab.clone();
+    crate::services::terminal_service::strip_persisted_env(
+        &mut filtered,
+        &crate::services::terminal_service::custom_agent_specs(),
+    );
+    let tab = &filtered;
     let strings = |key: &str| -> Vec<String> {
         tab.extra
             .get(key)
@@ -1433,6 +1443,23 @@ fn zone_from_localtime_target(target: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The phone's turn read is the same agent-written `.turn` record the
+    /// watcher reads: a FIFO there reads as nothing, without blocking (gap 29).
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_turn_record_reads_as_nothing_without_blocking() {
+        let state = tempfile::tempdir().unwrap();
+        let live = state.path().join("live_sessions");
+        std::fs::create_dir_all(&live).unwrap();
+        let uid = "turn-fifo-uid";
+        std::fs::write(live.join(format!("{uid}{TURN_SUFFIX}")), "working 5").unwrap();
+        assert_eq!(turn_record(state.path(), "p", uid), Some((TurnState::Working, Some(5))));
+        std::fs::remove_file(live.join(format!("{uid}{TURN_SUFFIX}"))).unwrap();
+        crate::services::home_io::mkfifo(&live.join(format!("{uid}{TURN_SUFFIX}")));
+        let at = state.path().to_path_buf();
+        assert_eq!(crate::services::home_io::within_deadline(move || turn_record(&at, "p", uid)), None);
+    }
     use crate::commands::calendar::{create_event_at, create_task_at};
     use crate::schema::calendar::{CalendarEvent, CalendarTask, Freq, Rrule};
 
@@ -1778,6 +1805,35 @@ mod tests {
         let opts = launch_options("p1", &record);
         assert!(opts.local_model);
         assert!(!opts.agent, "the fence knows a local-model driver by its command");
+    }
+
+    /// The owner reads a stored record raw, past the load sanitizer: a
+    /// loader or control variable in its `env` never reaches the spawn
+    /// (gap 17), while the tab's own `TAB_UID` and `VIBE_HOME` do.
+    #[test]
+    fn a_stored_records_env_is_filtered_before_launch() {
+        let mut record = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");
+        let mut env = serde_json::Map::new();
+        for (k, v) in [
+            ("PATH", "/tmp/evil"),
+            ("LD_PRELOAD", "/tmp/x.so"),
+            ("BASH_ENV", "/tmp/rc"),
+            (crate::app_env!("HOST_SESSION"), "1"),
+            (crate::app_env!("AGENT_FENCE"), "1"),
+            (crate::app_env!("TAB_UID"), "uid-1"),
+            ("VIBE_HOME", "/home/u/.vibe-local"),
+        ] {
+            env.insert(k.into(), serde_json::json!(v));
+        }
+        record.extra.insert("env".into(), serde_json::Value::Object(env));
+        let opts = launch_options("p1", &record);
+        let mut keys: Vec<&str> = opts.env.keys().map(String::as_str).collect();
+        keys.sort();
+        let mut want = [crate::app_env!("TAB_UID"), "VIBE_HOME"];
+        want.sort();
+        assert_eq!(keys, want);
+        // The stored record itself is not rewritten.
+        assert!(record.extra["env"].get("PATH").is_some());
     }
 
     #[test]

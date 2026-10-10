@@ -150,6 +150,13 @@ fn mint() -> Option<String> {
     Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// A grant for `tab` with no key, upstream or tmux session behind it, as
+/// [`issue`] hands a spawn — for other modules' teardown tests.
+#[cfg(test)]
+pub(crate) fn issue_for_test(scope: &str, tab: &str) -> Option<String> {
+    issue_grant(Grant { provider: Provider::Anthropic, scope: scope.to_string(), tab: tab.to_string(), tmux: None })
+}
+
 /// The token for `grant`: the one it already holds (a respawn of the same tab
 /// re-attaches the agent that still carries it), else a new one. `None` only
 /// without system randomness.

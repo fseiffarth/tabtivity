@@ -283,6 +283,38 @@ function undecorate(spans: ReadableSpan[]): ReadableSpan[] | "blank" | "border" 
 const SIDE_RULE = /(?:^|\s{2})[─━]{12,}$/u;
 /** A rule starting left of this is the screen's own, not a side panel's. */
 const MIN_SIDE_COLUMN = 24;
+/** Fewer rows than this are too few to tell a panel's divider from a table's
+ * column. */
+const MIN_DIVIDER_ROWS = 8;
+/** How far left of its column a row's divider may sit: each wide glyph left of
+ * it is one character on two cells. */
+const DIVIDER_SLACK = 4;
+
+/** Where `text` carries the divider found at `column`: the index of its `│`,
+ * or -1. */
+function dividerAt(text: string, column: number): number {
+  for (let index = column; index >= Math.max(0, column - DIVIDER_SLACK); index -= 1) {
+    if (text[index] === "│") return index;
+  }
+  return -1;
+}
+
+/**
+ * The column of a divider drawn down the whole screen, or -1. Claude Code's
+ * fullscreen renderer (2.1.292) opens its diff panel (`/diff`) as a pane right
+ * of a `│` that runs through every row, the input box and the footer included,
+ * with no gutter before it — a dialog's question can run up to the divider
+ * itself. A table's columns never cross the input frame, so a bar on every
+ * row is the pane's.
+ */
+function dividerColumn(texts: readonly string[]): number {
+  if (texts.length < MIN_DIVIDER_ROWS) return -1;
+  const first = texts[0];
+  for (let column = first.indexOf("│", MIN_SIDE_COLUMN); column >= 0; column = first.indexOf("│", column + 1)) {
+    if (texts.every((text) => dividerAt(text, column) >= 0)) return column;
+  }
+  return -1;
+}
 
 /**
  * Cuts a side panel off the rows it shares with the conversation, in place.
@@ -295,9 +327,21 @@ const MIN_SIDE_COLUMN = 24;
  * frame and a full-width row printed before the panel opened stay whole.
  * Columns are counted in characters: a wide glyph left of the panel shifts
  * that row's cut by one.
+ *
+ * The fullscreen renderer's pane is fenced by a divider instead
+ * (`dividerColumn`), and every row is cut at it: read whole, the pane's file
+ * header, rules and "New file not yet staged" ran into an agent's question,
+ * and cut off its options' notes.
  */
 function cutSidePanel(rows: ReadableSpan[][]) {
   const texts = rows.map((spans) => spanText(spans).replace(/\s+$/u, ""));
+  const divider = dividerColumn(texts);
+  if (divider >= 0) {
+    rows.forEach((spans, index) => {
+      trimSpansRight(spans, spanText(spans).length - dividerAt(texts[index], divider));
+    });
+    return;
+  }
   const byColumn = new Map<number, number[]>();
   texts.forEach((text, index) => {
     const match = SIDE_RULE.exec(text);

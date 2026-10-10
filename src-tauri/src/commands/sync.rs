@@ -175,14 +175,15 @@ async fn resolve(
 
 /// Pull a single file or a whole folder subtree from the host into the local
 /// mirror, marking each pulled file selected and recording its base. `rel_path`
-/// is project-relative (`""` = the whole project root). Returns the number of
-/// files transferred. Streams `sync-progress` as it goes.
+/// is project-relative (`""` = the whole project root). Returns how many files
+/// landed and the files over the cap it left on the host
+/// ([`remote_sync::PullOutcome`]). Streams `sync-progress` as it goes.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_pull(
     ctx: Ctx,
     project_id: String,
     rel_path: String,
-) -> Result<usize, String> {
+) -> Result<remote_sync::PullOutcome, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let (target, sftp) = resolve(&project_id, pool).await?;
@@ -203,7 +204,7 @@ pub async fn sync_pull(
 pub async fn sync_whole_project(
     ctx: Ctx,
     project_id: String,
-) -> Result<usize, String> {
+) -> Result<remote_sync::PullOutcome, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let (target, sftp) = resolve(&project_id, pool).await?;
@@ -1712,7 +1713,7 @@ async fn pull_subtree(
     sftp: &Sftp,
     rel: &str,
     manifest: &SyncManifestState,
-) -> Result<usize, String> {
+) -> Result<remote_sync::PullOutcome, String> {
     // Determine whether `rel` is a directory (walkable) or a single file.
     let (files, is_dir) =
         match remote_sync::walk_host_files(sftp, &target.spec.remote_path, rel).await {
@@ -1787,18 +1788,23 @@ async fn pull_subtree(
 
     let mirror_root = remote_sync::mirror_dir(project_id);
     let mut done = 0usize;
+    let mut outcome = remote_sync::PullOutcome::default();
     for file in files {
         let host_abs = join_remote(&target.spec.remote_path, &file.rel);
         let local = mirror_local_path(project_id, &file.rel);
-        // rsync already wrote the bytes; only stat locally to capture the base.
+        // rsync already wrote the bytes; only lstat locally to capture the base,
+        // and record only a regular file within the cap (gap 35): an oversized
+        // file was left out of the transfer, and whatever else a changing host
+        // tree slipped past the walk is skipped like the floor would.
         // Otherwise pull the file over SFTP (which confines the write, #863).
         let local_base = if rsynced {
-            std::fs::metadata(&local).ok().map(|m| local_meta(&m))
+            remote_sync::rsync_pulled_base(&local, file.size)
         } else {
             remote_sync::pull_file(sftp, &host_abs, file.size, &mirror_root, &file.rel)
                 .await
                 .ok()
         };
+        outcome.tally(&file, local_base.is_some());
         match local_base {
             Some((ls, lm)) => {
                 let mut guard = manifest.lock().await;
@@ -1809,7 +1815,8 @@ async fn pull_subtree(
             }
             None => {
                 // A single oversized/unreadable file shouldn't abort the whole
-                // folder sync; report it and carry on.
+                // folder sync; carry on. One over the cap is in the outcome
+                // for the UI to name (gap 35); the rest stay a stderr line.
                 eprintln!("sync_pull: skip '{}'", file.rel);
             }
         }
@@ -1817,7 +1824,7 @@ async fn pull_subtree(
         emit(ctx, project_id, "file", &file.rel, done, total);
     }
     emit(ctx, project_id, "done", rel, done, total);
-    Ok(done)
+    Ok(outcome)
 }
 
 /// Attempt the rsync fast-path for a directory pull of `rel`: probe rsync on both
@@ -1829,7 +1836,12 @@ async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::
     if !remote_sync::rsync_available_local() {
         return false;
     }
-    let Some(rsync_files) = remote_sync::rsync_subtree_files(files, rel) else {
+    // The floor refuses a file over the cap; so does the fast path (gap 35).
+    let within_cap = remote_sync::rsync_transfer_list(files);
+    if within_cap.is_empty() {
+        return false;
+    }
+    let Some(rsync_files) = remote_sync::rsync_subtree_files(&within_cap, rel) else {
         return false;
     };
     let spec = target.spec.clone();

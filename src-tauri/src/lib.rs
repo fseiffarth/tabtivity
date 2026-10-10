@@ -1186,6 +1186,12 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
+    // With that renderer off the page paints on the CPU, so a GPU video
+    // decoder's frames never reach the screen: the media viewer played with no
+    // picture. Demote GPU decoders for this process. See `services::webkit_video`.
+    #[cfg(target_os = "linux")]
+    services::webkit_video::install();
+
     // WebKit's AT-SPI bridge aborts the web process on a stale text offset, and
     // Tabtivity's constantly rewriting UI produces those by the second whenever a
     // screen reader is attached (2026-09-17: two renderer SIGABRTs, both taking
@@ -1397,7 +1403,7 @@ pub fn run() {
                 if let Some(id) = _app
                     .get_webview_window("main")
                     .and_then(|w| w.ns_window().ok())
-                    .and_then(|ns| platform::macos::ns_window_id(ns as *mut std::ffi::c_void))
+                    .and_then(platform::macos::ns_window_id)
                 {
                     workspace.lock().unwrap().backend.set_main_window_id(id);
                 }
@@ -1447,6 +1453,10 @@ pub fn run() {
             // logins and its ~/.claude, ~/.codex, ~/.gemini config, so no
             // agent comes back signed out or without its instructions. Before
             // the keeper and before any tab can spawn.
+            // First, drop the login paths that stopped being shared (dotenv
+            // files, Cline's provider config) from the store and the Host
+            // home, so neither the import nor the keeper sees them again.
+            services::agent_auth::retire_shared_paths();
             services::agent_auth::import_once();
             services::agent_global::import_once();
             services::agent_auth::start();
@@ -2066,6 +2076,7 @@ pub fn run() {
             commands::terminal::copilot_fence_sign_out,
             commands::terminal::agent_fence_marks,
             commands::terminal::register_host_bound_tab,
+            commands::terminal::pty_drop_files,
             commands::terminal::pty_write,
             commands::terminal::pty_resize,
             commands::terminal::pty_kill,
@@ -2480,6 +2491,10 @@ pub fn run() {
                 // is deliberately left alone: Ollama is a machine service as
                 // often as it is a Tabtivity detail.
                 commands::ollama::shutdown_owned_server();
+                // A spreadsheet viewer's parse child (`services::sheet_reader`):
+                // bounded by its own wall clock, ended here so none outlives
+                // the quit.
+                services::sheet_reader::kill_all_for_exit();
                 // The fenced Copilot language servers (one per consented project).
                 tauri::async_runtime::block_on(commands::copilot::stop_all_for_exit());
                 // Let the machine sleep again if a talk was on: the presenter's

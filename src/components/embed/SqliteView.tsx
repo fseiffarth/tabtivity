@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { ViewerHeader } from "./FileViewerPane";
 import { useT } from "../../lib/i18n";
 import { cellToneColor } from "../../lib/viewers/table";
+import { viewerErrorText } from "../../lib/viewers/limitError";
+import { useFileScope } from "./fileAccess";
 
 /** One page of a table, mirroring the backend `SqlitePage` struct. */
 type SqlitePage = {
@@ -17,9 +19,10 @@ const PAGE_SIZE = 100;
 /**
  * Read-only SQLite database browser (Dev C, frontend half). Lists the
  * database's tables/views in a left rail and renders the selected table's rows
- * in a paged, scrollable grid. Backend: `sqlite_tables(path)` and
- * `sqlite_page(path, table, limit, offset)` in `src-tauri/src/commands/
- * sqlite.rs`. All cells are React children (auto-escaped) — never raw HTML.
+ * in a paged, scrollable grid. Backend: `sqlite_tables(path, projectId)` and
+ * `sqlite_page(path, table, limit, offset, projectId)` in `src-tauri/src/
+ * commands/sqlite.rs`, confined to the owning project's roots. All cells are
+ * React children (auto-escaped) — never raw HTML.
  */
 export function SqliteView({
   path,
@@ -31,6 +34,7 @@ export function SqliteView({
   tabKey?: string;
 }) {
   const t = useT();
+  const scope = useFileScope();
   const [tables, setTables] = useState<string[] | null>(null);
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -47,7 +51,7 @@ export function SqliteView({
     setTablesError(null);
     setSelected(null);
     setOffset(0);
-    invoke<string[]>("sqlite_tables", { path })
+    invoke<string[]>("sqlite_tables", { path, projectId: scope })
       .then((names) => {
         if (cancelled) return;
         setTables(names);
@@ -59,7 +63,7 @@ export function SqliteView({
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, scope]);
 
   // Load the selected table's page whenever the table or offset changes.
   useEffect(() => {
@@ -76,6 +80,7 @@ export function SqliteView({
       table: selected,
       limit: PAGE_SIZE,
       offset,
+      projectId: scope,
     })
       .then((p) => {
         if (!cancelled) setPage(p);
@@ -86,7 +91,7 @@ export function SqliteView({
     return () => {
       cancelled = true;
     };
-  }, [path, selected, offset]);
+  }, [path, selected, offset, scope]);
 
   function selectTable(name: string) {
     setSelected(name);
@@ -109,7 +114,7 @@ export function SqliteView({
       >
         {tablesError != null ? (
           <div className="file-viewer-error" style={{ padding: "1rem", color: "#f85149" }}>
-            {tablesError}
+            {viewerErrorText(t, tablesError)}
           </div>
         ) : tables == null ? (
           <div
@@ -190,7 +195,7 @@ export function SqliteView({
                   className="sqlite-error"
                   style={{ padding: "1rem", color: "#f85149" }}
                 >
-                  {pageError}
+                  {viewerErrorText(t, pageError)}
                 </div>
               ) : page == null ? (
                 <div

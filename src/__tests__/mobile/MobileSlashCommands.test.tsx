@@ -86,6 +86,8 @@ describe(`${BRAND.display} Mobile slash commands — which CLI`, () => {
   it("offers each CLI only its own commands — Codex's /new is not Claude Code's", () => {
     // Codex's /new asks where the new conversation runs; /clear just starts it.
     expect(slashCatalog("codex").map((entry) => entry.command).slice(0, 2)).toEqual(["/clear", "/new"]);
+    expect(slashCatalog("codex").map((entry) => entry.command)).toContain("/permissions");
+    expect(slashCatalog("codex").map((entry) => entry.command)).not.toContain("/approvals");
     expect(slashCatalog("claude").map((entry) => entry.command)).toContain("/clear");
     expect(slashCatalog("claude").map((entry) => entry.command)).not.toContain("/new");
     expect(slashCatalog("gemini").map((entry) => entry.command)).toContain("/compress");

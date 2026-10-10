@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -301,7 +301,6 @@ fn routes() -> &'static Mutex<HashMap<String, OutputRoute>> {
     ROUTES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-static ROUTE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Trim with hysteresis (the frontend buffer's rule): cutting exactly to the
 /// cap on every chunk past it re-copies the whole buffer per chunk; letting it
@@ -442,16 +441,21 @@ fn route_digest_take(id: &str) -> Option<String> {
     route_digest_take_at(id, Instant::now())
 }
 
-/// Register a (re)spawn: keep the pane's visibility and any watchers, drop
-/// stale buffers, and mint the generation the task-end cleanup is guarded by.
+/// A route under a fresh generation, for the tests.
+#[cfg(test)]
 fn route_open(id: &str) -> u64 {
-    route_open_as(id, None)
+    let seq = crate::services::agent_fence::next_spawn_seq();
+    route_open_at(id, None, seq);
+    seq
 }
 
-/// [`route_open`] for a route whose events name `tab` instead of `id` (an
-/// attach PTY's, see [`attach_pty_id`]).
-fn route_open_as(id: &str, tab: Option<&str>) -> u64 {
-    let seq = ROUTE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+/// Register a (re)spawn: keep the pane's visibility and any watchers, drop
+/// stale buffers, and record the generation the task-end cleanup is guarded
+/// by — the spawn's own sequence number (`PreparedLaunch::spawn_seq`), so the
+/// task end names the spawn it belonged to. `tab` is set for a route whose
+/// events name that tab instead of `id` (an attach PTY's, see
+/// [`attach_pty_id`]).
+fn route_open_at(id: &str, tab: Option<&str>, seq: u64) {
     let mut map = routes().lock().unwrap();
     let route = map.entry(id.to_string()).or_default();
     route.tab = tab.map(str::to_string);
@@ -466,7 +470,6 @@ fn route_open_as(id: &str, tab: Option<&str>) -> u64 {
     route.decoder = Utf8StreamDecoder::default();
     route.last_activity = None;
     route.seq = seq;
-    seq
 }
 
 /// The retained catch-up tail for `id` (Group B #235), or an empty string when
@@ -864,6 +867,13 @@ struct PtyEntry {
     dead: Arc<AtomicBool>,
     crash_times: Vec<Instant>,
     meta: PtyMeta,
+    /// The local folder the process works in (`PreparedLaunch::drop_dir`),
+    /// where a file dropped onto the tab lands; `None` for a remote tab.
+    drop_dir: Option<String>,
+    /// The spawn's sequence number (`PreparedLaunch::spawn_seq`): what its
+    /// teardown passes to `launch_prep::on_tab_gone`, so a kill that lands
+    /// after a respawn of the same id cannot clear the respawn's state.
+    seq: u64,
 }
 
 /// Who a PTY belongs to, beyond its id — empty for every desktop PTY.
@@ -1039,11 +1049,13 @@ impl PtyRegistry {
         writer: Box<dyn Write + Send>,
         child: Box<dyn Child + Send + Sync>,
         dead: Arc<AtomicBool>,
+        seq: u64,
     ) {
-        self.insert_with(id, master, writer, child, dead, PtyMeta::default());
+        self.insert_with(id, master, writer, child, dead, PtyMeta::default(), seq);
     }
 
     /// [`Self::insert`] with the PTY's [`PtyMeta`].
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_with(
         &mut self,
         id: String,
@@ -1052,6 +1064,7 @@ impl PtyRegistry {
         child: Box<dyn Child + Send + Sync>,
         dead: Arc<AtomicBool>,
         meta: PtyMeta,
+        seq: u64,
     ) {
         // A spawn that reuses an id must not leak the previous child process,
         // and must keep its crash history so the crash-loop guard stays armed.
@@ -1091,11 +1104,52 @@ impl PtyRegistry {
                 dead,
                 crash_times,
                 meta,
+                drop_dir: None,
+                seq,
             },
         );
         // A new child (and the old one it may have replaced) changes the process
         // tree, so drop the cached descendant-pid set.
         invalidate_proc_tree_cache();
+    }
+
+    /// [`Self::insert_with`] for spawn `seq`, only while it is still the id's
+    /// newest spawn and not torn down (`agent_fence::is_current_spawn`).
+    /// Spawns of one id are prepared concurrently (a remount respawns while
+    /// the old mount's spawn is still in `launch_prep::prepare`) and may finish
+    /// out of order; an older one replacing a newer one's PTY left the newer
+    /// spawn's registration, tokens and turn binding with no PTY whose
+    /// teardown could end them (its own teardown is stale). Checked under the
+    /// registry lock, so a newer spawn of the id always inserts after this
+    /// one. A refused spawn hands its child back for the caller to end.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_current_spawn(
+        &mut self,
+        id: String,
+        master: Box<dyn MasterPty + Send>,
+        writer: Box<dyn Write + Send>,
+        child: Box<dyn Child + Send + Sync>,
+        dead: Arc<AtomicBool>,
+        meta: PtyMeta,
+        seq: u64,
+    ) -> Result<(), Box<dyn Child + Send + Sync>> {
+        if !crate::services::agent_fence::is_current_spawn(&id, seq) {
+            return Err(child);
+        }
+        self.insert_with(id, master, writer, child, dead, meta, seq);
+        Ok(())
+    }
+
+    /// Record where a file dropped onto the live tab `id` lands.
+    pub fn set_drop_dir(&mut self, id: &str, dir: Option<String>) {
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.drop_dir = dir;
+        }
+    }
+
+    /// `None` when no such tab is live; `Some(None)` for a remote one.
+    pub fn drop_dir(&self, id: &str) -> Option<Option<String>> {
+        self.entries.get(id).map(|e| e.drop_dir.clone())
     }
 
     pub fn input_sender(&self, id: &str) -> Option<tokio::sync::mpsc::Sender<Vec<u8>>> {
@@ -1284,8 +1338,7 @@ impl PtyRegistry {
             // Containerized tab: also TERM the in-container process (the docker
             // exec client we just killed is not it).
             crate::services::sandbox::kill_tab_process(&id);
-            crate::services::agent_fence::on_tab_gone(&id);
-            crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), &id);
+            crate::services::launch_prep::on_tab_gone(&id, e.seq);
         }
         reap_pids(subtree, ReapMode::Immediate);
         invalidate_proc_tree_cache();
@@ -1364,14 +1417,21 @@ pub fn teardown_taken(taken: Vec<TakenPty>) {
         if entry.meta.attach_of.is_some() {
             continue;
         }
-        // The tab is gone for good, so stop watching for its Codex session.
-        crate::services::codex_bind::untrack_now(&id);
-        // Containerized tab: killing the child above only killed the
-        // `docker exec` CLIENT — TERM the process inside the container too
-        // (best-effort, no-op for tabs that never containerized).
-        crate::services::sandbox::kill_tab_process(&id);
-        crate::services::agent_fence::on_tab_gone(&id);
-        crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), &id);
+        // This spawn's per-tab state — fence registration, proxy tokens, MCP
+        // tokens, turn binding — unless a respawn of the id has begun since.
+        // Then the respawn owns the id's Codex tracking and its in-container
+        // process record as well (`sandbox::register_exec_tab` already ended
+        // this spawn's in-container process when it replaced the record, and
+        // a respawn that fails first ends it in `launch_prep`), so a stale
+        // kill touches neither.
+        if crate::services::launch_prep::on_tab_gone(&id, entry.seq) {
+            // The tab is gone for good, so stop watching for its Codex session.
+            crate::services::codex_bind::untrack_now(&id);
+            // Containerized tab: killing the child above only killed the
+            // `docker exec` CLIENT — TERM the process inside the container too
+            // (best-effort, no-op for tabs that never containerized).
+            crate::services::sandbox::kill_tab_process(&id);
+        }
     }
     // The tree shrank; drop the cached descendant-pid set.
     invalidate_proc_tree_cache();
@@ -1391,6 +1451,7 @@ pub fn spawn_pty(
     ctx: CoreCtx,
     registry: Arc<Mutex<PtyRegistry>>,
     opts: PtyOptions,
+    seq: u64,
 ) -> Result<(), String> {
     // Record this PTY id so a later remount (HMR, webview reload) is a known
     // re-spawn. Agent-session resolution (Claude/Codex resume args) happens in
@@ -1409,7 +1470,7 @@ pub fn spawn_pty(
         attach_of: None,
     };
     let cmd = build_command(&opts);
-    launch(ctx, registry, &opts.id, cmd, opts.cols, opts.rows, meta, Some(&opts))
+    launch(ctx, registry, &opts.id, cmd, opts.cols, opts.rows, meta, Some(&opts), seq)
 }
 
 /// Give `ctx`'s server client a PTY of its own onto `opts.id`'s tab when the
@@ -1482,7 +1543,10 @@ pub fn join_tab(
         local_tmux: None,
         attach_of: Some(opts.id.clone()),
     };
-    launch(ctx.clone(), registry.clone(), &attach_id, cmd, attach.cols, attach.rows, meta, None)?;
+    // An attach PTY's own generation: no launch prepared it, so nothing
+    // but its route and registry entry carries the number.
+    let seq = crate::services::agent_fence::next_spawn_seq();
+    launch(ctx.clone(), registry.clone(), &attach_id, cmd, attach.cols, attach.rows, meta, None, seq)?;
     Ok(TabJoin { attached: true, stale })
 }
 
@@ -1499,6 +1563,7 @@ pub struct TabJoin {
 /// stream it. `tab` is the tab's own spawn (its options): the bookkeeping that
 /// follows a tab's process — Codex binding, MCP tokens, the fence — runs for
 /// it alone; `None` is an attach PTY, whose events name `meta.attach_of`.
+/// `seq` is the spawn's generation (`PreparedLaunch::spawn_seq` for a tab).
 #[allow(clippy::too_many_arguments)]
 fn launch(
     ctx: CoreCtx,
@@ -1509,6 +1574,7 @@ fn launch(
     rows: u16,
     meta: PtyMeta,
     tab: Option<&PtyOptions>,
+    seq: u64,
 ) -> Result<(), String> {
     let pty_system = NativePtySystem::default();
 
@@ -1547,9 +1613,25 @@ fn launch(
     // The id the frontend knows this PTY by: the tab's, for an attach PTY too.
     let payload_id = meta.attach_of.clone().unwrap_or_else(|| id.to_string());
     let dead = Arc::new(AtomicBool::new(false));
-    {
+    // A tab's own spawn goes in only while it is still the id's newest
+    // (`insert_current_spawn`); an attach PTY is a viewer with no spawn of
+    // its own to be superseded.
+    let refused = {
         let mut reg = registry.lock().unwrap();
-        reg.insert_with(id.to_string(), pair.master, writer, child, dead.clone(), meta);
+        if tab.is_some() {
+            reg.insert_current_spawn(id.to_string(), pair.master, writer, child, dead.clone(), meta, seq)
+                .err()
+        } else {
+            reg.insert_with(id.to_string(), pair.master, writer, child, dead.clone(), meta, seq);
+            None
+        }
+    };
+    if let Some(mut child) = refused {
+        if let Some(pid) = child.process_id() {
+            reap_child_subtree(pid, ReapMode::Graceful);
+        }
+        let _ = child.kill();
+        return Err(format!("terminal '{id}': a newer start of this tab replaced this one"));
     }
 
     emit_pty_event(
@@ -1595,11 +1677,12 @@ fn launch(
     // ever tear down its own.
     let bind_seq = tab.and_then(|_| crate::services::codex_bind::current_seq(&id));
     let resume_seq = tab.and_then(|_| crate::services::codex_bind::resume_seq(&id));
-    let route_seq = if is_tab {
-        route_open(&id)
+    let route_seq = seq;
+    if is_tab {
+        route_open_at(&id, None, route_seq);
     } else {
-        route_open_as(&id, Some(&payload_id))
-    };
+        route_open_at(&id, Some(&payload_id), route_seq);
+    }
     let env = tab.map(|opts| &opts.env);
     let mcp_token = env.and_then(|env| {
         env.get(crate::services::root_mcp::TOKEN_ENV)
@@ -1685,7 +1768,7 @@ fn launch(
         }
         if current_spawn_ended {
             if is_tab {
-                crate::services::agent_fence::on_tab_gone(&id);
+                crate::services::agent_fence::on_tab_gone(&id, route_seq);
             }
             if let Some(token) = help_token {
                 crate::services::root_mcp::revoke_token(&token);
@@ -1829,7 +1912,8 @@ fn command_for_resolved(path: std::path::PathBuf) -> CommandBuilder {
     match ext.as_deref() {
         Some("cmd") | Some("bat") => {
             let mut c = CommandBuilder::new("cmd.exe");
-            c.arg("/c");
+            c.arg("/D");
+            c.arg("/C");
             c.arg(path);
             c
         }
@@ -1891,6 +1975,11 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
         if crate::services::webkit_a11y::installed() {
             cmd.env_remove(crate::services::webkit_a11y::BUS_ADDRESS_VAR);
         }
+        // Same for the GPU-decoder demotion (`services::webkit_video`): it is
+        // for Tabtivity's software-painted window, not a player a tab launches.
+        if crate::services::webkit_video::installed() {
+            cmd.env_remove(crate::services::webkit_video::RANK_VAR);
+        }
     }
 
     cmd
@@ -1910,7 +1999,7 @@ pub(crate) fn insert_test_pty(registry: &Arc<Mutex<PtyRegistry>>, id: &str, meta
     registry
         .lock()
         .unwrap()
-        .insert_with(id.to_string(), pair.master, writer, child, Arc::new(AtomicBool::new(false)), meta);
+        .insert_with(id.to_string(), pair.master, writer, child, Arc::new(AtomicBool::new(false)), meta, 0);
 }
 
 /// End every PTY a test left in `registry`, without the tab cleanups.
@@ -2462,7 +2551,7 @@ mod tests {
         let dead = Arc::new(AtomicBool::new(false));
         {
             let mut reg = registry.lock().unwrap();
-            reg.insert("test".to_string(), master, writer, child, dead);
+            reg.insert("test".to_string(), master, writer, child, dead, 0);
         }
 
         resize_pty(&registry, "test", 100, 40).expect("resize");
@@ -2475,6 +2564,77 @@ mod tests {
         drop(reg);
 
         registry.lock().unwrap().kill("test");
+    }
+
+    /// A PTY running `sleep 30`, for the registry tests.
+    #[allow(clippy::type_complexity)]
+    fn sleeper() -> (Box<dyn MasterPty + Send>, Box<dyn Write + Send>, Box<dyn Child + Send + Sync>) {
+        let pair = NativePtySystem::default()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("sleep");
+        cmd.arg("30");
+        let child = pair.slave.spawn_command(cmd).expect("spawn sleep");
+        let writer = pair.master.take_writer().expect("take writer");
+        (pair.master, writer, child)
+    }
+
+    /// Gap 18 review: a kill whose teardown lands after a remount began
+    /// respawning the id leaves the respawn's Codex resume claim (and its
+    /// tracking, removed by the same `untrack_now`).
+    #[test]
+    fn a_stale_kill_leaves_the_respawns_codex_resume_claim() {
+        use crate::services::{agent_fence, codex_bind};
+        let id = "gen-reg:codex";
+        let mut reg = PtyRegistry::default();
+        let old = agent_fence::begin_spawn(id);
+        let (master, writer, child) = sleeper();
+        assert!(reg.insert_current_spawn(id.into(), master, writer, child, Arc::new(AtomicBool::new(false)), PtyMeta::default(), old).is_ok());
+        assert!(agent_fence::register_tab(id, None, old));
+        // The respawn begins and claims the Codex session it resumes.
+        let new = agent_fence::begin_spawn(id);
+        let mut opts = PtyOptions {
+            id: id.into(), cmd: "codex".into(), args: vec!["resume".into(), "0199aaaa-0000-7000-8000-00000000c0de".into()],
+            env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false, agent: true,
+            project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
+            local_model: false, schedule_target_id: None, host_session: false,
+        };
+        codex_bind::reserve_resume(&mut opts).expect("the respawn claims its session").keep();
+        let claim = codex_bind::resume_seq(id);
+        assert!(claim.is_some());
+        reg.take(id).expect("the old PTY").teardown();
+        assert_eq!(codex_bind::resume_seq(id), claim, "a stale kill released the respawn's claim");
+        // The respawn's own teardown ends it.
+        let (master, writer, child) = sleeper();
+        assert!(reg.insert_current_spawn(id.into(), master, writer, child, Arc::new(AtomicBool::new(false)), PtyMeta::default(), new).is_ok());
+        reg.take(id).expect("the new PTY").teardown();
+        assert_eq!(codex_bind::resume_seq(id), None);
+    }
+
+    /// Gap 18 review: two spawns of one id prepared at once can finish out of
+    /// order. The older one may not replace the newer one's PTY, whose
+    /// teardown is the only one that ends the newer spawn's grants.
+    #[test]
+    fn an_older_spawn_never_replaces_a_newer_ones_pty() {
+        use crate::services::agent_fence;
+        let id = "gen-reg:order";
+        let mut reg = PtyRegistry::default();
+        let older = agent_fence::begin_spawn(id);
+        let newer = agent_fence::begin_spawn(id);
+        // The newer spawn's prepare finished first.
+        let (master, writer, child) = sleeper();
+        let newer_pid = child.process_id();
+        assert!(reg.insert_current_spawn(id.into(), master, writer, child, Arc::new(AtomicBool::new(false)), PtyMeta::default(), newer).is_ok());
+        let (master, writer, child) = sleeper();
+        let mut refused = reg
+            .insert_current_spawn(id.into(), master, writer, child, Arc::new(AtomicBool::new(false)), PtyMeta::default(), older)
+            .expect_err("the older spawn is refused");
+        let _ = refused.kill();
+        assert_eq!(reg.pid(id), newer_pid, "the newer spawn's PTY stays");
+        assert_eq!(reg.entries.get(id).map(|e| e.seq), Some(newer));
+        // So the newer spawn's own teardown is the one that ends the tab.
+        reg.take(id).expect("the newer PTY").teardown();
+        assert!(!agent_fence::is_current_spawn(id, newer), "its teardown was current");
     }
 
     /// Closing a tab must abort the process **inside** it, not just the shell
@@ -2512,7 +2672,7 @@ mod tests {
         registry
             .lock()
             .unwrap()
-            .insert("test".to_string(), master, writer, child, dead);
+            .insert("test".to_string(), master, writer, child, dead, 0);
 
         // SAFETY: kill(pid, 0) probes existence without signalling; no pointers.
         let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
@@ -2581,6 +2741,7 @@ mod tests {
                 writer,
                 child,
                 Arc::new(AtomicBool::new(false)),
+                0,
             );
         }
         // Each leader's `sleep` child, once it has appeared.
@@ -2704,7 +2865,8 @@ mod client_tests {
     fn an_attach_routes_replay_names_the_tab() {
         let tab = "client-t:replay";
         let attach = attach_pty_id(tab, &web(2));
-        let seq = route_open_as(&attach, Some(tab));
+        let seq = crate::services::agent_fence::next_spawn_seq();
+        route_open_at(&attach, Some(tab), seq);
         route_chunk_at(&attach, b"while hidden", Instant::now(), seq);
         let events = RecordingEvents::new();
         let ctx = ctx_as(Caller::Client(web(2)), events.clone());
@@ -2956,7 +3118,8 @@ mod client_tests {
         route_set_visible(&ctx1, tab, "v1", true, 1, "web-81");
         let join = join_tab(&ctx1, &registry, &opts(100, 30), attach_argv).unwrap();
         assert!(!join.attached && join.stale.is_none(), "nothing to join yet");
-        spawn_pty(ctx1.clone(), registry.clone(), opts(100, 30)).unwrap();
+        let seq = crate::services::agent_fence::begin_spawn(tab);
+        spawn_pty(ctx1.clone(), registry.clone(), opts(100, 30), seq).unwrap();
         wait_for("the first client", &|| clients() == ["100x30"]);
 
         // Page 2 opens the same tab: a tmux client of its own, at its size.

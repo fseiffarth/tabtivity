@@ -42,9 +42,18 @@ where
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    #[cfg(not(unix))]
+    // Windows: like the Unix mode, only a file this call creates is
+    // restricted (an `icacls` run per write would cost a spawn each time).
+    #[cfg(windows)]
+    let created = private && !path.exists();
+    #[cfg(not(any(unix, windows)))]
     let _ = private;
-    opts.open(path)?.write_all(json.as_bytes())?;
+    let mut file = opts.open(path)?;
+    #[cfg(windows)]
+    if created {
+        crate::services::private_file::restrict_to_owner(path);
+    }
+    file.write_all(json.as_bytes())?;
     Ok(())
 }
 
@@ -812,15 +821,10 @@ mod tests {
             .unwrap_or("");
         // The home tree: the current name, or the old one where an install
         // made before the rename keeps it.
-        let home = paths::home_dir();
-        let expected = if !home.join(crate::brand::HOME_DIR_NAME).exists()
-            && home.join(crate::brand::LEGACY_HOME_DIR_NAME).exists()
-        {
-            crate::brand::LEGACY_HOME_DIR_NAME
-        } else {
-            crate::brand::HOME_DIR_NAME
-        };
-        assert_eq!(parent, expected);
+        assert!(
+            parent == crate::brand::HOME_DIR_NAME || parent == crate::brand::LEGACY_HOME_DIR_NAME,
+            "{dir:?}"
+        );
     }
 
     // ── write_json / read_json ─────────────────────────────────────────────

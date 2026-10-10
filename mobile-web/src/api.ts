@@ -135,7 +135,16 @@ export interface ProjectPromptList { prompts: ProjectPrompt[]; desktop_available
 export interface ClosedTabRow { id: string; label: string; agent: string; closed_at: number }
 /** `files`: whether the read-only file browser answers for this project
  * (the desktop's switch is on, and it is a project, not a box or root). */
-export interface ProjectDetail { project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean; /** The phone may open shell tabs (`shell_tabs` on the desktop); absent is off. */ shells?: boolean }
+export interface ProjectDetail {
+  project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean;
+  /** The phone may open shell tabs (`shell_tabs` on the desktop); absent is off. */
+  shells?: boolean;
+  /** How the host's tabs reach the phone: `tmux`, or `unsupported` on a host
+   * with no tmux (Windows), where nothing can be opened, scheduled or sent
+   * to — the project screen hides ＋, Schedule and Mark up's Submit and says
+   * so. Absent (an older desktop) is `tmux`. */
+  terminals?: "tmux" | "unsupported";
+}
 export interface TodoColumn { id: string; name: string; position: number; done: boolean; archived: boolean; intake: boolean; overdue: boolean; due_today: boolean; color?: string }
 export interface TodoSubtask { id: string; title: string; done: boolean }
 export interface TodoTaskInput {
@@ -1074,6 +1083,13 @@ export function refreshProjectFile(projectId: string, folder: string | undefined
  * asked about rather than waiting for the next poll. */
 export async function deleteOutboxFile(scope: OutboxScope, name: string): Promise<void> {
   await api<{ removed: boolean }>(`${outboxBase(scope)}/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+/** `DELETE …/outbox` — the gallery's Delete all, to free the space: every
+ * file the outbox would serve, past the listing's 40 too. Same exact-origin
+ * check as one file's delete; answers how many files went and their bytes. */
+export async function clearOutbox(scope: OutboxScope): Promise<{ removed: number; freed: number }> {
+  return api<{ removed: number; freed: number }>(outboxBase(scope), { method: "DELETE" });
 }
 
 /** POSTs a raw file to one of the desktop's drop boxes and returns the status

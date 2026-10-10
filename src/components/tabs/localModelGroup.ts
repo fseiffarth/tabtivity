@@ -123,6 +123,12 @@ export function useLocalModelPlacement(
  * single "load onto GPU" row that stays in the open menu and gives way to the
  * agents when the load lands.
  */
+/** The drivers not yet started live, each id spelled out for the untested register. */
+const DRIVER_UNTESTED: Record<string, Pick<AddMenuEntry, "untested">> = {
+  pi: { untested: "localDriver.pi" },
+  cline: { untested: "localDriver.cline" },
+};
+
 export function localModelMenuGroup(opts: {
   localModel: string | undefined;
   localModelOffInRoot: string | undefined;
@@ -134,8 +140,25 @@ export function localModelMenuGroup(opts: {
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
 }): AddMenuGroup {
   const { localModel, localModelOffInRoot, localDrivers, vibeForLocalModel, gpu, t } = opts;
+  // `heavy_harness` cautions, it never withholds — see
+  // lib/agents/localDrivers.ts. The row stays pickable because which local
+  // models cope is not something the backend can probe.
+  const driverRow = (d: LocalDriverInfo, model: string): AddMenuEntry => ({
+    key: d.id,
+    label: d.label,
+    ...DRIVER_UNTESTED[d.id],
+    color: TAB_ACCENT["local_agent"],
+    caution: d.heavy_harness
+      ? t("newTabMenu.localDriverHeavyHarness", { agent: d.label })
+      : undefined,
+    onPick: () => opts.onLaunch(d.id, d.label, model),
+  });
+  const drivers = (heavy: boolean, model: string) =>
+    localDrivers.filter((d) => d.available && d.heavy_harness === heavy).map((d) => driverRow(d, model));
   const agents: AddMenuEntry[] = localModel
     ? [
+        // Light-harness drivers (OpenCode, Pi) lead, ahead of Mistral.
+        ...drivers(false, localModel),
         // Mistral/vibe keeps its bespoke per-model VIBE_HOME path.
         ...(vibeForLocalModel
           ? [{
@@ -145,18 +168,7 @@ export function localModelMenuGroup(opts: {
               onPick: () => opts.onVibe(localModel),
             }]
           : []),
-        // `heavy_harness` cautions, it never withholds — see
-        // lib/agents/localDrivers.ts. The row stays pickable because which
-        // local models cope is not something the backend can probe.
-        ...localDrivers.filter((d) => d.available).map((d) => ({
-          key: d.id,
-          label: d.label,
-          color: TAB_ACCENT["local_agent"],
-          caution: d.heavy_harness
-            ? t("newTabMenu.localDriverHeavyHarness", { agent: d.label })
-            : undefined,
-          onPick: () => opts.onLaunch(d.id, d.label, localModel),
-        })),
+        ...drivers(true, localModel),
       ]
     : [];
 

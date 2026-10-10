@@ -3601,3 +3601,41 @@ Found sound by the reviewer: the `root_mcp.rs` port, every spawn path's
 carrier step, `fence_scope::run`'s hook, the boxes store, the `Phone`
 bindings, `auth.rs`'s union, the frontend joins, the i18n keys and the other
 filemap rows.
+
+## Merge `develop` → `hosted` (2026-10-10)
+
+`develop` at `f4f06fb0` (95 commits past the last merge's `a6ed2c7a`: the
+2026-10-08 threat-recheck fixes, macOS/Windows completion, the media-viewer
+GPU-decoder demotion, terminal file drops, the spawn-generation guard) merged
+into `hosted` at `7f84eba8`; then `develop`'s KaTeX bump `6754d5cd` on top.
+13 files conflicted; resolved by hand in one session, no subagents.
+
+- **Command files** (`sheets.rs`, `sqlite.rs`, `sync.rs`, `agents.rs`,
+  `commands/terminal.rs`): develop's new signatures (`project_id`
+  confinement, `PullOutcome`, local OpenCode changes) in the hosted form —
+  `cfg_attr(feature = "desktop", …)`, `Ctx`/`ctx.get`, `app_core::rt`.
+  `pty_drop_files` takes `Ctx`; `PtySpawned` carries both `attached` and
+  `resting`.
+- **`terminal/mod.rs`: attach PTYs × spawn generations.** A tab's own spawn
+  inserts through develop's `insert_current_spawn` (refused unless its seq is
+  still the id's newest) and its route opens under that seq; an attach PTY
+  (TODO #2347) takes a fresh `next_spawn_seq()` and the plain `insert_with`
+  (no launch prepared it, so `is_current_spawn` would refuse it). Teardown
+  still skips attach PTYs before develop's guarded `launch_prep::on_tab_gone`;
+  the reader task's `agent_fence::on_tab_gone(&id, seq)` stays tab-only.
+  `route_open_as` folded into `route_open_at(id, tab, seq)`; `PtyEntry`
+  keeps `meta`, `drop_dir` and `seq`.
+- **`pty_drop_files` is `Client`** (new row + rationale in `command_class.rs`,
+  `commandClasses.ts` regenerated): it reads OS-drop paths of the machine the
+  user sits at; a daemon would read its own disk outside the user's roots.
+- `services/mod.rs`: develop's new `webkit_video` and `win_links` stay in the
+  desktop crate (nothing in `src-core` spawns children that must strip them).
+- CI: the Windows/macOS jobs keep hosted's core-crate tests and workspace
+  check and take develop's staged clippy step and comments.
+- Filemap rows merged row by row (both sides' additions kept).
+
+Gates: `cargo check`/`clippy --workspace --all-targets -D warnings` clean;
+`cargo test` src-tauri 3743 passed (4 ignored), src-core 95, gateway/serverd
+133; `npm run build`; `npm test` 755 files / 7681 tests; `npm run lint` 0
+errors, 28 warnings (= develop); `brand-check` ok. Not run: the
+Windows/macOS cross-checks and the serverd `ldd`. Nothing run live.

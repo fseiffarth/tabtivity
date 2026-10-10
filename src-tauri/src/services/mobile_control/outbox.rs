@@ -370,6 +370,53 @@ pub fn remove(root: &Path, name: &str) -> Result<(), OutboxError> {
     Ok(())
 }
 
+/// What [`remove_all`] cleared: how many files and how many bytes they held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Cleared {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// Delete every file the outbox would serve — the phone's "Delete all", to
+/// free the space a folder nobody prunes keeps taking. Not bounded by
+/// `MAX_LISTED`: the files past the listing's strip take space too. Each leaf
+/// goes exactly as [`remove`] takes one (re-proved by `probe` in the held
+/// folder, markers with it); anything the phone could not see — a link, a
+/// folder, an oversized file — stays. A file that cannot be unlinked is
+/// skipped; the error is only an error when nothing at all went.
+pub fn remove_all(root: &Path) -> Result<Cleared, OutboxError> {
+    let Some(dir) = outbox_dir(root)? else {
+        return Ok(Cleared::default());
+    };
+    let entries = dir.entries().map_err(|e| match e {
+        super::files::FilesError::Io(e) => OutboxError::Io(e),
+        _ => OutboxError::Unavailable,
+    })?;
+    let mut cleared = Cleared::default();
+    let mut failed = None;
+    for (name, is_dir) in entries {
+        if is_dir {
+            continue;
+        }
+        let Some((_file, meta, _kind)) = probe(&dir, &name) else {
+            continue;
+        };
+        match dir.remove_file(&name) {
+            Ok(()) => {
+                let _ = dir.remove_file(&marker_name(&name));
+                let _ = dir.remove_file(&source_name(&name));
+                cleared.files += 1;
+                cleared.bytes += meta.len();
+            }
+            Err(e) => failed = Some(e.to_string()),
+        }
+    }
+    match failed {
+        Some(error) if cleared.files == 0 => Err(OutboxError::Io(error)),
+        _ => Ok(cleared),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,6 +671,38 @@ mod tests {
         assert_eq!(remove(dir.path(), "absent.png"), Err(OutboxError::NotFound));
         assert_eq!(remove(dir.path(), "../keep.png"), Err(OutboxError::NotFound));
         assert!(box_dir.join("keep.png").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_all_clears_every_servable_file_past_the_listing_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("private.png");
+        fs::write(&secret, PNG).unwrap();
+        let box_dir = outbox(dir.path());
+        for i in 0..(MAX_LISTED + 3) {
+            touch(&box_dir, &format!("p{i}.png"), PNG, Duration::from_secs(i as u64));
+        }
+        fs::write(box_dir.join(".p0.png.tab"), "aaaa-1").unwrap();
+        fs::write(box_dir.join(".p0.png.src"), "docs/p.png").unwrap();
+        std::os::unix::fs::symlink(&secret, box_dir.join("leak.png")).unwrap();
+        fs::create_dir(box_dir.join("folder")).unwrap();
+
+        let cleared = remove_all(dir.path()).unwrap();
+        assert_eq!(cleared.files, MAX_LISTED + 3);
+        assert_eq!(cleared.bytes, (PNG.len() * (MAX_LISTED + 3)) as u64);
+        assert!(list(dir.path()).unwrap().is_empty());
+        assert!(!box_dir.join(".p0.png.tab").exists() && !box_dir.join(".p0.png.src").exists());
+        // The link and the folder were never the phone's to clear.
+        assert!(box_dir.join("leak.png").symlink_metadata().is_ok() && secret.exists());
+        assert!(box_dir.join("folder").is_dir());
+
+        // Again, and with no outbox at all: nothing to clear, not an error.
+        assert_eq!(remove_all(dir.path()), Ok(Cleared::default()));
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(remove_all(empty.path()), Ok(Cleared::default()));
+        assert_eq!(remove_all(&empty.path().join("missing")), Err(OutboxError::Unavailable));
     }
 
     #[test]

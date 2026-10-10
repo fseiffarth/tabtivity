@@ -3,10 +3,9 @@
 //! Codex used to keep every conversation as a JSONL transcript under
 //! `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`, and Tabtivity
 //! read the model tag beside an agent tab out of that file's tail. Codex
-//! 0.153.4 writes its history into a SQLite database instead: the `threads` row
-//! still *names* a `rollout_path`, but no such file is written any more, so the
-//! tail read behind [`crate::services::agent_session::agent_session_model`]
-//! finds nothing and every Codex tab lost its pill.
+//! 0.153.4 could keep a thread in SQLite without writing its named rollout.
+//! Codex 0.160.1 writes rollouts again, but the store remains needed when a
+//! thread has no file and to check whether a retained rollout was archived.
 //!
 //! The row's own `model` column is the same fact by another route — the model
 //! that thread is running — so that is what this module reads, as the fallback
@@ -77,8 +76,8 @@ fn newest_db_in(dir: &Path, stem: &str) -> Option<PathBuf> {
 /// Whether the store at `db` still holds the thread `thread_id`.
 ///
 /// This is the successor to walking `~/.codex/sessions` for a
-/// `rollout-*-<uuid>.jsonl`: since 0.153.4 Codex records the thread here and
-/// writes no rollout file, so the walk finds nothing and every Codex tab fell
+/// `rollout-*-<uuid>.jsonl`: 0.153.4 could record the thread here without a
+/// rollout file, so the walk found nothing and a Codex tab fell
 /// back to a fresh session on relaunch (see
 /// [`crate::services::agent_session::codex_session_exists`]).
 ///
@@ -86,17 +85,20 @@ fn newest_db_in(dir: &Path, stem: &str) -> Option<PathBuf> {
 /// conversation is done; resuming it would be the one case where answering
 /// "yes, it exists" is worse than starting fresh.
 pub fn thread_exists(db: &Path, thread_id: &str) -> bool {
-    use rusqlite::{Connection, OpenFlags};
+    thread_archived(db, thread_id) == Some(false)
+}
 
-    let Ok(conn) = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
-        return false;
-    };
-    conn.query_row(
-        "SELECT 1 FROM threads WHERE id = ?1 AND archived = 0",
-        [thread_id],
-        |_| Ok(()),
-    )
-    .is_ok()
+/// The store's archive verdict for one thread. `None` means no row or an
+/// unreadable store; a legacy rollout may still be the only record then.
+pub(crate) fn thread_archived(db: &Path, thread_id: &str) -> Option<bool> {
+    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let archived: Option<i64> = conn
+        .query_row("SELECT archived FROM threads WHERE id = ?1", [thread_id], |row| row.get(0))
+        .optional()
+        .ok()?;
+    archived.map(|value| value != 0)
 }
 
 /// The model the thread `thread_id` is running, per the store at `db`.

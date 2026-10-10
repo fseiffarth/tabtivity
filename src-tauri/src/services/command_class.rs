@@ -52,6 +52,10 @@
 //!   requests to the admin-allowed model list server-side (plan §3.3).
 //! - **`list_recent_downloads` is `Client`**: Recent Downloads are always the
 //!   device the user sits at, never the server's folders.
+//! - **`pty_drop_files` is `Client`**: it reads the absolute paths an OS file
+//!   manager drop hands the window, which name files on the machine the user
+//!   sits at; a daemon would read its own disk outside the user's roots. A
+//!   browser client has no such paths and leaves the drop out.
 //! - `system_monitor_snapshot` is host-aware (a project's remote host, else the
 //!   daemon's), so it is `Core`; the bare this-machine `monitor` readings are
 //!   `Client` as §3.3 lists them.
@@ -945,6 +949,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("local_tmux_rename", Core),
     ("local_tmux_screen", Core),
     ("project_cpu_percent", Core),
+    ("pty_drop_files", Client),
     ("pty_kill", Core),
     ("pty_kill_scope", Core),
     ("pty_remove_view", Core),

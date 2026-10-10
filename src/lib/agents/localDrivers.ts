@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 /**
  * A coding agent that can be pointed at the active local (Ollama) model —
- * Claude Code, Codex, OpenCode, Droid, OpenClaw. Mirrors the backend's
+ * OpenCode, Pi, Claude Code, Codex, Droid, OpenClaw, Cline. Mirrors the backend's
  * `LocalDriverInfo`.
  */
 export interface LocalDriverInfo {

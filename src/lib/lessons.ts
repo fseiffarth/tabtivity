@@ -1,5 +1,6 @@
 import { ADVANCED_TOUR_STEPS, TOUR_STEPS, type TourStep } from "./tour";
 import type { TranslationKey } from "./i18n";
+import { modifierLabel } from "./shortcuts/shortcuts";
 
 /**
  * Task "lessons" — short, replayable narrated walkthroughs for specific jobs
@@ -458,6 +459,7 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.keyboardSteering.projectCycleTitle",
         bodyKey: "lessons.keyboardSteering.projectCycleBody",
+        bodyParams: () => ({ modifier: modifierLabel() }),
       },
     ],
   },
@@ -659,6 +661,7 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.deckPresenter.layersTitle",
         bodyKey: "lessons.deckPresenter.layersBody",
+        bodyParams: () => ({ modifier: modifierLabel() }),
       },
       {
         id: "builds",
@@ -735,6 +738,7 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.runPython.goToDefTitle",
         bodyKey: "lessons.runPython.goToDefBody",
+        bodyParams: () => ({ modifier: modifierLabel() }),
       },
     ],
   },
@@ -1195,6 +1199,7 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.localModel.useAutocompleteTitle",
         bodyKey: "lessons.localModel.useAutocompleteBody",
+        bodyParams: () => ({ modifier: modifierLabel() }),
       },
     ],
   },

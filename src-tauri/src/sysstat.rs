@@ -1433,19 +1433,13 @@ fn parse_host_processor_ticks(ticks: &[u32], ns_per_tick: u64) -> Vec<CpuTimes> 
         .collect()
 }
 
-/// Map a BSD `pbi_status` process state to the Linux-style single letter the
-/// monitor pane already renders: SRUN→R, SSLEEP→S, SSTOP→T, SZOMB→Z (SIDL→I;
-/// anything unknown → empty).
-/// Decode a `KERN_PROCARGS2` buffer into a space-joined argv.
+/// Split a `KERN_PROCARGS2` buffer into `argc` and the bytes from `argv[0]` on.
 ///
 /// Layout: a native-endian `u32` argc, the executable path (NUL-terminated,
 /// then padded with further NULs up to an alignment the kernel chooses), then
-/// `argc` NUL-terminated argv strings, then the environment. Only the argv
-/// strings are taken — the environment is exactly the part a monitor must not
-/// read (it is where tokens live) — and the exec path is not repeated, since
-/// `argv[0]` already names the program.
+/// `argc` NUL-terminated argv strings, then the environment.
 #[cfg(any(target_os = "macos", test))]
-fn parse_procargs2(buf: &[u8]) -> Option<String> {
+fn procargs2_args(buf: &[u8]) -> Option<(usize, &[u8])> {
     let argc = u32::from_ne_bytes(buf.get(0..4)?.try_into().ok()?) as usize;
     let rest = &buf[4..];
     // Skip the exec path and its NUL padding.
@@ -1454,8 +1448,20 @@ fn parse_procargs2(buf: &[u8]) -> Option<String> {
     while cursor < rest.len() && rest[cursor] == 0 {
         cursor += 1;
     }
+    Some((argc, &rest[cursor..]))
+}
+
+/// Decode a `KERN_PROCARGS2` buffer into a space-joined argv.
+///
+/// Only the argv strings are taken — the environment is exactly the part a
+/// monitor must not read (it is where tokens live) — and the exec path is not
+/// repeated, since `argv[0]` already names the program. The one reader of the
+/// environment part is [`procargs2_env`], for a single named variable.
+#[cfg(any(target_os = "macos", test))]
+fn parse_procargs2(buf: &[u8]) -> Option<String> {
+    let (argc, rest) = procargs2_args(buf)?;
     let mut args: Vec<String> = Vec::with_capacity(argc);
-    for part in rest[cursor..].split(|&b| b == 0) {
+    for part in rest.split(|&b| b == 0) {
         if args.len() == argc {
             break;
         }
@@ -1465,6 +1471,45 @@ fn parse_procargs2(buf: &[u8]) -> Option<String> {
     (!joined.is_empty()).then_some(joined)
 }
 
+/// The environment part of a `KERN_PROCARGS2` buffer: the NUL-separated bytes
+/// after the `argc` argv strings (the kernel's trailing `apple[]` strings
+/// follow it; a caller matching one `NAME=` prefix need not care). Empty for a
+/// short or malformed buffer.
+///
+/// This is the part [`parse_procargs2`] refuses to read, and it stays out of
+/// the monitor: its only caller is `agent_turn`'s background-job scan, which
+/// looks for the tab-id variable alone and never keeps or surfaces anything
+/// else (the macOS twin of its `/proc/<pid>/environ` read).
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn procargs2_env(buf: &[u8]) -> &[u8] {
+    let Some((argc, mut rest)) = procargs2_args(buf) else { return &[] };
+    for _ in 0..argc {
+        match rest.iter().position(|&b| b == 0) {
+            Some(end) => rest = &rest[end + 1..],
+            None => return &[],
+        }
+    }
+    rest
+}
+
+/// The raw `KERN_PROCARGS2` buffer of one of the user's own processes (argv
+/// **and** environment). Only for [`procargs2_env`]'s one named lookup; every
+/// argv reader goes through [`cmdline`].
+#[cfg(target_os = "macos")]
+pub(crate) fn procargs2_raw(pid: u32) -> Option<Vec<u8>> {
+    platform::procargs2_raw(pid)
+}
+
+/// The kernel's short name of a process (`pbi_comm`, the executable's name cut
+/// to 16 bytes — what Linux's `/proc/<pid>/stat` calls `comm`).
+#[cfg(target_os = "macos")]
+pub(crate) fn comm(pid: u32) -> Option<String> {
+    platform::comm(pid)
+}
+
+/// Map a BSD `pbi_status` process state to the Linux-style single letter the
+/// monitor pane already renders: SRUN→R, SSLEEP→S, SSTOP→T, SZOMB→Z (SIDL→I;
+/// anything unknown → empty).
 #[cfg(any(target_os = "macos", test))]
 fn bsd_process_state(status: u32) -> String {
     match status {
@@ -2177,11 +2222,21 @@ mod platform {
         Some(bsd_info(pid)?.pbi_ppid)
     }
 
+    /// The kernel's short process name via the BSD-info flavor (`pbi_comm`).
+    pub fn comm(pid: u32) -> Option<String> {
+        Some(super::decode_ansi_nul(&bsd_info(pid)?.pbi_comm))
+    }
+
     /// Command line via `sysctl KERN_PROCARGS2`, the one documented read of
     /// another process's argv on macOS. Readable for the caller's own processes
     /// (which is all the process-tree walk ever asks about); a foreign pid
     /// answers `EPERM` and so `None`.
     pub fn cmdline(pid: u32) -> Option<String> {
+        super::parse_procargs2(&procargs2_raw(pid)?)
+    }
+
+    /// The whole `KERN_PROCARGS2` buffer (argv and environment) for `pid`.
+    pub fn procargs2_raw(pid: u32) -> Option<Vec<u8>> {
         let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
         let mut size: libc::size_t = 0;
         // SAFETY: a null buffer with `size` 0 asks only for the required length;
@@ -2213,7 +2268,7 @@ mod platform {
                 return None;
             }
             buf.truncate(size);
-            super::parse_procargs2(&buf)
+            Some(buf)
         }
     }
 
@@ -2648,6 +2703,31 @@ mod tests {
         // Short / malformed buffers answer nothing rather than panic.
         assert_eq!(super::parse_procargs2(b"\x01\x00"), None);
         assert_eq!(super::parse_procargs2(&0u32.to_ne_bytes()), None);
+    }
+
+    #[test]
+    fn procargs2_env_starts_after_the_argv_strings() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&3u32.to_ne_bytes());
+        buf.extend_from_slice(b"/Applications/X.app/Contents/MacOS/x\0\0\0");
+        // An empty argument still ends at its own NUL.
+        buf.extend_from_slice(b"x\0\0--flag\0");
+        buf.extend_from_slice(b"SECRET=placeholder\0HOME=/Users/a\0\0executable_path=/x\0");
+        assert_eq!(
+            super::procargs2_env(&buf),
+            &b"SECRET=placeholder\0HOME=/Users/a\0\0executable_path=/x\0"[..]
+        );
+        // The argv reader is unchanged by the split.
+        assert_eq!(super::parse_procargs2(&buf).as_deref(), Some("x  --flag"));
+        // No environment, a truncated argv and junk all answer empty.
+        let mut bare = 1u32.to_ne_bytes().to_vec();
+        bare.extend_from_slice(b"/bin/sh\0sh\0");
+        assert!(super::procargs2_env(&bare).is_empty());
+        let mut cut = 2u32.to_ne_bytes().to_vec();
+        cut.extend_from_slice(b"/bin/sh\0sh\0-c");
+        assert!(super::procargs2_env(&cut).is_empty());
+        assert!(super::procargs2_env(b"\x01\x00").is_empty());
+        assert!(super::procargs2_env(&0u32.to_ne_bytes()).is_empty());
     }
 
     use super::*;

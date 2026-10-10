@@ -8,10 +8,11 @@
  *
  *  - **Wi-Fi** is its SSID. Two sites sharing an SSID (eduroam) are one network
  *    to this rule — the honest limit of what a laptop can tell apart cheaply.
- *  - **Wired** is the default gateway's MAC (Linux reads it from `/proc`), since
- *    two routers can share an IP but not a MAC — carried only as a salted hash
- *    (`gateway_id`), so no hardware address lands in settings. Where none can
- *    be read (Windows, macOS) all wired links are one network, `lan`.
+ *  - **Wired** is the default gateway's MAC (Linux reads it from `/proc`,
+ *    macOS and Windows from `route`/`arp`), since two routers can share an IP
+ *    but not a MAC — carried only as a salted hash (`gateway_id`), so no
+ *    hardware address lands in settings. Where none can be read (an
+ *    unresolved neighbour, another OS) all wired links are one network, `lan`.
  *  - **Disconnected**, or Wi-Fi whose name nothing could read, has no key: a
  *    default cannot be saved for it and nothing is applied on it.
  */

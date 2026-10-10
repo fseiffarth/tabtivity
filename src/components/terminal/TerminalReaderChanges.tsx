@@ -14,6 +14,7 @@ import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { openFileEntry } from "../files/openFileEntry";
 import { openTabInScope } from "../tabs/tabScopeContext";
 import { UntestedTag } from "../common/UntestedTag";
+import { ArrowUpRightIcon } from "../common/icons/Icon";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
 
 /**
@@ -160,7 +161,7 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
             aria-label={t("terminal.changes.open")}
             onClick={() => onOpenFile(change.path)}
           >
-            ↗
+            <ArrowUpRightIcon />
           </button>
         )}
       </div>

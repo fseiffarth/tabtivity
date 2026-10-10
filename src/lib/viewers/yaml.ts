@@ -563,6 +563,14 @@ class Bail extends Error {
   }
 }
 
+/** The deepest nesting the tree reads, counted across block AND flow levels
+ *  (a node's `path` length). Every recursion in the parser adds one path segment
+ *  per level, so this bounds the parser's stack, the O(depth²) `path` copies and
+ *  every recursive walk of the tree after it. Past it the file bails like any
+ *  other construct the tree can't model, instead of a `RangeError` escaping the
+ *  render: `[[[[…` or `- - - - …` costs two bytes a level. */
+export const MAX_YAML_DEPTH = 512;
+
 const indentOf = (line: string): number => line.length - line.trimStart().length;
 const isBlank = (line: string): boolean => line.trim() === "";
 const isComment = (line: string): boolean => line.trimStart().startsWith("#");
@@ -618,6 +626,13 @@ class Parser {
 
   private lineOf(offset: number): number {
     return lineOfOffset(this.starts, offset);
+  }
+
+  /** Refuse a collection nested past {@link MAX_YAML_DEPTH}; `line` is 0-based. */
+  private checkDepth(path: (string | number)[], line: number): void {
+    if (path.length > MAX_YAML_DEPTH) {
+      throw new Bail(line, "yamlParse.tooDeep", { max: String(MAX_YAML_DEPTH) });
+    }
   }
 
   private lineEnd(line: number): number {
@@ -762,6 +777,7 @@ class Parser {
   }
 
   private parseMap(indent: number, path: (string | number)[], docIndex: number): YamlNode {
+    this.checkDepth(path, this.i);
     const start = this.i;
     const children: YamlNode[] = [];
     let endLine = start;
@@ -800,6 +816,7 @@ class Parser {
   }
 
   private parseSeq(indent: number, path: (string | number)[], docIndex: number): YamlNode {
+    this.checkDepth(path, this.i);
     const start = this.i;
     const items: YamlNode[] = [];
     let endLine = start;
@@ -1113,6 +1130,7 @@ class Parser {
     k: FlowKey | null,
     inFlow: boolean,
   ): YamlNode {
+    this.checkDepth(path, this.lineOf(at));
     const t = this.text;
     const isSeq = t[at] === "[";
     const close = isSeq ? "]" : "}";

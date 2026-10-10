@@ -1,7 +1,8 @@
 /**
  * The Focus view's sideways swipe: left→right reveals the agent's status
  * strip, right→left puts it away. The project screen reads the same gesture
- * for its files drawer (`ProjectFiles`), which slides in from the left.
+ * for its files drawer (`ProjectFiles`), which slides in from the left, and
+ * for closing a tab card, which a right→left swipe over it does.
  *
  * Every listener here is passive and nothing is ever prevented. The Focus view
  * is a reading surface whose vertical scroll and text selection are the
@@ -96,9 +97,13 @@ interface Gesture {
 
 export function installFocusSwipe(
   host: HTMLElement,
-  /** `onSwipeRight` is told where the finger landed, so a host can read a
-   * swipe from the left of the screen as something else. */
-  handlers: { onSwipeRight: (start: SwipePoint) => void; onSwipeLeft: () => void },
+  /** Both are told where the finger landed and on what, so a host can read a
+   * swipe from the left of the screen, or one over a list row, as something
+   * else. */
+  handlers: {
+    onSwipeRight: (start: SwipePoint, target: Element | null) => void;
+    onSwipeLeft: (start: SwipePoint, target: Element | null) => void;
+  },
   /** `ignore`: a selector whose elements never start a swipe — a control
    * that owns its own drag (`touch-action:none`), or a sheet laid over the
    * host that the swipe must not reach through. `leftEdge`: a start at the
@@ -137,8 +142,8 @@ export function installFocusSwipe(
     if (blockedByScroller(current.target, host, direction)) return;
     const selection = currentSelection();
     if (selection && selection !== current.selection) return;
-    if (direction === "right") handlers.onSwipeRight(current.start);
-    else handlers.onSwipeLeft();
+    if (direction === "right") handlers.onSwipeRight(current.start, current.target);
+    else handlers.onSwipeLeft(current.start, current.target);
   };
 
   const touchAt = (touches: TouchList, identifier?: number) => {

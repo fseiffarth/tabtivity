@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useT } from "../../../lib/i18n";
 import { formatBytes } from "../../../lib/formatBytes";
 import { IS_HOST_WINDOWS } from "../../../lib/platform";
+import { chordLabel, modifierLabel } from "../../../lib/shortcuts/shortcuts";
 import { runInstallInTab } from "../../../lib/installCommand";
 import { useOllamaStatus } from "../../../lib/ollamaStatus";
 import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../../lib/agents/localDrivers";
@@ -134,7 +135,7 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
   const resident = !!targetInfo?.running;
 
   // Which agents can drive the target in a Local Model tab (Mistral Vibe,
-  // Claude Code / Codex / OpenCode via `ollama launch`, …).
+  // OpenCode / Pi / Claude Code / Codex via `ollama launch`, …).
   useEffect(() => {
     if (!target) {
       setDrivers(null);
@@ -391,7 +392,7 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
         </IntroStep>
 
         <IntroStep num={6} title={t("intro.models.step6Title")}>
-          <div className="settings-help">{t("intro.models.step6Body")}</div>
+          <div className="settings-help">{t("intro.models.step6Body", { modifier: modifierLabel(), altRight: chordLabel({ key: "ArrowRight", alt: true }) })}</div>
         </IntroStep>
       </IntroSteps>
 

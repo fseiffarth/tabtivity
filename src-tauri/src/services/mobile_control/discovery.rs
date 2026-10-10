@@ -825,7 +825,7 @@ fn live_tmux() -> Result<HashMap<String, LiveTmux>, String> {
     // to list — and a spawn per catalog read would only ever fail. The desktop's
     // Mobile settings say so rather than leaving an empty terminal list to explain
     // itself.
-    if cfg!(target_os = "windows") {
+    if terminals_support() == TERMINALS_UNSUPPORTED {
         return Ok(HashMap::new());
     }
     let format ="#{session_name}\t#{session_activity}\t#{pane_current_path}";
@@ -835,6 +835,26 @@ fn live_tmux() -> Result<HashMap<String, LiveTmux>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
         Err(error) => Err(format!("tmux ls: {error}")),
     }
+}
+
+/// The project detail's `terminals` value where the host's tabs attach
+/// through tmux: the phone offers ＋, Schedule and Mark up's Submit.
+pub const TERMINALS_TMUX: &str = "tmux";
+/// … and where the host has no tmux (Windows): the phone hides those three
+/// and says why in one line. An older desktop sends no field, which the
+/// phone reads as `tmux`.
+pub const TERMINALS_UNSUPPORTED: &str = "unsupported";
+
+/// Whether this host's terminals reach a phone — the one predicate behind
+/// `live_tmux`'s short-circuit and the detail payload's `terminals` field, so
+/// the two cannot drift. Pure, so both answers have a test on every OS.
+fn terminals_support_on(windows: bool) -> &'static str {
+    if windows { TERMINALS_UNSUPPORTED } else { TERMINALS_TMUX }
+}
+
+/// `terminals_support_on` for the host this build runs on.
+pub fn terminals_support() -> &'static str {
+    terminals_support_on(cfg!(target_os = "windows"))
 }
 
 /// Whether a paired phone may see and open shell tabs. Off unless
@@ -1245,6 +1265,23 @@ fn resolve_scope(
 
 #[cfg(test)]
 mod tests {
+    /// The detail payload's `terminals` field has exactly two values, and the
+    /// host's own answer is the one `live_tmux` short-circuits on: a Windows
+    /// build says `unsupported` and lists no session, every other says `tmux`.
+    #[test]
+    fn terminals_support_names_tmux_or_unsupported() {
+        assert_eq!(super::terminals_support_on(false), super::TERMINALS_TMUX);
+        assert_eq!(super::terminals_support_on(true), super::TERMINALS_UNSUPPORTED);
+        assert_eq!(super::terminals_support(), super::terminals_support_on(cfg!(target_os = "windows")));
+        for value in [super::TERMINALS_TMUX, super::TERMINALS_UNSUPPORTED] {
+            let row = serde_json::json!({ "shells": false, "terminals": value });
+            assert_eq!(row["terminals"].as_str(), Some(value));
+        }
+        if cfg!(target_os = "windows") {
+            assert!(super::live_tmux().is_ok_and(|live| live.is_empty()));
+        }
+    }
+
     /// A saved tab keeps the session name it was created with, and a remote
     /// session keeps running across an update: the name an older build
     /// minted still matches its tab, and is counted.

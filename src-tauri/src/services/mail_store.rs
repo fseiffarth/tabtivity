@@ -4275,7 +4275,6 @@ mod tests {
 
     /// The copy is taken when the agent asks: a project file changed after the
     /// call is not what is sent.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn content_is_pinned_at_call_time() {
         let (dir, store) = store();

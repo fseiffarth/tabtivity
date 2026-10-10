@@ -891,6 +891,10 @@ describe("agentReader helpers", () => {
     expect(readerOffered({ kind: "agent", cmd: "codex" })).toBe(true);
     expect(readerOffered({ kind: "agent", cmd: "gemini" })).toBe(false);
     expect(readerOffered({ kind: "local_agent", cmd: "ollama" })).toBe(false);
+    expect(readerOffered({ kind: "local_agent", cmd: "ollama", localDriver: "claude" })).toBe(false);
+    expect(readerOffered({ kind: "local_agent", cmd: "ollama", localDriver: "opencode" })).toBe(true);
+    expect(readerOffered({ kind: "local_agent", cmd: "ollama", localLaunch: { driver: "opencode", model: "m", args: [] } })).toBe(true);
+    expect(readerOffered({ kind: "agent", cmd: "gemini", localDriver: "opencode" })).toBe(false);
     expect(readerOffered({ kind: "shell", cmd: "bash" })).toBe(false);
     expect(readerOffered(undefined)).toBe(false);
   });
@@ -901,6 +905,14 @@ describe("agentReader helpers", () => {
     expect(readerRequest("p", { ...tab, args: ["--continue"] }, "/p", undefined, 60)).toMatchObject({ since: null });
     expect(readerRequest("p", tab, "/p", undefined, 60)).toMatchObject({ subagent: null });
     expect(readerRequest("p", tab, "/p", undefined, 60, "sa-1")).toMatchObject({ subagent: "sa-1" });
+  });
+
+  it("reads a local-model OpenCode tab by folder from the local-model home", () => {
+    const local = { kind: "local_agent" as const, cmd: "ollama", args: ["launch", "opencode"], localDriver: "opencode", launchedAt: 5, cwd: "/p" };
+    expect(readerRequest("p", local, "/p", undefined, 60)).toMatchObject({
+      agent: "opencode", sessionId: "", tabDir: "/p", since: 5, localModel: true,
+    });
+    expect(readerRequest("p", tab, "/p", undefined, 60)).toMatchObject({ localModel: false });
   });
 
   it("keeps what is shown when the read answers unchanged", () => {

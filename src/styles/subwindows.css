@@ -996,6 +996,58 @@ button.steering-legend-hub:hover::before {
   gap: 5px;
   white-space: nowrap;
 }
+/* The chip row under the prompt (Alt+M model, Alt+E effort, Alt+K clear,
+   Alt+L plan, Alt+G goal): the phone composer's chips with their keys as key
+   caps; an open list or a lead in the text marks its chip with the accent. */
+.steering-prompt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -6px;
+}
+.steering-prompt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 4px;
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  background: var(--control-hover-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+}
+.steering-prompt-chip.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.steering-prompt-chip:disabled { opacity: 0.5; }
+.steering-prompt-chips .untested-tag { margin-left: auto; }
+.steering-prompt-note {
+  margin-top: -6px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+/* The list a chip opens, under the text: the Reader's picker rows; the
+   highlighted one (the session's own, or the effort cursor) in the accent. */
+.steering-prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+}
+.steering-prompt-list-head {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.steering-prompt-list .terminal-reader-option[aria-selected="true"] {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .steering-prompt-hint kbd {
   font-family: inherit;
   font-size: var(--text-xs);
@@ -1039,14 +1091,28 @@ html[data-steer="projects"] .app-header {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-html[data-steer="projects"] :is(.project-pill.active, .box-chip.active),
-html:is([data-steer="tabs"], [data-steer="scroll"]) .subwindow.focused .tab.active {
+html[data-steer="projects"] :is(.project-pill.active, .box-chip.active) {
   outline: 2px solid var(--tab-accent, var(--accent));
   outline-offset: -2px;
   background-image: linear-gradient(
     color-mix(in srgb, var(--tab-accent, var(--accent)) 26%, transparent),
     color-mix(in srgb, var(--tab-accent, var(--accent)) 26%, transparent)
   );
+}
+/* The steered tab takes a colour no tab kind uses — the theme's foreground
+   for the frame (white on dark themes, near-black on light) over a strong
+   accent fill — so it stands out from its own coloured siblings, the
+   everyday active tab's wash included. */
+html:is([data-steer="tabs"], [data-steer="scroll"]) .subwindow.focused .tab.active {
+  outline: 2px solid var(--text-primary);
+  outline-offset: -2px;
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--accent) 48%, transparent),
+    color-mix(in srgb, var(--accent) 48%, transparent)
+  );
+}
+html:is([data-steer="tabs"], [data-steer="scroll"]) .subwindow.focused .tab.active .tab-label {
+  opacity: 1;
 }
 /* Inside the terminal (the scroll level) the tab stays marked (above) and the
    frame thickens around it. On the focus frame, not `.subwindow-body`: the
@@ -2148,6 +2214,31 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 /* A file path in the chat (`linkPathsInHtml`): the Markdown viewer's
    `a.file-link`, which has no href and so needs the pointer said. */
 .terminal-reader-md a.file-link { cursor: var(--cur-pointer, pointer); }
+/* A task list's box (`answerMarkdown` emits an empty `.md-task`): drawn, not a
+   typed ☑/☐, which a font fallback could hand to the colour-emoji font. */
+.terminal-reader-md .md-task {
+  position: relative;
+  display: inline-block;
+  box-sizing: border-box;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 0.35em;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+  vertical-align: -0.08em;
+  opacity: 0.8;
+}
+.terminal-reader-md .md-task-done::after {
+  content: "";
+  position: absolute;
+  left: 0.22em;
+  top: 0.04em;
+  width: 0.2em;
+  height: 0.42em;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
 .terminal-reader-time {
   position: absolute;
   right: 10px;

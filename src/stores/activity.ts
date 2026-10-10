@@ -152,6 +152,24 @@ const turnStartByPty: Record<string, number> = {};
 /// after the Stop and no input since carries on the turn instead of opening one
 /// from zero (`wokenByBackground`).
 const backgroundAtByPty: Record<string, number> = {};
+/// When the tab's agent was last known to be waiting on nothing but its own
+/// next hook — so nothing on its screen is a question, and the screen is not
+/// read for one (`attentionFor`) until a hook speaks again. Raised by:
+///  - the session starting (`noteAgentSessionStart`: a launch, a resume, a
+///    `/clear`): the CLI is at its composer;
+///  - a spawn whose previous run left its turn finished (`noteAgentResting`,
+///    `pty_spawn`'s `resting`): a resumed or reattached agent at its composer;
+///  - the user's input retiring a verdict (`noteUserInput`): an answered
+///    approval runs its tool and reports it, an interrupted turn is back at
+///    its composer.
+/// Each of these is followed by a screen the screen check misreads: a resume
+/// or a tmux reattach repaints the whole conversation, and Claude's own
+/// prompt echo (`❯ continue`, `❯ yes`, `❯ 1. fix …`) and a reply's numbered
+/// list ("1. Run the gates / 2. Skip …") both read as a menu. Nothing retires
+/// that guess on an idle tab — it paints nothing more, and looking does not
+/// answer a question — so it stood until the user typed. Agents with no hooks
+/// never raise this, and keep the screen check.
+const awaitingHookByPty: Record<string, number> = {};
 
 /** When the tab's current or last turn began, if this session saw one begin. */
 export function agentTurnStartedAt(ptyId: string): number | undefined {
@@ -211,6 +229,7 @@ const PTY_MAPS: Record<string, unknown>[] = [
   workAtByPty,
   turnStartByPty,
   backgroundAtByPty,
+  awaitingHookByPty,
 ];
 
 /// Braille pattern cells (U+2800–U+28FF), which an agent TUI paints as
@@ -295,10 +314,21 @@ export type AgentTurnState = "working" | "decision" | "done" | "idle";
  *  both halves are read here: a `done` with a job still running is not a
  *  finished tab (the turn ended, the work did not), and a `working` with one is
  *  an agent and a command of its own going at once. */
-export function noteAgentTurn(ptyId: string, state: AgentTurnState, job = false) {
+export function noteAgentTurn(ptyId: string, state: AgentTurnState, job = false, replay = false) {
   if (isDetachedWindow()) return;
   if (!splitPtyId(ptyId)) return;
   const at = Date.now();
+  // A job flip re-reports the record's last state (`replay`), which still
+  // says what the user's input already retired — an approval answered, a turn
+  // cut off — since no hook has written over it. It carries the job flag on;
+  // it does not bring the verdict back, nor end the interrupted mark.
+  if (replay && turnByPty[ptyId] === undefined && awaitingHookByPty[ptyId] !== undefined) {
+    const prev = deliveryTurns[ptyId];
+    if (prev) deliveryTurns[ptyId] = { ...prev, job };
+    useActivityStore.getState().recompute();
+    return;
+  }
+  if (!replay) delete awaitingHookByPty[ptyId];
   // `working` also comes after every tool call and ends an approval wait; only
   // one that follows a finished, interrupted or never-started turn opens a new
   // one. The previous verdict is the raw hook history (`deliveryTurns`, which
@@ -470,7 +500,34 @@ export function noteUserInput(ptyId: string, interrupt = false) {
   tailByPty[ptyId] = "";
   if (turn && (turn.state === "decision" || (interrupt && turn.state === "working"))) {
     delete turnByPty[ptyId];
+    // The agent's next hook says what came of it (see `awaitingHookByPty`).
+    awaitingHookByPty[ptyId] = now;
   }
+}
+
+/** Record that a tab's agent session (re)started — its `SessionStart` hook
+ *  (`agent-session-roll`): a launch, a resume or a `/clear` puts the CLI at
+ *  its composer, so its screen holds no question until a hook says otherwise
+ *  (`awaitingHookByPty`). A `compact` can land mid-turn and says nothing. */
+export function noteAgentSessionStart(ptyId: string, source: string) {
+  if (isDetachedWindow()) return;
+  if (!splitPtyId(ptyId)) return;
+  if (source !== "startup" && source !== "resume" && source !== "clear") return;
+  awaitingHookByPty[ptyId] = Date.now();
+  useActivityStore.getState().recompute();
+}
+
+/** Record that the tab's previous process left its turn finished (`pty_spawn`'s
+ *  `resting`): the resumed — or, under tmux, reattached — agent sits at its
+ *  composer, whatever the repaint of its conversation looks like. */
+export function noteAgentResting(ptyId: string) {
+  if (isDetachedWindow()) {
+    void emit(DETACHED_ACTIVITY_EVENT, { ptyId, kind: "resting" });
+    return;
+  }
+  if (!splitPtyId(ptyId)) return;
+  awaitingHookByPty[ptyId] = Date.now();
+  useActivityStore.getState().recompute();
 }
 
 /** Record that the tab's previous process died mid-turn — Tabtivity quit, crashed
@@ -653,8 +710,16 @@ function attentionFor(
   // and what IS on screen is the agent's own reply, which quotes menus (a
   // diff of this very classifier, a report on a prompt) often enough to light
   // a finished tab as a question.
+  // Nor while the agent's hooks have the floor (`awaitingHookByPty`): it is at
+  // its composer or running what the user just approved, and the screen then
+  // holds its conversation, which reads as a menu far too easily.
   if (turn?.state === "decision") return "decision";
-  if (turn?.state !== "done" && quiet >= DECISION_QUIET_MS && tailLooksLikeDecision(ptyId)) {
+  if (
+    turn?.state !== "done" &&
+    awaitingHookByPty[ptyId] === undefined &&
+    quiet >= DECISION_QUIET_MS &&
+    tailLooksLikeDecision(ptyId)
+  ) {
     return "decision";
   }
   // A cut-off turn is a state of the tab, not output waiting to be read: it
