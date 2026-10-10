@@ -1,6 +1,54 @@
 # Threat-model recheck 2026-10-08 — findings and fix plan
 
-Status: **plan only.** Nothing here is implemented.
+Status: **partly done.** Plan steps 1, 2, 3, 6, 8, 13 and 14 are fixed in
+develop (`bdafdf03`, 2026-10-09; not pushed, not live-verified). The rest is
+listed under "Resume state" below.
+
+## Resume state (2026-10-10)
+
+"Continue the threat recheck" means: take the next item below whose decision
+is answered, run it with the plan → implement → review routine (handoff:
+`docs/threat_recheck_2026_10_08_handoff.md`, append new sections there), mark
+its rows in `docs/threat_model.md`, then land on develop. Ask the user only
+the decision an item names.
+
+1. **Steps waiting on a decision** (see "Decisions for the user"):
+
+   | Plan step | Gaps | Decision |
+   |---|---|---|
+   | 4 | 19 | A2 |
+   | 5 | 22, 31 | D1 |
+   | 7 | 23 (after step 5) | D3 |
+   | 9 | 25, 27, 33, 34 | E3 |
+   | 10 | 26, 32 | E2b |
+   | 11 | 21, 38 | C2, D6 |
+   | 12 | 20 | B1/C3 |
+
+2. **Follow-ups that need no decision** (found during the run; details in
+   the handoff's "Final review → Flagged for user"):
+   - Re-survey the logins still shared to every home, the Host home
+     included: Goose `secrets.yaml`, OpenCode `auth.json`, Qoder `.auth`
+     (gap 16 residual).
+   - Spawns still in `launch_prep::prepare` at quit escape `kill_all`, and
+     closing a tab during `prepare` leaves an orphaned PTY (gap 18 notes,
+     older than this run).
+   - Gap 30 residual: bwrap/Seatbelt open the control paths by name after
+     the check (`--ro-bind-fd` would close it).
+   - Background `sync_auto` skips files over 64 MiB with only a log line.
+   - `workspace_sync` serves stored tabs without the load sanitizer; a
+     headless relaunch of an adopted agent tab before a window re-saves it
+     has no `TAB_UID`.
+   - Spreadsheet reader limits: no `RLIMIT_AS` on macOS, no Job object on
+     Windows, `PR_SET_PDEATHSIG` Linux-only.
+   - Reviewer B's lead (`agent_session.rs` transcripts through symlinks):
+     step 4 refuses a link at the leaf only; a linked directory component is
+     still followed.
+3. **Never reviewed:** reviewer F's whole area and the per-reviewer gaps
+   (see "Not reviewed" at the end). That needs a fresh read-only review
+   run first.
+4. **Never run:** the 12-step live click-through (handoff, "Final review →
+   Live click-through"), and macOS/Windows compiling. Watch the first CI run
+   on those platforms.
 
 Six read-only reviewers went over HEAD `16182b63` on 2026-10-08. Each read
 `docs/threat_model.md` and its area's `docs/context/` files first, then checked

@@ -1480,7 +1480,7 @@ compiled.
 
 ### Flagged for user (consolidated, all steps)
 
-- **Step 1 Host-home cleanup (decision pending, unchanged here):** the first
+- **Step 1 Host-home cleanup (superseded: follow-up step 8 renames aside):** the first
   start removes a Vibe/Aider/mini-swe-agent/Cline login file from the Host
   home when it matches the store or its placed record, including one the user
   made there; sign in again in the Host session. Alternative: rename aside.
