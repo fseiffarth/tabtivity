@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import {
   loadedPdfCount,
+  PDF_WARN_GRACE_MS,
   PDF_WARN_INITIAL,
   pdfWarnGraceLeft,
   pdfWarnStep,
@@ -27,8 +28,8 @@ export function PdfLoadWarningHost() {
   const warn = useRef<PdfWarnState>(PDF_WARN_INITIAL);
 
   useEffect(() => {
-    const check = (n: number) => {
-      const step = pdfWarnStep(warn.current, n, performance.now());
+    const check = (n: number, nowMs = performance.now()) => {
+      const step = pdfWarnStep(warn.current, n, nowMs);
       warn.current = step.state;
       if (step.fire) setToast((prev) => ({ n, id: (prev?.id ?? 0) + 1 }));
     };
@@ -36,9 +37,18 @@ export function PdfLoadWarningHost() {
     // One look when the start-up grace ends: a count that crossed the
     // threshold inside it and has not moved since gets no other chance. A
     // one-shot timeout, gone once it ran; an already-warned crossing is
-    // disarmed, so this cannot show the notice twice.
+    // disarmed, so this cannot show the notice twice. The timer IS the grace's
+    // end, so it reads the clock as at least that: `setTimeout` truncates the
+    // fractional `left` to whole ms and a coarsened `performance.now()` can
+    // read just short of it, which would lose the one look for good.
     const left = pdfWarnGraceLeft(performance.now());
-    const graceEnd = left === null ? undefined : window.setTimeout(() => check(loadedPdfCount()), left);
+    const graceEnd =
+      left === null
+        ? undefined
+        : window.setTimeout(
+            () => check(loadedPdfCount(), Math.max(performance.now(), PDF_WARN_GRACE_MS)),
+            Math.ceil(left),
+          );
     return () => {
       unsubscribe();
       if (graceEnd !== undefined) window.clearTimeout(graceEnd);

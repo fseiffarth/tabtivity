@@ -90,6 +90,21 @@ describe("PdfLoadWarningHost", () => {
     expect(toasts()).toHaveLength(0);
   });
 
+  it("still looks when the grace-end timer fires on a clock reading just short of the grace", () => {
+    // A browser truncates setTimeout's delay to whole ms, and performance.now()
+    // is coarsened: mounted at G − 1000.5, the timer may fire on G − 0.5.
+    vi.useFakeTimers();
+    const now = vi.spyOn(performance, "now").mockReturnValue(PDF_WARN_GRACE_MS - 1000.5);
+    render(<PdfLoadWarningHost />);
+    for (let i = 1; i <= 9; i++) loadPdf(i);
+    now.mockReturnValue(PDF_WARN_GRACE_MS - 0.5);
+    act(() => {
+      vi.advanceTimersByTime(1001);
+    });
+    expect(toasts()).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1); // only the toast's own dismissal
+  });
+
   it("stays quiet when the grace ends below the threshold", () => {
     vi.useFakeTimers();
     const now = vi.spyOn(performance, "now").mockReturnValue(PDF_WARN_GRACE_MS - 1000);
