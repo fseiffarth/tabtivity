@@ -8,7 +8,7 @@ import { openFileTab, readFilesPlace, rememberFilesPlace } from "../filesPlace";
 import { shareAs, useOutboxShare } from "../outboxShare";
 import { sizeLabel } from "../terminal/fileLabels";
 import { installFocusSwipe } from "../terminal/focusSwipe";
-import { OutboxViewer, type MarkupTarget } from "./OutboxViewer";
+import { OutboxViewer, type MarkupNewTab, type MarkupTarget } from "./OutboxViewer";
 
 /** One folder on the way down: its sealed token (none for the project root)
  * and the name the reader tapped. */
@@ -117,9 +117,11 @@ const MAX_QUERY = 80;
  * results are still there when the viewer closes.
  *
  * A drawer from the left edge: the project screen opens it on a left→right
- * swipe, and a right→left swipe over it (or a tap beside it) puts it away.
+ * swipe or its header's ☰, and a right→left swipe over it (or a tap beside
+ * it) puts it away. There it is the project's menu too (`menu`), and holds
+ * only that while the desktop's files switch is off (`browse`).
  */
-export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
+export function ProjectFiles({ projectId, label, onClose, markup, showTab, linked, menu, browse = true }: {
   projectId: string;
   /** The project's name, the trail's first crumb. */
   label: string;
@@ -127,10 +129,18 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
   /** An agent tab's drawer offers **Mark up** on its PDFs and pictures; the
    * project screen's passes none (it has no chat). The drawer finds a
    * file's newest version itself (`refresh`). */
-  markup?: Omit<MarkupTarget, "projectId" | "place" | "refresh">;
+  markup?: Omit<MarkupTarget, "projectId" | "place" | "folder" | "refresh">;
   /** With no `markup`, Mark up's Submit opens a new agent tab, and the
    * view's Open tab button shows it through this (`MarkupNewTab`). */
   showTab?: (tab: TabRow) => void;
+  /** The agent tab a file's card sends its marks to (`MarkupNewTab`). */
+  linked?: MarkupNewTab["linked"];
+  /** The project screen's own rows (＋ New tab, the agent's files, Git),
+   * above the files; the drawer is then headed by the project's name. */
+  menu?: ReactNode;
+  /** False while the desktop's "Project files on the phone" switch is off:
+   * the drawer holds `menu` alone and lists nothing. */
+  browse?: boolean;
 }) {
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
@@ -154,6 +164,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
   const drawer = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
+    if (!browse) return;
     const controller = new AbortController();
     setListing(null);
     setFailure(null);
@@ -174,7 +185,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
       },
     );
     return () => controller.abort();
-  }, [projectId, here.token]);
+  }, [projectId, here.token, browse]);
 
   useEffect(() => {
     // The last results stay up while the next search is out, so typing does
@@ -269,7 +280,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
     // The folder trail names the file's layer on the phone; its token cannot.
     const place = trail.slice(1).map((crumb) => crumb.name).join("/");
     return <OutboxViewer key={fileOpen.ref} scope={scope} file={fileOpen} pictures={pictures} onStep={setFileOpen} onClose={() => setFileOpen(null)}
-      markup={markup && { ...markup, projectId, place, refresh }} newTab={showTab && { projectId, place, refresh, show: showTab }} />;
+      markup={markup && { ...markup, projectId, place, folder: here.token, refresh }} newTab={showTab && { projectId, place, folder: here.token, refresh, show: showTab, linked }} />;
   }
   /** One file or folder: its tile, name and times, and ↗ Share for a file.
    * A search hit names its folder above the times. */
@@ -312,46 +323,49 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
   }
 
   return <div className="sheet-backdrop files-drawer-backdrop" role="presentation" onClick={onClose}>
-    <section ref={drawer} className="option-sheet project-files" role="dialog" aria-modal="true" aria-label={t("mobile.files.title")} onClick={(event) => event.stopPropagation()}>
+    <section ref={drawer} className="option-sheet project-files" role="dialog" aria-modal="true" aria-label={menu ? label : t("mobile.files.title")} onClick={(event) => event.stopPropagation()}>
       <header>
         <button className="files-close" onClick={onClose} aria-label={t("mobile.files.close")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>
-        <h2>{t("mobile.files.title")} {(isUntested("mobile.files.browse") || isUntested("mobile.files.share") || isUntested("mobile.files.sections") || isUntested("mobile.files.remember") || isUntested("mobile.files.search")) && <small>{t("mobile.outbox.untested")}</small>}</h2>
+        <h2>{menu ? label : t("mobile.files.title")} {browse && (isUntested("mobile.files.browse") || isUntested("mobile.files.share") || isUntested("mobile.files.sections") || isUntested("mobile.files.remember") || isUntested("mobile.files.search")) && <small>{t("mobile.outbox.untested")}</small>}</h2>
         <span className="files-close" aria-hidden="true" />
       </header>
-      <input className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search"
-        placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}
-        onChange={(event) => setQuery(event.target.value)} />
-      {!searching && <nav className="files-trail" aria-label={t("mobile.files.trail")}>
-        {trail.map((crumb, index) => {
-          const last = index === trail.length - 1;
-          return <button key={`${index}:${crumb.token ?? ""}`} aria-current={last ? "location" : undefined} disabled={last}
-            onClick={() => setTrail((current) => current.slice(0, index + 1))}>{crumb.name}</button>;
-        })}
-      </nav>}
-      <p className="sheet-note">{t("mobile.files.readOnly")}</p>
-      {searching ? searchFailure
-        ? <p className="sheet-note error" role="alert">{t(searchFailure)}</p>
-        : !found
-          ? <p className="sheet-note">{t("mobile.files.searching")}</p>
-          : found.hits.length === 0
-            ? <p className="sheet-note">{t("mobile.files.noHits")}</p>
-            : <ul className="option-list files-list" aria-label={t("mobile.files.search")}>
-              {found.hits.map((hit) => row(hit, false, hit))}
-            </ul>
-      : failure
-        ? <p className="sheet-note error" role="alert">{t(failure)}</p>
-        : !listing
-          ? <p className="sheet-note">{t("mobile.files.loading")}</p>
-          : listing.entries.length === 0
-            ? <p className="sheet-note">{t("mobile.files.empty")}</p>
-            : <ul className="option-list files-list">
-              {sections.regular.map((entry) => row(entry))}
-              {sections.scaffold.length > 0 && section("scaffold", scaffoldOpen, setScaffoldOpen, sections.scaffold)}
-              {sections.ignored.length > 0 && section("ignored", ignoredOpen, setIgnoredOpen, sections.ignored)}
-            </ul>}
-      {searching
-        ? found?.truncated && <p className="sheet-note">{t("mobile.files.searchTruncated", { count: found.hits.length })}</p>
-        : listing?.truncated && <p className="sheet-note">{t("mobile.files.truncated", { count: listing.entries.length })}</p>}
+      {menu}
+      {browse && <>
+        <input className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search"
+          placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}
+          onChange={(event) => setQuery(event.target.value)} />
+        {!searching && <nav className="files-trail" aria-label={t("mobile.files.trail")}>
+          {trail.map((crumb, index) => {
+            const last = index === trail.length - 1;
+            return <button key={`${index}:${crumb.token ?? ""}`} aria-current={last ? "location" : undefined} disabled={last}
+              onClick={() => setTrail((current) => current.slice(0, index + 1))}>{crumb.name}</button>;
+          })}
+        </nav>}
+        <p className="sheet-note">{t("mobile.files.readOnly")}</p>
+        {searching ? searchFailure
+          ? <p className="sheet-note error" role="alert">{t(searchFailure)}</p>
+          : !found
+            ? <p className="sheet-note">{t("mobile.files.searching")}</p>
+            : found.hits.length === 0
+              ? <p className="sheet-note">{t("mobile.files.noHits")}</p>
+              : <ul className="option-list files-list" aria-label={t("mobile.files.search")}>
+                {found.hits.map((hit) => row(hit, false, hit))}
+              </ul>
+        : failure
+          ? <p className="sheet-note error" role="alert">{t(failure)}</p>
+          : !listing
+            ? <p className="sheet-note">{t("mobile.files.loading")}</p>
+            : listing.entries.length === 0
+              ? <p className="sheet-note">{t("mobile.files.empty")}</p>
+              : <ul className="option-list files-list">
+                {sections.regular.map((entry) => row(entry))}
+                {sections.scaffold.length > 0 && section("scaffold", scaffoldOpen, setScaffoldOpen, sections.scaffold)}
+                {sections.ignored.length > 0 && section("ignored", ignoredOpen, setIgnoredOpen, sections.ignored)}
+              </ul>}
+        {searching
+          ? found?.truncated && <p className="sheet-note">{t("mobile.files.searchTruncated", { count: found.hits.length })}</p>
+          : listing?.truncated && <p className="sheet-note">{t("mobile.files.truncated", { count: listing.entries.length })}</p>}
+      </>}
     </section>
   </div>;
 }

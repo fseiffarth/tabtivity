@@ -7,6 +7,7 @@ import { sizeLabel } from "../terminal/fileLabels";
 import { isUntested } from "../../../src/lib/untested";
 import { MarkupView } from "./MarkupView";
 import type { AgentSignal } from "../markup/submitState";
+import type { FileTabFile } from "../filesPlace";
 import { openingOutsideStrands } from "../platform";
 
 /** How a markup prompt left: into the agent's queue (it was working), typed
@@ -22,23 +23,39 @@ export type MarkupTarget = {
   tabId: string;
   projectId: string;
   place?: string;
+  /** That file's folder token (none at the root), for its card. */
+  folder?: string;
   onSend: (text: string) => MarkupSend;
   agent?: AgentSignal;
+  /** The model the tab's session runs, by its first word (`Opus`), for the
+   * pill's "Opus is working…"; absent while unknown. */
+  model?: string;
   /** The file as it is now — a fresh listing row, or a newer copy — or
    * `null` when it is gone. */
   refresh?: (file: OutboxFile) => Promise<OutboxFile | null>;
+  /** Tucks the markup view away behind the chat, kept mounted; the chat's
+   * bar brings it back (`MarkupView` `toChat`). */
+  toChat?: (name: string) => void;
+  /** The question line of a dialog the tab's CLI waits on (a permission
+   * prompt, its own question picker), for the pill — shown, answered in the
+   * chat (`dialogLine`). */
+  dialog?: string;
 };
 
 /** **Mark up** where no agent tab is open to send to (the project screen, a
  * shell tab): Submit opens a new tab of the desktop's default agent in
  * `projectId` and hands it the prompt; the view stays open, and its Open tab
  * button `show`s that tab (`markup/newTab.ts`).
- * `place` and `refresh` are a project file's, as in `MarkupTarget`. */
+ * `place`, `folder` and `refresh` are a project file's, as in `MarkupTarget`. */
 export type MarkupNewTab = {
   projectId: string;
   place?: string;
+  folder?: string;
   show: (tab: TabRow) => void;
   refresh?: (file: OutboxFile) => Promise<OutboxFile | null>;
+  /** The open agent tab the file's card says its earlier rounds went to
+   * (`filesPlace.ts`): Submit sends there rather than opening another. */
+  linked?: (file: FileTabFile) => TabRow | undefined;
 };
 
 const INLINE_LIMIT = 1024 * 1024;
@@ -122,7 +139,7 @@ function shownSize(img: HTMLImageElement | null, stage: Size): Size {
  * zooms the whole page and then cannot pan it. A swipe steps only while the
  * picture is at its fitted size; zoomed in, a drag moves the picture.
  */
-export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, newTab }: {
+export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, newTab, startMarking = false }: {
   /** Where the bytes come from: the outbox, or the project's own tree (the
    * read-only file browser, `ProjectFiles`) — the same viewer for both. */
   scope: ViewerScope;
@@ -137,9 +154,13 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   markup?: MarkupTarget;
   /** With no `markup`: Mark up still shows, and Submit opens a new agent tab. */
   newTab?: MarkupNewTab;
+  /** A picture opens in Mark up — its card among the project's tabs is a
+   * markup under way. A PDF's reader opens as the phone's "PDFs open in"
+   * says. */
+  startMarking?: boolean;
 }) {
   const t = useT();
-  const [marking, setMarking] = useState(false);
+  const [marking, setMarking] = useState(startMarking);
   const url = viewerFileUrl(scope, file);
   const isImage = file.kind.startsWith("image/");
   const steps = isImage && onStep ? pictures ?? [] : [];
@@ -316,16 +337,17 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
       scope: { files: target } as ViewerScope,
       file: projectFile,
       place: row.place,
+      folder: row.folder,
       refresh: refreshProjectFile(target, row.folder),
       adoptFrom: layerKey(target, { outbox: file.name }),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the row's fields, not its object: a listing poll hands a new one
   }, [row?.token, row?.name, row?.kind, row?.size, row?.modified, row?.place, row?.folder, inFiles, target, file.name]);
   /** What Mark up (and a PDF's reader) shows: the project file, or the file. */
-  const marked = shared ?? { scope, file, place: markup?.place ?? fresh?.place, refresh: markup?.refresh ?? fresh?.refresh, adoptFrom: undefined };
+  const marked = shared ?? { scope, file, place: markup?.place ?? fresh?.place, folder: markup?.folder ?? fresh?.folder, refresh: markup?.refresh ?? fresh?.refresh, adoptFrom: undefined };
   if (marking && (markup || fresh)) {
-    return <MarkupView tabId={markup?.tabId} projectId={target} scope={marked.scope} file={marked.file} place={marked.place}
-      onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} refresh={marked.refresh} adoptFrom={marked.adoptFrom} onClose={() => setMarking(false)} />;
+    return <MarkupView tabId={markup?.tabId} projectId={target} scope={marked.scope} file={marked.file} place={marked.place} folder={marked.folder}
+      onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} />;
   }
   const actions = <>
     {markable && <button className="outbox-action" onClick={() => setMarking(true)} aria-label={t("mobile.markup.openFile", { name: sentName(file) })}>{t("mobile.markup.open")}</button>}
@@ -338,8 +360,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   // A PDF's pages are drawn here, by the sealed pdf.js frame, and Mark up
   // switches on in that same view.
   if (isPdf) {
-    return <MarkupView tabId={markup?.tabId} projectId={target} place={marked.place} onSend={markup?.onSend}
-      newTab={fresh} agent={markup?.agent} refresh={marked.refresh} scope={marked.scope} file={marked.file} adoptFrom={marked.adoptFrom} onClose={onClose}
+    return <MarkupView tabId={markup?.tabId} projectId={target} place={marked.place} folder={marked.folder} onSend={markup?.onSend}
+      newTab={fresh} agent={markup?.agent} model={markup?.model} dialog={markup?.dialog} toChat={markup?.toChat} refresh={marked.refresh} scope={marked.scope} file={marked.file} adoptFrom={marked.adoptFrom} onClose={onClose}
       reader={{ actions, alert: sharing.failed === file.name ? t("mobile.outbox.shareError") : undefined }} />;
   }
   return <div className={`outbox-viewer${isText ? " outbox-text-sheet" : ""}`} role="dialog" aria-modal="true" aria-label={sentName(file)}>

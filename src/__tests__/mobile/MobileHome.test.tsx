@@ -117,24 +117,14 @@ describe("Mobile home — project list states", () => {
     await waitFor(() => expect(within(screen.getByRole("dialog", { name: "This device" })).getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch"));
   });
 
-  it("opens the project's git sheet from a row's git mark, and the project from the rest", async () => {
+  it("opens the project from a row's git mark like from the rest of the row", async () => {
     answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1, git: "unpushed" }]);
-    const projects = fetchMock.getMockImplementation()!;
-    fetchMock.mockImplementation(async (input: string | URL | Request) => String(input) === "/api/v1/projects/p1/git"
-      ? new Response(JSON.stringify({ repo: false, worktrees: [], worktrees_total: 0, branches: [], branches_total: 0, remote_branches: [], remote_total: 0 }), { status: 200 })
-      : projects(input));
     const open = vi.fn();
     render(<Home open={open} openTab={noop} todo={noop} mail={noop} />);
     fireEvent.click(await screen.findByText("not pushed"));
-    expect(open).not.toHaveBeenCalled();
-    const sheet = await screen.findByRole("dialog");
-    expect(sheet.textContent).toContain("Git · Alpha");
-    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/v1/projects/p1/git")).toBe(true));
-    fireEvent.click(within(sheet).getByRole("button", { name: /close/i }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-
-    fireEvent.click(screen.getByText("Alpha"));
     expect(open).toHaveBeenCalledWith("p1");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/v1/projects/p1/git")).toBe(false);
   });
 
   it("loads the list again on its own once the page is shown after a failed load", async () => {

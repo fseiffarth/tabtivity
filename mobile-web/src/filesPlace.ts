@@ -74,15 +74,19 @@ export function rememberFilesPlace(projectId: string, trail: FilesCrumb[], stora
 }
 
 /**
- * The PDFs the reader opened from the drawer, per project, newest first: the
- * project screen lists each as a card among its tabs (`Project.tsx`), so a
- * paper read this morning is one tap away again without walking the folders.
- * They are the phone's own — the desktop opens nothing — and a card's ✕ only
- * forgets it here.
+ * The PDFs the reader opened from the drawer, and every file it marked up
+ * wherever it was opened from (the drawer, the 🖼 gallery, an agent tab's
+ * chat), per project, newest first: the project screen lists each as a card
+ * among its tabs (`Project.tsx`), so a paper read this morning or a markup
+ * under way is one tap away again without walking the folders. They are the
+ * phone's own — the desktop opens nothing — and a card's ✕ only forgets it
+ * here; a markup's marks stay in the phone's layer store.
  *
  * Each seal carries a fresh nonce, so the same file comes back under a new
- * token on every listing: a file is known by its folder and name (`place`),
- * and `folder` is the token its folder was listed by, for a fresh row later.
+ * token on every listing: a project file is known by its folder and name
+ * (`place`), and `folder` is the token its folder was listed by, for a fresh
+ * row later. A file the agent sent (`from: "outbox"`) is known by its leaf
+ * name, which is also its `token`, the key the outbox is read by.
  */
 const TABS_KEY = storageKey("mobile.fileTabs");
 /** Cards per project; the oldest-opened falls off. */
@@ -96,9 +100,22 @@ export type FileTab = {
   modified: number;
   /** The token of the folder the file was listed in; none for the root. */
   folder?: string;
-  /** The folders below the root, `a/b`; empty for the root. */
+  /** The folders below the root, `a/b`; empty for the root and the outbox. */
   place: string;
+  /** `outbox`: a file the agent sent (`.tabtivity/outbox/`), read through the
+   * project's outbox by its leaf name; absent: a project file. */
+  from?: "outbox";
+  /** The name the reader knows the file by, where that is not `name` (an
+   * outbox leaf's original name, `sentName`). */
+  label?: string;
+  /** The agent tab the file's markup rounds went to, which the next Submit
+   * from the card goes to as well; absent before one was sent. */
+  tab?: string;
 };
+
+/** What tells two cards' files apart: where they are read from, their folder
+ * and their name — never a token, which a new listing seals afresh. */
+export type FileTabFile = Pick<FileTab, "from" | "place" | "name">;
 
 function validTab(value: unknown): value is FileTab {
   if (!value || typeof value !== "object") return false;
@@ -107,10 +124,13 @@ function validTab(value: unknown): value is FileTab {
     && typeof tab.kind === "string" && tab.kind.length <= 256
     && typeof tab.size === "number" && typeof tab.modified === "number"
     && (tab.folder === undefined || (typeof tab.folder === "string" && tab.folder.length > 0 && tab.folder.length <= 4096))
-    && typeof tab.place === "string" && tab.place.length <= 4096;
+    && typeof tab.place === "string" && tab.place.length <= 4096
+    && (tab.from === undefined || tab.from === "outbox")
+    && (tab.label === undefined || (typeof tab.label === "string" && tab.label.length > 0 && tab.label.length <= 1024))
+    && (tab.tab === undefined || (typeof tab.tab === "string" && tab.tab.length > 0 && tab.tab.length <= 256));
 }
 
-const sameFile = (a: FileTab, b: FileTab) => a.place === b.place && a.name === b.name;
+const sameFile = (a: FileTabFile, b: FileTabFile) => a.from === b.from && a.place === b.place && a.name === b.name;
 
 function loadTabs(storage: FilesPlaceStorage): Record<string, FileTab[]> {
   const parsed: unknown = JSON.parse(storage.getItem(TABS_KEY) ?? "{}");
@@ -119,7 +139,7 @@ function loadTabs(storage: FilesPlaceStorage): Record<string, FileTab[]> {
   for (const [projectId, tabs] of Object.entries(parsed)) {
     if (!Array.isArray(tabs)) continue;
     const kept = tabs.filter(validTab).slice(0, TABS_CAP)
-      .map(({ token, name, kind, size, modified, folder, place }) => ({ token, name, kind, size, modified, folder, place }));
+      .map(({ token, name, kind, size, modified, folder, place, from, label, tab }) => ({ token, name, kind, size, modified, folder, place, from, label, tab }));
     if (kept.length) out[projectId] = kept;
   }
   return out;
@@ -159,9 +179,32 @@ export function readFileTabs(projectId: string, storage?: FilesPlaceStorage): Fi
 }
 
 /** Put `tab` first among `projectId`'s file tabs, in place of an older card
- * for the same file. */
+ * for the same file — whose markup's agent tab it keeps. */
 export function openFileTab(projectId: string, tab: FileTab, storage?: FilesPlaceStorage): void {
-  writeTabs(projectId, (tabs) => [tab, ...tabs.filter((other) => !sameFile(other, tab))], storage);
+  writeTabs(projectId, (tabs) => {
+    const known = tabs.find((other) => sameFile(other, tab));
+    return [{ ...tab, tab: tab.tab ?? known?.tab }, ...tabs.filter((other) => !sameFile(other, tab))];
+  }, storage);
+}
+
+/** `projectId`'s card for `file`, if it has one. */
+export function findFileTab(projectId: string, file: FileTabFile, storage?: FilesPlaceStorage): FileTab | undefined {
+  return readFileTabs(projectId, storage).find((tab) => sameFile(tab, file));
+}
+
+/** A file being marked up gets its card: added first when it has none, else
+ * brought up to date where it stands — the row, and `tab` once a round went
+ * to one (a card keeps its tab otherwise). Nothing is written when nothing
+ * changed, since the markup view calls this as each mark is saved. */
+export function keepMarkupTab(projectId: string, tab: FileTab, storage?: FilesPlaceStorage): void {
+  const known = readFileTabs(projectId, storage).find((other) => sameFile(other, tab));
+  const next: FileTab = { ...known, ...tab, tab: tab.tab ?? known?.tab };
+  if (!validTab(next)) return;
+  const fields: (keyof FileTab)[] = ["token", "kind", "size", "modified", "folder", "label", "tab"];
+  if (known && fields.every((field) => known[field] === next[field])) return;
+  writeTabs(projectId, (tabs) => known
+    ? tabs.map((other) => sameFile(other, next) ? next : other)
+    : [next, ...tabs], storage);
 }
 
 /** Replace a card's row with a fresher listing of the same file. */

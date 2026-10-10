@@ -1,6 +1,7 @@
 /**
- * The project screen's read-only file browser (#31bo, `ProjectFiles`): a drawer
- * a left→right swipe opens while the desktop's "Project files on the phone" switch is on,
+ * The project screen's read-only file browser (#31bo, `ProjectFiles`): in the
+ * drawer a left→right swipe or the header's ☰ opens, below its own rows, while
+ * the desktop's "Project files on the phone" switch is on,
  * folders walked by the sealed tokens the sidecar hands out — never a path —
  * and files opened in the outbox's viewer, fetched by their token.
  */
@@ -99,13 +100,18 @@ describe("Mobile project — read-only file browser", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens nothing on a swipe while the desktop's switch is off", async () => {
+  it("opens the drawer without the browser while the desktop's switch is off", async () => {
     const fetch = hostWith(false);
     vi.stubGlobal("fetch", fetch);
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/v1/projects/p1", expect.anything()));
-    swipe(await screen.findByRole("heading", { name: "Alpha" }), 100, 300);
-    expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
+    const heading = await screen.findByRole("heading", { name: "Alpha" });
+    await waitFor(() => {
+      swipe(heading, 100, 300);
+      expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
+    });
+    const sheet = screen.getByRole("dialog", { name: "Alpha" });
+    expect(within(sheet).getByRole("menuitem", { name: /^Git/ })).toBeTruthy();
+    expect(within(sheet).queryByRole("searchbox")).toBeNull();
     expect(fetch.mock.calls.some(([url]) => String(url).includes("/files"))).toBe(false);
   });
 
@@ -116,9 +122,9 @@ describe("Mobile project — read-only file browser", () => {
     const heading = await screen.findByRole("heading", { name: "Alpha" });
     await waitFor(() => {
       swipe(heading, 100, 300);
-      expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
     });
-    const sheet = screen.getByRole("dialog", { name: "Files" });
+    const sheet = screen.getByRole("dialog", { name: "Alpha" });
     await within(sheet).findByRole("button", { name: "Open the folder src" });
     const box = within(sheet).getByRole("searchbox", { name: "Search the project's files" });
 
@@ -135,7 +141,7 @@ describe("Mobile project — read-only file browser", () => {
     const viewer = await screen.findByRole("dialog", { name: "main.rs" });
     await within(viewer).findByText("fn main() {}");
     fireEvent.click(within(viewer).getByRole("button", { name: "Close" }));
-    await within(screen.getByRole("dialog", { name: "Files" })).findByRole("button", { name: "Open main.rs" });
+    await within(screen.getByRole("dialog", { name: "Alpha" })).findByRole("button", { name: "Open main.rs" });
     fireEvent.change(screen.getByRole("searchbox", { name: "Search the project's files" }), { target: { value: "" } });
     const trail = await screen.findByRole("navigation", { name: "Folders" });
     expect(within(trail).getAllByRole("button").map((crumb) => crumb.textContent)).toEqual(["Alpha", "src"]);
@@ -164,20 +170,20 @@ describe("Mobile project — read-only file browser", () => {
     const heading = await screen.findByRole("heading", { name: "Alpha" });
     await waitFor(() => {
       swipe(heading, 100, 300);
-      expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
     });
-    const sheet = screen.getByRole("dialog", { name: "Files" });
+    const sheet = screen.getByRole("dialog", { name: "Alpha" });
     expect(sheet.textContent).toContain("Read-only");
     await within(sheet).findByRole("button", { name: "Open the folder src" });
     // Each row's tile names its kind; the scaffold and the gitignored fold
     // shut below the rest, as on the desktop's tree.
-    expect(Array.from(sheet.querySelectorAll(".option-list strong")).map((row) => row.textContent))
+    expect(Array.from(sheet.querySelectorAll(".files-list strong")).map((row) => row.textContent))
       .toEqual(["src", "notes.md", "plot.png", "paper.pdf"]);
     expect(Array.from(sheet.querySelectorAll(".files-icon")).map((tile) => tile.className.replace("files-icon files-icon-", "")))
       .toEqual(["dir", "text", "image", "pdf"]);
     // Each row says when it was last edited, and created where the desktop's
     // filesystem keeps a birth time (notes.md here, not the folder).
-    const meta = Array.from(sheet.querySelectorAll(".option-list small")).map((row) => row.textContent ?? "");
+    const meta = Array.from(sheet.querySelectorAll(".files-list small")).map((row) => row.textContent ?? "");
     expect(meta[0]).toContain("Edited ");
     expect(meta[0]).not.toContain("Created");
     expect(meta[1]).toMatch(/^8 B · Created .+ · Edited .+$/);
@@ -220,9 +226,9 @@ describe("Mobile project — read-only file browser", () => {
     const heading = await screen.findByRole("heading", { name: "Alpha" });
     await waitFor(() => {
       swipe(heading, 100, 300);
-      expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
     });
-    const sheet = screen.getByRole("dialog", { name: "Files" });
+    const sheet = screen.getByRole("dialog", { name: "Alpha" });
     const scaffold = await within(sheet).findByRole("button", { name: "scaffold (2)" });
     const ignored = within(sheet).getByRole("button", { name: "gitignored (2)" });
     expect([scaffold.getAttribute("aria-expanded"), ignored.getAttribute("aria-expanded")]).toEqual(["false", "false"]);
@@ -261,9 +267,9 @@ describe("Mobile project — read-only file browser", () => {
       const heading = await screen.findByRole("heading", { name: "Alpha" });
       await waitFor(() => {
         swipe(heading, 100, 300);
-        expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+        expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
       });
-      const sheet = screen.getByRole("dialog", { name: "Files" });
+      const sheet = screen.getByRole("dialog", { name: "Alpha" });
       await within(sheet).findByRole("button", { name: "Share plot.png" });
       // Every file gets one; a folder has nothing to share.
       expect(within(sheet).getAllByRole("button", { name: /^Share / }).map((button) => button.getAttribute("aria-label")))
@@ -295,9 +301,9 @@ describe("Mobile project — read-only file browser", () => {
     const heading = await screen.findByRole("heading", { name: "Alpha" });
     await waitFor(() => {
       swipe(heading, 100, 300);
-      expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
     });
-    const sheet = screen.getByRole("dialog", { name: "Files" });
+    const sheet = screen.getByRole("dialog", { name: "Alpha" });
     fireEvent.click(await within(sheet).findByRole("button", { name: "Open notes.md" }));
     fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Open the whole file" }));
     await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringContaining("Reconnect")));
@@ -310,17 +316,21 @@ describe("Mobile project — read-only file browser", () => {
     const heading = await screen.findByRole("heading", { name: "Alpha" });
     await waitFor(() => {
       swipe(heading, 4, 200);
-      expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
     });
   });
 
-  it("opens from the dropdown under the project's name too", async () => {
+  it("opens from the header's ☰ beside the ＋ too, its own rows above the files", async () => {
     vi.stubGlobal("fetch", hostWith(true));
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
-    fireEvent.click(within(screen.getByRole("menu", { name: "Project menu" })).getByRole("menuitem", { name: "Project files" }));
-    expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
-    expect(screen.queryByRole("menu", { name: "Project menu" })).toBeNull();
+    const sheet = await openDrawer();
+    const menu = within(sheet).getByRole("menu", { name: "Project menu" });
+    expect(within(menu).getAllByRole("menuitem").map((row) => row.textContent)).toEqual([expect.stringMatching(/^⎇Git/)]);
+    await within(sheet).findByRole("button", { name: "Open the folder src" });
+    // A row puts the drawer away for the sheet it opens.
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /^Git/ }));
+    expect(screen.queryByRole("dialog", { name: "Alpha" })).toBeNull();
+    expect(await screen.findByRole("dialog", { name: "Git · Alpha" })).toBeTruthy();
   });
 
   it("puts the drawer away on a right-to-left swipe over it", async () => {
@@ -329,19 +339,18 @@ describe("Mobile project — read-only file browser", () => {
     const heading = await screen.findByRole("heading", { name: "Alpha" });
     await waitFor(() => {
       swipe(heading, 100, 300);
-      expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Alpha" })).toBeTruthy();
     });
-    const drawer = screen.getByRole("dialog", { name: "Files" });
+    const drawer = screen.getByRole("dialog", { name: "Alpha" });
     await within(drawer).findByRole("button", { name: "Open the folder src" });
     swipe(drawer, 300, 100);
-    expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Alpha" })).toBeNull();
   });
 
-  /** The drawer, opened from the name's dropdown. */
+  /** The drawer, opened from the header's ☰ once the project is read. */
   async function openDrawer() {
-    fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
-    fireEvent.click(within(screen.getByRole("menu", { name: "Project menu" })).getByRole("menuitem", { name: "Project files" }));
-    return screen.getByRole("dialog", { name: "Files" });
+    fireEvent.click(await screen.findByRole("button", { name: "Project menu" }));
+    return screen.getByRole("dialog", { name: "Alpha" });
   }
   const crumbs = (sheet: HTMLElement) =>
     within(within(sheet).getByRole("navigation", { name: "Folders" })).getAllByRole("button").map((crumb) => crumb.textContent);
@@ -353,7 +362,7 @@ describe("Mobile project — read-only file browser", () => {
     fireEvent.click(await within(sheet).findByRole("button", { name: "Open the folder src" }));
     await within(sheet).findByRole("button", { name: "Open main.rs" });
     fireEvent.click(within(sheet).getByRole("button", { name: "Close the files" }));
-    expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Alpha" })).toBeNull();
 
     sheet = await openDrawer();
     expect(crumbs(sheet)).toEqual(["Alpha", "src"]);
@@ -390,9 +399,9 @@ describe("Mobile project — read-only file browser", () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "paper.pdf" })).getByRole("button", { name: "Close" }));
     // Closing the PDF comes back to the drawer, in its folder; a text opened
     // there makes no card.
-    fireEvent.click(await within(screen.getByRole("dialog", { name: "Files" })).findByRole("button", { name: "Open notes.md" }));
+    fireEvent.click(await within(screen.getByRole("dialog", { name: "Alpha" })).findByRole("button", { name: "Open notes.md" }));
     fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Close" }));
-    fireEvent.click(within(screen.getByRole("dialog", { name: "Files" })).getByRole("button", { name: "Close the files" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Alpha" })).getByRole("button", { name: "Close the files" }));
 
     const card = screen.getByRole("button", { name: "Open paper.pdf" }).closest(".file-tab-card") as HTMLElement;
     expect(card.textContent).toContain("Project folder");

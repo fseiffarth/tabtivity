@@ -34,9 +34,9 @@ function hostWith(files: unknown[]) {
 
 const picture = (name: string, modified: number) => ({ name, kind: "image/png", size: 48_000, modified });
 
-/** Opens the gallery from the dropdown under the project's name, whose row counts the files. */
+/** Opens the gallery from the project drawer, whose row counts the files. */
 async function openGallery(count: number) {
-  fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Project menu" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: `Files from the agent (${count})` }));
   return screen.getByRole("dialog", { name: "Files from the agent" });
 }
@@ -59,11 +59,11 @@ describe("Mobile project — the files the agent sent", () => {
     ]));
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
 
-    // The header row keeps no 🖼 of its own: the name opens a dropdown that has it.
+    // The header row keeps no 🖼 of its own: its ☰ opens the drawer that has it.
     const header = document.querySelector("header") as HTMLElement;
-    const name = await within(header).findByRole("button", { name: "Alpha" });
+    const drawer = await within(header).findByRole("button", { name: "Project menu" });
     expect(within(header).queryByRole("button", { name: /^Files from the agent/ })).toBeNull();
-    fireEvent.click(name);
+    fireEvent.click(drawer);
     const button = within(screen.getByRole("menu", { name: "Project menu" })).getByRole("menuitem", { name: "Files from the agent (2)" });
     expect(document.querySelector(".outbox-shelf")).toBeNull();
     expect(screen.queryByText("From the desktop")).toBeNull();
@@ -158,7 +158,7 @@ describe("Mobile project — the files the agent sent", () => {
     // Gone at once, and the counts with it — the poll is 8 s away.
     await waitFor(() => expect(Array.from(gallery.querySelectorAll(".outbox-entry strong")).map((n) => n.textContent)).toEqual(["notes.txt"]));
     expect(gallery.textContent).toContain("1 file in the project's outbox");
-    fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    fireEvent.click(screen.getByRole("button", { name: "Project menu" }));
     expect(screen.getByRole("menuitem", { name: "Files from the agent (1)" })).toBeTruthy();
   });
 
@@ -193,9 +193,9 @@ describe("Mobile project — the files the agent sent", () => {
 
     await screen.findByRole("button", { name: "Open Claude" });
     expect(screen.queryByRole("button", { name: /^Files from the agent/ })).toBeNull();
-    // Nor a 🖼 entry in the name's dropdown, which a project now always has
-    // for its ⎇ Git overview.
-    fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    // Nor a 🖼 entry in the drawer, which a project always has for its ⎇ Git
+    // overview.
+    fireEvent.click(screen.getByRole("button", { name: "Project menu" }));
     const menu = screen.getByRole("menu", { name: "Project menu" });
     expect(within(menu).queryByRole("menuitem", { name: /^Files from the agent/ })).toBeNull();
     expect(within(menu).getByRole("menuitem", { name: /^Git/ })).toBeTruthy();

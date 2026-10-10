@@ -35,7 +35,7 @@ function host(body: Record<string, unknown>) {
 
 /** The gallery picture, opened through the name menu's 🖼 row. */
 async function openPicture() {
-  fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+  if (!screen.queryByRole("menu", { name: "Project menu" })) fireEvent.click(await screen.findByRole("button", { name: "Project menu" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: /Files from the agent/ }));
   fireEvent.click(await screen.findByRole("button", { name: "Open plot.png" }));
   return screen.findByRole("dialog", { name: "plot.png" });
