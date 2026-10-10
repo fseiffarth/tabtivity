@@ -842,7 +842,7 @@ impl Refusal {
             Refusal::BadBody => concat!(crate::app_name!(), " API proxy: request body could not be read"),
             Refusal::NoKey => concat!(
                 crate::app_name!(),
-                " has no API key saved for this provider (or the keyring is locked): add one in Manage CLIs → API keys"
+                " has no API key saved for this provider (or its key store is locked): add one in Manage CLIs → API keys"
             ),
             Refusal::Upstream => concat!(crate::app_name!(), " API proxy: the provider's API could not be reached"),
             Refusal::Busy => concat!(crate::app_name!(), " API proxy: too many large requests at once; try again"),

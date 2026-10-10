@@ -111,3 +111,11 @@ refusal.
   estimate, all five dictionaries, help and DOCUMENTATION. Gates: clippy
   clean; `cargo test --workspace` 4143 passed; `npm test` 7681; lint 0
   errors / 28 warnings; build; brand-check.
+- **Step 2 — own keys on a server: done.** The daemon starts `api_proxy`
+  inside its runtime and stops it (tokens revoked, usage flushed) when it
+  exits; `agent_api_key_{set,clear}` and `agent_api_keys_status` are `Core`
+  (keys land in the vault through `remote_credentials`); the status names
+  its store (`keychain`/`vault`) and a locked vault says to sign in on a
+  paired device, with no keyring unlock. Residual: a daemon restart drops
+  every token, so a keyed agent in a surviving tmux tab must be restarted
+  (as after a desktop crash). Gates as step 1 (Rust 4143, frontend 7682).

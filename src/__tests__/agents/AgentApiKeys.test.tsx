@@ -47,9 +47,12 @@ type ProviderExtra = {
 };
 let extra: Record<string, ProviderExtra> = {};
 
+let store: "keychain" | "vault" = "keychain";
+
 function status(saved: string[], readable = true) {
   return {
     readable,
+    store,
     month: "2026-10",
     resetsOn: "2026-11-01",
     pricesDate: "2026-10-04",
@@ -74,6 +77,7 @@ const updateSettings = vi.fn(async (patch: Partial<Settings>) => {
 beforeEach(() => {
   saved = [];
   readable = true;
+  store = "keychain";
   extra = {};
   order = [];
   invokeMock.mockReset();
@@ -162,6 +166,16 @@ describe("API keys for agent CLIs", () => {
     expect(screen.queryByLabelText("Paste the Anthropic API key")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Unlock keyring" }));
     await waitFor(() => expect(calls("keyring_unlock")).toHaveLength(1));
+  });
+
+  it("on a server, says the sealed store is locked and offers no keyring unlock", async () => {
+    readable = false;
+    store = "vault";
+    render(<AgentApiKeysRows />);
+    expect((await screen.findAllByText(/sign in on a paired device to unlock the key/)).length).toBe(2);
+    expect(screen.queryByText(/keyring locked/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unlock keyring" })).toBeNull();
+    expect(screen.queryByLabelText("Paste the Anthropic API key")).toBeNull();
   });
 
   it("needs a valid monthly limit before a key can be saved", async () => {

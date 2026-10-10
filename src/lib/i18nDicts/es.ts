@@ -9102,6 +9102,7 @@ export const dict: Dict = {
   "settings.agentApiKeySaved": "guardada",
   "settings.agentApiKeyNotSaved": "sin guardar",
   "settings.agentApiKeyLocked": "llavero bloqueado: desbloquéalo para ver o cambiar esta clave",
+  "settings.agentApiKeyVaultLocked": "bloqueada: inicia sesión en un dispositivo vinculado para desbloquear la clave y luego verla o cambiarla aquí",
   "settings.agentApiKeyUnlock": "Desbloquear llavero",
   "settings.agentApiKeyPlaceholder": "Pega la clave de API de {provider}",
   "settings.agentApiKeySave": "Guardar",

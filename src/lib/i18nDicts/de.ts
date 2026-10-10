@@ -9106,6 +9106,7 @@ export const dict: Dict = {
   "settings.agentApiKeySaved": "gespeichert",
   "settings.agentApiKeyNotSaved": "nicht gespeichert",
   "settings.agentApiKeyLocked": "Schlüsselbund gesperrt — entsperren, um diesen Schlüssel zu sehen oder zu ändern",
+  "settings.agentApiKeyVaultLocked": "gesperrt — melde dich auf einem gekoppelten Gerät an, um den Schlüssel zu entsperren, dann kannst du diesen hier sehen oder ändern",
   "settings.agentApiKeyUnlock": "Schlüsselbund entsperren",
   "settings.agentApiKeyPlaceholder": "{provider}-API-Schlüssel einfügen",
   "settings.agentApiKeySave": "Speichern",

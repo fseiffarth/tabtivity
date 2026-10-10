@@ -403,6 +403,10 @@ pub struct ApiKeyStatus {
     /// The keyring can be read now. While it cannot, every `saved` reads
     /// false, so the panel says "locked" instead of "not saved".
     pub readable: bool,
+    /// Where keys are kept: `keychain` (the OS's, on a desktop) or `vault`
+    /// (a server daemon's sealed store, opened by a paired device — no
+    /// unlock button can open it).
+    pub store: &'static str,
     pub providers: Vec<ProviderStatus>,
     pub clis: Vec<CliStatus>,
     /// The UTC month the spending is counted for (`YYYY-MM`).
@@ -418,8 +422,10 @@ pub struct ApiKeyStatus {
 
 /// [`status`] over a given `saved` answer, switched-on list, limits and
 /// ledger. Pure.
+#[allow(clippy::too_many_arguments)]
 fn status_with(
     readable: bool,
+    store: &'static str,
     saved: impl Fn(Provider) -> bool,
     enabled: &[String],
     limits: &std::collections::BTreeMap<String, u64>,
@@ -458,6 +464,7 @@ fn status_with(
         .collect();
     ApiKeyStatus {
         readable,
+        store,
         providers,
         clis,
         month: ledger.month.clone(),
@@ -488,6 +495,7 @@ pub fn status() -> ApiKeyStatus {
     let settings = settings();
     status_with(
         crate::services::remote_credentials::store_readable(),
+        if crate::services::server::vault::vault().is_some() { "vault" } else { "keychain" },
         has_key,
         &settings.agent_api_key_clis.clone().unwrap_or_default(),
         &crate::services::api_usage::limits_in(&settings),
@@ -718,7 +726,7 @@ mod tests {
     #[test]
     fn status_is_ready_only_for_a_switched_on_cli_with_a_key() {
         let ledger = crate::services::api_usage::Ledger { month: "2026-10".into(), ..Default::default() };
-        let s = status_with(true, |p| p == Provider::Anthropic, &on(&["claude", "gemini"]), &Default::default(), &Default::default(), &ledger);
+        let s = status_with(true, "keychain", |p| p == Provider::Anthropic, &on(&["claude", "gemini"]), &Default::default(), &Default::default(), &ledger);
         let cli = |id: &str| s.clis.iter().find(|c| c.id == id).unwrap().clone();
         assert!(cli("claude").ready);
         assert!(!cli("gemini").ready, "on, but no Gemini key");
@@ -753,7 +761,7 @@ mod tests {
         let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 20_000)]);
         // An older build's dollar limits: shown only where no token limit is.
         let legacy = std::collections::BTreeMap::from([("anthropic".to_string(), 20.0), ("gemini".to_string(), 7.5)]);
-        let s = status_with(true, |_| true, &on(&["claude", "gemini"]), &limits, &legacy, &ledger);
+        let s = status_with(true, "vault", |_| true, &on(&["claude", "gemini"]), &limits, &legacy, &ledger);
         let anthropic = &s.providers[0];
         assert_eq!((anthropic.id, anthropic.limit_tokens, anthropic.budget), ("anthropic", Some(20_000), "reached"));
         assert_eq!(anthropic.billed, 20_000);
@@ -768,6 +776,7 @@ mod tests {
         assert_eq!(json["providers"][0]["billed"], 20_000);
         assert_eq!(json["providers"][1]["legacyLimitUsd"], 7.5);
         assert_eq!(json["providers"][1]["budget"], "noLimit");
+        assert_eq!(json["store"], "vault");
         // Claude's only provider is out of budget, Gemini's has no limit:
         // both are blocked; with a limit and room, Gemini is not.
         assert_eq!(budget_blocked_with(&["claude", "gemini"], &limits, &ledger), vec!["claude", "gemini"]);

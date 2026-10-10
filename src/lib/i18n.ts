@@ -1900,6 +1900,7 @@ export const enSource = {
   "settings.agentApiKeySaved": "saved",
   "settings.agentApiKeyNotSaved": "not saved",
   "settings.agentApiKeyLocked": "keyring locked — unlock it to see or change this key",
+  "settings.agentApiKeyVaultLocked": "locked — sign in on a paired device to unlock the key, then see or change this one here",
   "settings.agentApiKeyUnlock": "Unlock keyring",
   "settings.agentApiKeyPlaceholder": "Paste the {provider} API key",
   "settings.agentApiKeySave": "Save",

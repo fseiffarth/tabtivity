@@ -877,6 +877,9 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
 interface AgentApiKeyStatus {
   /** The keyring can be read now; while locked every `saved` reads false. */
   readable: boolean;
+  /** `keychain` (a desktop's OS store) or `vault` (a server's sealed store,
+   *  opened only by a paired device — nothing here can unlock it). */
+  store?: "keychain" | "vault";
   providers: {
     id: string;
     saved: boolean;
@@ -1048,7 +1051,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                   usd: usd(p.spentUsd ?? 0),
                 });
         const state = !status.readable
-          ? t("settings.agentApiKeyLocked")
+          ? t(status.store === "vault" ? "settings.agentApiKeyVaultLocked" : "settings.agentApiKeyLocked")
           : p.saved
             ? `${t("settings.agentApiKeySaved")} · ${budget}`
             : t("settings.agentApiKeyNotSaved");
@@ -1145,7 +1148,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
           </Fragment>
         );
       })}
-      {!status.readable && (
+      {!status.readable && status.store !== "vault" && (
         <div className="settings-toggle-card-row">
           <span />
           <button

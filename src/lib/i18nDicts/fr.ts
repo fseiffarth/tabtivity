@@ -9104,6 +9104,7 @@ export const dict: Dict = {
   "settings.agentApiKeySaved": "enregistrée",
   "settings.agentApiKeyNotSaved": "non enregistrée",
   "settings.agentApiKeyLocked": "trousseau verrouillé — déverrouillez-le pour voir ou modifier cette clé",
+  "settings.agentApiKeyVaultLocked": "verrouillée — connectez-vous sur un appareil associé pour déverrouiller la clé, puis consultez-la ou modifiez-la ici",
   "settings.agentApiKeyUnlock": "Déverrouiller le trousseau",
   "settings.agentApiKeyPlaceholder": "Collez la clé d'API {provider}",
   "settings.agentApiKeySave": "Enregistrer",

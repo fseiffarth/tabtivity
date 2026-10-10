@@ -124,7 +124,18 @@ pub fn main() -> ! {
             std::process::exit(1);
         }
     };
-    match runtime.block_on(run(config)) {
+    // The provider API proxy (`services::api_proxy`, #2389): this user's
+    // agents reach their API keys — their own, from the vault, or the
+    // administrator's — only through it, holding a per-tab token. Started
+    // inside the runtime it serves on; in `main`, not [`run`], because it
+    // writes its port file into the state dir.
+    let served = runtime.block_on(async {
+        crate::services::api_proxy::start();
+        run(config).await
+    });
+    // Revoke every token, drain, and write the month's usage.
+    crate::services::api_proxy::stop_for_exit();
+    match served {
         Ok(()) => {
             eprintln!("{SLUG}-serverd: exiting: shut down on admin request");
             std::process::exit(0);
