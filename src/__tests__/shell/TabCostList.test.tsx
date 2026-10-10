@@ -6,6 +6,7 @@
  * lines for tabs with nothing loaded and PDFs outside a tab.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const closeTabInScope = vi.hoisted(() => vi.fn());
@@ -17,7 +18,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("../../lib/remote/closeRemoteTab", () => ({ closeTabInScope }));
 
 import { TabCostList } from "../../components/layout/TabCostList";
-import { _clearTabCostForTest, registerPdfDoc, updatePdfDoc } from "../../lib/tabCost";
+import { _clearTabCostForTest, registerPdfDoc, unregisterPdfDoc, updatePdfDoc } from "../../lib/tabCost";
 import { _clearAsleepPtysForTest, markPtyAsleep } from "../../lib/terminal/sleepingPtys";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 
@@ -94,5 +95,57 @@ describe("TabCostList", () => {
     fireEvent.click(screen.getByText("Refresh"));
     expect(rowKeys()).toEqual(["embed-unloaded", "embed-big", "embed-other", "embed-small"]);
     expect(screen.getByText("1 more tabs hold nothing loaded")).toBeTruthy();
+  });
+});
+
+/** Stands in for a mounted `PdfCanvas`: registered while its tab is open,
+ *  unregistered in its unmount effect, as the real one is. */
+function FakeCanvas({ tabKey, bytes }: { tabKey: string; bytes: number }) {
+  useEffect(() => {
+    const token = {};
+    registerPdfDoc(token, { tabKey, path: `/p/${tabKey}.pdf` });
+    updatePdfDoc(token, { pages: 1, bytes });
+    return () => unregisterPdfDoc(token);
+  }, [tabKey, bytes]);
+  return null;
+}
+
+function OpenPdfTabs() {
+  const tabs = useTabsStore((s) => s.tabs);
+  return (
+    <>
+      {tabs
+        .filter((t) => t.viewer === "pdf")
+        .map((t) => (
+          <FakeCanvas key={t.key} tabKey={t.key} bytes={t.key === "embed-big" ? 10_000 : 100} />
+        ))}
+    </>
+  );
+}
+
+describe("TabCostList after Close", () => {
+  it("re-reads once the closed tab's viewer has unmounted, not before", () => {
+    _clearTabCostForTest();
+    pdf(undefined, 50); // a side-panel preview: the one PDF outside a tab
+    closeTabInScope.mockImplementation((_scope: string, key: string) => {
+      useTabsStore.setState((s) => ({ tabs: s.tabs.filter((t) => t.key !== key) }));
+    });
+    render(
+      <>
+        <OpenPdfTabs />
+        <TabCostList onClose={() => {}} />
+      </>,
+    );
+    fireEvent.click(screen.getByText("Refresh"));
+    expect(rowKeys()).toEqual(["embed-big", "embed-small"]);
+    expect(screen.getByText(/PDFs loaded now: 3\./)).toBeTruthy();
+
+    const close = rowOf("embed-big").querySelectorAll("button");
+    fireEvent.click(close[close.length - 1]);
+
+    expect(rowKeys()).toEqual(["embed-small"]);
+    // The closed tab's document is gone, not re-listed "outside a tab".
+    expect(screen.getByText(/1 PDFs open outside a tab/)).toBeTruthy();
+    expect(screen.getByText(/PDFs loaded now: 2\./)).toBeTruthy();
   });
 });

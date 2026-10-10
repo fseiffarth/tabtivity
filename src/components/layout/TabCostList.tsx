@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useT } from "../../lib/i18n";
 import {
   describeTabCost,
@@ -59,6 +59,14 @@ export function TabCostList({ onClose }: { onClose: () => void }) {
   const [snap, setSnap] = useState<Snapshot>(readSnapshot);
   const current = useTabsStore((s) => s.scope);
   const refresh = () => setSnap(readSnapshot());
+  // A Close re-reads after React has committed the removal: the closed tab's
+  // `PdfCanvas` unregisters in its unmount effect, so a read inside the click
+  // handler would still find its document and list it "outside a tab". Passive
+  // unmount cleanups run before this effect in the same commit.
+  const [closed, setClosed] = useState(0);
+  useEffect(() => {
+    if (closed > 0) setSnap(readSnapshot());
+  }, [closed]);
   const { ranked, others } = snap.costs;
   const empty = ranked.length === 0 && others === 0 && !snap.untabbed;
 
@@ -99,7 +107,7 @@ export function TabCostList({ onClose }: { onClose: () => void }) {
               className="settings-btn sm"
               onClick={() => {
                 closeTabInScope(row.scope, row.key);
-                refresh();
+                setClosed((n) => n + 1);
               }}
             >
               {t("settings.tabCostsClose")}
