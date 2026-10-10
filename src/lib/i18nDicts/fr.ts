@@ -1412,7 +1412,7 @@ export const dict: Dict = {
   "settings.sleepTabsNever": "Jamais",
   "settings.sleepTabsMinutes": "{n} min",
   "settings.shellScrollback": "Historique du shell",
-  "settings.shellScrollbackHelp": "Nombre de lignes d'historique qu'un terminal shell garde pour remonter. Moins de lignes utilisent moins de mémoire. Un changement s'applique tout de suite aux shells ouverts : le réduire supprime aussitôt leurs lignes les plus anciennes, sans rien redémarrer. Les onglets d'agent gardent toujours 5 000 lignes.",
+  "settings.shellScrollbackHelp": "Nombre de lignes d'historique qu'un terminal shell garde pour remonter. Moins de lignes utilisent moins de mémoire. Un changement s'applique tout de suite aux shells ouverts : le réduire supprime aussitôt leurs lignes les plus anciennes, sans rien redémarrer. Les onglets d'agent gardent toujours {n} lignes.",
   "settings.shellScrollbackLines": "{n} lignes",
   "settings.tabCosts": "Ce qu'occupent les onglets ouverts",
   "settings.tabCostsHelp": "Une estimation grossière de la mémoire qu'occupe le terminal ou le PDF de chaque onglet dans cette fenêtre, du plus gros au plus petit. Les autres types d'onglets ne sont pas comptés. « Afficher » va à un onglet du projet actuel.",

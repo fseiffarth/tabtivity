@@ -14,7 +14,7 @@ import { RootMcpSecurity } from "./RootMcpSecurity";
 import { CopilotCompletionCard } from "./CopilotCompletionCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { SLEEP_TABS_CHOICES_MIN, SLEEP_TABS_DEFAULT_MIN } from "../../lib/sleepWhenHidden";
-import { SHELL_SCROLLBACK_CHOICES, shellScrollbackRows } from "../../lib/terminal/scrollback";
+import { AGENT_SCROLLBACK_ROWS, SHELL_SCROLLBACK_CHOICES, shellScrollbackRows } from "../../lib/terminal/scrollback";
 import { experimentalEnabled } from "../../lib/experimental";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { TabCostList } from "./TabCostList";
@@ -2017,7 +2017,7 @@ export function SettingsDialog({
                   {t("settings.shellScrollback")} <UntestedTag id="settings.shellScrollback" />
                 </>
               }
-              help={t("settings.shellScrollbackHelp")}
+              help={t("settings.shellScrollbackHelp", { n: AGENT_SCROLLBACK_ROWS.toLocaleString() })}
               control={
                 <Dropdown
                   value={String(shellScrollbackRows(settings?.shell_scrollback_rows))}

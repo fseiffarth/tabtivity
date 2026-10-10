@@ -1411,7 +1411,7 @@ export const dict: Dict = {
   "settings.sleepTabsNever": "Nunca",
   "settings.sleepTabsMinutes": "{n} min",
   "settings.shellScrollback": "Historial de la shell",
-  "settings.shellScrollbackHelp": "Líneas de historial que conserva un terminal de shell para desplazarse hacia atrás. Menos líneas usan menos memoria. Un cambio se aplica al momento también a las shells abiertas: bajarlo descarta enseguida sus líneas más antiguas, sin reiniciar nada. Las pestañas de agente conservan siempre 5.000 líneas.",
+  "settings.shellScrollbackHelp": "Líneas de historial que conserva un terminal de shell para desplazarse hacia atrás. Menos líneas usan menos memoria. Un cambio se aplica al momento también a las shells abiertas: bajarlo descarta enseguida sus líneas más antiguas, sin reiniciar nada. Las pestañas de agente conservan siempre {n} líneas.",
   "settings.shellScrollbackLines": "{n} líneas",
   "settings.tabCosts": "Lo que ocupan las pestañas abiertas",
   "settings.tabCostsHelp": "Una estimación aproximada de la memoria que ocupa el terminal o el PDF de cada pestaña en esta ventana, de mayor a menor. No se cuentan otros tipos de pestaña. «Mostrar» salta a una pestaña del proyecto actual.",

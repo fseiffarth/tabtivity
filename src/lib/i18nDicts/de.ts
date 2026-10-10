@@ -1412,7 +1412,7 @@ export const dict: Dict = {
   "settings.sleepTabsNever": "Nie",
   "settings.sleepTabsMinutes": "{n} Min.",
   "settings.shellScrollback": "Shell-Verlauf",
-  "settings.shellScrollbackHelp": "Wie viele Zeilen Verlauf ein Shell-Terminal zum Zurückscrollen behält. Weniger Zeilen brauchen weniger Speicher. Eine Änderung gilt sofort auch für offene Shells: Ein kleinerer Wert verwirft ihre ältesten Zeilen sofort, ohne etwas neu zu starten. Agenten-Tabs behalten immer 5.000 Zeilen.",
+  "settings.shellScrollbackHelp": "Wie viele Zeilen Verlauf ein Shell-Terminal zum Zurückscrollen behält. Weniger Zeilen brauchen weniger Speicher. Eine Änderung gilt sofort auch für offene Shells: Ein kleinerer Wert verwirft ihre ältesten Zeilen sofort, ohne etwas neu zu starten. Agenten-Tabs behalten immer {n} Zeilen.",
   "settings.shellScrollbackLines": "{n} Zeilen",
   "settings.tabCosts": "Was offene Tabs belegen",
   "settings.tabCostsHelp": "Eine grobe Schätzung des Speichers, den das Terminal oder PDF jedes Tabs in diesem Fenster belegt, größter zuerst. Andere Tab-Arten werden nicht gezählt. „Anzeigen“ springt zu einem Tab des aktuellen Projekts.",

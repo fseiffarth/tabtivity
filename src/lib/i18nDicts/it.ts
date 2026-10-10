@@ -1411,7 +1411,7 @@ export const dict: Dict = {
   "settings.sleepTabsNever": "Mai",
   "settings.sleepTabsMinutes": "{n} min",
   "settings.shellScrollback": "Cronologia della shell",
-  "settings.shellScrollbackHelp": "Righe di cronologia che un terminale shell conserva per scorrere all'indietro. Meno righe usano meno memoria. Una modifica vale subito anche per le shell aperte: ridurla scarta subito le loro righe più vecchie, senza riavviare nulla. Le schede agente conservano sempre 5.000 righe.",
+  "settings.shellScrollbackHelp": "Righe di cronologia che un terminale shell conserva per scorrere all'indietro. Meno righe usano meno memoria. Una modifica vale subito anche per le shell aperte: ridurla scarta subito le loro righe più vecchie, senza riavviare nulla. Le schede agente conservano sempre {n} righe.",
   "settings.shellScrollbackLines": "{n} righe",
   "settings.tabCosts": "Cosa occupano le schede aperte",
   "settings.tabCostsHelp": "Una stima approssimativa della memoria che il terminale o il PDF di ogni scheda occupa in questa finestra, dalla più grande. Gli altri tipi di scheda non sono contati. «Mostra» passa a una scheda del progetto attuale.",
