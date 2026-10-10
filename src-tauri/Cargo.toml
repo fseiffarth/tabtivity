@@ -1,6 +1,6 @@
 [package]
 name = "tabtivity"
-version = "0.1.113"
+version = "0.1.114"
 edition = "2021"
 description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
