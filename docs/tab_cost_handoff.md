@@ -72,3 +72,46 @@ loaded (plan step 1). Base `3b5fd7a4`.
 - Threshold 8 / re-arm 5 / grace 2 min are constants (plan's open question).
 - The toast shares `conn-toast`'s position; a connection toast at the same
   moment would overlap it (same as the existing switch/conn pair).
+
+## T1 (reviewer)
+
+Range reviewed: `3b5fd7a4..71efaa06`. Bugs only; nothing run live.
+
+**Fixes**
+
+| Commit | Bug | Test |
+|---|---|---|
+| `35cbee11` | Close in the Settings list re-read the registry inside the click handler, before React unmounted the closed tab's `PdfCanvas`: its document stayed in "PDFs loaded now" and showed up as a PDF outside a tab until the next Refresh. The re-read now runs in an effect after the commit (passive unmount cleanups run first). | `TabCostList.test.tsx` "re-reads once the closed tab's viewer has unmounted, not before" (fake canvases that unregister on unmount, as the real one does) |
+| `4c083d49` | The loaded-PDF toast carried only `conn-toast`'s placement, so it sat exactly on a connection toast shown at the same moment (a project switch that loads PDFs), and its two lines reached into a remote project's two-line switch toast. It now takes the next slot down (`.conn-toast.pdf-warn-toast { top: calc(50% + 108px) }`), the offset-sibling rule `conn-toast` already uses below the switch toast. | `PdfLoadWarningHost.test.tsx` "sits in its own slot below the connection toast" (class on the toast + the rule in the CSS corpus, below `.conn-toast`) |
+
+**Checked, no bug:** registry register/unregister ordering incl. StrictMode
+(the update effect runs after the register effect and reads the new slot);
+§4.3 release and pane sleep unmount `PdfCanvas` → entry gone; failed load /
+file switch → `doc` null → 0 pages, not counted; per-window registries (popout,
+presenter windows never mount `AppShell`); TeX `<tab>#<path>` panes sum under
+the tab and are not "outside a tab"; no reading renders as 0 B (a loaded entry
+always has `docBytes`; terminals only print a size when live); hysteresis
+(8 / re-arm 5 / grace, StrictMode re-subscribe keeps the ref); Show/Close use
+the row's scope; hover card is the existing portaled card's classes; i18n keys
+and placeholders in all five files; both untested ids rendered as pills.
+
+**Gates** (worktree, after the fixes)
+- `npm run build`: ok.
+- `npm test -- --reporter=dot`: 770 files / 7789 tests, all pass (+2 tests).
+- `npm run lint`: 0 errors / 28 warnings (unchanged).
+- `scripts/brand-check.sh`, `scripts/privacy-check.sh` (staged and
+  `71efaa06..HEAD`), `git diff --check`: ok. No Rust touched.
+
+**Flagged for user**
+- A crossing of 8 inside the 2-min grace fires only on the next count change
+  after it; a restore that stays at ≥ 8 with no further change never toasts
+  (as the plan specifies — say if it should check once when the grace ends).
+- "N more tabs hold nothing loaded" also counts asleep terminals (their program
+  runs) and popped-out tabs (they hold memory in the popout) — wording, not
+  a count error.
+- "{n} PDFs open outside a tab" reads "1 PDFs" for one (no plural forms in the
+  keys); same for "{n} more tabs".
+- A TeX workspace tab that has never shown its PDF pane reads "Unloaded —
+  reloads when shown" though it never loaded one (plan's rule for `texworkspace`).
+- New toast slot position (`+108px`) is computed from the CSS, not seen live:
+  QA row 2415 should glance at a project switch that lands on ≥ 8 PDFs.
