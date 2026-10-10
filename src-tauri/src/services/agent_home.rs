@@ -13,8 +13,8 @@
 //! servers, skills) can only ever run in that project; what the user wants in
 //! every project comes from the Tabtivity-wide layer (`services::agent_global`),
 //! which no agent can write. Each home holds the
-//! agent's own config, transcripts, session stores and trust answers; logins
-//! are not kept here but hard-linked in from the per-CLI store
+//! agent's own config, transcripts, session stores and trust answers; a
+//! CLI's credential file is a copy the per-CLI store keeps in step
 //! (`services::agent_auth`), so a login made anywhere sticks everywhere.
 //! `~/.cache` of every home is a throwaway tmpfs on Linux.
 //!

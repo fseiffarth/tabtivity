@@ -148,8 +148,20 @@ exists nowhere else. "Not now" is always available.
 
 **Pull** (`sync_pull`, *Sync all* in the Remote tree): host bytes over the
 mirror's. For a folder, rsync is used when present on both ends, fed the exact
-file list the host walker produced; otherwise per-file SFTP. Locally edited
-files it overwrites are logged.
+file list the host walker produced; otherwise per-file SFTP. rsync lands only
+what SFTP would: `-t -c --no-links --no-devices --no-specials
+--max-size=<64 MiB>`, no `-a` and no recursion past the list
+(`remote_sync::rsync_pull_flags`), files over the cap left out of the list, and
+only a regular file within the cap recorded afterwards. Any rsync error (an old
+or foreign rsync refusing a flag included) falls back to SFTP. Locally edited
+files it overwrites are logged. Files over the 64 MiB cap stay on the host on
+either path; the pull returns them (`remote_sync::PullOutcome`:
+`pulled` + `skippedTooLarge`, path and size), and the result line under the
+Remote tree (a folder Pull, *Sync all*, a *take host* in the push-conflict
+queue), or atop the diverged (orange) view for its *take host* per row and
+for all, says "N file(s) over 64 MiB were not pulled" with the list
+(`SyncSkippedLarge`, folded past three). Copy such a file by hand (`scp`,
+`rsync`) if the mirror needs it.
 
 **Push** (`sync_push`, *Push all* in the Local tree): for each file the host is
 re-stat'd; a host that moved since the base **blocks** that file and returns it
@@ -330,6 +342,7 @@ into the mirror.
 | lockstep *disconnected* | the pool is cold | reconnect; nothing was claimed or written |
 | *Files changed on your local copy* dialog | a fast-forward, checkout, reset, or confirmed pull removed or overwrote mirror files | read the entry; git-side losses name the restore command |
 | pull/push of one file "did nothing" | it is lockstep-owned or excluded — the command now says which | commit it / include it |
+| a pulled folder lacks a big file | over the 64 MiB cap; the pull's result line names it | copy it by hand |
 
 ## 7. Verifying a change
 

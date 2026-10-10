@@ -100,6 +100,9 @@ where
     opts
 }
 
+/// The most of a legacy Vibe session's `meta.json` read to match its id.
+const VIBE_META_CAP: u64 = 16 * 1024 * 1024;
+
 fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
     if !is_uuid_shaped(id) {
         return false;
@@ -118,7 +121,10 @@ fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
         if !path.is_dir() || !entry.file_name().to_string_lossy().starts_with("session_") {
             return false;
         }
-        let Ok(raw) = std::fs::read_to_string(path.join("meta.json")) else {
+        // Agent-written: a FIFO or a link here must not hang or steer a spawn.
+        // Not a small record: Vibe dumps its config, every tool schema and the
+        // whole system prompt (the user's AGENTS.md included) into it.
+        let Some(raw) = crate::services::home_io::read_record_capped(&path.join("meta.json"), VIBE_META_CAP) else {
             return false;
         };
         serde_json::from_str::<serde_json::Value>(&raw).ok()
@@ -664,7 +670,9 @@ fn with_transcript_tail<T>(
     read: impl FnOnce(&[&str]) -> Option<T>,
 ) -> Option<T> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
+    // The agent writes its transcript: never a link, a FIFO or another
+    // special file.
+    let mut file = crate::services::home_io::open_regular(path)?;
     let len = file.metadata().ok()?.len();
     let start = len.saturating_sub(tail);
     file.seek(SeekFrom::Start(start)).ok()?;
@@ -1459,7 +1467,7 @@ fn cleared_session_in(
         return None;
     }
     // Same guard as the id record: the hook wrote it from agent-visible JSON.
-    let raw = std::fs::read_to_string(dir.join(format!("{uid}{LIVE_CLEARED_SUFFIX}"))).ok()?;
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}{LIVE_CLEARED_SUFFIX}")))?;
     let cleared = raw.trim().to_string();
     (is_uuidish(&cleared) && cleared != live && session_exists(&cleared)).then_some(cleared)
 }
@@ -1469,7 +1477,7 @@ pub fn read_live_source_in(dir: &std::path::Path, uid: &str) -> Option<String> {
     if !is_uuid_shaped(uid) {
         return None;
     }
-    let raw = std::fs::read_to_string(dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}"))).ok()?;
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}")))?;
     let word = raw.trim().to_string();
     is_session_source(&word).then_some(word)
 }
@@ -1485,7 +1493,7 @@ pub fn read_live_session_in(dir: &std::path::Path, uid: &str) -> Option<String> 
     if !is_uuid_shaped(uid) {
         return None;
     }
-    let raw = std::fs::read_to_string(dir.join(uid)).ok()?;
+    let raw = crate::services::home_io::read_record(&dir.join(uid))?;
     let id = raw.trim().to_string();
     if is_uuidish(&id) {
         Some(id)
@@ -1533,7 +1541,7 @@ fn read_live_mode_in(dir: &std::path::Path, uid: &str) -> Option<String> {
     if !is_uuid_shaped(uid) {
         return None;
     }
-    let raw = std::fs::read_to_string(dir.join(format!("{uid}.mode"))).ok()?;
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}.mode")))?;
     let mode = raw.trim().to_string();
     if is_permission_mode(&mode) {
         Some(mode)
@@ -1620,7 +1628,10 @@ pub fn codex_hook_state() -> CodexHookState {
 /// Tabtivity's hook as the Codex of one agent home sees it.
 fn codex_hook_state_of_home(home: &std::path::Path) -> CodexHookState {
     let config = home.join(".codex").join("config.toml");
-    let src = std::fs::read_to_string(&config).unwrap_or_default();
+    // The agent can rewrite its own config: never a FIFO or a link.
+    let src = crate::services::home_io::open_regular(&config)
+        .and_then(|f| std::io::read_to_string(f).ok())
+        .unwrap_or_default();
     codex_hook_state_in(&src, &config.to_string_lossy(), &hook_command())
 }
 
@@ -1802,7 +1813,12 @@ fn write_vibe_hooks(file: &HomeFile, app_owned: bool) -> std::io::Result<()> {
     if app_owned {
         let fresh = vibe_hook_block()?;
         if file.read().as_deref() != Some(fresh.as_bytes()) {
-            file.write(fresh.as_bytes())?;
+            // In place: the file is bind-mounted read-only into the model's
+            // running tabs and pinned by inode for one that is starting
+            // (`agent_fence::verify_control_pins`). A rename over it would
+            // detach those mounts and refuse a second tab of the model that
+            // started at the same time.
+            file.write_in_place(fresh.as_bytes())?;
         }
         return Ok(());
     }
@@ -2527,7 +2543,14 @@ mod tests {
         std::fs::write(sessions.join("unified").join(own).join("CURRENT"), "1").unwrap();
         let legacy = sessions.join("session_20260923_120000_ffffffff");
         std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("meta.json"), format!("{{\"session_id\":\"{other}\"}}")).unwrap();
+        // Vibe's real metadata carries its config, tool schemas and system
+        // prompt: far past a small record's cap, and still read.
+        let padding = "x".repeat(2 * crate::services::home_io::RECORD_CAP as usize);
+        std::fs::write(
+            legacy.join("meta.json"),
+            format!("{{\"session_id\":\"{other}\",\"system_prompt\":{{\"content\":\"{padding}\"}}}}"),
+        )
+        .unwrap();
 
         let mut opts = opts_with_args(&["--continue"]);
         opts.cmd = "vibe".into();
@@ -2571,6 +2594,35 @@ mod tests {
         write_vibe_hooks(&file, true).unwrap();
         assert_eq!(std::fs::read_to_string(&hooks).unwrap(), once);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// Two tabs of one local model starting together: the second spawn's
+    /// rewrite of a stale `hooks.toml` lands between the first spawn's pin and
+    /// its verify. The rewrite keeps the inode, so the first spawn is not
+    /// refused (and running tabs keep their read-only bind).
+    #[cfg(unix)]
+    #[test]
+    fn a_hooks_rewrite_between_pin_and_verify_keeps_the_pin_valid() {
+        let state = tempfile::tempdir().unwrap();
+        let home = state.path().join("vibe_local/gemma4-e4b");
+        std::fs::create_dir_all(&home).unwrap();
+        let hooks = home.join("hooks.toml");
+        let file = HomeFile::open(&home, "hooks.toml").unwrap();
+        // First tab ever: the first spawn creates the file and pins it.
+        write_vibe_hooks(&file, true).unwrap();
+        let pins = crate::services::agent_fence::local_model_control_paths(&home).unwrap();
+        // The second spawn read stale content (an update changed the block,
+        // or it raced the creation) and rewrites the file.
+        std::fs::OpenOptions::new().write(true).truncate(true).open(&hooks).unwrap();
+        write_vibe_hooks(&file, true).unwrap();
+        crate::services::agent_fence::verify_control_pins(&pins).unwrap();
+        let fresh = std::fs::read_to_string(&hooks).unwrap();
+        assert_eq!(fresh, vibe_hook_block().unwrap());
+        // Stale content under the pins: rewritten, still the pinned inode.
+        std::fs::write(&hooks, "[[hooks]]\nname = \"planted\"\ntype = \"post_agent\"\ncommand = \"true\"\n").unwrap();
+        write_vibe_hooks(&file, true).unwrap();
+        crate::services::agent_fence::verify_control_pins(&pins).unwrap();
+        assert_eq!(std::fs::read_to_string(&hooks).unwrap(), fresh);
     }
 
     #[test]
@@ -4371,5 +4423,102 @@ mod tests {
         assert_eq!(clean_model_name("evil\u{1b}]0;x\u{7}"), None);
         assert_eq!(clean_model_name("two words"), None);
         assert_eq!(clean_model_name(&"m".repeat(MAX_MODEL_NAME + 1)), None);
+    }
+
+    /// Gap 29: every record the host reads from the live-session slice, Vibe's
+    /// session metadata and a transcript are agent-writable. A planted FIFO
+    /// reads as nothing without blocking (a regression fails on the deadline
+    /// instead of hanging), so does a link or an oversized record, and a
+    /// normal record still reads.
+    #[cfg(unix)]
+    #[test]
+    fn planted_fifos_links_and_oversized_records_read_as_nothing() {
+        use crate::services::home_io::{mkfifo, within_deadline, RECORD_CAP};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("live");
+        std::fs::create_dir_all(&dir).unwrap();
+        let uid = "0a1b2c3d-0000-4000-8000-00000000abcd";
+        let prev = "0a1b2c3d-1111-4000-8000-00000000abcd";
+        let id_rec = dir.join(uid);
+        let src = dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}"));
+        let mode = dir.join(format!("{uid}.mode"));
+        let cleared = dir.join(format!("{uid}{LIVE_CLEARED_SUFFIX}"));
+        let write_all = || {
+            std::fs::write(&id_rec, format!("{uid}\n")).unwrap();
+            std::fs::write(&src, "clear\n").unwrap();
+            std::fs::write(&mode, "plan\n").unwrap();
+            std::fs::write(&cleared, format!("{prev}\n")).unwrap();
+        };
+        write_all();
+        assert_eq!(read_live_session_in(&dir, uid).as_deref(), Some(uid));
+        assert_eq!(read_live_source_in(&dir, uid).as_deref(), Some("clear"));
+        assert_eq!(read_live_mode_in(&dir, uid).as_deref(), Some("plan"));
+        assert_eq!(cleared_session_in(&dir, uid, |_| true).as_deref(), Some(prev));
+
+        // One FIFO at a time, the others valid, so each reader reaches its own file.
+        for fifo in [&id_rec, &src, &mode, &cleared] {
+            write_all();
+            std::fs::remove_file(fifo).unwrap();
+            mkfifo(fifo);
+            let at = dir.clone();
+            let got = within_deadline(move || {
+                (
+                    read_live_session_in(&at, uid),
+                    read_live_source_in(&at, uid),
+                    read_live_mode_in(&at, uid),
+                    cleared_session_in(&at, uid, |_| true),
+                )
+            });
+            let want = |hit: bool, ok: Option<&str>| if hit { None } else { ok.map(str::to_string) };
+            assert_eq!(got.0, want(fifo == &id_rec, Some(uid)), "{}", fifo.display());
+            assert_eq!(got.1, want(fifo == &src, Some("clear")), "{}", fifo.display());
+            assert_eq!(got.2, want(fifo == &mode, Some("plan")), "{}", fifo.display());
+            let undo = fifo == &mode;
+            assert_eq!(got.3, want(!undo, Some(prev)), "{}", fifo.display());
+            // Writing the next round's records must not open this FIFO.
+            std::fs::remove_file(fifo).unwrap();
+        }
+
+        // A link to a valid record elsewhere is not followed.
+        let outside = tmp.path().join("outside");
+        std::fs::write(&outside, format!("{uid}\n")).unwrap();
+        write_all();
+        std::fs::remove_file(&id_rec).unwrap();
+        std::os::unix::fs::symlink(&outside, &id_rec).unwrap();
+        assert_eq!(read_live_session_in(&dir, uid), None);
+
+        // An oversized record is refused even where its trimmed text is valid.
+        let mut huge = format!("{uid}\n").into_bytes();
+        huge.resize(RECORD_CAP as usize + 1, b' ');
+        std::fs::remove_file(&id_rec).unwrap();
+        std::fs::write(&id_rec, &huge).unwrap();
+        assert_eq!(read_live_session_in(&dir, uid), None);
+        std::fs::write(&id_rec, &huge[..RECORD_CAP as usize]).unwrap();
+        assert_eq!(read_live_session_in(&dir, uid).as_deref(), Some(uid));
+
+        // Vibe's `meta.json`.
+        let home = tmp.path().join("vibe");
+        let session = home.join("logs/session/session_1");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(session.join("meta.json"), format!(r#"{{"session_id":"{uid}"}}"#)).unwrap();
+        assert!(vibe_session_exists(&home, uid));
+        std::fs::remove_file(session.join("meta.json")).unwrap();
+        mkfifo(&session.join("meta.json"));
+        let at = home.clone();
+        assert!(!within_deadline(move || vibe_session_exists(&at, uid)));
+
+        // A transcript tail.
+        let transcript = tmp.path().join("t.jsonl");
+        std::fs::write(&transcript, "{\"a\":1}\n").unwrap();
+        assert_eq!(with_transcript_tail(&transcript, 1024, |lines| Some(lines.len())), Some(1));
+        std::fs::remove_file(&transcript).unwrap();
+        mkfifo(&transcript);
+        assert_eq!(within_deadline(move || with_transcript_tail(&transcript, 1024, |lines| Some(lines.len()))), None);
+
+        // Codex's config in an agent home, read for the hook check.
+        let agent_home = tmp.path().join("agent");
+        std::fs::create_dir_all(agent_home.join(".codex")).unwrap();
+        mkfifo(&agent_home.join(".codex/config.toml"));
+        within_deadline(move || codex_hook_state_of_home(&agent_home));
     }
 }

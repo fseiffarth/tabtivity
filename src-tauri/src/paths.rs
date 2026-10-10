@@ -50,7 +50,7 @@ pub fn command_no_window(bin: impl AsRef<OsStr>) -> Command {
     cmd
 }
 
-fn hide_command_window(_cmd: &mut Command) {
+pub(crate) fn hide_command_window(_cmd: &mut Command) {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;

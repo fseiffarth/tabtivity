@@ -107,7 +107,15 @@ pub struct Identity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScheduleBinding { pub target: String, pub agent: String }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PushBinding { pub dir: std::path::PathBuf }
+pub struct PushBinding {
+    pub dir: std::path::PathBuf,
+    /// The fence scope the tab was spawned into, stamped by the spawn path
+    /// once the fence wrapped it ([`TokenStore::stamp_push_fence_scope`]):
+    /// the token is minted before the fence is decided. The push preflight
+    /// runs the repo's `pre-push` hook inside this scope's fence, and refuses
+    /// while it is `None` — never on the host (gap 18).
+    pub fence_scope: Option<String>,
+}
 /// The lane a caller class occupies on its tab: a tab holds at most one
 /// session per lane, and a respawn replaces only the session of its own lane.
 /// Root, local-model and reader tokens share the root lane; the schedule,
@@ -140,6 +148,18 @@ impl TokenStore {
             if authorized(header, token) { found = Some(session.clone()); }
         }
         found
+    }
+    /// Record on `token`'s Pusher binding the fence scope its tab was spawned
+    /// into. Called from the spawn path before the agent process exists, so no
+    /// push request can have read the binding unstamped. Any other token, or
+    /// none, is left alone; whether a binding was stamped.
+    pub fn stamp_push_fence_scope(&self, token: &str, scope: &str) -> bool {
+        let mut map = self.map();
+        let Some(binding) = map.get_mut(token)
+            .filter(|s| s.identity.caller == Caller::Pusher)
+            .and_then(|s| s.identity.push.as_mut()) else { return false };
+        binding.fence_scope = Some(scope.to_string());
+        true
     }
     /// See [`register_token`].
     fn register(&self, token: String, identity: Identity, read_mail: bool) {
@@ -905,7 +925,7 @@ pub fn grant_git_push(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenSto
     let Some(token) = mint_token() else { return };
     apply_git_push_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(GIT_TOKEN_ENV) == Some(&token) {
-        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { dir }), endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { dir, fence_scope: None }), endpoint: None }, false);
     }
 }
 
@@ -3425,6 +3445,25 @@ pub fn handle_message(stores: &Stores, tab: &str, message: &Value) -> (Option<Va
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// Gap 18: the spawn path stamps the fence scope onto the tab's push
+    /// identity once the fence wrapped it; nothing else takes one.
+    #[test]
+    fn only_a_pusher_binding_takes_a_fence_scope() {
+        let store = TokenStore::default();
+        let identity = |caller, push| Identity { tab: "stamp:a".into(), caller, project: Some("p".into()), schedule_target: None, push, endpoint: None };
+        let pusher = mint_token().unwrap();
+        store.register(pusher.clone(), identity(Caller::Pusher, Some(PushBinding { dir: "/p".into(), fence_scope: None })), false);
+        let helper = mint_token().unwrap();
+        store.register(helper.clone(), identity(Caller::Helper, None), false);
+        assert!(!store.stamp_push_fence_scope(&helper, "p"));
+        assert!(!store.stamp_push_fence_scope("not-a-token", "p"));
+        let before = store.authenticate(Some(&format!("Bearer {pusher}"))).unwrap();
+        assert_eq!(before.identity.push.unwrap().fence_scope, None);
+        assert!(store.stamp_push_fence_scope(&pusher, "p"));
+        let after = store.authenticate(Some(&format!("Bearer {pusher}"))).unwrap();
+        assert_eq!(after.identity.push.unwrap().fence_scope.as_deref(), Some("p"));
+    }
 
     #[test]
     fn narrowing_invalidates_already_authenticated_requests() {

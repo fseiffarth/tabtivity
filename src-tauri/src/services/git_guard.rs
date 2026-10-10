@@ -97,7 +97,8 @@ pub fn guard_paths(roots: &[PathBuf], cwd: Option<&Path>) -> GuardPaths {
     }
     // A linked worktree's git dir shares its common dir's config and hooks.
     for dir in git_dirs.clone() {
-        if let Ok(text) = std::fs::read_to_string(dir.join("commondir")) {
+        // Agent-writable (gap 29): a FIFO here must not hang a spawn.
+        if let Some(text) = crate::services::home_io::read_record(&dir.join("commondir")) {
             let common = text.trim();
             if !common.is_empty() {
                 git_dirs.push(dir.join(common));
@@ -125,7 +126,7 @@ pub fn guard_paths(roots: &[PathBuf], cwd: Option<&Path>) -> GuardPaths {
 /// The git dir a `.git` pointer file names (`gitdir: <path>`, relative to the
 /// pointer's folder).
 fn pointer_target(dot_git: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(dot_git).ok()?;
+    let text = crate::services::home_io::read_record(dot_git)?;
     let target = text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim();
     if target.is_empty() {
         return None;
@@ -337,6 +338,41 @@ mod tests {
         assert!(g.read_only.contains(&root.join(".git")));
         assert!(g.read_only.contains(&root.join(".notgit").join("config")));
         assert!(g.read_only.contains(&root.join(".notgit").join("hooks")));
+    }
+
+    /// Gap 29: `commondir` and the `.git` pointer are agent-writable and read
+    /// at every fenced spawn and push preflight. A FIFO there must not hang
+    /// either; a link or an oversized pointer names nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_linked_or_huge_commondir_or_pointer_is_not_read() {
+        use crate::services::home_io::{mkfifo, within_deadline, RECORD_CAP};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("proj");
+        fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        fs::write(root.join(".git/config"), "").unwrap();
+        mkfifo(&root.join(".git/commondir"));
+        let at = root.clone();
+        let g = within_deadline(move || guard_paths(std::slice::from_ref(&at), Some(&at)));
+        assert_eq!(g.pinned, vec![root.join(".git")]);
+        assert!(g.read_only.contains(&root.join(".git/config")));
+
+        let pointer = tmp.path().join("pointer");
+        mkfifo(&pointer);
+        let at = pointer.clone();
+        assert_eq!(within_deadline(move || pointer_target(&at)), None);
+        fs::remove_file(&pointer).unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        fs::write(&elsewhere, "gitdir: /x\n").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &pointer).unwrap();
+        assert_eq!(pointer_target(&pointer), None);
+        fs::remove_file(&pointer).unwrap();
+        let mut huge = b"gitdir: /x\n".to_vec();
+        huge.resize(RECORD_CAP as usize + 1, b'\n');
+        fs::write(&pointer, &huge).unwrap();
+        assert_eq!(pointer_target(&pointer), None);
+        fs::write(&pointer, "gitdir: /x\n").unwrap();
+        assert_eq!(pointer_target(&pointer), Some(PathBuf::from("/x")));
     }
 
     #[test]

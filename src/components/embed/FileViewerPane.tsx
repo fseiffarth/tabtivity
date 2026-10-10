@@ -174,6 +174,7 @@ import {
   describeFileErrorKey,
 } from "./fileAccess";
 import { DiffView } from "./DiffView";
+import { ViewerErrorBoundary } from "./ViewerErrorBoundary";
 import {
   type TexCapability,
   type TexCompileResult,
@@ -755,7 +756,17 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
         <div className="presentation-host">
           {/* Fallback null: a lazy viewer's chunk loads in milliseconds off
               local disk, and any placeholder would flash for exactly that. */}
-          <Suspense fallback={null}>{view}</Suspense>
+          {/* One boundary for every viewer (threat model row 28): a viewer that
+              throws while rendering shows a card in this pane instead of
+              unmounting the window. Reset when the file or viewer changes. */}
+          <ViewerErrorBoundary
+            resetKey={`${viewer}\u0000${effectivePath}`}
+            sourcePath={TEXT_SOURCE_VIEWERS.has(viewer) ? effectivePath : null}
+            projectId={projectId}
+            onOpenExternally={NO_OPEN_EXTERNALLY_VIEWERS.has(viewer) ? null : openExternally}
+          >
+            <Suspense fallback={null}>{view}</Suspense>
+          </ViewerErrorBoundary>
           {!presenting && <PresentationOverlay />}
         </div>
       </ViewerHeaderInfoContext.Provider>
@@ -763,6 +774,20 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
     </FileScopeContext.Provider>
   );
 }
+
+/** Viewers whose file is text, so the error boundary can offer it as plain
+ *  source. Binary viewers (images, PDF, ODT, media, SQLite, spreadsheets) and
+ *  the comparison views, whose `path` means something else, are left out. */
+const TEXT_SOURCE_VIEWERS: ReadonlySet<InternalViewer> = new Set<InternalViewer>([
+  "text", "markdown", "tex", "texworkspace", "html", "yaml", "bib", "eldeck", "notebook",
+]);
+
+/** Views whose header has no "Open externally" (the merge resolvers: their
+ *  `path` names a conflict, not one file the OS should open), so the error
+ *  boundary's card does not offer it either. */
+const NO_OPEN_EXTERNALLY_VIEWERS: ReadonlySet<InternalViewer> = new Set<InternalViewer>([
+  "syncmerge", "gitmerge",
+]);
 
 /** The file identity a `ViewerHeader` needs to offer file-scoped actions (the
  *  auto-sync toggle, the Local/Remote source switch) without every sub-viewer

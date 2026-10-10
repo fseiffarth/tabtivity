@@ -243,7 +243,9 @@ pub fn snapshot_ids(root: &Path) -> HashSet<String> {
 pub fn read_rollout_meta(path: &Path, mtime: SystemTime) -> Option<RolloutMeta> {
     use std::io::Read;
 
-    let mut file = std::fs::File::open(path).ok()?;
+    // Codex writes the rollout from inside its fence: a FIFO swapped in
+    // after the walk must not block the binder.
+    let mut file = crate::services::home_io::open_regular(path)?;
     let mut buf = vec![0u8; MAX_HEAD_BYTES];
     let n = file.read(&mut buf).ok()?;
     buf.truncate(n);
@@ -984,6 +986,15 @@ mod tests {
         let torn = root.join("torn.jsonl");
         std::fs::write(&torn, "{\"type\":\"session_meta\",\"payl").unwrap();
         assert_eq!(read_rollout_meta(&torn, SystemTime::UNIX_EPOCH), None);
+
+        // A FIFO swapped in after the walk neither blocks nor reads (gap 29).
+        #[cfg(unix)]
+        {
+            let fifo = root.join("fifo.jsonl");
+            crate::services::home_io::mkfifo(&fifo);
+            let got = crate::services::home_io::within_deadline(move || read_rollout_meta(&fifo, SystemTime::UNIX_EPOCH));
+            assert_eq!(got, None);
+        }
 
         let _ = std::fs::remove_dir_all(&root);
     }

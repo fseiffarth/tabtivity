@@ -332,6 +332,26 @@ describe("loadFromLayout — resume args", () => {
     expect(tab.env).toEqual({ [envName("TAB_UID")]: sid, KEEP_ME: "yes" });
   });
 
+  it("an agent tab adopted with no env gets its TAB_UID back from sessionId", () => {
+    // Gap 17: the untrusted doors drop every tab's `env`, so the binding key
+    // must come from the durable sessionId for every resumable agent.
+    const layout = [
+      { key: "agent-1", label: "claude", cmd: "claude", cwd: "/stale", kind: "agent" as const, sessionId: "claude-sid" },
+      { key: "agent-2", label: "gemini", cmd: "gemini", cwd: "/stale", kind: "agent" as const, sessionId: "gemini-sid" },
+      { key: "shell-1", label: "Shell", cmd: "", cwd: "/stale", kind: "shell" as const },
+      { key: "agent-3", label: "aider", cmd: "aider", cwd: "/stale", kind: "agent" as const, sessionId: "aider-sid" },
+    ];
+
+    useTabsStore.getState().loadFromLayout(layout, "/project-r-dir", "project-r");
+
+    const tabs = useTabsStore.getState().tabsByScope["project-r"]!;
+    expect(tabs[0].env).toEqual({ [envName("TAB_UID")]: "claude-sid" });
+    expect(tabs[1].env).toEqual({ [envName("TAB_UID")]: "gemini-sid" });
+    // Not a resumable agent: nothing is minted.
+    expect(tabs[2].env).toEqual({});
+    expect(tabs[3].env).toEqual({});
+  });
+
   it("Claude agent without a sessionId gets no resume args", () => {
     const layout = [
       { key: "agent-1", label: "claude", cmd: "claude", cwd: "/stale", kind: "agent" as const },

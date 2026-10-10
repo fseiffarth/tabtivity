@@ -138,7 +138,8 @@ The four items that review left open were closed on 2026-09-26 (tracked in
    and places into every home after, so a login made anywhere reaches every
    other home in one pass. A hard link from an older Tabtivity is replaced by
    a copy on the first pass. Login directories (Kimi, CodeBuddy) are
-   reconciled file by file and no longer bind-mounted. The cost is that a
+   reconciled file by file, only for the file names each CLI writes its
+   login under (2026-10-08), and no longer bind-mounted. The cost is that a
    token refresh reaches the other running tabs one pass later instead of
    at once. Tests cover in-place and rename rotations, the refused account
    through both, the Host home, the hard-link migration and directories.
@@ -221,6 +222,27 @@ its session hooks in each home's `settings.json` / `config.toml` /
 Tabtivity reads back out of a home (transcripts, Codex's SQLite, Copilot's
 config) is agent-written and treated as attacker-controlled, as before.
 
+**Agent-written files are read and set up without trusting the path.** A
+plain read blocks forever on a FIFO, so every small record the host reads
+out of agent reach — the live-session slice, `.git/commondir` and the `.git`
+pointer, Vibe's `meta.json`, transcript tails (including the phone's
+transcript and changes reads, and Claude's subagent `.meta.json`), Codex's
+rollout heads — goes through `home_io::open_regular` / `read_record`
+(`O_NOFOLLOW | O_NONBLOCK`, a regular file on the opened inode, records
+capped at 64 KiB; Vibe's `meta.json`, which embeds the system prompt and
+tool schemas, at 16 MiB; gap 29). The
+local-model home `<state_dir>/vibe_local/<model>` is writable to every
+running tab of that model, so its read-only control paths (`config.toml`,
+`hooks.toml`, `.env`, `AGENTS.md`, the tool/plugin/skill/agent/prompt
+folders) are created through a handle on that home (`HomeFile::ensure`),
+pinned by inode, and re-`lstat`-ed as the fence wrapper's last step; any
+change refuses the spawn (`agent_fence::verify_control_pins`, gap 30).
+Tabtivity's own reset of `hooks.toml` is written in place
+(`HomeFile::write_in_place`): a rename would give it a new inode, refusing a
+second tab of the model starting at the same time, and would detach the
+read-only bind in the model's running tabs. bubblewrap and Seatbelt still open the paths by name after that check: the
+remaining window is the gap's stated residual.
+
 A home is seeded once: the scope's existing Tabtivity-kept Codex store and
 Copilot home move in, the Claude transcripts of the scope's own roots are
 **copied** from the user's `~/.claude/projects` (so every tab open before the
@@ -277,10 +299,42 @@ read, so a fenced tab could have planted a command that ran in every other
 scope and unfenced in the Host session (2026-09-26). The keeper now refuses
 a Pi login whose key is not a literal (`agent_auth::names_command`) and shows
 why in the Agents view, the same way as a refused account. A config that
-mixes both (Continue's `config.yaml`, Crush's `crush.json`, Aider's `.env`),
-a login in a database beside other state (Kiro, Kilo, OpenClaw) or one in
-the keyring stays per scope. Directories that hold nothing but a login
-(Kimi, CodeBuddy) are reconciled file by file. Where a file names an account
+mixes both (Continue's `config.yaml`, Crush's `crush.json`, Cline's
+`providers.json`), a file the CLI loads as its environment (Vibe's
+`.vibe/.env`, Aider's `.aider/oauth-keys.env` and `.env`, mini-swe-agent's
+`.config/mini-swe-agent/.env`), a login in a database beside other state
+(Kiro, Kilo, OpenClaw) or one in the keyring stays per scope. The dotenv
+files and Cline's `providers.json` were shared until 2026-10-08 (threat
+recheck gap 16): a fenced agent could write `GIT_CONFIG_*` →
+`core.fsmonitor=<cmd>` into `~/.vibe/.env` and have it run in every other
+scope's fence and unfenced in the Host session. There is no content
+validator for them; they left the shared set, and those CLIs sign in once
+per scope. At startup, before the import and the keeper,
+`agent_auth::retire_shared_paths_in` drops their store dirs; every scope
+and local-model home keeps the copy it holds, and the Host home's copy is
+renamed aside to `<name>.pre-scope` (`.1`, `.2`, … when taken; through the
+`home_io` handle, never replacing a file) where the bytes are the store's or
+what the store last placed there (a copy that differs from both is the Host
+session's own write and stays). Nothing is deleted: an adopted Host login
+and a placed copy leave the same record, so the cleanup cannot tell a login
+the user made in the Host session from one Tabtivity put there, and the
+rename keeps the former's settings for the user to copy back. No CLI loads
+a `.pre-scope` name and no allowlist admits one. If the rename fails, the
+store dir stays so the next start can tell again.
+Content planted before the fix stays in the fenced homes it already
+reached. A user who wants one key everywhere puts the file into the
+Tabtivity-wide layer (`<state_dir>/agent-global/`, "Open folder"), which no
+agent can write; the store's copy is not moved there, since an agent may
+have written it. Directories that hold a login (Kimi, CodeBuddy) are
+reconciled file by file and only for an allowlist of names
+(`agent_auth::DirNames`, read off the published bundles): Kimi's
+`<name>.json`, CodeBuddy's `<authId>.info` minus its logout backups. A
+temporary, a `.logged-out` marker, a backup or a planted file stays in the
+home it was written in; the import copies the folder one level deep under
+the same allowlist, and the startup cleanup removes unlisted names from the
+store and renames a home's copy aside (`<name>.pre-scope`) where it still
+matches what the store placed there.
+Where a file names an account
 (Codex's `account_id`; Claude's via the `.claude.json` identity the store
 also keeps), the store records it at first adoption and a later file naming
 another account is **not** adopted — the store's copy is put back over it,
@@ -320,6 +374,10 @@ one shim per registry CLI at the front of every tab's PATH
 `TABTIVITY_SCOPE` — same scope home, same shared logins — and runs it as its
 child on the same terminal, draining the terminal's input queue once the
 CLI has exited and before the shell reads again (reevaluation item 3).
+`TABTIVITY_SCOPE`, `TABTIVITY_AGENT_FENCE` and `TABTIVITY_HOST_SESSION` are
+only ever Tabtivity's: `launch_prep::prepare` drops each one (and the other
+control variables) from a tab's incoming env and sets the scope itself, so a
+persisted layout cannot name another scope or switch the shim off (gap 17).
 Inside a fence the shim steps aside to the real CLI, skipping its own
 directory only to *find* it: the CLI runs with PATH unchanged, so
 `tabtivity-send` (same directory) stays reachable. Exporting the trimmed PATH
@@ -391,7 +449,10 @@ header, never follows a redirect, bounds the body (32 MiB, 256 MiB held over
 all sockets), drops a socket idle for 60 s between requests (64 at most),
 streams the answer through chunk by chunk, answers its own refusals in the
 provider's error shape (`x-should-retry: false`), and logs nothing. A token
-dies with its tab (`agent_fence::on_tab_gone` → `api_proxy::on_tab_gone`);
+dies with its tab (`agent_fence::on_tab_gone` → `api_proxy::on_tab_gone`,
+for the tab's newest spawn only: a kill that lands after a remount began
+respawning the id is stale and leaves the respawn's token, see "Spawn
+generations" below);
 one bound to a local tmux session lives while that session does (a project
 switch or reload kills only the client) — revoked when Tabtivity kills the
 session, following a rename, and swept once a minute otherwise — a respawn of
@@ -427,6 +488,29 @@ config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`, Gemini's `.env`) can
 still point the CLI at another host — which then receives only the token,
 worthless off this machine and dead with the tab; and the agent can spend
 through its token while the tab lives — up to the monthly limit (C3).
+
+**Spawn generations** (gap 18, 2026-10-08). PTY ids are reused: a pane
+remount respawns the same id while the unmount's un-awaited `pty_kill` is
+still tearing the old PTY down. That teardown used to clear the respawn's
+fence registration, API proxy tokens, MCP tokens and turn binding. Every
+spawn now takes a sequence number in `launch_prep::prepare` before any grant
+(`agent_fence::begin_spawn`); the PTY entry and its output route carry it,
+`PreparedLaunch::commit` registers it (`register_tab(id, scope, seq)`, the
+scope only for a fenced tab), and a spawn dropped uncommitted hands it back
+(`abandon_spawn`). Every teardown names the spawn it ends
+(`launch_prep::on_tab_gone(id, seq)` from `pty_kill`, `pty_kill_scope`,
+`kill_all`; `agent_fence::on_tab_gone(id, seq)` from the reader task's end).
+Only the id's newest spawn takes the shared per-tab state (the Codex
+tracking and in-container process record too); a stale teardown forgets
+its own registration and nothing else. Two spawns of one id prepared at
+once may finish out of order, so `spawn_pty` puts a PTY in the registry
+only while its spawn is still the newest (`insert_current_spawn`): an older
+one never replaces the newer one's PTY. A spawn dropped uncommitted with no
+earlier spawn live runs the rest of the tab's teardown itself (MCP tokens,
+turn binding, Codex tracking, in-container process), as no PTY is left for
+a kill to take. The push preflight no longer
+reads this registry at all: its fence scope rides on the push identity
+(`docs/context/git_push_mcp.md`).
 
 **Spending limit** (`services::api_usage`, `api_meter`, `api_prices`; plan
 C3). A key is saved only beside a monthly USD limit

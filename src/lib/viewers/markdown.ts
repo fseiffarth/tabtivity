@@ -168,10 +168,12 @@ const mark = (kind: "C" | "M" | "L", idx: number) => `${NUL}${kind}${idx}${NUL}`
  *  (`![$x$](…)` puts a math marker in the alt). Restoring a marker's HTML there
  *  would let the span's own quotes end the attribute early, so a marker
  *  contributes only its visible text: the stored HTML minus its tags, which is
- *  already escaped. */
+ *  already escaped. The split spells the NUL delimiters as `\u0000` escapes:
+ *  literal NUL bytes here read as spaces in most tools, which made this split
+ *  look like it matched the old space-padded markers (threat model row 40). */
 function attrText(raw: string, spans: InlineSpans): string {
   return raw
-    .split(/( [CML]\d+ )/)
+    .split(/(\u0000[CML]\d+\u0000)/)
     .map((part, i) => {
       if (i % 2 === 0) return escapeHtml(part);
       const idx = Number(part.slice(2, -1));
