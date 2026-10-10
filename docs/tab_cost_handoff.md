@@ -243,3 +243,92 @@ warned is disarmed. `…One` keys present in all five files.
   its command instead of keeping `""`.
 - A shell tab running an agent CLI through the shim keeps the shell cap
   (it is a shell tab); say if those should keep 5,000.
+
+## T3 (implementer)
+
+**Commit** (base `e322f1c7`): `1ed60f08` — Stop experimental flags following
+Debug mode once a profile is migrated (plan step 3, one commit as the plan
+splits it).
+
+**What landed**
+- `lib/experimental.ts`: `experimentalEnabled` = explicit value, else off on a
+  profile with `experimental_explicit === true`, else the old `debug` fallback
+  (`terminal_webgl` still opt-in everywhere). `explicitExperimentalPatch`
+  (pure; `null` once marked; Debug on → `true` for every unset flag but
+  `terminal_webgl`, plus the marker; otherwise the marker alone; never touches
+  an explicit value, `false` included). `migrateExperimentalOnce` reads the
+  store, skips unless `loaded && settings`, writes through `updateSettings`
+  (optimistic guess = before + patch, so no frame shows a flag off), logs and
+  leaves a failed write (the store rolls the guess back → still unmarked →
+  next launch retries). Concurrent calls share one in-flight write. Module
+  header rewritten.
+- `AppShell` load effect: `Promise.resolve(loadSettings()).then(() =>
+  migrateExperimentalOnce())`. Main window only by construction.
+- `types/index.ts` + Rust `schema/settings.rs`: `experimental_explicit`
+  named field; `experimental()` checks it; new `Settings::copilot_completion()`
+  used by `copilot/policy.rs` and `invalidate_copilot`.
+- `SettingsPanel`: Debug toggle gets help `settings.debugHelp` + pill
+  `settings.debugNoExperiments`; new `deck_presenter` `ToggleCard`
+  (pill `settings.deckPresenter`, search key); experimental help is
+  Help1 + Help2 + Help3 (`experimentalHelpBold` deleted in all five files).
+- i18n (5 files): new `settings.debugHelp`, `settings.deckPresenter`,
+  `…Help`; rewritten `experimentalHelp1/2/3`, `lessons.deckPresenter.exportFlagBody`,
+  `lessons.runPython.debugFileBody`.
+- Comments that promised the debug default reworded: `types/index.ts`,
+  `schema/settings.rs`, `commands/browser.rs`, `DeckView.tsx`,
+  `FileViewerPane.tsx`, `TabBar.tsx`, `NewTabMenu.tsx`, `experimentalSweep.ts`,
+  `lib/mail.ts`, `stores/mail.ts`, `AppShell.tsx`, `BrowserTripwire.test.ts`.
+- `docs/guide/features.md`, filemap rows (`lib/experimental.ts`, backend
+  `schema/settings.rs`), two `untested.ts` rows, QA row 2417 (T3.1, T3.2,
+  four platform pairs each).
+
+**Choices**
+- `Promise.resolve(loadSettings())` rather than `loadSettings().then`: several
+  AppShell tests mock `load` as a bare `vi.fn()` returning `undefined`. A
+  rejected load still never reaches the migration and stays an unhandled
+  rejection, as before.
+- The migration also checks `loaded`, so a mocked/unloaded store with a
+  non-null `settings` (SidePanelEdgeRail's mock) writes nothing.
+- An explicit `experimental_explicit: false` counts as unmarked (only `true`
+  marks), in TS and Rust; the migration then writes `true`.
+- `experimentalEnabled` now tests `!= null` instead of `??`/`=== undefined`
+  (same result for JSON-borne values; `null` never reaches it from Rust).
+- Deck switch placed after the browser, before Python run/debug.
+- `dev/perfMonitor` (`import.meta.env.DEV`), the project-settings Debug
+  section (`ProjectFilesSettings.tsx`) and `browser_live_pages` untouched.
+
+**Gotchas**
+- `useSettingsStore.updateSettings` is optimistic: the migration's guess is
+  in the store synchronously, which is what keeps the sweep/restore filter
+  quiet between write and answer. A StrictMode second `load()` can land a
+  stale unmarked snapshot after the guess; it still shows the same flags
+  (old rule) and the in-flight guard stops a second write.
+
+**Gates** (worktree, after `1ed60f08`)
+- `npm run build`: ok.
+- `npm test -- --reporter=dot`: 775 files / 7829 tests, all pass (baseline
+  773 / 7809; +2 files `ExperimentalExplicit`, `DeckPresenterSetting`; +20
+  tests).
+- `npm run lint`: 0 errors / 28 warnings (unchanged).
+- `cargo test -q`: all pass (lib 3657 passed, 3 ignored; +3 tests).
+  `cargo clippy --all-targets -D warnings`: clean. Windows `cargo check
+  --target x86_64-pc-windows-msvc`: ok.
+- `scripts/brand-check.sh`, `scripts/privacy-check.sh`, `git diff --check`: ok.
+- `npm run backend:stale`: the open window and its embedded phone bundle
+  predate the current build (not running this branch). An older backend keeps
+  `experimental_explicit` in `Settings.extra`, so it round-trips and the
+  frontend reads it.
+
+**Flagged for user**
+- Not run live. QA row 2417 (T3.1 upgrade path with Debug on, T3.2 Debug off
+  + Deck switch) is the manual check.
+- On an older backend (stale window), Rust `experimental()` ignores the
+  marker: a marked profile with Debug on and `copilot_completion` unset would
+  still pass the backend Copilot policy there. A migrated Debug profile has it
+  explicit, so this only bites a profile that turns Debug on later while the
+  old binary runs.
+- A profile whose Debug mode was on keeps every experiment ticked forever
+  (the user decision); turning Debug off no longer turns them off — they are
+  unticked one by one.
+- No AppShell-level test drives the load → migrate wiring; it is covered by
+  the unit tests of `migrateExperimentalOnce` and the one-line call.
