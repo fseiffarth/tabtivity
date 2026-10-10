@@ -10,10 +10,12 @@
 //!   the proxy only talks to `api.anthropic.com`). Long-context pricing for
 //!   Sonnet 4 / 4.5 (2× input, 1.5× output past 200K input tokens) is from
 //!   the earlier version of that page; the 2026-10-04 page lists 1M context at
-//!   standard pricing for 4.6 and later only. Haiku 5.5 ($0.10/$0.50, and
-//!   $0.50/$2.50 for prompts over 100K) is from the Claude Code 2.1.293
-//!   changelog (2026-10-08); its cache rates are assumed to take the same
-//!   multiples of input as every other model here.
+//!   standard pricing for 4.6 and later only. The Anthropic rows were
+//!   re-read off that page on 2026-10-10 (Claude Code 2.1.296 repriced
+//!   Sonnet 5.5 cache reads): cache hits are 0.1× input except 0.05× on
+//!   Opus 5.5 and Sonnet 5.5 and 0.025× on Fable/Mythos 5.1, and the page now
+//!   lists Haiku 5.5 ($0.10/$0.50, $0.50/$2.50 for prompts over 100K) with the
+//!   cache rates this table already had.
 //! - Gemini: <https://ai.google.dev/gemini-api/docs/pricing> ("Last updated
 //!   2026-10-01 UTC"; paid tier, Standard — not batch, flex or priority).
 //!   Grounding with Google Search, read off the same page on 2026-10-04:
@@ -129,7 +131,8 @@ const ANTHROPIC: &[(&str, AnthropicRates)] = &[
     ("claude-opus-4-1", OPUS_4_OLD),
     ("claude-opus-4", OPUS_4_OLD),
     ("claude-opus-4-0", OPUS_4_OLD),
-    ("claude-sonnet-5-5", SONNET_5X),
+    // Cache hits at 0.05× input, Sonnet 5 at the usual 0.1×.
+    ("claude-sonnet-5-5", AnthropicRates { cache_read: 0.10, ..SONNET_5X }),
     ("claude-sonnet-5", SONNET_5X),
     ("claude-sonnet-4-6", SONNET_4X),
     ("claude-sonnet-4-5", AnthropicRates { long: Some(SONNET_4_LONG), ..SONNET_4X }),
@@ -652,6 +655,13 @@ mod tests {
         // Fast mode doubles, US-only adds a tenth.
         let u = AnthropicUsage { input_tokens: 1_000_000, fast: true, us_only: true, ..Default::default() };
         assert!(close(price_anthropic("claude-opus-5-5", &u).usd, 4.0 * 2.0 * 1.1));
+    }
+
+    #[test]
+    fn sonnet_5_5_cache_hits_cost_half_of_sonnet_5s() {
+        let u = AnthropicUsage { cache_read_input_tokens: 1_000_000, ..Default::default() };
+        assert!(close(price_anthropic("claude-sonnet-5-5", &u).usd, 0.10));
+        assert!(close(price_anthropic("claude-sonnet-5", &u).usd, 0.20));
     }
 
     #[test]
