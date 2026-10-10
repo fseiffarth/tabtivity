@@ -155,4 +155,13 @@ describe("PdfLoadWarningHost placement", () => {
     const px = (v: string) => Number(/50% \+ (\d+)px/.exec(v)?.[1]);
     expect(px(pdf[0])).toBeGreaterThan(px(conn[0]) + 46);
   });
+
+  it("wraps its long second line instead of cutting it off in a narrow window", () => {
+    const css = readAppStylesheet();
+    const rule = [...css.matchAll(/(?:^|[}/])\s*\.conn-toast\.pdf-warn-toast\s*\{([^}]*)\}/g)].map((m) => m[1]);
+    expect(rule).toHaveLength(1);
+    // `.multiline` sets `pre` (no wrap) and the base toast ellipsizes; the
+    // notice keeps its newline but wraps.
+    expect(/white-space:\s*pre-line;/.test(rule[0])).toBe(true);
+  });
 });
