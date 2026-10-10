@@ -38,6 +38,7 @@ import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
 import { markupPagePicture } from "../../components/embed/pdf/markupPage";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import { useActivityStore } from "../../stores/activity";
+import { useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
 import { DEFAULT_PDF_MARKUP_APPLY, markupUndoNote } from "../../lib/viewers/pdfMarkup";
@@ -201,6 +202,45 @@ describe("desktop markup Submit", () => {
     expect(await screen.findByText("The agent is asking something — answer in its tab")).toBeTruthy();
   });
 
+  it("shows the question of a dialog the tab waits on, and leads to the tab to answer it", async () => {
+    const screenText = ["Edit file", "  paper.tex", "", "Do you want to make this edit to paper.tex?", "❯ 1. Yes", "  2. No", "", "  esc to cancel"].join("\r\n");
+    const base = mocks.invoke.getMockImplementation();
+    mocks.invoke.mockImplementation(async (command: string, args?: unknown) =>
+      (command === "pty_scrollback" ? { data: screenText, startOffset: 0, endOffset: screenText.length } : base?.(command, args)));
+    const setActive = vi.spyOn(useTabsStore.getState(), "setActive").mockImplementation(() => {});
+    try {
+      render(<Harness />);
+      await waitFor(() => expect(submitButton().disabled).toBe(false));
+      expect(screen.queryByRole("button", { name: /Answer in tab/ })).toBeNull();
+      fireEvent.click(submitButton());
+      await screen.findByText("Sent — waiting for the agent");
+      act(() => useActivityStore.setState({ busyByTab: {}, attentionByTab: { "p1:t1": "decision" } }));
+      expect(await screen.findByText("“Do you want to make this edit to paper.tex?”")).toBeTruthy();
+      expect(mocks.invoke).toHaveBeenCalledWith("pty_scrollback", { id: "p1:t1" });
+      fireEvent.click(screen.getByRole("button", { name: /Answer in tab/ }));
+      expect(setActive).toHaveBeenCalledWith("t1");
+      // Answered: the tab works again, and the line and the button go.
+      act(() => useActivityStore.setState({ busyByTab: { "p1:t1": true }, attentionByTab: {} }));
+      await waitFor(() => expect(screen.queryByRole("button", { name: /Answer in tab/ })).toBeNull());
+      expect(screen.queryByText("“Do you want to make this edit to paper.tex?”")).toBeNull();
+    } finally {
+      setActive.mockRestore();
+    }
+  });
+
+  it("names the target's model while it works, by its first word", async () => {
+    useAgentModelsStore.setState({ screenByTab: { "p1:t1": "Opus 4.5 · high" } });
+    useActivityStore.setState({ busyByTab: { "p1:t1": true }, attentionByTab: {} });
+    try {
+      render(<Harness />);
+      await waitFor(() => expect(submitButton().disabled).toBe(false));
+      fireEvent.click(submitButton());
+      expect(await screen.findByText("Opus is working…")).toBeTruthy();
+    } finally {
+      useAgentModelsStore.setState({ screenByTab: {} });
+    }
+  });
+
   it("keeps Submit off with a hint when the project has no agent tab", async () => {
     useTabsStore.setState({ tabsByScope: { p1: [] } });
     render(<Harness />);
@@ -245,6 +285,20 @@ describe("desktop markup Submit", () => {
     fireEvent.change(picker, { target: { value: "s2" } });
     fireEvent.click(submitButton());
     await waitFor(() => expect(mocks.queuePromptForTab).toHaveBeenCalledWith("p1", "s2", "Look at the marked copy."));
+  });
+
+  it("Go to tab brings the picked agent tab to the front", async () => {
+    useTabsStore.setState({ tabsByScope: { p1: [agentTab("t1", "s1", "Claude"), agentTab("t2", "s2", "Codex")] } });
+    const setActive = vi.spyOn(useTabsStore.getState(), "setActive").mockImplementation(() => {});
+    try {
+      render(<Harness />);
+      await waitFor(() => expect(submitButton().disabled).toBe(false));
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "s2" } });
+      fireEvent.click(screen.getByRole("button", { name: /Go to tab/ }));
+      expect(setActive).toHaveBeenCalledWith("t2");
+    } finally {
+      setActive.mockRestore();
+    }
   });
 
   it("falls back to another tab when the chosen one closes", async () => {

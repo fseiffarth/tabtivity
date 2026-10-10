@@ -82,7 +82,9 @@ export function PdfMarkupBar({
       ? t(markup.stale ? "mobile.markup.round.finishedChanged" : "mobile.markup.round.finished")
       : round.phase === "question" && markup.questions.asks.length > 0
         ? t("pdfMarkup.round.asks")
-        : t(ROUND_KEYS[round.phase])
+        : round.phase === "working" && markup.targetModel
+          ? t("mobile.markup.round.workingModel", { model: markup.targetModel })
+          : t(ROUND_KEYS[round.phase])
     : null;
   const mark = round ? ROUND_MARK[round.phase] : undefined;
   /** Reload is offered only when the file changed under the marks — the
@@ -199,6 +201,16 @@ export function PdfMarkupBar({
             </select>
           </label>
         )}
+        {target && (
+          <button
+            type="button"
+            className="file-viewer-zoom-btn file-viewer-zoom-text"
+            onClick={markup.showTarget}
+            title={t("pdfMarkup.showTargetTitle", { tab: target.label })}
+          >
+            {t("pdfMarkup.showTarget")} <UntestedTag id="desktop.markup.link" />
+          </button>
+        )}
         <button
           type="button"
           className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-markup-submit"
@@ -221,6 +233,23 @@ export function PdfMarkupBar({
               {mark && <TabStatusMark stateClass={mark} />}
               <span>{roundWords}</span>
             </span>
+          )}
+          {markup.tabDialog && target && (
+            <>
+              {markup.tabDialog.line && (
+                <span className="file-viewer-pdf-markup-dialog" title={markup.tabDialog.line}>
+                  {t("pdfMarkup.tabDialog", { line: markup.tabDialog.line })}
+                </span>
+              )}
+              <button
+                type="button"
+                className="file-viewer-zoom-btn file-viewer-zoom-text active"
+                onClick={markup.showTarget}
+                title={t("pdfMarkup.answerInTabTitle", { tab: target.label })}
+              >
+                {t("pdfMarkup.answerInTab")} <UntestedTag id="desktop.markup.tabDialog" />
+              </button>
+            </>
           )}
           <PdfTicksStatus count={markup.ticks.marks.length} disabled={busy} onApproveAll={markup.ticks.approveAll} />
           {markup.stale && !(round?.phase === "finished") && <span>{t("pdfMarkup.stale")}</span>}

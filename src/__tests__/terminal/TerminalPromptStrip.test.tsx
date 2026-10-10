@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve([])) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn(() => Promise.resolve()) }));
@@ -9,6 +9,7 @@ import { useAgentPromptsStore, type SentAgentPrompt } from "../../stores/agents/
 import { _resetPromptTrailForTest, notePromptTrailInput } from "../../stores/agents/promptTrail";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { useMarkupLinksStore } from "../../stores/viewers/markupLinks";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "launch-1" };
 const iso = "2026-09-30T08:00:00Z";
@@ -25,6 +26,7 @@ describe("the prompt strip over an agent pane", () => {
     _resetPromptTrailForTest();
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [tab] } }));
     useAgentPromptsStore.setState({ historyByProject: { p: [sent] } });
+    useMarkupLinksStore.setState({ byPty: {} });
   });
 
   it("shows the newest prompt and steps back to the older one", () => {
@@ -69,5 +71,23 @@ describe("the prompt strip over an agent pane", () => {
     useAgentPromptsStore.setState({ historyByProject: { p: [] } });
     strip();
     expect(screen.getByText("No prompt in this tab yet")).toBeTruthy();
+  });
+
+  it("leads back to the PDF whose marks the tab is working on, only while the link holds", () => {
+    const setActive = vi.spyOn(useTabsStore.getState(), "setActive").mockImplementation(() => {});
+    try {
+      strip();
+      expect(screen.queryByRole("button", { name: /paper\.pdf/ })).toBeNull();
+      act(() => useMarkupLinksStore.getState().set("p:agent-1", { tabKey: "pdf-7", name: "paper.pdf", owner: "viewer-a" }));
+      fireEvent.click(screen.getByRole("button", { name: /paper\.pdf/ }));
+      expect(setActive).toHaveBeenCalledWith("pdf-7");
+      // Only the viewer that set the link takes it back.
+      act(() => useMarkupLinksStore.getState().clear("p:agent-1", "viewer-b"));
+      expect(screen.getByRole("button", { name: /paper\.pdf/ })).toBeTruthy();
+      act(() => useMarkupLinksStore.getState().clear("p:agent-1", "viewer-a"));
+      expect(screen.queryByRole("button", { name: /paper\.pdf/ })).toBeNull();
+    } finally {
+      setActive.mockRestore();
+    }
   });
 });

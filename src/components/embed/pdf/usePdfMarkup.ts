@@ -29,6 +29,8 @@ import { listen } from "@tauri-apps/api/event";
 import { fileMtime } from "../fileAccess";
 import { useT } from "../../../lib/i18n";
 import { holdPhonePrompt } from "../../../lib/agents/phoneHolds";
+import { readTabDialogLine } from "../../../lib/agents/tabDialog";
+import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../../stores/agents/agentModels";
 import {
   blobBase64,
   DEFAULT_PDF_MARKUP_APPLY,
@@ -104,6 +106,9 @@ import {
   undoneRound,
   type Round,
 } from "../../../../mobile-web/src/markup/submitState";
+
+/** When a tab's dialog is read a second time after its wait began. */
+const DIALOG_REREAD_MS = 1_000;
 
 export type MarkupTool = "ink" | "box" | "text" | "eraser";
 
@@ -408,7 +413,20 @@ export function usePdfMarkup({
     if (next !== chosen) setChosen(next);
   }, [active, targets, chosen]);
   const target = targets.find((entry) => entry.scheduleTargetId === chosen) ?? null;
+  const targetPty = target?.ptyId ?? null;
+  const showTarget = useCallback(() => {
+    if (!projectId || !targetPty?.startsWith(`${projectId}:`)) return;
+    useTabsStore.getState().setActive(targetPty.slice(projectId.length + 1));
+  }, [projectId, targetPty]);
   const tabAgent = useActivityStore((s) => (target ? agentTabStateOf(s, target.ptyId) : "idle"));
+  const modelsByTab = useAgentModelsStore((s) => s.byTab);
+  const screenModels = useAgentModelsStore((s) => s.screenByTab);
+  const targetTab = target && projectId ? tabs?.find((tab) => `${projectId}:${tab.key}` === target.ptyId) : undefined;
+  /** Who the pill says is at work: the target's model by its first word, as
+   *  the reader view's working row says it (`Opus is working…`). */
+  const targetModel = targetTab && projectId
+    ? agentTabModelTag(projectId, targetTab, modelsByTab, screenModels)?.trim().split(/\s+/)[0]
+    : undefined;
 
   // ── The agent's questions (`markup_ask`) ─────────────────────────────────
   const targetId = target?.scheduleTargetId ?? null;
@@ -528,6 +546,38 @@ export function usePdfMarkup({
     const timer = window.setTimeout(() => setRoundTick((tick) => tick + 1), wait);
     return () => window.clearTimeout(timer);
   }, [round, agent, active, sentShown, roundTick]);
+
+  // ── The target tab's own dialog ──────────────────────────────────────────
+  /** While the round waits on a dialog of the target tab's own (a permission
+   *  prompt, the CLI's question picker) and no `markup_ask` card: the tab and
+   *  when the wait began. Such a dialog is answered only in the tab — the pill
+   *  shows its question line and leads there (`showTarget`). */
+  const targetLabel = targetTab ? agentTabLabel(targetTab) : "";
+  const dialogWait = active && visible && targetPty && round?.phase === "question" && asks.length === 0 && tabAgent === "question"
+    ? `${targetPty}\n${round.since}`
+    : null;
+  const [tabDialog, setTabDialog] = useState<{ wait: string; line: string } | null>(null);
+  useEffect(() => {
+    if (!dialogWait || !targetPty) return;
+    let live = true;
+    const read = () => {
+      void readTabDialogLine(targetPty, targetLabel).then(
+        (line) => {
+          if (live && line) setTabDialog({ wait: dialogWait, line });
+        },
+        () => {},
+      );
+    };
+    read();
+    // The hook's verdict can beat the dialog's bytes to the router: look once
+    // more when they have had time to land.
+    const again = window.setTimeout(read, DIALOG_REREAD_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(again);
+    };
+  }, [dialogWait, targetPty, targetLabel]);
+  const dialogLine = dialogWait && tabDialog?.wait === dialogWait ? tabDialog.line : undefined;
 
   const roundRef = useRef(round);
   roundRef.current = round;
@@ -942,7 +992,14 @@ export function usePdfMarkup({
     holdsReload: active && (hasMarks || round !== null),
     targets,
     target,
+    targetModel,
     chooseTarget: setChosen,
+    /** Bring the target agent tab to the front; the tab's prompt strip leads
+     *  back here while a round is on (`stores/viewers/markupLinks`). */
+    showTarget,
+    /** The target tab waits on a dialog of its own: the question line it
+     *  shows, once read (`readTabDialogLine`); null while it waits on none. */
+    tabDialog: dialogWait ? { line: dialogLine } : null,
     agent,
     questions,
     ticks: tickState,

@@ -1980,6 +1980,16 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   opacity: 1;
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
+/* The way back to a marked-up PDF: a long file name ellipsizes. */
+.prompt-strip-markup {
+  max-width: 16em;
+}
+.prompt-strip-markup > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .prompt-strip-reader.active {
   opacity: 1;
   color: var(--accent-contrast);
