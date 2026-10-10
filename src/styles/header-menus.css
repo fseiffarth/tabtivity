@@ -1844,6 +1844,14 @@
   animation: toast-fade 3.2s ease forwards;
 }
 
+/* The two-line loaded-PDF notice (`PdfLoadWarningHost`) takes the next slot
+   down, below the connection toast, so a project switch that loads PDFs never
+   stacks it on the switch or connection toast. Same look and timing as
+   `.conn-toast`, which it also carries. */
+.conn-toast.pdf-warn-toast {
+  top: calc(50% + 108px);
+}
+
 /* ── Project-dialog remote step indicator + header connection lamps ────────── */
 .remote-steps {
   display: flex;

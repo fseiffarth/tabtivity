@@ -10,8 +10,9 @@ const TOAST_MS = 3200;
  * mounted once in the main window's `AppShell`. Follows the loaded-PDF count of
  * `lib/tabCost` — notified only when it moves, never per render or reload —
  * through the `pdfWarnStep` hysteresis, and shows AppShell's own toast
- * (`project-switch-toast conn-toast`, `pointer-events: none`), cleared by a
- * one-shot timeout. Non-blocking: nothing to click, nothing to dismiss.
+ * (`project-switch-toast conn-toast`, `pointer-events: none`) one slot below
+ * the connection toast (`pdf-warn-toast`), cleared by a one-shot timeout.
+ * Non-blocking: nothing to click, nothing to dismiss.
  */
 export function PdfLoadWarningHost() {
   const t = useT();
@@ -36,7 +37,7 @@ export function PdfLoadWarningHost() {
 
   if (!toast) return null;
   return (
-    <div key={toast.id} className="project-switch-toast conn-toast multiline" data-pdf-warn="">
+    <div key={toast.id} className="project-switch-toast conn-toast multiline pdf-warn-toast" data-pdf-warn="">
       {t("pdfWarn.toast", { n: toast.n })}
     </div>
   );

@@ -10,6 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(nul
 
 import { PdfLoadWarningHost } from "../../components/layout/PdfLoadWarningHost";
 import { PDF_WARN_GRACE_MS, _clearTabCostForTest, registerPdfDoc, updatePdfDoc } from "../../lib/tabCost";
+import { readAppStylesheet } from "../helpers/cssCorpus";
 
 function loadPdf(i: number) {
   const token = {};
@@ -41,7 +42,7 @@ describe("PdfLoadWarningHost", () => {
     loadPdf(8);
     expect(toasts()).toHaveLength(1);
     expect(toasts()[0].textContent).toContain("8 PDFs are loaded at once.");
-    expect(toasts()[0].className).toBe("project-switch-toast conn-toast multiline");
+    expect(toasts()[0].className).toBe("project-switch-toast conn-toast multiline pdf-warn-toast");
     act(() => {
       vi.advanceTimersByTime(3200);
     });
@@ -56,5 +57,33 @@ describe("PdfLoadWarningHost", () => {
     render(<PdfLoadWarningHost />);
     for (let i = 1; i <= 9; i++) loadPdf(i);
     expect(toasts()).toHaveLength(0);
+  });
+});
+
+/** Every `top:` declared for `selector`, in stylesheet order. */
+function topsOf(css: string, selector: string): string[] {
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [...css.matchAll(new RegExp(`(?:^|[}/])\\s*${esc}\\s*\\{([^}]*)\\}`, "g"))]
+    .map((m) => /(?:^|;|\s)top:\s*([^;]+);/.exec(m[1])?.[1].trim())
+    .filter((v): v is string => v !== undefined);
+}
+
+describe("PdfLoadWarningHost placement", () => {
+  it("sits in its own slot below the connection toast, never on top of it", () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockReturnValue(PDF_WARN_GRACE_MS + 1);
+    render(<PdfLoadWarningHost />);
+    for (let i = 1; i <= 8; i++) loadPdf(i);
+    expect(toasts()[0].classList.contains("pdf-warn-toast")).toBe(true);
+
+    const css = readAppStylesheet();
+    const conn = topsOf(css, ".conn-toast");
+    const pdf = topsOf(css, ".conn-toast.pdf-warn-toast");
+    expect(conn).toHaveLength(1);
+    expect(pdf).toHaveLength(1);
+    expect(pdf[0]).not.toBe(conn[0]);
+    // Both carry `.conn-toast`; the more specific rule must win, below it.
+    const px = (v: string) => Number(/50% \+ (\d+)px/.exec(v)?.[1]);
+    expect(px(pdf[0])).toBeGreaterThan(px(conn[0]) + 46);
   });
 });
