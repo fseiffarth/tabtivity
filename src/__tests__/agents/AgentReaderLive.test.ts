@@ -77,6 +77,35 @@ const DIFF_PANEL_QUESTION = [
   pane("Enter to select · ↑/↓ to navigate · Esc to cancel"),
 ];
 
+/** Claude Code 2.1.295's folder-trust question, as a 60-column pane drew it
+ * (captured, path replaced): unnumbered rows under a full-screen rule, the
+ * folder broken mid-word, the footer where the input box would be. */
+const TRUST_FOLDER = [
+  "",
+  "─".repeat(60),
+  " Accessing workspace:",
+  "",
+  " /home/user/projects/a-rather-long-project-folder-name-that",
+  " -wraps/src",
+  "",
+  " Quick safety check: Is this a project you created or one",
+  " you trust? (Like your own code, a well-known open source",
+  " project, or work from your team). If not, take a moment to",
+  " review what's in this folder first.",
+  "",
+  " Claude Code'll be able to read, edit, and execute files",
+  " here.",
+  "",
+  " Security guide",
+  "",
+  " ❯ No, exit",
+  "   Yes, I trust this folder",
+  "",
+  " Enter to confirm · Esc to cancel",
+  "",
+  "",
+];
+
 describe("the desktop Reader's live screen", () => {
   it("reads a question beside the fullscreen diff panel without the panel", () => {
     const live = readReaderLive(plainBuffer(DIFF_PANEL_QUESTION), "Claude", 130);
@@ -249,6 +278,29 @@ describe("the desktop Reader's live screen", () => {
       "Do you want to proceed?", "❯ 1. Yes", "  2. No", "", "> and now the tests", "", "⏺ Running them.", "> ",
     ]), "Claude");
     expect(answered.question).toBeNull();
+  });
+
+  it("reads Claude Code's unnumbered folder-trust question, path whole", () => {
+    const live = readReaderLive(plainBuffer(TRUST_FOLDER), "Claude", 60);
+    expect(live.question?.options).toEqual([
+      { index: 0, number: 1, label: "No, exit" },
+      { index: 1, number: 2, label: "Yes, I trust this folder" },
+    ]);
+    expect(live.question?.current).toBe(0);
+    expect(live.question?.title).toBe("Accessing workspace:");
+    expect(live.ask).toContain("/home/user/projects/a-rather-long-project-folder-name-that-wraps/src");
+    expect(live.ask.join("\n")).toMatch(/Quick safety check: Is this a project you created or one you trust\?/);
+    expect(live.ask[live.ask.length - 1]).toBe("Security guide");
+    expect(answerKeys(live.question!, live.question!.options[1])).toEqual(["\u001b[B", "\r"]);
+  });
+
+  it("reads no unnumbered dialog without its footer, or under an input box", () => {
+    const rows = TRUST_FOLDER.slice(0, -4);
+    expect(readReaderLive(plainBuffer(rows), "Claude", 60).question).toBeNull();
+    const twoMarks = TRUST_FOLDER.map((row) => (row === "   Yes, I trust this folder" ? " ❯ Yes, I trust this folder" : row));
+    expect(readReaderLive(plainBuffer(twoMarks), "Claude", 60).question).toBeNull();
+    const scrolledPast = [...TRUST_FOLDER, "> hello", "", "⏺ Hi.", "", "> ", "  ? for shortcuts"];
+    expect(readReaderLive(plainBuffer(scrolledPast), "Claude", 60).question).toBeNull();
   });
 
   it("tells a redraw of the same state from a change", () => {

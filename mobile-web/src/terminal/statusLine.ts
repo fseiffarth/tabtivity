@@ -31,7 +31,7 @@ import {
   openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
-import { isActionRow } from "./selectPrompt";
+import { isActionRow, isUnnumberedRow } from "./selectPrompt";
 
 export interface SessionStatus {
   /** Working directory, as printed (`~/…` or absolute). */
@@ -444,7 +444,8 @@ export function shortenPath(path: string): string {
 
 /** A numbered dialog row (`❯ 1. Yes`), which opens with the same marker as the
  * input line. It is a question waiting for an answer, never the composer —
- * and so is a multi-select question's unnumbered `❯ Submit` (`isActionRow`). */
+ * and so is a multi-select question's unnumbered `❯ Submit` (`isActionRow`)
+ * and the highlighted row of an unnumbered dialog (`isUnnumberedRow`). */
 const OPTION_ROW = /^\s*[>›❯*]\s*\d{1,2}[.)]\s/u;
 
 /** The rule an agent draws across the top of its input box, with the project
@@ -485,7 +486,7 @@ export function inputFrameStart(
   for (let index = lines.length - 1; start < 0 && index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text) || isActionRow(lines, index)) return lines.length;
+    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index)) return lines.length;
     start = index;
   }
   if (start < 0) return lines.length;
@@ -603,7 +604,7 @@ export function statusFrameLines(
   for (let index = lines.length - 1; index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text) || isActionRow(lines, index)) return [];
+    if (OPTION_ROW.test(text) || isActionRow(lines, index) || isUnnumberedRow(lines, index)) return [];
     inputIndex = index;
     break;
   }
