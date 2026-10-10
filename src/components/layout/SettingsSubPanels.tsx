@@ -718,16 +718,13 @@ interface AgentLogin {
    *  names a command where a credential belongs. */
   blocked: { account: string | null; stored: string | null; command: string | null } | null;
   shared: boolean;
-  /** The variable this CLI takes an API key in; `null`: an administrator's
-   *  key cannot reach it. */
   /** The API proxy serves this CLI: a server's administrator can offer a key. */
   admin_key_capable?: boolean;
   /** A hosted server's administrator offers a key for this CLI. */
   admin_key_offered?: boolean;
-  /** This user's agents run on that key instead of their own login. */
+  /** This user's agents run on that key instead of their own login (chosen
+   *  in the API keys section's "runs on" control, #2389). */
   uses_admin_key?: boolean;
-  /** Through the server's key broker (P5): this month's use and budget. */
-  admin_key_broker?: { month: string; billed: number; budget?: number | null } | null;
   /** Switched on for a stored provider API key, and one is saved
    *  (`services::agent_api_keys`). */
   api_key?: boolean;
@@ -757,10 +754,10 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
   );
   if (!logins) return null;
   const rows = logins.filter((l) => l.shared);
-  const run = (id: string, cmd: "agent_login_import" | "agent_login_sign_out" | "agent_login_use_admin_key", on?: boolean) => {
+  const run = (id: string, cmd: "agent_login_import" | "agent_login_sign_out") => {
     setError(null);
     setBusy(id);
-    invoke(cmd, on === undefined ? { id } : { id, on })
+    invoke(cmd, { id })
       .catch((e: unknown) => setError(String(e)))
       .finally(() => {
         setBusy(null);
@@ -784,9 +781,8 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
           ? t("settings.agentLoginApiBudgetReached")
           : t("settings.agentLoginUsesApiKey");
         const own = !l.api_key ? login : l.signed_in ? `${login} · ${keyLabel}` : keyLabel;
-        // A hosted server's administrator's key (plan §5.2): the user's own
-        // choice per CLI, only where one is on offer (or still chosen).
-        const adminKey = !!l.admin_key_capable && (!!l.admin_key_offered || !!l.uses_admin_key);
+        // A hosted server's administrator's key (plan §5.2): chosen per CLI
+        // in the API keys section; here only what the login row runs on.
         const state = l.uses_admin_key
           ? l.admin_key_offered
             ? t("settings.agentLoginAdminKey")
@@ -797,18 +793,6 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
             <span>
               {label}
               <span className="settings-help"> · {state}</span>
-              {l.uses_admin_key && l.admin_key_broker && (
-                <span className="settings-help">
-                  {" · "}
-                  <UntestedTag id="server.agentKeys.broker" />{" "}
-                  {l.admin_key_broker.budget != null
-                    ? t("settings.agentLoginBrokerUsage", {
-                        billed: l.admin_key_broker.billed.toLocaleString(),
-                        budget: l.admin_key_broker.budget.toLocaleString(),
-                      })
-                    : t("settings.agentLoginBrokerUsageNoCap", { billed: l.admin_key_broker.billed.toLocaleString() })}
-                </span>
-              )}
               {l.blocked && (
                 <span className="settings-help pill-fence-live-note">
                   {" "}
@@ -819,20 +803,6 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
               )}
             </span>
             <span>
-              {adminKey && (
-                <>
-                  <UntestedTag id="agents.adminKey" />{" "}
-                  <button
-                    type="button"
-                    className="ollama-action-btn"
-                    disabled={busy === l.id}
-                    title={l.uses_admin_key ? undefined : t("settings.agentLoginAdminKeyHelp")}
-                    onClick={() => run(l.id, "agent_login_use_admin_key", !l.uses_admin_key)}
-                  >
-                    {t(l.uses_admin_key ? "settings.agentLoginUseOwn" : "settings.agentLoginUseAdminKey")}
-                  </button>
-                </>
-              )}
               {l.importable && (
                 <button
                   type="button"
@@ -886,7 +856,18 @@ interface AgentApiKeyStatus {
     /** Models priced at the provider's highest rate (not in the table). */
     unknownModels?: string[];
   }[];
-  clis: { id: string; enabled: boolean; providers: string[]; ready: boolean }[];
+  clis: {
+    id: string;
+    enabled: boolean;
+    providers: string[];
+    ready: boolean;
+    /** A hosted server's administrator offers this user a key for the CLI. */
+    adminOffered?: boolean;
+    /** This user runs the CLI on the administrator's key. */
+    usesAdmin?: boolean;
+    /** Through the server's key broker: this month's use and budget. */
+    adminBroker?: { month: string; billed: number; budget?: number | null } | null;
+  }[];
   /** UTC month counted (`YYYY-MM`) and the day the count restarts. */
   month?: string;
   resetsOn?: string;
@@ -923,6 +904,10 @@ const API_KEY_PROVIDERS: Record<string, string> = {
   anthropic: "Anthropic",
   gemini: "Google Gemini",
 };
+
+/** What a CLI's agents run on: its own login, the user's own API key, or a
+ *  hosted server administrator's key (#2389). */
+type Credential = "login" | "key" | "admin";
 
 /** The CLIs that can take a stored key through the API proxy (the backend's
  *  `CLI_ROUTES`: only CLIs an environment variable points at the proxy), each
@@ -998,9 +983,19 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
       });
     });
   };
-  const setCliEnabled = (cli: string, on: boolean) => {
-    const next = on ? [...enabled.filter((c) => c !== cli), cli] : enabled.filter((c) => c !== cli);
-    act(cli, () => updateSettings({ agent_api_key_clis: next }));
+  // The own-key switch lives in the shared settings; the administrator's key
+  // is the user's choice on the server (`agent_login_use_admin_key`, which
+  // also switches the own key off — written here first, so the settings
+  // store never holds a stale switch).
+  const setCredential = (cli: string, from: Credential, to: Credential) => {
+    if (from === to) return;
+    const others = enabled.filter((c) => c !== cli);
+    act(cli, async () => {
+      if (from === "admin") await invoke("agent_login_use_admin_key", { id: cli, on: false });
+      if (from === "key") await updateSettings({ agent_api_key_clis: others });
+      if (to === "key") await updateSettings({ agent_api_key_clis: [...others, cli] });
+      if (to === "admin") await invoke("agent_login_use_admin_key", { id: cli, on: true });
+    });
   };
   return (
     <>
@@ -1153,25 +1148,63 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
       {API_KEY_CLIS.map(({ cli, untested }) => {
         const row = status.clis.find((c) => c.id === cli);
         if (!row) return null;
-        const on = enabled.includes(cli);
+        const name = labels.get(cli) ?? cli;
         const hasKey = row.providers.some((p) => saved.has(p));
+        // One credential per CLI (#2389): its own login, the user's own API
+        // key, or a hosted server administrator's key — never two at once.
+        const current: Credential = row.usesAdmin ? "admin" : enabled.includes(cli) ? "key" : "login";
+        const options = [
+          { value: "login", label: t("settings.agentCredLogin") },
+          ...(hasKey || current === "key"
+            ? [
+                {
+                  value: "key",
+                  label: t("settings.agentCredOwnKey", {
+                    providers: row.providers.map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
+                  }),
+                },
+              ]
+            : []),
+          ...(row.adminOffered || current === "admin" ? [{ value: "admin", label: t("settings.agentCredAdminKey") }] : []),
+        ];
+        const broker = row.usesAdmin ? row.adminBroker : null;
         return (
-          <ToggleRow
-            key={cli}
-            label={
-              <>
-                {t("settings.agentApiKeyUse", {
-                  cli: labels.get(cli) ?? cli,
-                  providers: row.providers.map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
-                })}{" "}
-                <UntestedTag id={untested} />
-              </>
-            }
-            checked={on}
-            // Off without a key; a switch left on can always be turned off.
-            disabled={busy === cli || (!on && !hasKey)}
-            onChange={(e) => setCliEnabled(cli, e.target.checked)}
-          />
+          <Fragment key={cli}>
+            <div className="settings-toggle-card-row">
+              <span>
+                {t("settings.agentCredRunsOn", { cli: name })} <UntestedTag id={untested} />
+                {(row.adminOffered || row.usesAdmin) && (
+                  <>
+                    {" "}
+                    <UntestedTag id="agents.adminKey" />
+                  </>
+                )}
+                {broker && (
+                  <span className="settings-help">
+                    {" · "}
+                    <UntestedTag id="server.agentKeys.broker" />{" "}
+                    {broker.budget != null
+                      ? t("settings.agentLoginBrokerUsage", {
+                          billed: broker.billed.toLocaleString(),
+                          budget: broker.budget.toLocaleString(),
+                        })
+                      : t("settings.agentLoginBrokerUsageNoCap", { billed: broker.billed.toLocaleString() })}
+                  </span>
+                )}
+              </span>
+              <Dropdown
+                value={current}
+                options={options}
+                disabled={busy === cli || options.length < 2}
+                ariaLabel={t("settings.agentCredRunsOn", { cli: name })}
+                title={row.adminOffered && !row.usesAdmin ? t("settings.agentLoginAdminKeyHelp") : undefined}
+                onChange={(next) => setCredential(cli, current, next as Credential)}
+              />
+            </div>
+            {row.usesAdmin && !row.adminOffered && (
+              <p className="settings-help pill-fence-live-note">{t("settings.agentLoginAdminKeyGone")}</p>
+            )}
+          </Fragment>
         );
       })}
       <p className="settings-help">{t("settings.agentApiKeysDialogs")}</p>

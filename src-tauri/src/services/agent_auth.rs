@@ -646,8 +646,6 @@ pub struct LoginStatus {
     /// This user's agents run on the administrator's key for this CLI, not
     /// on their own login (hosted plan §5.2).
     pub uses_admin_key: bool,
-    /// Through the server's key broker (P5): this month's use and budget.
-    pub admin_key_broker: Option<crate::services::server::keys_wire::MonthUsage>,
     /// The CLI is switched on for a stored provider API key and one of its
     /// providers has one (`services::agent_api_keys`). Filled by the
     /// `agent_logins` command, never here: this module stays keyring-free.
@@ -698,7 +696,6 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
                 admin_key_capable: crate::services::agent_api_keys::proxies(cli),
                 admin_key_offered: offered.contains(cli),
                 uses_admin_key: on_admin_key.contains(cli),
-                admin_key_broker: None,
                 api_key: false,
                 api_budget_reached: false,
             }
@@ -706,15 +703,11 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
         .collect()
 }
 
+/// The login rows. A key broker's month for a CLI on the administrator's
+/// key is in the API-key status (`agent_api_keys::status`), beside the one
+/// credential choice per CLI (#2389).
 pub fn status() -> Vec<LoginStatus> {
-    use crate::services::server::agent_keys;
-    let state_dir = storage::state_dir();
-    let mut rows = status_with(&state_dir, &crate::paths::home_dir(), &agent_keys::offered());
-    let mut brokered = agent_keys::broker_usage(&agent_keys::chosen_in(&state_dir));
-    for row in &mut rows {
-        row.admin_key_broker = brokered.remove(&row.id);
-    }
-    rows
+    status_with(&storage::state_dir(), &crate::paths::home_dir(), &crate::services::server::agent_keys::offered())
 }
 
 /// Remove a home's copies of `cli`'s login paths.

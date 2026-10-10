@@ -457,6 +457,14 @@ pub struct CliStatus {
     pub providers: Vec<&'static str>,
     /// Switched on and at least one of its providers has a key.
     pub ready: bool,
+    /// A hosted server's administrator offers this user a key for the CLI
+    /// (`server::agent_keys::offered`); always false on a desktop.
+    pub admin_offered: bool,
+    /// This user runs the CLI on the administrator's key (#2389: one
+    /// credential per CLI — login, own key, or this).
+    pub uses_admin: bool,
+    /// Through the server's key broker: this month's use and budget.
+    pub admin_broker: Option<crate::services::server::keys_wire::MonthUsage>,
 }
 
 /// What Manage CLIs shows. Never a key.
@@ -522,6 +530,9 @@ fn status_with(
                 enabled,
                 providers: routes.iter().map(|r| r.provider.id()).collect(),
                 ready: enabled && routes.iter().any(|r| is_saved(r.provider)),
+                admin_offered: false,
+                uses_admin: false,
+                admin_broker: None,
             }
         })
         .collect();
@@ -556,7 +567,7 @@ fn ready_clis_with(enabled: &[String], has: impl Fn(Provider) -> bool) -> Vec<&'
 
 pub fn status() -> ApiKeyStatus {
     let settings = settings();
-    status_with(
+    let mut status = status_with(
         crate::services::remote_credentials::store_readable(),
         if crate::services::server::vault::vault().is_some() { "vault" } else { "keychain" },
         has_key,
@@ -564,7 +575,20 @@ pub fn status() -> ApiKeyStatus {
         &crate::services::api_usage::limits_in(&settings),
         &crate::services::api_usage::legacy_usd_limits_in(&settings),
         &crate::services::api_usage::book().snapshot(chrono::Utc::now()),
-    )
+    );
+    // A hosted server's administrator's keys: the third choice per CLI.
+    if crate::services::server::is_server() {
+        use crate::services::server::agent_keys;
+        let offered = agent_keys::offered();
+        let chosen = agent_keys::chosen_in(&crate::storage::state_dir());
+        let mut brokered = agent_keys::broker_usage(&chosen);
+        for cli in &mut status.clis {
+            cli.admin_offered = offered.contains(cli.id);
+            cli.uses_admin = chosen.contains(cli.id);
+            cli.admin_broker = brokered.remove(cli.id);
+        }
+    }
+    status
 }
 
 /// Of `ready` (from [`ready_clis`]), the CLIs whose every provider is out of

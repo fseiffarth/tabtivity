@@ -182,55 +182,19 @@ describe("ServerAgentKeys (administrator)", () => {
   });
 });
 
-describe("Agent logins: the administrator's key per CLI (a user)", () => {
+describe("Agent logins on a server (a user)", () => {
   afterEach(() => {
     cleanup();
     vi.mocked(invoke).mockReset();
   });
 
-  it("offers the switch only where a key is on offer and sends the choice", async () => {
-    let rows = [
-      login("claude", true, { admin_key_offered: true }),
-      login("gemini", true),
-      login("codex", false, { admin_key_offered: true }),
-    ];
-    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
-      if (cmd === "agent_logins") return Promise.resolve(rows);
-      if (cmd === "agent_login_use_admin_key") {
-        const { id, on } = args as { id: string; on: boolean };
-        rows = rows.map((r) => (r.id === id ? { ...r, uses_admin_key: on } : r));
-      }
-      return Promise.resolve(null);
-    });
-    render(<AgentLoginsRows />);
-    const use = await screen.findAllByRole("button", { name: "Use the administrator's key" });
-    expect(use).toHaveLength(1);
-    fireEvent.click(use[0]);
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("agent_login_use_admin_key", { id: "claude", on: true }));
-    expect(await screen.findByText(/runs on the administrator's API key/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Use my own login" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("agent_login_use_admin_key", { id: "claude", on: false }));
-  });
-
-  it("shows this month's brokered use beside a key the user runs on (P5)", async () => {
+  it("says what a CLI runs on; the choice itself is in the API keys section", async () => {
     vi.mocked(invoke).mockImplementation(() =>
-      Promise.resolve([
-        login("claude", true, { admin_key_offered: true, uses_admin_key: true, admin_key_broker: { month: "2026-10", billed: 1234, budget: 5000 } }),
-      ]),
+      Promise.resolve([login("claude", true, { admin_key_offered: true, uses_admin_key: true }), login("gemini", true, { uses_admin_key: true })]),
     );
     render(<AgentLoginsRows />);
-    expect(await screen.findByText(/key broker: 1,234 of 5,000 tokens this month/)).toBeTruthy();
-  });
-
-  it("names a withdrawn key and offers nothing on the desktop", async () => {
-    vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", true, { uses_admin_key: true })]));
-    render(<AgentLoginsRows />);
-    expect(await screen.findByText(/no longer offered to you \(withdrawn, or you were taken off its list\)/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Use my own login" })).toBeTruthy();
-    cleanup();
-    vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", true)]));
-    render(<AgentLoginsRows />);
-    await screen.findByText(/Claude/);
-    expect(screen.queryByRole("button", { name: /administrator/ })).toBeNull();
+    expect(await screen.findByText(/runs on the administrator's API key/)).toBeTruthy();
+    expect(screen.getByText(/no longer offered to you \(withdrawn, or you were taken off its list\)/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /administrator|own login/ })).toBeNull();
   });
 });

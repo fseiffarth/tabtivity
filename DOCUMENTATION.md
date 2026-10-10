@@ -692,8 +692,9 @@ per CLI which one their agents run on.
   list, withdrawing it forgets the list. Each change is logged (who added or
   removed whom), never the key. A user not on the list does not see the key
   in Manage CLIs.
-- **A user** picks per CLI in Settings → Manage CLIs → Agent logins: **Use
-  the administrator's key** or **Use my own login**. While the
+- **A user** picks per CLI in Settings → Manage CLIs → API keys, under
+  **runs on**: its own login, their own API key, or **the administrator's API
+  key** — one at a time (#2389). While the
   administrator's key is chosen, that CLI's agents — agent tabs and the root
   console's Host session — run on it, your own API key for that CLI (if you
   had switched one on) is switched off, and your own login for that CLI is

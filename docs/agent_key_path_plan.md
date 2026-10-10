@@ -138,3 +138,12 @@ refusal.
   CLI's own API key off. A Claude on the admin key starts without Remote
   Control, like one on an own key. On a server, tmux < 3.2 fails any keyed
   spawn. Gates: clippy clean, Rust 4143, frontend 7682, lint 0 errors.
+- **Step 4 — one Manage CLIs control: done.** The API keys section has one
+  **runs on** dropdown per proxy-served CLI (own login / my API key, offered
+  once a key is saved / the administrator's key, offered where the keeper
+  offers it), the broker's month beside it and the withdrawn note under it;
+  the agent-logins rows lost their admin button and broker line and only say
+  what the CLI runs on. `ApiKeyStatus.clis` carries `adminOffered`,
+  `usesAdmin`, `adminBroker`; `LoginStatus` dropped `admin_key_broker`.
+  Switching writes the own switch first, then `agent_login_use_admin_key`.
+  Gates: clippy clean, Rust 4143, frontend 7682, lint 0 errors.

@@ -5,9 +5,11 @@
  *
  *  1. **A key goes in and never comes back.** Save hands it to the backend and
  *     clears the field; the page never shows a saved key, only "saved".
- *  2. **A CLI is switched on only where it can start on a key.** Its switch is
- *     off until one of its providers has a key, and writes through the shared
- *     settings (`agent_api_key_clis`).
+ *  2. **One credential per CLI** (#2389): a "runs on" dropdown — its own
+ *     login, the user's own key (only once one of its providers has a key;
+ *     written through the shared settings, `agent_api_key_clis`), or a hosted
+ *     server administrator's key (only where offered; switching to it and
+ *     away calls `agent_login_use_admin_key`, the own switch written first).
  *  3. **A locked keyring is said, not hidden.** It reads every key as absent,
  *     so the rows say "locked" and offer the unlock — never "not saved".
  *  4. **No key without a monthly limit** (`services::api_usage`), in billed
@@ -100,8 +102,11 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-const toggle = (cli: string) =>
-  screen.getByText(new RegExp(`^Use API key for ${cli} `)).closest("label")!.querySelector("input")!;
+const runsOn = (cli: string) => screen.getByRole("button", { name: `${cli} runs on` }) as HTMLButtonElement;
+const pick = (cli: string, option: RegExp) => {
+  fireEvent.click(runsOn(cli));
+  fireEvent.click(screen.getByRole("option", { name: option }));
+};
 
 describe("API keys for agent CLIs", () => {
   it("saves a key, clears the field and never reads it back", async () => {
@@ -129,33 +134,78 @@ describe("API keys for agent CLIs", () => {
     expect(calls("agent_api_key_clear")[0][1]).toEqual({ provider: "anthropic" });
   });
 
-  it("keeps a CLI's switch off until one of its providers has a key", async () => {
+  it("offers a CLI its own key only once one of its providers has one", async () => {
     render(<AgentApiKeysRows />);
-    await screen.findByText(/^Use API key for Claude/);
-    expect(toggle("Claude").disabled).toBe(true);
-    expect(screen.getByText(/^Use API key for Claude \(Anthropic\)/)).toBeTruthy();
-    // Only CLIs the proxy can serve have a switch: Vibe and OpenCode do not.
-    expect(screen.queryByText(/^Use API key for (Mistral|OpenCode)/)).toBeNull();
+    await screen.findByRole("button", { name: "Claude runs on" });
+    expect(runsOn("Claude").disabled, "only its login to choose").toBe(true);
+    expect(runsOn("Claude").textContent).toContain("its own login");
+    // Only CLIs the proxy can serve have a row: Vibe and OpenCode do not.
+    expect(screen.queryByRole("button", { name: /^(Mistral|OpenCode).* runs on/ })).toBeNull();
 
     cleanup();
     saved = ["anthropic"];
     render(<AgentApiKeysRows />);
-    await screen.findByText(/^Use API key for Claude/);
-    expect(toggle("Claude").disabled).toBe(false);
-    expect(toggle("Google Gemini").disabled).toBe(true);
-    fireEvent.click(toggle("Claude"));
+    await screen.findByRole("button", { name: "Claude runs on" });
+    expect(runsOn("Claude").disabled).toBe(false);
+    expect(runsOn("Google Gemini").disabled).toBe(true);
+    pick("Claude", /my API key \(Anthropic\)/);
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: ["claude"] }));
-    expect(toggle("Claude").checked).toBe(true);
+    expect(runsOn("Claude").textContent).toContain("my API key");
+    expect(calls("agent_login_use_admin_key")).toHaveLength(0);
   });
 
-  it("lets a switch left on be turned off after its key is gone", async () => {
+  it("lets a CLI left on its key go back to its login after the key is gone", async () => {
     useSettingsStore.setState({ settings: { agent_api_key_clis: ["claude"] } as Settings });
     render(<AgentApiKeysRows />);
-    await screen.findByText(/^Use API key for Claude/);
-    expect(toggle("Claude").checked).toBe(true);
-    expect(toggle("Claude").disabled).toBe(false);
-    fireEvent.click(toggle("Claude"));
+    await screen.findByRole("button", { name: "Claude runs on" });
+    expect(runsOn("Claude").disabled).toBe(false);
+    pick("Claude", /its own login/);
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: [] }));
+  });
+
+  it("on a server, offers the administrator's key as the third choice, one at a time", async () => {
+    saved = ["anthropic"];
+    let usesAdmin = false;
+    useSettingsStore.setState({ settings: { agent_api_key_clis: ["claude"] } as Settings });
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "agent_api_keys_status") {
+        const s = status(saved);
+        s.clis[0] = {
+          ...s.clis[0],
+          ...({ adminOffered: true, usesAdmin, adminBroker: usesAdmin ? { month: "2026-10", billed: 1234, budget: 5000 } : null } as object),
+        };
+        return Promise.resolve(s);
+      }
+      if (cmd === "agent_login_use_admin_key") {
+        order.push(`admin:${(args as { on: boolean }).on}`);
+        usesAdmin = (args as { on: boolean }).on;
+      }
+      return Promise.resolve(null);
+    });
+    render(<AgentApiKeysRows />);
+    await screen.findByRole("button", { name: "Claude runs on" });
+    pick("Claude", /the administrator's API key/);
+    // The own key goes off first (the settings store stays true), then the
+    // administrator's key on.
+    await waitFor(() => expect(order).toEqual(["settings:agent_api_key_clis", "admin:true"]));
+    expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: [] });
+    expect(await screen.findByText(/key broker: 1,234 of 5,000 tokens this month/)).toBeTruthy();
+    order = [];
+    pick("Claude", /its own login/);
+    await waitFor(() => expect(order).toEqual(["admin:false"]));
+  });
+
+  it("names a withdrawn administrator's key and offers none to a CLI without an offer", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd !== "agent_api_keys_status") return Promise.resolve(null);
+      const s = status([]);
+      s.clis[0] = { ...s.clis[0], ...({ adminOffered: false, usesAdmin: true } as object) };
+      return Promise.resolve(s);
+    });
+    render(<AgentApiKeysRows />);
+    expect(await screen.findByText(/no longer offered to you \(withdrawn, or you were taken off its list\)/)).toBeTruthy();
+    fireEvent.click(runsOn("Google Gemini"));
+    expect(screen.queryByRole("option", { name: /administrator/ })).toBeNull();
   });
 
   it("says the keyring is locked and offers the unlock instead of a key field", async () => {

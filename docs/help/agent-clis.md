@@ -92,17 +92,22 @@ Copilot's case is described under the sandbox below.
 
 **API keys instead of a subscription.** If you pay per token, Settings → Agent
 sandbox → **API keys** keeps one key per provider (Anthropic, Google Gemini) in
-your system keyring, and a switch per CLI (Claude, Gemini) lets that CLI's new
-local tabs use it. Nothing is switched on by default — a key moves that CLI's
-billing off your subscription. The agent never gets the key itself: Tabtivity
+your system keyring (on a hosted server: your sealed server store), and a
+**runs on** choice per CLI (Claude, Gemini) — **its own login**, **my API key**
+or, on a server whose administrator offers you one, **the administrator's API
+key** — decides what that CLI's new local tabs use, one at a time. Every CLI
+starts on its own login — a key moves that CLI's billing off your
+subscription. The agent never gets the key itself: Tabtivity
 holds it and gives each tab its own token, which works only through Tabtivity on
 this computer and ends with the tab; the CLI talks to the provider through
-Tabtivity. Claude uses it at once, without its "custom API key" question.
+Tabtivity (an administrator's key goes the same way). Claude uses it at once,
+without its "custom API key" question.
 Gemini uses it only after you pick "Use Gemini API key" in its `/auth`, once per
-project. Claude tabs on a key run without Remote Control. Remote, container and
+project. Claude tabs on a key run without Remote Control. Remote and
 local-model tabs never get a key, nor does a CLI you type into a shell tab, and
-a key or base URL you exported yourself wins. Switching a CLI on or off reaches
-new tabs only; removing a key stops running tabs at their next request. A tab
+a key or base URL you exported yourself wins; a project container's agent tab
+of a CLI on a key does not start (no key goes into a container). Changing what a
+CLI runs on reaches new tabs only; removing a key stops running tabs at their next request. A tab
 that outlives a Tabtivity crash in tmux loses its token — restart the CLI in it.
 If a tab reports an invalid key, fix or remove it there — signing in
 again does not help while the key is in use. Codex, Mistral Vibe and OpenCode
