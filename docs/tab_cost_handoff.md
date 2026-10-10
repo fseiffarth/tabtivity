@@ -332,3 +332,58 @@ splits it).
   unticked one by one.
 - No AppShell-level test drives the load → migrate wiring; it is covered by
   the unit tests of `migrateExperimentalOnce` and the one-line call.
+
+## T3 (reviewer)
+
+Range `e322f1c7..6fe52775` (main commit `1ed60f08`), bugs only.
+
+**Fixes**
+
+| Commit | Bug | Test |
+|---|---|---|
+| — | No confirmed bug found. | — |
+| (this commit) | Coverage gap the implementer flagged: nothing drove AppShell's load → migrate wiring. | `src/__tests__/windows/AppShellExperimentalMigration.test.tsx` — the migration writes once, only after `loadSettings()` resolves; under `<StrictMode>` (two loads, the second a stale unmarked snapshot landing while the write is in flight) it still writes once. Fails if the call moves before the load or the in-flight guard goes. |
+
+**Checked and sound**
+- Every flag reader goes through `experimentalEnabled` / `useExperimental` /
+  `withdrawnTabKinds` (main window, `DetachedApp` sweep, `stores/tabs` restore
+  filter, `lib/mail.ts`, `steeringRegion`, SettingsPanel switches); no direct
+  `settings.<flag>` read in `src/` or `mobile-web/` (the phone bundle reads no
+  flag). Rust: every accessor (`python_run_debug`, `mail_client`,
+  `deck_presenter`, `web_browser`, `copilot_completion`) goes through
+  `experimental()`; no raw field or JSON-key read elsewhere. Both sides treat
+  only `experimental_explicit === true` as marked.
+- Popout before the migration lands: it loads unmarked → old rule → same
+  flags; `SETTINGS_CHANGED_EVENT` then brings the marked snapshot with the
+  ticks → still the same flags.
+- Non-debug profile → marker only; Debug off with explicit flags → marker
+  only, explicit values kept; idempotent across launches (marked → `null`);
+  failed write rolls the guess back, profile stays unmarked, next launch
+  retries.
+- Copilot `authorize_project` / `invalidate_copilot`: for `debug` unset/false
+  the accessor equals the old `unwrap_or(false)`; the migration's own write
+  changes neither side of the comparison, so it never stops sessions.
+- `settings.json`: snake_case `experimental_explicit` on both sides (no
+  `rename_all`), named Rust field, omitted when unset.
+- i18n: `settings.debugHelp`, `settings.deckPresenter`, `…Help`,
+  `experimentalHelp1/2/3`, both lesson bodies present in all five files;
+  `experimentalHelpBold` gone everywhere.
+- `patch_settings` is a sync command (main thread, in arrival order), so a
+  Settings toggle sent after the migration lands after it on disk.
+
+**Gates** (worktree)
+- `npm run build`: ok.
+- `npm test -- --reporter=dot`: 776 files / 7831 tests, all pass (+1 file,
+  +2 tests over the 775 / 7829 baseline).
+- `npm run lint`: 0 errors / 28 warnings (unchanged).
+- `scripts/brand-check.sh`, `scripts/privacy-check.sh`, `git diff --check`: ok.
+- No Rust touched; cargo gates not rerun.
+
+**Flagged for user**
+- The migration's patch is computed from the main window's first
+  `get_settings` snapshot and sends unconditional `true`s for the flags unset
+  there. A write landing between that read and the patch (another window or
+  the phone unticking an experiment in those few milliseconds at startup)
+  would be overwritten with `true`. No such writer exists at startup today,
+  so not fixed; a backend-side "set if absent" would close it.
+- Not run live (QA row 2417 stands).
