@@ -326,8 +326,37 @@ fn classify(kind: &EventKind) -> Option<bool> {
     }
 }
 
+/// The most paths [`Births`] remembers; past it, it starts over.
+const MAX_BIRTHS: usize = 4096;
+
+/// Entries whose creation was already counted. macOS's FSEvents keeps a new
+/// file's "created" flag on its later events, so each write to a fresh
+/// sibling looked like another new transcript (ci-cd #383). An entry counts
+/// as created once, while it exists, until it is removed or renamed away.
+#[derive(Debug, Default)]
+struct Births(std::collections::HashSet<PathBuf>);
+
+impl Births {
+    /// Whether `path`, in an event [`classify`] called `created`, is a new
+    /// entry. `gone`: the event took it away.
+    fn created(&mut self, path: &Path, created: bool, gone: bool) -> bool {
+        if gone || (created && !path.exists()) {
+            self.0.remove(path);
+            return false;
+        }
+        if !created {
+            return false;
+        }
+        if self.0.len() >= MAX_BIRTHS {
+            self.0.clear();
+        }
+        self.0.insert(path.to_path_buf())
+    }
+}
+
 fn run(rx: mpsc::Receiver<notify::Result<notify::Event>>, state: Weak<Mutex<State>>, sink: Sink) {
     let mut debounce = Debouncer::default();
+    let mut births = Births::default();
     loop {
         let wait = debounce
             .next_due()
@@ -338,7 +367,14 @@ fn run(rx: mpsc::Receiver<notify::Result<notify::Event>>, state: Weak<Mutex<Stat
                     let Some(state) = state.upgrade() else { return };
                     let state = state.lock().unwrap_or_else(|p| p.into_inner());
                     let now = Instant::now();
-                    for path in &event.paths {
+                    let both = matches!(event.kind, EventKind::Modify(ModifyKind::Name(RenameMode::Both)));
+                    for (i, path) in event.paths.iter().enumerate() {
+                        // A rename's first path (both sides in one event) is the one it left.
+                        let gone = matches!(
+                            event.kind,
+                            EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(RenameMode::From))
+                        ) || (both && i == 0);
+                        let created = births.created(path, created, gone);
                         for id in state.registry.matching(path, created) {
                             debounce.note(&id, now);
                         }
@@ -500,6 +536,20 @@ mod tests {
         assert!(watch.arm("new", vec![file(999)]));
         assert!(watch.armed("w0") && watch.armed("w1") && watch.armed("new"));
         assert!(!watch.armed("w2"), "the least recently read went");
+    }
+
+    #[test]
+    fn an_entry_is_born_once_until_it_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let mut b = Births::default();
+        assert!(!b.created(&path, true, false), "a creation of nothing left is none");
+        std::fs::write(&path, "").unwrap();
+        assert!(b.created(&path, true, false));
+        assert!(!b.created(&path, true, false), "FSEvents' sticky flag on a later write");
+        assert!(!b.created(&path, false, false));
+        assert!(!b.created(&path, false, true), "removed");
+        assert!(b.created(&path, true, false), "and made again");
     }
 
     #[test]
