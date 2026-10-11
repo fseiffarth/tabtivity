@@ -163,7 +163,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
@@ -188,6 +188,12 @@ jobs:
             echo "::error::rust-toolchain.toml pins $pinned but ci-cd.yml installs $RUST_TOOLCHAIN; bump both together."
             exit 1
           fi
+
+      # scripts/ci-local.sh runs this workflow's Linux steps before a push;
+      # this fails when a step here is neither mirrored there nor on its
+      # allowlist, so the local run cannot fall behind CI unnoticed.
+      - name: ci-local.sh mirrors this workflow
+        run: bash scripts/ci-local.sh --check-drift
 
       - name: Lint frontend
         run: npm run lint
@@ -233,7 +239,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
@@ -319,7 +325,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
@@ -396,7 +402,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
@@ -477,7 +483,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
@@ -541,7 +547,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
@@ -598,7 +604,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
