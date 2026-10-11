@@ -58,7 +58,7 @@ describe("Mobile outbox — the name a file was sent under", () => {
     vi.stubGlobal("fetch", fetch);
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Project menu" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Files from the agent (1)" }));
     const gallery = screen.getByRole("dialog", { name: "Files from the agent" });
     expect(gallery.textContent).toContain("IMG_4711.jpg");

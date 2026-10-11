@@ -19,7 +19,6 @@ import { SendToDesktop } from "../components/SendToDesktop";
 import { LocalModelsSection } from "./LocalModelsSheet";
 import { GitMark } from "../components/GitMark";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
-import { GitSheet } from "./GitSheet";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
 import { customMarkupPrompts, MarkupInstructionSheet, markupInstructionSummary } from "../components/MarkupInstructionSheet";
@@ -186,9 +185,6 @@ export function Home({ open, openTab, todo, mail }: {
   const [speechLang, setSpeechLang] = useState<SpeechLang>(() => readSpeechLang());
   const [speechLangSheet, setSpeechLangSheet] = useState(false);
   const [languageSheet, setLanguageSheet] = useState(false);
-  /** The row whose git mark was tapped: the project screen's ⎇ Git sheet,
-   * opened straight from the start page. */
-  const [gitFor, setGitFor] = useState<ProjectRow | null>(null);
   /** What a Mark up Submit tells the agent — worded here and nowhere else. */
   const [markupInstruction, setMarkupInstruction] = useState(() => customMarkupPrompts());
   const [markupInstructionSheet, setMarkupInstructionSheet] = useState(false);
@@ -358,12 +354,7 @@ export function Home({ open, openTab, todo, mail }: {
         ref={drag.rowRef(project.id)}
       >
         <div className="tab-card-head">
-          <button className="card" onClick={(event) => {
-            // The git mark sits in the opener's caption, so it is a sub-target
-            // of the one button rather than a button of its own.
-            if (project.git && (event.target as Element).closest(".git-mark")) setGitFor(project);
-            else open(project.id);
-          }}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.git && <GitMark state={project.git} />}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
+          <button className="card" onClick={() => open(project.id)}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.git && <GitMark state={project.git} />}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
           {canReorder && <button
             className="tab-card-grip"
             aria-label={t("mobile.home.move", { label: project.label })}
@@ -405,7 +396,6 @@ export function Home({ open, openTab, todo, mail }: {
         </ul>
       </section>
     </div>}
-    {gitFor && <GitSheet projectId={gitFor.id} label={gitFor.label} onClose={() => setGitFor(null)} />}
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}

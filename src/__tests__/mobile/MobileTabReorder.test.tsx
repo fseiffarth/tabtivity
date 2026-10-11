@@ -116,7 +116,10 @@ describe("Mobile project — arranging tabs by hand", () => {
   });
 
   const listed = (container: HTMLElement) => [...container.querySelectorAll(".tab-card strong")].map((node) => node.textContent);
-  const manual = () => fireEvent.change(screen.getByLabelText("Sort tabs"), { target: { value: "native" } });
+  const manual = () => {
+    fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Manual (tab order)" }));
+  };
 
   beforeEach(() => {
     order = ["t-a", "t-b", "t-c"];

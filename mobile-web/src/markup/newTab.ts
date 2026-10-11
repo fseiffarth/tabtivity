@@ -39,12 +39,13 @@ function signalOf(status: AgentStatus | undefined): AgentSignal {
   return status === "working" ? "working" : status === "question" ? "question" : "idle";
 }
 
-/** What the tab a new-tab Submit opened is doing — the round's pill, as an
- * agent tab's chat feeds it: its row in the project's catalog, read every few
- * seconds while the page is visible. Idle until there is a tab to follow, and
- * kept as it was while a read fails. */
-export function useOpenedTabAgent(projectId: string, tabId: string | undefined): AgentSignal {
+/** What the tab a new-tab Submit opened is doing, and the model it runs by its
+ * first word — the round's pill, as an agent tab's chat feeds it: its row in
+ * the project's catalog, read every few seconds while the page is visible.
+ * Idle until there is a tab to follow, and kept as it was while a read fails. */
+export function useOpenedTabAgent(projectId: string, tabId: string | undefined): { agent: AgentSignal; model?: string } {
   const [signal, setSignal] = useState<AgentSignal>("idle");
+  const [model, setModel] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!tabId) return;
     let stopped = false;
@@ -58,7 +59,9 @@ export function useOpenedTabAgent(projectId: string, tabId: string | undefined):
       void api<ProjectDetail>(path, { signal: controller.signal }).then(
         (detail) => {
           if (stopped || controller.signal.aborted) return;
-          setSignal(signalOf(detail.tabs.find((tab) => tab.id === tabId)?.agent_status));
+          const row = detail.tabs.find((tab) => tab.id === tabId);
+          setSignal(signalOf(row?.agent_status));
+          setModel(row?.agent_model?.trim().split(/\s+/)[0] || undefined);
         },
         () => {},
       );
@@ -73,5 +76,5 @@ export function useOpenedTabAgent(projectId: string, tabId: string | undefined):
       document.removeEventListener("visibilitychange", poll);
     };
   }, [projectId, tabId]);
-  return tabId ? signal : "idle";
+  return tabId ? { agent: signal, model } : { agent: "idle" };
 }
