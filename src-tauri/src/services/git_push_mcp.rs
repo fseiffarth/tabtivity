@@ -556,8 +556,8 @@ enum HookBoundary<'a> {
     /// The hook is agent-writable, so a missing record never means "run it
     /// on the host".
     Unrecorded,
-    /// The host, for the hook tests only.
-    #[cfg(test)]
+    /// The host, for the hook tests only (Unix: they write a `#!/bin/sh` hook).
+    #[cfg(all(test, unix))]
     Host,
 }
 
@@ -585,7 +585,7 @@ fn preflight_command(boundary: HookBoundary<'_>, hook: &Path, dir: &Path, remote
                 "This tab has no recorded sandbox to run the repo's pre-push hook in, so nothing was pushed. Ask the user to restart the tab, or to push from the git bar."
             }));
         }
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         HookBoundary::Host => {
             let mut cmd = crate::paths::command_no_window(hook);
             cmd.args(&args).current_dir(dir);

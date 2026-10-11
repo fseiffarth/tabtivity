@@ -17,6 +17,7 @@ import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { usePdfSyncStore } from "../../../stores/viewers/pdfSync";
 import { useScrollSync } from "../../../stores/viewers/scrollSync";
+import { usePdfMarkupLink } from "../../../stores/viewers/markupLinks";
 import {
   useFileScope,
   useFileSource,
@@ -2456,6 +2457,13 @@ function PdfCanvas({
     }
     return () => releaseMarkup(key, markupOwner);
   }, [marking, markup.key, markupOwner]);
+  // While a round of these marks is with an agent tab, that tab's prompt strip
+  // offers the way back here (`stores/viewers/markupLinks`).
+  const linkTarget = marking && markup.round && tabKey ? markup.target : null;
+  usePdfMarkupLink(
+    linkTarget?.ptyId ?? null,
+    linkTarget && tabKey ? { tabKey, name: basename(path), owner: markupOwner } : null,
+  );
   // Anything that makes the sheets stop being the file's pages ends the mode.
   useEffect(() => {
     if (marking && !markupAllowed) setMarking(false);

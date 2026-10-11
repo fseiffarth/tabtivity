@@ -2,14 +2,16 @@ name: release
 
 # A release is cut only from a commit ci-cd.yml already passed on a branch
 # push, and nothing is rebuilt: the signed assets are the bundles that very
-# run built and tested. Two ways in:
+# run built and tested. Only main is released (RELEASE_BRANCH): develop
+# reaches it by PR, and the in-app updater installs whatever is released.
+# Two ways in:
 #
-#   - Actions → release → Run workflow on a branch: releases that branch's
-#     tip as v<package.json version>. The annotated tag is created here, after
+#   - Actions → release → Run workflow on main: releases main's tip as
+#     v<package.json version>. The annotated tag is created here, after
 #     every check below passed and right before the Release is published.
-#   - Pushing a v* tag (the app's Release button, which already refuses while
-#     CI is running or red, or a plain `git push`): waits for the tagged
-#     commit's ci-cd run. If it did not pass, or anything below fails before
+#   - Pushing a v* tag on a commit main holds (the app's Release button,
+#     which already refuses while CI is running or red, or a plain
+#     `git push`): waits for the tagged commit's ci-cd run. If it did not pass, or anything below fails before
 #     the Release is out, the tag is deleted again — a v* tag on GitHub always
 #     has a Release behind it, and the same name can be pushed again.
 #
@@ -40,6 +42,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       SHA: ${{ github.sha }}
+      RELEASE_BRANCH: main
 
     steps:
       # package.json names the version; the public key checks the signature.
@@ -67,10 +70,21 @@ jobs:
               echo "::error::The tag $REF_NAME does not match package.json at ${SHA::7} ($want); push $want instead."
               exit 1
             fi
+            # Only what main already holds: its tip or an older commit of it.
+            # A failed read is a refusal too — the tag is deleted and can be
+            # pushed again.
+            if ! on="$(gh api "repos/$GH_REPO/compare/$RELEASE_BRANCH...$SHA" --jq .status)"; then
+              echo "::error::Could not check that ${SHA::7} is on $RELEASE_BRANCH; push $REF_NAME again."
+              exit 1
+            fi
+            if [ "$on" != identical ] && [ "$on" != behind ]; then
+              echo "::error::${SHA::7} is not on $RELEASE_BRANCH ($on); only $RELEASE_BRANCH is released. Merge it there by PR, then release from $RELEASE_BRANCH."
+              exit 1
+            fi
             tag="$REF_NAME"
           else
-            if [ "$REF_TYPE" != branch ]; then
-              echo "::error::Run this workflow on a branch; it releases that branch's tip."
+            if [ "$REF_TYPE" != branch ] || [ "$REF_NAME" != "$RELEASE_BRANCH" ]; then
+              echo "::error::Run this workflow on $RELEASE_BRANCH; only $RELEASE_BRANCH's tip is released (develop reaches it by PR)."
               exit 1
             fi
             if gh api "repos/$GH_REPO/git/ref/tags/$want" >/dev/null 2>&1; then

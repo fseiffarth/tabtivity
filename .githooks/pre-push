@@ -109,6 +109,13 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         echo "pre-push: not pushing ${remote_ref#refs/tags/}: its release would fail unsigned." >&2
         echo "          Set the secret first, or override once: TABTIVITY_SKIP_SIGNING_CHECK=1 git push …" >&2
         exit 1
+      fi
+      # release.yml releases only what main holds and deletes any other v* tag
+      # again; say so before the tag leaves. Checked against the last fetch.
+      if ! git -C "$repo_root" merge-base --is-ancestor "$local_sha^{commit}" "refs/remotes/$remote/main" 2>/dev/null; then
+        echo "pre-push: not pushing ${remote_ref#refs/tags/}: its commit is not on $remote/main, and only main is released." >&2
+        echo "          Merge develop into main by PR, 'git fetch', then tag main's tip." >&2
+        exit 1
       fi ;;
     refs/tags/*) : ;;
     *) [[ "$local_ref" == refs/* && "$local_ref" != refs/tags/* ]] && bumpable=1 ;;

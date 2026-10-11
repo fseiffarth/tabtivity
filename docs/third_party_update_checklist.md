@@ -217,7 +217,18 @@ Claude's `/fast` — different thing.
   the cycle's mode labels count the same as 2.1.292's). 2.1.293 makes
   `claude-haiku-5-5` the default Haiku: the transcript reports that id, and
   `services::api_prices` now prices it (it had fallen to the dearest rate,
-  about 100× over). An earlier probe unset only
+  about 100× over). Re-checked against 2.1.296 (2026-10-10, live, the npm
+  linux-x64 binary run from a scratch directory, both `*_TAB_UID` names
+  unset: the same keys on SessionStart startup/resume, UserPromptSubmit,
+  PostToolUse, Stop and SessionEnd, `session_id` equal to the `--session-id`
+  passed, `sed` matching `jq` throughout; `-p --resume` of a `plan` session
+  still reports the default; `/usage` three meters, resets resolved; the
+  notification types and mode labels count the same as 2.1.294's;
+  `--permission-mode` still lists `manual` beside the six). 2.1.295's
+  Program Status Protocol (OSC 7501) is sent only after a terminal answers
+  its `OSC 7501 ; ?` probe, which xterm.js does not, so tabs see none of it.
+  2.1.296 prices Sonnet 5.5 cache reads at 0.05× input ($0.10, as the
+  pricing page says); `services::api_prices` had them at $0.20. An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
   counted no `claude` — the `--resume` took the record again, emptying the

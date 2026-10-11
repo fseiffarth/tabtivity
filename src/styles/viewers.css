@@ -4539,6 +4539,15 @@
   gap: 6px;
   color: var(--text-primary);
 }
+/* The question of a dialog the target tab waits on, read-only beside the
+   pill: one line, the rest is the tab's to show. */
+.file-viewer-pdf-markup-dialog {
+  min-width: 0;
+  max-width: 40em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* The agent's markup questions (`PdfMarkupQuestions`): the reader's question
    card (`terminal-reader-question`, `subwindows.css`) on the markup strip's
    ground, scrolling on its own so a long ask never pushes the pages away.

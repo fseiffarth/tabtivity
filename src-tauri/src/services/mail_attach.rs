@@ -562,7 +562,8 @@ mod tests {
             std::fs::create_dir_all(d).unwrap();
         }
         std::fs::write(alpha.join("out/paper.pdf"), b"%PDF").unwrap();
-        std::fs::write(outside.join("secret.txt"), b"private").unwrap();
+        // Not a credential-looking name: that check would refuse it before the walk.
+        std::fs::write(outside.join("notes.txt"), b"private").unwrap();
         junction(&outside, &alpha.join("away"));
         junction(&alpha.join("out"), &alpha.join("alias"));
         let projects: ProjectsList = serde_json::from_value(serde_json::json!([
@@ -571,7 +572,7 @@ mod tests {
         let (state, home) = (dir.path().join("state"), dir.path().join("home"));
         let lists = Lists { projects: &projects, boxes: &Vec::new(), state_dir: &state, home: &home, granted: None };
         assert_eq!(resolve(&lists, "a", "out/paper.pdf").unwrap().bytes, b"%PDF");
-        for path in ["away/secret.txt", "alias/paper.pdf", "away", "out"] {
+        for path in ["away/notes.txt", "alias/paper.pdf", "away", "out"] {
             let err = resolve(&lists, "a", path).unwrap_err();
             assert!(err.contains("never followed"), "{path}: {err}");
         }

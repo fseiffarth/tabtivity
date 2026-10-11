@@ -6,6 +6,8 @@ import { useUse24h } from "../../lib/timeFormat";
 import { buildPromptTrail, type TrailPrompt } from "../../lib/agents/prompt/trail";
 import { useAgentPromptsStore } from "../../stores/agents/agentPrompts";
 import { usePromptTrailStore } from "../../stores/agents/promptTrail";
+import { useTabsStore } from "../../stores/tabs";
+import { useMarkupLinksStore } from "../../stores/viewers/markupLinks";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { UntestedTag } from "../common/UntestedTag";
 
@@ -70,6 +72,9 @@ export function TerminalPromptStrip({
   const history = useAgentPromptsStore((state) => state.historyByProject[scope]);
   const typed = usePromptTrailStore((state) => state.typedByPty[ptyId]);
   const trail = useMemo(() => (tab ? buildPromptTrail(history ?? [], typed ?? [], tab) : []), [history, typed, tab]);
+  // A PDF whose marks this tab is working on (`stores/viewers/markupLinks`):
+  // one click back to it, as its markup strip's Go to tab came here.
+  const markupLink = useMarkupLinksStore((state) => state.byPty[ptyId]);
   // The prompt picked with ‹ ›, by identity so a new prompt does not move
   // it; none = follow the newest.
   const [picked, setPicked] = useState<{ at: number; text: string } | null>(null);
@@ -209,6 +214,18 @@ export function TerminalPromptStrip({
             {open ? "▴" : "▾"}
           </button>
         </>
+      )}
+      {markupLink && (
+        <button
+          type="button"
+          className="prompt-strip-reader prompt-strip-markup"
+          onMouseDown={keepFocus}
+          onClick={() => useTabsStore.getState().setActive(markupLink.tabKey)}
+          title={`${t("terminal.promptStrip.markupHint")} — ${markupLink.name}`}
+        >
+          <span>{t("terminal.promptStrip.markup", { name: markupLink.name })}</span>
+          <UntestedTag id="desktop.markup.link" />
+        </button>
       )}
       {reader?.changes && (
         <button

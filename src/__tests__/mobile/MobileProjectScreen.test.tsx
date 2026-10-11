@@ -86,17 +86,25 @@ describe("Mobile project screen — the header line", () => {
     const header = container.querySelector("header");
     expect(header?.querySelector(".back")).toBeTruthy();
     expect(header?.querySelector("h1")?.textContent).toBe("Alpha");
-    expect(header?.querySelector(".activity-sort select")).toBe(screen.getByLabelText("Sort tabs"));
-    // Nothing is left standing between the header and the cards: the order used
-    // to cost a row of its own above them.
-    expect(container.querySelectorAll(".activity-sort")).toHaveLength(1);
+    // The name is the order's dropdown, the order it sorts by under it; no
+    // select stands in the header row or between it and the cards.
+    expect(header?.querySelector(".terminal-title small")?.textContent).toBe("Sorted by Last working");
+    expect(container.querySelector("select")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    const menu = screen.getByRole("menu", { name: "Sort tabs" });
+    expect(within(menu).getAllByRole("menuitemradio").map((row) => [row.textContent, row.getAttribute("aria-checked")]))
+      .toEqual([["Last working", "true"], ["Last done", "false"], ["Manual (tab order)", "false"]]);
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Last done" }));
+    expect(screen.queryByRole("menu", { name: "Sort tabs" })).toBeNull();
+    expect(header?.querySelector(".terminal-title small")?.textContent).toBe("Sorted by Last done");
   });
 
   it("spends nothing on the order when there is only one tab to order", async () => {
     fetchMock.mockResolvedValue(detail([{ id: "a", label: "claude 1", kind: "agent", available: true, viewer_busy: false }]));
     render(<Project id="p" back={() => {}} terminal={() => {}} />);
     await screen.findByText("claude 1");
-    expect(screen.queryByLabelText("Sort tabs")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Alpha" })).toBeNull();
+    expect(screen.queryByText(/^Sorted by/)).toBeNull();
   });
 });
 
@@ -124,10 +132,11 @@ describe("Mobile project screen — the git overview", () => {
     }), { status: 200 }));
   };
 
-  it("offers ⎇ Git in the name menu of a project and opens the sheet", async () => {
+  it("offers ⎇ Git in the drawer of a project and opens the sheet", async () => {
     fetchMock.mockImplementation(host());
     render(<Project id="p" back={() => {}} terminal={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+    await screen.findByRole("heading", { name: "Alpha" });
+    fireEvent.click(screen.getByRole("button", { name: "Project menu" }));
     fireEvent.click(within(screen.getByRole("menu", { name: "Project menu" })).getByRole("menuitem", { name: /^Git/ }));
     const sheet = await screen.findByRole("dialog", { name: "Git · Alpha" });
     expect(await within(sheet).findByText("Branches (1)")).toBeTruthy();
@@ -139,7 +148,7 @@ describe("Mobile project screen — the git overview", () => {
     fetchMock.mockImplementation(host("box"));
     const { container } = render(<Project id="p" back={() => {}} terminal={() => {}} />);
     await waitFor(() => expect(container.querySelector("header h1")?.textContent).toBe("Alpha"));
-    expect(screen.queryByRole("button", { name: "Alpha" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Project menu" })).toBeNull();
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/git"))).toBe(false);
   });
 });

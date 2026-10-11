@@ -530,7 +530,15 @@ export function joinProseWraps(lines: readonly ReadableLine[]): ReadableLine[] {
     const head = previous.text.trimEnd();
     const headSpans = previous.spans.map((span) => ({ ...span }));
     trimSpansRight(headSpans, previous.text.length - head.length);
-    out[out.length - 1] = { ...previous, text: `${head} ${rest}`, spans: [...headSpans, { text: " " }, ...spans] };
+    // A row that is one word filling the width is a word too long for it —
+    // a path, broken mid-word (Claude Code's folder-trust question) — and is
+    // rejoined without a space.
+    const glue = before.length >= width && !/\s/u.test(before.trim()) ? [] : [{ text: " " }];
+    out[out.length - 1] = {
+      ...previous,
+      text: `${head}${glue.length ? " " : ""}${rest}`,
+      spans: [...headSpans, ...glue, ...spans],
+    };
   }
   return out;
 }
