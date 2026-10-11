@@ -45,6 +45,15 @@ restart a terminal or refetch on every render. Add no new warnings; no new `any`
 `cargo test -q`, `npm test -- --reporter=dot`, `npm run build 2>&1 | tail -40`. `git diff --check` for whitespace. If a gate's
 tool is unavailable, say so — never skip silently.
 
+CI runs the tests on Linux, Windows and macOS; the local gates run Linux only.
+Backend tests must be cross-OS: paths built per component with `Path::join`
+(no `"a/b"` literals), absolute-path literals gated with `cfg!(windows)`,
+spawned programs compared by file stem. Before pushing backend changes to
+paths, process spawning or `cfg(...)` code, run the Windows cross-check where
+the msvc shims are installed:
+`RC=$HOME/.local/bin/eldrun-msvc-rc-shim AR_x86_64_pc_windows_msvc=$HOME/.local/bin/eldrun-msvc-lib-shim cargo clippy --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings`
+Don't push new work while the branch's last ci-cd run is red; the next push is its fix.
+
 ## Git & privacy (public repo)
 
 - Work on `develop`; `main` is reached by PR.
