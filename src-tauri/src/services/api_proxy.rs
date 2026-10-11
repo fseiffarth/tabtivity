@@ -2090,24 +2090,28 @@ mod tests {
         let seen = Arc::new(Seen::default());
         let release = Arc::new(tokio::sync::Semaphore::new(0));
         let upstream = stub_upstream(seen.clone(), release.clone()).await;
-        let idle = Duration::from_millis(300);
+        // The bound runs from the accept, so even the honest request at the end
+        // must send its head within it: 300 ms was too short for a loaded CI
+        // runner, which reset that request.
+        let idle = Duration::from_secs(1);
         let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.idle_wait = idle).await;
 
         // A socket that never sends a request.
         let mut silent = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         assert!(closes_within(&mut silent, Duration::from_secs(5)).await);
 
-        // A head trickled byte by byte does not reset the bound.
+        // A head trickled byte by byte does not reset the bound: the whole
+        // trickle would take 3.6 bounds, and the socket closes well before.
         let mut trickle = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let started = Instant::now();
         for b in b"GET /anthropic/v1/models HTTP/1.1\r\n" {
             if trickle.write_all(&[*b]).await.is_err() {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(30)).await;
+            tokio::time::sleep(idle / 10).await;
         }
         assert!(closes_within(&mut trickle, Duration::from_secs(5)).await);
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(started.elapsed() < idle * 3, "took {:?}", started.elapsed());
 
         // A kept-alive socket after its answer.
         let mut kept = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();

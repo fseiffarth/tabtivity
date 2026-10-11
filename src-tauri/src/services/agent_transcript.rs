@@ -1503,7 +1503,10 @@ fn claude_tasks_ended(line: &str) -> Vec<String> {
 /// writes its output file until it exits, and a CLI that quit took its
 /// shells with it without a notification. Read off `/proc/<pid>/fd`, whose
 /// links name the file as the process sees it — the path its CLI wrote down,
-/// inside a fence or a container too. Elsewhere nothing is known to run.
+/// inside a fence or a container too. Those links are resolved paths, though:
+/// when the path written down runs through a symlink (a symlinked `$TMPDIR`
+/// or home), its real path is matched as well. Elsewhere nothing is known to
+/// run.
 ///
 /// The pids come from the shared process table (`services::proc_table`, at
 /// most a second old) rather than a walk of their own, shells first: the
@@ -1521,10 +1524,21 @@ fn running_outputs(outputs: &[&str]) -> std::collections::HashSet<String> {
     if outputs.is_empty() || !cfg!(target_os = "linux") {
         return open;
     }
+    // Each output under the name it was written down as and, where that runs
+    // through a symlink, under its real path too — the one an fd link shows.
+    let mut names: Vec<(std::ffi::OsString, &str)> = Vec::new();
+    for output in outputs {
+        names.push(((*output).into(), *output));
+        if let Ok(real) = std::fs::canonicalize(output) {
+            if real.as_os_str() != std::ffi::OsStr::new(output) {
+                names.push((real.into_os_string(), *output));
+            }
+        }
+    }
     let table = proc_table::snapshot();
     let is_shell = |comm: &str| matches!(comm, "bash" | "sh" | "dash" | "zsh" | "fish" | "ksh" | "mksh");
     let (shells, rest): (Vec<_>, Vec<_>) = table.procs().partition(|p| is_shell(&p.comm));
-    if holders_of(shells.into_iter().chain(rest).map(|p| p.pid), outputs, &mut open) {
+    if holders_of(shells.into_iter().chain(rest).map(|p| p.pid), &names, outputs.len(), &mut open) {
         return open;
     }
     let fresh = proc_table::snapshot_within(std::time::Duration::ZERO);
@@ -1532,18 +1546,20 @@ fn running_outputs(outputs: &[&str]) -> std::collections::HashSet<String> {
         .procs()
         .filter(|p| table.get(p.pid).is_none_or(|seen| seen.start != p.start))
         .map(|p| p.pid);
-    holders_of(new, outputs, &mut open);
+    holders_of(new, &names, outputs.len(), &mut open);
     open
 }
 
-/// Add to `open` each of `outputs` one of `pids` holds open; true once all are.
+/// Add to `open` each output one of `pids` holds open under one of its
+/// `names` (an fd link → the output it names); true once all `wanted` are.
 fn holders_of(
     pids: impl Iterator<Item = u32>,
-    outputs: &[&str],
+    names: &[(std::ffi::OsString, &str)],
+    wanted: usize,
     open: &mut std::collections::HashSet<String>,
 ) -> bool {
     for pid in pids {
-        if open.len() == outputs.len() {
+        if open.len() == wanted {
             break;
         }
         let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
@@ -1551,13 +1567,13 @@ fn holders_of(
         };
         for fd in fds.flatten() {
             if let Ok(target) = std::fs::read_link(fd.path()) {
-                if let Some(output) = outputs.iter().find(|output| target.as_os_str() == **output) {
+                if let Some((_, output)) = names.iter().find(|(name, _)| target.as_os_str() == name) {
                     open.insert(output.to_string());
                 }
             }
         }
     }
-    open.len() == outputs.len()
+    open.len() == wanted
 }
 
 /// The tool calls a Claude `user` record carries the results of.
@@ -2529,9 +2545,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_claude_background_shell_runs_while_its_output_is_held_open_and_no_notification_ended_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let main = dir.path().join("s.jsonl");
-        let output = dir.path().join("tasks").join("b1.output");
+        // Through a symlink: the output path Claude writes down keeps it, the
+        // fd link of the shell holding it open shows the real path.
+        let (_dir, dir) = crate::test_util::tempdir_via_symlink();
+        let main = dir.join("s.jsonl");
+        let output = dir.join("tasks").join("b1.output");
         std::fs::create_dir_all(output.parent().unwrap()).unwrap();
         let output_text = output.to_str().unwrap().to_string();
         let lines = |extra: &str| {

@@ -1894,10 +1894,11 @@ pub(crate) mod tests {
             bomb.extend_from_slice(format!("/k{i} 0 ").as_bytes());
         }
         bomb.extend_from_slice(b">>");
-        let started = Instant::now();
-        let _guard = AllowanceGuard::start(Instant::now() + BAKE_DEADLINE);
+        // The deadline is out of reach, so only the object allowance can stop
+        // the parse — shown without timing it (a stopwatch bound failed on a
+        // loaded machine, where unoptimised parsing ran past it).
+        let _guard = AllowanceGuard::start(Instant::now() + Duration::from_secs(3600));
         assert_eq!(Lexer::new(&bomb, 0).object(0), Err(BakeError::TooComplex));
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
         drop(_guard);
         // A passed deadline stops the parse too.
         let _late = AllowanceGuard::start(Instant::now() - Duration::from_secs(1));

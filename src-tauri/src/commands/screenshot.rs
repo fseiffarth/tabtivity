@@ -743,7 +743,7 @@ mod platform {
                 return Err("GetDIBits failed".to_string());
             }
             // GDI delivers BGRA with an unused alpha byte; convert to opaque RGBA.
-            for px in buffer.chunks_exact_mut(4) {
+            for px in buffer.as_chunks_mut::<4>().0 {
                 px.swap(0, 2);
                 px[3] = 0xFF;
             }

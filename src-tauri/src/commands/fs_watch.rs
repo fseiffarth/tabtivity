@@ -205,7 +205,13 @@ pub fn watch_dir(
     // Git state lives in the repo containing the project, not necessarily in
     // one containing the listed subfolder (a nested repo shows up in the tree
     // but is not what its markers come from).
-    let git_paths = git_watch_paths(Path::new(repo_dir.as_deref().unwrap_or(&path)));
+    // By its real path, as the listed folder is: macOS's FSEvents reports
+    // events under real paths, so a git dir reached through a symlink would
+    // never match its root and every write in it would count.
+    let repo = repo_dir.as_deref().map_or_else(|| canonical.clone(), |dir| {
+        std::fs::canonicalize(dir).unwrap_or_else(|_| PathBuf::from(dir))
+    });
+    let git_paths = git_watch_paths(&repo);
     let git_roots: Vec<PathBuf> = git_paths
         .iter()
         .filter(|(_, mode)| *mode == RecursiveMode::NonRecursive)

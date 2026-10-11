@@ -33,6 +33,8 @@ pub mod storage;
 pub mod sysstat;
 pub mod tauri_host;
 pub mod terminal;
+#[cfg(test)]
+pub(crate) mod test_util;
 
 use commands::apps::{WindowRegistry, WindowRegistryState};
 use commands::terminal::RegistryState;

@@ -234,12 +234,23 @@ fn many_pages_share_one_wait_at_the_service() {
     view(&alice);
     let carol = Shared::new(carol_sock, carol_state);
     let task = view(&carol).tasks[0].clone();
-    let pages: Vec<_> = (0..2 * app_gateway::calendars::MAX_PER_UID)
+    // Every page must have asked before carol's edit: a page that asks only
+    // after the shared wait answered starts a fresh one, which nothing wakes.
+    // A fixed sleep alone lost that race on a loaded runner, where the page
+    // threads had not all started yet; the barrier holds the edit until they
+    // have, and the sleep then covers the step from the barrier into `wait`.
+    let count = 2 * app_gateway::calendars::MAX_PER_UID;
+    let started = std::sync::Arc::new(std::sync::Barrier::new(count + 1));
+    let pages: Vec<_> = (0..count)
         .map(|_| {
-            let alice = alice.clone();
-            std::thread::spawn(move || alice.wait())
+            let (alice, started) = (alice.clone(), started.clone());
+            std::thread::spawn(move || {
+                started.wait();
+                alice.wait()
+            })
         })
         .collect();
+    started.wait();
     std::thread::sleep(std::time::Duration::from_millis(200));
     // Alice's own edit still gets a connection while every page waits.
     assert!(ask_at(&alice_sock, &Request::List).unwrap().ok);

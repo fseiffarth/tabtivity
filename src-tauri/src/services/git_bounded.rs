@@ -70,6 +70,16 @@ thread_local! {
     pub(crate) static LAST_PID: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
+/// Test bound for "answered instead of hanging": far under [`READ_TIMEOUT`],
+/// so it still tells a refusal or a stop at the test's own ceiling apart from
+/// git running to the production one, and far over what the setup spawns
+/// (config sanitizing, the common-dir pin) take on a loaded CI runner — a 5 s
+/// bound failed there at 7 s.
+#[cfg(all(test, unix))]
+pub(crate) const NOT_A_HANG: Duration = Duration::from_secs(60);
+#[cfg(all(test, unix))]
+const _: () = assert!(NOT_A_HANG.as_secs() * 2 <= READ_TIMEOUT.as_secs());
+
 /// The subcommand in a git argument list: the first argument that is neither a
 /// top-level option nor the value of one (`-c k=v`, `-C dir`, …).
 pub(crate) fn verb<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Option<String> {
@@ -525,7 +535,7 @@ mod tests {
             let err = output(crate::commands::git::hardened_git_command_in(tmp.path(), &["status"]))
                 .expect_err(name);
             assert!(err.contains("named pipe"), "{name}: {err}");
-            assert!(started.elapsed() < Duration::from_secs(5), "{name}: took {:?}", started.elapsed());
+            assert!(started.elapsed() < NOT_A_HANG, "{name}: took {:?}", started.elapsed());
             // Also from a subfolder, and through a link to the pipe.
             assert!(hazard(&tmp.path().join("sub")).is_some(), "{name} from sub");
         }
@@ -546,7 +556,7 @@ mod tests {
             .expect_err("a FIFO .gitignore must not hang");
         TEST_TIMEOUT.with(|t| t.set(None));
         assert!(err.contains("timed out"), "{err}");
-        assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+        assert!(started.elapsed() < NOT_A_HANG, "took {:?}", started.elapsed());
         let pid = LAST_PID.with(|p| p.get()).expect("spawned");
         assert!(gone(pid), "git {pid} left behind (zombie or running)");
     }
@@ -556,19 +566,25 @@ mod tests {
     fn a_grandchild_holding_the_pipes_is_killed_with_the_tree() {
         let marker = tempfile::tempdir().unwrap();
         let pidfile = marker.path().join("pid");
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", &format!("sleep 30 & echo $! > {}; wait", pidfile.display())]);
-        let started = Instant::now();
-        let err = output_within(cmd, Duration::from_millis(500)).expect_err("times out");
-        assert!(err.contains("timed out"), "{err}");
-        assert!(started.elapsed() < Duration::from_secs(5));
-        let sleeper: u32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
-        let until = Instant::now() + Duration::from_secs(2);
-        // The sleeper is reparented and reaped by init; give it a moment.
-        while !gone(sleeper) && Instant::now() < until {
-            std::thread::sleep(Duration::from_millis(20));
+        // The shell must have started the sleeper and written its pid before
+        // the ceiling stops it; a loaded runner may not get that far within a
+        // short one, so the ceiling grows until it did.
+        let mut sleeper = None;
+        for ceiling in [500, 2_000, 8_000] {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", &format!("sleep 30 & echo $! > {}.new && mv {0}.new {0}; wait", pidfile.display())]);
+            let started = Instant::now();
+            let err = output_within(cmd, Duration::from_millis(ceiling)).expect_err("times out");
+            assert!(err.contains("timed out"), "{err}");
+            assert!(started.elapsed() < NOT_A_HANG, "took {:?}", started.elapsed());
+            sleeper = std::fs::read_to_string(&pidfile).ok().and_then(|pid| pid.trim().parse::<u32>().ok());
+            if sleeper.is_some() {
+                break;
+            }
         }
-        assert!(gone(sleeper), "the grandchild survived");
+        let sleeper = sleeper.expect("the shell never started its sleeper");
+        // The sleeper is reparented and reaped by init; give it a moment.
+        assert!(crate::test_util::wait_until(crate::test_util::PATIENCE, || gone(sleeper)), "the grandchild survived");
     }
 
     #[cfg(unix)]

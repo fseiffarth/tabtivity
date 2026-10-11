@@ -725,11 +725,11 @@ mod tests {
         let on_disk: Ledger = crate::storage::read_json(&path).unwrap();
         assert_eq!(on_disk.month, "2026-11");
         assert_eq!(on_disk.previous.unwrap().month, "2026-10");
-        // The scheduled flush lands by itself.
+        // The scheduled flush lands by itself — polled for, not slept on: a
+        // loaded runner wakes the flush thread late.
         book.record(Provider::Gemini, &charge("gemini-2.5-pro", 0.5, true), now);
-        std::thread::sleep(FLUSH_DELAY + Duration::from_millis(500));
-        let on_disk: Ledger = crate::storage::read_json(&path).unwrap();
-        assert_eq!(on_disk.billed(Provider::Gemini), BILLED);
+        let flushed = || crate::storage::read_json::<Ledger>(&path).is_ok_and(|l| l.billed(Provider::Gemini) == BILLED);
+        assert!(crate::test_util::wait_until(FLUSH_DELAY + crate::test_util::PATIENCE, flushed));
     }
 
     #[test]

@@ -133,13 +133,49 @@ pub fn classify_fs_event(kind: &EventKind, path: &Path) -> Option<&'static str> 
 #[derive(Default)]
 pub struct Debouncer {
     last: HashMap<PathBuf, Instant>,
+    /// Paths whose creation was counted and that have not gone since: macOS's
+    /// FSEvents keeps a new file's "created" flag on its later events, so each
+    /// save to a fresh file arrived as another Create ([`Debouncer::settle`]).
+    born: std::collections::HashSet<PathBuf>,
     /// When [`Debouncer::prune`] last actually swept. `Option` because `Instant`
     /// has no `Default` and this struct derives it (built via `default()` in the
     /// watcher and every test); `None` means "never swept", so the first call runs.
     last_prune: Option<Instant>,
 }
 
+/// The most paths [`Debouncer`] remembers as born; past it, it starts over.
+const MAX_BORN: usize = 4096;
+
 impl Debouncer {
+    /// The metric an event on `path` counts as, `key` being what
+    /// [`classify_fs_event`] made of `kind`: a Create for a path whose creation
+    /// was already counted, and that has not been removed or renamed since, is
+    /// FSEvents' sticky flag on a later write — a modification.
+    pub fn settle(&mut self, kind: &EventKind, path: &Path, key: &'static str) -> &'static str {
+        match kind {
+            EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
+                self.born.remove(path);
+                key
+            }
+            EventKind::Create(_) if path.exists() => {
+                if self.born.len() >= MAX_BORN {
+                    self.born.clear();
+                }
+                if self.born.insert(path.to_path_buf()) {
+                    key
+                } else {
+                    metric::FILE_MODIFIED
+                }
+            }
+            EventKind::Create(_) => {
+                // Created and already gone again: no later write can follow.
+                self.born.remove(path);
+                key
+            }
+            _ => key,
+        }
+    }
+
     /// Whether this (path, metric) should be counted now. Takes `now` explicitly
     /// so the cooldown is testable without sleeping.
     pub fn should_count(&mut self, path: &Path, key: &str, now: Instant) -> bool {
@@ -371,6 +407,7 @@ pub fn watch_project(state: &UsageWatchState, project_id: &str) -> Result<(), St
             let Some(key) = classify_fs_event(&event.kind, path) else {
                 continue;
             };
+            let key = debouncer.settle(&event.kind, path, key);
             if debouncer.should_count(path, key, now) {
                 state_for_cb.bump(&owner, key);
             }
@@ -607,6 +644,31 @@ mod tests {
         assert!(d.should_count(&path, metric::FILE_CREATED, t0));
         assert!(d.should_count(&path, metric::FILE_DELETED, t0 + Duration::from_millis(10)));
         assert!(d.should_count(&path, metric::FILE_CREATED, t0 + Duration::from_millis(20)));
+    }
+
+    /// macOS's FSEvents repeats a new file's "created" flag on its later
+    /// writes: only the first Create counts as one, until the file goes.
+    #[test]
+    fn a_repeated_create_for_a_file_still_there_is_a_modification() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.rs");
+        std::fs::write(&path, "x").unwrap();
+        let created = EventKind::Create(CreateKind::File);
+        let mut d = Debouncer::default();
+        assert_eq!(d.settle(&created, &path, metric::FILE_CREATED), metric::FILE_CREATED);
+        assert_eq!(d.settle(&created, &path, metric::FILE_CREATED), metric::FILE_MODIFIED, "the sticky flag");
+        let modified = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+        assert_eq!(d.settle(&modified, &path, metric::FILE_MODIFIED), metric::FILE_MODIFIED);
+        // Removed (or renamed away) and made again: a new file.
+        assert_eq!(d.settle(&EventKind::Remove(RemoveKind::File), &path, metric::FILE_DELETED), metric::FILE_DELETED);
+        assert_eq!(d.settle(&created, &path, metric::FILE_CREATED), metric::FILE_CREATED);
+        let renamed = EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::From));
+        assert_eq!(d.settle(&renamed, &path, metric::FILE_MODIFIED), metric::FILE_MODIFIED);
+        assert_eq!(d.settle(&created, &path, metric::FILE_CREATED), metric::FILE_CREATED);
+        // A Create for a path already gone counts as made (its delete follows).
+        let gone = dir.path().join("gone.rs");
+        assert_eq!(d.settle(&created, &gone, metric::FILE_CREATED), metric::FILE_CREATED);
+        assert_eq!(d.settle(&created, &gone, metric::FILE_CREATED), metric::FILE_CREATED);
     }
 
     #[test]

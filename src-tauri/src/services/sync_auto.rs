@@ -256,7 +256,11 @@ async fn ensure_watcher(
         }
     }
     let tx = tx.clone();
-    let root = mirror.to_path_buf();
+    // The mirror as spelled and by its real path: macOS's FSEvents reports
+    // events under the real one, so a mirror reached through a symlink would
+    // match no `.git` write and every one would queue a walk.
+    let mut roots = vec![mirror.to_path_buf()];
+    roots.extend(std::fs::canonicalize(mirror).ok().filter(|real| real != mirror));
     let Ok(mut w) = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         // The recursive watch covers `.git` and `.tabtivity` too, and byte-sync never
         // moves a byte of either — yet every lockstep pass (bundle, fetch, refs),
@@ -264,7 +268,7 @@ async fn ensure_watcher(
         // `.tabtivity` used to queue a full host walk here. Only a write to something
         // byte-sync could actually act on gets to wake the loop.
         if let Ok(ev) = res {
-            if event_touches_synced_bytes(&root, &ev.paths) {
+            if event_touches_synced_bytes_under(&roots, &ev.paths) {
                 let _ = tx.send(());
             }
         }
@@ -296,6 +300,16 @@ pub fn event_touches_synced_bytes(mirror: &std::path::Path, paths: &[std::path::
             Some(std::path::Component::Normal(first)) if first == ".git" || first.to_str().is_some_and(crate::brand::is_project_dir)
         )
     })
+}
+
+/// [`event_touches_synced_bytes`] for a mirror known by several spellings
+/// (as given, and its real path): a path is skipped when any of them places
+/// it in `.git` or the app's folder.
+fn event_touches_synced_bytes_under(mirrors: &[std::path::PathBuf], paths: &[std::path::PathBuf]) -> bool {
+    paths.is_empty()
+        || paths
+            .iter()
+            .any(|p| mirrors.iter().all(|m| event_touches_synced_bytes(m, std::slice::from_ref(p))))
 }
 
 /// The per-project loop: reconcile on a fixed interval (host changes) and shortly
@@ -606,6 +620,20 @@ mod tests {
         // err toward running the pass rather than skipping it.
         assert!(event_touches_synced_bytes(mirror, &[]));
         assert!(event_touches_synced_bytes(mirror, &[p("/elsewhere/x")]));
+    }
+
+    /// macOS's FSEvents names a mirror reached through a symlink by its real
+    /// path: a `.git` write there must still not wake the loop.
+    #[test]
+    fn a_git_write_under_the_mirrors_real_path_does_not_wake_the_loop() {
+        use std::path::PathBuf;
+        let p = |parts: &[&str]| parts.iter().collect::<PathBuf>();
+        let mirrors = [p(&["link", "mirror"]), p(&["real", "mirror"])];
+        assert!(!event_touches_synced_bytes_under(&mirrors, &[p(&["real", "mirror", ".git", "index"])]));
+        assert!(!event_touches_synced_bytes_under(&mirrors, &[p(&["link", "mirror", ".git", "index"])]));
+        assert!(event_touches_synced_bytes_under(&mirrors, &[p(&["real", "mirror", "src", "a.rs"])]));
+        assert!(event_touches_synced_bytes_under(&mirrors, &[p(&["elsewhere", "x"])]));
+        assert!(event_touches_synced_bytes_under(&mirrors, &[]));
     }
 
     #[test]

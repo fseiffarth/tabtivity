@@ -272,6 +272,11 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
+    /// The deadline for a test that checks a size limit, not speed: the
+    /// production [`DEADLINE`] interrupts these multi-megabyte reads on a
+    /// loaded CI runner and turns the expected answer into `sqlite-timeout`.
+    const SIZE_TEST_BUDGET: Duration = Duration::from_secs(120);
+
     /// Build a small on-disk SQLite fixture and return its path (kept alive by
     /// the returned `TempDir`).
     fn fixture() -> (tempfile::TempDir, String) {
@@ -359,8 +364,7 @@ mod tests {
         ))
         .unwrap();
         drop(conn);
-        let err = sqlite_page_blocking(path.to_string_lossy().into_owned(), "huge".into(), 10, 0)
-            .unwrap_err();
+        let err = sqlite_page_within(&path.to_string_lossy(), "huge", 10, 0, SIZE_TEST_BUDGET).unwrap_err();
         assert_eq!(err, ERR_TOO_LARGE);
     }
 
@@ -376,8 +380,7 @@ mod tests {
         )
         .unwrap();
         drop(conn);
-        let page = sqlite_page_blocking(path.to_string_lossy().into_owned(), "t".into(), u32::MAX, 0)
-            .unwrap();
+        let page = sqlite_page_within(&path.to_string_lossy(), "t", u32::MAX, 0, SIZE_TEST_BUDGET).unwrap();
         assert_eq!(page.total, 1500);
         assert_eq!(page.rows.len(), MAX_PAGE_ROWS as usize);
         let cell = &page.rows[0][0];

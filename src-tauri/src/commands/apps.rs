@@ -1885,20 +1885,20 @@ unsafe fn hicon_to_rgba(
             }
             // Reconstruct alpha from the AND mask when the color bitmap carries
             // none (mask: 0 = opaque, white = transparent).
-            if !pixels.chunks_exact(4).any(|px| px[3] != 0) && !mask.is_invalid() {
+            if !pixels.as_chunks::<4>().0.iter().any(|px| px[3] != 0) && !mask.is_invalid() {
                 let mut mask_px = vec![0u8; pixel_count * 4];
                 if read_dib(mask, &mut mask_px) {
-                    for (px, m) in pixels.chunks_exact_mut(4).zip(mask_px.chunks_exact(4)) {
+                    for (px, m) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(mask_px.as_chunks::<4>().0) {
                         px[3] = if m[0] == 0 { 0xFF } else { 0x00 };
                     }
                 } else {
-                    for px in pixels.chunks_exact_mut(4) {
+                    for px in pixels.as_chunks_mut::<4>().0 {
                         px[3] = 0xFF;
                     }
                 }
             }
             // GDI delivers BGRA; the PNG encoder wants RGBA.
-            for px in pixels.chunks_exact_mut(4) {
+            for px in pixels.as_chunks_mut::<4>().0 {
                 px.swap(0, 2);
             }
             Some((width as u32, height as u32, pixels))

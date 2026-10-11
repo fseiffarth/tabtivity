@@ -73,6 +73,25 @@ const HARDENED_CONFIG: &[&str] = &[
     "safe.bareRepository=explicit",
 ];
 
+/// The user's own config that changes the shape of output Tabtivity parses,
+/// pinned back to git's defaults on every call: `color.ui=always` (or a
+/// per-command `color.diff=always`) put escape codes into captured diffs and
+/// statuses, `diff.noprefix` / `diff.mnemonicPrefix` drop or rename the
+/// `a/` `b/` prefixes, `diff.relative` cuts paths to the cwd, and
+/// `log.showSignature` adds gpg output to log records. Settings that choose
+/// *what* is shown (`status.showUntrackedFiles`) stay the user's.
+const OUTPUT_CONFIG: &[&str] = &[
+    "color.ui=never",
+    "color.diff=never",
+    "color.status=never",
+    "color.branch=never",
+    "color.grep=never",
+    "diff.noprefix=false",
+    "diff.mnemonicPrefix=false",
+    "diff.relative=false",
+    "log.showSignature=false",
+];
+
 /// Subcommands that accept `--no-ext-diff` / `--no-textconv`, the two flags that
 /// stop a repo-configured `diff.external` / `diff.<driver>.textconv` program from
 /// running. Neither flag changes output for a repo that configures neither, and
@@ -124,8 +143,8 @@ enum Hooks {
 }
 
 fn git_args<S: AsRef<str>>(args: &[S], hooks: Hooks) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(args.len() + HARDENED_CONFIG.len() * 2 + 4);
-    for kv in HARDENED_CONFIG {
+    let mut out: Vec<String> = Vec::with_capacity(args.len() + (HARDENED_CONFIG.len() + OUTPUT_CONFIG.len()) * 2 + 4);
+    for kv in HARDENED_CONFIG.iter().chain(OUTPUT_CONFIG) {
         out.push("-c".to_string());
         out.push((*kv).to_string());
     }
@@ -3770,9 +3789,13 @@ mod tests {
                 "safe.bareRepository=explicit"
             ]
         );
+        // Then the output-shape pins, each as its own `-c` pair.
+        let output = 6 + OUTPUT_CONFIG.len() * 2;
+        let pairs: Vec<String> = OUTPUT_CONFIG.iter().flat_map(|kv| ["-c".to_string(), kv.to_string()]).collect();
+        assert_eq!(&args[6..output], &pairs[..]);
         // Hooks off by default (#862): a read can fire `post-index-change`.
-        assert_eq!(&args[6..8], &["-c", "core.hooksPath="]);
-        assert_eq!(&args[8..], &["status", "--porcelain"]);
+        assert_eq!(&args[output..output + 2], &["-c", "core.hooksPath="]);
+        assert_eq!(&args[output + 2..], &["status", "--porcelain"]);
         // A subcommand that takes no diff-driver flags gets none.
         assert!(!args.iter().any(|a| a == "--no-ext-diff"));
     }
@@ -3793,7 +3816,7 @@ mod tests {
         }
         // Owned args (the `Vec<String>` call sites) go through the same builder.
         let owned = vec!["log".to_string(), "--numstat".to_string()];
-        let pinned = (HARDENED_CONFIG.len() + NO_HOOKS_CONFIG.len()) * 2;
+        let pinned = (HARDENED_CONFIG.len() + OUTPUT_CONFIG.len() + NO_HOOKS_CONFIG.len()) * 2;
         assert_eq!(
             hardened_git_args(&owned)[pinned..],
             ["log", "--no-ext-diff", "--no-textconv", "--numstat"]
@@ -4756,23 +4779,13 @@ filename note.txt
         // `-c core.hooksPath=` suppresses it (verified against git 2.53.0), and
         // since #862 every non-gated verb carries it without asking.
         let args = hardened_git_args(&["worktree", "add", "/p/wt", "feat"]);
-        assert_eq!(
-            args,
-            vec![
-                "-c",
-                "core.fsmonitor=false",
-                "-c",
-                "protocol.ext.allow=never",
-                "-c",
-                "safe.bareRepository=explicit",
-                "-c",
-                "core.hooksPath=",
-                "worktree",
-                "add",
-                "/p/wt",
-                "feat",
-            ]
-        );
+        let mut want: Vec<String> = HARDENED_CONFIG
+            .iter()
+            .chain(OUTPUT_CONFIG)
+            .flat_map(|kv| ["-c".to_string(), kv.to_string()])
+            .collect();
+        want.extend(["-c", "core.hooksPath=", "worktree", "add", "/p/wt", "feat"].map(String::from));
+        assert_eq!(args, want);
         // The caller's own `-c` pair must not be mistaken for the subcommand: a
         // scoped config on a diff-driver command would otherwise silently drop
         // `--no-ext-diff`/`--no-textconv`.
@@ -4792,11 +4805,15 @@ filename note.txt
         use crate::services::ssh_exec::remote_git_command;
         let args = hardened_git_args(&["worktree", "add", concat!("/s/p/.", crate::app_slug!(), "/worktrees/a b"), "feat"]);
         let cmd = remote_git_command("/scratch/proj", &args);
+        let output: String = OUTPUT_CONFIG.iter().map(|kv| format!(" '-c' '{kv}'")).collect();
         assert_eq!(
             cmd,
-            concat!("cd '/scratch/proj' && git '-c' 'core.fsmonitor=false' '-c' 'protocol.ext.allow=never' \
-             '-c' 'safe.bareRepository=explicit' '-c' 'core.hooksPath=' 'worktree' 'add' \
-             '/s/p/.", crate::app_slug!(), "/worktrees/a b' 'feat'")
+            format!(
+                "cd '/scratch/proj' && git '-c' 'core.fsmonitor=false' '-c' 'protocol.ext.allow=never' \
+                 '-c' 'safe.bareRepository=explicit'{output} '-c' 'core.hooksPath=' 'worktree' 'add' \
+                 '/s/p/.{}/worktrees/a b' 'feat'",
+                crate::app_slug!()
+            )
         );
     }
 
@@ -5583,7 +5600,7 @@ filename note.txt
     #[cfg(target_os = "linux")]
     #[test]
     fn a_fifo_ignore_file_makes_the_status_polls_fail_fast_not_hang() {
-        use crate::services::git_bounded::{LAST_PID, TEST_TIMEOUT};
+        use crate::services::git_bounded::{LAST_PID, NOT_A_HANG, TEST_TIMEOUT};
         use std::time::{Duration, Instant};
         if !git_available() {
             return;
@@ -5613,7 +5630,7 @@ filename note.txt
         let err = git_status_probe(d.clone(), false).err().expect("a FIFO exclude must not read as clean");
         assert!(err.contains("named pipe"), "{err}");
         assert!(git_file_statuses_blocking(d.clone(), String::new()).is_err());
-        assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+        assert!(started.elapsed() < NOT_A_HANG, "took {:?}", started.elapsed());
         fs::remove_file(&exclude).unwrap();
 
         mkfifo(&dir.join("sub/.gitignore"));
@@ -5626,7 +5643,7 @@ filename note.txt
         let err = err.err().expect("a FIFO nested .gitignore must not read as clean");
         assert!(err.contains("timed out"), "{err}");
         assert!(listing.expect_err("the tree's status").contains("timed out"));
-        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+        assert!(started.elapsed() < NOT_A_HANG, "took {:?}", started.elapsed());
         assert!(!Path::new(&format!("/proc/{pid}")).exists(), "git {pid} left behind");
     }
 }
