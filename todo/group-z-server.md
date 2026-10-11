@@ -915,6 +915,10 @@ the desktop groundwork the hosted plan's P1 builds on.*
     `docs/hosted_handoff.md` § "Merge `develop` → `hosted`". The
     `TODO(#2339)` allowlist call is still pending: the daemon does not serve
     the root lane yet. Owed: `hosted` → `develop`.
+    *2026-10-10 and 2026-10-11:* `develop` merged in again (`6754d5cd`, then
+    `32d65f6a`; one conflict, the frontend filemap). No new command since the
+    10-10 merge; the two phone requests `develop` added after the branch base
+    (markup questions, Local models) are answered on a server by #2390.
 
 2387. **Decide `open_external_url` in the Connect window.** The final fix
     round narrowed the Connect window to its socket bridge, clipboard,
@@ -957,3 +961,26 @@ the desktop groundwork the hosted plan's P1 builds on.*
     key) or the user's per-user vault (own key, so yes, a user may bring
     one), never an OS keychain; one budget model in billed tokens per UTC
     month. To build on `hosted` before `hosted` → `develop`.
+
+2390. **Markup questions on a server (no window).** ✅ **Built** (2026-10-11,
+    never on a server). The markup MCP lane (`markup_ask`,
+    `markup_withdraw`, `markup_done`) was granted and routed only where a
+    window serves it, so a server user's agents had no markup questions or
+    ticks, and the browser client's and phone's markup cards stayed empty.
+    Now `Runtime::serves_markup`: the window and a server daemon serve it
+    (`root_mcp::start_headless` with the daemon's context routes
+    `/mcp/markup` and rings `markup-mcp-changed` to the browser clients); the
+    phone's markup routes are answered from the daemon's own asks
+    (`host.rs` `markup_here`: list with ticks, answer held for the tab as a
+    no-window phone prompt and reopened when the hold fails, dismiss). A
+    desktop's Mobile host still never serves it. On a server the phone's
+    Local models routes are closed (`local_models_disabled`): the shared
+    Ollama is the administrator's (plan §3.3). Rationale:
+    `docs/context/markup_mcp.md`.
+    - [ ] 🖐️ Manual test — on a server, one account with a browser and a
+      phone: open a project Claude tab from the browser, mark up a PDF and
+      Submit with "Ask always" — the question card shows in the browser's
+      markup view and on the phone; answer on the phone → the prompt is
+      typed into the tab and the browser's card closes; the agent's
+      `markup_done` ticks show on both; the phone's start page shows no
+      Local models section.

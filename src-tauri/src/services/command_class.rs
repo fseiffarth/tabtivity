@@ -623,10 +623,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/markdown.rs
     ("markdown_remote_image", Core),
     // commands/markup_mcp.rs — the asks live in the process that serves the
-    // markup MCP lane, today the window's `root_mcp::start` only: a daemon
-    // answers these with no asks (empty lists, `gone`) until #2339 serves the
-    // lane there. Kept `core` so the browser client's markup view works the
-    // day it does; not `off`, which would refuse it then too.
+    // markup MCP lane (`Runtime::serves_markup`): the window, or a server
+    // daemon, whose own listener serves it, so the browser client's markup
+    // view reads the asks its tabs made here.
     ("markup_mcp_answer", Core),
     ("markup_mcp_dismiss", Core),
     ("markup_mcp_list", Core),

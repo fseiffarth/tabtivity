@@ -82,8 +82,13 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 /// host for the tabs it starts with no window open. `serves_root` is false in
 /// the Mobile host, which serves the schedule, push and help lanes only — so
 /// [`grant_lanes`] hands out neither a root nor a reader token there.
+/// `serves_markup`: this process holds the markup questions its tabs ask
+/// (`services::markup_mcp`) and answers the views that show them — the
+/// window, and a server daemon, which has no window and answers both the
+/// browser client and the phone itself. A desktop's Mobile host does not:
+/// the window's markup view could never see its asks.
 #[derive(Debug, Clone)]
-pub struct Runtime { pub port: u16, pub serves_root: bool }
+pub struct Runtime { pub port: u16, pub serves_root: bool, pub serves_markup: bool }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -747,11 +752,12 @@ fn help_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
 ///   (`git_push_mcp` on, the trusted entry's directory);
 /// - every local agent: the **help** lane while `help_mcp` is on;
 /// - those project agents with a schedule target: the **markup** lane while
-///   `markup_mcp` is on (window only).
+///   `markup_mcp` is on (the window, or a server daemon).
 ///
 /// `runtime` is this process's listener ([`runtime`]): `None` hands out
 /// nothing, and one that does not serve the root lane (the Mobile host) hands
-/// out neither a root, a reader nor a markup token. Tokens go into `store`, the one that
+/// out neither a root nor a reader token; a markup token only where
+/// [`Runtime::serves_markup`]. Tokens go into `store`, the one that
 /// listener authenticates against. Returns whether the spawn is a root agent.
 pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Runtime>, store: &TokenStore, state: &Path) -> bool {
     let root_agent = is_root_agent(opts, agent_spawn);
@@ -794,9 +800,9 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         grant_help(opts, runtime, store, &trusted.tool_models());
     }
     // Last, after help: the markup questions server (`services::markup_mcp`)
-    // merges into the same Vibe env. Its asks live in this process and are
-    // answered in the window's markup view, so only the window grants it.
-    if project_lanes && runtime.serves_root && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
+    // merges into the same Vibe env. Its asks live in this process, so only a
+    // process whose views answer them grants it (`Runtime::serves_markup`).
+    if project_lanes && runtime.serves_markup && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
         grant_markup(opts, runtime, store, &trusted.tool_models());
     }
     root_agent
@@ -3536,7 +3542,7 @@ mod tests {
 
     #[test]
     fn schedule_wiring_is_disjoint_scoped_and_secret_free() {
-        let runtime = Runtime { port: 8765, serves_root: true };
+        let runtime = Runtime { port: 8765, serves_root: true, serves_markup: true };
         for cli in WIRED_CLIS {
             let mut spawn = opts(cli, &[], Some("p"));
             apply_schedule_to_spawn_with(&mut spawn, &runtime, "secret", &[]);
@@ -3559,7 +3565,7 @@ mod tests {
     }
 
     fn rt() -> Runtime {
-        Runtime { port: 4321, serves_root: true }
+        Runtime { port: 4321, serves_root: true, serves_markup: true }
     }
 
     /// Every agent CLI gets the help pair; Claude and Codex are also named the

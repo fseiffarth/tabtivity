@@ -117,6 +117,9 @@ struct ServerState {
     /// Mobile host, whose listener serves the schedule, push and help lanes
     /// only (`docs/headless_mcp_plan.md`) — `/mcp` is not even routed there.
     ctx: Option<CoreCtx>,
+    /// `/mcp/markup` is routed (`Runtime::serves_markup`): the window, and a
+    /// server daemon's listener.
+    markup: bool,
     port: u16,
     /// The process's token store, the only one this listener accepts.
     store: &'static root_mcp::TokenStore,
@@ -438,7 +441,7 @@ pub fn start(ctx: CoreCtx) {
     });
     let handle = app_core::rt::spawn(async move {
         let served = match bind(LOOPBACK).await {
-            Ok(listener) => serve(listener, Some(ctx), notify, async { SHUTDOWN.notified().await }),
+            Ok(listener) => serve(listener, Some(ctx), true, notify, async { SHUTDOWN.notified().await }),
             Err(error) => Err(error),
         };
         match served {
@@ -451,16 +454,24 @@ pub fn start(ctx: CoreCtx) {
 
 /// The Mobile host's listener (`docs/headless_mcp_plan.md`): the schedule,
 /// push and help lanes for the tabs it spawns with no window open, on its own
-/// loopback port and token store; never the root lane. Bound before this
+/// loopback port and token store; never the root lane. `markup` is the
+/// host's context when this process answers the markup views itself — a
+/// server daemon, with no window (`Runtime::serves_markup`): the markup lane
+/// is served too, and its asks ring `markup-mcp-changed` to the browser
+/// clients. Bound before this
 /// returns, so a spawn after it is wired; the server runs until `shutdown`
 /// turns true. When the first bind fails, the error is returned (for the
 /// journal) and a task keeps retrying with [`bind_retry_delay`] until a bind
 /// succeeds or the host shuts down — tabs spawned meanwhile go without tools.
 pub async fn start_headless(
     notify: NoticeSink,
+    markup: Option<&CoreCtx>,
     shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u16, String> {
-    start_headless_on(LOOPBACK, notify, shutdown).await
+    if let Some(ctx) = markup {
+        crate::commands::markup_mcp::install_change_hook(ctx);
+    }
+    start_headless_on(LOOPBACK, notify, markup.is_some(), shutdown).await
 }
 
 /// Any free loopback port.
@@ -470,10 +481,11 @@ const LOOPBACK: std::net::SocketAddr = std::net::SocketAddr::new(std::net::IpAdd
 async fn start_headless_on(
     addr: std::net::SocketAddr,
     notify: NoticeSink,
+    markup: bool,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u16, String> {
     let first = match bind(addr).await {
-        Ok(listener) => serve(listener, None, notify.clone(), until_true(shutdown.clone())),
+        Ok(listener) => serve(listener, None, markup, notify.clone(), until_true(shutdown.clone())),
         Err(error) => Err(error),
     };
     match first {
@@ -494,7 +506,7 @@ async fn start_headless_on(
                     }
                     attempt = attempt.saturating_add(1);
                     let Ok(listener) = bind(addr).await else { continue };
-                    if let Ok((port, server)) = serve(listener, None, notify.clone(), until_true(shutdown.clone())) {
+                    if let Ok((port, server)) = serve(listener, None, markup, notify.clone(), until_true(shutdown.clone())) {
                         eprintln!("[root-mcp] bound on port {port} after {attempt} retries");
                         server.await;
                         return;
@@ -522,17 +534,23 @@ async fn until_true(mut flag: tokio::sync::watch::Receiver<bool>) {
 }
 
 /// The routes a listener answers: the schedule, push and help lanes
-/// everywhere, the root and markup lanes only where there is a window to
-/// serve them.
+/// everywhere, the root lane only where there is a window to serve it, and
+/// the markup lane where this process answers the views that show its asks
+/// (the window, a server daemon).
 fn router(state: ServerState) -> Router {
     let mut router = Router::new()
         .route("/mcp/schedule", post(handle))
         .route("/mcp/git", post(handle))
         .route("/mcp/help", post(handle));
     if state.ctx.is_some() {
-        // The markup questions live in this process and are answered in the
-        // window's markup view, so the lane is the window's alone.
-        router = router.route("/mcp", post(handle)).route("/mcp/markup", post(handle));
+        router = router.route("/mcp", post(handle));
+    }
+    if state.markup {
+        // The markup questions live in this process: the window's markup
+        // view reads them here, and so do a server daemon's browser client
+        // and phone routes. A desktop's Mobile host would hold asks no
+        // window could see, so it never routes the lane.
+        router = router.route("/mcp/markup", post(handle));
     }
     router.layer(axum::middleware::map_response(close_connection)).with_state(state)
 }
@@ -546,12 +564,13 @@ async fn bind(addr: std::net::SocketAddr) -> Result<tokio::net::TcpListener, Str
 fn serve(
     listener: tokio::net::TcpListener,
     ctx: Option<CoreCtx>,
+    markup: bool,
     notify: NoticeSink,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
-    root_mcp::set_runtime(Runtime { port, serves_root: ctx.is_some() });
-    let router = router(ServerState { ctx, port, store: root_mcp::tokens(), notify });
+    root_mcp::set_runtime(Runtime { port, serves_root: ctx.is_some(), serves_markup: markup });
+    let router = router(ServerState { ctx, markup, port, store: root_mcp::tokens(), notify });
     let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
     Ok((port, async move {
         if let Err(error) = axum::serve(listener, router).with_graceful_shutdown(shutdown).await {
@@ -943,7 +962,7 @@ mod security_tests {
     async fn a_token_is_admitted_only_by_the_listener_whose_process_minted_it() {
         let host: &'static root_mcp::TokenStore = Box::leak(Box::default());
         let window: &'static root_mcp::TokenStore = Box::leak(Box::default());
-        let runtime = Runtime { port: 8765, serves_root: false };
+        let runtime = Runtime { port: 8765, serves_root: false, serves_markup: false };
         let mut opts: crate::terminal::PtyOptions = serde_json::from_value(serde_json::json!({
             "id": "headless:t", "cmd": "claude", "args": [], "env": {}, "cwd": "/w", "cols": 80, "rows": 24,
             "local_only": false, "sandbox": false, "agent": true, "project_id": "p", "schedule_target_id": "target-1",
@@ -972,7 +991,7 @@ mod security_tests {
         let taken = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
         let addr = taken.local_addr().unwrap();
         let (stop, stopped) = tokio::sync::watch::channel(false);
-        let error = start_headless_on(addr, Arc::new(|_| {}), stopped).await.unwrap_err();
+        let error = start_headless_on(addr, Arc::new(|_| {}), false, stopped).await.unwrap_err();
         assert!(error.starts_with("bind failed:"), "{error}");
         assert!(root_mcp::runtime().is_none_or(|r| r.port != addr.port()), "nothing was published for the taken port");
         assert_eq!(bind_retry_delay(0), Duration::from_secs(5));
@@ -986,23 +1005,31 @@ mod security_tests {
         drop(taken);
     }
 
-    /// The Mobile host's listener has no root or markup lane at all: `/mcp`
-    /// and `/mcp/markup` are not routed (404 before any handler).
+    /// A desktop's Mobile host listener has no root or markup lane at all:
+    /// `/mcp` and `/mcp/markup` are not routed (404 before any handler). A
+    /// server daemon's routes the markup lane, never the root one.
     #[tokio::test]
     async fn the_headless_router_does_not_route_the_root_lane() {
         use tower::ServiceExt;
-        let state = ServerState { ctx: None, port: 8765, store: root_mcp::tokens(), notify: Arc::new(|_| {}) };
+        let state = ServerState { ctx: None, markup: false, port: 8765, store: root_mcp::tokens(), notify: Arc::new(|_| {}) };
         let req = |path: &str| Request::builder().method("POST").uri(path).header("host", "127.0.0.1:8765")
             .header("content-type", "application/json").header("authorization", "Bearer x")
             .body(axum::body::Body::from("{}")).unwrap();
         let root = router(state.clone()).oneshot(req("/mcp")).await.unwrap();
         assert_eq!(root.status(), StatusCode::NOT_FOUND);
         let markup = router(state.clone()).oneshot(req("/mcp/markup")).await.unwrap();
-        assert_eq!(markup.status(), StatusCode::NOT_FOUND, "the markup lane is the window's");
+        assert_eq!(markup.status(), StatusCode::NOT_FOUND, "a desktop's Mobile host never serves the markup lane");
         for path in ["/mcp/schedule", "/mcp/git", "/mcp/help"] {
             let side = router(state.clone()).oneshot(req(path)).await.unwrap();
             assert_eq!(side.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
+        // A server daemon's listener: the markup lane is routed (admission
+        // answers), the root lane still is not.
+        let server = ServerState { markup: true, ..state };
+        let markup = router(server.clone()).oneshot(req("/mcp/markup")).await.unwrap();
+        assert_eq!(markup.status(), StatusCode::UNAUTHORIZED, "a server daemon serves the markup lane");
+        let root = router(server).oneshot(req("/mcp")).await.unwrap();
+        assert_eq!(root.status(), StatusCode::NOT_FOUND, "never the root lane without a window");
     }
 
     use super::*;

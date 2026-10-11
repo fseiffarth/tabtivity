@@ -2640,6 +2640,14 @@ fn local_models_response(
     }
 }
 
+/// The phone's Local models are closed on a server daemon: the server's one
+/// shared Ollama is the administrator's to load, start and stop (hosted plan
+/// §3.3), and there is no window to answer the request — the phone leaves
+/// the section out, as for the switch turned off.
+fn local_models_closed(state: &HostState) -> bool {
+    state.web.on_server() || !local_models::local_models_open(&state.config.state_dir)
+}
+
 /// `GET /api/v1/local-models` — the desktop's installed Ollama models, their
 /// residency and the server's state. Host-wide; the switch is read per
 /// request and, when off, answers before the desktop is asked.
@@ -2647,7 +2655,7 @@ async fn local_models_list(State(state): State<HostState>, headers: HeaderMap) -
     if let Err(error) = authenticate(&headers, &state) {
         return error;
     }
-    if !local_models::local_models_open(&state.config.state_dir) {
+    if local_models_closed(&state) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
@@ -2671,7 +2679,7 @@ async fn local_models_mutate(
     if let Err(error) = mutation_guard(&headers, &state) {
         return error;
     }
-    if !local_models::local_models_open(&state.config.state_dir) {
+    if local_models_closed(&state) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
     let Ok(body) = serde_json::from_slice::<serde_json::Value>(&body) else {
@@ -5493,10 +5501,16 @@ fn markup_desktop_error(code: &str) -> ApiRefusal {
 /// listener that took them; with no window there is no listener and so no
 /// ask, and the owner has nothing to answer from (headless owner plan) — a
 /// closed desktop is `desktop_unavailable`, which the phone reads as "no
-/// card". Never an error the phone would show.
-async fn markup_call(state: &HostState, request: DesktopRequest) -> Result<DesktopResponse, ApiRefusal> {
-    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let response = admin::desktop_call(&desktop_socket, &request).await;
+/// card". Never an error the phone would show. A server daemon has no window
+/// and serves the markup lane itself (`Runtime::serves_markup`), so it
+/// answers from its own asks ([`markup_here`]).
+async fn markup_call(state: &HostState, request: DesktopRequest, tab: &ResolvedTab) -> Result<DesktopResponse, ApiRefusal> {
+    let response = if state.web.on_server() {
+        Ok(markup_here(state, request, tab).await)
+    } else {
+        let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+        admin::desktop_call(&desktop_socket, &request).await
+    };
     if desktop_down(&response) {
         return Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"));
     }
@@ -5504,6 +5518,88 @@ async fn markup_call(state: &HostState, request: DesktopRequest) -> Result<Deskt
         Ok(DesktopResponse::Error { code, .. }) => Err(markup_desktop_error(&code)),
         Ok(answer) => Ok(answer),
         Err(_) => Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable")),
+    }
+}
+
+/// A markup request answered in this process — a server daemon's, which
+/// holds the asks its tabs made (`services::markup_mcp`). The window's bridge
+/// steps (`MobileBridgeHost.tsx`: `markupQuestionsFor`,
+/// `answerMarkupFromPhone`, `dismissMarkupFromPhone`) over the same
+/// `markup_mcp_*` commands, keyed by the tab's schedule target; an answer's
+/// prompt is held for the tab as a phone prompt is with no window
+/// (`headless::hold_prompt`), and a hold that fails reopens the ask.
+async fn markup_here(state: &HostState, request: DesktopRequest, tab: &ResolvedTab) -> DesktopResponse {
+    use crate::commands::markup_mcp as commands;
+    use crate::services::markup_mcp::Answer;
+    use super::protocol::{MobileMarkupAsk, MobileMarkupChoice, MobileMarkupQuestion};
+    let error = |code: &str, message: &str| DesktopResponse::Error { code: code.to_string(), message: message.to_string() };
+    let Some(target) = tab.schedule_target_id.clone().filter(|id| !id.is_empty()) else {
+        return error("tab_not_found", "Agent tab is unavailable");
+    };
+    let ask_codes = ["superseded", "answered", "gone", "invalid_answer"];
+    match request {
+        DesktopRequest::MarkupQuestions { project_id, path, .. } => {
+            let banner = path.is_none();
+            let asks = commands::markup_mcp_list(project_id.clone(), target.clone(), path.clone()).await;
+            let ticks = commands::markup_mcp_ticks(project_id, target, path).await.unwrap_or_default();
+            let Ok(asks) = asks else { return error("markup_failed", "The markup questions could not be read") };
+            DesktopResponse::MarkupQuestions {
+                ticks: ticks.into_iter().map(|t| MobileMarkupTick { round: t.round, page: t.page, mark: t.mark }).collect(),
+                asks: asks
+                    .into_iter()
+                    .map(|ask| MobileMarkupAsk {
+                        id: ask.id,
+                        file_name: ask.file_name,
+                        path: if banner { ask.file } else { None },
+                        file_row: None,
+                        questions: ask
+                            .questions
+                            .into_iter()
+                            .map(|q| MobileMarkupQuestion {
+                                question: q.question,
+                                header: q.header,
+                                options: q.options.into_iter().map(|o| MobileMarkupChoice { label: o.label, description: o.description }).collect(),
+                                multi_select: q.multi_select,
+                                page: q.page,
+                                quote: q.quote,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }
+        }
+        DesktopRequest::MarkupAnswer { project_id, ask_id, answers, device_id, .. } => {
+            let answers: Vec<Answer> = answers
+                .into_iter()
+                .map(|a| Answer { options: a.options.into_iter().map(|i| i as usize).collect(), other: a.other })
+                .collect();
+            let taken = match commands::markup_mcp_answer(project_id.clone(), target.clone(), ask_id.clone(), answers) {
+                Ok(taken) => taken,
+                Err(code) if ask_codes.contains(&code.as_str()) => return error(&code, "The agent's questions did not take this answer"),
+                Err(code) => return error(&code, "The answer could not be taken"),
+            };
+            let state_dir = state.config.state_dir.clone();
+            let held = headless::hold_prompt(&state_dir, &project_id, tab, &taken.prompt, device_id.as_deref(), chrono::Local::now());
+            match held {
+                Ok(held_id) => {
+                    state.holds.hold(&held_id);
+                    DesktopResponse::Seen
+                }
+                Err(why) => {
+                    eprintln!("mobile: holding a markup answer failed: {why}");
+                    match commands::markup_mcp_reopen(project_id, target, ask_id, taken.receipt) {
+                        Ok(()) => error("delivery_failed", "The answer could not be queued; the questions are open again"),
+                        Err(_) => error("not_delivered", "The answer could not be queued, and the questions have closed"),
+                    }
+                }
+            }
+        }
+        DesktopRequest::MarkupDismiss { project_id, ask_id, .. } => match commands::markup_mcp_dismiss(project_id, target, ask_id) {
+            Ok(()) => DesktopResponse::Seen,
+            Err(code) if ask_codes.contains(&code.as_str()) => error(&code, "The agent's questions are no longer open"),
+            Err(code) => error(&code, "The questions could not be closed"),
+        },
+        _ => error("unknown_request", "Not a markup request"),
     }
 }
 
@@ -5531,7 +5627,7 @@ async fn markup_questions(
     let banner = path.is_none();
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     let request = DesktopRequest::MarkupQuestions { request_id, project_id: project_id.clone(), tmux_session: tab.tmux_name.clone(), path };
-    match markup_call(&state, request).await {
+    match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::MarkupQuestions { asks, ticks }) => {
             let ticks: Vec<_> = ticks.into_iter().filter(valid_tick).collect();
             let mut asks: Vec<_> = asks.into_iter().filter(|ask| valid_ask_id(&ask.id)).collect();
@@ -5667,7 +5763,7 @@ async fn markup_answer(
         answers: request.answers,
         device_id: Some(phone.device_id().to_string()),
     };
-    match markup_call(&state, request).await {
+    match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "answered": true }))),
         Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
         Err(error) => error,
@@ -5706,7 +5802,7 @@ async fn markup_dismiss(
     };
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     let request = DesktopRequest::MarkupDismiss { request_id, project_id, tmux_session: tab.tmux_name.clone(), ask_id: request.ask_id };
-    match markup_call(&state, request).await {
+    match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "dismissed": true }))),
         Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
         Err(error) => error,
@@ -6374,15 +6470,20 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     // The agent MCP servers of the tabs this host spawns with no window open
     // (`docs/headless_mcp_plan.md`): schedule, push and help on a listener of
     // its own, bound here, before the scheduler's first restart can need it.
+    // A server daemon has no window at all, so it also serves the markup
+    // lane: its asks live here, where its browser client's `markup_mcp_*`
+    // commands and the phone's markup routes (`markup_call`) read them.
     // This process never reads the git token from the keychain.
     crate::services::git_push_mcp::serve_without_keyring();
     let notice_dir = config.control_dir.clone();
+    let serves_markup = matches!(listen, Listen::Unix { .. });
     let listener = crate::commands::root_mcp::start_headless(
         Arc::new(move |notice| {
             if notice == crate::commands::root_mcp::Notice::Schedules {
                 poke_desktop(&notice_dir, None, &["schedules"]);
             }
         }),
+        serves_markup.then_some(&core_ctx),
         shutdown_tx.subscribe(),
     )
     .await;
@@ -7891,7 +7992,7 @@ mod tests {
     async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
         use crate::services::root_mcp::{self, TokenStore};
         let (stop, stopped) = tokio::sync::watch::channel(false);
-        let port = crate::commands::root_mcp::start_headless(Arc::new(|_| {}), stopped).await.expect("the host's listener binds");
+        let port = crate::commands::root_mcp::start_headless(Arc::new(|_| {}), None, stopped).await.expect("the host's listener binds");
         let runtime = root_mcp::runtime().expect("a) the host publishes its runtime");
         assert_eq!(runtime.port, port);
         assert!(!runtime.serves_root, "the host serves no root lane");
@@ -7993,7 +8094,7 @@ mod tests {
             }))
             .expect("options")
         };
-        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true };
+        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true };
         for project in [None, Some("vm-reader")] {
             let mut here = spawn("headless:c", project);
             root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
@@ -8003,7 +8104,8 @@ mod tests {
             assert!(window.env.contains_key(root_mcp::TOKEN_ENV), "{project:?}: the settings do grant it");
         }
         // The markup lane likewise: a project tab with a schedule target gets
-        // it from the window's runtime only.
+        // it from the window's runtime (or a server daemon's), never from a
+        // desktop's Mobile host.
         let mut here = spawn("headless:m", Some(RAW_PROJECT));
         here.schedule_target_id = Some("target-m".into());
         let mut window = here.clone();
@@ -9973,7 +10075,7 @@ mod tests {
         assert_eq!(json(&body)["error"], "undo_gone");
     }
 
-    /// The markup questions routes: with no window, a quiet
+    /// The markup questions routes on a desktop's Mobile host: with no window, a quiet
     /// `desktop_unavailable` (the phone shows no card); with one, the view's
     /// source goes to the desktop as a project-relative path, the asks come
     /// back with a bare leaf name and nothing else of the path, and an answer
@@ -10125,6 +10227,84 @@ mod tests {
         assert_eq!(answers[1].options, vec![0, 2]);
         assert_eq!(answers[1].other.as_deref(), Some("both"));
         assert!(matches!(&seen[4], DesktopRequest::MarkupDismiss { .. }));
+    }
+
+    /// A server daemon has no window: it serves the markup lane itself, so
+    /// the phone's markup requests read and answer this process's asks
+    /// (`markup_here`), never a desktop socket. The asks cross as the
+    /// window's bridge builds them (the path for the Focus banner only), an
+    /// answer is held for the tab as a phone prompt is, and a closed ask is
+    /// refused with its code.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_server_daemon_answers_markup_from_its_own_asks() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(66)).await.0;
+        let (_, tab_id) = project_and_tab(&host, &cookie).await;
+        let mut tab = catalog_unfiltered(&host.state).expect("catalog").tab(&tab_id).expect("the tab").1.clone();
+        let target = "t-server-markup";
+        tab.schedule_target_id = Some(target.into());
+        let ask = crate::services::markup_mcp::test_open_ask(
+            "server-markup",
+            RAW_PROJECT,
+            target,
+            json!([{ "question": "Which word?", "header": "Word", "page": 2, "quote": "the lede",
+                     "options": [{ "label": "lead" }, { "label": "lede", "description": "as written" }] }]),
+        );
+        let mut state = host.state.clone();
+        state.web = state.web.behind_gateway(web_client::ServerLink {
+            public_host: "server.example".into(),
+            content_origin: None,
+            auth: state.auth.clone(),
+        });
+        let rid = || "r".to_string();
+        let list = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
+        let Ok(DesktopResponse::MarkupQuestions { asks, ticks }) = markup_call(&state, list, &tab).await else { panic!("the daemon answers") };
+        assert!(ticks.is_empty());
+        assert_eq!(asks.len(), 1);
+        assert_eq!(asks[0].id, ask);
+        let question = &asks[0].questions[0];
+        assert_eq!((question.header.as_deref(), question.page, question.quote.as_deref()), (Some("Word"), Some(2), Some("the lede")));
+        assert_eq!(question.options[1].description.as_deref(), Some("as written"));
+        // Without the server link the same request goes to a window, and
+        // there is none: the desktop's quiet `desktop_unavailable`.
+        let desktop = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
+        let refused = markup_call(&host.state, desktop, &tab).await.expect_err("no window");
+        assert_eq!(refused.0, StatusCode::SERVICE_UNAVAILABLE);
+
+        let answer = DesktopRequest::MarkupAnswer {
+            request_id: rid(),
+            project_id: RAW_PROJECT.into(),
+            tmux_session: tab.tmux_name.clone(),
+            ask_id: ask.clone(),
+            answers: vec![super::super::protocol::MobileMarkupAnswer { options: vec![1], other: None }],
+            device_id: Some("phone-1".into()),
+        };
+        assert!(matches!(markup_call(&state, answer.clone(), &tab).await, Ok(DesktopResponse::Seen)));
+        let held = crate::services::agent_tasks::list_at(&state.config.state_dir, RAW_PROJECT, target).expect("the tab's rules");
+        assert_eq!(held.len(), 1, "the answer's prompt is held for the tab");
+        assert!(held[0].message.contains("lede"), "{}", held[0].message);
+        assert_eq!(held[0].phone_device.as_deref(), Some("phone-1"));
+        assert!(state.holds.due(&held[0].id), "typed at once, as a phone hold");
+        let again = markup_call(&state, answer, &tab).await.expect_err("answered once");
+        assert_eq!((refused_code(&again), again.0), ("answered".to_string(), StatusCode::CONFLICT));
+        let dismiss = DesktopRequest::MarkupDismiss { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), ask_id: ask };
+        assert!(matches!(markup_call(&state, dismiss, &tab).await, Ok(DesktopResponse::Seen)), "dismissing a closed ask is idempotent");
+
+        // The phone's Local models are closed on a server (§3.3).
+        std::fs::write(state.config.state_dir.join("settings.json"), json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true } }).to_string()).unwrap();
+        assert!(!local_models_closed(&host.state), "a desktop with the switch on");
+        assert!(local_models_closed(&state), "the same host behind the gateway");
+
+        // A tab with no schedule target has no asks to read.
+        tab.schedule_target_id = None;
+        let list = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
+        let none = markup_call(&state, list, &tab).await.expect_err("no target");
+        assert_eq!(refused_code(&none), "tab_not_found");
+    }
+
+    fn refused_code(refusal: &ApiRefusal) -> String {
+        refusal.1["error"].as_str().unwrap_or_default().to_string()
     }
 
     /// Local models from the phone: the switch and every refusal the sidecar

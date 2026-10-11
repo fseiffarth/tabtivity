@@ -1,4 +1,6 @@
-//! The window's half of the markup questions MCP (`services::markup_mcp`):
+//! The view's half of the markup questions MCP (`services::markup_mcp`), run
+//! in the process that serves the lane — the window, or a server daemon for
+//! its browser client and phone (`mobile_control::host::markup_here`):
 //! list a tab's open ask for the file a markup view shows, answer it (the
 //! desktop builds the prompt; the caller queues it into the tab the way the
 //! markup Submit does, and reopens the ask with the answer's receipt when

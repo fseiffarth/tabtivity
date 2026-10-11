@@ -1200,6 +1200,16 @@ view:** the phone and the desktop render the same daemon state, so a tab
 renamed on one is renamed on the other within one patch event. Opening a
 terminal on the phone takes that tab over from any other viewer (§3.5).
 
+*As built (2026-10-11, after the `develop` merge of that day):* the phone
+requests a window answers that `develop` added after this plan — the markup
+questions (`markup_ask`, its answer and dismiss) and the Local models
+sheet — are answered on a server as follows. Markup: the daemon serves the
+markup MCP lane on its own listener and answers the phone from the same
+asks (`host.rs` `markup_here`; `context/markup_mcp.md`). Local models:
+closed (`local_models_disabled`, the section is left out) — the shared
+Ollama is the administrator's (§3.3), whose `admin` commands run from the
+browser client, not the phone.
+
 ---
 
 ## 8. Operations

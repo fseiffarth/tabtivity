@@ -4,7 +4,7 @@ The front door for everything about the server version: where it stands,
 what the user decided, what is open, and which document holds the detail.
 Read this first; keep it current when a decision or an open point changes.
 
-## Status (2026-10-10)
+## Status (2026-10-11)
 
 - **Built, reviewed, unmerged, never run live.** Branch `hosted`
   (`.claude/worktrees/hosted`), `f3efd50b..` — every phase of the plan
@@ -18,11 +18,18 @@ Read this first; keep it current when a decision or an open point changes.
   `hosted_handoff.md` § "Merge `develop` → `hosted`". The other direction,
   `hosted` → `develop`, is still owed (#2386). Merged again 2026-10-10
   (`develop` `6754d5cd`, 13 conflicted files; § "Merge `develop` → `hosted`
-  (2026-10-10)").
+  (2026-10-10)") and 2026-10-11 (`develop` `32d65f6a`, one conflicted file;
+  § "Merge `develop` → `hosted` (2026-10-11)").
 - **One agent-API-key path built (2026-10-10, #2389).** Admin keys, a
   server user's own key and the desktop's own key all reach agents through
   `api_proxy`; limits in billed tokens; one "runs on" control per CLI.
   `docs/agent_key_path_plan.md` (steps 1–5, `1db2a95a..`).
+- **Markup questions on a server built (2026-10-11, #2390).** The daemon
+  serves the markup MCP lane itself (it has no window), so a server user's
+  agents get `markup_ask`/`markup_done` and the browser client and phone
+  show their cards. The phone's Local models are closed on a server (the
+  shared Ollama is the admin's) — the two phone requests `develop` added
+  after the branch base, both now answered.
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
 
@@ -146,10 +153,18 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
    agent in a tmux tab that outlived it must be restarted. Never run live.
 2. **The merge (#2386).** `develop` → `hosted` done 2026-10-07 (39
    conflicts, class rows and desktop-feature attributes for develop's new
-   commands included; TODO numbers did not collide). Owed: `hosted` →
-   `develop`, and #2339's root-MCP local-model lane through the model
-   allowlist once the daemon serves that lane (today only the window does).
-3. **Still deferred:** phone push for turn edges with no window (#2384); a
+   commands included; TODO numbers did not collide), again 2026-10-10 and
+   2026-10-11. Owed: `hosted` → `develop`, and #2339's root-MCP local-model
+   lane through the model allowlist once the daemon serves that lane.
+3. **Agent tools a server has no window for.** The daemon's listener serves
+   the schedule, push, help and markup lanes; the root lane (the root
+   agent's mail, calendar and to-do tools, ICS import, the overlay-docked
+   agent) and the mail reader lane stay window-only (#2339), so on a server
+   the root console's agents have none of them. Not yet decided whether the
+   daemon should serve them.
+4. **To build:** drop `open_external_url` from the Connect window (#2387,
+   decided 2026-10-10).
+5. **Still deferred:** phone push for turn edges with no window (#2384); a
    second page re-typing a shared-PTY tab's launch input (#2358); the rest
    of the gateway/helper security review and a gateway body cap (#2353);
    Connect's Rust enrol/release half (#2379); hub GC and quotas (#2372);
@@ -160,8 +175,8 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
 
 ## Open decisions
 
-None. #2389 and #2387 were answered 2026-10-10 (see the decisions above);
-both still need building. `hosted` → `develop` (#2386) waits by the user's
+Whether the daemon serves the root and reader lanes (open problem 3).
+#2389 and #2387 were answered 2026-10-10; #2389 is built, #2387 not yet. `hosted` → `develop` (#2386) waits by the user's
 call (2026-10-10) while heavy work continues on `develop`; re-merge
 `develop` → `hosted` as needed.
 
@@ -178,5 +193,8 @@ Each step's exact clicks are in its `hosted_handoff.md` section.
 4. P4 sharing with three accounts (#2366) and the worktree gate (#2381).
 5. OIDC (#2378), Connect mode (#2379), rootless Podman (#2380).
 6. The final fix round's 15 steps.
+7. The one agent-API-key path (#2389): its five steps in
+   `hosted_handoff.md` § "#2389".
+8. Markup questions on a server (#2390): the TODO's manual test.
 
 An `UntestedTag` is cleared only when the user says that item is tested.

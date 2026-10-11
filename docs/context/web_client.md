@@ -267,5 +267,8 @@ own standalone workspace (Q12). As built:
 
 Popout windows (`?popout=`), browser shortcut alternatives for Ctrl+T/W/N,
 `pdf_clip_*`/`run_script_detached`, a stale-bundle notice, the CSP and
-security review — and the root MCP listener in the sidecar (#2339: starting a
-second listener would sweep a running window's review sandboxes).
+security review — and the root MCP lane in the sidecar (#2339: starting a
+second root listener would sweep a running window's review sandboxes). The
+sidecar's own listener serves the schedule, push and help lanes; a server
+daemon's serves the markup lane too (2026-10-11), so the browser client's
+markup view and the phone read the asks its tabs make.

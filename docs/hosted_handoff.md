@@ -3681,3 +3681,61 @@ Not run: the Windows/macOS cross-checks, the serverd `ldd`. Nothing live.
    shows his month; Renew his token → one request fails, the next works.
 5. A container project with Claude on a key → the tab fails naming the way
    out; a shell-typed `claude` on the admin key → fails naming the agent tab.
+
+## Merge `develop` → `hosted` (2026-10-11)
+
+`develop` at `32d65f6a` (14 commits past `6754d5cd`: markup rounds from
+the viewer ask only through `markup_ask`, the desktop markup links back to
+its PDF and shows the agent tab's dialog, the phone's project drawer with
+agent files and Git, Claude's folder-trust dialog, Windows test fixes, the
+release workflow) merged as `363b3669`. One conflict,
+`docs/filemap_frontend.md`, resolved with develop's rows (the stale
+duplicate MarkupView row dropped). No new Tauri command, so no class row.
+
+Compared against the plan: of the phone requests a window answers, only
+`MarkupQuestions`/`MarkupAnswer`/`MarkupDismiss` and
+`LocalModels`/`LocalModelMutate` were added after the branch base — both
+unanswerable on a server until the step below.
+
+Gates on the merge: clippy (workspace, all targets; no-desktop lib) clean;
+cargo test src-tauri 3747 (4 ignored), core 95, gateway/serverd 134;
+`npm test` 757 files / 7701 tests; `npm run build`. Not run: the
+Windows/macOS cross-checks, the serverd `ldd`. Nothing live.
+
+## #2390: markup questions on a server (2026-10-11)
+
+Built in the main session, no subagents. The markup lane's asks live in
+the process that serves it, and only the window served it — on a server
+(no window) agents had no `markup_ask`/`markup_done` and every markup card
+stayed empty.
+
+- `root_mcp::Runtime` gains `serves_markup`; `grant_lanes` grants the
+  markup token on it (was `serves_root`). The window: true. The Mobile
+  host's listener: only a server daemon's — `start_headless(notify,
+  markup: Option<&CoreCtx>, …)` gets the host's context when it runs behind
+  the gateway (`Listen::Unix`), installs the `markup-mcp-changed` hook on
+  it (the browser clients' event sink) and routes `/mcp/markup`. `/mcp`
+  (root) still needs a window.
+- The browser client's `markup_mcp_*` commands (`Core`) run in the daemon,
+  so they read the same asks unchanged.
+- Phone: `markup_call` asks the window on a desktop; on a server
+  (`WebClientState::on_server`) it answers in-process (`markup_here`) with
+  the bridge's steps (`MobileBridgeHost.tsx`): list + ticks, the path only
+  for the Focus banner; answer → `markup_mcp_answer` → the prompt held for
+  the tab via `headless::hold_prompt` + `PhoneHolds::hold` (typed at once),
+  `markup_mcp_reopen` and `delivery_failed` when the hold fails; dismiss.
+- My call: on a server the phone's Local models routes answer `403
+  local_models_disabled` (`local_models_closed`) — no window to answer them,
+  and the shared Ollama is the admin's (plan §3.3); the phone leaves the
+  section out.
+- Tests: the router routes `/mcp/markup` (never `/mcp`) for a server
+  listener; `host` `a_server_daemon_answers_markup_from_its_own_asks`
+  (list shape, answer held as a phone hold with the device, a second
+  answer `409 answered`, dismiss idempotent, no target → `tab_not_found`,
+  Local models closed behind the gateway); `markup_mcp::test_open_ask`.
+- Docs: `context/markup_mcp.md`, `context/server_gateway.md` (listener
+  inventory row, which still said "not started by a daemon"),
+  `context/web_client.md`, the plan's §7.3 as-built note, `server.md`,
+  TODO #2390.
+
+**Live steps owed:** TODO #2390's manual test.

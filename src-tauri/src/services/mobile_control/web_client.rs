@@ -680,6 +680,12 @@ impl WebClientState {
         self.server.is_some()
     }
 
+    /// Whether this host is a server daemon behind the gateway: it has no
+    /// window, and answers what a window would itself.
+    pub fn on_server(&self) -> bool {
+        self.server.is_some()
+    }
+
     /// Whether a login token exists (the login route works).
     pub fn has_token(&self) -> bool {
         login_token(&self.control_dir).is_ok()
