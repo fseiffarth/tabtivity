@@ -2912,7 +2912,7 @@ fixes below. Nothing run live.
 **Flagged for user — consolidated (every open item from S1–S12 and their reviews; fixed ones marked)**
 
 *Decisions owed* (decided by the user 2026-10-09, except where marked)
-- Thin LTO (`f1c7281f`): binary +2.5 %, builds +11–30 %, runtime gain unmeasured — keep or revert (S8). **Decided:** keep until measured with `scripts/perf-numbers.sh`; revert if it shows no gain.
+- Thin LTO (`f1c7281f`): binary +2.5 %, builds +11–30 %, runtime gain unmeasured — keep or revert (S8). **Decided:** keep until measured with `scripts/perf-numbers.sh`; revert if it shows no gain. **Reverted 2026-10-11** (user): the after-merge run idles the app process at 0.8 % of a core, so LTO's share cannot be worth 11–30 % slower builds.
 - Bootstrap stays 3.3 MB (gz 977 kB); the 1.5 MB target needs another lever (lazy English dictionary), not more lazy panes (S8). **Decided:** measure first; lazy-load the dictionary only if parse time shows.
 - `AppShell` not lazy for popouts (popout startup vs main-window waterfall); `lib/tex.ts` not made dynamic (S8). **Decided:** leave as is.
 - Glass themes: tab bars / docked file column lost their frost; compensate with a more opaque fill? (S7). **Decided:** more opaque fill — done in S13 (`2198c80a`).
