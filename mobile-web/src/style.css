@@ -396,9 +396,16 @@ small { color:#9498aa; }
    the project header's ＋, and never shrinking: the brand gives way. */
 .home-settings { display:grid; place-items:center; flex:0 0 auto; width:40px; height:40px; padding:0; border-color:#45476a; border-radius:11px; background:rgba(27,30,44,.7); color:#d7d3f5; }
 .home-settings svg { width:21px; height:21px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-.tab-card.home-project-card { --oct-edge:#3b4055; --oct-face:linear-gradient(115deg,rgba(54,49,85,.42),rgba(54,49,85,0) 38%),#1c1f2b; }
+/* A project row must not read as one more button: every other control on the
+   page is the same grey octagon. So it wears a violet-tinted edge and face,
+   and a 3px accent down its left side, cuts included — the tab-colour edge
+   the project screen's cards use (`has-tab-color`), here in the brand violet. */
+.tab-card.home-project-card { --oct-edge:#4b4780; --oct-face:linear-gradient(100deg,rgba(124,108,255,.24),rgba(124,108,255,.07) 45%,rgba(124,108,255,0) 80%),#1d1f2e; }
+.tab-card.home-project-card::before { background:linear-gradient(90deg, #8c7df4 calc(var(--oct) + 3px), var(--oct-edge) 0); }
+.tab-card.home-project-card::after { left:3px; }
 .tab-card.home-project-card:focus-within { --oct-edge:#8d80ee; }
-.home-project-card .card { min-height:62px; }
+.home-project-card .card { min-height:62px; padding-left:18px; }
+.home-project-card .card strong { font-size:1.05rem; letter-spacing:-.01em; }
 /* A row's agent tabs by state: the tab cards' status pills, a size down so
    three of them and the tab count fit one phone-width row. */
 .home-project-card .card-trailing { gap:6px; }
@@ -1521,10 +1528,11 @@ span.files-close { background:transparent; }
 .markup-host { display:contents; }
 .markup-host.away { display:none; }
 .outbox-viewer { position:fixed; inset:0; z-index:13; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); background:rgba(4,5,9,.97); color:#e6e9f2; }
-.outbox-viewer-head { display:flex; align-items:center; gap:8px; min-width:0; min-height:0; padding:calc(8px + env(safe-area-inset-top)) 10px 8px; }
+.outbox-viewer-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; min-height:0; padding:calc(8px + env(safe-area-inset-top)) 10px 8px; }
 .outbox-viewer-head > a, .outbox-viewer-head > button { flex:0 0 auto; }
-/* The name over its position and size, so neither squeezes the other. */
-.outbox-viewer-title { display:grid; flex:1; min-width:0; }
+/* The name over its position and size, so neither squeezes the other. Kept
+   at least 7rem wide: on a narrow phone the actions wrap under it instead. */
+.outbox-viewer-title { display:grid; flex:1 1 7rem; min-width:0; }
 .outbox-viewer-head h2 { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.95rem; }
 .outbox-viewer-head small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#95a6c8; font-size:.72rem; }
 /* The picture fills the stage and is letterboxed in it; ‹ › sit on its edges
@@ -1597,7 +1605,7 @@ span.files-close { background:transparent; }
 .outbox-clear-all { border:1px solid #6b2f33; border-radius:999px; background:#2a1416; color:#f2b8b5; font-size:.78rem; padding:6px 12px; }
 .outbox-entry-error { padding:0 2px; color:#f2b8b5; font-size:.7rem; }
 .outbox-viewer-head a, .outbox-text-body a, .outbox-viewer > a { color:#8fb8ff; }
-/* The head's actions — Mark up, Save, Share — as one row of the same small
+/* The head's actions — Mark up, Save, Share, Print — as one row of the same small
    pills; Save is a download link drawn like the buttons beside it. */
 .outbox-viewer-head .outbox-action { display:inline-flex; align-items:center; min-height:32px; padding:0 11px; border:1px solid #34384a; border-radius:999px; background:#141a26; color:#d8e2f5; font:500 .78rem/1 Inter,ui-sans-serif,system-ui,sans-serif; text-decoration:none; white-space:nowrap; }
 .outbox-viewer-head .outbox-action:disabled { opacity:.45; }
@@ -1726,3 +1734,16 @@ span.files-close { background:transparent; }
 .readable-turn.user .transcript-send-state button { margin-left: 0.5rem; padding: 0.1rem 0.55rem; font-size: 0.78rem; border-radius: 999px; border: 1px solid currentColor; background: transparent; color: inherit; }
 .readable-turn.user .transcript-send-state em { margin-left: 0.4rem; font-style: normal; opacity: 0.7; }
 .readable-turn.user[data-send-failed] { outline: 1px dashed var(--danger, #ff6b6b); outline-offset: 2px; }
+/* Print (`print.ts`): the viewer's file is laid out in a .print-root beside
+   the app, hidden on screen; on paper it stands alone, black on white, one
+   picture per sheet, each fitted inside the sheet's printable area. */
+.print-root { display:none; }
+@media print {
+  html, body { height:auto !important; min-height:0 !important; overflow:visible !important; background:#fff !important; color:#000 !important; }
+  body > :not(.print-root) { display:none !important; }
+  .print-root { display:block; }
+  .print-root pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font:9.5pt/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#000; }
+  .print-page { break-after:page; break-inside:avoid; }
+  .print-page:last-child { break-after:auto; }
+  .print-page img { display:block; max-width:100%; max-height:98vh; margin:0 auto; }
+}
