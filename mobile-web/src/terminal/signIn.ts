@@ -296,6 +296,8 @@ const SIGNED_OUT = [
   /\binvalid api key\b/iu,
   /\b(?:oauth |access |auth )?token (?:has )?expired\b/iu,
   /\bauthentication (?:is )?required\b/iu,
+  // Antigravity 1.3.3, mid-session: "Authentication expired. Please log back in."
+  /\bauthentication expired\b/iu,
   /\b(?:please|you need to|you must) (?:log ?in|sign ?in)\b/iu,
   /\bselect login method\b/iu,
   /\bhow would you like to authenticate\b/iu,
