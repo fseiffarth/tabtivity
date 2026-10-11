@@ -1066,7 +1066,12 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .composer-bar { display:flex; align-items:center; gap:6px; }
 .composer-bar svg,.composer-dictate svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
 .composer-dictate,.composer-bar .send-icon { display:grid; place-items:center; width:40px; min-width:40px; height:40px; padding:0; border:0; border-radius:10px; }
-.composer-add { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:transparent; color:#c8cdda; }
+.composer-add { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:#252a3a; color:#c8cdda; }
+/* The ＋ turns into an ✕ while its tray is up, as messengers do. */
+.composer-add svg { transition:transform .15s ease-out; }
+.composer-add.open svg { transform:rotate(45deg); }
+/* Send is a round button, as messengers draw it. */
+.composer-bar .send-icon { border-radius:50%; }
 .composer-spacer { flex:1 0 0; }
 /* Folds the key row under the composer in and out; lit while it shows. */
 .composer-keys { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:transparent; color:#c8cdda; }
@@ -1190,6 +1195,21 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .sheet-note.error { color:#ffb4c0; }
 .notifications-group { display:grid; gap:6px; }
 .notifications-group h3 { margin:4px 6px 0; color:#9da3b6; font-size:.78rem; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+/* The composer's ＋ as an attach tray (`AttachSheet`): round, coloured icon
+   tiles with a short name under each. The fills are messenger colours that
+   read on every theme, so they are kept as written. */
+.attach-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(70px,1fr)); gap:16px 6px; margin:0; padding:4px 2px 6px; list-style:none; }
+.attach-tile { display:grid; justify-items:center; align-content:start; gap:7px; width:100%; padding:2px 0; border:0; background:transparent; color:#c8cdda; font-size:.78rem; }
+.attach-icon { display:grid; place-items:center; width:56px; height:56px; border-radius:50%; transition:transform .1s ease-out; }
+.attach-tile:active .attach-icon { transform:scale(.92); }
+.attach-icon svg { width:26px; height:26px; fill:none; stroke:#fff; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; /* theme: fixed */ }
+.attach-tile-camera .attach-icon { background:#e8546b; /* theme: fixed */ }
+.attach-tile-gallery .attach-icon { background:#7c6cff; /* theme: fixed */ }
+.attach-tile-files .attach-icon { background:#3b82f6; /* theme: fixed */ }
+.attach-tile-desktop .attach-icon { background:#22a565; /* theme: fixed */ }
+.attach-tile-project .attach-icon { background:#e09b1a; /* theme: fixed */ }
+.attach-label { text-align:center; line-height:1.2; overflow-wrap:anywhere; }
+.attach-tile .untested { margin-left:0; }
 .option-list { display:grid; gap:3px; margin:0; padding:0; list-style:none; }
 .option-list button { display:flex; align-items:center; gap:12px; width:100%; padding:13px 14px; border:0; border-radius:13px; background:#1e2230; text-align:left; }
 .option-list button.current { color:#8fb6ff; background:#1c2336; }

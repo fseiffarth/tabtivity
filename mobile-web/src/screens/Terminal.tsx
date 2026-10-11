@@ -6,6 +6,7 @@ import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
+import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { OutboxGallery } from "../components/OutboxGallery";
@@ -1228,6 +1229,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * types is what makes Android open the photo picker (and iOS the library)
    * instead of the file chooser `ANY_FILE_ACCEPT` lands in. */
   const galleryInput = useRef<HTMLInputElement>(null);
+  /** The same drop, straight from the camera: `capture` skips every chooser
+   * and opens it on Android and iOS alike. */
+  const cameraInput = useRef<HTMLInputElement>(null);
   /** Bumped when the tab changes so a late upload result lands nowhere. */
   const uploadRun = useRef(0);
   const uploadSeq = useRef(0);
@@ -3528,6 +3532,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     setAddSheet(false);
     if (key === "phone") {
       pickPhoneFiles(fileInput.current, attachFromPhone);
+    } else if (key === "camera") {
+      cameraInput.current?.click();
     } else if (key === "gallery") {
       galleryInput.current?.click();
     } else if (key === "desktop") {
@@ -3939,11 +3945,17 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     pending: choice.value === switching,
   }));
   const failedMode = modes.find((choice) => choice.value === switchFailed);
-  const addOptions: SheetOption[] = [
-    { key: "phone", label: t("mobile.add.phone"), description: t("mobile.add.phoneHint"), current: false },
-    { key: "gallery", label: t("mobile.add.gallery"), description: t("mobile.add.galleryHint"), current: false },
-    { key: "desktop", label: t("mobile.add.desktop"), description: t("mobile.add.desktopHint"), current: false },
-    { key: "project", label: t("mobile.add.project"), description: t("mobile.add.projectHint"), current: false },
+  const attachTiles: AttachTile[] = [
+    { key: "camera", tone: "camera", label: t("mobile.add.camera"), hint: t("mobile.add.cameraHint"), untested: "mobile.add.camera",
+      icon: <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" /><circle cx="12" cy="13" r="3.5" /></svg> },
+    { key: "gallery", tone: "gallery", label: t("mobile.add.gallery"), hint: t("mobile.add.galleryHint"),
+      icon: <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8.5" cy="9.5" r="1.5" /><path d="m21 15-5-5-10 10" /></svg> },
+    { key: "phone", tone: "files", label: t("mobile.add.phone"), hint: t("mobile.add.phoneHint"),
+      icon: <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" /><path d="M14 3v5h5" /></svg> },
+    { key: "desktop", tone: "desktop", label: t("mobile.add.desktopTile"), hint: t("mobile.add.desktopHint"),
+      icon: <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></svg> },
+    { key: "project", tone: "project", label: t("mobile.add.project"), hint: t("mobile.add.projectHint"),
+      icon: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.4 6.8" /></svg> },
   ];
   const desktopOptions: SheetOption[] = (desktopImages ?? []).map((image) => ({
     key: image.id,
@@ -4316,7 +4328,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           {tab.kind === "agent" && <>
             <input ref={fileInput} type="file" accept={ANY_FILE_ACCEPT} multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-file-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={galleryInput} type="file" accept="image/*,video/*" multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-gallery-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
-            <button className="composer-add" disabled={!connected} onClick={() => setAddSheet(true)} aria-label={t("mobile.add.title")} aria-haspopup="dialog" aria-expanded={addSheet} title={t("mobile.add.hint")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+            <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-camera-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
+            <button className={`composer-add${addSheet ? " open" : ""}`} disabled={!connected} onClick={() => setAddSheet(true)} aria-label={t("mobile.add.title")} aria-haspopup="dialog" aria-expanded={addSheet} title={t("mobile.add.hint")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
             {/* Folds the key row below in and out; it starts folded. */}
             <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
             {/* Plan / Goal / Clear sit centred between the keys button and Send, evenly spaced. */}
@@ -4379,11 +4392,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
         onClose={closeModelSheet}
       />)}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}
-    {addSheet && <OptionSheet
+    {addSheet && <AttachSheet
       title={t("mobile.add.title")}
-      options={addOptions}
-      waiting=""
-      busy={false}
+      tiles={attachTiles}
       onPick={pickAdd}
       onClose={() => setAddSheet(false)}
     />}

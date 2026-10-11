@@ -49,6 +49,7 @@ class FakeWebSocket {
   close() { this.readyState = 3; }
 }
 
+import { phoneFileAccept } from "../../../mobile-web/src/api";
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { BRAND, NAMES, storageKey } from "../../lib/brand";
 
@@ -138,17 +139,18 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
 
     fireEvent.click(screen.getByRole("button", { name: "Add to the message" }));
     const sheet = screen.getByRole("dialog", { name: "Add to the message" });
-    expect(sheet.textContent).toContain("From this phone");
-    expect(sheet.textContent).toContain("A project file (@)");
+    expect(sheet.textContent).toContain("Files");
+    expect(sheet.textContent).toContain("Camera");
+    expect(sheet.textContent).toContain("Project file");
 
     // The project option is the old +: an @ into the draft, no sheet left up.
-    fireEvent.click(screen.getByRole("button", { name: /A project file/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Project file/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(composer().value).toBe("@");
 
     // The phone option opens the native picker — the hidden file input.
     fireEvent.click(screen.getByRole("button", { name: "Add to the message" }));
-    fireEvent.click(screen.getByRole("button", { name: /From this phone/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Files/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(click).toHaveBeenCalledTimes(1);
     expect(fileInput().multiple).toBe(true);
@@ -165,21 +167,50 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     const click = vi.spyOn(gallery, "click").mockImplementation(() => {});
 
     fireEvent.click(screen.getByRole("button", { name: "Add to the message" }));
-    fireEvent.click(screen.getByRole("button", { name: /From the gallery/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Gallery/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(click).toHaveBeenCalledTimes(1);
     // The media `accept` is what opens the photo picker rather than the file browser.
     expect(gallery.accept).toBe("image/*,video/*");
     expect(gallery.multiple).toBe(true);
-    // "From this phone" names non-media types too, or Android offers only the
+    // "Files" names non-media types too, or Android offers only the
     // camera and the photo picker — no way into the phone's files.
     expect(fileInput().accept).toContain("application/*");
+    // iOS knows no file type for `application/*` and greys out every
+    // non-media file in Files; a bare input there takes any file.
+    expect(phoneFileAccept("iPad")).toBeUndefined();
+    expect(phoneFileAccept("iPhone")).toBeUndefined();
+    expect(phoneFileAccept(null)).toContain("application/*");
 
     Object.defineProperty(gallery, "files", { configurable: true, value: [new File(["abc"], "IMG_0099.jpg", { type: "image/jpeg" })] });
     fireEvent.change(gallery);
     await settle(0);
     expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/v1/tabs/tab-7/inbox?name=IMG_0099.jpg");
     expect(landed().some((text) => text.includes("IMG_0099.jpg"))).toBe(true);
+  });
+
+  it("offers the camera as its own tile: a capture input over the same inbox drop", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, {
+      attachment: { name: "20260917-120000-photo.jpg", reference: `${NAMES.inboxDir}/20260917-120000-photo.jpg`, size: 3 },
+    }));
+    vi.stubGlobal("fetch", routeOutbox(fetchMock));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await act(async () => {});
+    const camera = screen.getByTestId("inbox-camera-input") as HTMLInputElement;
+    const click = vi.spyOn(camera, "click").mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "Add to the message" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Camera/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(click).toHaveBeenCalledTimes(1);
+    // `capture` opens the camera itself rather than a chooser.
+    expect(camera.getAttribute("capture")).toBe("environment");
+    expect(camera.accept).toBe("image/*");
+
+    Object.defineProperty(camera, "files", { configurable: true, value: [new File(["abc"], "photo.jpg", { type: "image/jpeg" })] });
+    fireEvent.change(camera);
+    await settle(0);
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/v1/tabs/tab-7/inbox?name=photo.jpg");
   });
 
   it("sends a picked file into the project inbox and puts the desktop's reference after the message on Send", async () => {
@@ -311,8 +342,8 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     fireEvent.change(composer(), { target: { value: "fix this" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Add to the message" }));
-    expect(screen.getByRole("dialog", { name: "Add to the message" }).textContent).toContain("From the desktop");
-    fireEvent.click(screen.getByRole("button", { name: /From the desktop/ }));
+    expect(screen.getByRole("dialog", { name: "Add to the message" }).textContent).toContain("Desktop");
+    fireEvent.click(screen.getByRole("button", { name: /^Desktop/ }));
     // The list is asked for as the sheet opens, and the sheet says so.
     const sheet = screen.getByRole("dialog", { name: "From the desktop" });
     expect(sheet.textContent).toContain("Looking on the desktop…");
@@ -348,7 +379,7 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     await act(async () => {});
 
     fireEvent.click(screen.getByRole("button", { name: "Add to the message" }));
-    fireEvent.click(screen.getByRole("button", { name: /From the desktop/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Desktop/ }));
     await settle(0);
     expect(screen.getByRole("dialog", { name: "From the desktop" }).textContent).toContain("Nothing to attach");
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
@@ -356,7 +387,7 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     // Re-opening asks again: the clipboard has an image now, but it is gone
     // again by the time the desktop goes to copy it.
     fireEvent.click(screen.getByRole("button", { name: "Add to the message" }));
-    fireEvent.click(screen.getByRole("button", { name: /From the desktop/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Desktop/ }));
     await settle(0);
     fireEvent.click(screen.getByRole("button", { name: /Clipboard image/ }));
     await settle(0);

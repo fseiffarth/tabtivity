@@ -86,7 +86,7 @@ describe(`${BRAND.display} Mobile — the terminal header stays on screen`, () =
     render(<Terminal tab={agent} back={() => {}} />);
     await act(async () => {});
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add to the message" })); });
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /A project file/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Project file/ })); });
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message agent" }));
     expect(document.body.classList.contains("terminal-open")).toBe(true);
   });
