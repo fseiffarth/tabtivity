@@ -990,6 +990,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // still typed at. `launchNamed` is null until the spawn has answered.
     const launchName = attachOnly || waking ? null : claudeLaunchName(cmd, initialInput);
     let launchNamed: boolean | null = launchName ? null : false;
+    // A browser page that opened a tab another page already runs is attached
+    // to the running program (`pty_spawn` answers `attached`, TODO #2347):
+    // nothing is typed into it on the launch's behalf.
+    let launchAttached = false;
     let holdingInput = !attachOnly && !waking && !!initialInput && (kind === "agent" || kind === "local_agent");
     const heldInput: string[] = [];
     let holdInputTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1364,9 +1368,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
             initialEnterTimer.current = setTimeout(typeWhenReady, 100);
             return;
           }
-          if (launchNamed) {
+          if (launchNamed || launchAttached) {
             initialInputPending.current = false;
-            return; // named at launch — nothing to type
+            return; // named at launch, or joined a running one — nothing to type
           }
           // Last look before typing, for every agent: a CLI asking whether to
           // trust the folder must be answered by the user, never by our Enter
@@ -1557,14 +1561,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       // replay can't ride an old input stamp into a "working"/"done" glow.
       notePtySpawn(id);
       const spawn = async () => {
-        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; resting?: boolean } | null>("pty_spawn", {
+        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
           opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession },
           sessionName: launchName,
         });
         // An older backend answers nothing: `named` absent types the line as before.
-        launchNamed = spawned?.named === true;
+        launchAttached = spawned?.attached === true;
+        launchNamed = spawned?.named === true || launchAttached;
         if (launchNamed) releaseHeldInput(true);
         // The tab's last run died mid-turn (a quit or crash): mark it
         // interrupted, as its resumed transcript will say.

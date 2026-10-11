@@ -5,12 +5,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use tauri::{AppHandle, State};
-
 use crate::services::mobile_control::inbox;
 use crate::terminal::{PtyOptions, PtyRegistry};
+use crate::tauri_host::Ctx;
 
 pub type RegistryState = Arc<Mutex<PtyRegistry>>;
+
+/// The PTY the caller means by `id`: a server client's own attach PTY onto
+/// that tab when it has one (TODO #2347, `PtyRegistry::resolve`), else `id`.
+/// A desktop window never has one, so its calls skip the lookup.
+pub(crate) fn pty_id_for(ctx: &Ctx, registry: &RegistryState, id: String) -> String {
+    match ctx.caller {
+        app_core::Caller::Client(_) => registry.lock().unwrap().resolve(&ctx.caller, &id),
+        _ => id,
+    }
+}
 
 /// What `pty_spawn` tells the tab it launched.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
@@ -21,25 +30,48 @@ pub struct PtySpawned {
     /// The tab's previous process died mid-turn (`agent_turn::bind_tab`): the
     /// tab starts out marked interrupted.
     pub interrupted: bool,
+    /// A server client joined a tab another client already runs (TODO #2347):
+    /// its PTY is one more tmux client of the running session, so nothing may
+    /// be typed into it on the launch's behalf. Never set on the desktop, and
+    /// left out of the answer when unset.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub attached: bool,
     /// The tab's previous process left its turn finished: its agent sits at
     /// its composer, so the window reads no question off its screen until
     /// the hooks speak again (`agent_turn::LeftTurn`).
     pub resting: bool,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_spawn(
-    app: AppHandle,
-    registry: State<'_, RegistryState>,
-    pool: State<'_, crate::services::remote::RemotePoolState>,
+    ctx: Ctx,
     opts: PtyOptions,
     session_name: Option<String>,
 ) -> Result<PtySpawned, String> {
+    let registry = ctx.get::<RegistryState>();
+    // A server client opening a tab another client already runs in local
+    // tmux gets a tmux client of its own instead of replacing that one's
+    // (TODO #2347). Every desktop window takes the ordinary spawn below.
+    let join = crate::terminal::join_tab(
+        &ctx,
+        registry,
+        &opts,
+        crate::services::tmux_local::attach_argv,
+    )?;
+    if let Some(stale) = join.stale {
+        app_core::rt::spawn_blocking(move || stale.teardown())
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if join.attached {
+        return Ok(PtySpawned { attached: true, ..PtySpawned::default() });
+    }
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
     // The launch assembly is shared with the Mobile sidecar's headless spawn
     // (`services::launch_prep`); this command keeps what needs the window:
     // the registry's crash-loop guard, the PTY itself and its event.
     let prepared =
-        crate::services::launch_prep::prepare(opts, session_name, Some(pool.inner())).await?;
+        crate::services::launch_prep::prepare(opts, session_name, Some(pool)).await?;
 
     // Crash-loop guard.
     {
@@ -55,37 +87,42 @@ pub async fn pty_spawn(
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
     let drop_dir = prepared.drop_dir.clone();
-    let result = crate::terminal::spawn_pty(app.clone(), registry.inner().clone(), prepared.opts.clone(), prepared.spawn_seq());
+    let result = crate::terminal::spawn_pty(
+        ctx.0.clone(),
+        registry.clone(),
+        prepared.opts.clone(),
+        prepared.spawn_seq(),
+    );
     if result.is_ok() {
         registry.lock().unwrap().set_drop_dir(&prepared.opts.id, drop_dir);
         prepared.commit();
         if mcp_token_handed_out {
             // The MCP session access fold lists live sessions; a new token is one.
-            let _ = tauri::Emitter::emit(&app, crate::commands::root_mcp::SESSIONS_EVENT, ());
+            ctx.emit(crate::commands::root_mcp::SESSIONS_EVENT, ());
         }
     }
-    result.map(|()| PtySpawned { named, interrupted, resting })
+    result.map(|()| PtySpawned { named, interrupted, attached: false, resting })
 }
 
 /// Honest per-scope fence status for the project-pill menu.  This performs no
 /// spawn and uses the same cached bubblewrap probe and backend authority inputs
 /// as `pty_spawn`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_fence_status(project_id: String) -> crate::services::agent_fence::AgentFenceStatus {
     crate::services::agent_fence::status_for_scope(&project_id)
 }
 
 /// Whether fenced Copilot tabs have a sign-in Tabtivity holds for them, and as
 /// whom. Never returns the token (see `services::copilot_auth`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_fence_auth_status() -> crate::services::copilot_auth::CopilotFenceAuth {
     crate::services::copilot_auth::status().await
 }
 
 /// Forget the Copilot sign-in Tabtivity holds for fenced tabs.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_fence_sign_out() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(crate::services::copilot_auth::sign_out)
+    app_core::rt::spawn_blocking(crate::services::copilot_auth::sign_out)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -94,13 +131,13 @@ pub async fn copilot_fence_sign_out() -> Result<(), String> {
 /// agent tabs start unfenced by choice, and how many live ones run outside the
 /// fence right now — measured from the agent processes, not from what their
 /// spawn decided (see `agent_fence::HostAgentTab`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_fence_marks(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     project_ids: Vec<String>,
 ) -> Result<std::collections::HashMap<String, crate::services::agent_fence::AgentFenceMark>, String> {
-    let registry = registry.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let registry = ctx.get::<RegistryState>().clone();
+    app_core::rt::spawn_blocking(move || {
         let live = crate::services::agent_fence::live_unfenced_by_scope(|id| {
             registry.lock().unwrap().pid(id)
         });
@@ -112,13 +149,13 @@ pub async fn agent_fence_marks(
 
 /// List the tmux sessions running on the **local** machine (TODO #85), for a local
 /// project's Sessions view. Empty on Windows / without tmux / no server.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSession>, String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(Vec::new());
     }
-    tauri::async_runtime::spawn_blocking(|| {
-        let out = crate::paths::command_no_window("tmux")
+    app_core::rt::spawn_blocking(|| {
+        let out = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_ls_args())
             .output();
         match out {
@@ -132,13 +169,13 @@ pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSess
 
 /// Kill a **local** tmux session (TODO #85) — the explicit-close / Sessions-view
 /// kill of a local persistent tab. No-op on Windows / without tmux.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill(session: String) -> Result<(), String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::paths::command_no_window("tmux")
+    app_core::rt::spawn_blocking(move || {
+        let output = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_kill_args(&session))
             .output()
             .map_err(|e| format!("could not run tmux: {e}"))?;
@@ -175,12 +212,12 @@ pub async fn local_tmux_kill(session: String) -> Result<(), String> {
 /// `tabtivity-` session, no foreign one) and is also run by `RunEvent::Exit` as
 /// the net for exits that never reach frontend code. A renderer or process
 /// crash reaches neither, leaving the sessions alive for restore.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
-    tauri::async_runtime::spawn_blocking(crate::services::tmux_local::kill_app_sessions)
+    app_core::rt::spawn_blocking(crate::services::tmux_local::kill_app_sessions)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -189,15 +226,15 @@ pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
 /// model tag beside an agent tab reads the session's status line from
 /// (`stores/agents/agentModels`). `None` when the session is not here (a remote
 /// tab, one that exited, no tmux), which the caller reads as "no screen".
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String> {
     if !crate::services::ssh_exec::valid_tmux_session_name(&session)
         || !crate::services::tmux_local::tmux_available()
     {
         return Ok(None);
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::paths::command_no_window("tmux")
+    app_core::rt::spawn_blocking(move || {
+        let output = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_screen_args(&session))
             .output()
             .ok()?;
@@ -211,7 +248,7 @@ pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String
 }
 
 /// Rename a **local** tmux session (TODO #85). `new_name` must be a safe tmux name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), String> {
     if !crate::services::ssh_exec::valid_tmux_session_name(&new_name) {
         return Err("a session name may only contain letters, digits, '-' and '_'".to_string());
@@ -219,8 +256,8 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        let renamed = crate::paths::command_no_window("tmux")
+    app_core::rt::spawn_blocking(move || {
+        let renamed = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_rename_args(
                 &session, &new_name,
             ))
@@ -255,20 +292,21 @@ pub struct PtyDropped {
 /// not. A shell runs on the host and gets the paths themselves, as a native
 /// terminal would. A remote tab is refused (`remote_tab`): its program cannot
 /// see this disk.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_drop_files(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     id: String,
     paths: Vec<String>,
     agent: bool,
 ) -> Result<PtyDropped, String> {
-    let dir = registry
+    let dir = ctx
+        .get::<RegistryState>()
         .lock()
         .unwrap()
         .drop_dir(&id)
         .ok_or("no_terminal")?
         .ok_or("remote_tab")?;
-    tauri::async_runtime::spawn_blocking(move || drop_files(Path::new(&dir), &paths, agent))
+    app_core::rt::spawn_blocking(move || drop_files(Path::new(&dir), &paths, agent))
         .await
         .map_err(|e| e.to_string())
 }
@@ -312,15 +350,17 @@ fn drop_file(dir: &Path, path: &Path, agent: bool) -> Result<String, &'static st
         .map_err(|e| e.code())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_write(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
+    let registry = ctx.get::<RegistryState>();
     // Watch for a Tabtivity-minted interactive login command being typed in, which is
     // what marks this PTY as a legitimate destination for the matching saved
     // credential (see `commands::credentials`).
+    let id = pty_id_for(&ctx, registry, id);
     crate::commands::credentials::note_pty_input(&id, &data);
     let sender = registry.lock().unwrap().input_sender(&id);
     if let Some(sender) = sender {
@@ -332,14 +372,18 @@ pub async fn pty_write(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_resize(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    crate::terminal::resize_pty(registry.inner(), &id, cols, rows)
+    let registry = ctx.get::<RegistryState>();
+    // A server client resizes its own PTY onto the tab, never another
+    // client's: each has its own size (TODO #2347).
+    let id = pty_id_for(&ctx, registry, id);
+    crate::terminal::resize_pty(registry, &id, cols, rows)
 }
 
 /// A pane's visibility report (visible-only streaming): a hidden pane's PTY
@@ -347,20 +391,26 @@ pub async fn pty_resize(
 /// and condenses throttled digests (`terminal-activity-batch`) for the pill
 /// indicators — and re-showing drains the buffer as one `terminal-replay`.
 /// See the routing block in `terminal/mod.rs`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_set_visible(
-    app: AppHandle,
-    window: tauri::Window,
+    ctx: Ctx,
     id: String,
     viewer_id: String,
     visible: bool,
     update_seq: u64,
 ) -> Result<(), String> {
-    // The window label comes from the CALLING window, never from the payload —
-    // a view may only ever speak for itself (the rule `webview_renderer_claim`
-    // follows). It is what lets the `Destroyed` hook drop the registrations of a
-    // window that died without unmounting (Group B #238).
-    crate::terminal::route_set_visible(&app, &id, &viewer_id, visible, update_seq, window.label());
+    // The window label is the CALLER's (`Ctx` takes it from the calling
+    // webview), never payload data — a view may only ever speak for itself
+    // (the rule `webview_renderer_claim` follows). It is what lets the
+    // `Destroyed` hook drop the registrations of a window that died without
+    // unmounting (Group B #238).
+    let window = ctx
+        .caller
+        .client()
+        .ok_or_else(|| "pty_set_visible: no calling client".to_string())?
+        .clone();
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
+    crate::terminal::route_set_visible(&ctx, &id, &viewer_id, visible, update_seq, window.as_str());
     Ok(())
 }
 
@@ -376,11 +426,15 @@ pub async fn pty_set_visible(
 /// `wake`: the pane that owns this PTY is waking from sleep (performance plan
 /// §5.3) — the tail comes back cut at its last full clear and the route's
 /// sleep ends (`route_wake_scrollback`). Absent from older frontends.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_scrollback(
+    ctx: Ctx,
     id: String,
     wake: Option<bool>,
 ) -> Result<crate::terminal::TerminalScrollback, String> {
+    // A server client's catch-up is its own stream's: the offsets it saw are
+    // that PTY's (TODO #2347).
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
     if wake == Some(true) {
         return Ok(crate::terminal::route_wake_scrollback(&id));
     }
@@ -390,13 +444,15 @@ pub async fn pty_scrollback(
 /// A view leaves (`TerminalView` unmount). `sleeping`: its pane is going to
 /// sleep with the PTY still running (§5.3) — absent from older frontends,
 /// which never sleep a terminal.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_remove_view(
+    ctx: Ctx,
     id: String,
     viewer_id: String,
     update_seq: u64,
     sleeping: Option<bool>,
 ) -> Result<(), String> {
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
     crate::terminal::route_remove_view(&id, &viewer_id, update_seq, sleeping == Some(true));
     Ok(())
 }
@@ -404,20 +460,38 @@ pub async fn pty_remove_view(
 /// Hold a marker-watch on a PTY: stream its output as if its pane were
 /// visible, for the login flows that scan a possibly-hidden terminal's raw
 /// stream (`useRemoteSession`/`useRemoteReconnect`).
-#[tauri::command]
-pub async fn pty_watch(app: AppHandle, id: String) -> Result<(), String> {
-    crate::terminal::route_watch(&app, &id);
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pty_watch(ctx: Ctx, id: String) -> Result<(), String> {
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
+    crate::terminal::route_watch(&ctx, &id);
     Ok(())
 }
 
-#[tauri::command]
-pub async fn pty_unwatch(id: String) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pty_unwatch(ctx: Ctx, id: String) -> Result<(), String> {
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
     crate::terminal::route_unwatch(&id);
     Ok(())
 }
 
-#[tauri::command]
-pub async fn pty_kill(registry: State<'_, RegistryState>, id: String) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
+    let registry = ctx.get::<RegistryState>();
+    // A server client with its own attach PTY onto the tab closes that one —
+    // a tmux client; the tab's own PTY and the session are another client's
+    // (TODO #2347). Its route goes with it: nothing else will ever end it.
+    let resolved = pty_id_for(&ctx, registry, id.clone());
+    if resolved != id {
+        crate::commands::credentials::forget_login_pty(&resolved);
+        let taken = registry.lock().unwrap().take(&resolved);
+        crate::terminal::route_remove_all_views(&resolved);
+        if let Some(taken) = taken {
+            app_core::rt::spawn_blocking(move || taken.teardown())
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
     // The terminal is gone, so its login marking must not outlive it and bless a
     // future PTY that reuses the id.
     crate::commands::credentials::forget_login_pty(&id);
@@ -431,7 +505,7 @@ pub async fn pty_kill(registry: State<'_, RegistryState>, id: String) -> Result<
     // reader task's end already cleaned up that spawn.
     let taken = registry.lock().unwrap().take(&id);
     if let Some(taken) = taken {
-        tauri::async_runtime::spawn_blocking(move || taken.teardown())
+        app_core::rt::spawn_blocking(move || taken.teardown())
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -441,11 +515,12 @@ pub async fn pty_kill(registry: State<'_, RegistryState>, id: String) -> Result<
 /// Kill every live PTY belonging to one project scope. PTY ids are
 /// `<scope>:<tab-key>`; the delimiter is part of the match so similarly named
 /// projects cannot affect each other.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_kill_scope(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     scope: String,
 ) -> Result<Vec<String>, String> {
+    let registry = ctx.get::<RegistryState>();
     // Every PTY of the scope is taken in one short hold of the registry lock
     // (it is on every keystroke's path) and torn down after it, with one
     // process-table walk for the lot instead of one per tab.
@@ -461,7 +536,7 @@ pub async fn pty_kill_scope(
     }
     // The teardown ends each taken spawn's per-tab state, generation-guarded
     // like `pty_kill`'s.
-    tauri::async_runtime::spawn_blocking(move || crate::terminal::teardown_taken(taken))
+    app_core::rt::spawn_blocking(move || crate::terminal::teardown_taken(taken))
         .await
         .map_err(|e| e.to_string())?;
     Ok(ids)
@@ -473,11 +548,12 @@ pub async fn pty_kill_scope(
 /// Samples busy CPU ticks twice over a short interval via `sysstat` (Linux
 /// `/proc`, Windows `GetProcessTimes`). On backends that don't sample (other
 /// OSes) the ticks are always 0, so this returns 0.0 and the UI hides the figure.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_cpu_percent(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     pty_ids: Vec<String>,
 ) -> Result<f64, String> {
+    let registry = ctx.get::<RegistryState>();
     use crate::sysstat;
 
     let roots: Vec<u32> = {
@@ -510,7 +586,7 @@ pub async fn project_cpu_percent(
 /// (`services::sandbox::register_host_bound_tab`), which is what makes it survive
 /// a relaunch — the tab's key and PTY id do not — without the decision riding on
 /// anything a project's own files can state.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn register_host_bound_tab(project_id: String, uid: String) -> Result<(), String> {
     crate::services::sandbox::register_host_bound_tab(&project_id, &uid)
 }

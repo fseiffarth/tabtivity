@@ -15,7 +15,8 @@ import { useSettingsStore } from "../../stores/settings";
 import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
 import { GitPushMcpSettings } from "../agents/GitPushMcp";
 import { MarkupMcpSettings } from "../agents/MarkupMcpSettings";
-import { PLATFORM } from "../../lib/platform";
+import { HOST_OS } from "../../lib/platform";
+import { cliInstallsByAdmin } from "../../lib/transport/linkState";
 import {
   NODE_DOWNLOAD_URL,
   NODE_INSTALL,
@@ -717,6 +718,13 @@ interface AgentLogin {
    *  names a command where a credential belongs. */
   blocked: { account: string | null; stored: string | null; command: string | null } | null;
   shared: boolean;
+  /** The API proxy serves this CLI: a server's administrator can offer a key. */
+  admin_key_capable?: boolean;
+  /** A hosted server's administrator offers a key for this CLI. */
+  admin_key_offered?: boolean;
+  /** This user's agents run on that key instead of their own login (chosen
+   *  in the API keys section's "runs on" control, #2389). */
+  uses_admin_key?: boolean;
   /** Switched on for a stored provider API key, and one is saved
    *  (`services::agent_api_keys`). */
   api_key?: boolean;
@@ -772,7 +780,14 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
         const keyLabel = l.api_budget_reached
           ? t("settings.agentLoginApiBudgetReached")
           : t("settings.agentLoginUsesApiKey");
-        const state = !l.api_key ? login : l.signed_in ? `${login} · ${keyLabel}` : keyLabel;
+        const own = !l.api_key ? login : l.signed_in ? `${login} · ${keyLabel}` : keyLabel;
+        // A hosted server's administrator's key (plan §5.2): chosen per CLI
+        // in the API keys section; here only what the login row runs on.
+        const state = l.uses_admin_key
+          ? l.admin_key_offered
+            ? t("settings.agentLoginAdminKey")
+            : t("settings.agentLoginAdminKeyGone")
+          : own;
         return (
           <div key={l.id} className="settings-toggle-card-row">
             <span>
@@ -821,19 +836,38 @@ export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
 interface AgentApiKeyStatus {
   /** The keyring can be read now; while locked every `saved` reads false. */
   readable: boolean;
+  /** `keychain` (a desktop's OS store) or `vault` (a server's sealed store,
+   *  opened only by a paired device — nothing here can unlock it). */
+  store?: "keychain" | "vault";
   providers: {
     id: string;
     saved: boolean;
-    /** The monthly limit (`agent_api_limits`) as the backend reads it. */
-    limitUsd?: number | null;
-    /** Spent this month by the price table — an estimate. */
+    /** The monthly limit in billed tokens (`agent_api_token_limits`) as the
+     *  backend reads it. */
+    limitTokens?: number | null;
+    /** Billed tokens this month: what the limit counts. */
+    billed?: number;
+    /** Their cost by the price table — an estimate, shown only. */
     spentUsd?: number;
+    /** An older build's dollar limit while no token limit is set: a hint. */
+    legacyLimitUsd?: number | null;
     /** `open`, `reached`, or `noLimit` (refused until a limit is set). */
     budget?: "open" | "reached" | "noLimit";
     /** Models priced at the provider's highest rate (not in the table). */
     unknownModels?: string[];
   }[];
-  clis: { id: string; enabled: boolean; providers: string[]; ready: boolean }[];
+  clis: {
+    id: string;
+    enabled: boolean;
+    providers: string[];
+    ready: boolean;
+    /** A hosted server's administrator offers this user a key for the CLI. */
+    adminOffered?: boolean;
+    /** This user runs the CLI on the administrator's key. */
+    usesAdmin?: boolean;
+    /** Through the server's key broker: this month's use and budget. */
+    adminBroker?: { month: string; billed: number; budget?: number | null } | null;
+  }[];
   /** UTC month counted (`YYYY-MM`) and the day the count restarts. */
   month?: string;
   resetsOn?: string;
@@ -843,24 +877,37 @@ interface AgentApiKeyStatus {
   pricesDate?: string;
 }
 
-/** The monthly limit a new key's row proposes, in US dollars. */
-export const DEFAULT_API_LIMIT_USD = 20;
-/** The backend's `api_usage::MAX_LIMIT`. */
-const MAX_API_LIMIT_USD = 1_000_000;
+/** The monthly limit a new key's row proposes, in million billed tokens. */
+export const DEFAULT_API_LIMIT_MTOK = 5;
+/** The backend's `api_usage::MAX_LIMIT`, billed tokens. */
+const MAX_API_LIMIT_TOKENS = 1_000_000_000_000;
+const MILLION = 1_000_000;
 
-/** A typed limit as dollars, or `null` when it is not a usable one. */
+/** A typed limit (million billed tokens) as whole billed tokens, or `null`
+ *  when it is not a usable one. */
 function parseApiLimit(text: string): number | null {
   const n = Number(text.trim());
-  return text.trim() !== "" && Number.isFinite(n) && n > 0 && n <= MAX_API_LIMIT_USD ? n : null;
+  if (text.trim() === "" || !Number.isFinite(n)) return null;
+  const tokens = Math.round(n * MILLION);
+  return tokens > 0 && tokens <= MAX_API_LIMIT_TOKENS ? tokens : null;
 }
 
+/** Billed tokens as the limit field shows them: millions, no trailing zeros. */
+const asMillions = (tokens: number) => String(Number((tokens / MILLION).toFixed(6)));
+
 const usd = (n: number) => `$${n.toFixed(2)}`;
+const tokenCount = (n: number) =>
+  new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
 /** Provider names as their vendors spell them. */
 const API_KEY_PROVIDERS: Record<string, string> = {
   anthropic: "Anthropic",
   gemini: "Google Gemini",
 };
+
+/** What a CLI's agents run on: its own login, the user's own API key, or a
+ *  hosted server administrator's key (#2389). */
+type Credential = "login" | "key" | "admin";
 
 /** The CLIs that can take a stored key through the API proxy (the backend's
  *  `CLI_ROUTES`: only CLIs an environment variable points at the proxy), each
@@ -892,12 +939,14 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
   if (!status) return null;
   const saved = new Set(status.providers.filter((p) => p.saved).map((p) => p.id));
   const enabled = settings?.agent_api_key_clis ?? [];
-  const limits = settings?.agent_api_limits ?? {};
+  const limits = settings?.agent_api_token_limits ?? {};
   // A new key's row proposes the default; a saved key's shows its limit.
-  const limitDraft = (id: string, current?: number | null) =>
-    limitDrafts[id] ?? String(current ?? limits[id] ?? DEFAULT_API_LIMIT_USD);
+  const limitDraft = (id: string, current?: number | null) => {
+    const tokens = current ?? limits[id];
+    return limitDrafts[id] ?? (tokens != null ? asMillions(tokens) : String(DEFAULT_API_LIMIT_MTOK));
+  };
   const writeLimit = (id: string, limit: number) =>
-    updateSettings({ agent_api_limits: { ...limits, [id]: limit } });
+    updateSettings({ agent_api_token_limits: { ...limits, [id]: limit } });
   const act = (id: string, call: () => Promise<unknown>) => {
     setError(null);
     setBusy(id);
@@ -934,9 +983,19 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
       });
     });
   };
-  const setCliEnabled = (cli: string, on: boolean) => {
-    const next = on ? [...enabled.filter((c) => c !== cli), cli] : enabled.filter((c) => c !== cli);
-    act(cli, () => updateSettings({ agent_api_key_clis: next }));
+  // The own-key switch lives in the shared settings; the administrator's key
+  // is the user's choice on the server (`agent_login_use_admin_key`, which
+  // also switches the own key off — written here first, so the settings
+  // store never holds a stale switch).
+  const setCredential = (cli: string, from: Credential, to: Credential) => {
+    if (from === to) return;
+    const others = enabled.filter((c) => c !== cli);
+    act(cli, async () => {
+      if (from === "admin") await invoke("agent_login_use_admin_key", { id: cli, on: false });
+      if (from === "key") await updateSettings({ agent_api_key_clis: others });
+      if (to === "key") await updateSettings({ agent_api_key_clis: [...others, cli] });
+      if (to === "admin") await invoke("agent_login_use_admin_key", { id: cli, on: true });
+    });
   };
   return (
     <>
@@ -957,25 +1016,33 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
       {status.providers.map((p) => {
         const name = API_KEY_PROVIDERS[p.id] ?? p.id;
         const draft = drafts[p.id] ?? "";
-        const limitText = limitDraft(p.id, p.limitUsd);
+        const limitText = limitDraft(p.id, p.limitTokens);
         const limitOk = parseApiLimit(limitText) !== null;
-        const spent = usd(p.spentUsd ?? 0);
+        const spent = tokenCount(p.billed ?? 0);
         const budget = !p.saved
           ? null
-          : p.budget === "noLimit" || p.limitUsd == null
+          : p.budget === "noLimit" || p.limitTokens == null
             ? t("settings.agentApiNoLimit")
             : p.budget === "reached"
-              ? t("settings.agentApiBudgetReached", { spent, limit: usd(p.limitUsd), date: status.resetsOn ?? "" })
-              : t("settings.agentApiSpent", { spent, limit: usd(p.limitUsd) });
+              ? t("settings.agentApiBudgetReached", {
+                  spent,
+                  limit: tokenCount(p.limitTokens),
+                  date: status.resetsOn ?? "",
+                })
+              : t("settings.agentApiSpent", {
+                  spent,
+                  limit: tokenCount(p.limitTokens),
+                  usd: usd(p.spentUsd ?? 0),
+                });
         const state = !status.readable
-          ? t("settings.agentApiKeyLocked")
+          ? t(status.store === "vault" ? "settings.agentApiKeyVaultLocked" : "settings.agentApiKeyLocked")
           : p.saved
             ? `${t("settings.agentApiKeySaved")} · ${budget}`
             : t("settings.agentApiKeyNotSaved");
         const limitInput = (
           <input
             type="number"
-            min={0.01}
+            min={0.000001}
             step="any"
             value={limitText}
             aria-label={t("settings.agentApiLimitLabel", { provider: name })}
@@ -1005,7 +1072,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                     <button
                       type="button"
                       className="ollama-action-btn"
-                      disabled={busy === p.id || !limitOk || parseApiLimit(limitText) === p.limitUsd}
+                      disabled={busy === p.id || !limitOk || parseApiLimit(limitText) === p.limitTokens}
                       onClick={() => setLimit(p.id)}
                     >
                       {t("settings.agentApiLimitSet")}
@@ -1052,6 +1119,11 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                 )}
               </span>
             </div>
+            {p.saved && p.limitTokens == null && p.legacyLimitUsd != null && (
+              <p className="settings-help pill-fence-live-note">
+                {t("settings.agentApiOldUsdLimit", { usd: usd(p.legacyLimitUsd) })}
+              </p>
+            )}
             {p.saved && (p.unknownModels?.length ?? 0) > 0 && (
               <p className="settings-help">
                 {t("settings.agentApiUnknownModels", { provider: name, models: (p.unknownModels ?? []).join(", ") })}
@@ -1060,7 +1132,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
           </Fragment>
         );
       })}
-      {!status.readable && (
+      {!status.readable && status.store !== "vault" && (
         <div className="settings-toggle-card-row">
           <span />
           <button
@@ -1076,25 +1148,63 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
       {API_KEY_CLIS.map(({ cli, untested }) => {
         const row = status.clis.find((c) => c.id === cli);
         if (!row) return null;
-        const on = enabled.includes(cli);
+        const name = labels.get(cli) ?? cli;
         const hasKey = row.providers.some((p) => saved.has(p));
+        // One credential per CLI (#2389): its own login, the user's own API
+        // key, or a hosted server administrator's key — never two at once.
+        const current: Credential = row.usesAdmin ? "admin" : enabled.includes(cli) ? "key" : "login";
+        const options = [
+          { value: "login", label: t("settings.agentCredLogin") },
+          ...(hasKey || current === "key"
+            ? [
+                {
+                  value: "key",
+                  label: t("settings.agentCredOwnKey", {
+                    providers: row.providers.map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
+                  }),
+                },
+              ]
+            : []),
+          ...(row.adminOffered || current === "admin" ? [{ value: "admin", label: t("settings.agentCredAdminKey") }] : []),
+        ];
+        const broker = row.usesAdmin ? row.adminBroker : null;
         return (
-          <ToggleRow
-            key={cli}
-            label={
-              <>
-                {t("settings.agentApiKeyUse", {
-                  cli: labels.get(cli) ?? cli,
-                  providers: row.providers.map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
-                })}{" "}
-                <UntestedTag id={untested} />
-              </>
-            }
-            checked={on}
-            // Off without a key; a switch left on can always be turned off.
-            disabled={busy === cli || (!on && !hasKey)}
-            onChange={(e) => setCliEnabled(cli, e.target.checked)}
-          />
+          <Fragment key={cli}>
+            <div className="settings-toggle-card-row">
+              <span>
+                {t("settings.agentCredRunsOn", { cli: name })} <UntestedTag id={untested} />
+                {(row.adminOffered || row.usesAdmin) && (
+                  <>
+                    {" "}
+                    <UntestedTag id="agents.adminKey" />
+                  </>
+                )}
+                {broker && (
+                  <span className="settings-help">
+                    {" · "}
+                    <UntestedTag id="server.agentKeys.broker" />{" "}
+                    {broker.budget != null
+                      ? t("settings.agentLoginBrokerUsage", {
+                          billed: broker.billed.toLocaleString(),
+                          budget: broker.budget.toLocaleString(),
+                        })
+                      : t("settings.agentLoginBrokerUsageNoCap", { billed: broker.billed.toLocaleString() })}
+                  </span>
+                )}
+              </span>
+              <Dropdown
+                value={current}
+                options={options}
+                disabled={busy === cli || options.length < 2}
+                ariaLabel={t("settings.agentCredRunsOn", { cli: name })}
+                title={row.adminOffered && !row.usesAdmin ? t("settings.agentLoginAdminKeyHelp") : undefined}
+                onChange={(next) => setCredential(cli, current, next as Credential)}
+              />
+            </div>
+            {row.usesAdmin && !row.adminOffered && (
+              <p className="settings-help pill-fence-live-note">{t("settings.agentLoginAdminKeyGone")}</p>
+            )}
+          </Fragment>
         );
       })}
       <p className="settings-help">{t("settings.agentApiKeysDialogs")}</p>
@@ -1373,7 +1483,7 @@ function NodeRuntimeNotice() {
   if (!status || (status.npm && !status.too_old)) return null;
   const tooOld = status.npm && status.too_old;
 
-  const { command, shellKey, shellKind } = NODE_INSTALL[PLATFORM];
+  const { command, shellKey, shellKind } = NODE_INSTALL[HOST_OS];
   return (
     <div className="ollama-vibe-section agent-list-entry">
       <div className="settings-subheader">
@@ -1880,6 +1990,8 @@ export function AgentsPanel({
   installedExtras?: (a: AgentInfo) => ReactNode;
 }) {
   const t = useT();
+  // A hosted server: the administrator installs CLIs (#2354).
+  const adminInstalls = cliInstallsByAdmin();
   const { settings, updateSettings } = useSettingsStore();
   const remoteMachines = useGlobalMachinesStore((s) => s.machines);
   const remoteMachinesLoaded = useGlobalMachinesStore((s) => s.loaded);
@@ -2191,7 +2303,7 @@ export function AgentsPanel({
           {/* After a check found a newer release the chip turns into the
               update itself — `2.1.284 → 2.1.287`, the Ollama row's version
               pair — because the new number is what the user wants to act on. */}
-          {update?.updateAvailable && current && update.latest ? (
+          {update?.updateAvailable && current && update.latest && !adminInstalls ? (
             <button
               type="button"
               className="local-model-version-note has-update"
@@ -2226,7 +2338,7 @@ export function AgentsPanel({
           )}
           {/* Newest release known but the installed one unreadable: no claim
               of an update, but the installer can still be run again for it. */}
-          {update && !update.updateAvailable && update.latest && !current && (
+          {update && !update.updateAvailable && update.latest && !current && !adminInstalls && (
             <button
               type="button"
               className="ollama-action-btn"
@@ -2458,7 +2570,17 @@ export function AgentsPanel({
       {remoteErrors[a.id] && (
         <div className="project-dialog-error">{remoteErrors[a.id]}</div>
       )}
-      {a.installed && (
+      {adminInstalls && (
+        <>
+          {a.installed && versionNotice(a)}
+          <p className="settings-help">
+            {t(a.installed ? "agents.askAdminInstalled" : "agents.askAdminMissing", { label: a.label })}{" "}
+            <code>{`sudo ${NAMES.serverAdminHelper} cli-install ${a.id}`}</code>{" "}
+            <UntestedTag id="agents.askAdmin" />
+          </p>
+        </>
+      )}
+      {a.installed && !adminInstalls && (
         <>
           {versionNotice(a)}
           <div className="ollama-install-cmd-row">
@@ -2530,7 +2652,7 @@ export function AgentsPanel({
           )}
         </>
       )}
-      {!a.installed && (
+      {!a.installed && !adminInstalls && (
         <>
           {/* Auto-install runs the official installer via `sh` on
               Linux/macOS and via PowerShell/cmd on Windows. It is only

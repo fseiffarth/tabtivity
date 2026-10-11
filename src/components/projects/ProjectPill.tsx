@@ -20,7 +20,7 @@ import { PillTabMarks } from "./PillTabMarks";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { adoptSyncOutcome, cmdToKind, isResumableAgentTab, isRestorableTab, syncWorkspace, useTabsStore } from "../../stores/tabs";
-import { IS_LINUX, IS_WINDOWS } from "../../lib/platform";
+import { IS_HOST_LINUX, IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL, providerAuthLoginCmd } from "../../lib/installCommand";
 import { PythonInterpreterWindow } from "./PythonInterpreterWindow";
 import { useGitDirtyStore } from "../../stores/gitDirty";
@@ -539,7 +539,7 @@ function PublishWindow({
                 runInstallInTab(
                   t("projectDialog.installBinLabel", { bin: cliInstall.bin }),
                   cliInstall.cmd,
-                  IS_WINDOWS ? "default" : "bash",
+                  IS_HOST_WINDOWS ? "default" : "bash",
                 )
               }
             >
@@ -557,7 +557,7 @@ function PublishWindow({
                 runInstallInTab(
                   t("pill.publishSignInBtn", { cli }),
                   providerAuthLoginCmd(provider),
-                  IS_WINDOWS ? "default" : "bash",
+                  IS_HOST_WINDOWS ? "default" : "bash",
                 )
               }
             >
@@ -2422,7 +2422,7 @@ export function ProjectPill({
               <UntestedTag id="gitPushMcp" />
             </button>
             )}
-            {IS_LINUX && agentFenceInstallCommand(agentFenceStatus) && (
+            {IS_HOST_LINUX && agentFenceInstallCommand(agentFenceStatus) && (
                 <button
                   className="untested"
                   onClick={() => {

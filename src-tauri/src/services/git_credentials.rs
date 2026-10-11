@@ -22,14 +22,17 @@ fn account(scope: &str) -> String {
     format!("token:{scope}")
 }
 
+#[cfg(feature = "desktop")]
 fn entry(scope: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, &account(scope)).map_err(|e| e.to_string())
 }
 
 /// The OS keyring by service name, for the read that also looks under the
 /// service an older build used (`brand_migration::keyring`).
+#[cfg(feature = "desktop")]
 struct OsStore;
 
+#[cfg(feature = "desktop")]
 impl crate::services::brand_migration::keyring::Store for OsStore {
     fn get(&self, service: &str, account: &str) -> Option<String> {
         keyring::Entry::new(service, account)
@@ -55,6 +58,20 @@ impl crate::services::brand_migration::keyring::Store for OsStore {
 /// no token is stored or the keyring is unavailable — never an error, so a
 /// missing per-project token cleanly falls through to the global one.
 pub fn get_token(scope: &str) -> Option<String> {
+    // A server daemon keeps tokens in its sealed store (hosted plan §6.8).
+    if let Some(vault) = crate::services::server::vault::vault() {
+        return vault.credential(&format!("git-hosting:{}", account(scope)));
+    }
+    os_get_token(scope)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn os_get_token(_scope: &str) -> Option<String> {
+    None
+}
+
+#[cfg(feature = "desktop")]
+fn os_get_token(scope: &str) -> Option<String> {
     match entry(scope).and_then(|e| match e.get_password() {
         Ok(secret) => Ok(Some(secret)),
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -69,6 +86,7 @@ pub fn get_token(scope: &str) -> Option<String> {
 /// The token an older build saved under the service named after the app's
 /// old name, copied to the current service on the way. `None` at once while
 /// the name is unchanged.
+#[cfg(feature = "desktop")]
 fn legacy_token(scope: &str) -> Option<String> {
     let pair = crate::brand::PAIR;
     pair.legacy(crate::brand::Name::KEYRING_GIT_HOSTING)?;
@@ -85,6 +103,19 @@ fn legacy_token(scope: &str) -> Option<String> {
 /// Store (non-empty) or clear (`None`/empty) the token for `scope`. Returns an
 /// error string if the keyring write fails so the UI can report it.
 pub fn set_token(scope: &str, token: Option<&str>) -> Result<(), String> {
+    if let Some(vault) = crate::services::server::vault::vault() {
+        return vault.set_credential(&format!("git-hosting:{}", account(scope)), token.map(str::trim));
+    }
+    os_set_token(scope, token)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn os_set_token(_scope: &str, _token: Option<&str>) -> Result<(), String> {
+    Err("no credential store in this build".into())
+}
+
+#[cfg(feature = "desktop")]
+fn os_set_token(scope: &str, token: Option<&str>) -> Result<(), String> {
     let e = entry(scope)?;
     match token.map(str::trim).filter(|t| !t.is_empty()) {
         Some(secret) => e.set_password(secret).map_err(|err| err.to_string()),

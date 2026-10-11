@@ -284,7 +284,7 @@ fn process_config(file: &HomeFile) -> bool {
     let stored = stored_token();
     let refused = signed_out().lock().unwrap_or_else(|e| e.into_inner()).clone();
     let adopt = should_adopt(stored.as_deref(), &found, &refused, |s| {
-        tauri::async_runtime::block_on(github_login(s)).ok().map(|login| login.is_some())
+        app_core::rt::block_on(github_login(s)).ok().map(|login| login.is_some())
     });
     if adopt {
         if let Err(e) = crate::services::remote_credentials::set(ACCOUNT, Some(&found)) {
@@ -363,7 +363,7 @@ pub struct CopilotFenceAuth {
 pub async fn status() -> CopilotFenceAuth {
     let supported = cfg!(target_os = "linux");
     let token = if supported {
-        tauri::async_runtime::spawn_blocking(stored_token).await.ok().flatten()
+        app_core::rt::spawn_blocking(stored_token).await.ok().flatten()
     } else {
         None
     };

@@ -57,7 +57,24 @@ const MAX_OPEN_TICKETS: usize = 64;
 /// (`host::section_guard`) and the alert rows of its kind.
 pub const HIDEABLE_SECTIONS: [&str; 3] = ["todo", "calendar", "mail"];
 
-fn now() -> u64 {
+/// A device's name (trimmed, at most 64 characters) and public key (a P-256
+/// SPKI, base64url, bounded before it is parsed), or the pairing error.
+fn checked_device(name: &str, public_key: &str) -> Result<String, String> {
+    let clean_name = name.trim().chars().take(64).collect::<String>();
+    if clean_name.is_empty() {
+        return Err("device_name_required".into());
+    }
+    let der = Base64UrlUnpadded::decode_vec(public_key).map_err(|_| "invalid_public_key")?;
+    // Length first: the bound exists so an unauthenticated caller cannot
+    // hand the SPKI parser an arbitrarily long buffer.
+    if der.len() > 256 {
+        return Err("invalid_public_key".into());
+    }
+    PublicKey::from_public_key_der(&der).map_err(|_| "invalid_public_key")?;
+    Ok(clean_name)
+}
+
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -92,6 +109,11 @@ pub struct Device {
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<u64>,
+    /// The device's ECDH public key for the server's device-released secrets
+    /// key (hosted plan §6.8), SEC1 base64url; enrolled after pairing with a
+    /// signature of the pairing key ([`AuthStore::enrol_secrets_key`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecdh_public_key: Option<String>,
     /// [`HIDEABLE_SECTIONS`] this phone is kept out of. Plain strings, not an
     /// enum: a name a newer build wrote must not fail the whole file (and with
     /// it every phone's sign-in) here; an unknown one simply matches no route.
@@ -112,6 +134,61 @@ impl Default for DeviceFile {
             devices: vec![],
         }
     }
+}
+
+/// A server invite (hosted plan §4.1), written by the admin helper into the
+/// user's control dir: the hash of a single-use pairing code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InviteFile {
+    /// [`invite_hash`] of the code.
+    pub hash: String,
+    pub expires_at: u64,
+    #[serde(default)]
+    pub attempts: u8,
+}
+
+fn device_keys_of(file: &DeviceFile) -> Vec<crate::services::server::vault::DeviceKey> {
+    file.devices
+        .iter()
+        .filter_map(|d| d.ecdh_public_key.as_ref().map(|ecdh| crate::services::server::vault::DeviceKey { id: d.id.clone(), ecdh: ecdh.clone() }))
+        .collect()
+}
+
+/// [`AuthStore::secrets_device_keys`] from the file, for a caller that does
+/// not hold the store (the daemon's start, before the store opens). No file
+/// is no device; an unreadable one is an error, never "no devices" — the
+/// vault drops the wrap of every device a list leaves out.
+pub fn read_secrets_device_keys(control_dir: &Path) -> Result<Vec<crate::services::server::vault::DeviceKey>, String> {
+    let path = control_dir.join("devices.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    store::read_json::<DeviceFile>(&path).map(|f| device_keys_of(&f))
+}
+
+/// The actions that need a pairing-key signature on top of the session.
+pub const SIGNED_ACTIONS: [&str; 2] = ["secrets-setup", "secrets-recovery-code"];
+
+/// The invite file's name under the control dir.
+pub const INVITE_FILE: &str = "invite.json";
+/// How long an invite may be redeemed.
+pub const INVITE_TTL: u64 = 24 * 60 * 60;
+
+/// `hex(SHA-256("invite\n" ‖ code))`: what the helper writes and what
+/// [`AuthStore::pair`] compares. Both sides of the server build know it.
+pub fn invite_hash(code: &str) -> String {
+    use sha2::Digest;
+    let mut hasher = Sha256::new();
+    hasher.update(b"invite\n");
+    hasher.update(code.as_bytes());
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Write the invite for `code` into `control_dir` (the helper's step, done
+/// as the user; also what a test does to enrol a first device).
+pub fn write_invite(control_dir: &Path, code: &str, expires_at: u64) -> Result<(), String> {
+    store::ensure_private_dir(control_dir)?;
+    store::write_json_atomic(&control_dir.join(INVITE_FILE), &InviteFile { hash: invite_hash(code), expires_at, attempts: 0 }, 0o600)
 }
 
 /// The phones paired with this host, as the desktop reads them for the
@@ -224,6 +301,11 @@ pub struct AuthStore {
     devices: DeviceFile,
     pairing: Option<PairCode>,
     challenges: HashMap<String, Challenge>,
+    /// Single-use nonces for an action that needs the pairing key's
+    /// signature on top of the session (the secrets key's set-up and a new
+    /// recovery code). Apart from `challenges`, so one can never be spent
+    /// as the other.
+    action_challenges: HashMap<String, Challenge>,
     sessions: HashMap<String, Session>,
     tickets: HashMap<String, OpenTicket>,
     attempts: HashMap<String, VecDeque<u64>>,
@@ -281,6 +363,7 @@ impl AuthStore {
             devices,
             pairing: None,
             challenges: HashMap::new(),
+            action_challenges: HashMap::new(),
             sessions: HashMap::new(),
             tickets: HashMap::new(),
             attempts: HashMap::new(),
@@ -296,6 +379,7 @@ impl AuthStore {
     /// exact entry is presented again, so an abandoned login leaked one forever.
     fn sweep_expired(&mut self, t: u64) {
         self.challenges.retain(|_, c| c.expires_at >= t);
+        self.action_challenges.retain(|_, c| c.expires_at >= t);
         self.sessions.retain(|_, s| s.expires_at >= t);
         self.tickets.retain(|_, x| x.expires_at >= t);
     }
@@ -335,6 +419,11 @@ impl AuthStore {
         store::write_json_atomic(&self.control_dir.join("devices.json"), &self.devices, 0o600)
     }
 
+    /// Where the device list, invites and (on a server) the OIDC binding live.
+    pub fn control_dir(&self) -> &Path {
+        &self.control_dir
+    }
+
     pub fn create_pairing_code(&mut self) -> Result<(String, u64), String> {
         // Rejection-sample below the largest multiple of 10^8 that fits a u32:
         // a bare modulo skews codes under 94 967 296 by ~2%.
@@ -360,33 +449,49 @@ impl AuthStore {
             return Err("invalid_pairing_code".into());
         }
         let supplied = self.keyed(b"pair", code.as_bytes());
-        let Some(pairing) = self.pairing.as_mut() else {
-            return Err("invalid_pairing_code".into());
-        };
-        if pairing.expires_at < now() {
-            self.pairing = None;
-            return Err("invalid_pairing_code".into());
-        }
-        if !bool::from(pairing.hash.ct_eq(&supplied)) {
-            pairing.attempts += 1;
-            if pairing.attempts >= PAIR_CODE_ATTEMPTS {
+        // The code the window (or a signed-in client) minted, else — on a
+        // server — the invite the admin helper left in the control dir.
+        let mut invite_used = false;
+        match self.pairing.as_mut() {
+            Some(pairing) if pairing.expires_at < now() => {
                 self.pairing = None;
+                return Err("invalid_pairing_code".into());
             }
-            return Err("invalid_pairing_code".into());
+            Some(pairing) if !bool::from(pairing.hash.ct_eq(&supplied)) => {
+                pairing.attempts += 1;
+                if pairing.attempts >= PAIR_CODE_ATTEMPTS {
+                    self.pairing = None;
+                }
+                return Err("invalid_pairing_code".into());
+            }
+            Some(_) => {}
+            None => {
+                if !self.invite_matches(code) {
+                    return Err("invalid_pairing_code".into());
+                }
+                invite_used = true;
+            }
         }
-        let clean_name = name.trim().chars().take(64).collect::<String>();
-        if clean_name.is_empty() {
-            return Err("device_name_required".into());
-        }
-        let der = Base64UrlUnpadded::decode_vec(public_key).map_err(|_| "invalid_public_key")?;
-        // Length first: the bound exists so an unauthenticated caller cannot
-        // hand the SPKI parser an arbitrarily long buffer.
-        if der.len() > 256 {
-            return Err("invalid_public_key".into());
-        }
-        PublicKey::from_public_key_der(&der).map_err(|_| "invalid_public_key")?;
+        let clean_name = checked_device(name, public_key)?;
         // Everything is validated; only now is the code spent.
         self.pairing = None;
+        if invite_used {
+            let _ = fs::remove_file(self.control_dir.join(INVITE_FILE));
+        }
+        self.register(clean_name, public_key)
+    }
+
+    /// Pair a device whose right to pair was proven elsewhere: an identity
+    /// provider's sign-in the caller verified for this account
+    /// (`services::server::oidc::check`, hosted plan P5). Rate-limited like
+    /// a code.
+    pub fn pair_verified(&mut self, name: &str, public_key: &str) -> Result<String, String> {
+        self.rate_limit("pair", PAIR_ATTEMPT_BUDGET)?;
+        let clean_name = checked_device(name, public_key)?;
+        self.register(clean_name, public_key)
+    }
+
+    fn register(&mut self, clean_name: String, public_key: &str) -> Result<String, String> {
         let id = random_id::<20>()?;
         self.devices.devices.push(Device {
             id: id.clone(),
@@ -394,11 +499,37 @@ impl AuthStore {
             public_key: public_key.into(),
             created_at: now(),
             last_seen_at: None,
+            ecdh_public_key: None,
             hidden_sections: Vec::new(),
         });
         self.save_devices()?;
         self.audit("paired", Some(&id));
         Ok(id)
+    }
+
+    /// Does `code` match a live invite in the control dir? The file is the
+    /// admin helper's (hosted plan §4.1: `user add` writes it as the user,
+    /// `0600`), never the gateway's — so a compromised gateway cannot enrol a
+    /// device. A wrong guess counts like a pairing-code miss, and the file is
+    /// removed after [`PAIR_CODE_ATTEMPTS`] of them or when it has expired.
+    fn invite_matches(&mut self, code: &str) -> bool {
+        let path = self.control_dir.join(INVITE_FILE);
+        let Ok(mut invite) = store::read_json::<InviteFile>(&path) else { return false };
+        if invite.expires_at < now() {
+            let _ = fs::remove_file(&path);
+            return false;
+        }
+        let supplied = invite_hash(code);
+        if invite.hash.len() == supplied.len() && bool::from(invite.hash.as_bytes().ct_eq(supplied.as_bytes())) {
+            return true;
+        }
+        invite.attempts += 1;
+        if invite.attempts >= PAIR_CODE_ATTEMPTS {
+            let _ = fs::remove_file(&path);
+        } else {
+            let _ = store::write_json_atomic(&path, &invite, 0o600);
+        }
+        false
     }
 
     pub fn challenge(&mut self, device_id: &str) -> Result<(String, String, u64), String> {
@@ -563,6 +694,76 @@ impl AuthStore {
             .collect()
     }
 
+    /// Register a signed-in device's ECDH key for the secrets key (§6.8).
+    /// The session alone is not enough: the request carries a signature of
+    /// the device's own pairing key, which a stolen cookie does not have.
+    pub fn enrol_secrets_key(&mut self, device_id: &str, ecdh: &str, signature: &str) -> Result<(), String> {
+        let device = self.devices.devices.iter_mut().find(|d| d.id == device_id).ok_or("unknown_device")?;
+        crate::services::server::vault::Vault::check_enrolment(&self.origin, device_id, &device.public_key, ecdh, signature)?;
+        // A new key for a device that had one (its browser lost the old
+        // private key, or a save failed after an earlier enrolment): the wrap
+        // made for the old key can never be opened again, and `wrap_missing`
+        // skips a device that has a wrap — drop it, so the caller's
+        // `wrap_missing` (while unlocked) or the next release wraps the new one.
+        let changed = device.ecdh_public_key.as_deref().is_some_and(|old| old != ecdh);
+        device.ecdh_public_key = Some(ecdh.to_string());
+        if changed {
+            if let Some(vault) = crate::services::server::vault::vault() {
+                vault.drop_wrap(device_id);
+            }
+        }
+        self.save_devices()?;
+        self.audit("secrets_enrolled", Some(device_id));
+        Ok(())
+    }
+
+    /// A nonce for `action` (user decision 2026-10-03: the secrets key's
+    /// set-up and a new recovery code need the pairing key, not only the
+    /// session). The device signs [`Vault::action_payload`] over it, built
+    /// on its own side from these fields, never a text the server sends.
+    ///
+    /// [`Vault::action_payload`]: crate::services::server::vault::Vault::action_payload
+    pub fn action_challenge(&mut self, device_id: &str, action: &str) -> Result<(String, u64), String> {
+        if !SIGNED_ACTIONS.contains(&action) {
+            return Err("unknown_action".into());
+        }
+        if !self.devices.devices.iter().any(|d| d.id == device_id) {
+            return Err("unknown_device".into());
+        }
+        let t = now();
+        self.action_challenges.retain(|_, c| c.expires_at >= t);
+        if self.action_challenges.values().filter(|c| c.device_id == device_id).count() >= 4 || self.action_challenges.len() >= 256 {
+            return Err("rate_limited".into());
+        }
+        let nonce = random_id::<24>()?;
+        let expires_at = t + CHALLENGE_TTL;
+        let payload = crate::services::server::vault::Vault::action_payload(&self.origin, device_id, action, &nonce, expires_at);
+        self.action_challenges.insert(nonce.clone(), Challenge { device_id: device_id.into(), payload, expires_at });
+        Ok((nonce, expires_at))
+    }
+
+    /// Spend an action nonce: the signature must be the device's pairing key
+    /// over the payload made for this device and this action.
+    pub fn verify_action(&mut self, device_id: &str, action: &str, nonce: &str, signature: &str) -> Result<(), String> {
+        let challenge = self.action_challenges.remove(nonce).ok_or("invalid_challenge")?;
+        if challenge.device_id != device_id || challenge.expires_at < now() || !challenge.payload.contains(&format!("\n{action}\n{nonce}\n")) {
+            return Err("invalid_challenge".into());
+        }
+        let device = self.devices.devices.iter().find(|d| d.id == device_id).ok_or("unknown_device")?;
+        let der = Base64UrlUnpadded::decode_vec(&device.public_key).map_err(|_| "invalid_public_key")?;
+        let verifying = VerifyingKey::from(PublicKey::from_public_key_der(&der).map_err(|_| "invalid_public_key")?);
+        let sig = Base64UrlUnpadded::decode_vec(signature).map_err(|_| "invalid_signature")?;
+        let sig = Signature::from_slice(&sig).map_err(|_| "invalid_signature")?;
+        verifying.verify(challenge.payload.as_bytes(), &sig).map_err(|_| "invalid_signature")?;
+        self.audit(action, Some(device_id));
+        Ok(())
+    }
+
+    /// Every paired device's enrolled ECDH key.
+    pub fn secrets_device_keys(&self) -> Vec<crate::services::server::vault::DeviceKey> {
+        device_keys_of(&self.devices)
+    }
+
     /// Whether `device_id` is kept out of `section`. An unknown device hides
     /// nothing here — it never got past `authenticate` to ask.
     pub fn hides(&self, device_id: &str, section: &str) -> bool {
@@ -613,18 +814,41 @@ impl AuthStore {
         }
         self.sessions.retain(|_, s| s.device_id != device_id);
         self.challenges.retain(|_, c| c.device_id != device_id);
-        self.save_devices()?;
+        self.action_challenges.retain(|_, c| c.device_id != device_id);
+        // The device list is saved first: a crash before the vault below
+        // leaves a wrap of a device no longer listed, which the next release
+        // drops and rotates for; the other order left a device whose key had
+        // been rotated away still paired on disk, to be wrapped again.
+        let saved = self.save_devices();
+        // §6.8: a revoked device's wrap of the secrets key goes with it, and
+        // the key is rotated (now if unlocked, else at the next release), so
+        // the device and an old copy of the wraps open nothing new.
+        if let Some(vault) = crate::services::server::vault::vault() {
+            if let Err(error) = vault.revoke(device_id, &self.secrets_device_keys()) {
+                eprintln!("secrets: revoking {device_id}: {error} (the rotation is retried at the next release)");
+            }
+        }
+        saved?;
         self.push.forget_device(device_id)?;
         self.audit("revoked", Some(device_id));
         Ok(())
     }
 
     pub fn forget_all(&mut self) -> Result<(), String> {
+        let forgotten: Vec<String> = self.devices.devices.iter().map(|d| d.id.clone()).collect();
         self.devices.devices.clear();
         self.sessions.clear();
         self.challenges.clear();
+        self.action_challenges.clear();
         self.pairing = None;
-        self.save_devices()?;
+        // Saved before the vault hears of it, as in `revoke`.
+        let saved = self.save_devices();
+        if let Some(vault) = crate::services::server::vault::vault() {
+            if let Err(error) = vault.forget_devices(&forgotten) {
+                eprintln!("secrets: forgetting every device: {error} (the rotation is retried at the next release)");
+            }
+        }
+        saved?;
         self.push.forget_all()?;
         let next = random_bytes::<32>()?;
         let key_path = self.control_dir.join("host.key");
@@ -727,11 +951,100 @@ impl AuthStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_invite_file_enrols_once_and_wears_out_like_a_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let mut store = AuthStore::open(&control, "https://desk.example.ts.net".into()).unwrap();
+        let key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        use p256::pkcs8::EncodePublicKey;
+        let public = Base64UrlUnpadded::encode_string(key.verifying_key().to_public_key_der().unwrap().as_bytes());
+        assert_eq!(store.pair("12345678", "Laptop", &public), Err("invalid_pairing_code".into()), "no code, no invite");
+        write_invite(&control, "12345678", now() + 60).unwrap();
+        for _ in 0..PAIR_CODE_ATTEMPTS - 1 {
+            assert!(store.pair("00000000", "Laptop", &public).is_err());
+        }
+        assert!(control.join(INVITE_FILE).exists(), "still one guess left");
+        store.pair("12345678", "Laptop", &public).expect("the invite enrols");
+        assert!(!control.join(INVITE_FILE).exists(), "spent");
+        assert!(store.pair("12345678", "Laptop", &public).is_err());
+        // Too many misses retire the file; an expired invite is gone at first use.
+        // (A fresh store: the pair rate limit is per process, ten a minute.)
+        let mut store = AuthStore::open(&control, "https://desk.example.ts.net".into()).unwrap();
+        write_invite(&control, "22222222", now() + 60).unwrap();
+        for _ in 0..PAIR_CODE_ATTEMPTS {
+            assert!(store.pair("00000000", "Laptop", &public).is_err());
+        }
+        assert!(!control.join(INVITE_FILE).exists());
+        write_invite(&control, "33333333", now() - 1).unwrap();
+        assert!(store.pair("33333333", "Laptop", &public).is_err());
+        assert!(!control.join(INVITE_FILE).exists());
+        assert_eq!(invite_hash("x").len(), 64);
+        assert_ne!(invite_hash("x"), invite_hash("y"));
+    }
     use p256::{
         ecdsa::{signature::Signer, SigningKey},
         elliptic_curve::rand_core::OsRng,
         pkcs8::EncodePublicKey,
     };
+
+    /// The daemon's start reads the device list from the file: no file is
+    /// no device, but an unreadable one must not read as "no devices" (the
+    /// vault would drop every device's wrap).
+    #[test]
+    fn an_unreadable_device_file_is_an_error_not_an_empty_list() {
+        let dir = tempfile::tempdir().expect("control dir");
+        assert_eq!(read_secrets_device_keys(dir.path()), Ok(Vec::new()));
+        std::fs::write(dir.path().join("devices.json"), b"{ not json").expect("write");
+        assert!(read_secrets_device_keys(dir.path()).is_err());
+    }
+
+    /// User decision 2026-10-03: setting the secrets key up and a new
+    /// recovery code need the pairing key's signature over a single-use
+    /// nonce made for that device and that action.
+    #[test]
+    fn signed_actions_need_the_pairing_key_and_are_single_use() {
+        let dir = tempfile::tempdir().expect("control dir");
+        let origin = "https://desk.example.ts.net";
+        let mut auth = AuthStore::open(dir.path(), origin.into()).expect("auth store");
+        let signing = SigningKey::random(&mut OsRng);
+        let public = Base64UrlUnpadded::encode_string(signing.verifying_key().to_public_key_der().expect("SPKI").as_bytes());
+        let (code, _) = auth.create_pairing_code().expect("pairing code");
+        let device = auth.pair(&code, "Phone", &public).expect("paired");
+        let sign = |key: &SigningKey, action: &str, nonce: &str, expires_at: u64| {
+            let payload = crate::services::server::vault::Vault::action_payload(origin, &device, action, nonce, expires_at);
+            let signature: Signature = key.sign(payload.as_bytes());
+            Base64UrlUnpadded::encode_string(&signature.to_bytes())
+        };
+        assert_eq!(auth.action_challenge(&device, "login"), Err("unknown_action".into()));
+        assert_eq!(auth.action_challenge("dev_nobody", "secrets-setup"), Err("unknown_device".into()));
+
+        let (nonce, expires_at) = auth.action_challenge(&device, "secrets-setup").expect("nonce");
+        let stranger = SigningKey::random(&mut OsRng);
+        assert_eq!(auth.verify_action(&device, "secrets-setup", &nonce, &sign(&stranger, "secrets-setup", &nonce, expires_at)), Err("invalid_signature".into()), "another key");
+        assert_eq!(auth.verify_action(&device, "secrets-setup", &nonce, &sign(&signing, "secrets-setup", &nonce, expires_at)), Err("invalid_challenge".into()), "the failed try spent it");
+
+        let (nonce, expires_at) = auth.action_challenge(&device, "secrets-setup").expect("nonce");
+        let signature = sign(&signing, "secrets-setup", &nonce, expires_at);
+        assert_eq!(auth.verify_action(&device, "secrets-recovery-code", &nonce, &signature), Err("invalid_challenge".into()), "made for another action");
+        let (nonce, expires_at) = auth.action_challenge(&device, "secrets-setup").expect("nonce");
+        let signature = sign(&signing, "secrets-setup", &nonce, expires_at);
+        auth.verify_action(&device, "secrets-setup", &nonce, &signature).expect("signed");
+        assert_eq!(auth.verify_action(&device, "secrets-setup", &nonce, &signature), Err("invalid_challenge".into()), "single use");
+        // A login challenge's signature is no action signature, and the
+        // other way round.
+        let (login_nonce, payload, _) = auth.challenge(&device).expect("challenge");
+        let login_sig: Signature = signing.sign(payload.as_bytes());
+        assert!(auth.verify_action(&device, "secrets-setup", &login_nonce, &Base64UrlUnpadded::encode_string(&login_sig.to_bytes())).is_err());
+        // Bounded per device.
+        for _ in 0..4 {
+            auth.action_challenge(&device, "secrets-recovery-code").expect("nonce");
+        }
+        assert_eq!(auth.action_challenge(&device, "secrets-recovery-code"), Err("rate_limited".into()));
+        auth.revoke(&device).expect("revoke");
+        assert!(auth.action_challenges.is_empty(), "a revoked device's nonces go with it");
+    }
 
     #[test]
     fn pairing_login_and_revocation_are_key_bound() {

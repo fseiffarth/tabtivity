@@ -1,0 +1,21 @@
+[package]
+name = "app-serverd"
+# Not bumped with the app (`scripts/bump-version.sh` tracks src-tauri); the
+# daemon ships with the gateway as one server release (hosted plan §8).
+version = "0.1.0"
+edition = "2021"
+description = "The per-user server daemon of the hosted server: the desktop library without its window toolkit."
+license = "MIT OR Apache-2.0"
+publish = false
+
+# The per-user server daemon (docs/tabtivity_hosted_plan.md §3.1), started by
+# `<slug>-serverd@<user>.service`. Linux only. Built on its own
+# (`cargo build -p app-serverd`) it links no Tauri, WebKitGTK, GTK, X11 or
+# libdbus: the library comes without its `desktop` feature (TODO #2349).
+[[bin]]
+name = "tabtivity-serverd"
+path = "src/main.rs"
+
+[dependencies]
+# The desktop library (`app_lib`) without its `desktop` feature.
+app-lib = { package = "tabtivity", path = "../src-tauri", default-features = false }

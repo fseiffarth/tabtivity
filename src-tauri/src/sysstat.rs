@@ -2915,19 +2915,33 @@ M\t44000
         // changing the root set forces a real recompute.
         let fake_roots = vec![424242u32];
         let fake_pids = vec![424242u32, 999999u32];
-        let gen = PROC_TREE_GEN.load(Ordering::Relaxed);
-        {
-            let mut cache = DESCENDANT_CACHE.lock().unwrap();
-            *cache = vec![DescendantCache {
-                roots: fake_roots.clone(),
-                pids: fake_pids.clone(),
-                generation: gen,
-                computed_at: Instant::now(),
-            }];
-        }
         // Same roots + same generation + fresh → cache hit returns the seeded set
         // (which could never come from a real process walk for pid 424242).
-        assert_eq!(descendant_pids(&[424242]), fake_pids);
+        // Every PTY spawn or reap in a parallel test bumps the generation, and
+        // most of them do not take the cache lock (final review B9): a query
+        // whose generation moved between the seed and the answer proves
+        // nothing, so it is seeded and asked again.
+        let mut hit = false;
+        for _ in 0..50 {
+            let gen = PROC_TREE_GEN.load(Ordering::Relaxed);
+            {
+                let mut cache = DESCENDANT_CACHE.lock().unwrap();
+                *cache = vec![DescendantCache {
+                    roots: fake_roots.clone(),
+                    pids: fake_pids.clone(),
+                    generation: gen,
+                    computed_at: Instant::now(),
+                }];
+            }
+            let answer = descendant_pids(&[424242]);
+            if PROC_TREE_GEN.load(Ordering::Relaxed) != gen {
+                continue;
+            }
+            assert_eq!(answer, fake_pids);
+            hit = true;
+            break;
+        }
+        assert!(hit, "the process tree never held still for one query");
 
         // Invalidation bumps the generation, so the stale synthetic entry is no
         // longer reused — the rebuild walks the real tree and 999999 is gone.

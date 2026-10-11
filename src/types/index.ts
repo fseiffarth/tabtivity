@@ -162,6 +162,10 @@ export interface Settings {
     /** Quitting Tabtivity leaves the Mobile host running (headless owner). Unset
      * is off; read by the quit path. */
     stay_after_quit?: boolean;
+    /** Serve the desktop app to a browser on this machine (hosted plan P2,
+     * Settings → Mobile → Browser access). Unset is off; loopback only; read
+     * by the sidecar at start. */
+    browser_client?: boolean;
     /** A paired phone may see and open shell tabs. Unset is off (the phone is
      * agents-only); read by the sidecar per catalog load and repeated by the
      * desktop bridge. */
@@ -175,6 +179,9 @@ export interface Settings {
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */
   mobile_indicator?: boolean;
+  /** Server mode only (hosted plan §6.7): the features this user switched off
+   * for themselves (`"mail"`, `"calendar"`, `"todo"`). Ignored on the desktop. */
+  disabled_features?: string[];
   /** Is the header's machine-state cluster (connection, battery, Mobile, VPN,
    * Machines, CPU/RAM/GPU) expanded into the bar? Unset means collapsed to a
    * single summary lamp; anything non-nominal shows itself regardless. */
@@ -463,10 +470,13 @@ export interface Settings {
    *  (backend `services::agent_api_keys`), set by Manage CLIs → API keys.
    *  Opt-in: unset or empty hands no key to any CLI. Never a key itself. */
   agent_api_key_clis?: string[];
-  /** Monthly spending limit in US dollars per provider id (`anthropic`,
-   *  `gemini`) for the stored API keys (backend `services::api_usage`),
-   *  enforced by the API proxy. Saving a key requires one. */
+  /** An older build's monthly limit in US dollars per provider id: kept as
+   *  written and shown as a hint only (#2389). */
   agent_api_limits?: Record<string, number>;
+  /** Monthly limit in billed tokens per provider id (`anthropic`, `gemini`)
+   *  for the stored API keys (backend `services::api_usage`), enforced by the
+   *  API proxy. Saving a key requires one. */
+  agent_api_token_limits?: Record<string, number>;
   /** The order of the Agents group's rows, which is the order Ctrl+1–9 number
    *  them: row keys (a built-in's command, `"claude"`; a custom agent's
    *  `"custom:<id>"`). Set by Manage CLIs' ↑/↓. Unset = the default agent

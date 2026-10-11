@@ -144,7 +144,7 @@ export interface MailEncryptionState {
   enabled: boolean;
   /** The store actually open right now seals its values. */
   active: boolean;
-  mode?: "keychain" | "passphrase";
+  mode?: "keychain" | "passphrase" | "device";
   /** The open store is memory-only: nothing is being written down. */
   ephemeral: boolean;
   /** Why, in the user's words. Present only with `ephemeral`. */

@@ -125,6 +125,15 @@ older phone bundle sends no `origin`: the chat wording.
 - **Headless: `desktop_unavailable`.** The asks live in the window's
   process; with no window there is no listener and no ask. The three phone
   routes answer `503 desktop_unavailable`, which the phone reads as "no card".
+  A desktop's Mobile host never serves the lane: asks it held would be
+  invisible to the window's markup view.
+- **A server daemon serves it itself** (hosted plan; `Runtime::serves_markup`).
+  It has no window, so its own listener routes `/mcp/markup`, its browser
+  client's `markup_mcp_*` commands read the asks in the same process, and
+  the phone routes are answered there (`host.rs` `markup_here`: the bridge's
+  steps, an answer held for the tab as a phone prompt with no window is,
+  reopened when the hold fails). `markup-mcp-changed` rings to the browser
+  clients.
 
 ## Ticks (`markup_done`)
 
@@ -289,5 +298,9 @@ the app. QA group-h 31bt.
    (phone), and a retry delivers.
 8. Window closed (headless host): the phone shows no card and no error.
    Codex tab: the same flow.
+8b. Server daemon (no window): a project agent tab opened from the browser
+   client has `markup_ask`; its card shows in the browser's markup view and
+   on the phone; answering from either types the prompt into the tab, the
+   other card closes; ticks show on both.
 9. Manage CLIs → Advanced switch off: a new tab has no `markup_ask`; a tab
    opened before answers `off`.

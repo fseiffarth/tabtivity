@@ -12,7 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../../mobile-web/src/api";
-import { hasPairedDevice, logoutAuth, pair, resumeAuth } from "../../../mobile-web/src/auth";
+import { finishOidcReturn, hasPairedDevice, logoutAuth, oidcProvider, pair, resumeAuth, startOidc } from "../../../mobile-web/src/auth";
 import { BRAND } from "../../lib/brand";
 
 // ── A minimal IndexedDB: one database, named stores, get/put by key ─────────
@@ -435,5 +435,46 @@ describe(`${BRAND.display} Mobile auth — pair and logout`, () => {
     await logoutAuth();
     expect(fetchMock).toHaveBeenCalledOnce();
     await expect(hasPairedDevice()).resolves.toBe(true);
+  });
+});
+
+describe(`${BRAND.display} Mobile auth — sign-in at an identity provider (hosted P5)`, () => {
+  afterEach(() => history.replaceState(null, "", "/"));
+
+  it("asks the gateway whether a provider is offered; none on a desktop host", async () => {
+    fetchAnswering({ "GET /gateway/v1/oidc": json({ enabled: true, name: "Lab SSO" }) });
+    await expect(oidcProvider()).resolves.toBe("Lab SSO");
+    fetchAnswering({ "GET /gateway/v1/oidc": json({ enabled: false }) });
+    await expect(oidcProvider()).resolves.toBeNull();
+    fetchAnswering({ "GET /gateway/v1/oidc": () => new Response("", { status: 404 }) });
+    await expect(oidcProvider()).resolves.toBeNull();
+  });
+
+  it("keeps the new key across the provider's redirect and pairs it under the id the server returns", async () => {
+    const fetchMock = fetchAnswering({ "POST /gateway/v1/oidc/start": json({ url: "https://idp.example/auth?state=s" }) });
+    const go = vi.fn();
+    await startOidc("Lab laptop", go);
+    expect(body(fetchMock, "POST", "/gateway/v1/oidc/start")).toEqual({ public_key: "ABCD", device_name: "Lab laptop" });
+    expect(go).toHaveBeenCalledWith("https://idp.example/auth?state=s");
+    expect(stores.get("keys")?.get("oidc-pending")).toBe(privateKey);
+    await expect(hasPairedDevice()).resolves.toBe(false);
+    history.replaceState(null, "", "/?oidc=paired&device=dev_oidc_0001");
+    await expect(finishOidcReturn()).resolves.toBe("paired");
+    expect(stores.get("keys")?.get("device")).toEqual({ deviceId: "dev_oidc_0001", privateKey });
+    expect(stores.get("keys")?.get("oidc-pending")).toBeNull();
+    expect(location.search).toBe(""); // a reload never repeats it
+    await expect(finishOidcReturn()).resolves.toBeNull();
+  });
+
+  it("pairs nothing on any other outcome, or without the key it started with", async () => {
+    stores.set("keys", new Map<string, unknown>([["oidc-pending", privateKey]]));
+    history.replaceState(null, "", "/?oidc=unknown");
+    await expect(finishOidcReturn()).resolves.toBe("unknown");
+    await expect(hasPairedDevice()).resolves.toBe(false);
+    history.replaceState(null, "", "/?oidc=paired&device=dev_oidc_0001");
+    await expect(finishOidcReturn()).resolves.toBe("expired");
+    history.replaceState(null, "", "/?oidc=paired&device=bad%20id");
+    await expect(finishOidcReturn()).resolves.toBe("refused");
+    await expect(hasPairedDevice()).resolves.toBe(false);
   });
 });

@@ -24,17 +24,13 @@ pub mod git_push_mcp;
 pub mod git_release;
 pub mod git_ci;
 pub mod help_mcp;
+pub use app_core::services::schedule_usage;
+pub use app_core::services::agent_usage;
 pub mod markup_mcp;
 // The Undo of a PDF markup round that applied the marks directly: git-tree
 // snapshots of the work tree in the round's own object store under the state
 // dir, reverse-applied only when nothing changed since.
 pub mod markup_rounds;
-pub mod schedule_usage;
-// One agent CLI's own usage panel (Claude's `/usage`), read in print mode
-// without a tab: recipe table, envelope parsing, and the short-lived cache
-// that keeps a phone reopening the status sheet from spawning a CLI each
-// time.
-pub mod agent_usage;
 // Which release of each agent CLI is installed vs. the one Tabtivity's parsers
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
@@ -46,7 +42,7 @@ pub mod agent_latest;
 pub mod agent_fence;
 // Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap.
 #[cfg(target_os = "linux")]
-pub mod fence_scope;
+pub use app_core::services::fence_scope;
 // `--agent-exec`: an agent's secrets mapped from their app-named carriers to
 // the CLI's own variable names, just before the agent runs (no common name on
 // the user's tmux server).
@@ -74,7 +70,7 @@ pub mod copilot_auth;
 // "Check for a new Tabtivity" against the GitHub releases page: version compare,
 // per-platform asset pick, staged download, per-platform install.
 pub mod app_update;
-pub mod big_folders;
+pub use app_core::services::big_folders;
 // Ask-once approval for project-supplied programs Tabtivity runs on the host
 // (git hooks, latexmkrc, a project's own prettier), re-asked when they change.
 pub mod exec_trust;
@@ -106,10 +102,11 @@ pub mod codex_bind;
 pub mod codex_store;
 pub mod copilot;
 pub mod git_credentials;
+// The `.git` control files a sandbox keeps its occupant from writing (#158);
+// back in this crate since #2347 gave it `home_io`.
+pub mod git_guard;
 // Bounded local git runs: FIFO pre-check + timeout that reaps the subtree (#2349).
 pub mod git_bounded;
-// The `.git` control files a sandbox keeps its occupant from writing (#158).
-pub mod git_guard;
 // The default branch (`main`) for repositories Tabtivity creates, and the
 // unpublished-`master` rename that runs just before a publish.
 pub mod git_init;
@@ -122,6 +119,21 @@ pub mod hpc_mode;
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
 pub mod local_loss;
+// Hosted plan §3.3: every registered Tauri command's class (core / client /
+// admin / off) and the test that fails when one is added without a row.
+pub mod command_class;
+// Hosted plan §10 P2: the generated `core` dispatcher a server host answers a
+// browser's `invoke` with, the class check in front of it, and
+// `server_capabilities`.
+pub mod core_dispatch;
+// Hosted plan §3.3: the admin-allowed model list a browser client's
+// completion / local-model requests are held to before they reach Ollama.
+pub mod model_allowlist;
+// Hosted plan §3.5: a picked server file as a single-use grant, so the mail
+// commands never take a frontend path even in the browser client.
+pub mod pick_grants;
+// Server mode: the per-user daemon behind the gateway (hosted plan §10 P3).
+pub mod server;
 // Local-model mail assistant (Group Q, #203–#208): the loopback-only /api/chat
 // helper, prompt builders and defensive JSON parsers. AI never touches the net.
 pub mod mail_ai;
@@ -139,8 +151,12 @@ pub mod mail_crypt;
 pub mod private_file;
 pub mod mail_crypto;
 pub mod mail_engine;
+// Connect to a server (hosted plan §7.2, P5): pairing, sign-in and the
+// desktop socket a Connect window is bridged to.
+pub mod connect;
 pub mod mail_filters;
 pub mod mail_pgp;
+pub mod mail_rekey;
 pub mod mail_reader;
 pub mod mail_sanitize;
 pub mod mail_store;
@@ -150,10 +166,11 @@ pub mod mobile_control;
 pub mod net_usage;
 pub mod opencode_store;
 pub mod openvpn;
+pub mod process_lease;
 pub mod project_runtime;
 pub mod prompt_blame;
 pub mod remote;
-pub mod remote_agents;
+pub use app_core::services::remote_agents;
 pub mod remote_credentials;
 pub mod remote_sync;
 pub mod remote_usage;
@@ -207,16 +224,9 @@ pub mod usage_stats;
 // plus its allowlisting egress proxy and the built-in cloud-init seed writer.
 pub mod iso9660;
 pub mod vm;
-pub mod vm_proxy;
-// Shared web-safety primitives (URL policy, host display, filename sanitizing)
-// used by BOTH the mail client and the in-app browser. `mail_sanitize`
-// re-exports what it used to own.
-pub mod web_safety;
-// The WebKitGTK accessibility (AT-SPI) opt-out: WebKit 2.48's ATSPI text
-// handler aborts the whole web process on an out-of-range offset, which a
-// continuously rewriting UI hands it routinely. Installed before the first
-// webview, stripped from spawned children.
-pub mod webkit_a11y;
+pub use app_core::services::vm_proxy;
+pub use app_core::services::web_safety;
+pub use app_core::services::webkit_a11y;
 // GPU video decoders demoted while the DMA-BUF renderer is off, so the media
 // viewer's frames decode where the software painter can draw them. Installed
 // before the first webview, stripped from spawned children.
@@ -229,6 +239,6 @@ pub mod window_service;
 pub mod window_state;
 pub mod worker_sync;
 
-pub mod text_completion;
+pub use app_core::services::text_completion;
 // One FIFO worker thread: the state-file commands' way off the GTK thread.
 pub mod ordered_lane;

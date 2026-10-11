@@ -75,7 +75,7 @@ pub(crate) fn control_dir() -> PathBuf {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(|p| p.is_dir());
-    let dir = pick_control_dir(runtime.as_deref(), &storage::state_dir());
+    let dir = pick_control_dir(runtime.as_deref(), &storage::state_dir(), private_tmp_control_dir);
     #[cfg(unix)]
     if runtime.as_deref().is_some_and(|rt| dir.starts_with(rt)) && !dir.is_dir() {
         use std::os::unix::fs::DirBuilderExt;
@@ -98,7 +98,17 @@ const CONTROL_SOCKET_SUFFIX: usize = "/cm-".len() + 40 + ".".len() + 16;
 /// `<runtime>/tabtivity-ssh`. The rename made the state dir three bytes longer, which
 /// pushed `/home/<user>/.local/share/<slug>/ssh-control` past the limit for
 /// any user name over five letters (over eight before).
-fn pick_control_dir(runtime: Option<&std::path::Path>, state_dir: &std::path::Path) -> PathBuf {
+///
+/// With neither — the server daemon (hosted plan §3.1): a system unit gets no
+/// `$XDG_RUNTIME_DIR`, and its state dir `~/.local/share/<slug>-server` never
+/// leaves room — `private_tmp` is asked for `/tmp/<slug>-ssh-<uid>`, used
+/// only when it is a directory this uid owns with mode `0700` (the daemon's
+/// `/tmp` is its unit's private one; fenced tabs get their own `/tmp`).
+fn pick_control_dir(
+    runtime: Option<&std::path::Path>,
+    state_dir: &std::path::Path,
+    private_tmp: impl FnOnce() -> Option<PathBuf>,
+) -> PathBuf {
     let fits = |dir: &std::path::Path| dir.as_os_str().len() + CONTROL_SOCKET_SUFFIX <= SOCKET_PATH_MAX;
     let in_state = state_dir.join("ssh-control");
     if fits(&in_state) {
@@ -108,8 +118,32 @@ fn pick_control_dir(runtime: Option<&std::path::Path>, state_dir: &std::path::Pa
         Some(rt) if fits(&rt.join(concat!(crate::app_slug!(), "-ssh"))) => {
             rt.join(concat!(crate::app_slug!(), "-ssh"))
         }
-        _ => in_state,
+        _ => private_tmp().filter(|dir| fits(dir)).unwrap_or(in_state),
     }
+}
+
+/// `/tmp/<slug>-ssh-<uid>`, created `0700`, and returned only when it is a
+/// real directory (not a link) owned by this uid that no one else can enter
+/// — on a shared `/tmp` another account could have made it first.
+#[cfg(unix)]
+fn private_tmp_control_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    // SAFETY: geteuid has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    let dir = PathBuf::from("/tmp").join(format!("{}-ssh-{uid}", crate::app_slug!()));
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(&dir);
+    owned_private_dir(&dir, uid).then_some(dir)
+}
+
+#[cfg(not(unix))]
+fn private_tmp_control_dir() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(unix)]
+fn owned_private_dir(dir: &std::path::Path, uid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir() && m.uid() == uid && m.mode() & 0o077 == 0)
 }
 
 /// The socket path `cm-%C` actually expands to for this target.
@@ -1432,15 +1466,47 @@ mod tests {
         let rt = Path::new("/run/user/1000");
         let short = Path::new(concat!("/s/", crate::app_slug!()));
         let long = Path::new(concat!("/home/someone/.local/share/", crate::app_slug!()));
-        assert_eq!(pick_control_dir(Some(rt), short), short.join("ssh-control"));
-        let moved = pick_control_dir(Some(rt), long);
+        let no_tmp = || None;
+        assert_eq!(pick_control_dir(Some(rt), short, no_tmp), short.join("ssh-control"));
+        let moved = pick_control_dir(Some(rt), long, no_tmp);
         assert_eq!(moved, rt.join(concat!(crate::app_slug!(), "-ssh")));
         assert!(moved.as_os_str().len() + CONTROL_SOCKET_SUFFIX <= SOCKET_PATH_MAX);
-        assert_eq!(pick_control_dir(None, long), long.join("ssh-control"));
-        assert_eq!(pick_control_dir(Some(Path::new("run")), long), long.join("ssh-control"));
+        assert_eq!(pick_control_dir(None, long, no_tmp), long.join("ssh-control"));
+        assert_eq!(pick_control_dir(Some(Path::new("run")), long, no_tmp), long.join("ssh-control"));
+        // The server daemon: no runtime dir, and `<slug>-server` never fits
+        // even for a one-letter user — the private /tmp dir takes over.
+        let server = Path::new(concat!("/home/a/.local/share/", crate::app_slug!(), "-server"));
+        assert!(server.join("ssh-control").as_os_str().len() + CONTROL_SOCKET_SUFFIX > SOCKET_PATH_MAX);
+        let tmp_dir = PathBuf::from(concat!("/tmp/", crate::app_slug!(), "-ssh-4294967294"));
+        assert_eq!(pick_control_dir(None, server, || Some(tmp_dir.clone())), tmp_dir);
+        assert!(tmp_dir.as_os_str().len() + CONTROL_SOCKET_SUFFIX <= SOCKET_PATH_MAX);
+        assert_eq!(pick_control_dir(None, server, no_tmp), server.join("ssh-control"), "unusable: unchanged");
         // The exact bytes OpenSSH binds: `<dir>/cm-<40 hex>.<16 chars>`.
         let tmp = format!("{}/cm-{}.{}", moved.display(), "0".repeat(40), "x".repeat(16));
         assert_eq!(tmp.len(), moved.as_os_str().len() + CONTROL_SOCKET_SUFFIX);
+    }
+
+    /// The `/tmp` fallback is used only when this uid owns it privately:
+    /// a directory someone else made first, or a loose one, is refused.
+    #[cfg(unix)]
+    #[test]
+    fn the_tmp_control_dir_must_be_private_and_ours() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().unwrap();
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        let dir = base.path().join("ctl");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(owned_private_dir(&dir, uid));
+        assert!(!owned_private_dir(&dir, uid.wrapping_add(1)), "someone else's");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!owned_private_dir(&dir, uid), "others can enter it");
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!owned_private_dir(&link, uid), "a link is never followed");
+        assert!(!owned_private_dir(&base.path().join("missing"), uid));
     }
 
     /// **G.25's kill predicate.** The sweep signals a pid, so the one thing that

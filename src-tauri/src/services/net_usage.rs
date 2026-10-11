@@ -99,7 +99,7 @@ fn sample_due(since_last: Option<std::time::Duration>, pane_open: bool) -> bool 
 pub fn start(pool: RemotePoolState) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        tauri::async_runtime::spawn(run(pool));
+        app_core::rt::spawn(run(pool));
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -206,7 +206,7 @@ mod sampler {
                 Vec::new()
             } else {
                 last_sample = Some(std::time::Instant::now());
-                tauri::async_runtime::spawn_blocking(move || {
+                app_core::rt::spawn_blocking(move || {
                     // A unit struct on macOS only: `default()` is the
                     // spelling Linux compiles too.
                     #[cfg_attr(target_os = "macos", allow(clippy::default_constructed_unit_structs))]
@@ -281,7 +281,7 @@ mod sampler {
         if drained.is_empty() {
             return;
         }
-        let _ = tauri::async_runtime::spawn_blocking(move || {
+        let _ = app_core::rt::spawn_blocking(move || {
             let mut summary = net_usage::load();
             let hour = storage::hour_utc();
             for (id, c) in &drained {

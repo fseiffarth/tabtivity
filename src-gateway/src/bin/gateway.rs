@@ -1,0 +1,269 @@
+//! The server gateway (hosted plan §3.1): `<slug>-gateway serve`, started by
+//! `<slug>-gateway.service` as `<slug>-gw`. Linux only.
+
+fn main() {
+    #[cfg(target_os = "linux")]
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let slug = app_gateway::brand::SLUG;
+        match args.first().map(String::as_str) {
+            Some("serve") | None => {}
+            Some("keeper") => std::process::exit(keeper(&args[1..])),
+            Some("broker") => std::process::exit(broker(&args[1..])),
+            Some("hub") => std::process::exit(hub(&args[1..])),
+            Some("hub-forget") => std::process::exit(hub_forget(&args[1..])),
+            Some("keys-forget") => std::process::exit(keys_forget(&args[1..])),
+            Some("calendar") => std::process::exit(calendar(&args[1..])),
+            Some("--help") | Some("-h") => {
+                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH] [--usage-dir PATH]\n{slug}-gateway broker [--listen ADDR] [--dir PATH] [--usage-dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n{slug}-gateway keys-forget USER\n{slug}-gateway calendar [--socket PATH] [--dir PATH]\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nbroker: calls the provider with an administrator's key for users holding a broker token, within their budgets (as {slug}-auth, on the loopback port systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).\nkeys-forget: as root, takes a removed account off every administrator's key list (the admin helper's user-remove).\ncalendar: holds the calendars and to-do lists users opened to each other (as {slug}-cal, on the socket systemd passes).");
+                return;
+            }
+            Some(other) => {
+                eprintln!("{slug}-gateway: unknown argument {other:?} (try --help)");
+                std::process::exit(2);
+            }
+        }
+        let config = match app_gateway::config::GatewayConfig::from_env() {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("{slug}-gateway: {error}");
+                std::process::exit(2);
+            }
+        };
+        let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("{slug}-gateway: runtime: {error}");
+                std::process::exit(1);
+            }
+        };
+        if let Err(error) = runtime.block_on(app_gateway::server::serve(config)) {
+            eprintln!("{slug}-gateway: {error}");
+            std::process::exit(1);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        eprintln!("the server gateway runs on Linux only");
+        std::process::exit(2);
+    }
+}
+
+/// `<slug>-gateway keeper`: the key keeper (hosted plan §5.4), started by
+/// `<slug>-auth-keeper.service` as `<slug>-auth` on the socket its socket
+/// unit passes; `--socket` binds one itself (a manual test), `--dir` names
+/// another key directory.
+#[cfg(target_os = "linux")]
+fn keeper(args: &[String]) -> i32 {
+    use app_gateway::keeper::{self, Keeper, SystemPeers};
+    let slug = app_gateway::brand::SLUG;
+    let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let dir = value("--dir").map(std::path::PathBuf::from).unwrap_or_else(app_gateway::names::keeper_state_dir);
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway keeper: runtime: {error}");
+            return 1;
+        }
+    };
+    let result = runtime.block_on(async {
+        let listener = match keeper::activation_listener()? {
+            Some(listener) => listener,
+            None => {
+                let path = value("--socket").ok_or("no socket from systemd and no --socket PATH")?;
+                tokio::net::UnixListener::bind(&path).map_err(|e| format!("bind {path}: {e}"))?
+            }
+        };
+        let usage = value("--usage-dir").map(std::path::PathBuf::from).unwrap_or_else(app_gateway::names::broker_state_dir);
+        let keeper = std::sync::Arc::new(Keeper::new(dir, Box::new(SystemPeers)).with_usage_dir(usage));
+        eprintln!("{slug}-gateway keeper: {} key(s) on offer in {}", keeper.offered().len(), keeper.dir().display());
+        keeper::serve(keeper, listener).await
+    });
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{slug}-gateway keeper: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway broker`: the key broker (hosted plan §5.4, P5), started
+/// by `<slug>-keybroker.service` as `<slug>-auth` on the loopback port its
+/// socket unit holds; `--listen` binds one itself (a manual test, loopback
+/// only), `--dir` names another key directory.
+#[cfg(target_os = "linux")]
+fn broker(args: &[String]) -> i32 {
+    use app_gateway::broker::{self, Broker};
+    let slug = app_gateway::brand::SLUG;
+    let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let dir = value("--dir").map(std::path::PathBuf::from).unwrap_or_else(app_gateway::names::keeper_state_dir);
+    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway broker: runtime: {error}");
+            return 1;
+        }
+    };
+    let result = runtime.block_on(async {
+        let listener = match broker::activation_listener()? {
+            Some(listener) => listener,
+            None => {
+                let addr: std::net::SocketAddr = value("--listen").ok_or("no socket from systemd and no --listen ADDR")?.parse().map_err(|e| format!("--listen: {e}"))?;
+                if !addr.ip().is_loopback() {
+                    return Err("--listen must be a loopback address".to_string());
+                }
+                tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("bind {addr}: {e}"))?
+            }
+        };
+        let usage = value("--usage-dir").map(std::path::PathBuf::from).unwrap_or_else(app_gateway::names::broker_state_dir);
+        let broker = std::sync::Arc::new(Broker::new(dir, Default::default())?.with_usage_dir(usage));
+        eprintln!("{slug}-gateway broker: listening on {}", listener.local_addr().map(|a| a.to_string()).unwrap_or_default());
+        broker::serve(broker, listener).await
+    });
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{slug}-gateway broker: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway hub`: the share hub (hosted plan §6.2), started by
+/// `<slug>-hub.service` as `<slug>-hub` on the socket its socket unit
+/// passes; `--socket` binds one itself (a manual test), `--root`/`--dir`
+/// name other places.
+#[cfg(target_os = "linux")]
+fn hub(args: &[String]) -> i32 {
+    use app_gateway::hub;
+    let slug = app_gateway::brand::SLUG;
+    let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let mut service = hub::default_hub();
+    if let (Some(root), Some(dir)) = (value("--root"), value("--dir")) {
+        service = hub::Hub::new(root.into(), dir.into(), Box::new(hub::SystemHubPeers));
+    }
+    let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway hub: runtime: {error}");
+            return 1;
+        }
+    };
+    let result = runtime.block_on(async {
+        let listener = match app_gateway::keeper::activation_listener()? {
+            Some(listener) => listener,
+            None => {
+                let path = value("--socket").ok_or("no socket from systemd and no --socket PATH")?;
+                tokio::net::UnixListener::bind(&path).map_err(|e| format!("bind {path}: {e}"))?
+            }
+        };
+        eprintln!("{slug}-gateway hub: serving {}", service.root().display());
+        hub::serve(std::sync::Arc::new(service), listener).await
+    });
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{slug}-gateway hub: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway hub-forget USER`: as root, ask the hub to take USER off
+/// every share (their named ACL entries go with it).
+#[cfg(target_os = "linux")]
+fn hub_forget(args: &[String]) -> i32 {
+    use app_gateway::hub_wire::Request;
+    let slug = app_gateway::brand::SLUG;
+    let Some(user) = args.first().filter(|u| app_gateway::wire::valid_account_name(u)) else {
+        eprintln!("{slug}-gateway hub-forget: an account name is needed");
+        return 2;
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway hub-forget: runtime: {error}");
+            return 1;
+        }
+    };
+    match runtime.block_on(app_gateway::hub::ask(&app_gateway::names::hub_socket(), &Request::Forget { user: user.clone() }, b"")) {
+        Ok(reply) if reply.ok => 0,
+        Ok(reply) => {
+            eprintln!("{slug}-gateway hub-forget: {}", reply.error.unwrap_or_default());
+            1
+        }
+        Err(error) => {
+            eprintln!("{slug}-gateway hub-forget: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway keys-forget USER`: as root, ask the key keeper to take
+/// USER off every key's list (with their broker tokens and budgets).
+#[cfg(target_os = "linux")]
+fn keys_forget(args: &[String]) -> i32 {
+    use app_gateway::keys_wire::Request;
+    let slug = app_gateway::brand::SLUG;
+    let Some(user) = args.first().filter(|u| app_gateway::wire::valid_account_name(u)) else {
+        eprintln!("{slug}-gateway keys-forget: an account name is needed");
+        return 2;
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway keys-forget: runtime: {error}");
+            return 1;
+        }
+    };
+    match runtime.block_on(app_gateway::keeper::ask(&app_gateway::names::keeper_socket(), &Request::Forget { user: user.clone() })) {
+        Ok(reply) if reply.ok => 0,
+        Ok(reply) => {
+            eprintln!("{slug}-gateway keys-forget: {}", reply.error.unwrap_or_default());
+            1
+        }
+        Err(error) => {
+            eprintln!("{slug}-gateway keys-forget: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway calendar`: the shared-calendar service (hosted plan
+/// §6.7), started by `<slug>-calendar.service` as `<slug>-cal`.
+#[cfg(target_os = "linux")]
+fn calendar(args: &[String]) -> i32 {
+    use app_gateway::calendars;
+    let slug = app_gateway::brand::SLUG;
+    let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let mut service = calendars::default_service();
+    if let Some(dir) = value("--dir") {
+        service = calendars::Calendars::new(dir.into(), Box::new(app_gateway::hub::SystemHubPeers));
+    }
+    let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway calendar: runtime: {error}");
+            return 1;
+        }
+    };
+    let result = runtime.block_on(async {
+        let listener = match app_gateway::keeper::activation_listener()? {
+            Some(listener) => listener,
+            None => {
+                let path = value("--socket").ok_or("no socket from systemd and no --socket PATH")?;
+                tokio::net::UnixListener::bind(&path).map_err(|e| format!("bind {path}: {e}"))?
+            }
+        };
+        eprintln!("{slug}-gateway calendar: serving {}", service.dir().display());
+        calendars::serve(std::sync::Arc::new(service), listener).await
+    });
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{slug}-gateway calendar: {error}");
+            1
+        }
+    }
+}

@@ -12,12 +12,20 @@
 //! ordered worker (`services::ordered_lane`): the invoke is queued on the
 //! thread it arrived on, in arrival order, and the unchanged sync command body
 //! runs and answers from the worker.
+//!
+//! A server daemon's browser client takes the same commands in arrival order
+//! too (`mobile_control::web_client`, by [`is_ordered`]); the lane itself is
+//! the desktop window's.
 
+#[cfg(feature = "desktop")]
 use std::sync::Arc;
+#[cfg(feature = "desktop")]
 use std::time::Duration;
 
+#[cfg(feature = "desktop")]
 use crate::services::ordered_lane::OrderedLane;
 
+#[cfg(feature = "desktop")]
 static LANE: OrderedLane = OrderedLane::new("persist-lane");
 
 /// The commands that read or write `settings.json`, `projects.json` and the
@@ -43,6 +51,7 @@ pub fn is_ordered(command: &str) -> bool {
 
 /// Wrap the generated invoke handler: [`ORDERED`] commands go through the
 /// lane, everything else is dispatched exactly as before.
+#[cfg(feature = "desktop")]
 pub fn ordered<R, F>(handler: F) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static
 where
     R: tauri::Runtime,
@@ -63,6 +72,7 @@ where
 
 /// Let saves the window already sent reach disk before the process exits.
 /// Bounded: a hung filesystem must not keep a quit from finishing.
+#[cfg(feature = "desktop")]
 pub fn drain_at_exit() {
     if !LANE.drain(Duration::from_secs(5)) {
         eprintln!("persist lane still busy at exit; a queued save may be lost");

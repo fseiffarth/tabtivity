@@ -307,12 +307,81 @@ pub fn load_manifest(project_id: &str) -> Manifest {
 }
 
 /// Persist a project's manifest to disk (creates the state dir if needed).
+///
+/// Compare-and-swap across processes (G7 made real, final review B4): the
+/// window and its desktop sidecar share one state dir, each with its own
+/// [`SyncManifestState`] cache. Under the file's lock, a manifest this process
+/// loaded through [`ensure_loaded`] is written only while `sync.json` is still
+/// the version it was loaded from; otherwise nothing is written, the cache is
+/// marked stale (the next [`ensure_loaded`] re-reads the file) and the caller
+/// gets [`CHANGED_ELSEWHERE`] — a lost update becomes a retry.
 pub fn save_manifest(project_id: &str, manifest: &Manifest) -> Result<(), String> {
+    save_manifest_at(&manifest_path(project_id), manifest)
+}
+
+/// What [`save_manifest`] answers when another process wrote the manifest
+/// since this one read it.
+pub const CHANGED_ELSEWHERE: &str = "The sync state of this project was just changed by another window of this app (or its browser access); nothing was saved — try again.";
+
+fn save_manifest_at(path: &Path, manifest: &Manifest) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let _lock = crate::storage::FileLock::exclusive(path).map_err(|e| e.to_string())?;
+    let mut stamps = stamps();
+    if let Some(expected) = stamps.get(path) {
+        if *expected != stamp_of(path) {
+            stamps.remove(path);
+            return Err(CHANGED_ELSEWHERE.to_string());
+        }
+    }
+    crate::storage::write_json_atomic(path, manifest).map_err(|e| e.to_string())?;
+    stamps.insert(path.to_path_buf(), stamp_of(path));
+    Ok(())
+}
+
+/// Read-modify-write a project's manifest straight from the file, under its
+/// lock, for a caller outside the [`SyncManifestState`] cache; the cache
+/// re-reads the file at its next use.
+pub fn update_manifest(project_id: &str, update: impl FnOnce(&mut Manifest)) -> Result<(), String> {
     let path = manifest_path(project_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    crate::storage::write_json(&path, manifest).map_err(|e| e.to_string())
+    let _lock = crate::storage::FileLock::exclusive(&path).map_err(|e| e.to_string())?;
+    let mut manifest = load_manifest(project_id);
+    update(&mut manifest);
+    crate::storage::write_json_atomic(&path, &manifest).map_err(|e| e.to_string())?;
+    stamps().remove(&path);
+    Ok(())
+}
+
+/// Which version of a `sync.json` a cache holds: `None` = no file. Writes are
+/// atomic renames, so a new version is a new inode as well as a new mtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: Option<SystemTime>,
+    inode: u64,
+}
+
+fn stamp_of(path: &Path) -> Option<Stamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(&meta);
+    #[cfg(not(unix))]
+    let inode = 0;
+    Some(Stamp { len: meta.len(), modified: meta.modified().ok(), inode })
+}
+
+/// The version of each manifest file this process's cache was loaded from or
+/// last wrote, by path.
+fn stamps() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Option<Stamp>>> {
+    static STAMPS: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, Option<Stamp>>>> = std::sync::OnceLock::new();
+    STAMPS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────
@@ -532,9 +601,23 @@ pub fn ensure_loaded<'a>(
     cache: &'a mut HashMap<String, Manifest>,
     project_id: &str,
 ) -> &'a mut Manifest {
-    cache
-        .entry(project_id.to_string())
-        .or_insert_with(|| load_manifest(project_id))
+    ensure_loaded_at(cache, project_id, &manifest_path(project_id))
+}
+
+/// [`ensure_loaded`] for the file at `path`. The cached copy is used only
+/// while the file is still the version it was read from (or this process last
+/// wrote); a write by the other process sharing the state dir makes it read
+/// the file again.
+fn ensure_loaded_at<'a>(cache: &'a mut HashMap<String, Manifest>, project_id: &str, path: &Path) -> &'a mut Manifest {
+    let mut stamps = stamps();
+    let disk = stamp_of(path);
+    let fresh = cache.contains_key(project_id) && stamps.get(path) == Some(&disk);
+    if !fresh {
+        let manifest = if path.exists() { crate::storage::read_json(path).unwrap_or_default() } else { Manifest::new() };
+        cache.insert(project_id.to_string(), manifest);
+        stamps.insert(path.to_path_buf(), disk);
+    }
+    cache.get_mut(project_id).expect("inserted above")
 }
 
 /// `(size, mtime)` from a local file's metadata (mtime as unix secs).
@@ -1219,6 +1302,31 @@ fn rel_under(root: &Path, path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G7 across processes: a manifest the other process (window or desktop
+    /// sidecar) rewrote since this one cached it is never overwritten from the
+    /// stale copy, and the cache reads the new version next.
+    #[test]
+    fn a_manifest_changed_by_another_process_is_not_clobbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p").join("sync.json");
+        let mut cache = HashMap::new();
+        ensure_loaded_at(&mut cache, "p", &path).insert("a".into(), SyncEntry::default());
+        save_manifest_at(&path, &cache["p"]).expect("ours to write");
+        ensure_loaded_at(&mut cache, "p", &path).insert("b".into(), SyncEntry::default());
+        save_manifest_at(&path, &cache["p"]).expect("still ours: we wrote the last version");
+        // The other process writes its own version.
+        let theirs: Manifest = [("theirs-is-longer".to_string(), SyncEntry::default())].into_iter().collect();
+        std::fs::write(&path, serde_json::to_string_pretty(&theirs).unwrap()).unwrap();
+        cache.get_mut("p").unwrap().insert("c".into(), SyncEntry::default());
+        assert_eq!(save_manifest_at(&path, &cache["p"]).unwrap_err(), CHANGED_ELSEWHERE);
+        let on_disk: Manifest = crate::storage::read_json(&path).unwrap();
+        assert!(on_disk.contains_key("theirs-is-longer") && !on_disk.contains_key("c"));
+        let fresh = ensure_loaded_at(&mut cache, "p", &path);
+        assert!(fresh.contains_key("theirs-is-longer") && !fresh.contains_key("a"), "re-read, not the stale copy");
+        fresh.insert("d".into(), SyncEntry::default());
+        save_manifest_at(&path, &cache["p"]).expect("current again");
+    }
 
     /// #23 D2. Both walkers skipped the entry *named* `.git`, which correctly skips a
     /// linked worktree's `.git` FILE — but the checkout around it is not named `.git`

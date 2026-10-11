@@ -1,63 +1,13 @@
 import { ApiError, api, traceConnect } from "./api";
 import { classifyUnavailable, unavailableDetail, type UnavailableReason } from "./connection";
-import { LEGACY_NAMES, NAMES } from "../../src/lib/brand";
-import { adoptLegacyDatabase, databaseHost, databasePort } from "../../src/lib/brandMigration";
-
-const DB = NAMES.mobileAuthDb;
-/** The database an older build of the phone app kept the device key in. */
-const LEGACY_DB = LEGACY_NAMES.mobileAuthDb;
-const STORE = "keys";
-const DEVICE = "device";
-
-interface AuthRecord { deviceId: string; privateKey: CryptoKey }
+import { loadDevice as load, loadPendingKey, saveDevice as save, savePendingKey, type AuthRecord } from "./authStore";
 
 function b64url(bytes: ArrayBuffer): string {
   const raw = String.fromCharCode(...new Uint8Array(bytes));
   return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** The device key an older build stored under the app's old name is copied
- * over once, before the database is first used — so the phone stays paired
- * across a rename. A failed copy keeps the old database for the next start. */
-let adopted: Promise<unknown> | null = null;
-
-export async function openAuthDatabase(): Promise<IDBDatabase> {
-  if (LEGACY_DB !== DB) {
-    adopted ??= adoptLegacyDatabase(databaseHost(indexedDB), LEGACY_DB, DB, async () =>
-      databasePort(await openCurrentAuthDatabase()),
-    ).catch(() => undefined);
-    await adopted;
-  }
-  return openCurrentAuthDatabase();
-}
-
-function openCurrentAuthDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB, 2);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE);
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function load(): Promise<AuthRecord | null> {
-  const database = await openAuthDatabase();
-  return new Promise((resolve, reject) => {
-    const request = database.transaction(STORE).objectStore(STORE).get(DEVICE);
-    request.onsuccess = () => resolve((request.result as AuthRecord | undefined) ?? null);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function save(record: AuthRecord): Promise<void> {
-  const database = await openAuthDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const request = database.transaction(STORE, "readwrite").objectStore(STORE).put(record, DEVICE);
-    request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
-  });
-}
+export { openAuthDatabase } from "./authStore";
 
 /** The lock's best-effort `DELETE /auth/session`, while it is in flight. Its
  * answer clears the session cookie, so one that lands after the next sign-in
@@ -230,6 +180,11 @@ export async function resumeAuth(): Promise<ResumeResult> {
   }
 }
 
+/** This device's pairing record (id and non-extractable signing key). */
+export function deviceRecord(): Promise<AuthRecord | null> {
+  return load();
+}
+
 export async function hasPairedDevice(): Promise<boolean> {
   return !!await load();
 }
@@ -255,4 +210,54 @@ export async function pair(code: string, deviceName: string): Promise<void> {
   });
   const record = { deviceId: paired.device_id, privateKey: keys.privateKey };
   await save(record);
+}
+
+/** A hosted server's identity provider (P5), when it offers sign-in there:
+ * its button label. `null` on the desktop's Mobile host (no gateway route)
+ * and when the server has none. */
+export async function oidcProvider(): Promise<string | null> {
+  try {
+    const answer = await api<{ enabled?: boolean; name?: string }>("/gateway/v1/oidc", { method: "GET" }, AUTH_REQUEST_TIMEOUT);
+    return answer.enabled && answer.name ? answer.name : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Sign in at the identity provider to pair this device: a new key, kept
+ * across the redirect, and the provider's page. The server binds the
+ * sign-in to this key (its `nonce`) and to this browser (a cookie). */
+export async function startOidc(deviceName: string, go: (url: string) => void = (url) => location.assign(url)): Promise<void> {
+  const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const spki = await crypto.subtle.exportKey("spki", keys.publicKey);
+  await savePendingKey(keys.privateKey);
+  const started = await api<{ url: string }>("/gateway/v1/oidc/start", {
+    method: "POST",
+    body: JSON.stringify({ public_key: b64url(spki), device_name: deviceName }),
+  });
+  go(started.url);
+}
+
+/** How a provider sign-in came back (`/?oidc=…`), if this page load is one. */
+export type OidcOutcome = "paired" | "refused" | "unknown" | "expired" | "provider" | "busy";
+
+/** Finish a provider sign-in this page load returns from: with `paired`, the
+ * pending key becomes this device's pairing record under the id the server
+ * gave. The query is taken off the address either way, so a reload never
+ * repeats it. */
+export async function finishOidcReturn(): Promise<OidcOutcome | null> {
+  const params = new URLSearchParams(location.search);
+  const outcome = params.get("oidc") as OidcOutcome | null;
+  if (!outcome) return null;
+  const device = params.get("device");
+  history.replaceState(null, "", location.pathname + location.hash);
+  if (outcome === "paired" && device && /^[A-Za-z0-9_-]{8,128}$/.test(device)) {
+    const privateKey = await loadPendingKey();
+    if (!privateKey) return "expired";
+    await save({ deviceId: device, privateKey });
+    await savePendingKey(null);
+    return "paired";
+  }
+  await savePendingKey(null);
+  return outcome === "paired" ? "refused" : outcome;
 }

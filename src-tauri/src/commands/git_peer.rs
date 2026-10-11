@@ -6,15 +6,15 @@
 //! lockstep, base re-stamping) lives in the service so it stays `AppHandle`-free and
 //! unit-testable.
 
-use tauri::{AppHandle, State};
 
 use crate::services::git_peer::{self, BackupRef, GitPeerRegistry, GitPeerState, ReconcileOpts};
 use crate::services::remote::{remote_target_for, RemotePoolState};
 use crate::services::remote_sync::SyncManifestState;
 use crate::services::sync_auto::AutoSyncState;
+use crate::tauri_host::Ctx;
 
 /// Read a project's persisted lockstep state (disabled/synchronized default).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_status(project_id: String) -> Result<GitPeerState, String> {
     Ok(git_peer::load_state(&project_id))
 }
@@ -22,17 +22,17 @@ pub async fn git_peer_status(project_id: String) -> Result<GitPeerState, String>
 /// Toggle the per-project opt-in. Enabling persists the flag, launches the detection
 /// task (`.git` watcher + host poll), and reconciles once; disabling stops the task.
 /// Returns the resulting state.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_set_enabled(
-    app: AppHandle,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
-    auto: State<'_, AutoSyncState>,
-    reg: State<'_, GitPeerRegistry>,
-    worker_sync: State<'_, crate::services::worker_sync::WorkerSyncState>,
+    ctx: Ctx,
     project_id: String,
     enabled: bool,
 ) -> Result<GitPeerState, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let auto = ctx.get::<AutoSyncState>();
+    let reg = ctx.get::<GitPeerRegistry>();
+    let worker_sync = ctx.get::<crate::services::worker_sync::WorkerSyncState>();
     if remote_target_for(&project_id).is_none() {
         return Err("Git lockstep is only available for SSH remote projects".to_string());
     }
@@ -44,38 +44,38 @@ pub async fn git_peer_set_enabled(
         // start() reads the freshly-persisted `enabled`, attaches the watcher, and
         // runs an initial detect+emit in its loop.
         git_peer::start(
-            app,
-            pool.inner().clone(),
-            manifest.inner().clone(),
-            auto.inner().clone(),
-            reg.inner(),
-            worker_sync.inner().clone(),
+            ctx.0.clone(),
+            pool.clone(),
+            manifest.clone(),
+            auto.clone(),
+            reg,
+            worker_sync.clone(),
             &project_id,
         )
         .await;
     } else {
-        git_peer::stop(reg.inner(), &project_id).await;
+        git_peer::stop(reg, &project_id).await;
     }
     Ok(git_peer::load_state(&project_id))
 }
 
 /// Manually reconcile now (the Retry / "Sync git" action). Runs a detection pass and
 /// emits the new status.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_sync_now(
-    app: AppHandle,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
-    auto: State<'_, AutoSyncState>,
+    ctx: Ctx,
     project_id: String,
 ) -> Result<GitPeerState, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let auto = ctx.get::<AutoSyncState>();
     let target = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::detect_and_sync(
-        pool.inner(),
-        manifest.inner(),
-        auto.inner(),
+        pool,
+        manifest,
+        auto,
         &project_id,
         &target.spec,
         // A manual Retry means "actually look": bypass the D5 ref-signature early-out,
@@ -87,7 +87,7 @@ pub async fn git_peer_sync_now(
         },
     )
     .await;
-    git_peer::emit_status(&app, &project_id, &state);
+    git_peer::emit_status(&ctx, &project_id, &state);
     Ok(state)
 }
 
@@ -95,21 +95,21 @@ pub async fn git_peer_sync_now(
 /// (#28p D3). Only reachable from the state's `pairingConflict`, whose paths the UI has
 /// already named — this is the explicit consent that the refusal demands, and the only
 /// caller that may set `allow_pair_overwrite`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_pair_confirm(
-    app: AppHandle,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
-    auto: State<'_, AutoSyncState>,
+    ctx: Ctx,
     project_id: String,
 ) -> Result<GitPeerState, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::detect_and_sync(
-        pool.inner(),
-        manifest.inner(),
-        auto.inner(),
+        pool,
+        manifest,
+        auto,
         &project_id,
         &rt.spec,
         ReconcileOpts {
@@ -119,12 +119,12 @@ pub async fn git_peer_pair_confirm(
         },
     )
     .await;
-    git_peer::emit_status(&app, &project_id, &state);
+    git_peer::emit_status(&ctx, &project_id, &state);
     Ok(state)
 }
 
 /// List both peers' `refs/tabtivity/backup/*` safety refs, newest first (#28p D6).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_backups(project_id: String) -> Result<Vec<BackupRef>, String> {
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
@@ -133,36 +133,36 @@ pub async fn git_peer_backups(project_id: String) -> Result<Vec<BackupRef>, Stri
 
 /// Move a branch back onto a backup ref, on the peer that holds it (#28p D6). The
 /// branch's current tip is backed up first, so a restore is itself undoable.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_restore_backup(
-    app: AppHandle,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
-    auto: State<'_, AutoSyncState>,
+    ctx: Ctx,
     project_id: String,
     peer: String,
     refname: String,
 ) -> Result<GitPeerState, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::restore_backup(
-        pool.inner(),
-        manifest.inner(),
-        auto.inner(),
+        pool,
+        manifest,
+        auto,
         &project_id,
         &rt.spec,
         &peer,
         &refname,
     )
     .await?;
-    git_peer::emit_status(&app, &project_id, &state);
+    git_peer::emit_status(&ctx, &project_id, &state);
     Ok(state)
 }
 
 /// The local mirror's absolute path — where "Resolve in terminal" (#28p D8) opens its
 /// shell, since that is the working copy the user merges/rebases in.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_mirror_dir(project_id: String) -> Result<String, String> {
     if remote_target_for(&project_id).is_none() {
         return Err("Git lockstep is only available for SSH remote projects".to_string());
@@ -175,24 +175,24 @@ pub async fn git_peer_mirror_dir(project_id: String) -> Result<String, String> {
 /// Coordinated checkout: check `target` out on the initiating side, bring the peer in
 /// step, and check the same target out there (guarded — never `-f`). `initiating_side`
 /// is `"local"` or `"remote"` (default `"local"`; the frontend passes `initiatingSide`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_checkout(
-    app: AppHandle,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
-    auto: State<'_, AutoSyncState>,
+    ctx: Ctx,
     project_id: String,
     target: String,
     initiating_side: Option<String>,
 ) -> Result<GitPeerState, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let side = initiating_side.unwrap_or_else(|| "local".to_string());
     let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::checkout_lockstep(
-        pool.inner(),
-        manifest.inner(),
-        auto.inner(),
+        pool,
+        manifest,
+        auto,
         &project_id,
         &rt.spec,
         &target,
@@ -200,7 +200,7 @@ pub async fn git_peer_checkout(
         false,
     )
     .await?;
-    git_peer::emit_status(&app, &project_id, &state);
+    git_peer::emit_status(&ctx, &project_id, &state);
     Ok(state)
 }
 
@@ -209,27 +209,27 @@ pub async fn git_peer_checkout(
 /// tips backed up to `refs/tabtivity/backup/*` first), file-sync bases are re-stamped,
 /// and the recomputed status is emitted. The Use-local / Use-remote action (#28n
 /// Phase 2), only offered when the state is `Desynchronized`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_resolve(
-    app: AppHandle,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
-    auto: State<'_, AutoSyncState>,
+    ctx: Ctx,
     project_id: String,
     authority: String,
 ) -> Result<GitPeerState, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let auto = ctx.get::<AutoSyncState>();
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
     let _reconcile = git_peer::reconcile_guard(&project_id).await;
     let state = git_peer::resolve(
-        pool.inner(),
-        manifest.inner(),
-        auto.inner(),
+        pool,
+        manifest,
+        auto,
         &project_id,
         &rt.spec,
         &authority,
     )
     .await?;
-    git_peer::emit_status(&app, &project_id, &state);
+    git_peer::emit_status(&ctx, &project_id, &state);
     Ok(state)
 }

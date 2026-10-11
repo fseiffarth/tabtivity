@@ -137,7 +137,7 @@ fn submit_in_with_undo(
 /// minted for this Submit (`markup::valid_round`), under which the agent
 /// ticks marks off. `mode`: `"apply"` (the **Apply marks directly** switch,
 /// `Settings::pdf_markup_direct`) or `"list"`; absent is `list`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn pdf_markup_submit(
     project_id: String,
@@ -148,7 +148,7 @@ pub async fn pdf_markup_submit(
     round: Option<String>,
     mode: Option<markup::Mode>,
 ) -> Result<PdfMarkupSubmitted, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let root = local_root(
             remote::remote_target_for(&project_id).is_some(),
             remote::project_directory(&project_id),
@@ -196,7 +196,7 @@ async fn round_call<T: Send + 'static>(
     undo_id: String,
     call: fn(&Path, &str, &markup_rounds::Owner) -> Result<T, markup_rounds::RoundError>,
 ) -> Result<T, PdfMarkupUndoFailure> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         call(&crate::storage::state_dir(), &undo_id, &desktop_owner(&project_id)).map_err(PdfMarkupUndoFailure::from)
     })
     .await
@@ -205,7 +205,7 @@ async fn round_call<T: Send + 'static>(
 
 /// `pdf_markup_undo_settle({ projectId, undoId })` → `null`: the round's
 /// after-snapshot, each time its turn finishes (the last one wins).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pdf_markup_undo_settle(project_id: String, undo_id: String) -> Result<(), PdfMarkupUndoFailure> {
     round_call(project_id, undo_id, markup_rounds::settle).await
 }
@@ -213,14 +213,14 @@ pub async fn pdf_markup_undo_settle(project_id: String, undo_id: String) -> Resu
 /// `pdf_markup_undo_preview({ projectId, undoId })` → `{ files: [{ path,
 /// change }], more, pdf }`: what an undo would put back (settles first when
 /// the round has not).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pdf_markup_undo_preview(project_id: String, undo_id: String) -> Result<markup_rounds::Changes, PdfMarkupUndoFailure> {
     round_call(project_id, undo_id, markup_rounds::preview).await
 }
 
 /// `pdf_markup_undo({ projectId, undoId })` → `{ files, more, pdf }`, or
 /// `{ code: "undo_conflict", files, more }` with nothing changed.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pdf_markup_undo(project_id: String, undo_id: String) -> Result<markup_rounds::Changes, PdfMarkupUndoFailure> {
     round_call(project_id, undo_id, markup_rounds::undo).await
 }

@@ -34,7 +34,7 @@ import {
 import { Dropdown } from "../common/Dropdown";
 import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL } from "../../lib/installCommand";
 import { UntestedTag } from "../common/UntestedTag";
-import { IS_WINDOWS, IS_MAC } from "../../lib/platform";
+import { IS_HOST_MAC, IS_HOST_WINDOWS } from "../../lib/platform";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
@@ -44,9 +44,9 @@ import { usePoll } from "../../lib/usePoll";
  *  prompt shown when creating/importing a git-backed project on a machine with
  *  no `git` on PATH (`scaffold_project`'s `git init` would otherwise silently
  *  no-op, registering a git-typed project with no repo). */
-const GIT_INSTALL_CMD = IS_WINDOWS
+const GIT_INSTALL_CMD = IS_HOST_WINDOWS
   ? "winget install --id Git.Git -e --source winget"
-  : IS_MAC
+  : IS_HOST_MAC
     ? "brew install git"
     : "sudo apt-get install -y git";
 
@@ -1253,7 +1253,7 @@ export function ProjectDialog({
                 runInstallInTab(
                   t("projectDialog.installBinLabel", { bin: forkCli.bin }),
                   forkCli.cmd,
-                  IS_WINDOWS ? "default" : "bash",
+                  IS_HOST_WINDOWS ? "default" : "bash",
                 )
               }
             >
@@ -1386,7 +1386,7 @@ export function ProjectDialog({
                 runInstallInTab(
                   t("projectDialog.installBinLabel", { bin: publishCli.bin }),
                   publishCli.cmd,
-                  IS_WINDOWS ? "default" : "bash",
+                  IS_HOST_WINDOWS ? "default" : "bash",
                 )
               }
             >
@@ -1417,7 +1417,7 @@ export function ProjectDialog({
               className="ollama-action-btn primary"
               title={t("projectDialog.runInTerminalTitle")}
               onClick={() =>
-                runInstallInTab(t("projectDialog.installGitLabel"), GIT_INSTALL_CMD, IS_WINDOWS ? "default" : "bash")
+                runInstallInTab(t("projectDialog.installGitLabel"), GIT_INSTALL_CMD, IS_HOST_WINDOWS ? "default" : "bash")
               }
             >
               {t("projectDialog.runInTerminalBtn")}
@@ -1464,7 +1464,7 @@ export function ProjectDialog({
               <button
                 type="button"
                 onClick={() =>
-                  runInstallInTab("VM base image", vmDoctor.fetch_command!, IS_WINDOWS ? "default" : "bash")
+                  runInstallInTab("VM base image", vmDoctor.fetch_command!, IS_HOST_WINDOWS ? "default" : "bash")
                 }
               >
                 {t("projectDialog.vmFetchBaseBtn")}
@@ -1491,7 +1491,7 @@ export function ProjectDialog({
                     runInstallInTab(
                       t("projectDialog.vmInstallLabel"),
                       vmDoctor.install_command!,
-                      IS_WINDOWS ? "default" : "bash",
+                      IS_HOST_WINDOWS ? "default" : "bash",
                     );
                   }}
                 >

@@ -554,8 +554,27 @@ pub fn reconcile_home_in(state_dir: &Path, home: &Path) {
 }
 
 fn reconcile_home_step(state_dir: &Path, home: &Path, step: Step) {
+    // The store and the homes are shared by every process on this state dir
+    // (the window, its desktop sidecar, a server's daemon and its shell
+    // shims): one adopt/place at a time, or two could each adopt a different
+    // refresh and place the older one, or leave a login half-removed beside
+    // the administrator's key (final review B4).
+    let _one_at_a_time = storage::FileLock::exclusive(&store_root_in(state_dir));
+    reconcile_home_with(state_dir, home, step, &crate::services::server::agent_keys::holds_admin_key);
+}
+
+/// Whether a login file holds the administrator's current key for a CLI
+/// (`services::server::agent_keys::holds_admin_key`); `None`: unknown.
+type HoldsAdminKey = dyn Fn(&str, &[u8]) -> Option<bool>;
+
+fn reconcile_home_with(state_dir: &Path, home: &Path, step: Step, holds_key: &HoldsAdminKey) {
+    let on_admin_key = crate::services::server::agent_keys::chosen_in(state_dir);
     for (cli, paths) in registry() {
         let store_dir = store_dir_in(state_dir, cli);
+        if on_admin_key.contains(cli) {
+            beside_admin_key(cli, state_dir, &store_dir, paths, home, step, holds_key);
+            continue;
+        }
         for path in paths {
             let store = store_path_in(state_dir, cli, path);
             match path.kind {
@@ -576,6 +595,55 @@ fn reconcile_home_step(state_dir: &Path, home: &Path, step: Step) {
         }
         if cli == "claude" && step.places() {
             link_claude_identity(&store_dir, home);
+        }
+    }
+}
+
+/// A CLI this user runs on the administrator's API key (hosted plan §5.2,
+/// "never both"): the home keeps none of the user's own login for it, so the
+/// CLI never picks between the environment key and a login file. The store
+/// keeps the login; switching back places it again.
+///
+/// A login a tab wrote all the same — a tab from before the switch
+/// refreshing its token, a `/login` in the tab — is still adopted first, so
+/// a rotated refresh token is not lost; but never a file holding the
+/// administrator's key (a CLI that saved the key it was handed): the
+/// administrator's key never becomes the user's own login. When that cannot
+/// be told (the keeper unreachable, the key withdrawn), the written file is
+/// neither adopted nor removed — it stays in the home until it can be told:
+/// removing it would lose the only copy of a rotated refresh token, and no
+/// new agent runs beside it meanwhile, since the same keeper answer fails
+/// the next spawn (`agent_keys::inject_env`). Only single-file logins are
+/// adopted here (every CLI that can take a key keeps one).
+fn beside_admin_key(cli: &str, state_dir: &Path, store_dir: &Path, paths: &[AuthPath], home: &Path, step: Step, holds_key: &HoldsAdminKey) {
+    // The bytes of a login file a tab wrote since the store last placed one.
+    let written = |path: &AuthPath| -> Option<Vec<u8>> {
+        let bytes = content(HomeFile::open_existing(home, path.rel)?.read())?;
+        let unchanged = read_placed(store_dir, home, &leaf_of(path.rel)).as_deref() == Some(digest(&bytes).as_str())
+            || content(std::fs::read(store_path_in(state_dir, cli, path)).ok()).as_deref() == Some(bytes.as_slice());
+        (!unchanged).then_some(bytes)
+    };
+    let files = || paths.iter().filter(|p| p.kind == AuthKind::File);
+    if step.adopts() {
+        for path in files() {
+            let Some(bytes) = written(path) else { continue };
+            let store = store_path_in(state_dir, cli, path);
+            if holds_key(cli, &bytes) == Some(false) && adopt(cli, store_dir, &store, home, &bytes) {
+                write_placed(store_dir, home, &leaf_of(path.rel), &digest(&bytes));
+            }
+        }
+    }
+    if step.places() {
+        let undecided: Vec<&str> = files()
+            .filter(|path| written(path).is_some_and(|bytes| holds_key(cli, &bytes).is_none()))
+            .map(|path| path.rel)
+            .collect();
+        let leave: Vec<AuthPath> = paths.iter().filter(|p| !undecided.contains(&p.rel)).copied().collect();
+        remove_copies(home, &leave);
+        if cli == "claude" {
+            if let Some(file) = HomeFile::open_existing(home, ".claude.json") {
+                strip_claude_identity(&file);
+            }
         }
     }
 }
@@ -681,6 +749,15 @@ pub struct LoginStatus {
     /// This CLI keeps its login somewhere Tabtivity cannot share (a keyring, a
     /// database mixed with other state): one login per scope.
     pub shared: bool,
+    /// The CLI can run on an API key at all — the API proxy serves it
+    /// (`agent_api_keys::proxies`): what a server's administrator can offer
+    /// a key for.
+    pub admin_key_capable: bool,
+    /// A hosted server's administrator offers an API key for this CLI.
+    pub admin_key_offered: bool,
+    /// This user's agents run on the administrator's key for this CLI, not
+    /// on their own login (hosted plan §5.2).
+    pub uses_admin_key: bool,
     /// The CLI is switched on for a stored provider API key and one of its
     /// providers has one (`services::agent_api_keys`). Filled by the
     /// `agent_logins` command, never here: this module stays keyring-free.
@@ -692,6 +769,13 @@ pub struct LoginStatus {
 }
 
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
+    status_with(state_dir, user_home, &BTreeSet::new())
+}
+
+/// [`status_in`] with the CLIs a hosted server's administrator offers a key
+/// for (`services::server::agent_keys::offered`).
+pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String>) -> Vec<LoginStatus> {
+    let on_admin_key = crate::services::server::agent_keys::chosen_in(state_dir);
     registry()
         .into_iter()
         .map(|(cli, paths)| {
@@ -721,6 +805,9 @@ pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
                 importable,
                 blocked,
                 shared: !paths.is_empty(),
+                admin_key_capable: crate::services::agent_api_keys::proxies(cli),
+                admin_key_offered: offered.contains(cli),
+                uses_admin_key: on_admin_key.contains(cli),
                 api_key: false,
                 api_budget_reached: false,
             }
@@ -728,8 +815,11 @@ pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
         .collect()
 }
 
+/// The login rows. A key broker's month for a CLI on the administrator's
+/// key is in the API-key status (`agent_api_keys::status`), beside the one
+/// credential choice per CLI (#2389).
 pub fn status() -> Vec<LoginStatus> {
-    status_in(&storage::state_dir(), &crate::paths::home_dir())
+    status_with(&storage::state_dir(), &crate::paths::home_dir(), &crate::services::server::agent_keys::offered())
 }
 
 /// Remove a home's copies of `cli`'s login paths.
@@ -1245,6 +1335,77 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}");
         assert!(std::fs::symlink_metadata(home.join(".claude.json")).unwrap().is_file());
         assert_eq!(claude_account_in_home(&home).as_deref(), Some("fixture@example.com"));
+    }
+
+    /// Hosted plan §5.2, "never both": a CLI on the administrator's key has
+    /// none of the user's own login in any home; a refresh a tab wrote is
+    /// still adopted, a file holding the key never; switching back puts the
+    /// login in again. Another CLI and another user are untouched.
+    #[test]
+    fn a_cli_on_the_admin_key_keeps_no_own_login_in_the_homes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = crate::services::agent_home::scope_home_in(&state, "a");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let creds = ".claude/.credentials.json";
+        write_store(&store_of(&state, "claude", creds), b"{\"own\":1}").unwrap();
+        write_store(&store_of(&state, "gemini", ".gemini/oauth_creds.json"), b"{\"g\":1}").unwrap();
+        std::fs::write(home.join(".claude.json"), r#"{"oauthAccount":{"emailAddress":"own@example.com"},"theme":"dark"}"#).unwrap();
+        reconcile_home_in(&state, &home);
+        assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":1}");
+        // Bob's state dir is another user's: his choice is his alone.
+        let bob = tmp.path().join("bob");
+        let bob_home = crate::services::agent_home::scope_home_in(&bob, "a");
+        std::fs::create_dir_all(&bob_home).unwrap();
+        write_store(&store_of(&bob, "claude", creds), b"{\"bob\":1}").unwrap();
+
+        crate::services::server::agent_keys::set_choice_in(&state, "claude", true).unwrap();
+        let never = |_: &str, _: &[u8]| Some(false);
+        reconcile_home_with(&state, &home, Step::Both, &never);
+        assert!(!home.join(creds).exists(), "the own login left the home");
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":1}", "the store keeps it");
+        let identity = std::fs::read_to_string(home.join(".claude.json")).unwrap();
+        assert!(!identity.contains("oauthAccount") && identity.contains("theme"), "{identity}");
+        assert!(home.join(".gemini/oauth_creds.json").is_file(), "another CLI keeps its login");
+        reconcile_home_in(&bob, &bob_home);
+        assert_eq!(std::fs::read(bob_home.join(creds)).unwrap(), b"{\"bob\":1}", "Bob stays on his own login");
+
+        // A tab from before the switch refreshes: adopted, then taken out.
+        std::fs::write(home.join(creds), b"{\"own\":2}").unwrap();
+        reconcile_home_with(&state, &home, Step::Both, &never);
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}");
+        assert!(!home.join(creds).exists());
+        // A file holding the administrator's key is never adopted, and
+        // leaves the home.
+        std::fs::write(home.join(creds), b"{\"admin\":1}").unwrap();
+        reconcile_home_with(&state, &home, Step::Both, &|_: &str, _: &[u8]| Some(true));
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}");
+        assert!(!home.join(creds).exists());
+        // One that cannot be checked (keeper down, key withdrawn) is neither
+        // adopted nor removed — it may be the only copy of a rotated refresh
+        // token (P3b review) — through the keeper's adopt-then-place passes
+        // too; once it can be told, it is adopted and leaves.
+        std::fs::write(home.join(creds), b"{\"own\":3}").unwrap();
+        let unknown = |_: &str, _: &[u8]| None;
+        reconcile_home_with(&state, &home, Step::Both, &unknown);
+        reconcile_home_with(&state, &home, Step::Adopt, &unknown);
+        reconcile_home_with(&state, &home, Step::Place, &unknown);
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}");
+        assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":3}", "kept until it can be told");
+        reconcile_home_with(&state, &home, Step::Both, &never);
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":3}");
+        assert!(!home.join(creds).exists());
+
+        crate::services::server::agent_keys::set_choice_in(&state, "claude", false).unwrap();
+        reconcile_home_in(&state, &home);
+        assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":3}", "switching back places the login again");
+        let rows = status_with(&state, tmp.path(), &["claude".to_string()].into_iter().collect());
+        let claude = rows.iter().find(|r| r.id == "claude").unwrap();
+        assert_eq!((claude.admin_key_capable, claude.admin_key_offered, claude.uses_admin_key), (true, true, false));
+        let codex = rows.iter().find(|r| r.id == "codex").unwrap();
+        assert_eq!((codex.admin_key_capable, codex.admin_key_offered), (false, false));
+        let vibe = rows.iter().find(|r| r.id == "vibe").unwrap();
+        assert!(!vibe.admin_key_capable, "no base-URL variable: no API key through the proxy (#2389)");
     }
 
     #[test]

@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import type { IconProps } from "../../src/components/common/icons/Icon";
 import { AppMark } from "./AppMark";
-import { hasPairedDevice, logoutAuth, resumeAuth } from "./auth";
+import { finishOidcReturn, hasPairedDevice, logoutAuth, resumeAuth } from "./auth";
+import { newCodeAdvised, releaseSecrets } from "./secrets";
+import { SecretsNewCodeSheet } from "./screens/SecretsNewCodeSheet";
+import { SecretsRepinSheet } from "./screens/SecretsRepinSheet";
 import { connectTrace, getMobileStatus, primeConnection, setUnauthorizedHandler, traceConnect, type TabRow } from "./api";
 import { classifyUnavailable, describeUnavailable, suspectsTunnel, tailscaleAppLink, TUNNEL_STEPS, unavailableDetail, type UnavailableReason } from "./connection";
 import { forgetLastPlace, parsePlace, rememberLastPlace, resolvePlace, restoreLastPlace, type LastPlace, type MobileSection, type RestoredPlace } from "./lastPlace";
@@ -12,7 +15,7 @@ import { clearConnectReload, isConnectReload, noteUnlockedLeave, takeConnectRelo
 import { noteDesktopTheme } from "./theme";
 import { isUntested, setUntestedTagsVisible } from "../../src/lib/untested";
 import { useT, type TranslationKey } from "../../src/lib/i18n";
-import { Pair } from "./screens/Pair";
+import { Pair, noteOidcOutcome } from "./screens/Pair";
 import { LocalUnlock } from "./screens/LocalUnlock";
 import { LockedHomeShell } from "./screens/LockedHomeShell";
 import { Home } from "./screens/Home";
@@ -245,6 +248,12 @@ export function App() {
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
   const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
+  /** The server's identity key is not the pinned one: ask for the recovery
+   * code (`SecretsRepinSheet`). Once per sign-in; Later closes it. */
+  const [secretsUntrusted, setSecretsUntrusted] = useState(false);
+  /** A device was revoked since the recovery code was made: offer a new
+   * code (`SecretsNewCodeSheet`). Once per sign-in; Later closes it. */
+  const [secretsNewCode, setSecretsNewCode] = useState(false);
   /** Why the last attempt failed, shown on the `unavailable` splash. */
   const [unavailable, setUnavailable] = useState<{ reason: UnavailableReason; detail?: string }>({ reason: "unreachable" });
   const authRef = useRef(auth);
@@ -308,6 +317,14 @@ export function App() {
         reset();
         if (restored) goTo(restored);
         void refreshPush().catch(() => undefined);
+        // A server's secrets key: enrol this device, and release the key
+        // if the server rebooted (`secrets.ts`). Off a server, one GET.
+        void releaseSecrets().then(async (outcome) => {
+          traceConnect(`secrets ${outcome}`);
+          setSecretsUntrusted(outcome === "untrusted");
+          // After a release the key is open: a new code can be made now.
+          if (outcome !== "untrusted") setSecretsNewCode(await newCodeAdvised());
+        });
       } else if (result.kind === "unpaired") {
         forgetLastPlace();
       } else {
@@ -328,7 +345,14 @@ export function App() {
     traceConnect("app started", true);
     if (isConnectReload()) traceConnect("reloaded after a failed connect");
     primeConnection();
-    void Promise.all([hasPairedDevice(), hasLocalUnlock()]).then(([paired, locked]) => {
+    // Back from an identity provider's sign-in (a hosted server, P5): a
+    // paired outcome stores this device's key first, so the open below sees
+    // a paired device and goes on to the lock set-up; anything else is shown
+    // on the pairing screen.
+    void Promise.resolve(finishOidcReturn()).then((outcome) => {
+      noteOidcOutcome(outcome ?? null);
+      return Promise.all([hasPairedDevice(), hasLocalUnlock()]);
+    }).then(([paired, locked]) => {
       if (!paired) {
         forgetLastPlace();
         setPairNeedsLock(!locked);
@@ -590,5 +614,7 @@ export function App() {
               mail={() => setTab("mail")}
             />}
     <TabBar active={tab} open={openSection} hidden={hiddenSections} />
+    {secretsUntrusted && <SecretsRepinSheet onClose={() => setSecretsUntrusted(false)} />}
+    {!secretsUntrusted && secretsNewCode && <SecretsNewCodeSheet onClose={() => setSecretsNewCode(false)} />}
   </div>;
 }

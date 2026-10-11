@@ -13,6 +13,7 @@ vi.mock("../../../mobile-web/src/auth", () => ({
   resumeAuth: vi.fn(),
   logoutAuth: vi.fn(async () => undefined),
   pair: vi.fn(),
+  finishOidcReturn: vi.fn(async () => null),
 }));
 vi.mock("../../../mobile-web/src/localLock", () => ({ hasLocalUnlock: vi.fn(async () => true) }));
 vi.mock("../../../mobile-web/src/screens/LocalUnlock", () => ({

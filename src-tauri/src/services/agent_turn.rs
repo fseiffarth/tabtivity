@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use app_core::CoreCtx;
 
 use crate::services::agent_session::{
     live_sessions_dir, project_live_sessions_dir, read_live_source_in, LIVE_SOURCE_SUFFIX,
@@ -621,7 +621,7 @@ fn tool_shell_uids(
 /// `agent-turn` event. Runs for the app's lifetime on its own thread; a watcher
 /// that cannot be created only costs the hook path (the activity store falls
 /// back to its byte heuristic), so failures are logged and swallowed.
-pub fn start(app: AppHandle) {
+pub fn start(ctx: CoreCtx) {
     std::thread::spawn(move || {
         use notify::{RecursiveMode, Watcher};
         use std::sync::mpsc::RecvTimeoutError;
@@ -656,7 +656,7 @@ pub fn start(app: AppHandle) {
             return;
         }
         let emit = |id: String, state: TurnState, job: bool, replay: bool| {
-            let _ = app.emit(TURN_EVENT, TurnPayload { id, state: state.as_str(), job, replay });
+            ctx.emit(TURN_EVENT, TurnPayload { id, state: state.as_str(), job, replay });
         };
         // Keep the watcher alive for as long as events flow; the loop ends only
         // when the sender side is dropped, i.e. never before the app exits. The
@@ -668,7 +668,7 @@ pub fn start(app: AppHandle) {
                     // A source record says how the session rolled (a `/clear`,
                     // a `/resume`); it carries no turn state.
                     if let Some((id, source)) = resolve_roll_event(&path) {
-                        let _ = app.emit(ROLL_EVENT, RollPayload { id, source });
+                        ctx.emit(ROLL_EVENT, RollPayload { id, source });
                         continue;
                     }
                     if let (Some((id, state)), Some(uid)) = (resolve_event(&path), uid_of(&path)) {

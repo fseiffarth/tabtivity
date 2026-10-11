@@ -1,0 +1,29 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema/capability.json",
+  "identifier": "connect",
+  "description": "The Connect window (hosted plan §7.2): this app's own bundle talking to a hosted server. Narrowed on purpose (user decision, P5 review finding 10): window controls, notifications and the events its socket bridge needs — no dialog, drag, path, app, menu, tray or webview-creation plugin. Its app commands are narrowed in Rust too (`commands::connect::CONNECT_WINDOW_COMMANDS`). Scoped by webview label, never `remote`.",
+  "webviews": [
+    "connect"
+  ],
+  "permissions": [
+    "core:event:allow-emit",
+    "core:event:allow-emit-to",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:default",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
+    "core:window:allow-current-monitor",
+    "core:window:allow-set-fullscreen",
+    "core:webview:default",
+    "notification:default"
+  ]
+}

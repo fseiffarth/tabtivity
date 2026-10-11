@@ -18,7 +18,7 @@ import { stripFormatControls } from "../../lib/textSafety";
 
 /** The `FORMAT_CHARS` code points, read from the Rust source. */
 function rustFormatChars(): string[] {
-  const src = readFileSync("src-tauri/src/services/web_safety.rs", "utf8");
+  const src = readFileSync("src-core/src/services/web_safety.rs", "utf8");
   const decl = /pub const FORMAT_CHARS: &\[char\] = &\[([\s\S]*?)\];/.exec(src);
   if (!decl) throw new Error("FORMAT_CHARS not found in web_safety.rs");
   return [...decl[1].matchAll(/'\\u\{([0-9A-Fa-f]+)\}'/g)].map((m) =>

@@ -24,7 +24,7 @@ const SERVICE: &str = crate::brand::KEYRING_REMOTE;
 /// The Linux credential handles are trait objects, not `keyring::Entry`, so their
 /// `get_password`/`set_password`/`delete_credential` come from this trait. Imported
 /// anonymously: only the methods are wanted, never the name.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
 use keyring::credential::CredentialApi as _;
 
 /// The keychain account for an SSH host target: `"ssh:{user}@{host}:{port}"`.
@@ -184,6 +184,7 @@ pub fn openvpn_user_account(config: &str) -> String {
 /// enabling the feature and going on using `Entry` would silently keep today's
 /// secret-service-only behaviour. Constructing the credential directly is the whole
 /// point of the feature, so it is done here, once.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 fn entry(
     account: &str,
@@ -191,6 +192,7 @@ fn entry(
     entry_in(SERVICE, account)
 }
 
+#[cfg(feature = "desktop")]
 #[cfg(not(target_os = "linux"))]
 fn entry(account: &str) -> Result<keyring::Entry, String> {
     entry_in(SERVICE, account)
@@ -198,6 +200,7 @@ fn entry(account: &str) -> Result<keyring::Entry, String> {
 
 /// [`entry`] under a given service: the current one, or the one an older
 /// build saved under (`brand_migration::keyring`).
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 fn entry_in(
     service: &str,
@@ -209,6 +212,7 @@ fn entry_in(
     .map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "desktop")]
 #[cfg(not(target_os = "linux"))]
 fn entry_in(service: &str, account: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(service, account).map_err(|e| e.to_string())
@@ -216,8 +220,10 @@ fn entry_in(service: &str, account: &str) -> Result<keyring::Entry, String> {
 
 /// The credential store by service name, for the read that also looks under
 /// the service named after the app's old name.
+#[cfg(feature = "desktop")]
 struct OsStore;
 
+#[cfg(feature = "desktop")]
 impl crate::services::brand_migration::keyring::Store for OsStore {
     fn get(&self, service: &str, account: &str) -> Option<String> {
         entry_in(service, account)
@@ -239,9 +245,11 @@ impl crate::services::brand_migration::keyring::Store for OsStore {
 
 /// The kernel-keyring half alone, by service name: what a locked collection
 /// can still answer. It is never written through here.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 struct CachedOnlyStore;
 
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 impl crate::services::brand_migration::keyring::Store for CachedOnlyStore {
     fn get(&self, service: &str, account: &str) -> Option<String> {
@@ -267,6 +275,7 @@ impl crate::services::brand_migration::keyring::Store for CachedOnlyStore {
 /// then also copied to the current service. Otherwise only the kernel
 /// keyring is asked and nothing is written — the same rule as [`get`], so
 /// this can never be what raises an unlock prompt.
+#[cfg(feature = "desktop")]
 fn legacy_get(account: &str, unlocked: bool) -> Option<String> {
     let pair = crate::brand::PAIR;
     pair.legacy(crate::brand::Name::KEYRING_REMOTE)?;
@@ -301,6 +310,7 @@ fn legacy_get(account: &str, unlocked: bool) -> Option<String> {
 ///
 /// The key must match the one the combo store's cache half writes, so it is derived the
 /// same way: `new_with_target(None, SERVICE, account)`.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 fn get_cached_only(account: &str) -> Option<String> {
     use keyring::credential::CredentialApi;
@@ -326,6 +336,7 @@ const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
 /// degrades a locked keyring to "nothing saved", which routes the caller to a prompt —
 /// the safe direction. The abandoned worker unblocks if the keyring ever does; that
 /// costs at most one parked thread per hung read, and only ever happens locked.
+#[cfg(feature = "desktop")]
 fn read_timed<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static, on_timeout: T) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -350,6 +361,21 @@ fn read_timed<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static, on_time
 /// again. Asking [`cached_keyring_state`] first breaks that loop: while locked, the read
 /// goes to the kernel-keyring cache, which answers immediately and off the bus.
 pub fn get(account: &str) -> Option<String> {
+    // A server daemon has no Secret Service: opt-in passwords live in the
+    // sealed store under the device-released key (hosted plan §6.8).
+    if let Some(vault) = crate::services::server::vault::vault() {
+        return vault.credential(account);
+    }
+    // The server daemon's build has no OS credential store: the vault above
+    // is its store, and without one nothing is saved.
+    #[cfg(not(feature = "desktop"))]
+    return None;
+    #[cfg(feature = "desktop")]
+    get_os(account)
+}
+
+#[cfg(feature = "desktop")]
+fn get_os(account: &str) -> Option<String> {
     #[cfg(target_os = "linux")]
     if cached_keyring_state() != KeyringState::Unlocked {
         return get_cached_only(account).or_else(|| legacy_get(account, false));
@@ -359,6 +385,7 @@ pub fn get(account: &str) -> Option<String> {
 }
 
 /// The unbounded keychain read, run on the worker thread by [`get`].
+#[cfg(feature = "desktop")]
 fn get_uncapped(account: &str) -> Option<String> {
     match entry(account).and_then(|e| match e.get_password() {
         Ok(secret) => Ok(Some(secret)),
@@ -380,6 +407,17 @@ fn get_uncapped(account: &str) -> Option<String> {
 /// the kernel-keyring half would be worse than either — a credential that reads back
 /// fine until the next reboot silently loses it.
 pub fn set(account: &str, password: Option<&str>) -> Result<(), String> {
+    if let Some(vault) = crate::services::server::vault::vault() {
+        return vault.set_credential(account, password);
+    }
+    #[cfg(not(feature = "desktop"))]
+    return Err("no credential store in this build".into());
+    #[cfg(feature = "desktop")]
+    set_os(account, password)
+}
+
+#[cfg(feature = "desktop")]
+fn set_os(account: &str, password: Option<&str>) -> Result<(), String> {
     // No longer Linux-only: a locked macOS keychain refuses the write too, and used to
     // reach `delete_credential` with nothing standing in its way (G.24). Windows'
     // store reports `Unlocked` unconditionally, so this is a no-op there.
@@ -472,6 +510,19 @@ pub enum KeyringState {
 /// Service call is overwhelmingly a locked collection waiting on an unlock nobody
 /// answered, and `Locked` is the state with an action behind it.
 pub fn keyring_state() -> KeyringState {
+    // On a server "unlocked" is the vault holding K; locked until a paired
+    // device releases it.
+    if let Some(vault) = crate::services::server::vault::vault() {
+        return if vault.key().is_some() { KeyringState::Unlocked } else { KeyringState::Locked };
+    }
+    #[cfg(not(feature = "desktop"))]
+    return KeyringState::Unavailable;
+    #[cfg(feature = "desktop")]
+    keyring_state_os()
+}
+
+#[cfg(feature = "desktop")]
+fn keyring_state_os() -> KeyringState {
     let state = read_timed(keyring_state_uncapped, KeyringState::Locked);
     remember_keyring_state(state);
     state
@@ -491,6 +542,9 @@ static STATE_CACHE: std::sync::Mutex<Option<(std::time::Instant, KeyringState)>>
 /// Secret Service read?" before *every* read costs a D-Bus round trip only once per
 /// [`STATE_TTL`]. The probe behind it never prompts, so a miss is cheap and safe.
 fn cached_keyring_state() -> KeyringState {
+    if crate::services::server::vault::vault().is_some() {
+        return keyring_state();
+    }
     if let Ok(cache) = STATE_CACHE.lock() {
         if let Some((at, state)) = *cache {
             if at.elapsed() < STATE_TTL {
@@ -520,6 +574,7 @@ pub fn forget_keyring_state() {
     }
 }
 
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 fn keyring_state_uncapped() -> KeyringState {
     use dbus_secret_service::{EncryptionType, SecretService};
@@ -553,6 +608,7 @@ fn keyring_state_uncapped() -> KeyringState {
 /// screen is not a probe. It costs a process spawn, which is why only
 /// [`cached_keyring_state`] calls it and only once per [`STATE_TTL`]; the whole call is
 /// already bounded by [`read_timed`]'s 4 s.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "macos")]
 fn keyring_state_uncapped() -> KeyringState {
     let Ok(out) = crate::paths::command_no_window("security")
@@ -582,6 +638,7 @@ fn keyring_state_uncapped() -> KeyringState {
 /// there is genuinely no lockable collection, so there is nothing to measure and
 /// `Unlocked` is a fact rather than an assumption. Same for any other target, where a
 /// wrong guess would be the unsafe direction and no probe exists to improve on it.
+#[cfg(feature = "desktop")]
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn keyring_state_uncapped() -> KeyringState {
     KeyringState::Unlocked
@@ -597,6 +654,17 @@ fn keyring_state_uncapped() -> KeyringState {
 /// Returns `Ok(())` once the collection is unlocked (including when it already was);
 /// an `Err` if the dialog was dismissed, timed out, or there is no store to unlock.
 pub fn unlock_keyring() -> Result<(), String> {
+    if crate::services::server::vault::vault().is_some() {
+        return Err(concat!("saved passwords on a server unlock when a paired device opens ", crate::app_name!()).into());
+    }
+    #[cfg(not(feature = "desktop"))]
+    return Err("no credential store in this build".into());
+    #[cfg(feature = "desktop")]
+    unlock_keyring_os()
+}
+
+#[cfg(feature = "desktop")]
+fn unlock_keyring_os() -> Result<(), String> {
     let out = unlock_keyring_impl();
     // Whichever way the dialog went, the cached reading is now the stale one — and this
     // is precisely the transition [`get`]'s gate must see immediately, since the click
@@ -605,6 +673,7 @@ pub fn unlock_keyring() -> Result<(), String> {
     out
 }
 
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 fn unlock_keyring_impl() -> Result<(), String> {
     use dbus_secret_service::{EncryptionType, SecretService};
@@ -631,6 +700,7 @@ fn unlock_keyring_impl() -> Result<(), String> {
     }
 }
 
+#[cfg(feature = "desktop")]
 #[cfg(not(target_os = "linux"))]
 fn unlock_keyring_impl() -> Result<(), String> {
     Ok(())
@@ -946,8 +1016,8 @@ mod tests {
 
     /// A locked collection must make the write fail *fast*, not wait on an unlock prompt
     /// nobody may answer. Proven by the error alone: reaching the keychain at all would
-    /// mean the gate let the call through.
-    #[cfg(target_os = "linux")]
+    /// mean the gate let the call through. The daemon's build has no keychain to gate.
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
     #[test]
     fn a_locked_keyring_refuses_the_write_instead_of_blocking_on_it() {
         remember_keyring_state(KeyringState::Locked);

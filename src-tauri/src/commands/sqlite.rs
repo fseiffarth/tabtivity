@@ -164,7 +164,7 @@ fn confine(path: &str, project_id: Option<&str>) -> Result<(), String> {
 }
 
 /// List the user tables (and views) in a SQLite database file, sorted by name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sqlite_tables(path: String, project_id: Option<String>) -> Result<Vec<String>, String> {
     run_off_thread(move || {
         confine(&path, project_id.as_deref())?;
@@ -184,7 +184,7 @@ fn sqlite_tables_within(path: &str, budget: Duration) -> Result<Vec<String>, Str
 
 /// Read up to `limit` rows (at most [`MAX_PAGE_ROWS`]) from `table`, starting
 /// at `offset`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sqlite_page(
     path: String,
     table: String,

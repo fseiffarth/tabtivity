@@ -53,7 +53,9 @@ pub struct Mapping {
 }
 
 /// The variables a carrier may set: the CLIs' credential variables that carry
-/// an API proxy token (`agent_api_keys::ENV_VARS`), nothing else. The step runs *outside* the
+/// an API proxy token (`agent_api_keys::ENV_VARS`) — the user's own key's or a
+/// hosted server administrator's, which reach agents only through the proxy
+/// (#2389) — nothing else. The step runs *outside* the
 /// fence, in front of bwrap or `sandbox-exec` (and of an unfenced Host
 /// session's CLI), so a carrier able to name any variable would be an
 /// environment-injection lever there: `LD_PRELOAD`, `PATH`, `BASH_ENV` or
@@ -61,8 +63,8 @@ pub struct Mapping {
 /// nothing: the step is always the running binary (`fence_scope::
 /// running_binary`, `/proc/<pid>/exe` once replaced), the same build that
 /// injected the carrier. A name a later build adds is added here with it.
-pub fn targets() -> &'static [&'static str] {
-    crate::services::agent_api_keys::ENV_VARS
+pub fn targets() -> Vec<&'static str> {
+    crate::services::agent_api_keys::ENV_VARS.to_vec()
 }
 
 /// Whether `key` is a carrier, by bytes: a name that is not UTF-8 still
@@ -78,13 +80,14 @@ fn is_carrier(key: &OsStr) -> bool {
 /// server's own global copy, which is not the user's choice for this tab.
 pub fn mapping<'a>(vars: impl IntoIterator<Item = (&'a OsStr, &'a OsStr)>) -> Mapping {
     let mut out = Mapping::default();
+    let targets = targets();
     for (key, value) in vars {
         if !is_carrier(key) {
             continue;
         }
         out.remove.push(key.to_owned());
         let target = key.to_str().and_then(|k| k.strip_prefix(CARRIER_PREFIX));
-        if let Some(name) = target.filter(|n| targets().contains(n)) {
+        if let Some(name) = target.filter(|n| targets.contains(n)) {
             if !value.is_empty() {
                 out.set.push((OsString::from(name), value.to_owned()));
             }
@@ -221,8 +224,7 @@ mod tests {
             carrier_name("NODE_OPTIONS"),
             carrier_name("HOME"),
             carrier_name("ANTHROPIC_BASE_URL"),
-            // The raw key's name: since the proxy (C2) no carrier sets it.
-            carrier_name("ANTHROPIC_API_KEY"),
+            // Case matters: the registry names `ANTHROPIC_API_KEY`, not this.
             carrier_name("anthropic_api_key"),
         ];
         let mut pairs: Vec<(&str, &str)> = vec![(empty.as_str(), "")];
@@ -230,10 +232,10 @@ mod tests {
         let m = map(&pairs);
         assert_eq!(m.remove.len(), pairs.len());
         assert!(m.set.is_empty(), "{:?}", m.set);
-        // Every key variable a spawn can carry is a target.
-        for var in crate::services::agent_api_keys::ENV_VARS {
+        // Every key variable a spawn can carry is a target: the proxy tokens'.
+        for var in targets() {
             let carrier = carrier_name(var);
-            assert_eq!(map(&[(&carrier, "fake")]).set, vec![(OsString::from(*var), OsString::from("fake"))]);
+            assert_eq!(map(&[(&carrier, "fake")]).set, vec![(OsString::from(var), OsString::from("fake"))]);
         }
     }
 

@@ -28,7 +28,7 @@ use app_lib::services::mail_sanitize::sanitize_message_html;
 fn keyring(seed: u8) -> (tempfile::TempDir, PgpKeyring) {
     let dir = tempfile::tempdir().unwrap();
     let keys = MailKeys::derive(Key::from_bytes([seed; 32]));
-    let ring = PgpKeyring::open(dir.path(), &keys).unwrap();
+    let ring = PgpKeyring::open(dir.path(), &keys, *app_lib::services::mail_crypt::side_files()).unwrap();
     (dir, ring)
 }
 

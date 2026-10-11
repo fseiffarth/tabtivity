@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::services::remote::{remote_target_for_dir, RemoteTarget};
+use crate::tauri_host::Ctx;
 
 // Every git invocation goes through the single `run_git` helper, which dispatches
 // on whether the project is local or remote:
@@ -278,6 +279,58 @@ const CONFIG_DENYLIST: &[DenylistedConfigKey] = &[
     },
 ];
 
+/// Keys beyond [`CONFIG_DENYLIST`] from which git runs a program, **refused**
+/// (never stripped) in a project shared through a hosted server's hub (TODO
+/// #2374, user decision: fail closed). Stripping them would silently break
+/// legitimate setups (`merge.ours.driver`, signing, a credential helper);
+/// pinning exact keys with `-c` cannot reach a named driver. So git is not
+/// run in that clone until the key is removed, and the refusal names it.
+/// `(prefix, suffix)` like [`CONFIG_DENYLIST`]; an empty suffix with a
+/// prefix ending in `.` takes any key below it. `core.hooksPath` and
+/// `core.fsmonitor` are absent on purpose: a shared clone's git runs
+/// hookless and with `core.fsmonitor=false` pinned per call.
+const SHARED_PROGRAM_KEYS: &[(&str, &str)] = &[
+    ("merge.", ".driver"),
+    ("remote.", ".uploadpack"),
+    ("remote.", ".receivepack"),
+    ("remote.", ".vcs"),
+    ("gpg.", ".program"),
+    ("credential.", ".helper"),
+    ("url.", ".insteadof"),
+    ("url.", ".pushinsteadof"),
+    ("pager.", ""),
+    ("difftool.", ".cmd"),
+    ("mergetool.", ".cmd"),
+    ("browser.", ".cmd"),
+    ("browser.", ".path"),
+    ("man.", ".cmd"),
+    ("man.", ".path"),
+    ("submodule.", ".update"),
+    ("core.sshcommand", ""),
+    ("core.gitproxy", ""),
+    ("core.askpass", ""),
+    ("core.editor", ""),
+    ("core.pager", ""),
+    ("core.alternaterefscommand", ""),
+    ("sequence.editor", ""),
+    ("diff.external", ""),
+    ("web.browser", ""),
+    ("interactive.difffilter", ""),
+    ("sendemail.smtpserver", ""),
+];
+
+/// Pure match against [`SHARED_PROGRAM_KEYS`], case-insensitive.
+fn is_shared_program_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    SHARED_PROGRAM_KEYS.iter().any(|(prefix, suffix)| {
+        if suffix.is_empty() && !prefix.ends_with('.') {
+            key == *prefix
+        } else {
+            key.starts_with(prefix) && key.ends_with(suffix) && key.len() > prefix.len()
+        }
+    })
+}
+
 /// Pure match against [`CONFIG_DENYLIST`], case-insensitive (git lowercases
 /// section and key names itself; only the attacker-controlled subsection may
 /// carry mixed case, and it never touches the fixed prefix/suffix ends this
@@ -404,6 +457,54 @@ pub(crate) fn pin_common_dir(cmd: &mut std::process::Command, project_dir: &Path
     }
 }
 
+/// [`sanitize_repo_git_config`] that **fails closed** (hosted plan §6.5 gate
+/// 1): for a shared project's repo, whose `.git/config` can be reached by
+/// whatever a co-member's merged content makes run. After the strip every
+/// config file is listed again; a file that cannot be listed, or a
+/// denylisted key that survived, is an error and the git call is refused.
+fn sanitize_repo_git_config_strict(project_dir: &Path) -> Result<(), String> {
+    for config in repo_config_files(project_dir) {
+        sanitize_git_config_file(&config);
+        if let Some(key) = surviving_denylisted_key(&config)? {
+            return Err(format!(
+                "{} sets {key}, which can make git run a program; git is not run in this shared project until it is removed (git config --file {} --unset-all {key})",
+                config.display(),
+                config.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The first [`CONFIG_DENYLIST`] or [`SHARED_PROGRAM_KEYS`] key `config_path`
+/// still sets; `Err` when the file is there but cannot be listed.
+fn surviving_denylisted_key(config_path: &Path) -> Result<Option<String>, String> {
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    let path = config_path.to_str().ok_or_else(|| format!("{}: not a UTF-8 path", config_path.display()))?;
+    let listed = crate::paths::command_no_window("git")
+        .args(["config", "--file", path, "--name-only", "--list", "--no-includes"])
+        .output()
+        .map_err(|e| format!("git config: {e}"))?;
+    if !listed.status.success() {
+        return Err(format!("{} cannot be read as git config, so git is not run in this shared project", config_path.display()));
+    }
+    Ok(String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|k| is_denylisted_config_key(k) || is_shared_program_key(k))
+        .map(str::to_string))
+}
+
+/// A command that runs nothing and fails with `message` on stderr — what a
+/// git call becomes when [`sanitize_repo_git_config_strict`] refuses it.
+fn refusing_command(message: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("/bin/sh");
+    cmd.args(["-c", "printf '%s\\n' \"$1\" >&2; exit 128", "sh", message]);
+    cmd
+}
+
 fn sanitize_git_config_file(config_path: &Path) {
     let Some(config_path_str) = config_path.to_str() else {
         return;
@@ -476,12 +577,37 @@ pub(crate) fn hookless_git_command_in<S: AsRef<str>, P: AsRef<Path>>(
     hardened_git_command_in(project_dir, args)
 }
 
+/// The subcommand of a git argument list: the first argument after any
+/// leading `-c key=value` pairs.
+fn subcommand_of<S: AsRef<str>>(args: &[S]) -> Option<&str> {
+    let mut rest = args.iter().map(|a| a.as_ref());
+    loop {
+        match rest.next()? {
+            "-c" => {
+                rest.next()?;
+            }
+            sub => return Some(sub),
+        }
+    }
+}
+
 fn git_command_in<S: AsRef<str>>(project_dir: &Path, args: &[S], hooks: Hooks) -> std::process::Command {
-    // `init` creates a new repository here. An ancestor may itself be a repo
-    // (including a shared temp root); pinning its common dir would make the
-    // new repository incomplete and send later commands to the ancestor.
-    let initializing = args.first().is_some_and(|arg| arg.as_ref() == "init");
-    if !initializing {
+    // `init` creates a new repository here, and `clone` a new one below it
+    // (a shared project's clone-to-add, hosted plan §6.2). An ancestor may
+    // itself be a repo (including a shared temp root); pinning its common dir
+    // would make the new repository incomplete and send later commands to the
+    // ancestor. The subcommand follows any leading `-c key=value` pairs.
+    let initializing = subcommand_of(args).is_some_and(|sub| sub == "init" || sub == "clone");
+    // A project shared through a hosted server's hub (plan §6.5 gate 1): its
+    // hooks can arrive by merge, so a hooked verb runs hookless here, and
+    // config sanitizing fails closed.
+    let shared = !initializing && crate::services::server::share::is_shared_dir(project_dir);
+    let hooks = if shared { Hooks::Off } else { hooks };
+    if shared {
+        if let Err(message) = sanitize_repo_git_config_strict(project_dir) {
+            return refusing_command(&message);
+        }
+    } else if !initializing {
         sanitize_repo_git_config(project_dir);
     }
     let mut cmd = git_command(args, hooks);
@@ -617,7 +743,7 @@ pub(crate) async fn run_off_thread<T: Send + 'static>(
 /// this before offering a git-backed project, so a missing `git` surfaces as an
 /// install prompt instead of `scaffold_project` silently no-oping `git init`
 /// (see its `let _ =` discard) and registering a git-typed project with no repo.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn git_available() -> bool {
     crate::paths::command_no_window("git")
         .arg("--version")
@@ -648,7 +774,7 @@ pub struct GitStatus {
     pub upstream_ahead: Option<usize>,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_status(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -821,7 +947,7 @@ pub struct GitDirtyProbe {
 /// one IPC round trip — a clean tree tracking an upstream reads its unpushed
 /// count off the status header too ([`unpushed_count`]); only a clean branch
 /// with no upstream pays the namesake lookup.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_dirty_probe(project_dir: String) -> Result<GitDirtyProbe, String> {
     run_off_thread(move || {
         // `has_remote` is not read by the dot (see `git_status_probe`); skip it.
@@ -852,7 +978,7 @@ pub async fn git_dirty_probe(project_dir: String) -> Result<GitDirtyProbe, Strin
 /// host toplevel can't be reverse-mapped back to the project's `RemoteSpec` by
 /// `remote_target_for_dir`, so remote projects short-circuit to `None` and keep
 /// their existing project-scoped behavior.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_repo_root(
     project_dir: String,
     rel_path: String,
@@ -885,7 +1011,7 @@ fn git_repo_root_blocking(project_dir: String, rel_path: String) -> Result<Optio
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_add_all(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -913,7 +1039,7 @@ fn git_add_all_blocking_selected(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_generate_commit_message(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -1017,7 +1143,7 @@ fn format_commit_message(kind: &str, files: &[String]) -> String {
     format!("{kind}: {subject}")
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_commit(
     project_dir: String,
     message: String,
@@ -1056,7 +1182,7 @@ fn git_commit_blocking_selected(
 ///   "unpushed"  – committed locally but not pushed to upstream (green ↑)
 ///   "ignored"   – ignored by git (gray ✕)
 /// For directories the highest-priority child status bubbles up.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_file_statuses(
     project_dir: String,
     rel_path: String,
@@ -1263,7 +1389,7 @@ fn git_file_statuses_blocking(
 }
 
 /// Stages a specific path (file or directory) via `git add`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_add_path(project_dir: String, rel_path: String) -> Result<(), String> {
     run_off_thread(move || git_add_path_blocking(project_dir, rel_path)).await
 }
@@ -1292,13 +1418,14 @@ pub struct FileChange {
 ///   "staged"   – index vs HEAD (the Commit list)
 ///   "unpushed" – local commits ahead of upstream (the Push list)
 /// The frontend folds these flat paths into a navigable folder tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_change_stats(
+    ctx: Ctx,
     project_dir: String,
     scope: String,
-    pool: tauri::State<'_, crate::services::remote::RemotePoolState>,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<Vec<FileChange>, String> {
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
     let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
     let dir = Path::new(&project_dir);
     if local_non_repo(target.as_ref(), &project_dir) {
@@ -1373,7 +1500,7 @@ pub async fn git_change_stats(
                     // than failing the whole listing.
                     let (added, binary) = match &target {
                         None => count_added_lines(&dir.join(&rel)),
-                        Some(t) => count_added_lines_remote(&pool, t, &rel).await,
+                        Some(t) => count_added_lines_remote(pool, t, &rel).await,
                     };
                     changes.push(FileChange {
                         path: rel,
@@ -1486,7 +1613,7 @@ fn pick_remote_namesake(refs: &str, branch: &str) -> Option<String> {
 
 /// Returns one-line summaries of commits ahead of the upstream (not yet pushed),
 /// measured against [`unpushed_base`]. Empty when there is none or no repo.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_unpushed_commits(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -1559,13 +1686,18 @@ pub(crate) fn require_hook_trust(target: Option<&RemoteTarget>, project_dir: &st
     if target.is_some() {
         return Ok(());
     }
+    // A shared project's clone runs no hook at all (plan §6.5): nothing to
+    // approve, and no approval could make one run.
+    if crate::services::server::share::is_shared_dir(Path::new(project_dir)) {
+        return Ok(());
+    }
     crate::services::exec_trust::require(
         crate::services::exec_trust::TrustKind::GitHooks,
         Path::new(project_dir),
     )
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_push(
     project_dir: String,
     project_id: Option<String>,
@@ -1589,7 +1721,7 @@ pub async fn git_push(
 /// The git bar's Release dialog: the suggested tag for the checked-out
 /// branch's tip and whether a release could go out now
 /// (`services::git_release`). Local projects only; asks the remote.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_release_preview(
     project_dir: String,
     project_id: Option<String>,
@@ -1616,7 +1748,7 @@ pub async fn git_release_preview(
 /// tip is exactly what the remote branch holds and the tag is new there. Gated
 /// like Push: with no stored token the user's own credential helpers answer,
 /// and those are part of the approved hook fingerprint.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_release_tag(
     project_dir: String,
     project_id: Option<String>,
@@ -1925,7 +2057,7 @@ fn clone_error(stderr: &str, had_token: bool, https: bool) -> String {
 /// SSH URL uses the user's own keys. Every interactive prompt git could raise is
 /// disabled (`GIT_TERMINAL_PROMPT=0`, ssh `BatchMode=yes`) — Tabtivity has no console
 /// attached, so a prompt would be an invisible hang rather than a question.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_clone(url: String, dest: String) -> Result<String, String> {
     run_off_thread(move || git_clone_blocking(url, dest)).await
 }
@@ -2035,7 +2167,7 @@ pub(crate) fn https_probe_url(raw: &str) -> Option<String> {
 /// from a mistyped URL — both read as `"private"`, which is also the safe default
 /// for the field this fills, and the clone itself is the thing that reports a bad
 /// URL.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_remote_visibility(url: String) -> Result<String, String> {
     run_off_thread(move || git_remote_visibility_blocking(url)).await
 }
@@ -2107,7 +2239,7 @@ fn git_head_hash(target: Option<&RemoteTarget>, project_dir: &str) -> Option<Str
 /// 100) starting `skip` commits back from HEAD, so the panel can page a long
 /// history in instead of stopping at the first page. Returns an empty vec for a
 /// non-git directory, a repo with no commits yet, or a `skip` past the root.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_log(
     project_dir: String,
     limit: Option<u32>,
@@ -2165,7 +2297,7 @@ const GIT_LOG_SEARCH_SCAN: u32 = 20_000;
 /// Search the history (newest first) for commits whose hash, subject, author or
 /// ref names contain `query` (case-insensitive). Reads `GIT_LOG_SEARCH_SCAN`
 /// commits at most and returns up to `limit` matches.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_log_search(
     project_dir: String,
     query: String,
@@ -2265,7 +2397,7 @@ fn parse_git_log(text: &str, head: Option<&str>) -> Vec<GitCommit> {
 /// recent first. `--follow` keeps history across renames. Returns an empty vec for
 /// a non-git dir, an untracked path, or a repo with no commits. Local and remote
 /// (SSH) projects both work via the shared `run_git` dispatch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_file_log(
     project_dir: String,
     rel_path: String,
@@ -2305,7 +2437,7 @@ fn git_file_log_blocking(
 /// Used by the in-app compare/merge view for the "old version" pane. Errors (bad
 /// rev, path absent at that rev) surface as `Err(stderr)`. Local and remote (SSH)
 /// projects both work via the shared `run_git` dispatch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_file_at_rev(
     project_dir: String,
     rel_path: String,
@@ -2348,7 +2480,7 @@ pub struct GitBranch {
 }
 
 /// Lists local and remote-tracking branches.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_branches(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -2402,7 +2534,7 @@ fn git_branches_blocking_selected(
 
 /// Checks out a branch name or commit hash. Surfaces git's stderr on failure
 /// (e.g. when the working tree has conflicting uncommitted changes).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_checkout(
     project_dir: String,
     target: String,
@@ -2442,7 +2574,7 @@ fn git_checkout_blocking_selected(
 }
 
 /// Returns the full commit message (subject + body) for a single commit.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_commit_message(
     project_dir: String,
     hash: String,
@@ -2479,7 +2611,7 @@ fn git_commit_message_blocking_selected(
 
 /// Rewords the most recent commit (HEAD) via `git commit --amend`. Only valid
 /// for the latest commit; rewording older commits would require a rebase.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_reword_head(
     project_dir: String,
     message: String,
@@ -2525,7 +2657,7 @@ fn git_reword_head_blocking_selected(
 /// <rel_path>`, which renders the whole file as added. `--no-index` exits
 /// non-zero whenever there are differences, so for the fallback we treat any
 /// non-empty stdout as success regardless of exit status.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_diff_file(project_dir: String, rel_path: String) -> Result<String, String> {
     run_off_thread(move || git_diff_file_blocking(project_dir, rel_path)).await
 }
@@ -2656,7 +2788,7 @@ fn parse_blame_porcelain(text: &str) -> Vec<GitBlameLine> {
 /// for a non-git dir or a path with no blame (e.g. never committed and no
 /// working-tree content). Local and remote (SSH) projects both work via the
 /// shared `run_git` dispatch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_blame(project_dir: String, rel_path: String) -> Result<Vec<GitBlameLine>, String> {
     run_off_thread(move || git_blame_blocking(project_dir, rel_path)).await
 }
@@ -2840,7 +2972,7 @@ impl WorktreeSite {
 
 /// Frontend capability check: older running binaries ignore unknown command
 /// arguments, so selection must stay disabled until this API is available.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn git_worktree_selection_supported() -> bool {
     true
 }
@@ -3074,7 +3206,7 @@ fn git_err(out: &std::process::Output) -> String {
 }
 
 /// Lists worktrees attached to the repository on the chosen side.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_list(
     project_dir: String,
     site: Option<String>,
@@ -3112,7 +3244,7 @@ pub(crate) fn git_worktree_list_blocking(
 ///
 /// `path` is resolved into the project's sanctioned worktrees root — see
 /// [`resolve_worktree_path`]; a bare name is the normal input.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn git_worktree_add(
     project_dir: String,
@@ -3260,7 +3392,7 @@ fn remote_exclude_script() -> String {
 /// (`remove -f -f`) is the only thing that removes a *locked* one — git says so
 /// itself and exits 128 for a single `--force` (verified). Passing a bool here
 /// is what made a locked worktree permanently unremovable from Tabtivity (B4).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_remove(
     project_dir: String,
     path: String,
@@ -3307,7 +3439,7 @@ fn git_worktree_remove_blocking(
 
 /// Locks a worktree so neither `prune` nor a plain `remove` can drop it —
 /// `reason` is git's own free text, shown back in the list.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_lock(
     project_dir: String,
     path: String,
@@ -3343,7 +3475,7 @@ pub async fn git_worktree_lock(
 /// Unlocks a worktree. Without this, and without `remove -f -f`, a locked
 /// worktree could only be freed from a terminal — for a feature whose point is
 /// not needing one (B4).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_unlock(
     project_dir: String,
     path: String,
@@ -3366,7 +3498,7 @@ pub async fn git_worktree_unlock(
 
 /// Prunes administrative entries for worktrees whose directories were removed
 /// out-of-band (`git worktree prune`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_prune(
     project_dir: String,
     site: Option<String>,
@@ -3421,7 +3553,7 @@ pub struct DetectedOrigin {
 /// Offloaded via [`run_off_thread`]: the body forks one `git remote get-url`
 /// per local project, and as a sync command that whole loop ran on the main
 /// thread, stalling the window for N process spawns on every call.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detect_git_providers() -> Result<HashMap<String, DetectedOrigin>, String> {
     run_off_thread(detect_git_providers_blocking).await
 }
@@ -5208,7 +5340,7 @@ filename note.txt
         let head = plain_git(&dir, &["rev-parse", "HEAD"]);
         fs::write(git.join("MERGE_HEAD"), &head.stdout).expect("MERGE_HEAD");
         fs::write(dir.join("f.txt"), "d\n").expect("edit");
-        let state = tauri::async_runtime::block_on(crate::commands::git_pull::git_merge_state(d.clone(), None))
+        let state = app_core::rt::block_on(crate::commands::git_pull::git_merge_state(d.clone(), None))
             .expect("merge state");
         assert!(state.merging, "setup is stale: MERGE_HEAD not seen");
         assert!(!planted.exists(), "planted hook ran on the merge-state probe");
@@ -5496,5 +5628,88 @@ filename note.txt
         assert!(listing.expect_err("the tree's status").contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
         assert!(!Path::new(&format!("/proc/{pid}")).exists(), "git {pid} left behind");
+    }
+}
+
+/// Hosted plan §6.5 gate 1: in a shared project's repo, config sanitizing
+/// fails closed and a refused call runs nothing.
+#[cfg(all(test, unix))]
+mod shared_gate_tests {
+    use super::*;
+
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).output().unwrap();
+        assert!(out.status.success());
+        dir
+    }
+
+    #[test]
+    fn strict_sanitizing_strips_and_then_refuses_what_it_cannot_read() {
+        let dir = repo();
+        let config = dir.path().join(".git/config");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("[filter \"x\"]\n\tclean = touch /tmp/pwned\n");
+        std::fs::write(&config, &text).unwrap();
+        sanitize_repo_git_config_strict(dir.path()).unwrap();
+        assert!(!std::fs::read_to_string(&config).unwrap().contains("pwned"), "the filter is gone");
+        // A config git cannot parse: refused, not skipped.
+        std::fs::write(&config, "[core\n\tbare = false\n").unwrap();
+        let error = sanitize_repo_git_config_strict(dir.path()).unwrap_err();
+        assert!(error.contains("cannot be read"), "{error}");
+        // The lenient path the desktop keeps does not refuse.
+        sanitize_repo_git_config(dir.path());
+    }
+
+    /// TODO #2374 (user decision): every other key git runs a program from
+    /// refuses the shared clone's git — not stripped — and says which.
+    #[test]
+    fn strict_sanitizing_refuses_every_program_running_key() {
+        for (section, line) in [
+            ("[merge \"ours\"]", "driver = true"),
+            ("[remote \"origin\"]", "uploadpack = touch /tmp/x"),
+            ("[core]", "sshCommand = ssh -oProxyCommand=x"),
+            ("[core]", "askPass = /tmp/x"),
+            ("[gpg]", "program = /tmp/x"),
+            ("[gpg \"ssh\"]", "program = /tmp/x"),
+            ("[credential]", "helper = !x"),
+            ("[credential \"https://example.invalid\"]", "helper = x"),
+            ("[url \"/tmp/evil\"]", "insteadOf = https://example.invalid/"),
+            ("[sequence]", "editor = x"),
+            ("[pager]", "log = x"),
+            ("[diff]", "external = x"),
+        ] {
+            let dir = repo();
+            let config = dir.path().join(".git/config");
+            let mut text = std::fs::read_to_string(&config).unwrap();
+            text.push_str(&format!("{section}\n\t{line}\n"));
+            std::fs::write(&config, &text).unwrap();
+            let error = sanitize_repo_git_config_strict(dir.path()).unwrap_err();
+            assert!(error.contains("can make git run a program"), "{section} {line}: {error}");
+            assert!(std::fs::read_to_string(&config).unwrap().contains(line.split(' ').next().unwrap()), "refused, not stripped: {section}");
+        }
+        // What a clone of a shared project legitimately holds still runs.
+        let dir = repo();
+        let config = dir.path().join(".git/config");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("[remote \"origin\"]\n\turl = /srv/hub/p.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[core]\n\thooksPath = .husky\n[user]\n\tname = A\n");
+        std::fs::write(&config, &text).unwrap();
+        sanitize_repo_git_config_strict(dir.path()).unwrap();
+        assert!(is_shared_program_key("core.sshCommand") && !is_shared_program_key("core.sshcommandx") && !is_shared_program_key("remote.origin.url"));
+    }
+
+    #[test]
+    fn a_refused_call_runs_nothing_and_says_why() {
+        let out = refusing_command("refused: because").output().unwrap();
+        assert_eq!(out.status.code(), Some(128));
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "refused: because");
+        assert!(out.stdout.is_empty());
+    }
+
+    #[test]
+    fn the_subcommand_follows_leading_config_pairs() {
+        assert_eq!(subcommand_of(&["-c", "safe.directory=/x", "clone", "a"]), Some("clone"));
+        assert_eq!(subcommand_of(&["status"]), Some("status"));
+        assert_eq!(subcommand_of(&["-c", "a=b"]), None);
     }
 }

@@ -222,7 +222,7 @@ fn walk(
 /// every search on a large project (the main-thread freeze class
 /// `commands::git`'s `run_off_thread` doc describes). The sync body stays
 /// directly unit-testable below.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_search(
     project_dir: String,
     query: String,

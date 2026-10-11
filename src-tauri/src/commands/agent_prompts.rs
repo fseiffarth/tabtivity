@@ -1,4 +1,3 @@
-use tauri::{AppHandle, Emitter};
 
 use crate::{
     schema::agent_prompts::{
@@ -9,82 +8,84 @@ use crate::{
 };
 
 use super::git::run_off_thread;
+use crate::tauri_host::Ctx;
+use app_core::CoreCtx;
 
 const CHANGED_EVENT: &str = "agent-prompts-changed";
 
-fn changed(app: &AppHandle) {
-    let _ = app.emit(CHANGED_EVENT, ());
+fn changed(ctx: &CoreCtx) {
+    ctx.emit(CHANGED_EVENT, ());
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompts_list(project_id: String) -> Result<Vec<ProjectAgentPrompt>, String> {
     agent_prompts::list(&project_id)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_links_list(project_id: String) -> Result<Vec<PromptLink>, String> {
     agent_prompts::links(&project_id)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_link_upsert(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     link: PromptLinkInput,
 ) -> Result<Vec<PromptLink>, String> {
     let result = agent_prompts::link_upsert(&project_id, link)?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_link_delete(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     link_id: String,
 ) -> Result<Vec<PromptLink>, String> {
     let result = agent_prompts::link_delete(&project_id, &link_id)?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_upsert(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     prompt: ProjectAgentPromptInput,
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     let result = agent_prompts::upsert(&project_id, prompt)?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_delete(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     prompt_id: String,
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     let result = agent_prompts::delete(&project_id, &prompt_id)?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }
 
 /// Reorder a project's collected prompts — the order a drag left them in. The
 /// caller sends the ids in their new order; anything it did not name keeps its
 /// relative place after them.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_reorder(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     ids: Vec<String>,
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     let result = agent_prompts::reorder(&project_id, ids)?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_history_list(project_id: String) -> Result<Vec<SentAgentPrompt>, String> {
     agent_prompts::history(&project_id)
 }
@@ -94,16 +95,16 @@ pub fn agent_prompt_history_list(project_id: String) -> Result<Vec<SentAgentProm
 ///
 /// Off-thread, like the git commands: the row is stamped with the project's
 /// HEAD (`services::prompt_blame`), which spawns git for a local project.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_prompt_archive(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     prompt_id: String,
     sent: SentAgentPromptInput,
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     let result =
         run_off_thread(move || agent_prompts::archive(&project_id, &prompt_id, sent)).await?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }
 
@@ -111,14 +112,14 @@ pub async fn agent_prompt_archive(
 /// returns the history rather than the active list; an entry already written
 /// under this id (a send-now prompt archived when it was queued) is updated in
 /// place with the outcome.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_prompt_record(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     entry: RecordedAgentPromptInput,
 ) -> Result<Vec<SentAgentPrompt>, String> {
     let result = run_off_thread(move || agent_prompts::record(&project_id, entry)).await?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }
 
@@ -126,9 +127,9 @@ pub async fn agent_prompt_record(
 /// its delivery (or `since`, the moment the scheduler submitted the text) and
 /// now. The scheduler calls it once, when it sees the tab idle again after a
 /// delivery. Returns the project's history.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_prompt_blame(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     entry_id: String,
     since: Option<String>,
@@ -136,17 +137,17 @@ pub async fn agent_prompt_blame(
     let result =
         run_off_thread(move || agent_prompts::blame(&project_id, &entry_id, since.as_deref()))
             .await?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_history_clear(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     entry_id: Option<String>,
 ) -> Result<Vec<SentAgentPrompt>, String> {
     let result = agent_prompts::clear_history(&project_id, entry_id.as_deref())?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }

@@ -6,13 +6,13 @@
 //! sign-on: the master authenticates here and every later channel (file browse /
 //! I-O, agent tabs, git over ssh) rides it.
 
-use tauri::{AppHandle, State};
 
 use crate::services::git_peer::{self, GitPeerRegistry};
 use crate::services::hpc_mode;
 use crate::services::remote::{self, RemotePoolState};
 use crate::services::remote_sync::SyncManifestState;
 use crate::services::sync_auto::{self, AutoSyncState};
+use crate::tauri_host::Ctx;
 
 // NOTE: `kill_tmux_on_disconnect` used to run here, from both disconnect
 // commands. It ran `tmux kill-server` on the host for a **plain project
@@ -82,20 +82,20 @@ fn record_key_auth(
 /// indistinguishable from key/agent auth from here — so it must NOT be allowed to
 /// record `key_auth: true` (see [`record_key_auth`]). It is a *caller* fact, not
 /// something this command can observe.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_connect(
-    app: AppHandle,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
-    auto: State<'_, AutoSyncState>,
-    git_peer_reg: State<'_, GitPeerRegistry>,
-    worker_sync: State<'_, crate::services::worker_sync::WorkerSyncState>,
+    ctx: Ctx,
     project_id: String,
     host_id: Option<String>,
     password: Option<String>,
     via_login: Option<bool>,
     background: Option<bool>,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let auto = ctx.get::<AutoSyncState>();
+    let git_peer_reg = ctx.get::<GitPeerRegistry>();
+    let worker_sync = ctx.get::<crate::services::worker_sync::WorkerSyncState>();
     let host_id = host_id.unwrap_or_else(|| remote::PRIMARY_HOST.to_string());
     // `background` per `ssh_common`'s second shape, same polarity and same
     // default as every other dual-caller command: a Connect click passes
@@ -122,7 +122,7 @@ pub async fn remote_connect(
         let boot_id = project_id.clone();
         let name =
             crate::commands::vm::project_name(&project_id).unwrap_or_else(|| "project".to_string());
-        tauri::async_runtime::spawn_blocking(move || {
+        app_core::rt::spawn_blocking(move || {
             crate::services::vm::ensure_booted(&boot_id, &name)
         })
         .await
@@ -136,7 +136,7 @@ pub async fn remote_connect(
             t.spec.port,
         )
     });
-    remote::connect_host(pool.inner(), &project_id, &host_id, password.as_deref()).await?;
+    remote::connect_host(pool, &project_id, &host_id, password.as_deref()).await?;
 
     // Best-effort "is this host already busy?" check, off the connect critical
     // path: it runs one extra SSH round trip (riding the same ControlMaster this
@@ -156,18 +156,18 @@ pub async fn remote_connect(
     if let Some(target) = remote::remote_target_for_host(&project_id, &host_id)
         .filter(|t| !hpc_mode::is_careful_host(&t.spec))
     {
-        let app_for_usage = app.clone();
+        let ctx_for_usage = ctx.0.clone();
         let usage_spec = target.spec.clone();
         let usage_project_id = project_id.clone();
         let usage_host_id = host_id.clone();
-        tauri::async_runtime::spawn(async move {
-            let result = tauri::async_runtime::spawn_blocking(move || {
+        app_core::rt::spawn(async move {
+            let result = app_core::rt::spawn_blocking(move || {
                 crate::services::remote_usage::check_usage(&usage_spec)
             })
             .await;
             if let Ok(Ok(report)) = result {
                 crate::services::remote_usage::emit_usage_report(
-                    &app_for_usage,
+                    &ctx_for_usage,
                     &usage_project_id,
                     &usage_host_id,
                     &report,
@@ -210,9 +210,9 @@ pub async fn remote_connect(
         }
         if !shared {
             crate::services::worker_sync::on_worker_connect(
-                app.clone(),
-                pool.inner().clone(),
-                worker_sync.inner().clone(),
+                ctx.0.clone(),
+                pool.clone(),
+                worker_sync.clone(),
                 &project_id,
                 &host_id,
             )
@@ -247,7 +247,7 @@ pub async fn remote_connect(
     if crate::brand::PAIR.renamed() {
         let id = project_id.clone();
         let spec = remote::remote_target_for_host(&project_id, &host_id).map(|t| t.spec);
-        let _ = tauri::async_runtime::spawn_blocking(move || {
+        let _ = app_core::rt::spawn_blocking(move || {
             crate::services::brand_migration::project::on_project_open(&id);
             if let Some(spec) = spec {
                 crate::services::brand_migration::project::on_remote_connect(&id, &spec);
@@ -256,22 +256,22 @@ pub async fn remote_connect(
         .await;
     }
     sync_auto::start(
-        app.clone(),
-        pool.inner().clone(),
-        manifest.inner().clone(),
-        auto.inner(),
+        ctx.0.clone(),
+        pool.clone(),
+        manifest.clone(),
+        auto,
         &project_id,
     )
     .await;
     // Launch git lockstep only when the project has opted in (start() itself no-ops
     // otherwise); it attaches the .git watcher + host poll and reconciles once.
     git_peer::start(
-        app,
-        pool.inner().clone(),
-        manifest.inner().clone(),
-        auto.inner().clone(),
-        git_peer_reg.inner(),
-        worker_sync.inner().clone(),
+        ctx.0.clone(),
+        pool.clone(),
+        manifest.clone(),
+        auto.clone(),
+        git_peer_reg,
+        worker_sync.clone(),
         &project_id,
     )
     .await;
@@ -295,9 +295,10 @@ pub async fn remote_connect(
 /// type is `String` rather than `()` because every other command here uses
 /// `String` (and `clippy::result_unit_err` asks for a nameable error either way);
 /// nothing ever constructs one.
-#[tauri::command]
-pub async fn remote_connected_ids(pool: State<'_, RemotePoolState>) -> Result<Vec<String>, String> {
-    Ok(remote::connected_ids(pool.inner()).await)
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn remote_connected_ids(ctx: Ctx) -> Result<Vec<String>, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    Ok(remote::connected_ids(pool).await)
 }
 
 /// Close the pooled connection for a remote project host (on deactivation, or a
@@ -309,20 +310,21 @@ pub async fn remote_connected_ids(pool: State<'_, RemotePoolState>) -> Result<Ve
 /// Deliberately leaves the host's tmux sessions running: closing a connection is
 /// not ending the work it was carrying (TODO #85). See the note at the top of
 /// this module.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_disconnect(
-    pool: State<'_, RemotePoolState>,
-    auto: State<'_, AutoSyncState>,
-    git_peer_reg: State<'_, GitPeerRegistry>,
+    ctx: Ctx,
     project_id: String,
     host_id: Option<String>,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let auto = ctx.get::<AutoSyncState>();
+    let git_peer_reg = ctx.get::<GitPeerRegistry>();
     let host_id = host_id.unwrap_or_else(|| remote::PRIMARY_HOST.to_string());
     if host_id == remote::PRIMARY_HOST {
-        git_peer::stop(git_peer_reg.inner(), &project_id).await;
-        sync_auto::stop(auto.inner(), &project_id).await;
+        git_peer::stop(git_peer_reg, &project_id).await;
+        sync_auto::stop(auto, &project_id).await;
     }
-    remote::disconnect_host(pool.inner(), &project_id, &host_id).await;
+    remote::disconnect_host(pool, &project_id, &host_id).await;
     Ok(())
 }
 
@@ -330,45 +332,45 @@ pub async fn remote_disconnect(
 /// — on project deactivation. Stops the primary's lockstep/auto-sync, then tears
 /// down all pooled entries for the project. Like [`remote_disconnect`], it leaves
 /// the hosts' tmux sessions alone: this fires on an ordinary project switch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_disconnect_all_hosts(
-    pool: State<'_, RemotePoolState>,
-    auto: State<'_, AutoSyncState>,
-    git_peer_reg: State<'_, GitPeerRegistry>,
+    ctx: Ctx,
     project_id: String,
 ) -> Result<(), String> {
-    git_peer::stop(git_peer_reg.inner(), &project_id).await;
-    sync_auto::stop(auto.inner(), &project_id).await;
-    remote::disconnect_project(pool.inner(), &project_id).await;
+    let pool = ctx.get::<RemotePoolState>();
+    let auto = ctx.get::<AutoSyncState>();
+    let git_peer_reg = ctx.get::<GitPeerRegistry>();
+    git_peer::stop(git_peer_reg, &project_id).await;
+    sync_auto::stop(auto, &project_id).await;
+    remote::disconnect_project(pool, &project_id).await;
     Ok(())
 }
 
 /// The `(project_id, host_id)` pairs whose pooled SSH connection is currently live
 /// — the per-host granular form of [`remote_connected_ids`], for the frontend to
 /// reconcile each host lamp against reality (see that command's rationale).
-#[tauri::command]
-pub async fn remote_connected_targets(
-    pool: State<'_, RemotePoolState>,
-) -> Result<Vec<(String, String)>, String> {
-    Ok(remote::connected_targets(pool.inner()).await)
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn remote_connected_targets(ctx: Ctx) -> Result<Vec<(String, String)>, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    Ok(remote::connected_targets(pool).await)
 }
 
 /// Manually push the mirror's current HEAD to a remote project's worker host (the
 /// pill's "Sync code now"). `force` re-pushes even when the worker is recorded as
 /// already at HEAD. Emits a `worker-sync-report` and returns the same report.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn worker_sync_now(
-    app: AppHandle,
-    pool: State<'_, RemotePoolState>,
-    worker_sync: State<'_, crate::services::worker_sync::WorkerSyncState>,
+    ctx: Ctx,
     project_id: String,
     host_id: String,
 ) -> Result<crate::services::worker_sync::WorkerSyncReport, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let worker_sync = ctx.get::<crate::services::worker_sync::WorkerSyncState>();
     let _dial = user_dial_for_host(&project_id, &host_id);
     let report = crate::services::worker_sync::sync_worker_guarded(
-        &app,
-        pool.inner(),
-        worker_sync.inner(),
+        &ctx,
+        pool,
+        worker_sync,
         &project_id,
         &host_id,
         true,
@@ -396,7 +398,7 @@ fn user_dial_for_host(
 
 /// Preview the size of a worker's pullable experiment outputs (its untracked
 /// files) so the frontend can confirm before a large transfer (plan §4.4).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn worker_outputs_preview(
     project_id: String,
     host_id: String,
@@ -406,14 +408,15 @@ pub async fn worker_outputs_preview(
 
 /// Pull a worker's untracked outputs into a local `outputs/<label>/` folder — the
 /// one, user-initiated worker→local byte path (plan §4.4/§8).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn worker_pull_outputs(
-    pool: State<'_, RemotePoolState>,
+    ctx: Ctx,
     project_id: String,
     host_id: String,
 ) -> Result<crate::services::worker_sync::WorkerPullReport, String> {
+    let pool = ctx.get::<RemotePoolState>();
     let _dial = user_dial_for_host(&project_id, &host_id);
-    crate::services::worker_sync::pull_outputs(pool.inner(), &project_id, &host_id).await
+    crate::services::worker_sync::pull_outputs(pool, &project_id, &host_id).await
 }
 
 /// Upload a LOCAL file to a remote project's tree over the pooled SFTP, streaming
@@ -425,13 +428,14 @@ pub async fn worker_pull_outputs(
 ///
 /// `dest_rel` is sanitized to stay inside the project root: a leading `/` is
 /// dropped and a `..` component is refused, so an upload can never escape the tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_upload_file(
-    pool: State<'_, RemotePoolState>,
+    ctx: Ctx,
     project_id: String,
     local_path: String,
     dest_rel: String,
 ) -> Result<String, String> {
+    let pool = ctx.get::<RemotePoolState>();
     let target =
         remote::remote_target_for(&project_id).ok_or_else(|| "not a remote project".to_string())?;
     let rel = dest_rel.trim().trim_start_matches('/');
@@ -443,7 +447,7 @@ pub async fn remote_upload_file(
     }
     let root = target.spec.remote_path.trim_end_matches('/');
     let dest = format!("{root}/{rel}");
-    let sftp = remote::pooled_sftp(pool.inner(), &project_id)
+    let sftp = remote::pooled_sftp(pool, &project_id)
         .await
         .ok_or_else(|| "remote project is not connected".to_string())?;
     crate::services::sftp::upload_file_streaming_on(
@@ -470,7 +474,7 @@ pub async fn remote_upload_file(
 /// host listing unfiltered, which is how an orphaned or unattributable session
 /// stays reachable to kill. The **path** used is this host's own
 /// `remote_path`, so a synced worker with its own copy scopes to its own tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_tmux_list(
     project_id: String,
     host_id: Option<String>,
@@ -482,7 +486,7 @@ pub async fn remote_tmux_list(
     let filter_project_id = project_id.clone();
     let project_root = target.spec.remote_path.clone();
     let include_all = include_all.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let out = crate::services::ssh_exec::run_remote_script(
             &target.spec,
             crate::services::ssh_exec::tmux_ls_script(),
@@ -527,7 +531,7 @@ pub async fn remote_tmux_list(
 /// intent behind an **explicit** tab close of a persistent remote tab, and the
 /// Sessions view's per-row Kill. `host_id`
 /// defaults to the primary; `session` is `shell_quote`d inside the script.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_tmux_kill(
     project_id: String,
     host_id: Option<String>,
@@ -537,7 +541,7 @@ pub async fn remote_tmux_kill(
     let target = remote::remote_target_for_host(&project_id, &host_id)
         .ok_or_else(|| "not a remote project host".to_string())?;
     let _dial = user_dial_for_host(&project_id, &host_id);
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let output = crate::services::ssh_exec::run_remote_script(
             &target.spec,
             &crate::services::ssh_exec::tmux_kill_session_script(&session),
@@ -560,7 +564,7 @@ pub async fn remote_tmux_kill(
 /// view's per-row Rename. `new_name` must be a safe tmux name
 /// (`ssh_exec::valid_tmux_session_name`); the (possibly foreign) `session` source
 /// name is only quoted. `host_id` defaults to the primary.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_tmux_rename(
     project_id: String,
     host_id: Option<String>,
@@ -573,7 +577,7 @@ pub async fn remote_tmux_rename(
     let host_id = host_id.unwrap_or_else(|| remote::PRIMARY_HOST.to_string());
     let target = remote::remote_target_for_host(&project_id, &host_id)
         .ok_or_else(|| "not a remote project host".to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         crate::services::ssh_exec::run_remote_script(
             &target.spec,
             &crate::services::ssh_exec::tmux_rename_session_script(&session, &new_name),
@@ -593,7 +597,7 @@ pub async fn remote_tmux_rename(
 /// Takes `background` (`ssh_common`'s second shape): a per-row "Read now" is a
 /// gesture, while the dialog's open-the-menu sweep across every host is not, and
 /// the two reach this same command. Only `Some(false)` counts as the former.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_usage_check(
     project_id: String,
     host_id: Option<String>,
@@ -608,7 +612,7 @@ pub async fn remote_usage_check(
         &target.spec.host,
         target.spec.port,
     );
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         crate::services::remote_usage::check_usage(&target.spec)
     })
     .await

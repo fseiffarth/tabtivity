@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use crate::schema::usage_stats::{self, Counters};
 use crate::services::remote::remote_target_for_dir;
+use crate::tauri_host::Ctx;
 
 /// The rollup handed to the frontend: the same two bucket maps the store holds,
 /// already folded to one project (or summed across all of them).
@@ -34,7 +35,7 @@ pub struct UsageReport {
 ///
 /// Offloaded to the blocking pool: it is a read-modify-write of a JSON file, and
 /// a Tauri sync command would do that on the UI thread.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_bump(project_id: String, metrics: Counters) -> Result<(), String> {
     tokio::task::spawn_blocking(move || usage_stats::record(&project_id, &metrics))
         .await
@@ -43,7 +44,7 @@ pub async fn usage_bump(project_id: String, metrics: Counters) -> Result<(), Str
 
 /// Every recorded counter for `project_id`, or summed across all projects when it
 /// is empty. Read-only — recording is internal to [`usage_bump`] and the watcher.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_summary(project_id: String) -> Result<UsageReport, String> {
     tokio::task::spawn_blocking(move || {
         let stats = usage_stats::load();
@@ -80,7 +81,7 @@ pub struct TokenReport {
 /// transcripts (`services::token_stats`) and folds the result like
 /// [`usage_summary`]. On the blocking pool — the first scan reads every
 /// transcript there is.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_token_stats(project_id: String) -> Result<TokenReport, String> {
     tokio::task::spawn_blocking(move || {
         let state_dir = crate::storage::state_dir();
@@ -124,12 +125,13 @@ fn known_scope_ids() -> Vec<String> {
 /// local mirror — is resolved backend-side (`services::usage_stats::watch_root_for`).
 /// Watching is best-effort: a project with nothing watchable simply records no
 /// file stats.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn usage_watch_project(
-    state: tauri::State<'_, crate::services::usage_stats::UsageWatchState>,
+    ctx: Ctx,
     project_id: String,
 ) -> Result<(), String> {
-    crate::services::usage_stats::watch_project(&state, &project_id)
+    let state = ctx.get::<crate::services::usage_stats::UsageWatchState>();
+    crate::services::usage_stats::watch_project(state, &project_id)
 }
 
 /// Commits and line churn attributable to *you*, in a time window.
@@ -159,7 +161,7 @@ pub struct GitStats {
 /// down — and this command runs while the recap is opening. A remote project
 /// reports no git stats rather than hanging the dialog; its local mirror, being
 /// an ordinary local path, works normally.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_git_stats(project_dir: String, since: String) -> Result<GitStats, String> {
     tokio::task::spawn_blocking(move || git_stats_blocking(&project_dir, &since))
         .await

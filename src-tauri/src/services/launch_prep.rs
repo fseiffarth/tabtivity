@@ -108,9 +108,12 @@ fn settings_agent_remote_control() -> bool {
 fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> {
     let subcommand = crate::services::agent_fence::runs_subcommand(&opts.args);
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
+    // A hosted server's administrator's key (the Host session), checked
+    // against the keeper's offer: a withdrawn key fails the spawn.
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&opts.cmd)?;
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, binding, &mut opts.env);
+    crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, admin, binding, &mut opts.env);
     #[cfg(unix)]
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
@@ -124,23 +127,34 @@ fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> 
 /// own name is the user's, and is not touched here), so one the tab brought
 /// itself would have no business riding the argv either. The `agent_exec`
 /// step may still be in front of the command; with nothing to map it only
-/// execs. Names only in the log.
+/// execs. Names only in the log. On a hosted server a proxy token is never
+/// dropped silently — a CLI on the administrator's key has no login in its
+/// home to fall back to — so such a spawn fails naming the way back (the
+/// server's tmux must be 3.2 or newer).
 #[cfg(unix)]
-fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) {
+fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
     if opts.tmux_session.is_none()
         || !crate::services::tmux_local::tmux_available()
         || crate::services::tmux_local::tmux_supports_session_env()
     {
-        return;
+        return Ok(());
     }
     let dropped = drop_carriers(&mut opts.env);
-    if !dropped.is_empty() {
-        eprintln!(
-            "launch_prep: tmux < 3.2 cannot keep {} off its argv; tab '{}' starts without it",
-            dropped.join(", "),
-            opts.id
-        );
+    if dropped.is_empty() {
+        return Ok(());
     }
+    if crate::services::server::is_server() {
+        return Err(format!(
+            "an API key ({}) needs tmux 3.2 or newer on this server, which keeps its token off the tmux argv; ask the administrator to update tmux, or switch to your own login in Settings → Manage CLIs",
+            dropped.join(", ")
+        ));
+    }
+    eprintln!(
+        "launch_prep: tmux < 3.2 cannot keep {} off its argv; tab '{}' starts without it",
+        dropped.join(", "),
+        opts.id
+    );
+    Ok(())
 }
 
 /// Remove every `agent_exec` carrier from `env`, and the proxy base URL that
@@ -168,18 +182,22 @@ fn drop_carriers(env: &mut std::collections::HashMap<String, String>) -> Vec<Str
     dropped
 }
 
-/// Whether this `claude` spawn runs here, as a session, on the user's stored
-/// Anthropic key through the API proxy (`agent_api_keys::keyed`): Claude
-/// switched on in Manage CLIs → API keys, the proxy running, a key saved, and
-/// a local, non-container, non-local-model tab. Reads the keychain (once, then
-/// the proxy's cache) only when Claude is switched on.
+/// Whether this `claude` spawn runs here, as a session, on an Anthropic key
+/// through the API proxy: the user's stored one (`agent_api_keys::keyed`:
+/// Claude switched on in Manage CLIs → API keys, the proxy running, a key
+/// saved) or a hosted server administrator's that this user chose for Claude
+/// (#2389) — in a local, non-container, non-local-model tab. Reads the
+/// keychain (once, then the proxy's cache) only when Claude is switched on.
 fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
     if remote_agent_run || opts.sandbox || crate::services::agent_api_keys::is_local_model(opts) {
         return false;
     }
     let settings: crate::schema::Settings =
         storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default();
-    crate::services::agent_api_keys::keyed(&opts.cmd, &settings)
+    let admin = crate::services::server::is_server()
+        && crate::services::agent_api_keys::cli_of(&opts.cmd) == Some("claude")
+        && crate::services::server::agent_keys::chosen_in(&storage::state_dir()).contains("claude");
+    admin || crate::services::agent_api_keys::keyed(&opts.cmd, &settings)
 }
 
 /// Whether Claude agent tabs of `project_id` should spawn with
@@ -898,7 +916,7 @@ pub async fn prepare(
     let host_agent_tab = (fence_roots.is_some()
         && !opts.sandbox
         && opts.cmd != "ssh"
-        && opts.cmd != "docker")
+        && !crate::services::sandbox::is_engine_cmd(&opts.cmd))
         .then(|| crate::services::agent_fence::HostAgentTab {
             scope_id: opts.project_id.clone().unwrap_or_else(|| "root".to_string()),
             agent_cmd: opts.cmd.clone(),
@@ -918,7 +936,7 @@ pub async fn prepare(
             crate::services::agent_fence::platform_accepted(),
             crate::services::agent_fence::bwrap_available(),
         );
-        let local_agent = opts.cmd != "ssh" && opts.cmd != "docker";
+        let local_agent = opts.cmd != "ssh" && !crate::services::sandbox::is_engine_cmd(&opts.cmd);
         let scope_id = crate::services::agent_home::scope_of(opts.project_id.as_deref());
         let push_scope = push_fence_scope(&decision, local_agent, &scope_id);
         match decision {
@@ -1000,11 +1018,21 @@ pub async fn prepare(
     // `tmux_session` name is wrapped in a tmux session on this machine, so the run
     // survives a Tabtivity crash and the tab reattaches on restart. A remote tab is
     // now `cmd == "ssh"` (its tmux is inside the remote command) and a container tab
-    // is `cmd == "docker"`, so both are skipped. No-op on Windows / without tmux.
+    // is `cmd == "docker"` (or `podman` on a server), so both are skipped. No-op on Windows / without tmux.
     crate::brand::PAIR.export_both(&mut opts.env);
     #[cfg(unix)]
-    if opts.tmux_session.is_some() && opts.cmd != "ssh" && opts.cmd != "docker" {
-        drop_api_keys_for_old_tmux(&mut opts);
+    if opts.tmux_session.is_some() && opts.cmd != "ssh" && !crate::services::sandbox::is_engine_cmd(&opts.cmd) {
+        // On a hosted server the tmux server is its own unit's (`tmux -L
+        // <slug>`, started by systemd), so a pane does not inherit this
+        // daemon's PATH the way a desktop's tmux inherits the window's: carry
+        // it, the agent shims first — a CLI typed into a shell tab then runs
+        // fenced, with the administrator's key where chosen (plan §5.4).
+        if crate::services::server::is_server() {
+            if let Some(path) = crate::paths::effective_path() {
+                opts.env.entry("PATH".into()).or_insert_with(|| path.to_string_lossy().into_owned());
+            }
+        }
+        drop_api_keys_for_old_tmux(&mut opts)?;
         crate::services::tmux_local::wrap_pty_options_local(&mut opts);
     }
 

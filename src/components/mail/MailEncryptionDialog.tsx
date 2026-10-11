@@ -219,7 +219,9 @@ export function MailEncryptionDialog({ state, onChanged, onClose }: MailEncrypti
               <p className="mail-note">
                 {state.mode === "passphrase"
                   ? t("mail.encryption.statusModePassphrase")
-                  : t("mail.encryption.statusModeKeychain")}
+                  : state.mode === "device"
+                    ? t("mail.encryption.statusModeDevice")
+                    : t("mail.encryption.statusModeKeychain")}
               </p>
               {state.ephemeral && (
                 <div className="mail-warning-strip">

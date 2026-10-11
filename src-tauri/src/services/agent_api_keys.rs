@@ -180,6 +180,18 @@ pub fn cli_of(cmd: &str) -> Option<&'static str> {
     crate::commands::agents::agent_id_for_bin(bin)
 }
 
+/// Whether the proxy serves CLI `id` (registry id) at all — what an API key,
+/// the user's own or a server administrator's, can run (#2389).
+pub fn proxies(id: &str) -> bool {
+    !routes_of(id).is_empty()
+}
+
+/// Every variable that carries a provider credential, by any provider: a
+/// value under one of these never rides an argv (`sandbox`'s `docker exec`).
+pub fn credential_names() -> impl Iterator<Item = &'static str> {
+    Provider::ALL.into_iter().flat_map(|p| p.credential_names().iter().copied())
+}
+
 /// The routes of CLI `id`; empty for one not in the table.
 fn routes_of(id: &str) -> &'static [Route] {
     CLI_ROUTES
@@ -287,17 +299,19 @@ pub struct Binding<'a> {
 }
 
 /// The pure core of [`inject_env`]. Nothing for a local-model tab, a CLI
-/// subcommand, or a CLI not in `enabled`; otherwise each of the CLI's routes
-/// the user did not set gets `grant(provider)` — a proxy token and base URL —
-/// when that has one: the token under its carrier with `carry`, else under
-/// the CLI's own name, the base URL under the CLI's variable. Returns the
-/// names it set.
+/// subcommand, or a CLI neither in `enabled` nor on a server administrator's
+/// key (`admin`, the CLI id `server::agent_keys::admin_for_spawn` passed);
+/// otherwise each of the CLI's routes the user did not set gets
+/// `grant(provider)` — a proxy token and base URL — when that has one: the
+/// token under its carrier with `carry`, else under the CLI's own name, the
+/// base URL under the CLI's variable. Returns the names it set.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn inject_env_with(
     cmd: &str,
     subcommand: bool,
     local_model: bool,
     enabled: &[String],
+    admin: Option<&'static str>,
     env: &mut HashMap<String, String>,
     carry: bool,
     ambient: impl Fn(&str) -> bool,
@@ -309,7 +323,7 @@ pub(crate) fn inject_env_with(
     let Some(id) = cli_of(cmd) else {
         return Vec::new();
     };
-    if !enabled.iter().any(|c| c == id) {
+    if admin != Some(id) && !enabled.iter().any(|c| c == id) {
         return Vec::new();
     }
     let mut set = Vec::new();
@@ -330,13 +344,17 @@ pub(crate) fn inject_env_with(
 
 /// Point a local agent session of `cmd` at the proxy for its keyed providers.
 /// `subcommand` is `agent_fence::runs_subcommand` of the CLI's own argv, taken
-/// before a fence rewrites it. Settings first, so a spawn of a CLI nobody
-/// switched on never touches the keyring; nothing at all where the proxy is
-/// not running (the `--agent-shim` process).
+/// before a fence rewrites it. `admin` is the CLI a hosted server's user runs
+/// on the administrator's key (`server::agent_keys::admin_for_spawn`, which
+/// checked the offer): its grants forward with that key, whatever the
+/// own-key switches say. Settings first, so a spawn of a CLI nobody switched
+/// on never touches the keyring; nothing at all where the proxy is not running
+/// (the `--agent-shim` process).
 pub fn inject_env(
     cmd: &str,
     subcommand: bool,
     local_model: bool,
+    admin: Option<&'static str>,
     binding: Binding<'_>,
     env: &mut HashMap<String, String>,
 ) -> Vec<&'static str> {
@@ -354,11 +372,56 @@ pub fn inject_env(
         subcommand,
         local_model,
         &enabled_clis(),
+        admin,
         env,
         CARRY,
         |k| std::env::var_os(k).is_some_and(|v| !v.is_empty()),
-        |provider| crate::services::api_proxy::issue(provider, binding.scope, binding.tab, binding.tmux),
+        |provider| crate::services::api_proxy::issue(provider, admin, binding.scope, binding.tab, binding.tmux),
     )
+}
+
+/// A project-container spawn of `cmd` (`sandbox`): refused when the CLI runs
+/// on an API key — the user's own (switched on, with a key saved) or a
+/// server administrator's — since the container cannot reach this process's
+/// loopback proxy and no key is ever put into one (#2389). The message names
+/// the way out. `keyless`: a spawn that never takes a key (a local-model tab,
+/// a CLI subcommand such as a sign-in). Settings first: the keychain is read
+/// only for a switched-on CLI.
+pub fn refuse_in_container(cmd: &str, keyless: bool) -> Result<(), String> {
+    if keyless {
+        return Ok(());
+    }
+    let Some(id) = cli_of(cmd).filter(|id| proxies(id)) else {
+        return Ok(());
+    };
+    let admin = crate::services::server::is_server()
+        && crate::services::server::agent_keys::chosen_in(&crate::storage::state_dir()).contains(id);
+    let own = applies_to(cmd, &settings()) && routes_of(id).iter().any(|r| has_key(r.provider));
+    if admin || own {
+        let label = crate::commands::agents::agent_label_for_id(id).unwrap_or(id);
+        return Err(format!(
+            "{label} runs on an API key, which never goes into a project container: turn the container off for this project, or switch {label} back to its own login in Settings → Manage CLIs"
+        ));
+    }
+    Ok(())
+}
+
+/// Switch CLI `id`'s own API key off (`Settings::agent_api_key_clis`): a
+/// server user choosing the administrator's key for it (one credential per
+/// CLI, `server::agent_keys::choose`).
+pub fn switch_off(id: &str) -> Result<(), String> {
+    let path = crate::storage::state_dir().join("settings.json");
+    if !settings().agent_api_key_clis.is_some_and(|on| on.iter().any(|c| c == id)) {
+        return Ok(());
+    }
+    // Under the settings file's own lock, as `patch_settings` writes it.
+    crate::storage::patch_json(&path, crate::schema::Settings::default(), |settings| {
+        if let Some(on) = settings.agent_api_key_clis.as_mut() {
+            on.retain(|c| c != id);
+        }
+        settings.rev += 1;
+        Ok(())
+    })
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -366,11 +429,16 @@ pub fn inject_env(
 pub struct ProviderStatus {
     pub id: &'static str,
     pub saved: bool,
-    /// The monthly limit in US dollars (`Settings::agent_api_limits`), if a
-    /// valid one is set.
-    pub limit_usd: Option<f64>,
-    /// Spent this month, by `api_prices` (an estimate).
+    /// The monthly limit in billed tokens (`Settings::agent_api_token_limits`),
+    /// if a valid one is set.
+    pub limit_tokens: Option<u64>,
+    /// Billed tokens this month (the limit's unit).
+    pub billed: u64,
+    /// What they cost by `api_prices`: an estimate, shown beside the tokens.
     pub spent_usd: f64,
+    /// An older build's dollar limit, while no token limit is set: a hint
+    /// for choosing one, never enforced.
+    pub legacy_limit_usd: Option<f64>,
     /// `api_usage::Verdict::id`: `open`, `reached`, or `noLimit` (requests
     /// are refused until a limit is set).
     pub budget: &'static str,
@@ -389,6 +457,14 @@ pub struct CliStatus {
     pub providers: Vec<&'static str>,
     /// Switched on and at least one of its providers has a key.
     pub ready: bool,
+    /// A hosted server's administrator offers this user a key for the CLI
+    /// (`server::agent_keys::offered`); always false on a desktop.
+    pub admin_offered: bool,
+    /// This user runs the CLI on the administrator's key (#2389: one
+    /// credential per CLI — login, own key, or this).
+    pub uses_admin: bool,
+    /// Through the server's key broker: this month's use and budget.
+    pub admin_broker: Option<crate::services::server::keys_wire::MonthUsage>,
 }
 
 /// What Manage CLIs shows. Never a key.
@@ -398,6 +474,10 @@ pub struct ApiKeyStatus {
     /// The keyring can be read now. While it cannot, every `saved` reads
     /// false, so the panel says "locked" instead of "not saved".
     pub readable: bool,
+    /// Where keys are kept: `keychain` (the OS's, on a desktop) or `vault`
+    /// (a server daemon's sealed store, opened by a paired device — no
+    /// unlock button can open it).
+    pub store: &'static str,
     pub providers: Vec<ProviderStatus>,
     pub clis: Vec<CliStatus>,
     /// The UTC month the spending is counted for (`YYYY-MM`).
@@ -413,24 +493,29 @@ pub struct ApiKeyStatus {
 
 /// [`status`] over a given `saved` answer, switched-on list, limits and
 /// ledger. Pure.
+#[allow(clippy::too_many_arguments)]
 fn status_with(
     readable: bool,
+    store: &'static str,
     saved: impl Fn(Provider) -> bool,
     enabled: &[String],
-    limits: &std::collections::BTreeMap<String, f64>,
+    limits: &std::collections::BTreeMap<String, u64>,
+    legacy_usd: &std::collections::BTreeMap<String, f64>,
     ledger: &crate::services::api_usage::Ledger,
 ) -> ApiKeyStatus {
     let providers: Vec<ProviderStatus> = Provider::ALL
         .into_iter()
         .map(|p| {
-            let limit_usd = limits.get(p.id()).copied();
-            let spent_usd = ledger.spent(p);
+            let limit_tokens = limits.get(p.id()).copied();
+            let billed = ledger.billed(p);
             ProviderStatus {
                 id: p.id(),
                 saved: saved(p),
-                limit_usd,
-                spent_usd,
-                budget: crate::services::api_usage::Verdict::of(spent_usd, limit_usd).id(),
+                limit_tokens,
+                billed,
+                spent_usd: ledger.spent_usd(p),
+                legacy_limit_usd: limit_tokens.is_none().then(|| legacy_usd.get(p.id()).copied()).flatten(),
+                budget: crate::services::api_usage::Verdict::of(billed, limit_tokens).id(),
                 unknown_models: ledger.unknown_models(p),
             }
         })
@@ -445,11 +530,15 @@ fn status_with(
                 enabled,
                 providers: routes.iter().map(|r| r.provider.id()).collect(),
                 ready: enabled && routes.iter().any(|r| is_saved(r.provider)),
+                admin_offered: false,
+                uses_admin: false,
+                admin_broker: None,
             }
         })
         .collect();
     ApiKeyStatus {
         readable,
+        store,
         providers,
         clis,
         month: ledger.month.clone(),
@@ -478,13 +567,28 @@ fn ready_clis_with(enabled: &[String], has: impl Fn(Provider) -> bool) -> Vec<&'
 
 pub fn status() -> ApiKeyStatus {
     let settings = settings();
-    status_with(
+    let mut status = status_with(
         crate::services::remote_credentials::store_readable(),
+        if crate::services::server::vault::vault().is_some() { "vault" } else { "keychain" },
         has_key,
         &settings.agent_api_key_clis.clone().unwrap_or_default(),
         &crate::services::api_usage::limits_in(&settings),
+        &crate::services::api_usage::legacy_usd_limits_in(&settings),
         &crate::services::api_usage::book().snapshot(chrono::Utc::now()),
-    )
+    );
+    // A hosted server's administrator's keys: the third choice per CLI.
+    if crate::services::server::is_server() {
+        use crate::services::server::agent_keys;
+        let offered = agent_keys::offered();
+        let chosen = agent_keys::chosen_in(&crate::storage::state_dir());
+        let mut brokered = agent_keys::broker_usage(&chosen);
+        for cli in &mut status.clis {
+            cli.admin_offered = offered.contains(cli.id);
+            cli.uses_admin = chosen.contains(cli.id);
+            cli.admin_broker = brokered.remove(cli.id);
+        }
+    }
+    status
 }
 
 /// Of `ready` (from [`ready_clis`]), the CLIs whose every provider is out of
@@ -498,7 +602,7 @@ pub fn budget_blocked_clis(ready: &[&'static str]) -> Vec<&'static str> {
 
 fn budget_blocked_with(
     ready: &[&'static str],
-    limits: &std::collections::BTreeMap<String, f64>,
+    limits: &std::collections::BTreeMap<String, u64>,
     ledger: &crate::services::api_usage::Ledger,
 ) -> Vec<&'static str> {
     ready
@@ -508,7 +612,7 @@ fn budget_blocked_with(
             let routes = routes_of(id);
             !routes.is_empty()
                 && routes.iter().all(|r| {
-                    crate::services::api_usage::Verdict::of(ledger.spent(r.provider), limits.get(r.provider.id()).copied())
+                    crate::services::api_usage::Verdict::of(ledger.billed(r.provider), limits.get(r.provider.id()).copied())
                         != crate::services::api_usage::Verdict::Open
                 })
         })
@@ -516,9 +620,9 @@ fn budget_blocked_with(
 }
 
 /// The monthly limit saving `provider`'s key requires: refused without one.
-pub fn require_limit(provider: Provider) -> Result<f64, String> {
+pub fn require_limit(provider: Provider) -> Result<u64, String> {
     crate::services::api_usage::limit_for(provider)
-        .ok_or_else(|| "set a monthly spending limit for this provider before saving its key".to_string())
+        .ok_or_else(|| "set a monthly token limit for this provider before saving its key".to_string())
 }
 
 #[cfg(test)]
@@ -539,7 +643,31 @@ mod tests {
     }
 
     fn inject(cmd: &str, enabled: &[&str], env: &mut HashMap<String, String>) -> Vec<&'static str> {
-        inject_env_with(cmd, false, false, &on(enabled), env, false, |_| false, proxied)
+        inject_env_with(cmd, false, false, &on(enabled), None, env, false, |_| false, proxied)
+    }
+
+    /// #2389: the keeper offers administrator's keys for exactly the CLIs
+    /// this proxy serves.
+    #[test]
+    fn the_keepers_key_clis_are_the_proxys_clis() {
+        let ours: Vec<&str> = CLI_ROUTES.iter().map(|(id, _)| *id).collect();
+        assert_eq!(crate::services::server::keys_wire::KEY_CLIS, ours.as_slice());
+    }
+
+    /// #2389: a CLI a server user runs on the administrator's key gets a
+    /// grant though its own-key switch is off, and only that CLI does.
+    #[test]
+    fn a_cli_on_the_administrators_key_gets_a_grant_without_its_own_switch() {
+        let mut env = HashMap::new();
+        let set = inject_env_with("claude", false, false, &[], Some("claude"), &mut env, true, |_| false, proxied);
+        assert_eq!(set, vec![ANTHROPIC_CARRIER, ANTHROPIC_BASE_ENV]);
+        let mut env = HashMap::new();
+        assert!(inject_env_with("gemini", false, false, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
+        // A subcommand (a sign-in) or a local-model tab still gets nothing.
+        assert!(inject_env_with("claude", true, false, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
+        assert!(inject_env_with("claude", false, true, &[], Some("claude"), &mut env, true, |_| false, proxied).is_empty());
+        assert!(env.is_empty());
+        assert!(proxies("claude") && proxies("gemini") && !proxies("vibe") && !proxies("codex"));
     }
 
     #[test]
@@ -571,7 +699,7 @@ mod tests {
         }
         // Tabtivity's own environment counts too.
         let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, false, |k| k == ANTHROPIC_BASE_ENV, proxied);
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), None, &mut env, false, |k| k == ANTHROPIC_BASE_ENV, proxied);
         assert!(set.is_empty() && env.is_empty());
         // An empty value is not a choice.
         let mut env = HashMap::from([(ANTHROPIC_TOKEN_ENV.to_string(), String::new())]);
@@ -581,7 +709,7 @@ mod tests {
     #[test]
     fn no_grant_sets_nothing() {
         let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, |_| None);
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), None, &mut env, true, |_| false, |_| None);
         assert!(set.is_empty() && env.is_empty());
     }
 
@@ -606,8 +734,8 @@ mod tests {
     fn local_model_tabs_and_subcommands_get_nothing() {
         let mut env = HashMap::new();
         let all = on(&["claude", "gemini"]);
-        assert!(inject_env_with("claude", false, true, &all, &mut env, true, |_| false, proxied).is_empty());
-        assert!(inject_env_with("claude", true, false, &all, &mut env, true, |_| false, proxied).is_empty());
+        assert!(inject_env_with("claude", false, true, &all, None, &mut env, true, |_| false, proxied).is_empty());
+        assert!(inject_env_with("claude", true, false, &all, None, &mut env, true, |_| false, proxied).is_empty());
         assert!(env.is_empty());
         let args = vec!["auth".to_string(), "login".to_string()];
         assert!(crate::services::agent_fence::runs_subcommand(&args));
@@ -661,7 +789,7 @@ mod tests {
     #[test]
     fn a_carried_token_goes_in_under_its_carrier_and_maps_back() {
         let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, proxied);
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), None, &mut env, true, |_| false, proxied);
         assert_eq!(set, vec![ANTHROPIC_CARRIER, ANTHROPIC_BASE_ENV]);
         assert!(!env.contains_key(ANTHROPIC_TOKEN_ENV));
         assert_eq!(env[ANTHROPIC_CARRIER], "test-proxy-token-fake-anthropic");
@@ -680,7 +808,7 @@ mod tests {
         assert_eq!(m.remove.len(), 1);
         // A value the user set under the CLI's name still wins over a carrier.
         let mut env = HashMap::from([("ANTHROPIC_API_KEY".to_string(), "mine".to_string())]);
-        assert!(inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, proxied).is_empty());
+        assert!(inject_env_with("claude", false, false, &on(&["claude"]), None, &mut env, true, |_| false, proxied).is_empty());
         assert!(!env.contains_key(ANTHROPIC_CARRIER));
     }
 
@@ -691,7 +819,7 @@ mod tests {
         assert!(!crate::services::api_proxy::running());
         let mut env = HashMap::new();
         let binding = Binding { tab: "t", scope: "s", tmux: None };
-        assert!(inject_env("claude", false, false, binding, &mut env).is_empty());
+        assert!(inject_env("claude", false, false, None, binding, &mut env).is_empty());
         assert!(env.is_empty());
     }
 
@@ -709,7 +837,7 @@ mod tests {
     #[test]
     fn status_is_ready_only_for_a_switched_on_cli_with_a_key() {
         let ledger = crate::services::api_usage::Ledger { month: "2026-10".into(), ..Default::default() };
-        let s = status_with(true, |p| p == Provider::Anthropic, &on(&["claude", "gemini"]), &Default::default(), &ledger);
+        let s = status_with(true, "keychain", |p| p == Provider::Anthropic, &on(&["claude", "gemini"]), &Default::default(), &Default::default(), &ledger);
         let cli = |id: &str| s.clis.iter().find(|c| c.id == id).unwrap().clone();
         assert!(cli("claude").ready);
         assert!(!cli("gemini").ready, "on, but no Gemini key");
@@ -729,36 +857,41 @@ mod tests {
         use crate::services::api_prices::Charge;
         use crate::services::api_usage::Ledger;
         let mut ledger = Ledger { month: "2026-10".into(), ..Default::default() };
-        let charge = |model: &str, usd: f64, known: bool| Charge {
+        // `output` tokens billed in full; `usd` the estimate beside them.
+        let charge = |model: &str, output: u64, usd: f64, known: bool| Charge {
             model: model.into(),
             known,
-            input: 1,
-            output: 1,
-            cache_write: 0,
-            cache_read: 0,
-            web_searches: 0,
+            output,
             usd,
+            ..Charge::default()
         };
-        ledger.add(Provider::Anthropic, &charge("claude-opus-5-5", 12.0, true));
-        ledger.add(Provider::Anthropic, &charge("claude-new", 8.0, false));
-        ledger.add(Provider::Gemini, &charge("gemini-2.5-pro", 1.0, true));
+        ledger.add(Provider::Anthropic, &charge("claude-opus-5-5", 12_000, 12.0, true));
+        ledger.add(Provider::Anthropic, &charge("claude-new", 8_000, 8.0, false));
+        ledger.add(Provider::Gemini, &charge("gemini-2.5-pro", 1_000, 1.0, true));
         ledger.restarted = Some("2026-10-04T12:00:00Z".into());
-        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 20.0)]);
-        let s = status_with(true, |_| true, &on(&["claude", "gemini"]), &limits, &ledger);
+        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 20_000)]);
+        // An older build's dollar limits: shown only where no token limit is.
+        let legacy = std::collections::BTreeMap::from([("anthropic".to_string(), 20.0), ("gemini".to_string(), 7.5)]);
+        let s = status_with(true, "vault", |_| true, &on(&["claude", "gemini"]), &limits, &legacy, &ledger);
         let anthropic = &s.providers[0];
-        assert_eq!((anthropic.id, anthropic.limit_usd, anthropic.budget), ("anthropic", Some(20.0), "reached"));
+        assert_eq!((anthropic.id, anthropic.limit_tokens, anthropic.budget), ("anthropic", Some(20_000), "reached"));
+        assert_eq!(anthropic.billed, 20_000);
         assert!((anthropic.spent_usd - 20.0).abs() < 1e-9);
+        assert_eq!(anthropic.legacy_limit_usd, None, "a token limit is set");
         assert_eq!(anthropic.unknown_models, ["claude-new"]);
         let gemini = &s.providers[1];
-        assert_eq!((gemini.limit_usd, gemini.budget), (None, "noLimit"));
+        assert_eq!((gemini.limit_tokens, gemini.budget, gemini.legacy_limit_usd), (None, "noLimit", Some(7.5)));
         assert_eq!(s.ledger_restarted.as_deref(), Some("2026-10-04T12:00:00Z"));
         let json = serde_json::to_value(&s).unwrap();
-        assert_eq!(json["providers"][0]["limitUsd"], 20.0);
+        assert_eq!(json["providers"][0]["limitTokens"], 20_000);
+        assert_eq!(json["providers"][0]["billed"], 20_000);
+        assert_eq!(json["providers"][1]["legacyLimitUsd"], 7.5);
         assert_eq!(json["providers"][1]["budget"], "noLimit");
+        assert_eq!(json["store"], "vault");
         // Claude's only provider is out of budget, Gemini's has no limit:
         // both are blocked; with a limit and room, Gemini is not.
         assert_eq!(budget_blocked_with(&["claude", "gemini"], &limits, &ledger), vec!["claude", "gemini"]);
-        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 50.0), ("gemini".to_string(), 5.0)]);
+        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 50_000), ("gemini".to_string(), 5_000)]);
         assert!(budget_blocked_with(&["claude", "gemini"], &limits, &ledger).is_empty());
     }
 

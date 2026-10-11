@@ -78,13 +78,14 @@ import { Dropdown } from "../common/Dropdown";
 import { PasswordInput } from "../common/PasswordInput";
 import { useT, LANGUAGES, type Language, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
-import { IS_MAC, IS_WINDOWS, PLATFORM } from "../../lib/platform";
+import { IS_HOST_WINDOWS, IS_MAC, PLATFORM } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import { useHintsStore } from "../../stores/hints";
 import { canConnectVpnSilently } from "../../lib/remote/vpn/vpnConnect";
 import { setVpnAutoConnect, vpnUsernameFor } from "../../lib/remote/vpn/vpnAutoConnect";
 import type { StoredVpnConfig } from "../../types";
 import { MobileSettings } from "../mobile/MobileSettings";
+import { ServerSettings } from "../server/ServerSettings";
 import { UpdatesPanel } from "./UpdatesPanel";
 import { DEFAULT_PDF_MARKUP_APPLY, DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION, DEFAULT_PDF_MARKUP_ASK, DEFAULT_PDF_MARKUP_INSTRUCTION, MAX_PDF_MARKUP_PROMPT, PDF_MARKUP_ASK_STOPS, pdfMarkupAsk, pdfMarkupInstruction } from "../../lib/viewers/pdfMarkup";
 import { BugIcon, PlayIcon, WarningIcon } from "../common/icons/Icon";
@@ -259,7 +260,7 @@ function VmInstallSettings() {
           className="settings-btn"
           onClick={() => {
             setInstalling(true);
-            runInstallInTab(t("projectDialog.vmInstallLabel"), doctor.install_command!, IS_WINDOWS ? "default" : "bash");
+            runInstallInTab(t("projectDialog.vmInstallLabel"), doctor.install_command!, IS_HOST_WINDOWS ? "default" : "bash");
           }}
         >
           {t("projectDialog.vmInstallBtn")}
@@ -1394,7 +1395,7 @@ export function SettingsDialog({
               onChange={(e) => void updateSettings({ run_scripts_in_background: e.target.checked })}
             />
 
-            {!IS_WINDOWS && (
+            {!IS_HOST_WINDOWS && (
               <ToggleCard
                 label={t("settings.persistLocal")}
                 checked={settings?.persist_local_sessions ?? true}
@@ -1942,6 +1943,7 @@ export function SettingsDialog({
                 user unit, launchd agent, or the Windows Run key), so the
                 section is not platform-gated. */}
             <SettingsSection title={t("settings.mobile")} anchor={SETTINGS_ANCHORS.mobile} />
+            <ServerSettings />
             <MobileSettings />
             <ToggleCard
               label={t("settings.mobileIndicator")}

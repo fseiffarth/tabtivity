@@ -72,14 +72,23 @@ const DEFAULT_OLLAMA_PORT: u16 = 11434;
 /// module hears, and the alternative is a stale endpoint that survives until
 /// relaunch. It is one small JSON read against a file the app already keeps hot.
 fn ollama_addr() -> Result<String, String> {
-    let settings = read_settings();
-    resolve_ollama_addr(
-        settings.as_ref().and_then(|s| s.ollama_host.as_deref()),
-        settings
-            .as_ref()
-            .and_then(|s| s.ollama_allow_remote_host)
-            .unwrap_or(false),
-    )
+    let settings = read_settings().unwrap_or_default();
+    let (host, allow_remote) = host_setting(&settings);
+    resolve_ollama_addr(host, allow_remote)
+}
+
+/// `Settings::ollama_host` and `ollama_allow_remote_host` as this process
+/// honours them. On a hosted server neither is a user's to set (final review
+/// A2): the endpoint is the one shared Ollama on loopback that the admin runs,
+/// so a user's `settings.json` can neither send the daemon's prompts to a
+/// host of their choosing, nor aim it at another account's loopback listener,
+/// nor make the model allowlist's "installed" list come from a server of
+/// their own. The desktop — window and sidecar alike — keeps both settings.
+pub(crate) fn host_setting(settings: &crate::schema::Settings) -> (Option<&str>, bool) {
+    if crate::services::server::is_server() {
+        return (None, false);
+    }
+    (settings.ollama_host.as_deref(), settings.ollama_allow_remote_host.unwrap_or(false))
 }
 
 fn read_settings() -> Option<crate::schema::Settings> {
@@ -269,11 +278,22 @@ pub(crate) fn ollama_http(
     path: &str,
     json_body: Option<&str>,
 ) -> Result<String, String> {
+    // 10-minute timeout accommodates large model pulls
+    ollama_http_within(method, path, json_body, Duration::from_secs(600))
+}
+
+/// [`ollama_http`] with its own read timeout, for a quick question that must
+/// not hold its thread for a pull's ten minutes.
+fn ollama_http_within(
+    method: &str,
+    path: &str,
+    json_body: Option<&str>,
+    read_timeout: Duration,
+) -> Result<String, String> {
     let addr = ollama_addr()?;
     let mut stream = connect_ollama(&addr)?;
-    // 10-minute timeout accommodates large model pulls
     stream
-        .set_read_timeout(Some(Duration::from_secs(600)))
+        .set_read_timeout(Some(read_timeout))
         .map_err(|e| format!("set timeout: {e}"))?;
 
     let req = match json_body {
@@ -337,12 +357,14 @@ fn friendly_ollama_error(raw: &str) -> String {
 // PATH lookups go through the shared, cross-platform `crate::paths::binary_on_path`
 // (`where` on Windows, `which` elsewhere); see that module for the rationale.
 use crate::paths::binary_on_path;
+use crate::tauri_host::Ctx;
+use app_core::CoreCtx;
 
 /// True when the `ollama` binary is available. Checks PATH first, then (on
 /// Windows) the well-known per-user install location, since winget/the GUI
 /// installer drop `ollama.exe` under `%LOCALAPPDATA%\Programs\Ollama` and a
 /// running Tabtivity's inherited PATH won't pick it up until a new session.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_is_installed() -> bool {
     if binary_on_path("ollama") {
         return true;
@@ -392,10 +414,9 @@ pub fn ollama_install_cmd() -> &'static str {
 ///   so a non-interactive run only succeeds with passwordless sudo or as root.
 ///
 /// Returns the install log on success, or the tail of the output on failure.
-#[tauri::command]
-pub async fn install_ollama(app: tauri::AppHandle) -> Result<String, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_ollama(ctx: Ctx) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
-    use tauri::Emitter;
 
     if ollama_is_installed().await {
         return Ok("Ollama is already installed.".to_string());
@@ -424,7 +445,7 @@ pub async fn install_ollama(app: tauri::AppHandle) -> Result<String, String> {
     };
 
     let emit = |line: &str| {
-        let _ = app.emit(
+        ctx.emit(
             "ollama-install-progress",
             serde_json::json!({ "line": line }),
         );
@@ -506,7 +527,7 @@ pub struct OllamaInstallStrategy {
 }
 
 /// Report the OS-dependent Ollama install strategy (detect OS + suggest command).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_install_strategy() -> OllamaInstallStrategy {
     let os = if cfg!(target_os = "windows") {
         "windows"
@@ -562,7 +583,7 @@ pub fn vibe_install_cmd() -> &'static str {
 /// `where`/`which`) and the well-known user install locations the installer uses,
 /// since Tabtivity's inherited `PATH` may omit `~/.local/bin` even when a login shell
 /// would include it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vibe_is_installed() -> bool {
     if binary_on_path("vibe") {
         return true;
@@ -593,10 +614,9 @@ pub async fn vibe_is_installed() -> bool {
 ///
 /// Per-OS the command is driven through the native shell: PowerShell on Windows
 /// (uv → `uv tool install mistral-vibe`), the POSIX shell on Linux/macOS.
-#[tauri::command]
-pub async fn install_vibe(app: tauri::AppHandle) -> Result<String, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_vibe(ctx: Ctx) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
-    use tauri::Emitter;
 
     if vibe_is_installed().await {
         return Ok("Vibe is already installed.".to_string());
@@ -626,7 +646,7 @@ pub async fn install_vibe(app: tauri::AppHandle) -> Result<String, String> {
     };
 
     let emit = |line: &str| {
-        let _ = app.emit("vibe-install-progress", serde_json::json!({ "line": line }));
+        ctx.emit("vibe-install-progress", serde_json::json!({ "line": line }));
     };
     emit("Starting Vibe installer…");
 
@@ -698,7 +718,7 @@ pub struct VibeInstallStrategy {
 }
 
 /// Report the OS-dependent Vibe install strategy (detect OS + suggest command).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vibe_install_strategy() -> VibeInstallStrategy {
     let os = if cfg!(target_os = "windows") {
         "windows"
@@ -850,7 +870,7 @@ fn model_supports_thinking(model: &str) -> Option<bool> {
 
 /// Return detailed info for every locally installed model, cross-referenced
 /// with the running-models list from /api/ps.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_ollama_models_detailed() -> Result<Vec<OllamaModelInfo>, String> {
     let tags_body = ollama_http("GET", "/api/tags", None)?;
     let tags: serde_json::Value =
@@ -994,7 +1014,7 @@ fn installed_match(tags_body: &str, wanted: &str) -> Result<String, &'static str
 }
 
 /// Unload a model from memory without deleting it (sets keep_alive=0).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn stop_ollama_model(model: String) -> Result<(), String> {
     let body = serde_json::json!({"model": model, "keep_alive": 0}).to_string();
     ollama_http("POST", "/api/generate", Some(&body))?;
@@ -1035,7 +1055,7 @@ fn mark_pending_pull(model: &str, active: bool) {
 
 /// Model refs whose download was interrupted (Tabtivity closed/crashed mid-pull).
 /// The UI reconciles these against the installed list and offers to resume them.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_pending_ollama_pulls() -> Vec<String> {
     read_pending_pulls()
 }
@@ -1104,7 +1124,7 @@ fn ollama_model_dir_candidates(
 
 /// Orphaned partial download layers sitting in Ollama's blob cache, largest
 /// first. Each is an interrupted download with no recoverable model name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_orphan_partial_blobs() -> Vec<PartialBlob> {
     let mut out: Vec<PartialBlob> = Vec::new();
     for dir in ollama_blob_dirs() {
@@ -1144,7 +1164,7 @@ pub async fn list_orphan_partial_blobs() -> Vec<PartialBlob> {
 /// `-partial-<N>` siblings) to reclaim disk. Validated to a file named `*-partial`
 /// inside one of the known Ollama blob directories, so it can't be used to remove
 /// anything else — the check matters because the removal may run elevated.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_partial_blob(path: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     let name = p
@@ -1242,7 +1262,7 @@ fn remove_blob_files_elevated(_files: &[&std::path::PathBuf]) -> Result<(), Stri
 }
 
 /// Forget an interrupted pull (e.g. the user dismisses it, or it finished).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn clear_pending_ollama_pull(model: String) {
     mark_pending_pull(&model, false);
 }
@@ -1263,7 +1283,7 @@ fn paused_pulls() -> &'static std::sync::Mutex<std::collections::HashSet<String>
 
 /// Request that an in-flight pull of `model` pause at the next streamed chunk.
 /// The partial download is preserved so it can be resumed later.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pause_ollama_pull(model: String) {
     if let Ok(mut set) = paused_pulls().lock() {
         set.insert(model);
@@ -1283,7 +1303,7 @@ fn take_pause_request(model: &str) -> bool {
 /// same ref. Best-effort — the partial blobs are resolved from the registry
 /// manifest's layer digests, so a missing network leaves them for the orphan-blob
 /// cleanup to reclaim instead. Always clears the pending record so the UI settles.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_ollama_pull(model: String) -> Result<(), String> {
     mark_pending_pull(&model, false);
     // Drop any committed manifest/blobs (no-op 404 if the pull never got that far).
@@ -1405,23 +1425,21 @@ impl LoadDevice {
 /// (`{ model, status }`, status `loading`→`success`/`error`) is emitted around the
 /// blocking call so any surface (the brain menu, the settings panel) can show a
 /// live "Loading into memory…" indicator for a load started anywhere.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn load_ollama_model(
-    app: tauri::AppHandle,
+    ctx: Ctx,
     model: String,
     device: Option<LoadDevice>,
 ) -> Result<(), String> {
-    run_load(&app, &model, device.unwrap_or_default())
+    run_load(&ctx, &model, device.unwrap_or_default())
 }
 
 /// The load itself, shared by [`load_ollama_model`] and
 /// [`load_installed_ollama_model`]: `ollama-load-progress` `loading`, the
 /// blocking warm-up with `keep_alive: -1`, then `success`/`error` — all keyed by
 /// `model` exactly as given.
-fn run_load(app: &tauri::AppHandle, model: &str, device: LoadDevice) -> Result<(), String> {
-    use tauri::Emitter;
-
-    let _ = app.emit(
+fn run_load(ctx: &CoreCtx, model: &str, device: LoadDevice) -> Result<(), String> {
+    ctx.emit(
         "ollama-load-progress",
         serde_json::json!({ "model": model, "status": "loading" }),
     );
@@ -1431,7 +1449,7 @@ fn run_load(app: &tauri::AppHandle, model: &str, device: LoadDevice) -> Result<(
     }
     let body = payload.to_string();
     let result = ollama_http("POST", "/api/generate", Some(&body));
-    let _ = app.emit(
+    ctx.emit(
         "ollama-load-progress",
         match &result {
             Ok(_) => serde_json::json!({ "model": model, "status": "success" }),
@@ -1450,6 +1468,16 @@ fn phone_loads() -> &'static std::sync::Mutex<std::collections::HashSet<String>>
     static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
         std::sync::OnceLock::new();
     S.get_or_init(Default::default)
+}
+
+/// Whether a phone-started load of `listed` (the name as `/api/tags` lists
+/// it) is warming right now — a server daemon's Local models list reads it,
+/// having no window that tracks loads (`mobile_control::local_models`).
+pub fn phone_loading(listed: &str) -> bool {
+    phone_loads()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(listed)
 }
 
 /// A claim on one [`phone_loads`] entry, released on drop — so a load that
@@ -1492,11 +1520,12 @@ impl Drop for PhoneLoadClaim {
 ///
 /// Exit does not wait for the load thread; an owned server torn down at exit
 /// makes its read fail.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn load_installed_ollama_model(
-    app: tauri::AppHandle,
+    ctx: Ctx,
     model: String,
 ) -> Result<String, String> {
+    let ctx = ctx.0;
     validate_model_name(&model)?;
     let wanted = model.trim().to_owned();
     tokio::task::spawn_blocking(move || {
@@ -1514,7 +1543,7 @@ pub async fn load_installed_ollama_model(
                 .name("ollama-phone-load".into())
                 .spawn(move || {
                     let _claim = claim;
-                    let _ = run_load(&app, &name, LoadDevice::Auto);
+                    let _ = run_load(&ctx, &name, LoadDevice::Auto);
                 })
                 .map_err(|e| format!("could not start the load: {e}"))?;
         }
@@ -1529,10 +1558,9 @@ pub async fn load_installed_ollama_model(
 /// (`{ model, status, completed, total }`) line-by-line as Ollama reports
 /// them so the UI can show a live percentage. Blocks until complete — may
 /// take minutes for large models.
-#[tauri::command]
-pub async fn pull_ollama_model(app: tauri::AppHandle, model: String) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pull_ollama_model(ctx: Ctx, model: String) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
-    use tauri::Emitter;
 
     let body = serde_json::json!({"model": model, "stream": true}).to_string();
 
@@ -1590,7 +1618,7 @@ pub async fn pull_ollama_model(app: tauri::AppHandle, model: String) -> Result<(
         // drop the connection. Ollama keeps the partial blobs, and the pending-pull
         // record is left in place so the UI can offer Resume or Delete.
         if take_pause_request(&model) {
-            let _ = app.emit(
+            ctx.emit(
                 "ollama-pull-progress",
                 serde_json::json!({ "model": model, "status": "paused" }),
             );
@@ -1612,7 +1640,7 @@ pub async fn pull_ollama_model(app: tauri::AppHandle, model: String) -> Result<(
                 last_err = Some(err.to_string());
                 continue;
             }
-            let _ = app.emit(
+            ctx.emit(
                 "ollama-pull-progress",
                 serde_json::json!({
                     "model": model,
@@ -1713,7 +1741,7 @@ fn header_value(head: &str, name: &str) -> Option<String> {
 /// registry can't answer for comes back with `error` set and
 /// `update_available: false` rather than being dropped, so the menu can say
 /// "couldn't check" instead of silently implying "up to date".
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_check_updates(models: Vec<String>) -> Result<Vec<OllamaModelUpdate>, String> {
     let installed = list_ollama_models_detailed().await?;
     let wanted: Vec<(String, String)> = installed
@@ -1899,7 +1927,7 @@ fn version_is_newer(candidate: &str, current: &str) -> Option<bool> {
 /// `check_remote: false` touches no network at all, so the menu can show what is
 /// installed the moment it opens. `true` is the "Check for updates" click and
 /// costs one unauthenticated GitHub request.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
     tokio::task::spawn_blocking(move || {
         // Deliberately NOT pointed at `ollama_host`: this reads the version of
@@ -1958,7 +1986,7 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
 }
 
 /// Permanently delete a locally installed model.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_ollama_model(model: String) -> Result<(), String> {
     let body = serde_json::json!({"model": model}).to_string();
     ollama_http("DELETE", "/api/delete", Some(&body))?;
@@ -2021,7 +2049,7 @@ fn fetch_registry_manifest(model: &str) -> Result<serde_json::Value, String> {
 /// Total download size in bytes for an installable model tag, read from the
 /// Ollama registry manifest. Used to show a model's size on hover before the
 /// user commits to a pull. Sums the manifest's config + layer sizes.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_registry_size(model: String) -> Result<u64, String> {
     let v = fetch_registry_manifest(&model)?;
 
@@ -2081,7 +2109,7 @@ pub struct RegistryDetails {
 /// that carries no size badge on the search card — including a cloud model,
 /// whose parameter count (e.g. 756B) is the real "will it fit" answer even
 /// though it has nothing to download. Two small HTTP reads, fetched lazily.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, String> {
     let (repo, _tag) = registry_repo_tag(&model)?;
     let manifest = fetch_registry_manifest(&model)?;
@@ -2282,7 +2310,7 @@ fn parse_search_html(html: &str) -> Vec<RegistryModel> {
 /// (~20 rows) of results so the frontend can lazy-load; an empty vec means no
 /// more pages. `capability` filters by a single capability ("" = any);
 /// `sort` is "newest" or anything else (popular, the default). `page` is 1-based.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn search_ollama_registry(
     query: String,
     capability: String,
@@ -2320,7 +2348,7 @@ pub async fn search_ollama_registry(
 }
 
 /// Return the built-in catalog of popular installable models.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_installable_models() -> Vec<CatalogEntry> {
     vec![
         CatalogEntry {
@@ -2506,7 +2534,7 @@ pub async fn list_installable_models() -> Vec<CatalogEntry> {
 
 /// True when the Ollama server is reachable on its default port. Cheap enough
 /// (200 ms TCP connect) to poll from the UI for a live status indicator.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_is_running() -> bool {
     ollama_listening()
 }
@@ -2519,7 +2547,7 @@ pub async fn ollama_is_running() -> bool {
 /// One round trip: `/api/ps` lists the models resident in memory, and a
 /// successful response also proves the server is reachable, so it doubles as
 /// the running check.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_status() -> &'static str {
     match ollama_http("GET", "/api/ps", None) {
         Err(_) => "stopped",
@@ -2703,7 +2731,7 @@ fn ollama_under_systemd() -> bool {
 ///
 /// On demand only — it spawns processes (`systemctl`, `ollama serve --help`),
 /// so it belongs to a menu opening, never to a poll.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_gpu_status() -> OllamaGpuStatus {
     tokio::task::spawn_blocking(|| {
         let gpus = crate::gpustat::snapshot();
@@ -2824,7 +2852,7 @@ pub struct OllamaModelsDirPlan {
 ///
 /// On demand only — it spawns `systemctl` to learn whether the server is a unit,
 /// so it belongs to the Settings panel opening, never to a poll.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_models_dir_plan(path: Option<String>) -> OllamaModelsDirPlan {
     tokio::task::spawn_blocking(move || {
         let default_dir = crate::paths::home_dir()
@@ -2957,7 +2985,7 @@ fn systemd_ollama_active() -> bool {
 ///
 /// Whatever it starts is recorded in [`OWNED_SERVER`] so that exactly that much
 /// is torn down again at exit — see [`shutdown_owned_server`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ensure_ollama_running() -> Result<(), String> {
     ensure_running(true)
 }
@@ -2967,7 +2995,7 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
 /// fails rather than popping a polkit dialog, and the owned `ollama serve`
 /// fallback — torn down at exit like any other — takes over. Runs off the async
 /// runtime: it can block for 16 s or more.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ensure_ollama_running_unattended() -> Result<(), String> {
     tokio::task::spawn_blocking(|| ensure_running(false))
         .await
@@ -3128,7 +3156,7 @@ fn server_kind(addr: &str) -> &'static str {
 /// another (`"remote"`); a bad `ollama_host` is the `Err`. Lets the phone
 /// bridge tell a stopped local server (startable) from one it can do nothing
 /// about, without re-implementing [`resolve_ollama_addr`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_server_kind() -> Result<&'static str, String> {
     Ok(server_kind(&ollama_addr()?))
 }
@@ -3164,9 +3192,21 @@ fn system_ollama_models_dir() -> Option<std::path::PathBuf> {
 
 /// Query the Ollama REST API and return all installed model names.
 /// Returns Err("not_running") when the Ollama server is not reachable.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_ollama_models() -> Result<Vec<String>, String> {
-    let body = ollama_http("GET", "/api/tags", None)?;
+    installed_model_names()
+}
+
+/// The names `/api/tags` lists, synchronously — the dispatcher's model
+/// allowlist (`services::model_allowlist`) asks before a request is forwarded.
+pub(crate) fn installed_model_names() -> Result<Vec<String>, String> {
+    installed_model_names_within(Duration::from_secs(600))
+}
+
+/// [`installed_model_names`] answered within `read_timeout` (after the
+/// bounded connect), or an error.
+pub(crate) fn installed_model_names_within(read_timeout: Duration) -> Result<Vec<String>, String> {
+    let body = ollama_http_within("GET", "/api/tags", None, read_timeout)?;
     let v: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("ollama json: {e}"))?;
 
@@ -3581,12 +3621,12 @@ fn trim_context_overlap(prefix: &str, suffix: &str, completion: &str) -> String 
 
 /// Reserve before starting so a frontend abort can cancel even before the
 /// generation command has arrived. Reservations expire if the caller disappears.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn prepare_text_completion() -> Result<String, String> {
     crate::services::text_completion::reserve()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn cancel_text_completion(request_id: String) {
     crate::services::text_completion::cancel(&request_id);
 }
@@ -3662,10 +3702,10 @@ fn completion_body(
 /// comes from /api/show capabilities, carried by list_ollama_models_detailed.
 /// Attached references stay on the chat path to avoid injecting prose into raw
 /// source. Unsupported FIM falls back to chat before any ghost is published.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn complete_text(
-    window: tauri::WebviewWindow,
+    ctx: Ctx,
     prefix: String,
     suffix: String,
     model: String,
@@ -3678,14 +3718,13 @@ pub async fn complete_text(
     project_id: Option<String>,
 ) -> Result<String, String> {
     use crate::services::text_completion;
-    use tauri::Emitter;
     let event = format!("text-completion-{request_id}");
     text_completion::run(request_id, async move {
         let settings = read_settings().unwrap_or_default();
         let local_only = project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
             .is_some_and(|policy| policy.local_only);
-        let addr = resolve_ollama_addr(settings.ollama_host.as_deref(),
-            !local_only && settings.ollama_allow_remote_host.unwrap_or(false))?;
+        let (host, allow_remote) = host_setting(&settings);
+        let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
         let client = text_completion::client()?;
         let mode = CompletionMode::parse(mode.as_deref().unwrap_or("sentence"));
         let context = context
@@ -3718,11 +3757,10 @@ pub async fn complete_text(
                     let stop = sentence.then(|| completion_stop(&text, prose, done)).flatten();
                     if let Some(end) = stop { text.truncate(end); }
                     published |= !text.is_empty();
-                    // Target only the requesting editor window. IPC Channels bypass
-                    // the embedded browser's origin ACL (see browser.rs tests).
-                    window
-                        .emit_to(window.label(), &event, text)
-                        .map_err(|e| e.to_string())?;
+                    // Target only the requesting editor's client (the calling
+                    // window). IPC Channels bypass the embedded browser's origin
+                    // ACL (see browser.rs tests).
+                    ctx.emit_to_caller(&event, text);
                     Ok(stop.is_some())
                 },
             )
@@ -3779,7 +3817,7 @@ pub struct LocalAgentPrep {
 ///
 /// Each Ollama tab gets its own VIBE_HOME subdirectory so there is no shared
 /// mutable config state and `active_model` is always unambiguous.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn prepare_local_agent(model: String) -> Result<LocalAgentPrep, String> {
     validate_model_name(&model)?;
     let alias = sanitize_alias(&model);
@@ -3805,7 +3843,7 @@ pub async fn prepare_local_agent(model: String) -> Result<LocalAgentPrep, String
 /// Ensure the Ollama provider and the given model are registered in
 /// `~/.vibe/config.toml` so that `VIBE_ACTIVE_MODEL=<alias>` works.
 /// Returns the alias string to pass as `VIBE_ACTIVE_MODEL`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ensure_vibe_ollama_model(model: String) -> Result<String, String> {
     validate_model_name(&model)?;
     let alias = sanitize_alias(&model);
@@ -4268,7 +4306,7 @@ pub struct LocalDriverInfo {
 /// stays offered — an agent that errors is a worse outcome than a menu that is
 /// briefly wrong, but an agent that silently vanishes because a probe timed out
 /// is worse than both.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_local_drivers(model: Option<String>) -> Vec<LocalDriverInfo> {
     let has_launch = ollama_has_launch();
     // `None` — no model given, or Ollama couldn't say — means "don't filter".
@@ -4322,7 +4360,7 @@ pub struct LocalLaunchSpec {
 /// back to a direct invocation when launch is unavailable. Errors when the agent
 /// is unknown, or it is launch-only and `ollama launch` is missing. The model is
 /// validated and passed as a discrete arg (no shell), so it can't inject.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn prepare_local_launch(agent: String, model: String) -> Result<LocalLaunchSpec, String> {
     validate_model_name(&model)?;
     let driver = LOCAL_DRIVERS

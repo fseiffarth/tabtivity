@@ -443,7 +443,7 @@ describe("no machine token ever reaches the user", () => {
    * one proves every entry in it has a phrase.
    */
   function rustReasonTokens(): string[] {
-    const src: string = readFileSync("src-tauri/src/services/web_safety.rs", "utf8");
+    const src: string = readFileSync("src-core/src/services/web_safety.rs", "utf8");
     const decl = /pub const REASON_TOKENS: &\[&str\] = &\[([\s\S]*?)\n\];/.exec(src);
     expect(decl, "REASON_TOKENS is gone from web_safety.rs").not.toBeNull();
     const tokens = Array.from(decl![1].matchAll(/"([^"]+)"/g)).map((m) => m[1]);
@@ -610,7 +610,7 @@ describe("origin emphasis: a documented v1 limitation", () => {
   it("mail's registrable() is untouched, so its cached decisions still hold", () => {
     // The reason the browser did not upgrade it. If this ever changes,
     // SANITIZER_VERSION has to change with it.
-    const rust: string = readFileSync("src-tauri/src/services/web_safety.rs", "utf8");
+    const rust: string = readFileSync("src-core/src/services/web_safety.rs", "utf8");
     expect(rust).toContain("pub fn registrable(");
     expect(rust).not.toContain("psl::");
   });

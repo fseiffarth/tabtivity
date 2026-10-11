@@ -79,7 +79,7 @@ jobs:
           echo "Scanning ${base}..${HEAD_SHA}"
           scripts/privacy-check.sh "$base" "$HEAD_SHA"
 
-  # The app's name is spelled in the brand modules only (src-tauri/src/brand.rs,
+  # The app's name is spelled in the brand modules only (src-core/src/brand.rs,
   # src/lib/brand.ts, scripts/lib/brand.sh); everything else reads it from
   # there. This fails when a tracked file outside the script's commented
   # allowlist spells it itself. No hook runs it, so CI is where it is enforced.
@@ -170,7 +170,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -180,6 +180,21 @@ jobs:
 
       - name: Lint backend
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Lint core crate
+        run: cargo clippy --manifest-path src-core/Cargo.toml --all-targets -- -D warnings
+
+      - name: Lint gateway crate
+        run: cargo clippy --manifest-path src-gateway/Cargo.toml --all-targets -- -D warnings
+
+      # The server daemon's build of the library: no `desktop` feature, so no
+      # Tauri/GTK/X11/libdbus (hosted plan §3.2, TODO #2349). Built alone, or
+      # Cargo would unify the desktop's features into it.
+      - name: Lint the daemon's build of the library
+        run: cargo clippy -p tabtivity --no-default-features --lib -- -D warnings
+
+      - name: Lint daemon crate
+        run: cargo clippy -p app-serverd -- -D warnings
 
   test:
     name: test
@@ -213,7 +228,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -251,6 +266,31 @@ jobs:
         with:
           path: .ci-failed
           key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Run core crate tests
+        run: cargo test --manifest-path src-core/Cargo.toml
+
+      - name: Run gateway crate tests
+        run: cargo test --manifest-path src-gateway/Cargo.toml
+
+      # The library as the server daemon builds it (no `desktop` feature):
+      # code compiled only there (the vault-only credential paths, the
+      # headless platform stubs) is tested where it runs, plus the secrets
+      # end-to-end test against that build.
+      - name: Run the daemon build's library tests
+        run: cargo test -p tabtivity --no-default-features --lib --test server_secrets
+
+      # The daemon links no window toolkit: built on its own, `ldd` must name
+      # no GTK, GDK, WebKit, X11/xcb or libdbus library (TODO #2349).
+      - name: Daemon links no desktop libraries
+        run: |
+          cargo build -p app-serverd
+          daemon=$(ls target/debug/*-serverd)
+          ldd "$daemon"
+          if ldd "$daemon" | grep -Ei 'gtk|gdk|webkit|javascriptcore|libx11|xcb|dbus|soup|ayatana'; then
+            echo "the server daemon links a desktop library" >&2
+            exit 1
+          fi
 
   test-windows:
     name: test-windows
@@ -274,7 +314,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -312,6 +352,14 @@ jobs:
         with:
           path: .ci-failed
           key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Run core crate tests
+        run: cargo test --manifest-path src-core/Cargo.toml
+
+      # The server crates (gateway, daemon) are Linux-only but must still
+      # compile here, tests included, so the workspace builds on every OS.
+      - name: Check the whole workspace, tests included
+        run: cargo check --workspace --all-targets
 
       # Staged gate: the Windows-only arms were linted locally through the
       # cross-target shims (zero findings), but never yet on a real Windows
@@ -342,7 +390,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -380,6 +428,14 @@ jobs:
         with:
           path: .ci-failed
           key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Run core crate tests
+        run: cargo test --manifest-path src-core/Cargo.toml
+
+      # The server crates (gateway, daemon) are Linux-only but must still
+      # compile here, tests included, so the workspace builds on every OS.
+      - name: Check the whole workspace, tests included
+        run: cargo check --workspace --all-targets
 
       # Staged gate: the macOS-only arms were linted locally only through
       # check-only `cc`/`ar` stand-ins (zero findings), never on a real Mac.
@@ -412,7 +468,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -474,7 +530,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -531,7 +587,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci

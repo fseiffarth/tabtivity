@@ -19,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::commands::terminal::RegistryState;
 use crate::services::remote_credentials::{self as creds, KeyringState};
-use tauri::State;
+use crate::tauri_host::Ctx;
 
 // ── Login-PTY registry (which terminals may receive a secret) ────────────────
 //
@@ -134,7 +134,7 @@ fn paste_allowed(pty: &str, account: &str) -> bool {
 }
 
 /// Whether the OS credential store is readable right now (see [`KeyringState`]).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn keyring_state() -> KeyringState {
     tokio::task::spawn_blocking(creds::keyring_state)
         .await
@@ -148,7 +148,7 @@ pub async fn keyring_state() -> KeyringState {
 ///
 /// Only ever called from an explicit user action (the header's VPN menu, a Connect
 /// dialog) — never from a launch path, which promises not to prompt.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn keyring_unlock() -> Result<(), String> {
     tokio::task::spawn_blocking(creds::unlock_keyring)
         .await
@@ -212,13 +212,17 @@ impl PasteCredential {
 /// Returns `false` when nothing is stored for the target (including a locked keyring,
 /// which reads as empty — [`keyring_state`] is what distinguishes the two), so the
 /// caller can say "nothing saved" instead of appearing to paste an empty secret.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn credential_paste_to_pty(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     pty: String,
     target: PasteCredential,
     submit: Option<bool>,
 ) -> Result<bool, String> {
+    let registry = ctx.get::<RegistryState>();
+    // A server client's login runs in its own PTY onto the tab (TODO #2347):
+    // that is where `pty_write` saw it typed, and where the secret goes.
+    let pty = crate::commands::terminal::pty_id_for(&ctx, registry, pty);
     let account = target.account();
     // The destination must be a terminal the backend has *seen* run the login this
     // credential belongs to (see the login-PTY registry above). Without this the

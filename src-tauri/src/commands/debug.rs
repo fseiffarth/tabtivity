@@ -56,11 +56,11 @@ fn reuse_within<T: Clone>(
 /// Every read here is blocking I/O — a `/proc` walk, a stat read per pid, sysfs,
 /// a loopback HTTP request — so it runs on the blocking pool, never on the async
 /// workers that drive the PTY output batchers.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn debug_app_resource_usage(gpu: Option<bool>) -> Result<AppResourceUsage, String> {
     use crate::sysstat;
 
-    let (pids, t0) = tauri::async_runtime::spawn_blocking(|| {
+    let (pids, t0) = app_core::rt::spawn_blocking(|| {
         let root = app_process_root(std::process::id());
         // Relaxed reuse: this is polled every 5 s for a header number.
         let pids = sysstat::descendant_pids_relaxed(&[root]);
@@ -72,7 +72,7 @@ pub async fn debug_app_resource_usage(gpu: Option<bool>) -> Result<AppResourceUs
     let interval = std::time::Duration::from_millis(300);
     tokio::time::sleep(interval).await;
     let with_gpu = gpu.unwrap_or(true);
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let t1 = sysstat::sum_jiffies(&pids);
         let busy_secs = t1.saturating_sub(t0) as f64 / sysstat::clk_tck() as f64;
         let cpu_percent = busy_secs / interval.as_secs_f64() * 100.0;
@@ -100,7 +100,7 @@ pub async fn debug_app_resource_usage(gpu: Option<bool>) -> Result<AppResourceUs
 
 /// The short commit this binary was compiled from (see `build.rs`), shown
 /// beside the version in the side panel; `None` outside a git checkout.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn app_build_commit() -> Option<&'static str> {
     option_env!(crate::app_env!("BUILD_COMMIT"))
 }
@@ -110,9 +110,9 @@ pub fn app_build_commit() -> Option<&'static str> {
 /// Blocking-pool, because it reads a log tail and runs `git rev-list`. Each
 /// poll also queues a freeze of a HEAD the commit hook could not queue from
 /// inside an agent fence (`dev_build::queue_if_behind`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_build_status() -> Option<crate::services::dev_build::DevBuildStatus> {
-    tauri::async_runtime::spawn_blocking(|| {
+    app_core::rt::spawn_blocking(|| {
         crate::services::dev_build::queue_if_behind();
         crate::services::dev_build::status()
     })
@@ -123,9 +123,9 @@ pub async fn dev_build_status() -> Option<crate::services::dev_build::DevBuildSt
 
 /// Pause (cancelling a running compile) or resume the background "Tabtivity
 /// (dev)" auto-builds, from the dev-build chip's switch. User-clicked only.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_build_set_paused(paused: bool) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || crate::services::dev_build::set_paused(paused))
+    app_core::rt::spawn_blocking(move || crate::services::dev_build::set_paused(paused))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -133,9 +133,9 @@ pub async fn dev_build_set_paused(paused: bool) -> Result<(), String> {
 /// Build HEAD once while the background "Tabtivity (dev)" auto-builds stay
 /// paused, from the dev-build chip's "Build now"; a no-op when the installed
 /// snapshot already is HEAD. User-clicked only.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_build_now() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(crate::services::dev_build::build_now)
+    app_core::rt::spawn_blocking(crate::services::dev_build::build_now)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -146,10 +146,12 @@ pub async fn dev_build_now() -> Result<(), String> {
 /// the ordinary one (layout flush, tmux reap, `RunEvent::Exit`) and tabs
 /// restore as after any relaunch. User-clicked only; refused outside the
 /// frozen binary.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_build_relaunch(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(feature = "desktop")]
     use tauri::Manager;
-    tauri::async_runtime::spawn_blocking(crate::services::dev_build::spawn_relauncher)
+    app_core::rt::spawn_blocking(crate::services::dev_build::spawn_relauncher)
         .await
         .map_err(|e| e.to_string())??;
     match app.get_webview_window("main") {
@@ -163,30 +165,30 @@ pub async fn dev_build_relaunch(app: tauri::AppHandle) -> Result<(), String> {
 
 /// The checkout's todo groups for the side panel's Todo view; `None` outside a
 /// dev build, which hides the view (see `services::dev_todo`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_todo_groups() -> Result<Option<Vec<crate::services::dev_todo::TodoGroup>>, String> {
-    tauri::async_runtime::spawn_blocking(crate::services::dev_todo::list)
+    app_core::rt::spawn_blocking(crate::services::dev_todo::list)
         .await
         .map_err(|e| e.to_string())?
         .transpose()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_todo_read(name: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::services::dev_todo::read(&name))
+    app_core::rt::spawn_blocking(move || crate::services::dev_todo::read(&name))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// A checkbox click's write-back: lands only while the file still reads
 /// `expected`, else returns what is on disk now.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_todo_write(
     name: String,
     expected: String,
     next: String,
 ) -> Result<crate::services::dev_todo::WriteOutcome, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         crate::services::dev_todo::write(&name, &expected, &next)
     })
     .await
@@ -219,9 +221,9 @@ pub async fn dev_todo_write(
 /// the whole process table and reads a command line per descendant — a stall
 /// of the very event loop that pumps every window's IPC, taken every couple of
 /// seconds by the debug footer and every 30 s by each window's watchdog.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn webview_rss_kib() -> u64 {
-    tauri::async_runtime::spawn_blocking(largest_renderer_rss_kib)
+    app_core::rt::spawn_blocking(largest_renderer_rss_kib)
         .await
         .unwrap_or(0)
 }
@@ -280,9 +282,9 @@ pub struct MappingRss {
 /// The memory breakdown of one of this app's renderer processes. Only a pid
 /// that [`webview_renderer_rss`] would list is read — a made-up pid gets `None`,
 /// as does any platform without `/proc`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn webview_renderer_memory(pid: u32) -> Option<RendererMemory> {
-    tauri::async_runtime::spawn_blocking(move || renderer_memory(pid))
+    app_core::rt::spawn_blocking(move || renderer_memory(pid))
         .await
         .ok()
         .flatten()
@@ -325,14 +327,17 @@ static RENDERER_CLAIMS: std::sync::Mutex<Vec<(u32, String)>> = std::sync::Mutex:
 /// other window's readout can name it too. A claim is dropped the moment its
 /// pid is no longer a live renderer (the process was replaced after a crash),
 /// and a window that finds its claim gone simply probes again.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn webview_renderer_rss(app: tauri::AppHandle) -> Vec<RendererRss> {
-    tauri::async_runtime::spawn_blocking(move || renderer_rss(&app))
+    app_core::rt::spawn_blocking(move || renderer_rss(&app))
         .await
         .unwrap_or_default()
 }
 
+#[cfg(feature = "desktop")]
 fn renderer_rss(app: &tauri::AppHandle) -> Vec<RendererRss> {
+    #[cfg(feature = "desktop")]
     use tauri::Manager;
 
     let root = app_process_root(std::process::id());
@@ -377,10 +382,11 @@ fn renderer_rss(app: &tauri::AppHandle) -> Vec<RendererRss> {
 /// from the payload, so a window can only ever speak for itself; a pid that is
 /// not a live renderer under the app is refused. One claim per window and one
 /// per pid — a re-probe after a crash replaces both sides.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn webview_renderer_claim(window: tauri::WebviewWindow, pid: u32) -> Result<(), String> {
     let label = window.label().to_string();
-    tauri::async_runtime::spawn_blocking(move || claim_renderer(label, pid))
+    app_core::rt::spawn_blocking(move || claim_renderer(label, pid))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -432,7 +438,8 @@ const RENDERER_RESTART_COOLDOWN: std::time::Duration = std::time::Duration::from
 /// Linux only: WebView2 and WKWebView expose no way to end a content process.
 /// There the command fails and the window holds as before. Refused inside
 /// [`RENDERER_RESTART_COOLDOWN`] of the window's previous replacement.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn webview_renderer_restart(window: tauri::WebviewWindow) -> Result<(), String> {
     let label = window.label().to_string();
     {
@@ -453,6 +460,7 @@ pub fn webview_renderer_restart(window: tauri::WebviewWindow) -> Result<(), Stri
     restart_renderer(&window, &label)
 }
 
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 fn restart_renderer(window: &tauri::WebviewWindow, label: &str) -> Result<(), String> {
     crate::crash_log_append(&format!(
@@ -461,6 +469,7 @@ fn restart_renderer(window: &tauri::WebviewWindow, label: &str) -> Result<(), St
     ));
     window
         .with_webview(|webview| {
+            #[cfg(feature = "desktop")]
             use webkit2gtk::WebViewExt;
             let view = webview.inner();
             view.terminate_web_process();
@@ -473,6 +482,7 @@ fn restart_renderer(window: &tauri::WebviewWindow, label: &str) -> Result<(), St
         .map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "desktop")]
 #[cfg(not(target_os = "linux"))]
 fn restart_renderer(_window: &tauri::WebviewWindow, label: &str) -> Result<(), String> {
     Err(format!(

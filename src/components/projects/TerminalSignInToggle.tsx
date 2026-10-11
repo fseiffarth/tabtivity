@@ -1,6 +1,6 @@
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
-import { IS_WINDOWS } from "../../lib/platform";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { useT } from "../../lib/i18n";
 
 /**
@@ -49,7 +49,7 @@ export function TerminalSignInToggle({
   failed?: boolean;
 }) {
   const t = useT();
-  if (IS_WINDOWS) return null;
+  if (IS_HOST_WINDOWS) return null;
   const what = channel === "ssh" ? t("terminalSignIn.sshHostWord") : t("terminalSignIn.vpnTunnelWord");
   return (
     <label

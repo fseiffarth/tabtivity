@@ -231,7 +231,7 @@ pub fn detached_size(width: Option<f64>, height: Option<f64>) -> Option<Size> {
 /// This body holds no lock guard across an `.await` (it has none), so the future
 /// stays `Send`. On Linux/macOS the loop isn't blocked the same way, which is why a
 /// sync command worked on the dev box but not on Windows (#42).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detach_subwindow(
     app: AppHandle,
     workspace: State<'_, WorkspaceStateArc>,
@@ -1123,7 +1123,7 @@ pub fn sync_detached_visibility(app: &AppHandle, win_registry: &WindowRegistrySt
 /// scope changes, then asks `detach_subwindow` for each of the new scope's
 /// popouts (a no-op for a live one; the rebuild of one a Wayland scope-out
 /// retired).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn sync_detached_scope(
     app: AppHandle,
     win_registry: State<'_, WindowRegistryState>,
@@ -1258,7 +1258,7 @@ fn minimize_parked_window(app: &AppHandle, label: &str) {
 /// A popout's answer to [`RETIRE_REQUEST_EVENT_PREFIX`]: `clean` = nothing
 /// unsaved is left in it. Bound to the calling window's own label, so a popout
 /// can only answer for itself.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn detached_retire_ack(
     window: tauri::WebviewWindow,
     win_registry: State<'_, WindowRegistryState>,
@@ -1275,7 +1275,7 @@ pub fn detached_retire_ack(
 /// now on. Until then a scope-out closes it directly: it is still loading and
 /// holds no work. (A renderer from before this protocol never calls this, so
 /// it is closed directly too — it could not answer anyway.)
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn detached_retire_ready(window: tauri::WebviewWindow, win_registry: State<'_, WindowRegistryState>) {
     win_registry
         .lock()
@@ -1292,7 +1292,7 @@ pub fn detached_retire_ready(window: tauri::WebviewWindow, win_registry: State<'
 /// renderer blanks every pane (the "empty third window" bug). Elsewhere
 /// parking is a real `hide()` the renderer reads through `isVisible()`, and
 /// this set is empty. Kept as a command for hot-reload compatibility.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn detached_window_is_parked(
     window: tauri::WebviewWindow,
     win_registry: State<'_, WindowRegistryState>,
@@ -1309,7 +1309,7 @@ pub fn detached_window_is_parked(
 /// (#240). The rescue gesture for the window the user can no longer resize:
 /// a borderless popout sized on an external monitor keeps that size when the
 /// display goes away, and its resize edges go with it off the panel.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn snap_detached_window(app: AppHandle, label: String) -> bool {
     snap_detached_to_screen(&app, &label)
 }
@@ -1319,7 +1319,7 @@ pub fn snap_detached_window(app: AppHandle, label: String) -> bool {
 /// so this can never bring up the main window or a presenter. Wayland's
 /// `set_focus` presents the surface (`gtk_window_present_with_time`), which
 /// also undoes a minimize there.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn focus_detached_window(app: AppHandle, label: String) -> bool {
     if !label.starts_with("detached-") {
         return false;
@@ -1413,7 +1413,7 @@ pub fn spawn_monitor_watcher(app: AppHandle) {
 /// Close a detached subwindow and remove it from the registry + parkable
 /// override. Idempotent: a missing window/registry entry is not an error (the
 /// group still docks back in the frontend store).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn attach_subwindow(
     app: AppHandle,
     workspace: State<'_, WorkspaceStateArc>,
@@ -1439,7 +1439,7 @@ pub fn attach_subwindow(
 /// Desktop coordinates are unavailable on native Wayland: tao reports a dummy
 /// (0, 0) cursor there. Query GDK's actual backend, so XWayland still works.
 /// This synchronous command runs on the main thread, as GTK requires.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn desktop_coordinates_supported() -> bool {
     #[cfg(target_os = "linux")]
     {
@@ -1461,7 +1461,7 @@ pub fn desktop_coordinates_supported() -> bool {
 /// Unknown identity or stacking order cannot authorize a dock. In particular,
 /// XWayland can expose desktop geometry while our native-id lookup is disabled
 /// for the Wayland session; assuming that popout is on top steals local drops.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn detached_window_frontmost(
     win_registry: State<'_, WindowRegistryState>,
     registry_id: String,

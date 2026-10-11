@@ -101,7 +101,7 @@ fn candidates(project_id: &str) -> Result<(PathBuf, Vec<Candidate>), String> {
 /// The IDEs `project_id`'s tree carries markers for, each with its resolved
 /// launcher. Cheap (one top-level listing plus a few `exists` checks), so the
 /// menus call it on open rather than caching.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detect_project_ides(project_id: String) -> Result<Vec<IdeCandidate>, String> {
     run_off_thread(move || {
         let (dir, found) = candidates(&project_id)?;
@@ -134,7 +134,7 @@ pub async fn detect_project_ides(project_id: String) -> Result<Vec<IdeCandidate>
 /// Launch `ide_id` on the project. Detection runs again here — the frontend's
 /// list is a display, never the thing that is executed — and the window is
 /// tracked with [`ORIGIN_PROJECT_IDE`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_project_in_ide(
     registry: State<'_, WindowRegistryState>,
     project_id: String,
@@ -164,7 +164,7 @@ pub async fn open_project_in_ide(
 }
 
 /// Set (or, with `None`/blank, clear) the user's program for `ide_id`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_ide_launcher(ide_id: String, exec: Option<String>) -> Result<(), String> {
     IdeId::parse(&ide_id).ok_or_else(|| format!("unknown IDE {ide_id}"))?;
     let exec = exec.map(|e| e.trim().to_string()).filter(|e| !e.is_empty());

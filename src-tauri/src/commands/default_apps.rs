@@ -8,7 +8,7 @@ fn default_apps_path() -> std::path::PathBuf {
     storage::state_dir().join("default_apps.json")
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_default_apps() -> Result<DefaultApps, String> {
     let path = default_apps_path();
     if !path.exists() {
@@ -21,7 +21,7 @@ pub fn get_default_apps() -> Result<DefaultApps, String> {
 /// like the patch, so it cannot interleave with one (headless owner plan,
 /// H1b) — but it still overwrites entries another client set meanwhile,
 /// which is why the frontend patches instead.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_default_apps(default_apps: DefaultApps) -> Result<(), String> {
     storage::patch_json(&default_apps_path(), DefaultApps::default(), |apps| {
         *apps = default_apps;
@@ -33,7 +33,7 @@ pub fn save_default_apps(default_apps: DefaultApps) -> Result<(), String> {
 /// replaces, `remove` drops, both under the file's lock on top of what is on
 /// disk right now — so a dialog on the desktop and a settings page on the
 /// phone saving at once keep each other's entries. Answers the map as stored.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn patch_default_apps(
     set: Option<HashMap<String, String>>,
     remove: Option<Vec<String>>,

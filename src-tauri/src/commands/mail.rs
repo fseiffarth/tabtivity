@@ -53,7 +53,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
-use tauri::{AppHandle, Emitter, State};
+#[cfg(feature = "desktop")]
 use tauri_plugin_dialog::DialogExt;
 
 use crate::commands::projects::uuid_v4;
@@ -153,6 +153,10 @@ const MAX_PREVIEW_BYTES: usize = 4 * 1024 * 1024;
 // Largest single file the user may attach to a draft — shared with the
 // agent `attach` path, so it lives in the schema.
 use crate::schema::mail::MAX_STAGED_BYTES;
+use app_core::CoreCtx;
+use crate::tauri_host::Ctx;
+#[cfg(feature = "desktop")]
+use tauri::AppHandle;
 
 // ── Managed state ───────────────────────────────────────────────────────────
 
@@ -187,11 +191,80 @@ fn store_of(state: &MailState) -> Result<Arc<MailStore>, String> {
     if let Some(store) = &rt.store {
         return Ok(store.clone());
     }
+    let vault = crate::services::server::vault::vault();
+    let had_key = vault.is_some_and(|v| v.key().is_some());
+    // On a server, a rotation (a device revoked) gives the store a fresh
+    // master key: switch to it and re-key in the background. Listening
+    // *before* the open: a rotation that commits while the open reads the
+    // key file (an open can take long — a migration, a vacuum) would
+    // otherwise go unheard, and the store would go on sealing new mail
+    // under the revoked device's master until the next restart. The
+    // listener's refresh waits for this runtime lock, so it reads the key
+    // file after the open. A store whose key file still lists a previous
+    // master (a re-key a restart cut short) resumes below.
+    if let Some(vault) = vault {
+        let rotated = state.clone();
+        vault.on_rotate("mail", move || {
+            let state = rotated.clone();
+            std::thread::spawn(move || after_rotation(&state));
+        });
+    }
     let opened = open_store(&mail_dir())?;
+    let rekeying = opened.keys.as_ref().is_some_and(|k| k.rekeying());
     set_session_keys(opened.keys.clone());
     rt.store = Some(opened.store.clone());
+    let waiting = waits_for_release(&opened.note, had_key);
     rt.unlock_note = opened.note;
+    drop(rt);
+    if rekeying {
+        start_rekey(state);
+    }
+    // On a server, a store waiting for the device-released key reopens the
+    // moment a device (or the recovery code) puts it back. On a thread: the
+    // listener also runs at once when the key is already there.
+    if waiting {
+        if let Some(vault) = vault {
+            let state = state.clone();
+            vault.on_unlock("mail", move || {
+                let state = state.clone();
+                std::thread::spawn(move || reopen_after_release(&state));
+            });
+        }
+    }
     Ok(opened.store)
+}
+
+/// Is this store waiting for the server's secrets key — locked, or not set
+/// up yet — rather than for something a release cannot fix (a passphrase, a
+/// missing key file, a key that does not fit)? Only then is a reopen on
+/// release wanted. `had_key`: K was held when the store was opened, so its
+/// failure was not the lock; waiting again would reopen at once, fail the
+/// same way and re-arm forever.
+fn waits_for_release(note: &Option<UnlockNote>, had_key: bool) -> bool {
+    !had_key && is_device_wait(note)
+}
+
+fn is_device_wait(note: &Option<UnlockNote>) -> bool {
+    matches!(note, Some(UnlockNote::Unavailable(why)) if why == mail_crypt::DEVICE_LOCKED || why == mail_crypt::DEVICE_NOT_SET_UP)
+}
+
+/// The secrets key came back: drop the memory-only stand-in and open the
+/// real store (or enable a new one) now, so the sealed files beside it find
+/// their key too.
+fn reopen_after_release(state: &MailState) {
+    {
+        let Ok(mut guard) = state.lock() else { return };
+        // A passphrase store, or one the user already unlocked meanwhile:
+        // not the release's to reopen.
+        if !is_device_wait(&guard.unlock_note) {
+            return;
+        }
+        guard.store = None;
+        guard.unlock_note = None;
+    }
+    if let Err(error) = store_of(state) {
+        eprintln!("mail: reopening after the secrets key came back: {error}");
+    }
 }
 
 // ── The store key, for the session ──────────────────────────────────────────
@@ -402,18 +475,31 @@ fn open_unencrypted_or_enable(dir: &Path) -> Result<OpenedStore, String> {
         // Best effort. A locked keyring at first launch must not stop the mail
         // client from opening at all — the store simply stays plain and the
         // preference stays unset, so the question is asked again later.
-        if let Ok(keys) = mail_crypt::enable_with_keychain(dir) {
-            let keys = Arc::new(keys);
-            let store = Arc::new(MailStore::open_with_keys(dir, Some(keys.clone()))?);
-            migrate_accounts_file(Some(&keys))?;
-            migrate_filters_file(Some(&keys))?;
-            migrate_contacts_file(Some(&keys))?;
-            set_encrypt_preference(Some(true));
-            return Ok(OpenedStore {
-                store,
-                keys: Some(keys),
-                note: None,
-            });
+        match mail_crypt::enable_default(dir) {
+            Ok(keys) => {
+                let keys = Arc::new(keys);
+                let store = Arc::new(MailStore::open_with_keys(dir, Some(keys.clone()))?);
+                migrate_accounts_file(Some(&keys))?;
+                migrate_filters_file(Some(&keys))?;
+                migrate_contacts_file(Some(&keys))?;
+                set_encrypt_preference(Some(true));
+                return Ok(OpenedStore {
+                    store,
+                    keys: Some(keys),
+                    note: None,
+                });
+            }
+            // On a server a mailbox is never started in the clear because
+            // the secrets key is locked or not set up yet: it waits in
+            // memory, and reopens when the key comes back (`store_of`).
+            Err(why) if mail_crypt::device_mode_available() => {
+                return Ok(OpenedStore {
+                    store: Arc::new(MailStore::open_ephemeral()?),
+                    keys: None,
+                    note: Some(UnlockNote::Unavailable(why)),
+                });
+            }
+            Err(_) => {}
         }
     }
     Ok(OpenedStore {
@@ -440,6 +526,126 @@ fn set_encrypt_preference(value: Option<bool>) {
     });
 }
 
+// ── Re-keying after a revoke (hosted plan §6.8) ────────────────────────────
+//
+// User decision 2026-10-03: revoking a device on a server also re-keys the
+// mailbox. The vault's rotation writes a fresh master key into `key.json`
+// and keeps the old one in its `previous` list (`mail_crypt::
+// rotate_device_key_file`); here the open store and the session switch to
+// it at once, so new mail is sealed under it, and a background thread moves
+// what is already there (`MailStore::rekey_step`, one batch per lock hold),
+// re-seals the files beside the database, and only then retires the old
+// master (`mail_crypt::retire_previous`, under the vault's lock, synced).
+//
+// Lock order, outermost first: `REFRESH` → the vault's lock (released again
+// inside `mail_crypt::unlock`) → the runtime (`MailState`, released again)
+// → `mail_crypt::side_files` → the store's connection. The vault's lock is
+// a leaf towards mail: nothing under it touches the database or the files
+// beside it, and its listeners run after it is released.
+
+static REKEY_RUNNING: AtomicBool = AtomicBool::new(false);
+static REKEY_AGAIN: AtomicBool = AtomicBool::new(false);
+/// Serializes key refreshes, so an older `key.json` is never applied over a
+/// newer one.
+static REFRESH: Mutex<()> = Mutex::new(());
+/// The pause between two re-key batches: mail commands get the store's lock
+/// in between.
+const REKEY_PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// The open store if it is the persistent, encrypted one (not the
+/// memory-only stand-in) — without opening anything.
+fn open_persistent_store(state: &MailState) -> Option<Arc<MailStore>> {
+    let rt = state.lock().ok()?;
+    rt.store.clone().filter(|s| s.is_encrypted() && !s.is_ephemeral() && rt.unlock_note.is_none())
+}
+
+/// Follow `key.json` after a rotation or a finished re-key: the session's
+/// keys and the open store switch to what it holds now, side files first
+/// and under their lock, so no writer keeps sealing with the replaced keys.
+/// Whether a re-key is (still) due.
+fn refresh_keys(state: &MailState) -> Result<bool, String> {
+    let _serial = REFRESH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(store) = open_persistent_store(state) else {
+        // No store open, but the files beside it may have published keys
+        // (`silent_unlock`): those follow the key file too, or an account or
+        // filter edit would go on sealing under the revoked device's master
+        // until the store opens. The re-key itself starts with the store.
+        if session_keys().is_some() {
+            if let mail_crypt::Unlock::Ready(keys) = mail_crypt::unlock(&mail_dir()) {
+                let mut side = mail_crypt::side_files();
+                *side += 1;
+                set_session_keys(Some(Arc::new(keys)));
+            }
+        }
+        return Ok(false);
+    };
+    let keys = match mail_crypt::unlock(store.dir()) {
+        mail_crypt::Unlock::Ready(keys) => Arc::new(keys),
+        mail_crypt::Unlock::Unavailable(why) => return Err(why),
+        _ => return Ok(false),
+    };
+    let mut side = mail_crypt::side_files();
+    *side += 1;
+    set_session_keys(Some(keys.clone()));
+    store.switch_keys(keys.clone())?;
+    Ok(keys.rekeying())
+}
+
+/// A rotation committed: switch to the fresh master key and re-key.
+fn after_rotation(state: &MailState) {
+    match refresh_keys(state) {
+        Ok(true) => start_rekey(state),
+        Ok(false) => {}
+        Err(error) => eprintln!("mail: switching to the rotated key failed (the next open does): {error}"),
+    }
+}
+
+/// Start the re-key thread, or have the running one look again.
+fn start_rekey(state: &MailState) {
+    REKEY_AGAIN.store(true, Ordering::SeqCst);
+    if REKEY_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let state = state.clone();
+    std::thread::spawn(move || loop {
+        REKEY_AGAIN.store(false, Ordering::SeqCst);
+        rekey_run(&state);
+        REKEY_RUNNING.store(false, Ordering::SeqCst);
+        if !REKEY_AGAIN.load(Ordering::SeqCst) || REKEY_RUNNING.swap(true, Ordering::SeqCst) {
+            break;
+        }
+    });
+}
+
+/// The re-key thread's view of this process: the runtime's open store, the
+/// key refresh above, the vault for retiring.
+struct RekeyHost<'a>(&'a MailState);
+
+impl crate::services::mail_rekey::Host for RekeyHost<'_> {
+    fn store(&self) -> Option<Arc<MailStore>> {
+        open_persistent_store(self.0)
+    }
+
+    fn refresh(&self) -> Result<bool, String> {
+        refresh_keys(self.0)
+    }
+
+    fn retire(&self, dir: &Path, keys: &MailKeys) -> Result<bool, String> {
+        mail_crypt::retire_previous(dir, keys)
+    }
+
+    fn wait_for_unlock(&self) {
+        if let Some(vault) = crate::services::server::vault::vault() {
+            let state = self.0.clone();
+            vault.on_unlock("mail-rekey", move || start_rekey(&state));
+        }
+    }
+}
+
+fn rekey_run(state: &MailState) {
+    crate::services::mail_rekey::run(&RekeyHost(state), REKEY_PAUSE);
+}
+
 // ── OpenPGP ─────────────────────────────────────────────────────────────────
 
 /// The keyring, which exists only when the store is encrypted.
@@ -450,11 +656,15 @@ fn set_encrypt_preference(value: Option<bool>) {
 fn keyring_of(rt: &MailState) -> Result<PgpKeyring, String> {
     // Opening the store is what resolves the unlock and publishes the keys.
     store_of(rt)?;
+    // The keys and the switch count together, under the side-file lock: a
+    // keyring write after a switch is refused, never sealed under keys a
+    // server's re-key is about to retire.
+    let side = mail_crypt::side_files();
     let keys = session_keys().ok_or(
         "turn on encryption for the local mail store first — an OpenPGP private key \
          cannot be kept in a plaintext file",
     )?;
-    PgpKeyring::open(&mail_dir(), &keys)
+    PgpKeyring::open(&mail_dir(), &keys, *side)
 }
 
 /// Whether this message was signed or encrypted, and what came of it.
@@ -618,7 +828,8 @@ fn read_accounts(path: &Path) -> Result<MailAccounts, String> {
         let enc = sealed_twin(path);
         if enc.exists() {
             let raw = std::fs::read(&enc).map_err(|e| e.to_string())?;
-            let plain = mail_crypt::open(&keys.field, &mail_crypt::accounts_aad(), &raw)
+            let (plain, _) = keys
+                .open_any(|k| &k.field, &mail_crypt::accounts_aad(), &raw)
                 .map_err(|e| format!("the mail account list could not be decrypted: {e}"))?;
             return serde_json::from_slice(&plain).map_err(|e| e.to_string());
         }
@@ -633,6 +844,8 @@ fn read_accounts(path: &Path) -> Result<MailAccounts, String> {
 }
 
 fn write_accounts(path: &Path, data: &MailAccounts) -> Result<(), String> {
+    // Keys read under the side-file lock (see `mail_crypt::side_files`).
+    let _side = mail_crypt::side_files();
     let Some(keys) = file_keys() else {
         if let Some(why) = sealed_write_refusal(sealed_twin(path).exists(), false) {
             return Err(why);
@@ -696,7 +909,8 @@ fn read_filters(path: &Path) -> Result<MailFilters, String> {
         let enc = sealed_twin(path);
         if enc.exists() {
             let sealed = std::fs::read(&enc).map_err(|e| e.to_string())?;
-            let plain = mail_crypt::open(&keys.field, &mail_crypt::filters_aad(), &sealed)
+            let (plain, _) = keys
+                .open_any(|k| &k.field, &mail_crypt::filters_aad(), &sealed)
                 .map_err(|e| format!("the mail filter list could not be decrypted: {e}"))?;
             Some(plain.to_vec())
         } else {
@@ -749,6 +963,8 @@ fn parse_filters(bytes: &[u8]) -> MailFilters {
 }
 
 fn write_filters(path: &Path, data: &MailFilters) -> Result<(), String> {
+    // Keys read under the side-file lock (see `mail_crypt::side_files`).
+    let _side = mail_crypt::side_files();
     let Some(keys) = file_keys() else {
         if let Some(why) = sealed_write_refusal(sealed_twin(path).exists(), false) {
             return Err(why);
@@ -805,7 +1021,8 @@ fn read_contacts(path: &Path) -> Result<MailContacts, String> {
         let enc = sealed_twin(path);
         if enc.exists() {
             let sealed = std::fs::read(&enc).map_err(|e| e.to_string())?;
-            let plain = mail_crypt::open(&keys.field, &mail_crypt::contacts_aad(), &sealed)
+            let (plain, _) = keys
+                .open_any(|k| &k.field, &mail_crypt::contacts_aad(), &sealed)
                 .map_err(|e| format!("the address book could not be decrypted: {e}"))?;
             Some(plain.to_vec())
         } else {
@@ -843,6 +1060,8 @@ fn parse_contacts(bytes: &[u8]) -> Result<MailContacts, String> {
 }
 
 fn write_contacts(path: &Path, data: &MailContacts) -> Result<(), String> {
+    // Keys read under the side-file lock (see `mail_crypt::side_files`).
+    let _side = mail_crypt::side_files();
     let Some(keys) = file_keys() else {
         // Stricter than the filters' rule: refused whenever the *mailbox* is
         // encrypted, not only when a sealed twin exists. Collecting writes this
@@ -1173,7 +1392,7 @@ fn blank_save_error(already_saved: bool, store_readable: bool) -> Option<String>
 
 // ── Commands: accounts ──────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_accounts_list() -> Result<Vec<MailAccount>, String> {
     tokio::task::spawn_blocking(|| Ok(read_accounts(&accounts_path())?.accounts))
         .await
@@ -1182,7 +1401,7 @@ pub async fn mail_accounts_list() -> Result<Vec<MailAccount>, String> {
 
 /// Set the per-account **Mail AI (local)** toggles for one account, returning
 /// the updated account. Touches no credential — see `set_account_ai_at`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_account_set_ai(
     account_id: String,
     ai: MailAiPrefs,
@@ -1207,14 +1426,15 @@ pub async fn mail_account_set_ai(
 /// which is exactly what "saving the mail password does not work" looks like
 /// from the outside. The secret is resolved first (typed → session), and a
 /// genuinely empty one leaves the keychain alone and says why.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_account_upsert(
+    ctx: Ctx,
     account: MailAccount,
     password: Option<String>,
     remember: Option<bool>,
-    state: State<'_, MailState>,
 ) -> Result<MailAccountSaved, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let remember = remember_arg(remember);
     tokio::task::spawn_blocking(move || {
         // A pooled IMAP session is an *authenticated* socket, and these are the
@@ -1327,11 +1547,12 @@ pub async fn mail_account_upsert(
 /// enabled" and "is the open store actually sealed" are different questions with
 /// a meaningful gap between them, and two round trips could observe that gap at
 /// two different moments and render a contradiction.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_encryption_state(
-    state: State<'_, MailState>,
+    ctx: Ctx,
 ) -> Result<MailEncryptionState, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || encryption_state(&rt))
         .await
         .map_err(|e| e.to_string())?
@@ -1354,6 +1575,7 @@ fn encryption_state(rt: &MailState) -> Result<MailEncryptionState, String> {
             mode: file.as_ref().map(|f| match f.mode {
                 mail_crypt::UnlockMode::Keychain => "keychain".to_string(),
                 mail_crypt::UnlockMode::Passphrase => "passphrase".to_string(),
+                mail_crypt::UnlockMode::Device => "device".to_string(),
             }),
             ephemeral: note.is_some(),
             reason: match &note {
@@ -1379,13 +1601,14 @@ fn encryption_state(rt: &MailState) -> Result<MailEncryptionState, String> {
 /// The honest caveat, which the UI states beside the button: on an SSD or a
 /// copy-on-write filesystem, deleting the old file is not erasure.
 /// [`mail_encryption_reset`] is the option for anyone who actually cares.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_encryption_enable(
+    ctx: Ctx,
     mode: String,
     passphrase: Option<String>,
-    state: State<'_, MailState>,
 ) -> Result<MailEncryptionState, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let dir = mail_dir();
         let keys = match mode.as_str() {
@@ -1393,7 +1616,8 @@ pub async fn mail_encryption_enable(
                 let pass = passphrase.unwrap_or_default();
                 mail_crypt::enable_with_passphrase(&dir, &pass)?
             }
-            "keychain" => mail_crypt::enable_with_keychain(&dir)?,
+            // On a server the silent mode is the device-released key.
+            "keychain" | "device" => mail_crypt::enable_default(&dir)?,
             other => return Err(format!("unknown unlock mode '{other}'")),
         };
         adopt_keys(&rt, &dir, Arc::new(keys))?;
@@ -1406,12 +1630,13 @@ pub async fn mail_encryption_enable(
 
 /// Open a passphrase-protected store that is currently showing its memory-only
 /// stand-in.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_encryption_unlock(
+    ctx: Ctx,
     passphrase: String,
-    state: State<'_, MailState>,
 ) -> Result<MailEncryptionState, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let dir = mail_dir();
         let keys = mail_crypt::unlock_with_passphrase(&dir, &passphrase)?;
@@ -1424,7 +1649,7 @@ pub async fn mail_encryption_unlock(
 
 /// Record that the user does not want the local store encrypted, so the one-time
 /// prompt stops asking.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_encryption_decline() -> Result<(), String> {
     tokio::task::spawn_blocking(|| set_encrypt_preference(Some(false)))
         .await
@@ -1439,13 +1664,14 @@ pub async fn mail_encryption_decline() -> Result<(), String> {
 /// copy at all. Everything here is a cache with an authoritative copy on the
 /// server — the one exception is drafts, which is why the UI says so before it
 /// offers the button.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_encryption_reset(
+    ctx: Ctx,
     mode: String,
     passphrase: Option<String>,
-    state: State<'_, MailState>,
 ) -> Result<MailEncryptionState, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let dir = mail_dir();
         // Drop the open handle first: on Windows a live SQLite connection holds
@@ -1454,7 +1680,7 @@ pub async fn mail_encryption_reset(
             guard.store = None;
             guard.unlock_note = None;
         }
-        if !matches!(mode.as_str(), "passphrase" | "keychain") {
+        if !matches!(mode.as_str(), "passphrase" | "keychain" | "device") {
             return Err(format!("unknown unlock mode '{mode}'"));
         }
 
@@ -1465,6 +1691,12 @@ pub async fn mail_encryption_reset(
         // opened now and re-sealed under the new key below. Without that, the
         // account list was deleted and the keyring left behind unreadable — the
         // user's private keys lost, silently, by a button labelled "start over".
+        //
+        // Under the side-file lock until the new files are written: a server's
+        // re-key re-seals these files under it (`mail_rekey::reseal_side_files`),
+        // and one that read a file before the removal below and wrote it back
+        // after the carried copy would leave it sealed under the destroyed key.
+        let side = mail_crypt::side_files();
         let old_keys = session_keys();
         let carried = match &old_keys {
             Some(old) => Some(CarriedConfig {
@@ -1523,7 +1755,7 @@ pub async fn mail_encryption_reset(
             "passphrase" => {
                 mail_crypt::enable_with_passphrase(&dir, &passphrase.unwrap_or_default())?
             }
-            _ => mail_crypt::enable_with_keychain(&dir)?,
+            _ => mail_crypt::enable_default(&dir)?,
         };
         if let Some(carried) = carried {
             if let Some(plain) = carried.accounts {
@@ -1542,6 +1774,8 @@ pub async fn mail_encryption_reset(
                 mail_pgp::write_keyring_plaintext(&dir, &keys, &plain)?;
             }
         }
+        // `adopt_keys` takes it again to publish the new keys.
+        drop(side);
         adopt_keys(&rt, &dir, Arc::new(keys))?;
         set_encrypt_preference(Some(true));
         encryption_state(&rt)
@@ -1565,8 +1799,9 @@ fn open_sealed_file(
     aad: &[u8],
 ) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
     match std::fs::read(path) {
-        Ok(raw) => mail_crypt::open(&keys.field, aad, &raw)
-            .map(|plain| Some(Zeroizing::new(plain.to_vec())))
+        Ok(raw) => keys
+            .open_any(|k| &k.field, aad, &raw)
+            .map(|(plain, _)| Some(Zeroizing::new(plain.to_vec())))
             .map_err(|e| format!("{} could not be decrypted: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
@@ -1581,7 +1816,13 @@ fn adopt_keys(rt: &MailState, dir: &Path, keys: Arc<MailKeys>) -> Result<(), Str
         guard.store = None;
     }
     let store = Arc::new(MailStore::open_with_keys(dir, Some(keys.clone()))?);
-    set_session_keys(Some(keys.clone()));
+    {
+        // A switch of keys like a rotation's: a side-file writer still
+        // holding the old ones is refused, not sealed under a dead key.
+        let mut side = mail_crypt::side_files();
+        *side += 1;
+        set_session_keys(Some(keys.clone()));
+    }
     migrate_accounts_file(Some(&keys))?;
     migrate_filters_file(Some(&keys))?;
     migrate_contacts_file(Some(&keys))?;
@@ -1599,17 +1840,19 @@ fn adopt_keys(rt: &MailState, dir: &Path, keys: Arc<MailKeys>) -> Result<(), Str
 /// same sentence: the keyring needs an encrypted store, and a settings panel
 /// that offers key management it cannot deliver is a worse experience than one
 /// that explains the precondition.
-#[tauri::command]
-pub async fn mail_pgp_available(state: State<'_, MailState>) -> Result<bool, String> {
-    let rt = state.inner().clone();
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_pgp_available(ctx: Ctx) -> Result<bool, String> {
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || Ok(keyring_of(&rt).is_ok()))
         .await
         .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn mail_pgp_keys(state: State<'_, MailState>) -> Result<Vec<PgpKeyInfo>, String> {
-    let rt = state.inner().clone();
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_pgp_keys(ctx: Ctx) -> Result<Vec<PgpKeyInfo>, String> {
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || keyring_of(&rt)?.list())
         .await
         .map_err(|e| e.to_string())?
@@ -1619,14 +1862,15 @@ pub async fn mail_pgp_keys(state: State<'_, MailState>) -> Result<Vec<PgpKeyInfo
 ///
 /// Key generation is CPU work and runs in `spawn_blocking` like everything else
 /// here; a synchronous command would freeze the window for its duration.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_generate(
+    ctx: Ctx,
     account_id: String,
     name: String,
     address: String,
-    state: State<'_, MailState>,
 ) -> Result<PgpKeyInfo, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || keyring_of(&rt)?.generate(&name, &address, &account_id))
         .await
         .map_err(|e| e.to_string())?
@@ -1638,12 +1882,13 @@ pub async fn mail_pgp_generate(
 /// here too, and it costs nothing: an armored key is text, so pasting it is the
 /// natural gesture anyway. [`mail_pgp_import_pick`] covers the file case by
 /// raising the OS dialog inside Rust, exactly as attachments do.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_import(
+    ctx: Ctx,
     armored: String,
-    state: State<'_, MailState>,
 ) -> Result<Vec<PgpKeyInfo>, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || keyring_of(&rt)?.import(armored.as_bytes()))
         .await
         .map_err(|e| e.to_string())?
@@ -1657,11 +1902,14 @@ pub async fn mail_pgp_import(
 /// which is rule 1 of this module and which `the_dialogs_are_never_raised_with_
 /// the_blocking_api` enforces by scanning this very file (so it must not be
 /// named here either).
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_import_pick(
+    ctx: Ctx,
+    // The file dialog is the desktop's; P2's server-side picker replaces it.
     app: AppHandle,
-    state: State<'_, MailState>,
 ) -> Result<Vec<PgpKeyInfo>, String> {
+    let state = ctx.get::<MailState>();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
@@ -1672,11 +1920,26 @@ pub async fn mail_pgp_import_pick(
     let Some(picked) = rx.await.map_err(|e| e.to_string())? else {
         return Ok(Vec::new());
     };
-    let rt = state.inner().clone();
+    let path = picked
+        .into_path()
+        .map_err(|e| format!("could not read that file: {e}"))?;
+    pgp_import_from(state, path).await
+}
+
+/// [`mail_pgp_import_pick`] for a file the browser client picked in its
+/// server-side picker (hosted plan §3.5): `grant` is the single-use id the
+/// transport minted for that pick (`services::pick_grants`), never a path —
+/// rule 2 holds in the browser too. The same import, the same size cap.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_pgp_import_grant(ctx: Ctx, grant: String) -> Result<Vec<PgpKeyInfo>, String> {
+    let state = ctx.get::<MailState>();
+    let picked = crate::services::pick_grants::redeem(ctx.get(), &grant)?;
+    pgp_import_from(state, picked).await
+}
+
+async fn pgp_import_from(state: &MailState, path: PathBuf) -> Result<Vec<PgpKeyInfo>, String> {
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
-        let path = picked
-            .into_path()
-            .map_err(|e| format!("could not read that file: {e}"))?;
         // A key file is small; anything huge is not one, and reading it would be
         // the only unbounded read in the mail subsystem.
         let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
@@ -1692,12 +1955,13 @@ pub async fn mail_pgp_import_pick(
 
 /// The armored **public** half, to send to a correspondent. There is no command
 /// that exports a private key, and that is not an omission.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_export(
+    ctx: Ctx,
     fingerprint: String,
-    state: State<'_, MailState>,
 ) -> Result<String, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || keyring_of(&rt)?.export_public(&fingerprint))
         .await
         .map_err(|e| e.to_string())?
@@ -1708,26 +1972,28 @@ pub async fn mail_pgp_export(
 /// The only path to `MailCryptoState::Verified`, and therefore the only way any
 /// message ever earns positive chrome. There is no heuristic that can stand in
 /// for it, because OpenPGP has no authority to ask.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_set_verified(
+    ctx: Ctx,
     fingerprint: String,
     verified: bool,
-    state: State<'_, MailState>,
 ) -> Result<PgpKeyInfo, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || keyring_of(&rt)?.set_verified(&fingerprint, verified))
         .await
         .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_bind(
+    ctx: Ctx,
     fingerprint: String,
     account_id: String,
     bind: bool,
-    state: State<'_, MailState>,
 ) -> Result<(), String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         keyring_of(&rt)?.bind_account(&fingerprint, &account_id, bind)
     })
@@ -1735,12 +2001,13 @@ pub async fn mail_pgp_bind(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_delete(
+    ctx: Ctx,
     fingerprint: String,
-    state: State<'_, MailState>,
 ) -> Result<(), String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || keyring_of(&rt)?.delete(&fingerprint))
         .await
         .map_err(|e| e.to_string())?
@@ -1751,13 +2018,14 @@ pub async fn mail_pgp_delete(
 ///
 /// Asked up front rather than discovered on Send, because finding out at that
 /// moment means either a refused send or — far worse — a silent downgrade.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_recipients_ready(
+    ctx: Ctx,
     account_id: String,
     recipients: Vec<String>,
-    state: State<'_, MailState>,
 ) -> Result<Vec<String>, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let ring = keyring_of(&rt)?;
         if ring.secret_for_account(&account_id)?.is_none() {
@@ -1775,12 +2043,13 @@ pub async fn mail_pgp_recipients_ready(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_account_delete(
+    ctx: Ctx,
     account_id: String,
-    state: State<'_, MailState>,
 ) -> Result<(), String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         // The local mail goes with the account; the keychain entry does not.
         // It is keyed by *server target*, so another account (or another app's
@@ -1809,13 +2078,14 @@ pub async fn mail_account_delete(
 /// Try both endpoints once and report each. Never retries: one attempt per user
 /// action, because a retry loop against a provider's lockout policy is how
 /// accounts get locked.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_account_test(
+    ctx: Ctx,
     account: MailAccount,
     password: Option<String>,
-    state: State<'_, MailState>,
 ) -> Result<MailProbe, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let secret = match password.filter(|p| !p.is_empty()) {
         Some(p) => Some(Password::new(p)),
         None => resolve_password(&rt, &account, MailProto::Imap),
@@ -1833,7 +2103,7 @@ pub async fn mail_account_test(
     Ok(InProcessEngine.probe(&account, &secret).await)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_password_state(account_id: String) -> Result<MailPasswordState, String> {
     tokio::task::spawn_blocking(move || {
         let account = account_by_id(&accounts_path(), &account_id)?;
@@ -1851,12 +2121,13 @@ pub async fn mail_password_state(account_id: String) -> Result<MailPasswordState
 }
 
 /// The **only** path that deletes a saved mail password.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_forget_password(
+    ctx: Ctx,
     account_id: String,
-    state: State<'_, MailState>,
 ) -> Result<(), String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let account = account_by_id(&accounts_path(), &account_id)?;
         // `remember_secret(Some(false), …)` refuses to clear an entry it could
@@ -1890,13 +2161,14 @@ pub async fn mail_forget_password(
 
 // ── Commands: folders, sync, headers ────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_folders(
+    ctx: Ctx,
     account_id: String,
     refresh: bool,
-    state: State<'_, MailState>,
 ) -> Result<Vec<MailFolder>, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let (account, store) = {
         let rt2 = rt.clone();
         let id = account_id.clone();
@@ -1952,8 +2224,8 @@ fn no_password_message() -> String {
         .to_string()
 }
 
-fn emit_sync(app: &AppHandle, event: MailSyncEvent) {
-    let _ = app.emit("mail:sync", event);
+fn emit_sync(ctx: &CoreCtx, event: MailSyncEvent) {
+    ctx.emit("mail:sync", event);
 }
 
 /// Pull folders and the newest headers, emitting progress rather than returning
@@ -1962,20 +2234,20 @@ fn emit_sync(app: &AppHandle, event: MailSyncEvent) {
 /// Cancellable via [`mail_sync_cancel`] — the `commands::disk_usage` pattern.
 /// Never dispatched from a launch or restore path: the mail overlay renders from
 /// the local store and shows a **Check mail** button.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_sync(
-    app: AppHandle,
+    ctx: Ctx,
     account_id: String,
     folder_id: Option<String>,
-    state: State<'_, MailState>,
 ) -> Result<MailSyncSummary, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let cancel = Arc::new(AtomicBool::new(false));
     if let Ok(mut guard) = rt.lock() {
         guard.cancel.insert(account_id.clone(), cancel.clone());
     }
 
-    let out = sync_inner(&app, &rt, &account_id, folder_id, &cancel).await;
+    let out = sync_inner(&ctx, &rt, &account_id, folder_id, &cancel).await;
 
     if let Ok(mut guard) = rt.lock() {
         guard.cancel.remove(&account_id);
@@ -1989,7 +2261,7 @@ pub async fn mail_sync(
         },
     };
     emit_sync(
-        &app,
+        &ctx,
         MailSyncEvent {
             account_id: account_id.clone(),
             folder_id: None,
@@ -2006,14 +2278,14 @@ pub async fn mail_sync(
 }
 
 async fn sync_inner(
-    app: &AppHandle,
+    ctx: &CoreCtx,
     rt: &MailState,
     account_id: &str,
     only_folder: Option<String>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<MailSyncSummary, String> {
     emit_sync(
-        app,
+        ctx,
         MailSyncEvent {
             account_id: account_id.to_string(),
             folder_id: None,
@@ -2101,7 +2373,7 @@ async fn sync_inner(
             .unwrap_or(false);
     // How many messages the model may look at per sync, and how long each may
     // take — the classifier is best-effort filing, not a sync precondition.
-    let mut classify_budget: u32 = 20;
+    let mut classify_budget: u32 = classify_budget_per_sync(crate::services::server::is_server());
 
     let mut new_messages = 0u32;
     let mut filtered = 0u32;
@@ -2111,7 +2383,7 @@ async fn sync_inner(
             break;
         }
         emit_sync(
-            app,
+            ctx,
             MailSyncEvent {
                 account_id: account_id.to_string(),
                 folder_id: Some(folder.id.clone()),
@@ -2224,7 +2496,7 @@ async fn sync_inner(
         filtered += filed;
         new_messages += added;
         emit_sync(
-            app,
+            ctx,
             MailSyncEvent {
                 account_id: account_id.to_string(),
                 folder_id: Some(folder.id.clone()),
@@ -2234,7 +2506,7 @@ async fn sync_inner(
             },
         );
         if added > 0 && folder.kind == crate::schema::mail::MailFolderKind::Inbox {
-            let _ = app.emit(
+            ctx.emit(
                 "mail:new",
                 crate::schema::mail::MailNewEvent {
                     account_id: account_id.to_string(),
@@ -2254,11 +2526,12 @@ async fn sync_inner(
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_sync_cancel(
+    ctx: Ctx,
     account_id: String,
-    state: State<'_, MailState>,
 ) -> Result<(), String> {
+    let state = ctx.get::<MailState>();
     if let Ok(guard) = state.lock() {
         if let Some(flag) = guard.cancel.get(&account_id) {
             flag.store(true, Ordering::Relaxed);
@@ -2273,8 +2546,9 @@ pub async fn mail_sync_cancel(
 /// `sort`/`desc` are optional so an older frontend keeps the newest-first order
 /// it used to get; they are a `MailSort`, never a column name, because the order
 /// is the one part of the statement SQLite cannot take as a bound parameter.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_headers(
+    ctx: Ctx,
     folder_id: String,
     offset: u32,
     limit: u32,
@@ -2283,9 +2557,9 @@ pub async fn mail_headers(
     desc: Option<bool>,
     unread_only: Option<bool>,
     agent_only: Option<bool>,
-    state: State<'_, MailState>,
 ) -> Result<MailHeaderPage, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let store = store_of(&rt)?;
         // `agent_only`: the "shared with agents" filter — the same page a reader
@@ -2337,8 +2611,9 @@ pub async fn mail_headers(
 /// typing a longer query over the shorter one's matches reuses what is already
 /// here. Never prompts: the password comes from the session or the keychain,
 /// silently.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_search(
+    ctx: Ctx,
     folder_id: String,
     query: String,
     offset: u32,
@@ -2347,9 +2622,9 @@ pub async fn mail_search(
     desc: Option<bool>,
     unread_only: Option<bool>,
     agent_only: Option<bool>,
-    state: State<'_, MailState>,
 ) -> Result<MailSearchPage, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let sort = sort.unwrap_or_default();
     let desc = desc.unwrap_or(true);
     let unread_only = unread_only.unwrap_or(false);
@@ -2358,6 +2633,7 @@ pub async fn mail_search(
     // nothing and claim a scope it did not earn.
     if query.trim().is_empty() {
         return mail_headers(
+            ctx,
             folder_id,
             offset,
             limit,
@@ -2366,7 +2642,6 @@ pub async fn mail_search(
             Some(desc),
             Some(unread_only),
             Some(agent_only),
-            state,
         )
         .await
         .map(|page| MailSearchPage { page, remote: false, partial: false });
@@ -2514,12 +2789,13 @@ fn local_search_page(
 
 /// The answers the user already wrote to one message, from the local index —
 /// no network (`MailStore::replies_to`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_replies(
+    ctx: Ctx,
     message_id: String,
-    state: State<'_, MailState>,
 ) -> Result<Vec<MailHeader>, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let mut replies = store_of(&rt)?.replies_to(&message_id)?;
         serve_auth_state(&mut replies);
@@ -2537,14 +2813,15 @@ pub async fn mail_replies(
 /// does **not** load anything today: the remote-image proxy is plan B §2.6 and
 /// is not part of this phase. Remote references are counted and stripped either
 /// way, so a tracker never sees the user's IP.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_body(
+    ctx: Ctx,
     message_id: String,
     allow_remote: bool,
-    state: State<'_, MailState>,
 ) -> Result<MailBody, String> {
+    let state = ctx.get::<MailState>();
     let _ = allow_remote;
-    body_inner(state.inner().clone(), message_id).await
+    body_inner(state.clone(), message_id).await
 }
 
 /// `mail_body`'s whole body, shared with the root MCP's `mail_read`
@@ -2700,14 +2977,15 @@ async fn body_inner(rt: MailState, message_id: String) -> Result<MailBody, Strin
 
 // ── Commands: flags and moves ───────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_flag(
+    ctx: Ctx,
     message_id: String,
     flag: MailFlag,
     value: bool,
-    state: State<'_, MailState>,
 ) -> Result<(), String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let id = message_id.clone();
     let rt2 = rt.clone();
     let (account, folder, header, store) = tokio::task::spawn_blocking(move || {
@@ -2770,12 +3048,13 @@ pub async fn mail_flag(
 /// check rather than staying wrong forever. That is the safe way round; the
 /// opposite (server-first) would leave the user staring at an unchanged list
 /// while the connection times out.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_mark_folder_read(
+    ctx: Ctx,
     folder_id: String,
-    state: State<'_, MailState>,
 ) -> Result<u32, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let rt2 = rt.clone();
     let id = folder_id.clone();
     // The UIDs are read *before* the local flip: afterwards there is nothing
@@ -2860,13 +3139,14 @@ pub async fn mail_mark_folder_read(
 /// Local only: no login, no STORE, no COPY. It returns whether a row actually
 /// changed, so the frontend can tell "marked" from "that message is no longer in
 /// the index" rather than reporting a silent success either way.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_priority_set(
+    ctx: Ctx,
     message_id: String,
     priority: Option<MailPriority>,
-    state: State<'_, MailState>,
 ) -> Result<bool, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || store_of(&rt)?.set_priority(&message_id, priority))
         .await
         .map_err(|e| e.to_string())?
@@ -2880,8 +3160,9 @@ pub async fn mail_priority_set(
 /// here too: a cross-account list is exactly where an unchecked SPF/DKIM verdict
 /// would be most misleading, since the reader is no longer looking at one
 /// account's mail.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_priority_page(
+    ctx: Ctx,
     priority: MailPriority,
     offset: u32,
     limit: u32,
@@ -2889,9 +3170,9 @@ pub async fn mail_priority_page(
     sort: Option<MailSort>,
     desc: Option<bool>,
     unread_only: Option<bool>,
-    state: State<'_, MailState>,
 ) -> Result<MailHeaderPage, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let store = store_of(&rt)?;
         let mut page = store.priority_page(
@@ -2923,23 +3204,25 @@ pub async fn mail_priority_page(
 /// Nothing here is destructive to *mail* — a mark is not a folder, so every
 /// message stays exactly where it is (`schema::mail::MailPriority`). What is
 /// lost is the filing itself, which is why the caller asks first.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_priority_clear(
+    ctx: Ctx,
     priority: MailPriority,
-    state: State<'_, MailState>,
 ) -> Result<u32, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || store_of(&rt)?.clear_priority(priority))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// The two rail badges' numbers, read together so they cannot disagree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_priority_counts(
-    state: State<'_, MailState>,
+    ctx: Ctx,
 ) -> Result<MailPriorityCounts, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || store_of(&rt)?.priority_counts())
         .await
         .map_err(|e| e.to_string())?
@@ -2967,7 +3250,7 @@ pub async fn mail_priority_counts(
 /// that key itself (`file_keys`) rather than relying on some other command
 /// having opened the database first — the ordering bug that made an encrypted
 /// install's *account* list read empty at launch is described in full there.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_filters_list() -> Result<Vec<MailFilterRule>, String> {
     tokio::task::spawn_blocking(|| Ok(read_filters(&filters_path())?.rules))
         .await
@@ -2981,7 +3264,7 @@ pub async fn mail_filters_list() -> Result<Vec<MailFilterRule>, String> {
 /// matching rule wins), so a reorder is an ordinary edit that no per-rule verb
 /// can express. Ids are minted here for rules that arrive without one — the
 /// store owns identity, exactly as it does for an account.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_filters_set(rules: Vec<MailFilterRule>) -> Result<Vec<MailFilterRule>, String> {
     tokio::task::spawn_blocking(move || {
         let mut rules = rules;
@@ -3022,15 +3305,16 @@ pub async fn mail_filters_set(rules: Vec<MailFilterRule>) -> Result<Vec<MailFilt
 /// `MailStore::unmarked_headers` for the folder kinds it refuses and why), and
 /// the bound is **reported** — `capped` is what lets the UI say *of the most
 /// recent N* instead of implying the whole mailbox was considered.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_filters_apply(
+    ctx: Ctx,
     dry_run: bool,
     account_id: Option<String>,
     rules: Option<Vec<MailFilterRule>>,
     limit: Option<u32>,
-    state: State<'_, MailState>,
 ) -> Result<MailFilterReport, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         // An explicit list is the dialog testing a rule it has not saved yet;
         // otherwise the saved, enabled ones. A rule under test is honoured even
@@ -3203,6 +3487,19 @@ async fn fetch_message_text(
     Ok((header, text))
 }
 
+/// How many new inbox messages one sync may hand the local classifier. On a
+/// hosted server every user's sync loads the model on the one shared Ollama
+/// (and evicts whatever another user had loaded), so a server classifies a
+/// quarter as many per sync (final review A5); the rest stay unmarked, as a
+/// message the model declined would.
+fn classify_budget_per_sync(server: bool) -> u32 {
+    if server {
+        5
+    } else {
+        20
+    }
+}
+
 /// Run the local model over the still-unmarked new inbox messages a sync just
 /// produced, bounded by `budget` and per-message timeout. **Best-effort**: a
 /// model down / slow / absent skips silently and NEVER fails the sync.
@@ -3250,12 +3547,13 @@ async fn classify_new_inbox(
 /// #204 — summarize one message into a few plain-text bullets, on demand. The
 /// summary is returned to the caller and held in frontend state; it is never
 /// persisted (the decrypted-plaintext rule).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_summarize(
+    ctx: Ctx,
     message_id: String,
-    state: State<'_, MailState>,
 ) -> Result<String, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let (header, text) = fetch_message_text(&rt, &message_id, SUMMARIZE_BODY_CAP).await?;
     let user = mail_ai::summarize_user(&header.subject, &from_display(&header.from), &text);
     tokio::task::spawn_blocking(move || {
@@ -3271,15 +3569,16 @@ pub async fn mail_summarize(
 
 /// #206 — turn rough notes into a formal reply body. **Never sends**: the result
 /// only fills the composer's `body_text` for explicit review and send.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_formalize_reply(
+    ctx: Ctx,
     notes: String,
     message_id: Option<String>,
     account_id: String,
     tone: Option<String>,
-    state: State<'_, MailState>,
 ) -> Result<String, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     // The original message is optional context, never quoted back.
     let original = match &message_id {
         Some(id) => Some(fetch_message_text(&rt, id, FORMALIZE_BODY_CAP).await?.1),
@@ -3314,12 +3613,13 @@ pub async fn mail_formalize_reply(
 /// #207 — extract a calendar event, anchored on the message `Date` and today so
 /// relative phrasing resolves. A low-confidence / unparseable result is
 /// `Ok(None)` — "nothing to create" — never an error.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_extract_event(
+    ctx: Ctx,
     message_id: String,
-    state: State<'_, MailState>,
 ) -> Result<Option<MailExtractedEvent>, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let (header, text) = fetch_message_text(&rt, &message_id, EXTRACT_BODY_CAP).await?;
     let today = mail_ai::today_iso();
     let user = mail_ai::event_user(
@@ -3343,12 +3643,13 @@ pub async fn mail_extract_event(
 
 /// #208 — extract a to-do task, same anchoring and defensive parse. `Ok(None)`
 /// when there is nothing actionable.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_extract_task(
+    ctx: Ctx,
     message_id: String,
-    state: State<'_, MailState>,
 ) -> Result<Option<MailExtractedTask>, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let (header, text) = fetch_message_text(&rt, &message_id, EXTRACT_BODY_CAP).await?;
     let today = mail_ai::today_iso();
     let user = mail_ai::task_user(
@@ -3376,14 +3677,15 @@ pub async fn mail_extract_task(
 /// otherwise the marks are applied with `model` provenance. A whole-model
 /// failure (down / not configured / remote refused) is reported rather than
 /// returned as an empty preview.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_ai_classify_apply(
+    ctx: Ctx,
     dry_run: bool,
     account_id: Option<String>,
     limit: Option<u32>,
-    state: State<'_, MailState>,
 ) -> Result<MailAiClassifyReport, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let store = {
         let rt = rt.clone();
         tokio::task::spawn_blocking(move || store_of(&rt))
@@ -3475,16 +3777,17 @@ fn resolve_uid_batch(
     Ok((account, folder, uids))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_move(
+    ctx: Ctx,
     message_ids: Vec<String>,
     dest_folder_id: String,
-    state: State<'_, MailState>,
 ) -> Result<(), String> {
+    let state = ctx.get::<MailState>();
     if message_ids.is_empty() {
         return Ok(());
     }
-    let rt = state.inner().clone();
+    let rt = state.clone();
     let rt2 = rt.clone();
     let ids = message_ids.clone();
     let dest = dest_folder_id.clone();
@@ -3533,15 +3836,16 @@ pub async fn mail_move(
 /// so the caller asks first — and the server is asked *before* the index, so a
 /// refused expunge leaves rows for mail that is still in the mailbox rather than
 /// the other way round.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_purge(
+    ctx: Ctx,
     message_ids: Vec<String>,
-    state: State<'_, MailState>,
 ) -> Result<u32, String> {
+    let state = ctx.get::<MailState>();
     if message_ids.is_empty() {
         return Ok(0);
     }
-    let rt = state.inner().clone();
+    let rt = state.clone();
     let rt2 = rt.clone();
     let ids = message_ids.clone();
     let (account, folder_id, folder_path, uids, store) = tokio::task::spawn_blocking(move || {
@@ -3571,12 +3875,13 @@ pub async fn mail_purge(
 
 // ── Commands: drafts and sending ────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_draft_save(
+    ctx: Ctx,
     draft: MailDraft,
-    state: State<'_, MailState>,
 ) -> Result<MailDraft, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let store = store_of(&rt)?;
         let mut draft = draft;
@@ -3606,9 +3911,10 @@ pub async fn mail_draft_save(
 /// the store is what resolves its unlock (and can migrate a database) — not a
 /// decision for a badge. A store not opened yet lists nothing; the mail pane
 /// asks again once it has opened it.
-#[tauri::command]
-pub async fn mail_agent_drafts(state: State<'_, MailState>) -> Result<Vec<MailDraft>, String> {
-    let rt = state.inner().clone();
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_agent_drafts(ctx: Ctx) -> Result<Vec<MailDraft>, String> {
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let Ok(store) = AgentMail(rt).store() else {
             return Ok(Vec::new());
@@ -3628,24 +3934,26 @@ pub async fn mail_agent_drafts(state: State<'_, MailState>) -> Result<Vec<MailDr
 
 /// ✓ Approvals' approve on agent drafts: file each, exactly as the panel
 /// showed it, into the "Drafted by agents" folder. Nothing is sent.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_agent_drafts_file(
+    ctx: Ctx,
     drafts: Vec<MailDraft>,
-    state: State<'_, MailState>,
 ) -> Result<usize, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || store_of(&rt)?.file_agent_drafts(&drafts))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// Discard one draft and whatever was staged for it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_draft_discard(
+    ctx: Ctx,
     draft_id: String,
-    state: State<'_, MailState>,
 ) -> Result<(), String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || store_of(&rt)?.delete_draft(&draft_id))
         .await
         .map_err(|e| e.to_string())?
@@ -3679,50 +3987,54 @@ pub fn widest_agent_scope() -> Option<crate::schema::mail::MailAgentScope> {
 // "that message is no longer in the index".
 
 /// Mark or unmark messages for a contained reader.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_agent_mark(
+    ctx: Ctx,
     message_ids: Vec<String>,
     marked: bool,
-    state: State<'_, MailState>,
 ) -> Result<usize, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || store_of(&rt)?.agent_mark(&message_ids, marked))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// Mark every message of a folder.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_agent_mark_folder(
+    ctx: Ctx,
     folder_id: String,
-    state: State<'_, MailState>,
 ) -> Result<usize, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || store_of(&rt)?.agent_mark_folder(&folder_id))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// Mark every message of an account from one sender address.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_agent_mark_sender(
+    ctx: Ctx,
     account_id: String,
     address: String,
-    state: State<'_, MailState>,
 ) -> Result<usize, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || store_of(&rt)?.agent_mark_sender(&account_id, &address))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// The ids of an account's marked messages, for the mail view's mark.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_agent_marks(
+    ctx: Ctx,
     account_id: String,
-    state: State<'_, MailState>,
 ) -> Result<Vec<String>, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || store_of(&rt)?.agent_marks(&account_id))
         .await
         .map_err(|e| e.to_string())?
@@ -3813,7 +4125,7 @@ impl crate::services::root_mcp_mail::MailAccess for AgentMail {
         self.store()?;
         // Called from the listener's `spawn_blocking` thread, where blocking on
         // the runtime is allowed.
-        tauri::async_runtime::block_on(async {
+        app_core::rt::block_on(async {
             tokio::time::timeout(std::time::Duration::from_secs(8), body_inner(self.0.clone(), message_id.to_string()))
                 .await.map_err(|_| "MCP mail read timed out".to_string())?
         }).map_err(
@@ -3864,15 +4176,16 @@ impl crate::services::root_mcp_mail::MailAccess for AgentMail {
 /// `staged_ids` is the attachment set the composer showed. The send is bound
 /// to it in the backend: a different set in the store, or a draft an agent
 /// wrote that the composer never saved, refuses before a message is built.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_draft_send(
+    ctx: Ctx,
     draft_id: String,
     staged_ids: Vec<String>,
     sign: bool,
     encrypt: bool,
-    state: State<'_, MailState>,
 ) -> Result<MailSendResult, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let rt2 = rt.clone();
     let id = draft_id.clone();
     let prepared = tokio::task::spawn_blocking(move || {
@@ -3999,7 +4312,7 @@ pub async fn mail_draft_send(
 // are thin, locked read-modify-writes of `contacts.json`.
 
 /// The whole book, for the Address Book tab and the composer's autocomplete.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_get() -> Result<MailContactsView, String> {
     tokio::task::spawn_blocking(|| {
         let _guard = CONTACTS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -4015,7 +4328,7 @@ pub async fn mail_contacts_get() -> Result<MailContactsView, String> {
 }
 
 /// Insert or replace one card; the backend mints the id and owns the counters.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contact_upsert(contact: MailContact) -> Result<MailContact, String> {
     tokio::task::spawn_blocking(move || {
         with_contacts(|book| {
@@ -4026,7 +4339,7 @@ pub async fn mail_contact_upsert(contact: MailContact) -> Result<MailContact, St
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_delete(ids: Vec<String>) -> Result<u32, String> {
     tokio::task::spawn_blocking(move || {
         with_contacts(|book| Ok(mail_contacts::delete_contacts(book, &ids) as u32))
@@ -4035,7 +4348,7 @@ pub async fn mail_contacts_delete(ids: Vec<String>) -> Result<u32, String> {
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contact_list_upsert(list: MailContactList) -> Result<MailContactList, String> {
     tokio::task::spawn_blocking(move || {
         with_contacts(|book| mail_contacts::upsert_list(book, list, &mut uuid_v4))
@@ -4044,7 +4357,7 @@ pub async fn mail_contact_list_upsert(list: MailContactList) -> Result<MailConta
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contact_list_delete(id: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || {
         with_contacts(|book| Ok(mail_contacts::delete_list(book, &id)))
@@ -4055,7 +4368,7 @@ pub async fn mail_contact_list_delete(id: String) -> Result<bool, String> {
 
 /// Thunderbird's "automatically add outgoing e-mail addresses to Collected
 /// Addresses". Off stops new cards; sends still count toward known ones.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_set_collect(enabled: bool) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         with_contacts(|book| {
@@ -4073,7 +4386,8 @@ pub async fn mail_contacts_set_collect(enabled: bool) -> Result<(), String> {
 /// `mail_contacts::MAX_IMPORT_BYTES` (a database at
 /// `mail_thunderbird::MAX_DB_BYTES`), and parsed as untrusted text. The format
 /// is told from the contents, not the extension.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_import(app: AppHandle) -> Result<MailContactsImportReport, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
@@ -4094,6 +4408,18 @@ pub async fn mail_contacts_import(app: AppHandle) -> Result<MailContactsImportRe
         });
     };
     let source = chosen.into_path().map_err(|e| e.to_string())?;
+    contacts_import_from(source).await
+}
+
+/// [`mail_contacts_import`] for a file the browser client picked; `grant` as
+/// in [`mail_pgp_import_grant`].
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_contacts_import_grant(ctx: Ctx, grant: String) -> Result<MailContactsImportReport, String> {
+    let picked = crate::services::pick_grants::redeem(ctx.get(), &grant)?;
+    contacts_import_from(picked).await
+}
+
+async fn contacts_import_from(source: PathBuf) -> Result<MailContactsImportReport, String> {
     tokio::task::spawn_blocking(move || {
         let meta = std::fs::metadata(&source).map_err(|e| e.to_string())?;
         if !meta.is_file() {
@@ -4159,7 +4485,7 @@ fn merge_thunderbird(
 /// into Personal and `history.sqlite` ("Collected Addresses") into Collected.
 /// Read-only — see `services::mail_thunderbird`. One unreadable book does not
 /// stop the rest; only a run where none could be read is an error.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_import_thunderbird() -> Result<MailContactsImportReport, String> {
     tokio::task::spawn_blocking(|| {
         let books = mail_thunderbird::find_books(&crate::paths::home_dir());
@@ -4207,11 +4533,12 @@ pub async fn mail_contacts_import_thunderbird() -> Result<MailContactsImportRepo
 /// "Add from Inbox": the senders of every locally indexed Inbox message, in
 /// every account, become Collected cards (`mail_contacts::harvest`). Never
 /// touches a server; the user's own account addresses are left out.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_harvest_inbox(
-    state: State<'_, MailState>,
+    ctx: Ctx,
 ) -> Result<MailContactsImportReport, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let store = store_of(&rt)?;
         let senders = store.inbox_senders(HARVEST_SCAN_CAP)?;
@@ -4235,24 +4562,10 @@ const HARVEST_SCAN_CAP: u32 = 50_000;
 /// Export cards as vCard 3.0 through a Rust-raised save dialog: the given ids,
 /// or the whole book when `ids` is empty. `None` when the dialog was cancelled,
 /// otherwise how many cards were written.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_export(app: AppHandle, ids: Vec<String>) -> Result<Option<u32>, String> {
-    let cards = tokio::task::spawn_blocking(move || {
-        let _guard = CONTACTS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let book = read_contacts(&contacts_path())?;
-        let wanted: std::collections::HashSet<String> = ids.into_iter().collect();
-        Ok::<_, String>(
-            book.contacts
-                .into_iter()
-                .filter(|c| wanted.is_empty() || wanted.contains(&c.id))
-                .collect::<Vec<_>>(),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    if cards.is_empty() {
-        return Err("there are no contacts to export".into());
-    }
+    let (vcards, count) = contacts_export_text(ids).await?;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
@@ -4268,9 +4581,42 @@ pub async fn mail_contacts_export(app: AppHandle, ids: Vec<String>) -> Result<Op
         return Ok(None);
     };
     let dest = chosen.into_path().map_err(|e| e.to_string())?;
+    write_export(vcards, count, dest).await
+}
+
+/// [`mail_contacts_export`] to a destination the browser client picked;
+/// `grant` as in [`mail_pgp_import_grant`].
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_contacts_export_grant(ctx: Ctx, ids: Vec<String>, grant: String) -> Result<Option<u32>, String> {
+    let (vcards, count) = contacts_export_text(ids).await?;
+    let dest = crate::services::pick_grants::redeem(ctx.get(), &grant)?;
+    write_export(vcards, count, dest).await
+}
+
+/// The cards `ids` name (every card when empty) as vCard text, and how many.
+async fn contacts_export_text(ids: Vec<String>) -> Result<(String, u32), String> {
     tokio::task::spawn_blocking(move || {
-        std::fs::write(&dest, mail_contacts::to_vcards(&cards)).map_err(|e| e.to_string())?;
-        Ok(Some(cards.len() as u32))
+        let _guard = CONTACTS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let book = read_contacts(&contacts_path())?;
+        let wanted: std::collections::HashSet<String> = ids.into_iter().collect();
+        let cards: Vec<_> = book
+            .contacts
+            .into_iter()
+            .filter(|c| wanted.is_empty() || wanted.contains(&c.id))
+            .collect();
+        if cards.is_empty() {
+            return Err("there are no contacts to export".to_string());
+        }
+        Ok((mail_contacts::to_vcards(&cards), cards.len() as u32))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+async fn write_export(vcards: String, count: u32, dest: PathBuf) -> Result<Option<u32>, String> {
+    tokio::task::spawn_blocking(move || {
+        std::fs::write(&dest, vcards).map_err(|e| e.to_string())?;
+        Ok(Some(count))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -4289,12 +4635,15 @@ pub async fn mail_contacts_export(app: AppHandle, ids: Vec<String>) -> Result<Op
 /// The dialog is raised through the callback API bridged to a `oneshot` — never
 /// through the plugin's blocking variants, which would hold the main thread for
 /// as long as the user takes to choose.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_attach_pick(
+    ctx: Ctx,
+    // The file dialog is the desktop's; P2's server-side picker replaces it.
     app: AppHandle,
     draft_id: String,
-    state: State<'_, MailState>,
 ) -> Result<Vec<StagedAttachment>, String> {
+    let state = ctx.get::<MailState>();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
@@ -4306,13 +4655,37 @@ pub async fn mail_attach_pick(
     let Some(chosen) = chosen else {
         return Ok(Vec::new());
     };
+    let paths: Vec<PathBuf> = chosen.into_iter().filter_map(|f| f.into_path().ok()).collect();
+    stage_attachments(state, draft_id, paths).await
+}
 
-    let rt = state.inner().clone();
+/// [`mail_attach_pick`] for files the browser client picked: one single-use
+/// `grant` per file (`services::pick_grants`), the same copy into the draft's
+/// staging directory, the same boundary — ids come back, nothing else.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_attach_grants(
+    ctx: Ctx,
+    draft_id: String,
+    grants: Vec<String>,
+) -> Result<Vec<StagedAttachment>, String> {
+    let state = ctx.get::<MailState>();
+    let mut picked = Vec::with_capacity(grants.len());
+    for grant in &grants {
+        picked.push(crate::services::pick_grants::redeem(ctx.get(), grant)?);
+    }
+    stage_attachments(state, draft_id, picked).await
+}
+
+async fn stage_attachments(
+    state: &MailState,
+    draft_id: String,
+    paths: Vec<PathBuf>,
+) -> Result<Vec<StagedAttachment>, String> {
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let store = store_of(&rt)?;
         let mut out = Vec::new();
-        for file in chosen {
-            let Ok(path) = file.into_path() else { continue };
+        for path in paths {
             let Ok(meta) = std::fs::metadata(&path) else {
                 continue;
             };
@@ -4338,13 +4711,14 @@ pub async fn mail_attach_pick(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_attach_remove(
+    ctx: Ctx,
     draft_id: String,
     staged_id: String,
-    state: State<'_, MailState>,
 ) -> Result<(), String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let store = store_of(&rt)?;
         store.remove_staged(&draft_id, &staged_id)
@@ -4431,14 +4805,17 @@ async fn load_attachment(
 /// no directory target. That friction sits exactly at the point where the
 /// boundary is crossed, and it is the difference between "the user exported
 /// three files" and "a message wrote eight files somewhere".
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_attachment_save(
+    ctx: Ctx,
+    // The file dialog is the desktop's; P2's server-side picker replaces it.
     app: AppHandle,
     message_id: String,
     part_id: String,
-    state: State<'_, MailState>,
 ) -> Result<Option<String>, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let (meta, bytes) = load_attachment(&rt, &message_id, &part_id).await?;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -4456,7 +4833,27 @@ pub async fn mail_attachment_save(
         return Ok(None);
     };
     let target = chosen.into_path().map_err(|e| e.to_string())?;
+    let _ = meta;
+    write_attachment_to(bytes, target).await
+}
 
+/// [`mail_attachment_save`] to a destination the browser client picked;
+/// `grant` as in [`mail_pgp_import_grant`].
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_attachment_save_grant(
+    ctx: Ctx,
+    message_id: String,
+    part_id: String,
+    grant: String,
+) -> Result<Option<String>, String> {
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
+    let (_meta, bytes) = load_attachment(&rt, &message_id, &part_id).await?;
+    let target = crate::services::pick_grants::redeem(ctx.get(), &grant)?;
+    write_attachment_to(bytes, target).await
+}
+
+async fn write_attachment_to(bytes: Vec<u8>, target: PathBuf) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || {
         // A plain write of the already-decoded blob to the path the dialog
         // returned. We do not create directories, do not follow the name, do
@@ -4488,14 +4885,15 @@ pub async fn mail_attachment_save(
 /// filename can neither choose the folder nor traverse out of it. The
 /// pick-any-location path stays [`mail_attachment_save`]'s OS dialog, offered
 /// beside this one in the same confirmation.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_attachment_save_to_project(
+    ctx: Ctx,
     message_id: String,
     part_id: String,
     project_id: String,
-    state: State<'_, MailState>,
 ) -> Result<String, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let (meta, bytes) = load_attachment(&rt, &message_id, &part_id).await?;
 
     tokio::task::spawn_blocking(move || {
@@ -4632,13 +5030,14 @@ fn write_unique_in_dir(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, 
 
 /// Bounded bytes for in-pane preview. Nothing is written to disk; the pane
 /// renders them with the existing viewers, inside the capability boundary.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_attachment_preview(
+    ctx: Ctx,
     message_id: String,
     part_id: String,
-    state: State<'_, MailState>,
 ) -> Result<MailPreviewBlob, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     let (meta, bytes) = load_attachment(&rt, &message_id, &part_id).await?;
     tokio::task::spawn_blocking(move || {
         let truncated = bytes.len() > MAX_PREVIEW_BYTES;
@@ -4656,13 +5055,14 @@ pub async fn mail_attachment_preview(
 /// Bounded bytes of one file staged on a draft — the outbox copy, decrypted
 /// here, never the original — for the composer's review chip. The same caps
 /// as [`mail_attachment_preview`]; nothing is written to disk.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_staged_preview(
+    ctx: Ctx,
     draft_id: String,
     staged_id: String,
-    state: State<'_, MailState>,
 ) -> Result<MailPreviewBlob, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let store = store_of(&rt)?;
         let meta = store
@@ -4685,8 +5085,29 @@ pub async fn mail_staged_preview(
 
 #[cfg(test)]
 mod tests {
+    /// A server store reopens on release only when the lock was the
+    /// reason: a passphrase store, or a device store that failed with K held,
+    /// re-armed at once and spun a reopen thread forever.
+    #[test]
+    fn only_a_store_waiting_for_the_secrets_key_reopens_on_release() {
+        use crate::services::mail_crypt::{DEVICE_LOCKED, DEVICE_NOT_SET_UP};
+        let locked = Some(super::UnlockNote::Unavailable(DEVICE_LOCKED.into()));
+        assert!(super::waits_for_release(&locked, false));
+        assert!(super::waits_for_release(&Some(super::UnlockNote::Unavailable(DEVICE_NOT_SET_UP.into())), false));
+        assert!(!super::waits_for_release(&locked, true), "K was there: the lock was not the reason");
+        assert!(!super::waits_for_release(&Some(super::UnlockNote::NeedsPassphrase), false));
+        assert!(!super::waits_for_release(&Some(super::UnlockNote::Unavailable("key.json is missing".into())), false));
+        assert!(!super::waits_for_release(&None, false));
+    }
+
     use super::*;
     use crate::schema::mail::{MailSecurity, MailServer};
+
+    #[test]
+    fn a_server_classifies_fewer_messages_per_sync() {
+        assert_eq!(classify_budget_per_sync(false), 20);
+        assert!(classify_budget_per_sync(true) < classify_budget_per_sync(false));
+    }
 
     #[test]
     fn server_search_cap_reports_omitted_matches() {
@@ -4824,7 +5245,7 @@ mod tests {
         // eventually slicing into the middle of a multi-byte char in a comment.
         for chunk in src.split_inclusive('\n') {
             let line = chunk.trim_end_matches('\n').trim_end_matches('\r');
-            if line.trim() == concat!("#[tauri", "::command]") {
+            if line.trim() == concat!("#[cfg_attr(feature = \"desktop\", tauri", "::command)]") {
                 starts.push(offset + line.len());
             }
             offset += chunk.len();
@@ -4917,7 +5338,7 @@ mod tests {
         for (i, line) in lines.iter().enumerate() {
             // Only a real attribute line counts — the module doc quotes the
             // marker, and a doc comment is not a command.
-            if line.trim() != concat!("#[tauri", "::command]") {
+            if line.trim() != concat!("#[cfg_attr(feature = \"desktop\", tauri", "::command)]") {
                 continue;
             }
             seen += 1;
@@ -4976,7 +5397,7 @@ mod tests {
     fn a_composer_save_clears_the_origin_and_the_agent_path_never_opens_the_store() {
         let src = include_str!("mail.rs");
         let save = &src[src.find("pub async fn mail_draft_save(").unwrap()..];
-        let save = &save[..save.find("#[tauri::command]").unwrap()];
+        let save = &save[..save.find("tauri::command)]").unwrap()];
         assert!(save.contains("draft.origin = None;"));
         let agent = &src[src.find("impl AgentMail {").unwrap()..];
         let agent = &agent[..agent.find("/// Send one draft.").unwrap()];

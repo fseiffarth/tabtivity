@@ -113,6 +113,98 @@ enum SearchFields {
 /// The `meta` key set once the store's existing plaintext has been sealed.
 const META_ENCRYPTED: &str = "encrypted";
 
+/// Every sealed column, by table: `(table, primary key, account column,
+/// columns)`. The AAD's row key is the primary-key columns NUL-joined, which
+/// is how the read and write paths build theirs. The one list both passes
+/// over existing values walk — sealing a store that ran plain
+/// ([`MailStore::seal_existing`]) and re-keying one ([`MailStore::rekey_step`])
+/// — so a column added to one is added to both.
+type SealedTable = (&'static str, &'static [&'static str], Option<&'static str>, &'static [&'static str]);
+const SEALED_TABLES: &[SealedTable] = &[
+    (
+        "messages",
+        &["id"],
+        Some("account_id"),
+        &[
+            "subject",
+            "from_json",
+            "to_json",
+            "cc_json",
+            "preview",
+            "malformed",
+            "rfc_message_id",
+            "authres_json",
+            // A model's reason quotes the message, so it is sealed on write;
+            // leaving it off this list left every reason written before
+            // encryption was turned on in the clear, permanently.
+            "priority_source",
+            "priority_reason",
+        ],
+    ),
+    ("bodies_cache", &["message_id"], None, &["html", "text", "links_json"]),
+    ("attachments", &["message_id", "part_id"], None, &["filename", "mime", "mismatch"]),
+    ("drafts", &["id"], Some("account_id"), &["json"]),
+    ("staged", &["draft_id", "staged_id"], None, &["filename", "mime", "source"]),
+    ("folders", &["id"], Some("account_id"), &["path", "name"]),
+    ("mail_remote_allow", &["addr_key"], None, &["address"]),
+];
+
+/// The `meta` key of a re-key's progress marker ([`MailStore::rekey_step`]).
+const META_REKEY: &str = "rekey_cursor";
+
+/// Where a re-key stands, kept in `meta` and written in the same
+/// transaction as the batch it describes, so a crash never leaves it ahead
+/// of what is on disk. It is only a shortcut: every step re-checks each
+/// value under the current key and skips what already opens there, so a
+/// marker behind the truth costs time, never data.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct RekeyCursor {
+    /// [`MailKeys::fingerprint`] of the master this pass moves to; another
+    /// one (a second revoke mid-way) starts the pass over.
+    target: String,
+    /// 0 the keyed digests, 1..=N the tables of [`SEALED_TABLES`], then the
+    /// blob files, then the outbox.
+    stage: usize,
+    /// The last rowid done in the current table.
+    after: i64,
+    /// The last blob file name done.
+    #[serde(default)]
+    blob_after: String,
+    /// Old blob files whose rows were pointed at their re-sealed copies in
+    /// the transaction that saved this marker: deleted right after it, and
+    /// again by the next step in case a crash came between.
+    #[serde(default)]
+    unlink: Vec<String>,
+}
+
+/// Rows read per re-key batch, and the sealed bytes after which a batch
+/// stops early: what bounds how long one batch holds the store's lock.
+const REKEY_ROWS: usize = 200;
+const REKEY_BYTES: usize = 4 * 1024 * 1024;
+
+/// What one [`MailStore::rekey_step`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RekeyStep {
+    /// More to do; `seen` rows or files were looked at, `moved` re-sealed.
+    More { seen: usize, moved: usize },
+    /// Every value opens under the current master: the previous ones may be
+    /// retired (`mail_crypt::retire_previous`).
+    Done,
+}
+
+/// Where a re-key step can stop when the process dies (the tests' crash
+/// points; blob files are the only work outside one transaction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RekeyCrash {
+    /// New blob files written, their references not yet committed.
+    BlobsWritten,
+    /// References committed, the old files not yet deleted.
+    BlobsCommitted,
+}
+
+/// What a simulated crash returns.
+pub const REKEY_CRASHED: &str = "crashed";
+
 /// How many of the user's own replies one message lists. A thread answered more
 /// often than this is read in the Sent folder, not in a strip above a body.
 const MAX_REPLIES: usize = 20;
@@ -128,7 +220,13 @@ pub struct MailStore {
     /// caller passed. Not a degraded mode: it is what an install that never
     /// turned encryption on looks like, and it is the path every test below
     /// exercises.
-    keys: Option<Arc<MailKeys>>,
+    ///
+    /// Behind a lock of its own because a server's rotation swaps them while
+    /// the store is open ([`MailStore::switch_keys`]). Held only for the
+    /// moment it takes to clone the `Arc` (never while taking another lock);
+    /// every write reads them **while holding `conn`**, and a switch takes
+    /// `conn` too, so nothing is sealed under keys a switch has replaced.
+    keys: Mutex<Option<Arc<MailKeys>>>,
     /// Set once a sealed store's migration is known complete. From then on a
     /// non-empty `TEXT` value in a sealed column is not "not migrated yet" but a
     /// value this store never wrote — plaintext planted by whoever could write
@@ -143,7 +241,7 @@ impl std::fmt::Debug for MailStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MailStore")
             .field("dir", &self.dir)
-            .field("encrypted", &self.keys.is_some())
+            .field("encrypted", &self.is_encrypted())
             .finish()
     }
 }
@@ -169,15 +267,16 @@ impl MailStore {
         let conn = Connection::open(&db).map_err(|e| e.to_string())?;
         harden(&db, 0o600);
         configure(&conn);
+        let encrypted = keys.is_some();
         let mut store = MailStore {
             dir: dir.to_path_buf(),
             conn: Mutex::new(conn),
-            keys,
+            keys: Mutex::new(keys),
             refuse_plaintext: false,
             _scratch: None,
         };
         store.migrate()?;
-        let was_marked = store.keys.is_some() && store.marked_encrypted()?;
+        let was_marked = encrypted && store.marked_encrypted()?;
         let sealed = store.seal_existing()?;
         // Between the sealing pass and the vacuum, deliberately. The pass is
         // what strands a digest — it seals a value and leaves the key column
@@ -193,13 +292,13 @@ impl MailStore {
         // A store that was never marked done also gets the vacuum when this
         // pass found nothing left to seal: that is the store whose previous
         // sealing pass completed and then died before its vacuum.
-        if sealed || rekeyed || (store.keys.is_some() && !was_marked) {
+        if sealed || rekeyed || (encrypted && !was_marked) {
             store.vacuum_into_place()?;
         }
-        if store.keys.is_some() && !was_marked {
+        if encrypted && !was_marked {
             store.mark_encrypted()?;
         }
-        if store.keys.is_some() {
+        if encrypted {
             store.seal_late_columns()?;
             store.refuse_plaintext = true;
         }
@@ -255,7 +354,7 @@ impl MailStore {
         let store = MailStore {
             dir: scratch.path().to_path_buf(),
             conn: Mutex::new(conn),
-            keys: Some(keys),
+            keys: Mutex::new(Some(keys)),
             refuse_plaintext: false,
             _scratch: Some(scratch),
         };
@@ -265,7 +364,33 @@ impl MailStore {
 
     /// Whether values in this store are sealed.
     pub fn is_encrypted(&self) -> bool {
-        self.keys.is_some()
+        self.keys().is_some()
+    }
+
+    /// The keys right now. A writer calls this while holding `conn`.
+    pub fn keys(&self) -> Option<Arc<MailKeys>> {
+        self.keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    /// Whether this is the memory-only stand-in ([`MailStore::open_ephemeral`]).
+    pub fn is_ephemeral(&self) -> bool {
+        self._scratch.is_some()
+    }
+
+    /// Swap in the keys a server's rotation or a finished re-key left in
+    /// `key.json` (hosted plan §6.8). Under `conn`: every write seals with
+    /// keys read while holding it, so nothing written after this returns is
+    /// sealed under the keys it replaced — which a re-key whose pass has
+    /// already gone by would never move. Refused for a plain or a
+    /// memory-only store: neither has a key file to follow.
+    pub fn switch_keys(&self, keys: Arc<MailKeys>) -> Result<(), String> {
+        let _conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        let mut slot = self.keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.is_none() || self.is_ephemeral() {
+            return Err("this mail store has no key file to follow".into());
+        }
+        *slot = Some(keys);
+        Ok(())
     }
 
     pub fn dir(&self) -> &Path {
@@ -288,7 +413,7 @@ impl MailStore {
         row: &str,
         value: &str,
     ) -> SqlValue {
-        match &self.keys {
+        match self.keys().as_deref() {
             Some(k) => SqlValue::Blob(mail_crypt::seal(
                 &k.field,
                 &mail_crypt::field_aad(account_id, table, column, row),
@@ -342,14 +467,17 @@ impl MailStore {
                 None
             }
             ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
-            ValueRef::Blob(b) => match &self.keys {
-                Some(k) => mail_crypt::open(
-                    &k.field,
-                    &mail_crypt::field_aad(account_id, table, column, row),
-                    b,
-                )
-                .ok()
-                .map(|p| String::from_utf8_lossy(&p).into_owned()),
+            // Every key a re-key still reads with (hosted plan §6.8): the
+            // current master first, then the previous ones.
+            ValueRef::Blob(b) => match self.keys().as_deref() {
+                Some(k) => k
+                    .open_any(
+                        |k| &k.field,
+                        &mail_crypt::field_aad(account_id, table, column, row),
+                        b,
+                    )
+                    .ok()
+                    .map(|(p, _)| String::from_utf8_lossy(&p).into_owned()),
                 // A blob in a store with no keys is a store that *was* encrypted
                 // and is now being opened without them. Nothing to do but say so.
                 None => None,
@@ -382,7 +510,7 @@ impl MailStore {
 
     /// The cleartext stand-in a sealed column's `UNIQUE` moves onto.
     fn digest_of(&self, namespace: &str, value: &str) -> String {
-        match &self.keys {
+        match self.keys().as_deref() {
             Some(k) => mail_crypt::name_digest(&k.name, namespace, value),
             // Unencrypted stores keep the readable value as its own key, so the
             // constraint means exactly what it always did and no migration is
@@ -720,22 +848,28 @@ impl MailStore {
     ///
     /// Both are 64 hex characters, so [`MailStore::get_blob`]'s validation is
     /// unchanged — it now means something different.
-    fn blob_name(&self, bytes: &[u8]) -> String {
-        match &self.keys {
+    fn blob_name(keys: Option<&MailKeys>, bytes: &[u8]) -> String {
+        match keys {
             Some(k) => mail_crypt::blob_id(&k.addr, bytes),
             None => hex_digest(bytes),
         }
     }
 
     /// Store `bytes` under their content address and return it.
+    ///
+    /// Under `conn`, like every other write: the name and the seal come from
+    /// the keys of the moment, and a re-key's blob pass ([`MailStore::rekey_step`])
+    /// cannot run between choosing them and the file landing.
     pub fn put_blob(&self, bytes: &[u8]) -> Result<String, String> {
-        let hex = self.blob_name(bytes);
+        let _conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        let keys = self.keys();
+        let hex = Self::blob_name(keys.as_deref(), bytes);
         let dir = self.blobs_dir();
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         harden(&dir, 0o700);
         let path = dir.join(&hex);
         if !path.exists() {
-            let payload = match &self.keys {
+            let payload = match keys.as_deref() {
                 Some(k) => mail_crypt::seal(&k.blob, &mail_crypt::blob_aad(&hex), bytes),
                 None => bytes.to_vec(),
             };
@@ -751,9 +885,10 @@ impl MailStore {
             return Err("not a blob id".into());
         }
         let raw = std::fs::read(self.blobs_dir().join(&digest)).map_err(|e| e.to_string())?;
-        match &self.keys {
-            Some(k) => mail_crypt::open(&k.blob, &mail_crypt::blob_aad(&digest), &raw)
-                .map(|p| p.to_vec())
+        match self.keys().as_deref() {
+            Some(k) => k
+                .open_any(|k| &k.blob, &mail_crypt::blob_aad(&digest), &raw)
+                .map(|(p, _)| p.to_vec())
                 .map_err(|e| e.to_string()),
             None => Ok(raw),
         }
@@ -1258,7 +1393,7 @@ impl MailStore {
         let needle = query.map(str::trim).filter(|q| !q.is_empty());
 
         // ── Encrypted + a query: decrypt-on-scan ────────────────────────────
-        if self.keys.is_some() {
+        if self.is_encrypted() {
             if let Some(needle) = needle {
                 let needle = needle.to_lowercase();
                 let mut stmt = conn
@@ -1446,12 +1581,12 @@ impl MailStore {
     /// field nothing displays. A no-op once the key is in place, which on a
     /// re-sync is every row.
     pub fn set_reply_key(&self, message_id: &str, in_reply_to: Option<&str>) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
         let key = in_reply_to
             .map(normalize_rfc_id)
             .filter(|id| !id.is_empty())
             .map(|id| self.digest_of("reply", id))
             .unwrap_or_default();
-        let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
         conn.execute(
             "UPDATE messages SET reply_key = ?1 WHERE id = ?2 AND reply_key != ?1",
             params![key, message_id],
@@ -1472,8 +1607,8 @@ impl MailStore {
         if rfc_id.is_empty() {
             return Ok(Vec::new());
         }
-        let key = self.digest_of("reply", rfc_id);
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        let key = self.digest_of("reply", rfc_id);
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {} FROM messages
@@ -1525,8 +1660,8 @@ impl MailStore {
         let mut changed = 0usize;
         for id in message_ids {
             let Some(header) = self.header(id)? else { continue };
-            let key = self.agent_mark_key(&header);
             let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+            let key = self.agent_mark_key(&header);
             if marked {
                 changed += conn
                     .execute(
@@ -2681,6 +2816,9 @@ impl MailStore {
         mime: &str,
         bytes: &[u8],
     ) -> Result<StagedAttachment, String> {
+        // Under `conn` from the file write on, so the payload and the row are
+        // sealed under the same keys of the moment (see `put_blob`).
+        let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
         let dir = self.outbox_dir(draft_id);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         harden(&dir, 0o700);
@@ -2702,7 +2840,6 @@ impl MailStore {
             origin: None,
             source: None,
         };
-        let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
         // The user's pick: `origin` stays `''`, which is what takes an agent
         // draft out of the agent's reach (`agent_draft_guard`).
         conn.execute(
@@ -2742,7 +2879,7 @@ impl MailStore {
     }
 
     fn seal_staged(&self, draft_id: &str, staged_id: &str, bytes: &[u8]) -> Vec<u8> {
-        match &self.keys {
+        match self.keys().as_deref() {
             Some(k) => mail_crypt::seal(&k.blob, &Self::staged_aad(draft_id, staged_id), bytes),
             None => bytes.to_vec(),
         }
@@ -2787,9 +2924,10 @@ impl MailStore {
     pub fn staged_bytes(&self, draft_id: &str, staged_id: &str) -> Result<Vec<u8>, String> {
         let path = self.outbox_dir(draft_id).join(sanitize_id(staged_id));
         let raw = std::fs::read(&path).map_err(|e| e.to_string())?;
-        match &self.keys {
-            Some(k) => mail_crypt::open(&k.blob, &Self::staged_aad(draft_id, staged_id), &raw)
-                .map(|p| p.to_vec())
+        match self.keys().as_deref() {
+            Some(k) => k
+                .open_any(|k| &k.blob, &Self::staged_aad(draft_id, staged_id), &raw)
+                .map(|(p, _)| p.to_vec())
                 .map_err(|e| e.to_string()),
             None => Ok(raw),
         }
@@ -2842,7 +2980,7 @@ impl MailStore {
     /// Anyone who actually cares should use "delete local mail and re-sync"
     /// instead, which never writes the plaintext in the first place.
     fn seal_existing(&self) -> Result<bool, String> {
-        if self.keys.is_none() {
+        if !self.is_encrypted() {
             return Ok(false);
         }
         {
@@ -2861,56 +2999,19 @@ impl MailStore {
         }
 
         let mut changed = 0usize;
-        changed += self.seal_table(
-            "messages",
-            &["id"],
-            Some("account_id"),
-            &[
-                "subject",
-                "from_json",
-                "to_json",
-                "cc_json",
-                "preview",
-                "malformed",
-                "rfc_message_id",
-                "authres_json",
-                // A model's reason quotes the message, so it is sealed on write;
-                // leaving it off this list left every reason written before
-                // encryption was turned on in the clear, permanently.
-                "priority_source",
-                "priority_reason",
-            ],
-        )?;
-        // `reply_key` is a digest of a `Message-ID`, and in a store that ran
-        // plain it *is* that id. There is no sealed copy to re-digest it from,
-        // so it is dropped; the next sync writes every row's keyed one back.
-        {
-            let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
-            changed += conn
-                .execute("UPDATE messages SET reply_key = '' WHERE reply_key != ''", [])
-                .map_err(|e| e.to_string())?;
+        for (table, pk, account_col, columns) in SEALED_TABLES {
+            changed += self.seal_table(table, pk, *account_col, columns)?;
+            if *table == "messages" {
+                // `reply_key` is a digest of a `Message-ID`, and in a store that
+                // ran plain it *is* that id. There is no sealed copy to
+                // re-digest it from, so it is dropped; the next sync writes
+                // every row's keyed one back.
+                let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+                changed += conn
+                    .execute("UPDATE messages SET reply_key = '' WHERE reply_key != ''", [])
+                    .map_err(|e| e.to_string())?;
+            }
         }
-        changed += self.seal_table(
-            "bodies_cache",
-            &["message_id"],
-            None,
-            &["html", "text", "links_json"],
-        )?;
-        changed += self.seal_table(
-            "attachments",
-            &["message_id", "part_id"],
-            None,
-            &["filename", "mime", "mismatch"],
-        )?;
-        changed += self.seal_table("drafts", &["id"], Some("account_id"), &["json"])?;
-        changed += self.seal_table(
-            "staged",
-            &["draft_id", "staged_id"],
-            None,
-            &["filename", "mime", "source"],
-        )?;
-        changed += self.seal_table("folders", &["id"], Some("account_id"), &["path", "name"])?;
-        changed += self.seal_table("mail_remote_allow", &["addr_key"], None, &["address"])?;
         changed += self.reseal_blobs()?;
         changed += self.reseal_outbox()?;
         // Not marked done here. The flag is what makes the next open skip this
@@ -2991,9 +3092,9 @@ impl MailStore {
         account_col: Option<&'static str>,
         columns: &'static [&'static str],
     ) -> Result<usize, String> {
-        let Some(_) = self.keys.as_ref() else {
+        if !self.is_encrypted() {
             return Ok(0);
-        };
+        }
         let mut conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
 
         // (row key, account id, [(column, plaintext)])
@@ -3086,7 +3187,7 @@ impl MailStore {
     /// would mean writing a digest of nothing over the only key that still
     /// finds it.
     fn rekey_digest_columns(&self) -> Result<usize, String> {
-        if self.keys.is_none() {
+        if !self.is_encrypted() {
             return Ok(0);
         }
         let mut conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
@@ -3231,7 +3332,7 @@ impl MailStore {
     /// Seal every blob payload and move it from its bare SHA-256 name onto its
     /// keyed one, rewriting the two cleartext columns that reference it.
     fn reseal_blobs(&self) -> Result<usize, String> {
-        let Some(keys) = self.keys.as_ref() else {
+        let Some(keys) = self.keys() else {
             return Ok(0);
         };
         let dir = self.blobs_dir();
@@ -3286,7 +3387,7 @@ impl MailStore {
     /// Seal every staged (outgoing) payload in place. Their names are already
     /// opaque ids, so unlike a blob nothing has to be renamed.
     fn reseal_outbox(&self) -> Result<usize, String> {
-        if self.keys.is_none() {
+        if !self.is_encrypted() {
             return Ok(0);
         }
         let root = self.dir.join("outbox");
@@ -3358,6 +3459,393 @@ impl MailStore {
         configure(&conn);
         *self.conn.get_mut().map_err(|_| "mail store is poisoned")? = conn;
         Ok(())
+    }
+
+    // ── Re-keying (hosted plan §6.8, user decision 2026-10-03) ─────────────
+    //
+    // Revoking a device on a server rotates the secrets key, and the rotation
+    // gives this store a fresh master key (`mail_crypt::rotate_device_key_file`):
+    // from the switch on every write is sealed under it, while the keys keep
+    // the old masters for reading. These steps move what is already here,
+    // batch by batch, each under `conn` and each its own transaction with its
+    // progress marker; between batches mail works as usual. Once a pass ends
+    // with nothing left under an old master the caller retires them.
+
+    /// One batch of the re-key. `Done` when the store holds no previous
+    /// master or nothing is left to move.
+    pub fn rekey_step(&self) -> Result<RekeyStep, String> {
+        self.rekey_step_inner(None)
+    }
+
+    /// [`MailStore::rekey_step`], stopping at `crash` (tests).
+    pub fn rekey_step_inner(&self, crash: Option<RekeyCrash>) -> Result<RekeyStep, String> {
+        // The digests, each table, the blob files, the outbox.
+        let stages = SEALED_TABLES.len() + 3;
+        let mut conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        // Read under `conn`: a switch cannot slip between this and the writes.
+        let Some(keys) = self.keys() else { return Ok(RekeyStep::Done) };
+        if !keys.rekeying() || self.is_ephemeral() {
+            return Ok(RekeyStep::Done);
+        }
+        // While re-keying, pages SQLite frees (a re-sealed value of another
+        // size, a row deleted since the revoke) are zeroed, not left holding
+        // the old master's ciphertext; `rekey_clear` turns it off again.
+        conn.pragma_update(None, "secure_delete", "ON").map_err(|e| e.to_string())?;
+        let target = keys.fingerprint();
+        let mut cursor = Self::rekey_cursor(&conn)?.filter(|c| c.target == target).unwrap_or(RekeyCursor { target, ..Default::default() });
+        // Old blob files a committed batch no longer names: gone at once
+        // normally, here when a crash came in between.
+        for name in std::mem::take(&mut cursor.unlink) {
+            if name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                let _ = std::fs::remove_file(self.blobs_dir().join(name));
+            }
+        }
+        if cursor.stage >= stages {
+            // Before the old master is retired: the WAL's frames from before
+            // the pass are the last copies of its ciphertext in the database
+            // files. A checkpoint that truncates the log drops them (this
+            // connection is the store's only one, so nothing holds it back).
+            Self::truncate_wal(&conn);
+            return Ok(RekeyStep::Done);
+        }
+
+        if cursor.stage == 0 {
+            // The keyed digests first (a few rows: folders, the remote-content
+            // list, agent marks): lookups by digest then find their rows under
+            // the new key for the rest of the pass.
+            drop(conn);
+            let changed = self.rekey_digest_columns()?;
+            let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+            cursor.stage = 1;
+            cursor.after = 0;
+            Self::save_rekey_cursor(&conn, &cursor)?;
+            return Ok(RekeyStep::More { seen: 0, moved: changed });
+        }
+
+        if cursor.stage <= SEALED_TABLES.len() {
+            let (table, pk, account_col, columns) = SEALED_TABLES[cursor.stage - 1];
+            // (rowid, row key, account, [(column, sealed)])
+            type Row = (i64, String, String, Vec<(&'static str, Vec<u8>)>);
+            let rows: Vec<Row> = {
+                let select: Vec<&str> = ["rowid"].iter().chain(pk.iter()).chain(account_col.iter()).chain(columns.iter()).copied().collect();
+                let mut stmt = conn
+                    .prepare(&format!("SELECT {} FROM {table} WHERE rowid > ?1 ORDER BY rowid LIMIT ?2", select.join(", ")))
+                    .map_err(|e| e.to_string())?;
+                let value_base = 1 + pk.len() + usize::from(account_col.is_some());
+                let rows = stmt
+                    .query_map(params![cursor.after, REKEY_ROWS as i64], |r| {
+                        use rusqlite::types::ValueRef;
+                        let rowid: i64 = r.get(0)?;
+                        let mut key = Vec::with_capacity(pk.len());
+                        for i in 0..pk.len() {
+                            key.push(r.get::<_, String>(1 + i)?);
+                        }
+                        let account = match account_col {
+                            Some(_) => r.get::<_, String>(1 + pk.len())?,
+                            None => String::new(),
+                        };
+                        let mut sealed = Vec::new();
+                        for (n, column) in columns.iter().enumerate() {
+                            // Only a `Blob` is an envelope; `Null` and the
+                            // `Text` column defaults hold nothing sealed.
+                            if let ValueRef::Blob(b) = r.get_ref(value_base + n)? {
+                                sealed.push((*column, b.to_vec()));
+                            }
+                        }
+                        Ok((rowid, key.join("\u{0}"), account, sealed))
+                    })
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+            };
+            let mut updates: Vec<(i64, &'static str, Vec<u8>)> = Vec::new();
+            // `Message-ID`s of the batch's messages: the replies naming one
+            // carry its digest under a previous key in `reply_key`.
+            let mut reply_ids: Vec<String> = Vec::new();
+            let (mut seen, mut bytes, mut last) = (0usize, 0usize, cursor.after);
+            for (rowid, row_key, account, sealed) in &rows {
+                for (column, value) in sealed {
+                    let aad = mail_crypt::field_aad(account, table, column, row_key);
+                    let opened = keys.open_any(|k| &k.field, &aad, value);
+                    if table == "messages" && *column == "rfc_message_id" {
+                        if let Ok((plain, _)) = &opened {
+                            let id = normalize_rfc_id(&String::from_utf8_lossy(plain)).to_string();
+                            if !id.is_empty() {
+                                reply_ids.push(id);
+                            }
+                        }
+                    }
+                    // Already under the current master: nothing to do. Under
+                    // none (damaged on disk): left alone, it reads as damaged
+                    // either way.
+                    if let Ok((plain, false)) = opened {
+                        bytes += plain.len();
+                        updates.push((*rowid, column, mail_crypt::seal(&keys.field, &aad, &plain)));
+                    }
+                }
+                seen += 1;
+                last = *rowid;
+                if bytes >= REKEY_BYTES {
+                    break;
+                }
+            }
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            for (rowid, column, value) in &updates {
+                tx.execute(&format!("UPDATE {table} SET {column} = ?1 WHERE rowid = ?2"), params![value, rowid])
+                    .map_err(|e| e.to_string())?;
+            }
+            // The replies to these messages: their `reply_key` is a digest
+            // under the key it was written with, so after the switch the
+            // replies strip found none of the earlier ones, and the old-key
+            // digests stayed for the old master to match. Moved to the
+            // current key through the `messages_by_reply_key` index.
+            for id in &reply_ids {
+                let new = mail_crypt::name_digest(&keys.name, "reply", id);
+                for old in keys.previous() {
+                    tx.execute(
+                        "UPDATE messages SET reply_key = ?1 WHERE reply_key = ?2",
+                        params![new, mail_crypt::name_digest(&old.name, "reply", id)],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+            if rows.len() < REKEY_ROWS && seen == rows.len() {
+                cursor.stage += 1;
+                cursor.after = 0;
+            } else {
+                cursor.after = last;
+            }
+            Self::save_rekey_cursor(&tx, &cursor)?;
+            tx.commit().map_err(|e| e.to_string())?;
+            return Ok(RekeyStep::More { seen, moved: updates.len() });
+        }
+
+        if cursor.stage == SEALED_TABLES.len() + 1 {
+            return self.rekey_blobs(conn, &keys, cursor, crash);
+        }
+
+        // The outbox: a draft's picked files, few and renamed by nobody.
+        let mut moved = 0usize;
+        let root = self.dir.join("outbox");
+        if let Ok(drafts) = std::fs::read_dir(&root) {
+            for draft in drafts.flatten() {
+                let Some(draft_id) = draft.file_name().to_str().map(str::to_owned) else { continue };
+                let Ok(files) = std::fs::read_dir(draft.path()) else { continue };
+                for file in files.flatten() {
+                    let path = file.path();
+                    let Some(staged_id) = path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else { continue };
+                    // A staged id is sanitized to `[A-Za-z0-9_-]`: a name with a
+                    // dot is a temp file of an interrupted write, not a payload.
+                    if staged_id.contains('.') {
+                        continue;
+                    }
+                    let Ok(raw) = std::fs::read(&path) else { continue };
+                    let aad = Self::staged_aad(&draft_id, &staged_id);
+                    if let Ok((plain, false)) = keys.open_any(|k| &k.blob, &aad, &raw) {
+                        mail_crypt::write_bytes_durable(&path, &mail_crypt::seal(&keys.blob, &aad, &plain))?;
+                        moved += 1;
+                    }
+                }
+            }
+        }
+        cursor.stage += 1;
+        Self::save_rekey_cursor(&conn, &cursor)?;
+        Ok(RekeyStep::More { seen: moved, moved })
+    }
+
+    /// One batch of blob files: each opened under a previous master is
+    /// re-sealed under the current one, under its new keyed name (the name
+    /// is a digest under the store's key too), then the rows naming it are
+    /// pointed at the new name, then the old file goes. A crash before the
+    /// commit leaves an unreferenced new file beside the still-named old one
+    /// (the resumed batch adopts it); one after it, an old file the marker
+    /// names for deletion — never a reference to nothing.
+    fn rekey_blobs(&self, mut conn: std::sync::MutexGuard<'_, Connection>, keys: &MailKeys, mut cursor: RekeyCursor, crash: Option<RekeyCrash>) -> Result<RekeyStep, String> {
+        let dir = self.blobs_dir();
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+                    .filter(|n| n.len() == 64 && n.bytes().all(|b| b.is_ascii_hexdigit()) && *n > cursor.blob_after)
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        let (mut seen, mut bytes) = (0usize, 0usize);
+        let mut moves: Vec<(String, String)> = Vec::new();
+        // Each moved file's bytes, for the one that turns out unreferenced.
+        let mut plains: Vec<zeroize::Zeroizing<Vec<u8>>> = Vec::new();
+        for name in &names {
+            seen += 1;
+            cursor.blob_after = name.clone();
+            let Ok(raw) = std::fs::read(dir.join(name)) else { continue };
+            bytes += raw.len();
+            if let Ok((plain, false)) = keys.open_any(|k| &k.blob, &mail_crypt::blob_aad(name), &raw) {
+                let new_id = mail_crypt::blob_id(&keys.addr, &plain);
+                let new_path = dir.join(&new_id);
+                let new_aad = mail_crypt::blob_aad(&new_id);
+                // The new name may exist already: the same bytes arrived again
+                // since the switch (`put_blob`, which writes without a sync), or
+                // a batch a crash cut short wrote it. Adopted only if it opens
+                // under the current key, and synced first — the old file goes
+                // once the rows point here, so this copy must be on disk.
+                let adoptable = std::fs::read(&new_path).is_ok_and(|b| mail_crypt::open(&keys.blob, &new_aad, &b).is_ok());
+                if adoptable {
+                    // Opened for writing: `FlushFileBuffers` on Windows needs it.
+                    std::fs::OpenOptions::new().read(true).write(true).open(&new_path).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
+                } else {
+                    mail_crypt::write_bytes_durable(&new_path, &mail_crypt::seal(&keys.blob, &new_aad, &plain))?;
+                }
+                moves.push((name.clone(), new_id));
+                plains.push(plain);
+            }
+            if seen >= REKEY_ROWS || bytes >= REKEY_BYTES {
+                break;
+            }
+        }
+        if crash == Some(RekeyCrash::BlobsWritten) {
+            return Err(REKEY_CRASHED.into());
+        }
+        if !moves.is_empty() {
+            // The adopted files' names, too (`write_bytes_durable` synced its own).
+            if let Ok(handle) = std::fs::File::open(&dir) {
+                let _ = handle.sync_all();
+            }
+        }
+        let finished = seen == names.len();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        if !moves.is_empty() {
+            // One pass over each table for the whole batch. Neither column is
+            // indexed, and `raw_blob` sits behind the bodies, so a statement
+            // per moved file was a full read of the body cache per file — up
+            // to 400 of them while holding the store's lock.
+            tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS rekey_moves (old TEXT PRIMARY KEY, new TEXT NOT NULL); DELETE FROM rekey_moves;")
+                .map_err(|e| e.to_string())?;
+            for (old, new) in &moves {
+                tx.execute("INSERT OR REPLACE INTO rekey_moves (old, new) VALUES (?1, ?2)", params![old, new]).map_err(|e| e.to_string())?;
+            }
+            // A file no row names yet may still be named under its old name:
+            // `put_blob` wrote it under the old keys just before the switch,
+            // and the row naming it lands after this batch. Re-sealed in place
+            // under the current key instead of moved, so that late row finds
+            // a file — one the old master no longer opens. (Its new-name copy
+            // stays for the prune; a `put_blob` of the same bytes may name it.)
+            let referenced: std::collections::HashSet<String> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT old FROM rekey_moves
+                         WHERE old IN (SELECT raw_blob FROM bodies_cache WHERE raw_blob IS NOT NULL)
+                            OR old IN (SELECT blob FROM attachments)",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+                rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+            };
+            for ((old, _), plain) in moves.iter().zip(&plains) {
+                if !referenced.contains(old) {
+                    mail_crypt::write_bytes_durable(&dir.join(old), &mail_crypt::seal(&keys.blob, &mail_crypt::blob_aad(old), plain))?;
+                }
+            }
+            moves.retain(|(old, _)| referenced.contains(old));
+            tx.execute(
+                "UPDATE bodies_cache SET raw_blob = (SELECT new FROM rekey_moves WHERE old = bodies_cache.raw_blob)
+                 WHERE raw_blob IN (SELECT old FROM rekey_moves)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE attachments SET blob = (SELECT new FROM rekey_moves WHERE old = attachments.blob)
+                 WHERE blob IN (SELECT old FROM rekey_moves)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM rekey_moves", []).map_err(|e| e.to_string())?;
+        }
+        if finished {
+            cursor.stage += 1;
+        }
+        cursor.unlink = moves.iter().filter(|(old, new)| old != new).map(|(old, _)| old.clone()).collect();
+        Self::save_rekey_cursor(&tx, &cursor)?;
+        // Durable before any old file goes (WAL, `synchronous` FULL).
+        tx.commit().map_err(|e| e.to_string())?;
+        if crash == Some(RekeyCrash::BlobsCommitted) {
+            return Err(REKEY_CRASHED.into());
+        }
+        for old in &cursor.unlink {
+            let _ = std::fs::remove_file(dir.join(old));
+        }
+        Ok(RekeyStep::More { seen, moved: moves.len() })
+    }
+
+    fn rekey_cursor(conn: &Connection) -> Result<Option<RekeyCursor>, String> {
+        let raw: Option<String> = conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![META_REKEY], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        // An unreadable marker is a pass from the start, not an error.
+        Ok(raw.and_then(|raw| serde_json::from_str(&raw).ok()))
+    }
+
+    fn save_rekey_cursor(conn: &Connection, cursor: &RekeyCursor) -> Result<(), String> {
+        let json = serde_json::to_string(cursor).map_err(|e| e.to_string())?;
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![META_REKEY, json])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Forget a finished re-key's marker (after the old masters are retired).
+    pub fn rekey_clear(&self) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        conn.execute("DELETE FROM meta WHERE key = ?1", params![META_REKEY]).map_err(|e| e.to_string())?;
+        let _ = conn.pragma_update(None, "secure_delete", "OFF");
+        Ok(())
+    }
+
+    /// `PRAGMA wal_checkpoint(TRUNCATE)`, best effort: a busy answer is
+    /// logged (the frames are then dropped by a later checkpoint).
+    fn truncate_wal(conn: &Connection) {
+        match conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get::<_, i64>(0)) {
+            Ok(0) => {}
+            Ok(_) => eprintln!("mail: the re-key's WAL checkpoint was busy; old frames go at a later checkpoint"),
+            Err(e) => eprintln!("mail: the re-key's WAL checkpoint failed: {e}"),
+        }
+    }
+
+    /// How far the re-key towards the current master is: `(done, total)`,
+    /// in rows and blob files, from the marker. For the progress line only.
+    pub fn rekey_progress(&self) -> Result<(u64, u64), String> {
+        let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        let target = self.keys().map(|k| k.fingerprint()).unwrap_or_default();
+        let cursor = Self::rekey_cursor(&conn)?.filter(|c| c.target == target).unwrap_or_default();
+        let count = |sql: &str, after: Option<i64>| -> Result<u64, String> {
+            match after {
+                Some(after) => conn.query_row(sql, params![after], |r| r.get::<_, i64>(0)),
+                None => conn.query_row(sql, [], |r| r.get::<_, i64>(0)),
+            }
+            .map(|n| n.max(0) as u64)
+            .map_err(|e| e.to_string())
+        };
+        let (mut done, mut total) = (0u64, 0u64);
+        for (i, (table, ..)) in SEALED_TABLES.iter().enumerate() {
+            let rows = count(&format!("SELECT COUNT(*) FROM {table}"), None)?;
+            total += rows;
+            let stage = i + 1;
+            if cursor.stage > stage {
+                done += rows;
+            } else if cursor.stage == stage {
+                done += count(&format!("SELECT COUNT(*) FROM {table} WHERE rowid <= ?1"), Some(cursor.after))?;
+            }
+        }
+        let blobs: Vec<String> = std::fs::read_dir(self.blobs_dir())
+            .map(|entries| entries.flatten().filter_map(|e| e.file_name().to_str().map(str::to_owned)).filter(|n| n.len() == 64).collect())
+            .unwrap_or_default();
+        total += blobs.len() as u64;
+        if cursor.stage > SEALED_TABLES.len() + 1 {
+            done += blobs.len() as u64;
+        } else if cursor.stage == SEALED_TABLES.len() + 1 {
+            done += blobs.iter().filter(|n| **n <= cursor.blob_after).count() as u64;
+        }
+        Ok((done.min(total), total))
     }
 
     /// Remove everything belonging to one account, blobs included.

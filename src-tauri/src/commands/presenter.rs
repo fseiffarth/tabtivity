@@ -100,7 +100,7 @@ pub fn choose_audience_monitor_index(
 /// Windows blocks on the main-thread event loop pumping WebView2's controller
 /// callback — which the in-flight sync command is itself blocking (wry#583 /
 /// tauri#4121), surfacing as a blank window that never renders.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_presenter_window(
     app: AppHandle,
     label: String,
@@ -222,7 +222,7 @@ pub async fn open_presenter_window(
 /// Close the audience window. Idempotent — a window already gone is the state the
 /// caller wanted, so it is not an error (the presenter closes on unmount too,
 /// which races the user closing it from the WM).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn close_presenter_window(app: AppHandle, label: String) -> Result<(), String> {
     if !valid_presenter_label(&label) {
         return Err("invalid presenter window label".into());
@@ -420,7 +420,7 @@ fn acquire_inhibitor(reason: &str) -> Option<Inhibitor> {
 /// Falls back to reporting `false` rather than erroring — a talk must not fail to
 /// start because a desktop has no inhibit mechanism, and a modal about it
 /// mid-presentation would be worse than the thing it warns about.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn presenter_inhibit_sleep(reason: String) -> Result<bool, String> {
     let mut held = INHIBIT
         .lock()
@@ -440,7 +440,7 @@ pub fn presenter_inhibit_sleep(reason: String) -> Result<bool, String> {
 
 /// Release the inhibitor. Idempotent — nothing held is the state the caller
 /// wanted, and the presenter's unmount races app exit's own release.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn presenter_release_sleep() -> Result<(), String> {
     let mut held = INHIBIT
         .lock()

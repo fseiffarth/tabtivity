@@ -482,12 +482,18 @@ pub struct Settings {
     /// Opt-in: unset or empty hands no key to any CLI. Never a key itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_api_key_clis: Option<Vec<String>>,
-    /// Monthly spending limit in US dollars per provider id (`anthropic`,
-    /// `gemini`) for the stored API keys (`services::api_usage`), enforced by
-    /// the API proxy. Saving a key requires one; a provider with a key and no
-    /// limit is refused until one is set.
+    /// The monthly limit in US dollars per provider id that builds before
+    /// the token limit (#2389) wrote. Kept as written and shown as a hint
+    /// only; nothing enforces it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_api_limits: Option<std::collections::BTreeMap<String, f64>>,
+    /// Monthly limit in billed tokens (`keys_wire::billed_tokens`) per
+    /// provider id (`anthropic`, `gemini`) for the stored API keys
+    /// (`services::api_usage`), enforced by the API proxy. Saving a key
+    /// requires one; a provider with a key and no limit is refused until one
+    /// is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_api_token_limits: Option<std::collections::BTreeMap<String, u64>>,
     /// Local model names switched off for the root console by the 🧠 menu's
     /// "Root" chips. Opt-out: unset means every local model is offered there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -498,6 +504,17 @@ pub struct Settings {
     /// completion-only model working. Read at spawn by `services::root_mcp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_mcp_models: Option<Vec<String>>,
+    /// Kept so older files round-trip; read by nothing. A server's model
+    /// allowlist is the admin's policy (`policy.json`, hosted plan §3.3,
+    /// `services::model_allowlist`), never a user's own settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_allowed_models: Option<Vec<String>>,
+    /// Server mode only (hosted plan §6.7): the features this user switched
+    /// off for themselves — `"mail"`, `"calendar"`, `"todo"` — within what
+    /// the admin's policy allows. Off refuses the feature's commands and stops
+    /// its daemon timers; nothing is deleted. Ignored on the desktop.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_features: Vec<String>,
     /// When true (the default), running a `.sh` from the side panel spawns it
     /// as a detached background process instead of opening a terminal tab.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1731,6 +1748,24 @@ mod default_rule_tests {
         let limits = back.agent_api_limits.unwrap();
         assert_eq!(limits["anthropic"], 20.0);
         assert_eq!(limits["gemini"], 7.5);
+    }
+
+    /// The token limits (#2389) beside a USD map from an older build: both
+    /// round-trip, and neither appears while unset.
+    #[test]
+    fn agent_api_token_limits_round_trip_beside_the_old_usd_ones() {
+        let s: Settings = serde_json::from_str(r#"{"agent_api_key_clis":["claude"]}"#).unwrap();
+        assert!(s.agent_api_token_limits.is_none());
+        assert!(!serde_json::to_string(&s).unwrap().contains("agent_api_token_limits"));
+        let s: Settings = serde_json::from_str(
+            r#"{"agent_api_limits":{"anthropic":20},"agent_api_token_limits":{"anthropic":5000000,"gemini":250000}}"#,
+        )
+        .unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.agent_api_limits.unwrap()["anthropic"], 20.0);
+        let tokens = back.agent_api_token_limits.unwrap();
+        assert_eq!(tokens["anthropic"], 5_000_000);
+        assert_eq!(tokens["gemini"], 250_000);
     }
 
     /// `ide_launchers` is optional on the way in and absent on the way out

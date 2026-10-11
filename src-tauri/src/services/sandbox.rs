@@ -156,6 +156,79 @@ fn sanitize_key(id: &str) -> String {
     crate::storage::project_key(id)
 }
 
+// ── The engine ────────────────────────────────────────────────────────────
+
+/// The container engine. Docker on a desktop (the user's own machine, the
+/// user's own daemon). On a hosted server **rootless Podman, as the user**
+/// (plan §9, P5): the Docker socket is root on the host, so no server user
+/// may have it, whereas a rootless Podman container runs in the user's own
+/// user namespace with the user's own uid on the host — "Alice's container
+/// touched Bob's file" stays a kernel refusal, as for every other process of
+/// hers. Its CLI is Docker's for everything this module runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Engine {
+    Docker,
+    Podman,
+}
+
+impl Engine {
+    pub fn current() -> Engine {
+        if crate::services::server::is_server() {
+            Engine::Podman
+        } else {
+            Engine::Docker
+        }
+    }
+
+    pub fn program(self) -> &'static str {
+        match self {
+            Engine::Docker => "docker",
+            Engine::Podman => "podman",
+        }
+    }
+
+    /// Flags before the subcommand. A server's daemon is a system service with
+    /// no systemd user session (no user bus), so Podman's cgroups are managed
+    /// as plain files — its containers stay inside the daemon's own cgroup,
+    /// under the user's slice and its limits — and its events go to a file.
+    pub fn global_args(self) -> &'static [&'static str] {
+        match self {
+            Engine::Docker => &[],
+            Engine::Podman => &["--cgroup-manager=cgroupfs", "--events-backend=file"],
+        }
+    }
+
+    /// `run …` for this engine: Podman also maps the user's own uid into the
+    /// container (`--userns=keep-id`), so the `--user uid:gid` the argv
+    /// carries is the user on the host too and project files stay theirs.
+    pub fn create_args(self, docker_args: Vec<String>) -> Vec<String> {
+        let mut out: Vec<String> = self.global_args().iter().map(|s| s.to_string()).collect();
+        let mut args = docker_args.into_iter();
+        if let Some(first) = args.next() {
+            out.push(first);
+            if self == Engine::Podman {
+                out.push("--userns=keep-id".into());
+            }
+        }
+        out.extend(args);
+        out
+    }
+}
+
+/// May a container start here? Always on a desktop; on a hosted server only
+/// while the administrator's `containers` switch (and the user's own) is on
+/// (P5) — checked by every path that creates one, the activation warm-up
+/// as much as a tab's spawn.
+pub fn containers_allowed() -> bool {
+    !crate::services::server::is_server() || crate::services::server::feature_on(crate::services::server::Feature::Containers)
+}
+
+/// Is `cmd` a tab already wrapped into the project container (an engine
+/// client), which no tmux or fence wrap may wrap again?
+pub fn is_engine_cmd(cmd: &str) -> bool {
+    cmd == Engine::Docker.program() || cmd == Engine::Podman.program()
+}
+
 /// Name of the session container for a project: `tabtivity-<sanitized-id>`.
 pub fn container_name_for(project_id: &str) -> String {
     format!("{}{}", crate::brand::CONTAINER_PREFIX, sanitize_key(project_id))
@@ -328,11 +401,13 @@ pub fn docker_create_args(
 }
 
 /// Whether a tab variable's VALUE must stay off the `docker exec` argv (#864):
-/// the forwarded agent credentials and Tabtivity's MCP bearer tokens. The docker
+/// the forwarded agent credentials, a hosted server's administrator's keys
+/// (`agent_keys::key_envs`) and Tabtivity's MCP bearer tokens. The docker
 /// client stays alive for the tab's whole life, and `/proc/<pid>/cmdline` is
 /// readable by every local user — not only this uid.
 fn is_secret_exec_env(key: &str) -> bool {
     crate::services::ssh_exec::AGENT_AUTH_ENV.contains(&key)
+        || crate::services::agent_api_keys::credential_names().any(|name| name == key)
         || [
             crate::services::root_mcp::TOKEN_ENV,
             crate::services::root_mcp::SCHEDULE_TOKEN_ENV,
@@ -687,6 +762,17 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     if !opts.sandbox {
         return Ok(());
     }
+    // A hosted server runs containers only while the administrator allows
+    // them (P5); a project switched on before keeps its spec, but no tab
+    // starts in it — never silently on the host instead.
+    if !containers_allowed() {
+        return Err("Project container: containers are switched off on this server (the administrator's Server settings), or by you. Turn the container toggle off to run this project's tabs without one.".into());
+    }
+    // A shared project's unreviewed agent instructions stop a container agent
+    // too (hosted plan §6.5 gate 2), not only a fenced one.
+    if let Some(dir) = opts.project_id.as_deref().and_then(project_dir_for) {
+        crate::services::server::share::spawn_gate(&[std::path::PathBuf::from(dir)])?;
+    }
     // Defence-in-depth: containers are local-only. Never docker-wrap a remote
     // project (resolved explicitly from the tab's owning project id).
     //
@@ -714,6 +800,14 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
         .clone()
         .ok_or_else(|| "Project container: this tab has no owning project.".to_string())?;
 
+    // A CLI on an API key (the user's own, or a server administrator's)
+    // cannot reach the API proxy from the container's network, and no key
+    // ever goes into one (#2389): refused before the container comes up.
+    crate::services::agent_api_keys::refuse_in_container(
+        &opts.cmd,
+        crate::services::agent_api_keys::is_local_model(opts)
+            || crate::services::agent_fence::runs_subcommand(&opts.args),
+    )?;
     let spec = sandbox_spec_for(&project_id);
     // The container mounts the project ROOT; a subdir tab keeps its cwd via -w.
     let project_dir = project_dir_for(&project_id).unwrap_or_else(|| opts.cwd.clone());
@@ -740,8 +834,11 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     let auth_env = host_auth_env();
     let pidfile = register_exec_tab(&opts.id, &name);
 
-    opts.args = docker_exec_args(&name, &opts.cwd, &env, &auth_env, &pidfile, &cmd, &cmd_args);
-    opts.cmd = "docker".to_string();
+    let engine = Engine::current();
+    let mut args: Vec<String> = engine.global_args().iter().map(|s| s.to_string()).collect();
+    args.extend(docker_exec_args(&name, &opts.cwd, &env, &auth_env, &pidfile, &cmd, &cmd_args));
+    opts.args = args;
+    opts.cmd = engine.program().to_string();
     // Env now rides inside the docker argv as `-e` flags; the docker client
     // itself needs nothing from opts.env — except the secrets, which the argv
     // only names (`-e NAME`) and docker reads from the client's own env (#864).
@@ -930,10 +1027,15 @@ pub fn up(
 
     match up_decision(&probe_container(&name), &fingerprint) {
         UpAction::UseExisting => {
-            created_set().lock().unwrap().insert(name.clone());
+            mark_created(&name);
             return Ok(name);
         }
         UpAction::Recreate => {
+            // Never under the other process's live tabs (the window and the
+            // desktop sidecar share one state dir, final review B4).
+            let Some(_free) = crate::services::process_lease::free_to_tear_down(&crate::services::process_lease::container_key(&name)) else {
+                return Err(IN_USE_ELSEWHERE.to_string());
+            };
             let _ = docker(&["rm", "-f", &name]);
         }
         UpAction::Create => {}
@@ -954,23 +1056,39 @@ pub fn up(
         &harden,
         Some(&fingerprint),
     );
+    let engine = Engine::current();
+    let args = engine.create_args(args);
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = docker(&argv)?;
+    let out = engine_output(engine, &argv, false)?;
     if !out.status.success() {
         return Err(format!(
-            "Project container: docker run failed: {}",
+            "Project container: {} run failed: {}",
+            engine.program(),
             stderr_tail(&out)
         ));
     }
-    created_set().lock().unwrap().insert(name.clone());
+    mark_created(&name);
     Ok(name)
 }
 
+/// This process now uses container `name`: remembered for its own teardown,
+/// and leased so the other process sharing the state dir (window or desktop
+/// sidecar) never removes it under this one's tabs (`process_lease`).
+fn mark_created(name: &str) {
+    created_set().lock().unwrap().insert(name.to_string());
+    crate::services::process_lease::hold(&crate::services::process_lease::container_key(name));
+}
+
+/// `up` refused to recreate a container the other process still runs tabs in.
+const IN_USE_ELSEWHERE: &str = "Project container: its configuration changed, but another window of this app (or its browser access) still runs tabs in it — close those tabs, then open this one again.";
+
 /// Activation warm-up: `up()` for a project *iff* it is a container-toggled,
-/// local project. `Ok(None)` when the toggle is off / the project is remote —
-/// callers treat that as "nothing to do".
+/// local project. `Ok(None)` when the toggle is off / the project is remote /
+/// a server's containers switch is off — callers treat that as "nothing to
+/// do".
 pub fn up_for_project(project_id: &str) -> Result<Option<String>, String> {
-    if crate::services::remote::remote_target_for(project_id).is_some() {
+    // Switched off on a server: no warm-up either (a tab's spawn says why).
+    if !containers_allowed() || crate::services::remote::remote_target_for(project_id).is_some() {
         return Ok(None);
     }
     let Some(spec) = sandbox_spec_for(project_id) else {
@@ -994,12 +1112,16 @@ pub fn down_for_project(project_id: &str) {
         return;
     }
     let _guard = lifecycle_lock().lock().unwrap();
-    let _ = docker(&["rm", "-f", &name]);
     created_set().lock().unwrap().remove(&name);
     exec_tabs()
         .lock()
         .unwrap()
         .retain(|_, t| t.container != name);
+    // The other process sharing the state dir may still run tabs in it: then
+    // it stays, and goes with that process's own teardown.
+    if let Some(_free) = crate::services::process_lease::free_to_tear_down(&crate::services::process_lease::container_key(&name)) {
+        let _ = docker(&["rm", "-f", &name]);
+    }
 }
 
 /// App-exit teardown: remove every tabtivity-owned container. Skipped entirely
@@ -1030,7 +1152,7 @@ pub fn sweep_orphans() {
     // What must not happen is a `docker --version`/`docker ps` spawn at every
     // startup on a machine with no Docker at all — hence the PATH walk first,
     // which spawns nothing.
-    if !sweep_should_probe(crate::paths::binary_on_path("docker")) || preflight_docker().is_err() {
+    if !sweep_should_probe(crate::paths::binary_on_path(Engine::current().program())) || preflight_docker().is_err() {
         return;
     }
     remove_all_owned();
@@ -1046,24 +1168,35 @@ fn sweep_should_probe(docker_on_path: bool) -> bool {
 fn remove_all_owned() {
     let _guard = lifecycle_lock().lock().unwrap();
     // The owner label, and — after a rename — the one an older build put on
-    // its containers: both are this app's, and both are stale.
+    // its containers: both are this app's, and both are stale — unless the
+    // other process sharing the state dir (window or desktop sidecar) still
+    // runs tabs in one (`process_lease`, final review B4).
     let pair = crate::brand::PAIR;
     for label in crate::services::brand_migration::docker::owner_labels(&pair) {
-        let Ok(out) = docker(&["ps", "-aq", "--filter", &format!("label={label}")]) else {
+        let Ok(out) = docker(&["ps", "-a", "--filter", &format!("label={label}"), "--format", "{{.Names}}"]) else {
             return;
         };
-        let ids: Vec<&str> = std::str::from_utf8(&out.stdout)
-            .unwrap_or("")
-            .split_whitespace()
-            .collect();
-        if ids.is_empty() {
+        let names = container_names(&String::from_utf8_lossy(&out.stdout));
+        if names.is_empty() {
             continue;
         }
         crate::services::brand_migration::docker::swept_legacy(&pair, &label);
+        let free: Vec<_> = names
+            .iter()
+            .filter_map(|name| crate::services::process_lease::free_to_tear_down(&crate::services::process_lease::container_key(name)).map(|lease| (name.as_str(), lease)))
+            .collect();
+        if free.is_empty() {
+            continue;
+        }
         let mut args = vec!["rm", "-f"];
-        args.extend(ids);
+        args.extend(free.iter().map(|(name, _)| *name));
         let _ = docker(&args);
     }
+}
+
+/// The container names `docker ps --format {{.Names}}` printed, one a line.
+fn container_names(stdout: &str) -> Vec<String> {
+    stdout.lines().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).collect()
 }
 
 /// Inspect the named container: does it exist, is it running, and which spec
@@ -1195,13 +1328,19 @@ fn ensure_image(spec: Option<&SandboxSpec>, project_dir: &str, image: &str) -> R
 
 // ── Preflight ─────────────────────────────────────────────────────────────
 
-/// `docker` binary present and runnable?
+/// The engine's binary present and runnable?
 fn preflight_docker() -> Result<(), String> {
-    match crate::paths::command_no_window("docker")
+    let engine = Engine::current();
+    match crate::paths::command_no_window(engine.program())
         .arg("--version")
         .output()
     {
         Ok(o) if o.status.success() => Ok(()),
+        _ if engine == Engine::Podman => Err(
+            "Project container: 'podman' is not installed on this server. Ask the administrator \
+             (rootless Podman, the uidmap package), or turn the container toggle off for this project."
+                .to_string(),
+        ),
         _ => Err(
             "Project container: 'docker' not found. Install Docker, or turn the container \
              toggle off for this project."
@@ -1214,8 +1353,17 @@ fn preflight_docker() -> Result<(), String> {
 /// daemon must be diagnosed separately — "image missing" and "Docker isn't
 /// running" are different user actions.
 fn preflight_daemon() -> Result<(), String> {
-    match docker(&["info", "--format", "{{.ServerVersion}}"]) {
+    let engine = Engine::current();
+    // Rootless Podman has no daemon; `info` checks its user namespace and
+    // storage (a missing subordinate uid range fails here).
+    let format = if engine == Engine::Podman { "{{.Host.Security.Rootless}}" } else { "{{.ServerVersion}}" };
+    match docker(&["info", "--format", format]) {
         Ok(o) if o.status.success() => Ok(()),
+        Ok(o) if engine == Engine::Podman => Err(format!(
+            "Project container: rootless Podman cannot run for this account ({}). The administrator \
+             gives each server user a subordinate uid/gid range (/etc/subuid, /etc/subgid).",
+            stderr_tail(&o)
+        )),
         _ => Err(if cfg!(target_os = "linux") {
             "Project container: Docker isn't running. Start the Docker service (e.g. \
              `systemctl start docker`), or turn the container toggle off for this project."
@@ -1288,15 +1436,17 @@ pub fn preflight_report(project_id: &str) -> PreflightReport {
 /// embedded copy of the reference Dockerfile materialized under the state dir
 /// (an installed app has no repo checkout). Anything else is a registry pull.
 fn build_command(project_id: &str, image: &str) -> Option<String> {
+    // On a server the image goes into the user's own rootless store.
+    let engine = Engine::current().program();
     if image != DEFAULT_IMAGE && !image.starts_with(crate::brand::CONTAINER_PREFIX) {
-        return Some(format!("docker pull {image}"));
+        return Some(format!("{engine} pull {image}"));
     }
     let windows = cfg!(target_os = "windows");
     if let Some(dir) = project_dir_for(project_id) {
         let in_repo = Path::new(&dir).join("docker").join("agent-sandbox");
         if in_repo.join("Dockerfile").is_file() {
             return Some(format!(
-                "docker build -t {image} {}",
+                "{engine} build -t {image} {}",
                 install_shell_quote(&in_repo.to_string_lossy(), windows)
             ));
         }
@@ -1305,7 +1455,7 @@ fn build_command(project_id: &str, image: &str) -> Option<String> {
     std::fs::create_dir_all(&stage).ok()?;
     std::fs::write(stage.join("Dockerfile"), REFERENCE_DOCKERFILE).ok()?;
     Some(format!(
-        "docker build -t {image} {}",
+        "{engine} build -t {image} {}",
         install_shell_quote(&stage.to_string_lossy(), windows)
     ))
 }
@@ -1725,10 +1875,17 @@ fn host_auth_env() -> BTreeMap<String, String> {
 }
 
 fn docker(args: &[&str]) -> Result<std::process::Output, String> {
-    crate::paths::command_no_window("docker")
-        .args(args)
-        .output()
-        .map_err(|e| format!("run docker: {e}"))
+    engine_output(Engine::current(), args, true)
+}
+
+/// Run the engine; `global` puts its global flags first (a create argv from
+/// [`Engine::create_args`] carries them already).
+fn engine_output(engine: Engine, args: &[&str], global: bool) -> Result<std::process::Output, String> {
+    let mut command = crate::paths::command_no_window(engine.program());
+    if global {
+        command.args(engine.global_args());
+    }
+    command.args(args).output().map_err(|e| format!("run {}: {e}", engine.program()))
 }
 
 /// Last non-empty stderr line — docker's errors are one-liners at the tail.
@@ -1755,6 +1912,22 @@ fn host_uid_gid() -> (u32, u32) {
 #[cfg(test)]
 mod tests {
 
+    /// P5: on a server the engine is rootless Podman — its global flags come
+    /// first, the user's own uid is kept inside (`--userns=keep-id`), and a
+    /// tab running either engine's client is never wrapped again.
+    #[test]
+    fn rootless_podman_keeps_the_users_uid_and_its_flags_come_first() {
+        let docker = vec!["run".to_string(), "-d".into(), "--user".into(), "1000:1000".into(), "img".into()];
+        assert_eq!(Engine::Docker.create_args(docker.clone()), docker, "Docker's argv is unchanged");
+        let podman = Engine::Podman.create_args(docker);
+        assert_eq!(podman[..4], ["--cgroup-manager=cgroupfs", "--events-backend=file", "run", "--userns=keep-id"]);
+        assert_eq!(podman[4..], ["-d", "--user", "1000:1000", "img"]);
+        assert_eq!((Engine::Docker.program(), Engine::Podman.program()), ("docker", "podman"));
+        assert!(is_engine_cmd("docker") && is_engine_cmd("podman") && !is_engine_cmd("ssh") && !is_engine_cmd(""));
+        assert_eq!(Engine::current(), Engine::Docker, "a desktop (this test process) keeps Docker");
+        assert!(containers_allowed(), "a desktop has no containers switch");
+    }
+
     #[test]
     fn host_trust_is_read_per_exact_folder() {
         let value = serde_json::json!({"projects": {
@@ -1769,6 +1942,12 @@ mod tests {
         assert!(!trust_accepted_for(&serde_json::json!({}), "/p/a"));
     }
     use super::*;
+
+    #[test]
+    fn the_sweep_reads_one_container_name_a_line() {
+        assert_eq!(container_names("a-p1\n\n  b-p2 \n"), vec!["a-p1".to_string(), "b-p2".to_string()]);
+        assert!(container_names("").is_empty());
+    }
 
     #[test]
     fn orphan_sweep_probes_only_when_docker_is_on_path() {
@@ -2157,6 +2336,19 @@ mod tests {
         assert_eq!(client.get("ANTHROPIC_API_KEY").map(String::as_str), Some("auth-s3cret"));
         assert_eq!(client.get("OPENAI_API_KEY").map(String::as_str), Some("auth-wins-s3cret"));
         assert!(!client.contains_key(crate::app_env!("TAB_UID")));
+    }
+
+    /// A provider credential the tab's environment carries (a user's own
+    /// `GEMINI_API_KEY`): named on the exec argv, its value only in the
+    /// client's environment. No Tabtivity key is ever put there (#2389).
+    #[test]
+    fn exec_argv_carries_no_provider_credential_value() {
+        let envs = env(&[("GEMINI_API_KEY", "gemini-s3cret"), ("ANTHROPIC_AUTH_TOKEN", "token-s3cret")]);
+        let out = docker_exec_args(concat!(crate::app_slug!(), "-p1"), "/p", &envs, &BTreeMap::new(), "/tmp/x.pid", "claude", &[]);
+        assert!(!out.iter().any(|a| a.contains("s3cret")), "{out:?}");
+        assert!(has_flag_value(&out, "-e", "GEMINI_API_KEY") && has_flag_value(&out, "-e", "ANTHROPIC_AUTH_TOKEN"), "{out:?}");
+        let client = docker_exec_client_env(&envs, &BTreeMap::new());
+        assert_eq!(client.get("GEMINI_API_KEY").map(String::as_str), Some("gemini-s3cret"));
     }
 
     #[test]

@@ -865,18 +865,30 @@ impl Meter {
         self.estimate(month, end, false)
     }
 
-    /// The most the request can cost by the estimate in the module docs, in
-    /// USD, priced in UTC month `month` — for before it is sent (after
+    /// The most the request can cost by the estimate in the module docs,
+    /// priced in UTC month `month` — for before it is sent (after
     /// [`Meter::request`]): the whole output cap (Anthropic's `max_tokens`,
     /// else the provider's cap), input from the body's size as 1-hour cache
     /// writes (Anthropic) — the model's whole context window when the body
     /// names input by reference ([`names_input_by_reference`], #2343) —
     /// [`GROUNDING_QUERIES_ESTIMATE`] queries for a
-    /// Gemini request that may ground. Held against the monthly limit while
-    /// the request is in flight; the answer is then charged what it cost.
-    pub fn worst_case(&self, month: &str) -> f64 {
+    /// Gemini request that may ground.
+    fn worst_charge(&self, month: &str) -> Option<Charge> {
         self.estimate(month, End { complete: false, elapsed: std::time::Duration::MAX }, true)
-            .map_or(0.0, |c| c.usd)
+    }
+
+    /// [`Self::worst_charge`] in billed tokens (`Charge::billed`, the monthly
+    /// limit's unit, #2389): held against the limit while the request is in
+    /// flight; the answer is then charged what it billed.
+    pub fn worst_case_billed(&self, month: &str) -> u64 {
+        self.worst_charge(month).map_or(0, |c| c.billed())
+    }
+
+    /// [`Self::worst_charge`] in USD, the estimate the tests pin the
+    /// worst-case rules with.
+    #[cfg(test)]
+    pub fn worst_case(&self, month: &str) -> f64 {
+        self.worst_charge(month).map_or(0.0, |c| c.usd)
     }
 
     fn estimate(&self, month: &str, end: End, worst: bool) -> Option<Charge> {

@@ -40,6 +40,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "desktop")]
 use tauri::{Emitter, State};
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -400,7 +401,8 @@ pub(crate) async fn run_off_thread<T: Send + 'static>(
         .map_err(|e| format!("app task failed: {e}"))?
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn launch_app(
     registry: State<'_, WindowRegistryState>,
     exec: String,
@@ -436,7 +438,7 @@ pub async fn launch_app(
 /// results (including misses) are cached per exec for the app's lifetime.
 static ICON_CACHE: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn resolve_app_icon(exec: String) -> Option<String> {
     if let Some(cached) = ICON_CACHE
         .lock()
@@ -522,7 +524,8 @@ pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     String::from_utf8(out).unwrap_or_default()
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_file(
     registry: State<'_, WindowRegistryState>,
     workspace: State<'_, crate::commands::workspace::WorkspaceStateArc>,
@@ -656,7 +659,8 @@ fn open_file_blocking(
 /// <any path>` — so without confinement one `invoke` runs any script on the host;
 /// the only legitimate caller is the file tree's "run in background" on a file it
 /// is displaying, which is by construction inside the project.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn run_script_detached(
     app: tauri::AppHandle,
     script_path: String,
@@ -999,7 +1003,7 @@ fn desktop_app_dirs() -> Vec<PathBuf> {
 /// (`data:image/png;base64,…`) — a bare file path fails to deserialize and the
 /// whole drag command rejects before it starts. So embed the app icon at compile
 /// time and hand back a data URL the frontend can pass straight to `startDrag`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn drag_preview_icon() -> String {
     use base64::Engine;
     const ICON_PNG: &[u8] = include_bytes!("../../icons/128x128.png");
@@ -1007,7 +1011,7 @@ pub fn drag_preview_icon() -> String {
     format!("data:image/png;base64,{b64}")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
 thread_local! {
     /// The in-flight GTK drag, so `cancel_file_drag` can abort it when the
     /// cursor comes back into the window. GTK/GDK objects are not `Send`, and
@@ -1047,8 +1051,9 @@ pub const FILE_DRAG_ENDED: &str = crate::brand::FILE_DRAG_ENDED_EVENT;
 ///
 /// Deliberately a SYNC command: Tauri dispatches those on the main (GTK)
 /// thread, which is exactly where every call below must run.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn start_file_drag(window: tauri::Window, paths: Vec<String>) -> Result<(), String> {
     use gtk::{gdk, glib, prelude::*};
     use std::cell::RefCell;
@@ -1145,8 +1150,8 @@ pub fn start_file_drag(window: tauri::Window, paths: Vec<String>) -> Result<(), 
 /// in-app pointer drag (the cursor re-entered the Tabtivity window, so the ghost
 /// and hover take over again from the OS drag icon). A no-op when no native
 /// drag is running, so the frontend can call it unconditionally.
-#[cfg(target_os = "linux")]
-#[tauri::command]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn cancel_file_drag() {
     use gtk::prelude::DragContextExtManual;
     let Some(context) = ACTIVE_DRAG.with(|c| c.borrow().clone()) else {
@@ -1158,14 +1163,14 @@ pub fn cancel_file_drag() {
     context.drag_cancel();
 }
 
-#[cfg(not(target_os = "linux"))]
-#[tauri::command]
+#[cfg(any(not(target_os = "linux"), not(feature = "desktop")))]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn cancel_file_drag() {}
 
 /// Non-Linux stub so the command registers everywhere; the frontend only
 /// routes to it on Linux (Windows/macOS stay on `tauri-plugin-drag`).
-#[cfg(not(target_os = "linux"))]
-#[tauri::command]
+#[cfg(any(not(target_os = "linux"), not(feature = "desktop")))]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn start_file_drag(paths: Vec<String>) -> Result<(), String> {
     let _ = paths;
     Err("start_file_drag is Linux-only; use tauri-plugin-drag".into())
@@ -1190,7 +1195,8 @@ pub struct EmbedCapability {
 /// `os_embeddable && app_embeddable`; otherwise the file opens externally.
 ///
 /// Phase 1: this reports capability only — no reparenting happens yet.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn embed_capability(
     workspace: State<'_, crate::commands::workspace::WorkspaceStateArc>,
     path: String,
@@ -1248,7 +1254,7 @@ fn project_apps_from_entry(entry: &crate::schema::ProjectEntry) -> HashMap<Strin
 }
 
 /// The project-level default-app map, from the trusted registry only.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_project_default_apps(project_id: String) -> HashMap<String, String> {
     project_apps_for_id(Some(&project_id))
 }
@@ -1256,7 +1262,7 @@ pub fn get_project_default_apps(project_id: String) -> HashMap<String, String> {
 /// Replace the project-level default-app map. Written to both stores like
 /// `set_project_python`: the `projects.json` mirror is what the open path reads,
 /// `project.json` keeps it with the project for display/export.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_default_apps(
     project_id: String,
     default_apps: HashMap<String, String>,
@@ -1302,7 +1308,7 @@ pub struct InstalledApp {
 /// directories (skipping hidden entries and non-`Application` types, deduped by
 /// executable basename with user dirs taking precedence); on Windows it
 /// enumerates Start-Menu shortcuts. Sorted by name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_installed_apps() -> Vec<InstalledApp> {
     #[cfg(target_os = "windows")]
     {
@@ -2066,7 +2072,8 @@ fn find_icon_file(dir: &Path, names: &[String], depth: usize) -> Option<PathBuf>
     None
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_tracked_windows(
     registry: State<'_, WindowRegistryState>,
     project_id: Option<String>,
@@ -2083,7 +2090,8 @@ pub fn list_tracked_windows(
         .collect()
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn untrack_window(registry: State<'_, WindowRegistryState>, id: String) -> bool {
     registry.lock().unwrap().windows.remove(&id).is_some()
 }
@@ -2099,7 +2107,8 @@ pub fn untrack_window(registry: State<'_, WindowRegistryState>, id: String) -> b
 /// The row is removed HERE rather than by the exit watcher: the watcher's
 /// hand-off guard can still see the dying window on screen and would demote
 /// the row to a pid-0 ghost instead of dropping it.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn close_tracked_window(
     registry: State<'_, WindowRegistryState>,
     id: String,
@@ -2161,7 +2170,7 @@ fn prune_dead_windows_with(
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn check_pid_alive(pid: u32) -> bool {
     pid_alive(pid)
 }
@@ -2223,7 +2232,8 @@ pub fn pid_alive(pid: u32) -> bool {
 ///
 /// Async + `spawn_blocking`: each launch pays `do_launch`'s window-resolution
 /// poll (up to ~2 s), and this runs N of them during project activation.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn restore_open_apps(
     registry: State<'_, WindowRegistryState>,
     open_apps: Vec<crate::schema::project::OpenApp>,
@@ -2294,7 +2304,7 @@ fn track_opened_file(
     Ok(win)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
 fn list_window_ids() -> Vec<u64> {
     // Under Wayland the X client list holds nothing a launch could add to it
     // (see `platform::x11::session_is_wayland`), so `find_new_window` has no
@@ -2317,12 +2327,12 @@ fn list_window_ids() -> Vec<u64> {
     crate::platform::macos::list_window_ids()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+#[cfg(any(not(any(target_os = "linux", target_os = "windows", target_os = "macos")), all(target_os = "linux", not(feature = "desktop"))))]
 fn list_window_ids() -> Vec<u64> {
     Vec::new()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
 fn find_window_for_pid(pid: u32, attempts: usize) -> Option<u64> {
     // Wayland: the scan cannot see a native window and nothing consumes the id
     // (`platform::x11::session_is_wayland`) — don't spend `attempts` × 100 ms
@@ -2373,12 +2383,12 @@ pub fn resolve_window_id_for_pid(pid: u32) -> Option<u64> {
     crate::platform::macos::find_window_for_pid(pid, 1)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+#[cfg(any(not(any(target_os = "linux", target_os = "windows", target_os = "macos")), all(target_os = "linux", not(feature = "desktop"))))]
 fn find_window_for_pid(_pid: u32, _attempts: usize) -> Option<u64> {
     None
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
 fn find_new_window(before: &[u64], attempts: usize) -> Option<u64> {
     // Same Wayland short-circuit as `find_window_for_pid`, and for the same
     // reason: `open_file` chains the two, so this is the second half of the
@@ -2410,7 +2420,7 @@ fn find_new_window(before: &[u64], attempts: usize) -> Option<u64> {
     crate::platform::macos::find_new_window(before, attempts)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+#[cfg(any(not(any(target_os = "linux", target_os = "windows", target_os = "macos")), all(target_os = "linux", not(feature = "desktop"))))]
 fn find_new_window(_before: &[u64], _attempts: usize) -> Option<u64> {
     None
 }
@@ -2423,7 +2433,7 @@ struct X11ClientWindow {
     protected: bool,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
 fn x11_client_windows() -> Result<Vec<X11ClientWindow>, String> {
     use xcb::x::{self, Window};
     use xcb::{Connection, Xid};
@@ -2459,7 +2469,7 @@ fn x11_client_windows() -> Result<Vec<X11ClientWindow>, String> {
         .collect())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
 fn window_pid(conn: &xcb::Connection, window: xcb::x::Window, atom: xcb::x::Atom) -> Option<u32> {
     conn.wait_for_reply(conn.send_request(&xcb::x::GetProperty {
         delete: false,
@@ -2473,7 +2483,7 @@ fn window_pid(conn: &xcb::Connection, window: xcb::x::Window, atom: xcb::x::Atom
     .and_then(|r| r.value::<u32>().first().copied())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
 fn is_protected_window(conn: &xcb::Connection, window: xcb::x::Window) -> bool {
     let class = conn
         .wait_for_reply(conn.send_request(&xcb::x::GetProperty {

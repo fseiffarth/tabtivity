@@ -28,11 +28,14 @@ Run before calling work done; all are CI gates and all sit at zero warnings
 except `npm run lint` (see below):
 
 ```
-npm run build        # the ONLY type-check (tsc + both bundles); vitest/eslint don't type-check
+npm run build        # the ONLY type-check (tsc + desktop, mobile, web bundles)
 npm test
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --workspace
+cargo test -p tabtivity --no-default-features --lib --test server_secrets   # the daemon's build
 npm run lint
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p tabtivity --no-default-features --lib -- -D warnings
+cargo clippy -p app-serverd --all-targets -- -D warnings
 scripts/brand-check.sh   # the app's name is spelled only in the brand modules
 ```
 
@@ -51,7 +54,11 @@ Backend tests must be cross-OS: paths built per component with `Path::join`
 spawned programs compared by file stem. Before pushing backend changes to
 paths, process spawning or `cfg(...)` code, run the Windows cross-check where
 the msvc shims are installed:
-`RC=$HOME/.local/bin/eldrun-msvc-rc-shim AR_x86_64_pc_windows_msvc=$HOME/.local/bin/eldrun-msvc-lib-shim cargo clippy --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings`
+`RC=$HOME/.local/bin/eldrun-msvc-rc-shim AR_x86_64_pc_windows_msvc=$HOME/.local/bin/eldrun-msvc-lib-shim cargo clippy --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings`,
+and `cargo check --workspace --all-targets` for that target (the same shims)
+and for `aarch64-apple-darwin` (check-only CC/AR shims): the workspace's
+server crates build there too. Touched the daemon? `cargo build -p
+app-serverd` and `ldd` it: no GTK/WebKit/X11/dbus.
 Don't push new work while the branch's last ci-cd run is red; the next push is its fix.
 
 ## Git & privacy (public repo)
@@ -81,7 +88,9 @@ Don't push new work while the branch's last ci-cd run is red; the next push is i
   brand_migration, caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
   markup_mcp, mobile_access, multi_host_remote, openvpn, project_boxes, project_transfer,
   release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console,
-  tmux_sessions, usage_stats, vm_projects.
+  server_gateway, sharing, tmux_sessions, usage_stats, vm_projects, web_client.
+- Server version (hosted plan, gateway, daemon, sharing): start at
+  `docs/server.md` — status, the user's decisions, open problems, doc map.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.
 - Updating a wrapped third-party tool: `docs/third_party_update_checklist.md`.
 - New TODOs go in the matching `todo/<group>.md`. A 🖐️ manual box gets a
@@ -91,6 +100,18 @@ Don't push new work while the branch's last ci-cd run is red; the next push is i
   spot with `rg -n`, then read or edit only that range. Never read one whole.
 
 ## Conventions
+
+- New Tauri commands (the server daemon builds the library without Tauri):
+  `#[cfg_attr(feature = "desktop", tauri::command)]`, never a bare
+  `#[tauri::command]`; take `tauri_host::Ctx` (or nothing), never
+  `AppHandle`/`State`/`Window`, and no `use tauri::…` outside
+  `#[cfg(feature = "desktop")]` code. Give every new command a row in
+  `services::command_class` (`core`/`client`/`admin`/`off`) and regenerate
+  `src/lib/transport/commandClasses.ts` (`UPDATE_COMMAND_CLASSES=1 cargo
+  test -p tabtivity --lib -- the_generated_command_classes_ts_is_current`).
+  A command that names an Ollama model gets a `model_allowlist::MODEL_ARG`
+  row. A browser client cannot run a whole-document save: give a new store a
+  patch or compare-and-swap command.
 
 - Match surrounding style; small focused changes; `rg` for search.
 - Never spell the app's name in code. Rust: `crate::brand` constants and

@@ -393,7 +393,7 @@ pub fn watch_project(state: &UsageWatchState, project_id: &str) -> Result<(), St
 /// Start the periodic flush of watched churn into `usage_stats.json`. One
 /// detached task for the life of the process.
 pub fn start(state: UsageWatchState) {
-    tauri::async_runtime::spawn(async move {
+    app_core::rt::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(FLUSH_INTERVAL_SECS)).await;
             let batch = state.drain();

@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use notify::event::{AccessKind, AccessMode};
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
-use tauri::{AppHandle, Emitter, State};
+use crate::tauri_host::Ctx;
 
 /// How long to coalesce a burst of raw `notify` events into a single
 /// `fs-change` emit. A single write (or a `git status` touching `.git/*` while
@@ -133,13 +133,13 @@ fn is_git_state_event(path: &Path, git_roots: &[PathBuf]) -> bool {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn watch_dir(
-    app: AppHandle,
-    state: State<'_, FsWatchState>,
+    ctx: Ctx,
     path: String,
     repo_dir: Option<String>,
 ) -> Result<(), String> {
+    let state = ctx.get::<FsWatchState>();
     // Mount-free remote (Phase 2): inotify cannot see a remote (SFTP) tree, and a
     // remote project's watched dir is its non-fs mountpoint root. No-op so the
     // remote file tree just relies on manual refresh; the frontend already skips
@@ -175,6 +175,8 @@ pub fn watch_dir(
     let (tx, rx) = std::sync::mpsc::channel::<u64>();
     {
         let generation = Arc::clone(&generation);
+        // The debounce thread outlives this call: it keeps its own context.
+        let ctx = ctx.0.clone();
         std::thread::spawn(move || {
             // Ends when the watcher (and with it the sender) is dropped.
             while let Ok(mut seen) = rx.recv() {
@@ -193,7 +195,7 @@ pub fn watch_dir(
                     // Only the last event of a burst still matches; anything newer
                     // means the burst is still going — drain and wait again.
                     if generation.load(Ordering::SeqCst) == seen {
-                        let _ = app.emit("fs-change", &emit_path);
+                        ctx.emit("fs-change", &emit_path);
                         break;
                     }
                 }
@@ -247,8 +249,9 @@ pub fn watch_dir(
     Ok(())
 }
 
-#[tauri::command]
-pub fn unwatch_dir(state: State<'_, FsWatchState>) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn unwatch_dir(ctx: Ctx) -> Result<(), String> {
+    let state = ctx.get::<FsWatchState>();
     *state.lock().unwrap() = None;
     Ok(())
 }
