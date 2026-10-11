@@ -168,7 +168,8 @@ describe(`${BRAND.display} Mobile terminal pipeline`, () => {
   it("keeps the model and mode facts current while the Terminal view is up", async () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});
-    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Terminal" }));
     expect(screen.queryByLabelText("Session output")).toBeNull();
 
     // The session switches to plan mode with the reading view unmounted. The

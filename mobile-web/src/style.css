@@ -62,8 +62,8 @@ nav button,.keys button { flex:1; }
 .project-title > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .project-title > .view-caret { flex:0 0 auto; }
 .project-menu { right:auto; left:44px; }
-.project-header-tools .drawer-open { display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border:1px solid #34384a; border-radius:10px; background:#151822; color:#e7e9f2; }
-.project-header-tools .drawer-open svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; }
+.drawer-open { flex:0 0 auto; display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border:1px solid #34384a; border-radius:10px; background:#151822; color:#e7e9f2; }
+.drawer-open svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; }
 /* The drawer's own rows (the agent's files, Git), above the file
    browser and set off from it by the head's rule. */
 .drawer-menu { padding:4px 0 10px; border-bottom:1px solid #2b3040; }
@@ -734,6 +734,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .focus-menu button { display:flex; align-items:center; gap:12px; width:100%; padding:11px 12px; border:0; border-radius:10px; background:#1e2230; text-align:left; }
 .focus-menu button[aria-checked="true"] { color:#8fb6ff; background:#1c2336; }
 .focus-menu button.unavailable { opacity:.6; }
+.focus-menu-rule { margin:3px 4px; border:0; border-top:1px solid #2c3040; }
 .focus-menu button > span { display:grid; flex:1; gap:3px; min-width:0; }
 .focus-menu strong { font-weight:600; }
 .focus-menu em { margin-left:6px; color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
@@ -937,7 +938,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* The strip over the chat: the subagent index and the sent-files index side by
    side, one list open at a time. */
 .chat-index { position:sticky; top:-12px; z-index:2; display:flex; align-items:flex-start; gap:6px; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid #262a3a; background:#10131b; }
-.chat-index > nav { flex:1 1 0; min-width:0; }
+/* Not the global `nav` row: the chip stacks over its list at full width. */
+.chat-index > nav { display:block; flex:1 1 0; min-width:0; margin:0; }
 /* An open list takes the strip's full width; the shut chip moves to a line of
    its own above it. */
 .chat-index:has(> nav.open) { flex-wrap:wrap; }

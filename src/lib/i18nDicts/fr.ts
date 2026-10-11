@@ -814,7 +814,6 @@ export const dict: Dict = {
   "mobile.focus.screen": "Écran",
   "mobile.focus.sessionHint": "Lire la conversation enregistrée de l'agent",
   "mobile.focus.screenHint": "Lire l'écran du terminal",
-  "mobile.focus.source": "Source de la lecture",
   "mobile.focus.copyMessage": "Copier le message",
   "mobile.focus.selectText": "Sélectionner le texte",
   "mobile.focus.editPrompt": "Modifier",

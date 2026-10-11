@@ -885,7 +885,6 @@ export const enSource = {
   "mobile.focus.screen": "Screen",
   "mobile.focus.sessionHint": "Read the agent's stored conversation",
   "mobile.focus.screenHint": "Read the terminal screen",
-  "mobile.focus.source": "Reader source",
   "mobile.focus.copyMessage": "Copy message",
   "mobile.focus.selectText": "Select text",
   "mobile.focus.editPrompt": "Edit",

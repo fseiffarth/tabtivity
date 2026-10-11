@@ -183,7 +183,8 @@ describe(`${BRAND.display} Mobile Focus status line`, () => {
     drag(output(), [100, 300], [220, 300]);
     expect(strip()).not.toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Terminal" }));
     expect(screen.queryByRole("region", { name: "Session output" })).toBeNull();
     expect(strip()).toBeNull();
 
@@ -274,5 +275,22 @@ describe(`${BRAND.display} Mobile Focus — the project's files drawer`, () => {
     drag(output(), [600, 300], [760, 300]);
     expect(drawer()).not.toBeNull();
     expect(strip()).toBeNull();
+  });
+
+  it("opens from the header's ☰ in either view, which is there only while the switch is on", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    await openAgent(CLAUDE_SCREEN, { project: "p1" });
+
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Project menu" }));
+    expect(drawer()).not.toBeNull();
+  });
+
+  it("has no ☰ while the switch is off", async () => {
+    vi.stubGlobal("fetch", hostWith(false));
+    await openAgent(CLAUDE_SCREEN, { project: "p1" });
+
+    expect(screen.queryByRole("button", { name: "Project menu" })).toBeNull();
   });
 });

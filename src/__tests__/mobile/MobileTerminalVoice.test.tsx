@@ -380,12 +380,12 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     render(<Terminal tab={{ id: "opaque-shell", label: "Shell", kind: "shell", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
 
-    const focus = screen.getByRole("button", { name: "Reader" });
-    const terminal = screen.getByRole("button", { name: "Terminal" });
-    expect(terminal.getAttribute("aria-pressed")).toBe("true");
+    const pill = screen.getByTitle("Output view");
+    expect(pill.textContent).toBe("Terminal");
     expect(screen.getByRole("textbox", { name: "Shell command" })).toBeTruthy();
-    fireEvent.click(focus);
-    expect(focus.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(pill);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Reader" }));
+    expect(pill.textContent).toBe("Reader");
     expect(localStorage.getItem(storageKey("mobile.view.shell"))).toBe("focus");
     expect(screen.getByRole("textbox", { name: "Shell command" })).toBeTruthy();
   });
@@ -394,7 +394,8 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     render(<Terminal tab={{ id: "opaque-agent", label: "Codex", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
 
-    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Terminal" }));
     const send = screen.getByRole("button", { name: "Send" });
     const dictate = screen.getByRole("button", { name: "Dictate" });
     expect(dictate.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -469,6 +470,6 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
 
     expect(screen.queryByText("secret for tab a")).toBeNull();
     expect((screen.getByRole("textbox", { name: "Shell command" }) as HTMLTextAreaElement).value).toBe("");
-    expect(screen.getByRole("button", { name: "Reader" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Output view").textContent).toBe("Reader");
   });
 });

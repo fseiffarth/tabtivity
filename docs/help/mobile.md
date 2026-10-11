@@ -92,10 +92,11 @@ off.
 - A paired phone types into a terminal exactly like your keyboard: keep agent
   approval modes conservative while Mobile is on.
 - An agent tab opens as a **Chat**: the conversation as messages, a text box
-  to write the next one, and the agent's questions as buttons to tap. Tap
-  **Chat** again to choose whether it shows the stored conversation
-  (**Session**) or the screen as text (**Screen**); **Terminal** shows the
-  real terminal. A shell tab has no conversation, so its switch reads
+  to write the next one, and the agent's questions as buttons to tap. The
+  pill at the top right names the view on screen; tap it to switch to
+  **Terminal** (the real terminal) and back, and, in Chat, to choose whether
+  it shows the stored conversation (**Session**) or the screen as text
+  (**Screen**). A shell tab has no conversation, so its pill offers
   **Reader** (the screen as text) and **Terminal**. The desktop offers the
   same chat on its agent tabs (help topic `agent-clis`).
 - Over the chat, **Files (n)** lists every file the conversation carried —
@@ -217,7 +218,8 @@ from left to right across it, the screen's left edge included — a drawer
 slides in from the left (swipe back, or tap beside it, to close it). Inside a
 tab's Chat (or a shell tab's Reader) the same swipe opens them when it starts in the left third of
 the screen; further right it shows the agent's status line (a shell tab has
-none, so there any left→right swipe opens the files). Walk the folders and
+none, so there any left→right swipe opens the files); the ☰ in the header
+opens them too, in either view. Walk the folders and
 open a file —
 pictures and text full screen, PDFs in the browser, with Save and Share. It is
 read-only: nothing can be changed, moved or deleted from there.

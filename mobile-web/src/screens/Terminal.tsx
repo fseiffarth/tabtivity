@@ -3601,6 +3601,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** Agent tabs read as a chat (`ReadableTurns`); a shell's output has no
    * turns to lay out. */
   const chat = tab.kind === "agent";
+  /** What the non-terminal view is called: a chat on an agent tab. */
+  const focusLabel = chat ? "mobile.focus.chat" : "mobile.focus.reader";
   /** The live screen after the last prompt echo — what the session is
    * drawing right now. Shown under the stored session while it holds a
    * choice the session is waiting on, which the transcript cannot carry. */
@@ -4035,13 +4037,39 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           </div>}
         </div>}
   </>;
-  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>{outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{outbox.length}</small></button>}<div className="terminal-view-switch" aria-label={t("mobile.focus.outputView")}><button className={view === "focus" ? "selected" : ""} aria-pressed={view === "focus"} aria-haspopup={chat ? "menu" : undefined} aria-expanded={chat ? focusMenu : undefined} onClick={() => {
-      // An agent tab's Reader is a list once it is up: where it reads from.
-      if (chat && view === "focus") setFocusMenu((open) => !open);
-      else chooseView("focus");
-    }}>{t(chat ? "mobile.focus.chat" : "mobile.focus.reader")}{chat && <span className="view-caret" aria-hidden="true" />}</button><button className={view === "terminal" ? "selected" : ""} aria-pressed={view === "terminal"} onClick={() => { setFocusMenu(false); chooseView("terminal"); }}>{t("mobile.focus.terminal")}</button></div><span className={connected ? "lamp" : "lamp off"} /></header>
-    {focusMenu && chat && view === "focus" && <div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
-      <div className="focus-menu" role="menu" aria-label={t("mobile.focus.source")} onClick={(event) => event.stopPropagation()}>
+  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>
+      {/* The project's drawer, the ☰ the project screen carries too: what a
+          left→right swipe over the output pulls in, offered while the
+          desktop's "Project files on the phone" switch is on. */}
+      {project && filesLabel !== null && <button
+        className="drawer-open"
+        onClick={() => setFilesOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={filesOpen}
+        aria-label={t("mobile.project.menu")}
+        title={t("mobile.project.menu")}
+      ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg></button>}
+      {outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{outbox.length}</small></button>}
+      {/* One pill named after the view on screen; its list switches views and,
+          on an agent tab's Chat, says where the chat reads from. */}
+      <div className="terminal-view-switch"><button
+        className="selected"
+        aria-haspopup="menu"
+        aria-expanded={focusMenu}
+        title={t("mobile.focus.outputView")}
+        onClick={() => setFocusMenu((open) => !open)}
+      >{t(view === "terminal" ? "mobile.focus.terminal" : focusLabel)}<span className="view-caret" aria-hidden="true" /></button></div><span className={connected ? "lamp" : "lamp off"} /></header>
+    {focusMenu && <div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
+      <div className="focus-menu" role="menu" aria-label={t("mobile.focus.outputView")} onClick={(event) => event.stopPropagation()}>
+        {([["focus", focusLabel], ["terminal", "mobile.focus.terminal"]] as const).map(([choice, label]) => <button key={choice} role="menuitemradio" aria-checked={view === choice} onClick={() => {
+          setFocusMenu(false);
+          if (view !== choice) chooseView(choice);
+        }}>
+          <span><strong>{t(label)}</strong></span>
+          {view === choice && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
+        </button>)}
+        {chat && view === "focus" && <>
+        <hr className="focus-menu-rule" />
         {/* Dimmed when the stored session cannot be read (an agent whose
             transcript Tabtivity does not read, no session id yet); the row then
             says which, rather than doing nothing. */}
@@ -4092,6 +4120,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           <span><strong>{t("mobile.speech.language")} {isUntested("mobile.speech.language") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{speechLangSummary(speechLang, t)}</small></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
         </button>
+        </>}
       </div>
     </div>}
     <div className="terminal-body">
