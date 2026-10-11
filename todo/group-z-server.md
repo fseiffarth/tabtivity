@@ -1024,3 +1024,94 @@ the desktop groundwork the hosted plan's P1 builds on.*
       with the shared Ollama's installed models; Load one → it shows
       loading, then loaded, also in the admin's browser client; Unload
       → idle. The user's phone shows no Local models section.
+
+2418. **Desktop smoke test after `hosted` landed on `develop`.** `develop`
+    `4ed492a5` (2026-10-11) carries the server version and, before it, the
+    performance work (sleeping panes, batched activity, ordered saves); both
+    reshaped the desktop's terminal path, and none of it has run live. On the
+    first dev build from `4ed492a5` or later (check it re-embedded the phone
+    bundle: `package-dev-auto.sh` warned "mobile bundle is stale"):
+    - [ ] 🖐️ Manual test — terminal and agent tabs: open several, switch,
+      close; output streams, typing feels as before.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — hidden tabs: a busy background tab shows its
+      activity dot; an agent waiting for an answer glows (the batched
+      `terminal-activity-batch`).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — sleeping panes: leave a busy terminal hidden a
+      while, come back; its output is all there and it kept running. A
+      program that ended while asleep says so on return.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — restart: quit and relaunch; tabs come back,
+      agent sessions resume.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — settings: change two settings quickly one after
+      the other, reopen Settings; both kept (the ordered persist lane).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — Agent Reader: updates live while an agent works
+      (`transcript-changed`, no 2 s poll lag).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — phone: the terminal view streams; markup
+      questions and ticks work, the ✓ badge sits beside the marked words
+      (`5fc28cb8`), not on them; Local models works.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — links in an agent tab and in mail still open in
+      the system browser (only the Connect window lost its link opener,
+      #2387).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
