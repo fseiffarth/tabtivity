@@ -254,7 +254,14 @@ impl TranscriptWatch {
     /// the caller then keeps reading on its own clock.
     pub fn arm(&self, id: &str, targets: Vec<Target>) -> bool {
         let mut seen = std::collections::HashSet::new();
-        let mut targets = targets;
+        // Folders by their real path: macOS's FSEvents reports events under
+        // it (`/private/var/…` for a `/var/…` folder), so a folder reached
+        // through a symlink never matched its own events (ci-cd #382). One
+        // that cannot be resolved keeps its path and fails to watch below.
+        let mut targets: Vec<Target> = targets
+            .into_iter()
+            .map(|t| Target { dir: std::fs::canonicalize(&t.dir).unwrap_or(t.dir), rule: t.rule })
+            .collect();
         targets.retain(|t| seen.insert(t.clone()));
         let mut state = self.lock();
         if state.registry.targets(id) == Some(&targets) {
