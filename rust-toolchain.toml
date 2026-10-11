@@ -1,0 +1,10 @@
+# The Rust every build uses, locally and in CI (ci-cd.yml's RUST_TOOLCHAIN
+# must name the same version; its lint job checks). Pinned so a new stable's
+# clippy lints reach developers and CI together: bump both here and there,
+# then `rustup toolchain install <version> --profile minimal -c clippy
+# -t x86_64-pc-windows-msvc,aarch64-apple-darwin` on each machine, outside any
+# agent fence (~/.rustup is read-only inside one).
+[toolchain]
+channel = "1.99.0"
+components = ["clippy"]
+profile = "minimal"

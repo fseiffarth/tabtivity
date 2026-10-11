@@ -39,7 +39,9 @@ cargo clippy -p app-serverd --all-targets -- -D warnings
 scripts/brand-check.sh   # the app's name is spelled only in the brand modules
 ```
 
-CI clippy is latest stable; a stale local toolchain can pass what CI fails.
+Rust is pinned in `rust-toolchain.toml`, and CI installs the same version
+(`RUST_TOOLCHAIN` in `ci-cd.yml`); bump both together, then install it on the
+host outside the fence (`~/.rustup` is read-only inside one).
 `npm run lint` fails only on errors. Its `react-hooks/exhaustive-deps`
 warnings are advisory and mostly deliberate omissions (mount-only effects,
 timer `tick`s): don't add a dependency just to silence one, since that can

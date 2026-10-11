@@ -21,6 +21,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The Rust every job installs: the version rust-toolchain.toml pins, so CI
+  # lints and tests with exactly the compiler and clippy developers run (the
+  # lint job checks the two agree). Bump both together.
+  RUST_TOOLCHAIN: "1.99.0"
 
 jobs:
   # The pre-push hook runs this same scan, but the hook needs
@@ -165,6 +169,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
 
       - name: Rust cache
@@ -174,6 +179,15 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: CI's Rust is the pinned one
+        shell: bash
+        run: |
+          pinned="$(sed -nE 's/^channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml)"
+          if [ "$pinned" != "$RUST_TOOLCHAIN" ]; then
+            echo "::error::rust-toolchain.toml pins $pinned but ci-cd.yml installs $RUST_TOOLCHAIN; bump both together."
+            exit 1
+          fi
 
       - name: Lint frontend
         run: npm run lint
@@ -224,6 +238,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -309,6 +325,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
 
       - name: Rust cache
@@ -385,6 +402,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
 
       - name: Rust cache
@@ -464,6 +482,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -526,6 +546,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -582,6 +604,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Rust cache
