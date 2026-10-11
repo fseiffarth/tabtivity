@@ -26,6 +26,24 @@ cores (agents running in tabs: opencode, claude).
 | App RSS | 434 MB |
 | Stopwatch: agent tab / 100-page PDF | not yet recorded |
 
+After the run (2026-10-11, `before-merge` = dev build of develop ac24ce9e
+without this work, `after-merge` = fc5b7567 ~10 min after a restart; same tab
+set, idle, load < 9; full log in `docs/performance_numbers.md`). The 10-06
+baseline ran under load 72, so compare these two columns with each other:
+
+| Number | before-merge | after-merge |
+|---|---|---|
+| Renderer whole process / main thread | 7.5 % / 6.0 % | 3.6 % / 3.0 % |
+| Renderer runqueue wait per 30 s | 4 ms | 0 ms |
+| App process / main thread | 1.9 % / 0.9 % | 0.8 % / 0.2 % |
+| App voluntary ctxt switches | 21 /s | 3 /s |
+| Renderer RSS (PDFs open → closed) | 927–942 MB (closed snapshot taken earlier, not comparable) | 490–539 MB → 477 MB |
+| App RSS | 692 MB | 298–328 MB |
+
+Memory is not like for like: the after run is a fresh process, the before one
+had hours of uptime. Retake both RSS numbers after a few hours on the new
+build. Thin LTO's share of the CPU drop cannot be read off these runs.
+
 ## 0. Diagnosis in one paragraph
 
 The renderer is a single WebKitGTK thread (DMABUF is off, so JS, layout and
