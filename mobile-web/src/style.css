@@ -919,8 +919,11 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-agent-body small { color:#8fb8ff; font-size:.66rem; text-transform:uppercase; letter-spacing:.05em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .transcript-agent-body small em { font-style:normal; }
 .transcript-agent-body > span { font-size:.86rem; line-height:1.35; overflow-wrap:break-word; }
-/* A subagent that has reported back: the tab cards' ✓, as a small square. */
-.transcript-agent > .agent-status { flex:0 0 auto; padding:2px 5px; font-size:.72rem; line-height:1; }
+/* A subagent that has reported back: the tab cards' ✓, as a small square; one at work: their ▶. */
+.transcript-agent > .agent-status, .subagent-index-list .agent-status { flex:0 0 auto; padding:2px 5px; font-size:.72rem; line-height:1; }
+.transcript-agent > .agent-status svg { width:1em; height:1em; stroke:none; }
+.subagent-index-list button.has-status { position:relative; padding-right:36px; }
+.subagent-index-list button > .agent-status { position:absolute; top:50%; right:10px; transform:translateY(-50%); }
 /* Over a subagent's conversation: back up, its task, and ‹ n of m › through
    the subagents beside it. Sticks to the top of the reading view, over its
    padding, so the way back never scrolls away. */

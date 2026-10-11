@@ -119,7 +119,7 @@ import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../terminal/subagentInput";
-import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
+import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, arrivedPending, pendingPrompt, reworded, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPosts";
 import { inboxLeaves, useInboxFiles, withoutInboxReferences } from "../terminal/inboxRefs";
@@ -524,11 +524,13 @@ function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers;
  * agent's side. One that has reported back wears the tab cards' ✓ (where its
  * CLI records that). One whose CLI has not yet recorded where its
  * conversation lives cannot be opened yet. */
-function SubagentCard({ turn, label, untested, time, onOpen }: {
+function SubagentCard({ turn, label, untested, time, busy = false, onOpen }: {
   turn: TranscriptTurn;
   label: string;
   untested: string;
   time?: ReactNode;
+  /** The conversation it was spawned from is at work (`subagentAtWork`). */
+  busy?: boolean;
   onOpen?: (turn: TranscriptTurn) => void;
 }) {
   const t = useT();
@@ -545,7 +547,7 @@ function SubagentCard({ turn, label, untested, time, onOpen }: {
       </span>}
       {time}
     </span>
-    {turn.finished && <AgentStatusMark status="done" />}
+    {turn.finished ? <AgentStatusMark status="done" /> : subagentAtWork(turn, busy) && <AgentStatusMark status="working" />}
     {openable && <svg className="transcript-agent-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>}
   </button>;
 }
@@ -565,7 +567,7 @@ function SubagentCard({ turn, label, untested, time, onOpen }: {
  * `part` draws only the settled chat or only the prompts the desktop still
  * holds (`queued`), so the agent at work can be drawn between the two; both
  * halves key and date their bubbles from the whole of `entries`. */
-const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", onOpenAgent, onResend, onEdit, posts, renderPost, inbox }: {
+const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, posts, renderPost, inbox }: {
   entries: SessionTranscript["entries"];
   part?: "settled" | "queued";
   cutLabel: string;
@@ -575,6 +577,8 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   planUntested?: string;
   agentLabel?: string;
   agentUntested?: string;
+  /** The conversation is at work: its subagents that have not reported back are too. */
+  busy?: boolean;
   onOpenAgent?: (turn: TranscriptTurn) => void;
   /** Send a prompt the link lost once more, by its pending id. */
   onResend?: (pending: number) => void;
@@ -606,7 +610,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
       <span>{chatDayLabel(moment, now, dayLabels)}{timesUntested && <em> · {t("mobile.focus.untested")}</em>}</span>
     </div>}
     {turn.kind === "agent"
-      ? <SubagentCard turn={turn} label={agentLabel} untested={agentUntested} time={time} onOpen={onOpenAgent} />
+      ? <SubagentCard turn={turn} label={agentLabel} untested={agentUntested} time={time} busy={busy} onOpen={onOpenAgent} />
       : turn.questions
       ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={hold(turn.key, () => turn.text)} />
       : turn.command
@@ -4026,7 +4030,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       ? <div className="readable-empty"><strong>{t("mobile.subagent.empty")}</strong></div>
       : <div className="readable-lines chat transcript" data-testid="subagent-transcript">
           {subTranscript.truncated && <button className="readable-earlier" onClick={() => setSubLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
-          <TranscriptTurns entries={subTranscript.entries} cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.subagent.task")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} onOpenAgent={openSubagentTurn} />
+          <TranscriptTurns entries={subTranscript.entries} cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.subagent.task")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={subagentWorking} onOpenAgent={openSubagentTurn} />
           {subagentWorking && <div className="transcript-working" role="status" data-testid="subagent-working">
             <span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span>
             {subagentModel ? t("mobile.focus.workingModel", { model: subagentModel }) : t("mobile.focus.working")}
@@ -4147,10 +4151,14 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
                 <svg className={subagentListOpen ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
               </button>
               {subagentListOpen && <div id="mobile-subagent-list" className="subagent-index-list">
-                {sessionAgents.map((entry, index) => <button type="button" key={`${entry.at ?? index}:${index}`} disabled={!entry.subagent} aria-label={`${entry.role ?? t("mobile.subagent.region")} · ${entry.text}`} onClick={() => openListedSubagent(entry)}>
-                  <small>{entry.role ?? t("mobile.subagent.region")}</small>
-                  <span>{entry.text}{entry.cut && "…"}</span>
-                </button>)}
+                {sessionAgents.map((entry, index) => {
+                  const status = entry.finished ? "done" : subagentAtWork(entry, sessionBusy) ? "working" : null;
+                  return <button type="button" key={`${entry.at ?? index}:${index}`} className={status ? "has-status" : undefined} disabled={!entry.subagent} aria-label={`${entry.role ?? t("mobile.subagent.region")} · ${entry.text}`} onClick={() => openListedSubagent(entry)}>
+                    <small>{entry.role ?? t("mobile.subagent.region")}</small>
+                    <span>{entry.text}{entry.cut && "…"}</span>
+                    {status && <AgentStatusMark status={status} />}
+                  </button>;
+                })}
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
             </nav>}
@@ -4173,7 +4181,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
                 : <div className="readable-empty"><strong>{t("mobile.transcript.empty")}</strong><span>{t("mobile.transcript.emptyHint")}</span></div>)
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
+                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.onScreen") && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
