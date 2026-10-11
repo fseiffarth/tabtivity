@@ -192,7 +192,43 @@ Claude's `/fast` — different thing.
   `--permission-mode manual` reported as `default`; new and unread:
   `prompt_id` on every event but SessionStart, Stop `session_crons`, a resume
   start `estimated_cache_write_usd` and `prompt_cache_likely_expired`; the
-  hook's `sed` extractions match `jq` on every payload). That probe unset only
+  hook's `sed` extractions match `jq` on every payload). Re-checked against
+  2.1.291 (2026-10-06, live, the same dump with both `*_TAB_UID` names unset:
+  identical keys on all six events; `-p --resume` does not restore `plan`, the
+  2.1.290 plan restore is terminal-only, so `agent_session`'s re-applied mode
+  stays needed; `/usage` parsed into three meters, resets resolved; the
+  binary still carries the three notification types and six modes; 2.1.290's
+  `❯` on the selected `/`/`@` suggestion row does not trip `POINTER_WORD`,
+  which needs a bare word right after the glyph). Re-checked against 2.1.292
+  (2026-10-06, live, the same dump, both `*_TAB_UID` names unset: identical
+  keys on SessionStart startup/resume, UserPromptSubmit, PostToolUse, Stop and
+  SessionEnd, `session_id` equal to the `--session-id` passed, the hook's `sed`
+  extractions match `jq` on every payload; its changelog's "plan mode not
+  being restored when resuming" fix still does not reach `-p --resume` — a
+  `plan` session resumed without a mode flag reports the default (`auto`
+  here), so the re-applied
+  mode stays needed; `/usage` three meters, resets resolved; the binary's
+  notification-type and mode-label strings count the same as 2.1.291's).
+  Re-checked against 2.1.294 (2026-10-08, live, the same dump, both
+  `*_TAB_UID` names unset: identical keys on all five events it fired,
+  `session_id` equal to the `--session-id` passed, `sed` matching `jq`
+  throughout; `-p --resume` of a `plan` session still reports the default;
+  `/usage` three meters, resets resolved; the three notification types and
+  the cycle's mode labels count the same as 2.1.292's). 2.1.293 makes
+  `claude-haiku-5-5` the default Haiku: the transcript reports that id, and
+  `services::api_prices` now prices it (it had fallen to the dearest rate,
+  about 100× over). Re-checked against 2.1.296 (2026-10-10, live, the npm
+  linux-x64 binary run from a scratch directory, both `*_TAB_UID` names
+  unset: the same keys on SessionStart startup/resume, UserPromptSubmit,
+  PostToolUse, Stop and SessionEnd, `session_id` equal to the `--session-id`
+  passed, `sed` matching `jq` throughout; `-p --resume` of a `plan` session
+  still reports the default; `/usage` three meters, resets resolved; the
+  notification types and mode labels count the same as 2.1.294's;
+  `--permission-mode` still lists `manual` beside the six). 2.1.295's
+  Program Status Protocol (OSC 7501) is sent only after a terminal answers
+  its `OSC 7501 ; ?` probe, which xterm.js does not, so tabs see none of it.
+  2.1.296 prices Sonnet 5.5 cache reads at 0.05× input ($0.10, as the
+  pricing page says); `services::api_prices` had them at $0.20. An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
   counted no `claude` — the `--resume` took the record again, emptying the
@@ -320,6 +356,59 @@ aliases, and anything about where or how credentials are stored.
 
 **Assumes**
 
+- **0.161.0 (2026-10-07), live but outside Tabtivity** — the GitHub release's
+  musl build (npm's linux-x64 tarball was not served yet) run in a private
+  tmux with its own `CODEX_HOME`, inside a fenced agent tab, `--no-daemon`.
+  `--version` prints `codex-cli 0.161.0`; `resume [SESSION_ID]`,
+  `exec --skip-git-repo-check`, `--no-daemon`, `--oss`, `-m`, `-c` stand and
+  `-a` still takes `on-request | never`. Verified live and fed to the parsers
+  as captured: the approval menu (same three labels as 0.159.2, `›` on row 1,
+  `looksLikeDecisionPrompt` true, `readSelectPrompt` reads all three) and its
+  title frames `[ ! ]`/`[ . ] Action Required | <action> | <dir>`; both
+  `/model` steps (heading, two blank lines, rows from 1, row 5
+  `More reasoning…`, footer `enter default · s session · esc back`); the mode
+  line — CSI-u Shift+Tab (and tmux's backtab) toggles the silent default and
+  `Plan mode`, which `sessionStatus` / `currentMode` read as `working` and
+  `plan`; the rollout's first line `session_meta` with `session_id` and `cwd`,
+  then `turn_context.model` and user prompts as `response_item` user messages
+  (no `event_msg` `user_message`, as since 0.158.0). Hook events unchanged
+  (`PreToolUse` … `Interrupt`, `UserPromptSubmit`, `Stop`; still no
+  `Notification`). The writer lock is markers only (`active writer`,
+  `thread-writer-locks`); its lifecycle was last probed on 0.154.0. The
+  installed 0.160.1 matched 0.159.3 on the same binary markers and rollouts.
+  New: the TUI runs shell commands through a sibling `codex-code-mode-host`
+  and fails closed ("host executable is missing") without it. The standalone
+  package ships it in `bin/` next to `codex`, a directory the fence already
+  binds because it is on the binary's symlink chain; keep it that way if the
+  binding is ever narrowed to the one file. Re-checked against 0.161.0 on
+  2026-10-08 (still the latest release), same musl build, private
+  `CODEX_HOME`, a local Ollama model: npm's linux-x64 tarball is now served
+  and carries the same-size `codex` with `codex-code-mode-host` beside it in
+  `vendor/<triple>/bin/`; `exec --skip-git-repo-check` (the warm-up) runs and
+  exits on its own without a TTY. Hook payloads captured live (exec with
+  `--dangerously-bypass-hook-trust`, then a TUI `resume`): every event carries
+  `session_id`, `hook_event_name`, `transcript_path`, `cwd`; SessionStart adds
+  `source` (`startup`, `resume`), UserPromptSubmit `prompt`, SessionEnd
+  `reason`; `PreToolUse` and `PostToolUse` fire around a shell call. Plain
+  SessionStart stdout lands in the rollout as a developer message; a Stop hook
+  that prints non-JSON is reported "Failed" (ours prints nothing there).
+  Trusting through the startup "Hooks need review" menu writes a bare
+  `trusted_hash` under `[hooks.state."<config>:session_start:0:0"]`, what
+  `codex_hook_state_in` reads. Writer lock, live: a TUI `resume` holds
+  `thread-writer-locks/<id>.lock`, a second `exec resume` exits 1 with
+  "already has an active writer", and after the TUI is SIGKILLed the same
+  resume succeeds (the empty lock file stays). Rollouts now number each line
+  (`ordinal`) and add `world_state` and `token_usage_record` records; the
+  `event_msg` `token_count` totals that `token_stats` reads are unchanged.
+  Two things that already held on 0.160.1 (same strings in its binary), both
+  fixed 2026-10-08: Codex clamps a SessionEnd hook's timeout to 3s and warned
+  about our `timeout = 10` on every start (`⚠ … warnings` in the TUI footer) —
+  `register_codex_hook_as` now writes 3 there and lowers an older block in
+  place (live: the trust hash does not cover the timeout, so the lowered hook
+  stays trusted and the warning goes); and that "Hooks need review" menu
+  (`Review hooks` / `Trust all and continue` / `Continue without trusting`)
+  has no deny option, so it never lit the decision lamp — `prompt.ts` now
+  matches its heading plus a numbered `Trust` row.
 - **0.159.3 (2026-10-01), binary and rollout check** — the installed standalone
   CLI prints `codex-cli 0.159.3`. Its help still accepts `resume [SESSION_ID]`,
   `exec --skip-git-repo-check`, `--no-daemon`, `--oss`, `-m` and `-c`.
@@ -376,7 +465,9 @@ aliases, and anything about where or how credentials are stored.
   the lock. Keep the binder's within-pass claims exclusive and its spawn-time
   duplicate guard independent of hook trust; duplicates use the documented
   `codex resume` picker (no id). Never delete Codex's writer locks to force a
-  resume. Verify this lifecycle again when its thread store changes.
+  resume. Verify this lifecycle again when its thread store changes (last
+  checked live on 0.161.0, with the CLI itself: a SIGKILLed writer releases
+  the lock).
 - Session rollouts at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`
   whose **first line** is `{"type":"session_meta","payload":{"session_id","cwd",…}}`.
   This is the hook-free binding path; a new layout or header breaks every
@@ -396,8 +487,8 @@ aliases, and anything about where or how credentials are stored.
   `[[hooks.Stop]]` and `[[hooks.SessionEnd]]` without matchers
   (`CODEX_HOOK_EVENTS`; 0.154.0 names those events and no `Notification`, read
   off the binary's strings, not live — so a Codex approval wait is still read
-  off its screen). Their payloads are assumed to carry `session_id` and
-  `hook_event_name` like Claude's. Trust state is read from
+  off its screen). Their payloads carry `session_id` and `hook_event_name`
+  like Claude's (verified live on 0.161.0). Trust state is read from
   `[hooks.state."…"]` tables (`trusted_hash`, enabled flag), each hook by
   position, so the new blocks need the same one-time `/hooks` trust.
   Text-appended per event, never reserialized.
@@ -408,7 +499,7 @@ aliases, and anything about where or how credentials are stored.
 - Preface commands `/new /compact /status`; `/status` is *not* available in
   exec mode, so there is no usage recipe.
 - The decision lamp reads Codex's screen off the PTY, and two habits of its
-  ratatui TUI are load-bearing (verified against 0.153.0; 0.157.0 by strings):
+  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.161.0):
   - **A blocked Codex is not a quiet Codex.** It keeps repainting its terminal
     title on a ~100ms timer — a braille frame while working, and while blocked
     an `ESC ] 0 ; [ ! ] Action Required BEL` alternating with `[ . ]`. Those
@@ -432,8 +523,9 @@ aliases, and anything about where or how credentials are stored.
     `agentPrompt.ts` matches the first word of each option; renaming the
     options away from yes/no/allow/cancel wording is what would break it.
 - Mobile: modes `working (silent) | plan | read only | auto | full access`;
-  Shift+Tab is sent as CSI-u. Verified against codex-cli 0.151.0 (0.157.0 by
-  strings).
+  Shift+Tab is sent as CSI-u. Verified against codex-cli 0.151.0; live on
+  0.161.0, where Shift+Tab toggles only the silent default and plan (the
+  other three are not on its cycle).
 - Mobile's model sheet reads `/model` off the screen, and Codex answers it in
   **two steps** — `Select Model and Effort`, then `Select Reasoning Level for
   <model>` (whose row 5, "More reasoning…", opens a third). Each step is a
@@ -441,7 +533,7 @@ aliases, and anything about where or how credentials are stored.
   the highlight marked `›`; the sheet holds until a *different* list is drawn
   and closes when none is. Renumbering, dropping the heading, or drawing the
   next step without clearing the previous one is what would break it. Verified
-  against codex-cli 0.153.4 and live against 0.159.2, whose reasoning step's
+  against codex-cli 0.153.4 and live against 0.159.2 and 0.161.0, whose reasoning step's
   footer reads `enter default · s session · esc back`: the Enter the sheet
   sends saves the pick as the default, `s` would keep it to the session.
 
@@ -503,7 +595,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 | Grok | — (0.0.34 keeps no sessions; `--session` is an unknown option) | `-p` | `npm i -g @vibe-kit/grok-cli` |
 | Antigravity (`agy`) | `--continue` | — | `curl … antigravity.google/cli/install.sh` |
 | Kimi | — | `-p` | `curl … code.kimi.com/install.sh` |
-| Pi | — | `-p` | `npm i -g @mariozechner/pi-coding-agent` |
+| Pi | — | `-p` | `npm i -g @earendil-works/pi-coding-agent` |
 | Amp | — | `-x` | `npm i -g @sourcegraph/amp` |
 | Goose | — | `run -t` | GitHub release `download_cli.sh` |
 | Crush | — | `run` | `npm i -g @charmland/crush` |
@@ -678,9 +770,14 @@ Headless probe: `cargo run --example ollama_probe --manifest-path src-tauri/Carg
   the GitHub releases API.
 - `ollama launch <agent> --model <m>` exists since **0.15** and is the only way
   to hand Claude Code an Anthropic-compatible endpoint; sub-commands used:
-  `claude`, `codex`, `opencode`, `droid`, `openclaw`. `ollama launch --help` is
-  read to learn which agents the installed server supports. `launch` writes
-  `~/.codex/model.json` and forwards no extra flags.
+  `claude`, `codex`, `droid`, `openclaw`, `pi`, `cline` (OpenCode never goes
+  through it). `ollama launch --help` is read to learn whether the subcommand
+  exists. `launch` writes `~/.codex/model.json`, Pi's `models.json` (and
+  migrates a legacy `@mariozechner/pi-coding-agent` install with `npm -g`),
+  and Cline's `providers.json` + `globalState.json` — Cline's login file
+  (per scope since 2026-10-08, not shared); a local-model home stays
+  receive-only in `agent_auth` for every shared login. Before ~0.34 it forwarded
+  no extra flags; 0.34 passes args after `--`, which Tabtivity doesn't use yet.
 - **≥ 0.32 drops integrated GPUs** unless `OLLAMA_IGPU_ENABLE=1`; Tabtivity sets it
   on the server it spawns and offers a systemd drop-in for the unit. The flag's
   existence is read from `ollama serve --help`, not from the version.

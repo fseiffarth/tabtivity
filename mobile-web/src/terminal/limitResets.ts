@@ -14,9 +14,10 @@ export function resetCountdown(phrase: string, now: Date, readAt = now): string 
   if (minutes < 1) return "<1m";
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h ${minutes % 60}m`;
-  // Past two days the minutes drop off, unless the hours read zero: `4d 0h`
-  // says nothing a `4d 37m` doesn't say better.
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  // From a day on it counts days — `1d 18h`, not `42h 31m` — and the minutes
+  // drop off, unless the hours read zero: `4d 0h` says nothing a `4d 37m`
+  // doesn't say better.
   const days = Math.floor(hours / 24);
   const lang = useI18nStore.getState().lang;
   return hours % 24

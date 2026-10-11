@@ -11,6 +11,8 @@ import {
   attentionStateClass,
   agentDeliveryTurn,
   isInterruptInput,
+  noteAgentResting,
+  noteAgentSessionStart,
   noteAgentTurn,
   notePtyOutput,
   notePtySpawn,
@@ -328,6 +330,83 @@ describe("activity store — hook verdicts", () => {
     expect(busy()).toBe(false);
   });
 
+  it("never brings back an answered question when a job flip re-reports it", () => {
+    // A background shell is running; the agent asks, the user answers "No",
+    // and the turn ends with no hook. The record still says `decision`, and
+    // the job scan re-sends it when that shell exits.
+    noteAgentTurn(PTY, "working", true);
+    noteAgentTurn(PTY, "decision", true);
+    noteUserInput(PTY);
+    noteAgentTurn(PTY, "decision", false, true);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+    expect(agentDeliveryTurn(PTY)?.job).toBe(false);
+    // Nor a working turn the user cut off.
+    noteAgentTurn(PTY, "working");
+    noteUserInput(PTY, true);
+    noteAgentTurn(PTY, "working", true, true);
+    state().recompute();
+    expect(busy()).toBe(false);
+    expect(attention()).toBe("interrupted");
+    // A verdict that still stands takes the job flag as before.
+    noteAgentTurn(PTY, "working");
+    noteAgentTurn(PTY, "working", true, true);
+    state().recompute();
+    expect(state().busyKindByTab[PTY]).toBe("both");
+  });
+
+  it("reads no question off the conversation a resumed or reattached agent repaints", () => {
+    // Claude's own prompt echo and a reply's numbered list, as a resume or a
+    // tmux reattach paints them back onto an idle composer.
+    const repaint =
+      "❯ continue\r\n⏺ Next steps:\r\n  1. Run the gates\r\n  2. Skip the live check\r\n❯ \r\n";
+    noteAgentSessionStart(PTY, "resume");
+    notePtyOutput(PTY, repaint);
+    vi.advanceTimersByTime(700);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+
+    _clearPtyActivityForTest();
+    noteAgentResting(PTY); // `pty_spawn`: the last run finished its turn
+    notePtyOutput(PTY, repaint);
+    vi.advanceTimersByTime(700);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+
+    // A compaction can land mid-turn: it does not silence the screen.
+    _clearPtyActivityForTest();
+    noteAgentSessionStart(PTY, "compact");
+    notePtyOutput(PTY, repaint);
+    vi.advanceTimersByTime(700);
+    state().recompute();
+    expect(attention()).toBe("decision");
+
+    // The next turn reads the screen again: a menu that stalls it is a question.
+    _clearPtyActivityForTest();
+    noteAgentSessionStart(PTY, "startup");
+    noteAgentTurn(PTY, "working");
+    notePtyOutput(PTY, "Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\n");
+    vi.advanceTimersByTime(700);
+    state().recompute();
+    expect(attention()).toBe("decision");
+  });
+
+  it("reads no question off the screen between an answer and the agent's next hook", () => {
+    noteAgentTurn(PTY, "working");
+    noteAgentTurn(PTY, "decision");
+    noteUserInput(PTY);
+    // The screen settles on the conversation, prompt echoes and all.
+    notePtyOutput(PTY, "❯ yes, go ahead\r\n⏺ Bash(npm test)\r\n");
+    vi.advanceTimersByTime(700);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+    // The tool finished; the agent works on, its spinner painting.
+    noteAgentTurn(PTY, "working");
+    notePtyOutput(PTY, "✻ Thinking… (3s)");
+    state().recompute();
+    expect(busy()).toBe(true);
+  });
+
   it("ignores a verdict for an id that is not a PTY, and in a popout", () => {
     noteAgentTurn("not-a-pty-id", "working");
     expect(state().busyByTab["not-a-pty-id"]).toBeUndefined();
@@ -342,6 +421,15 @@ describe("activity store — the bytes under the verdicts", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("still reads a menu off a hook-free agent's screen, restored or not", () => {
+    // Nothing ever says such an agent is at its composer, so its screen is all
+    // there is — the hook-trust menu of a Codex whose hooks are untrusted.
+    notePtyOutput(PTY, "Hooks need review\r\n› 1. Review hooks\r\n  2. Trust all and continue\r\n");
+    vi.advanceTimersByTime(700);
+    state().recompute();
+    expect(attention()).toBe("decision");
   });
 
   it("reads a working Codex — one timer digit a second between spinner frames — as working", () => {

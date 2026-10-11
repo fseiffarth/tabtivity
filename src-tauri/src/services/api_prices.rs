@@ -10,7 +10,12 @@
 //!   the proxy only talks to `api.anthropic.com`). Long-context pricing for
 //!   Sonnet 4 / 4.5 (2× input, 1.5× output past 200K input tokens) is from
 //!   the earlier version of that page; the 2026-10-04 page lists 1M context at
-//!   standard pricing for 4.6 and later only.
+//!   standard pricing for 4.6 and later only. The Anthropic rows were
+//!   re-read off that page on 2026-10-10 (Claude Code 2.1.296 repriced
+//!   Sonnet 5.5 cache reads): cache hits are 0.1× input except 0.05× on
+//!   Opus 5.5 and Sonnet 5.5 and 0.025× on Fable/Mythos 5.1, and the page now
+//!   lists Haiku 5.5 ($0.10/$0.50, $0.50/$2.50 for prompts over 100K) with the
+//!   cache rates this table already had.
 //! - Gemini: <https://ai.google.dev/gemini-api/docs/pricing> ("Last updated
 //!   2026-10-01 UTC"; paid tier, Standard — not batch, flex or priority).
 //!   Grounding with Google Search, read off the same page on 2026-10-04:
@@ -75,16 +80,32 @@ pub struct AnthropicRates {
     pub cache_write_1h: f64,
     pub cache_read: f64,
     pub output: f64,
-    /// Sonnet 4 / 4.5: past [`LONG_CONTEXT`] input tokens, input-side rates
-    /// double and output costs 1.5×.
-    pub long_context_premium: bool,
+    /// A long-context tier: past its prompt size, input-side rates and output
+    /// take its multipliers (Sonnet 4 / 4.5, Haiku 5.5).
+    pub long: Option<LongTier>,
     /// Retired on the first-party API: priced if seen, left out of the
     /// unknown-model fallback.
     pub retired: bool,
 }
 
+/// An Anthropic long-context tier: a prompt of more than `past` input tokens
+/// (cache included) pays `input`× on every input-side rate and `output`× on
+/// output.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LongTier {
+    pub past: u64,
+    pub input: f64,
+    pub output: f64,
+}
+
+/// Sonnet 4 / 4.5: past [`LONG_CONTEXT`], input-side rates double and output
+/// costs 1.5×.
+const SONNET_4_LONG: LongTier = LongTier { past: LONG_CONTEXT, input: 2.0, output: 1.5 };
+/// Haiku 5.5: past 100K, $0.50/$2.50 over $0.10/$0.50.
+const HAIKU_5_5_LONG: LongTier = LongTier { past: 100_000, input: 5.0, output: 5.0 };
+
 const fn anthropic(input: f64, cache_write_5m: f64, cache_write_1h: f64, cache_read: f64, output: f64) -> AnthropicRates {
-    AnthropicRates { input, cache_write_5m, cache_write_1h, cache_read, output, long_context_premium: false, retired: false }
+    AnthropicRates { input, cache_write_5m, cache_write_1h, cache_read, output, long: None, retired: false }
 }
 
 const OPUS_4X: AnthropicRates = anthropic(5.0, 6.25, 10.0, 0.50, 25.0);
@@ -110,12 +131,14 @@ const ANTHROPIC: &[(&str, AnthropicRates)] = &[
     ("claude-opus-4-1", OPUS_4_OLD),
     ("claude-opus-4", OPUS_4_OLD),
     ("claude-opus-4-0", OPUS_4_OLD),
-    ("claude-sonnet-5-5", SONNET_5X),
+    // Cache hits at 0.05× input, Sonnet 5 at the usual 0.1×.
+    ("claude-sonnet-5-5", AnthropicRates { cache_read: 0.10, ..SONNET_5X }),
     ("claude-sonnet-5", SONNET_5X),
     ("claude-sonnet-4-6", SONNET_4X),
-    ("claude-sonnet-4-5", AnthropicRates { long_context_premium: true, ..SONNET_4X }),
-    ("claude-sonnet-4", AnthropicRates { long_context_premium: true, retired: true, ..SONNET_4X }),
-    ("claude-sonnet-4-0", AnthropicRates { long_context_premium: true, retired: true, ..SONNET_4X }),
+    ("claude-sonnet-4-5", AnthropicRates { long: Some(SONNET_4_LONG), ..SONNET_4X }),
+    ("claude-sonnet-4", AnthropicRates { long: Some(SONNET_4_LONG), retired: true, ..SONNET_4X }),
+    ("claude-sonnet-4-0", AnthropicRates { long: Some(SONNET_4_LONG), retired: true, ..SONNET_4X }),
+    ("claude-haiku-5-5", AnthropicRates { long: Some(HAIKU_5_5_LONG), ..anthropic(0.10, 0.125, 0.20, 0.01, 0.50) }),
     ("claude-haiku-4-5", anthropic(1.0, 1.25, 2.0, 0.10, 5.0)),
     ("claude-3-5-haiku", AnthropicRates { retired: true, ..anthropic(0.80, 1.0, 1.60, 0.08, 4.0) }),
 ];
@@ -324,7 +347,7 @@ fn anthropic_fallback() -> AnthropicRates {
         cache_write_1h: max(|r| r.cache_write_1h),
         cache_read: max(|r| r.cache_read),
         output: max(|r| r.output),
-        long_context_premium: false,
+        long: None,
         retired: false,
     }
 }
@@ -463,7 +486,10 @@ pub fn price_anthropic(model: &str, u: &AnthropicUsage) -> Charge {
     let w5 = u.cache_5m.unwrap_or(0).min(cache_write);
     let w1h = cache_write - w5;
     let total_in = u.input_tokens.saturating_add(cache_write).saturating_add(u.cache_read_input_tokens);
-    let (in_mult, out_mult) = if r.long_context_premium && total_in > LONG_CONTEXT { (2.0, 1.5) } else { (1.0, 1.0) };
+    let (in_mult, out_mult) = match r.long {
+        Some(t) if total_in > t.past => (t.input, t.output),
+        _ => (1.0, 1.0),
+    };
     let tokens = u.input_tokens as f64 * r.input * in_mult
         + w5 as f64 * r.cache_write_5m * in_mult
         + w1h as f64 * r.cache_write_1h * in_mult
@@ -632,6 +658,13 @@ mod tests {
     }
 
     #[test]
+    fn sonnet_5_5_cache_hits_cost_half_of_sonnet_5s() {
+        let u = AnthropicUsage { cache_read_input_tokens: 1_000_000, ..Default::default() };
+        assert!(close(price_anthropic("claude-sonnet-5-5", &u).usd, 0.10));
+        assert!(close(price_anthropic("claude-sonnet-5", &u).usd, 0.20));
+    }
+
+    #[test]
     fn sonnet_4_5_long_context_costs_more_past_200k() {
         let short = AnthropicUsage { input_tokens: 200_000, output_tokens: 1000, ..Default::default() };
         let long = AnthropicUsage { input_tokens: 200_001, output_tokens: 1000, ..Default::default() };
@@ -640,6 +673,21 @@ mod tests {
         assert!(close(price_anthropic("claude-sonnet-4-5", &long).usd, 200_001.0 * 6.0 / 1e6 + 1000.0 * 22.5 / 1e6));
         // 4.6 has none.
         assert!(close(price_anthropic("claude-sonnet-4-6", &long).usd, 200_001.0 * 3.0 / 1e6 + 1000.0 * 15.0 / 1e6));
+    }
+
+    #[test]
+    fn haiku_5_5_is_known_and_costs_five_times_past_100k() {
+        let short = AnthropicUsage { input_tokens: 90_000, cache_read_input_tokens: 10_000, output_tokens: 1000, ..Default::default() };
+        let c = price_anthropic("claude-haiku-5-5", &short);
+        assert!(c.known, "the new default Haiku must not fall back to the dearest rate");
+        assert!(close(c.usd, 90_000.0 * 0.10 / 1e6 + 10_000.0 * 0.01 / 1e6 + 1000.0 * 0.50 / 1e6));
+        // Cache counts toward the 100K.
+        let long = AnthropicUsage { cache_read_input_tokens: 10_001, ..short };
+        assert!(close(
+            price_anthropic("claude-haiku-5-5", &long).usd,
+            90_000.0 * 0.50 / 1e6 + 10_001.0 * 0.05 / 1e6 + 1000.0 * 2.50 / 1e6
+        ));
+        assert_eq!(context_window(Provider::Anthropic, "claude-haiku-5-5"), 1_000_000);
     }
 
     #[test]

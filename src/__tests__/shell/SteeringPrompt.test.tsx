@@ -204,4 +204,114 @@ describe("steering prompt box", () => {
     expect(box()).toBeNull();
     expect(steering().active).toBe(true);
   });
+
+  describe("chips", () => {
+    function openBox(target = "chips") {
+      activeTab({ kind: "agent", scheduleTargetId: target });
+      registerScheduledAgentInput(target, {
+        ptyId: "p:t1",
+        ready: () => true,
+        bracketedPaste: () => false,
+        recordAuthorizedInput: vi.fn(),
+      });
+      render(
+        <>
+          <Harness />
+          <SteeringPromptOverlay />
+        </>,
+      );
+      act(() => steering().enter());
+      press("i");
+      return box()!;
+    }
+    const alt = (input: HTMLTextAreaElement, key: string) =>
+      fireEvent.keyDown(input, { key, code: `Key${key.toUpperCase()}`, altKey: true });
+    const written = () => writeMock.mock.calls.map(([, bytes]) => decode(bytes));
+
+    it("Alt+L / Alt+G lead the text with /plan or /goal and take it off again", () => {
+      const input = openBox();
+      fireEvent.change(input, { target: { value: "tidy the tests" } });
+      alt(input, "l");
+      expect(box()!.value).toBe("/plan tidy the tests");
+      alt(input, "g");
+      expect(box()!.value).toBe("/goal tidy the tests");
+      alt(input, "g");
+      expect(box()!.value).toBe("tidy the tests");
+      expect(writeMock).not.toHaveBeenCalled();
+    });
+
+    it("Alt+K clears only on the second press", async () => {
+      const input = openBox();
+      alt(input, "k");
+      expect(writeMock).not.toHaveBeenCalled();
+      expect(document.querySelector(".steering-prompt-chip.on")).not.toBeNull();
+      alt(input, "k");
+      await vi.waitFor(() => expect(written()).toContain("/clear"));
+      expect(box()).not.toBeNull();
+    });
+
+    it("another key between the two Alt+K presses disarms Clear", () => {
+      const input = openBox();
+      alt(input, "k");
+      fireEvent.keyDown(input, { key: "a" });
+      alt(input, "k");
+      expect(writeMock).not.toHaveBeenCalled();
+    });
+
+    it("Alt+E lists Claude's efforts: ↓ and Enter send one, Escape closes the list first", async () => {
+      const input = openBox();
+      alt(input, "e");
+      expect(document.querySelector(".steering-prompt-list")).not.toBeNull();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await vi.waitFor(() => expect(written()).toContain("/effort medium"));
+      await vi.waitFor(() => expect(document.querySelector(".steering-prompt-list")).toBeNull());
+
+      alt(input, "e");
+      act(() => {
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      });
+      expect(document.querySelector(".steering-prompt-list")).toBeNull();
+      expect(box()).not.toBeNull();
+      // With no list up, Escape closes the box again.
+      act(() => {
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      });
+      expect(box()).toBeNull();
+    });
+
+    it("names each chip's key the way the platform does (Alt+M here)", () => {
+      openBox();
+      const keys = Array.from(document.querySelectorAll(".steering-prompt-chip kbd")).map((k) => k.textContent);
+      expect(keys.length).toBeGreaterThan(0);
+      for (const key of keys) expect(key).toMatch(/^Alt\+[A-Z]$/);
+    });
+
+    /** `IS_MAC` is an import-time constant: read the label from a fresh module
+     *  graph under a mocked `lib/platform`. */
+    it("names the chip keys with Option (⌥) on macOS", async () => {
+      vi.resetModules();
+      vi.doMock("../../lib/platform", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../../lib/platform")>()),
+        IS_MAC: true,
+        IS_WINDOWS: false,
+        IS_LINUX: false,
+        PLATFORM: "macos",
+      }));
+      try {
+        const { chipKeyLabel } = await import("../../components/layout/SteeringPromptOverlay");
+        const chips = ["model", "effort", "clear", "plan", "goal"] as const;
+        expect(chips.map((c) => chipKeyLabel(c))).toEqual([
+          "⌥M",
+          "⌥E",
+          "⌥K",
+          "⌥L",
+          "⌥G",
+        ]);
+      } finally {
+        vi.doUnmock("../../lib/platform");
+        vi.resetModules();
+      }
+    });
+  });
 });

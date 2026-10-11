@@ -84,13 +84,16 @@ calling; the Models & agents menu tags models without it "no tools".
 
 ## 5. Open a Local Model tab
 
-1. Install **Mistral Vibe**, the default local-model runner: the Ollama panel
-   offers **Install Vibe** (no administrator rights needed; Linux/macOS
+1. Install a runner. **OpenCode** is the first choice when installed; the
+   Ollama panel also offers **Install Vibe** for **Mistral Vibe** (no
+   administrator rights needed; Linux/macOS
    `curl -LsSf https://mistral.ai/vibe/install.sh | bash`).
 2. Click `+` on a tab bar. The **Local Model · <model>** group lists the
-   agents that can drive your Tabs/default model: **Mistral**, plus any
-   installed Claude Code, Codex, OpenCode, Droid or OpenClaw (through
-   `ollama launch`) when the model supports tool calling.
+   agents that can drive your Tabs/default model: **OpenCode** and **Pi**
+   first, then **Mistral**, then any installed Claude Code, Codex, Droid,
+   OpenClaw or Cline (through `ollama launch`) — every one but Mistral only when the model
+   supports tool calling. A ⚠ marks the agents built around hosted frontier
+   models, which a local model may answer badly.
 3. If the model is not on the GPU yet, the group offers **Load onto GPU to
    start an agent** first.
 4. Pick an entry; the tab runs fully on your machine.

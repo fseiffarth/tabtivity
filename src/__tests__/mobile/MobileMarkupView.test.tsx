@@ -104,6 +104,8 @@ describe("MarkupView", () => {
       mode: "apply",
       // The round the agent's ticks come back under (`mintRound`).
       round: expect.stringMatching(/^[a-z0-9]{8}$/),
+      // From the chat (`onSend`): no `origin`, so the prompt's asking line is
+      // the chat's own.
     });
     // The view stays open; the marks are kept as sent, not cleared.
     await waitFor(() => {

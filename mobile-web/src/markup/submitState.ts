@@ -129,6 +129,23 @@ export function nextCheck(round: Round, agent: AgentSignal, now: number): number
   return null;
 }
 
+/** The longest dialog line the pill shows; the rest is the tab's to show. */
+const DIALOG_LINE_MAX = 160;
+
+/** The line of a dialog the agent's tab waits on that the round's pill shows,
+ * read-only, on both hosts: the last paragraph of its own question (the
+ * Reader's `ask`, `questionParts`) — "Do you want to make this edit to
+ * main.tex?" — whitespace collapsed and clipped. It only says whether leaving
+ * the PDF is worth it now: the answer is given in the tab, where the whole
+ * dialog and what it was drawn onto are on screen. */
+export function dialogLine(ask: readonly string[]): string | undefined {
+  for (let index = ask.length - 1; index >= 0; index -= 1) {
+    const line = ask[index].replace(/\s+/g, " ").trim();
+    if (line) return line.length > DIALOG_LINE_MAX ? `${line.slice(0, DIALOG_LINE_MAX - 1).trimEnd()}…` : line;
+  }
+  return undefined;
+}
+
 /** What an undo would put back, as the confirm dialog says it on both hosts:
  * the files (project-relative), how many more were not named, the PDF's
  * fate, and the files changed outside the project folder, which the undo

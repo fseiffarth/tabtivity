@@ -45,27 +45,30 @@ nav button,.keys button { flex:1; }
 .activity-sort.in-header select { flex:0 1 auto; max-width:11rem; }
 @media (max-width:420px) { .activity-sort.in-header > span { display:none; } }
 /* One dense row, the agent tab header's shape: plain chevron, the name taking
-   what is left, then the 🖼 pill, the order as a compact select sized like the
-   Focus view switch, and a small ＋. The tools never shrink below their own
-   width; the name ellipsizes instead. */
+   what is left with its order under it, then the drawer's ☰ and a small ＋.
+   The tools never shrink below their own width; the name ellipsizes instead. */
 .project-header-tools { flex:0 0 auto; display:flex; align-items:center; gap:6px; min-width:0; }
-.project-header-tools .activity-sort.in-header { flex:0 1 auto; gap:0; margin:0; }
-.project-header-tools .activity-sort.in-header > span { display:none; }
-.project-header-tools .activity-sort.in-header select { max-width:8.5rem; height:32px; padding:0 24px 0 9px; border-color:#34384a; border-radius:10px; background-color:#151822; background-position:right 8px center; background-size:10px 7px; font-size:.76rem; }
 /* The sticky bar and cards share a softer surface, while the controls remain
    visible as the tab list scrolls. */
 .project-screen { padding-top:0; background:radial-gradient(ellipse 85% 300px at 50% 0, #1c2034 0, #0e111b 72%, #0e111b 100%); }
 .project-header { position:sticky; top:0; z-index:5; gap:8px; margin:0 -18px 12px; padding:env(safe-area-inset-top) 12px 0 6px; border-bottom:1px solid #2b3040; background:rgba(15,18,29,.96); box-shadow:0 8px 24px rgba(0,0,0,.16); }
 .project-header > .terminal-title { align-content:center; }
+/* The order stays under the name on a phone, where a tab's caption goes. */
+.project-header .terminal-title small { display:block; color:#98a0b4; font-size:.72rem; }
 .project-header-tools .new-tab { display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border-radius:10px; font-size:1.1rem; }
-/* The name is the dropdown's button: it reads as the title, with the Focus
+/* The name is the order's dropdown: it reads as the title, with the Focus
    switch's caret; the menu is Focus's own, pinned under the name instead. */
-.project-header .project-title { display:inline-flex; align-items:center; max-width:100%; min-width:0; padding:4px 0; border:0; background:transparent; font:inherit; color:inherit; text-align:left; }
+.project-header .project-title { display:inline-flex; align-items:center; max-width:100%; min-width:0; padding:0; border:0; background:transparent; font:inherit; color:inherit; text-align:left; }
 .project-title > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .project-title > .view-caret { flex:0 0 auto; }
 .project-menu { right:auto; left:44px; }
-.project-menu .project-menu-icon { flex:0 0 auto; width:22px; font-size:1.1rem; text-align:center; }
-.project-menu .project-menu-count { color:#8fb8ff; font-weight:650; }
+.project-header-tools .drawer-open { display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border:1px solid #34384a; border-radius:10px; background:#151822; color:#e7e9f2; }
+.project-header-tools .drawer-open svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; }
+/* The drawer's own rows (the agent's files, Git), above the file
+   browser and set off from it by the head's rule. */
+.drawer-menu { padding:4px 0 10px; border-bottom:1px solid #2b3040; }
+.drawer-menu .project-menu-icon { flex:0 0 auto; width:22px; font-size:1.1rem; text-align:center; }
+.drawer-menu .project-menu-count { color:#8fb8ff; font-weight:650; }
 .project-menu-note { margin:2px 6px 0; }
 .cards { display:grid; gap:10px; }
 .project-screen .cards { gap:12px; }
@@ -147,6 +150,11 @@ nav button,.keys button { flex:1; }
    it is that corner it has to round rather than a rule running into nothing. */
 .tab-card.one-row .tab-card-grip { border-radius:0 11px 11px 0; }
 .tab-card.dragging { opacity:.65; }
+/* A card a right→left swipe is closing slides out the way the finger went
+   while the desktop answers; a refused close drops the class and it slides
+   back. Transform and opacity only — nothing blurred is animated. */
+.tab-card { transition:transform .18s ease-out, opacity .18s ease-out; }
+.tab-card.swiped-out { transform:translateX(-100%); opacity:0; pointer-events:none; }
 /* The slot the dropped card would land in, drawn on the card it lands beside.
    An outline rather than a moved card: the list itself does not rearrange until
    the finger lifts, so the line is the whole preview. */
@@ -594,7 +602,8 @@ button.mobile-alert-row { cursor:pointer; }
 .mail-mobile-attachments div { display:flex; justify-content:space-between; gap:12px; padding:11px; border-radius:9px; background:#1b1e29; unicode-bidi:plaintext; }
 .mail-mobile-empty { padding:24px; text-align:center; color:#9498aa; }
 .mail-mobile-row.flagged b::before { content:"★ "; color:#f4c66c; }
-.mail-mobile-row.answered b::after { content:" ↩"; color:#9498aa; }
+/* Answered: the shared UndoIcon's hooked arrow as a mask — a typed ↩ reached the colour-emoji font. */
+.mail-mobile-row.answered b::after { content:""; display:inline-block; width:1em; height:1em; margin-left:.3em; vertical-align:-.15em; background:#9498aa; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14L4 9l5-5'/%3E%3Cpath d='M4 9h10.5a5.5 5.5 0 010 11H11'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14L4 9l5-5'/%3E%3Cpath d='M4 9h10.5a5.5 5.5 0 010 11H11'/%3E%3C/svg%3E") center/contain no-repeat; }
 .mail-mobile-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .mail-mobile-actions button { flex:1 1 auto; }
 .mail-mobile-reply { display:grid; gap:8px; padding:14px; border:1px solid #383c4d; border-radius:12px; background:rgba(28,31,43,.92); }
@@ -860,7 +869,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-md li::marker { color:#8c84d8; }
 .transcript-md li > ul,.transcript-md li > ol { margin:.2em 0 0; }
 .transcript-md .task-item { list-style:none; margin-left:-1.1em; }
-.transcript-md .md-task { display:inline-block; width:1.1em; color:#8c84d8; }
+.transcript-md .md-task { position:relative; display:inline-block; box-sizing:border-box; width:.85em; height:.85em; margin-right:.3em; border:1.5px solid currentColor; border-radius:3px; vertical-align:-.08em; color:#8c84d8; }
+.transcript-md .md-task-done::after { content:""; position:absolute; left:.22em; top:.04em; width:.2em; height:.42em; border:solid currentColor; border-width:0 1.5px 1.5px 0; transform:rotate(45deg); }
 .transcript-md code { padding:.08em .35em; border-radius:5px; background:#2a2e42; color:#dcd6ff; font:400 .82rem/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow-wrap:anywhere; }
 .transcript-md pre { margin:0 0 .6em; padding:8px 10px; overflow-x:auto; border-radius:8px; background:#12141c; -webkit-overflow-scrolling:touch; }
 .transcript-md pre code { padding:0; background:none; color:#e3e6f2; white-space:pre; overflow-wrap:normal; }
@@ -925,11 +935,14 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-bar + .readable-empty { min-height:calc(100% - 56px); }
 /* Keep the session's subagents within reach even after their cards scroll away. */
 /* The strip over the chat: the subagent index and the sent-files index side by
-   side, one list open at a time; the open one takes the room, the shut one
-   keeps to its chip. */
+   side, one list open at a time. */
 .chat-index { position:sticky; top:-12px; z-index:2; display:flex; align-items:flex-start; gap:6px; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid #262a3a; background:#10131b; }
 .chat-index > nav { flex:1 1 0; min-width:0; }
-.chat-index:has(> nav.open) > nav:not(.open) { flex:0 1 auto; }
+/* An open list takes the strip's full width; the shut chip moves to a line of
+   its own above it. */
+.chat-index:has(> nav.open) { flex-wrap:wrap; }
+.chat-index > nav.open { flex:1 0 100%; }
+.chat-index:has(> nav.open) > nav:not(.open) { order:-1; }
 .chat-index .subagent-index-toggle span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .subagent-index-toggle { display:flex; align-items:center; gap:8px; width:100%; padding:5px 7px; border:1px solid #343f58; border-radius:9px; background:#171e2d; color:#dbe4f6; font:600 .78rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; }
 .subagent-index-toggle span { flex:1; }
@@ -942,9 +955,6 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-index-list small, .git-rows > li > small { color:#8fb8ff; font-size:.64rem; text-transform:uppercase; letter-spacing:.05em; }
 .subagent-index-list span, .git-rows > li > span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
 .subagent-index-list button.subagent-index-earlier { color:#9da3b6; font-size:.76rem; text-align:center; }
-.chat-index > nav.sent-index.open { flex:1 0 100%; }
-.chat-index:has(> nav.sent-index.open) { flex-wrap:wrap; }
-.chat-index:has(> nav.sent-index.open) > nav:not(.open) { flex:1 1 0; }
 .sent-index-groups { display:grid; gap:10px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
 .sent-index-head { margin:0 0 5px; padding:0 2px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
 .sent-index-head.phone { color:#a99cf0; }
@@ -1226,6 +1236,9 @@ span.files-close { background:transparent; }
 .file-tab-card .tab-card-main > span { display:grid; gap:2px; min-width:0; }
 .file-tab-card .tab-card-title strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .file-tab-place { overflow:hidden; color:#8b93aa; font-size:.76rem; text-overflow:ellipsis; white-space:nowrap; }
+.file-tab-markup { display:flex; flex-wrap:wrap; gap:2px 10px; min-width:0; color:#8b93aa; font-size:.76rem; }
+.file-tab-markup > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.file-tab-unsent { color:#f28b82; }
 .files-list small { font-size:.76rem; }
 .option-list .files-chevron { width:17px; height:17px; color:#6f7790; }
 /* A folded section's head: the desktop tree's divider, not a card. */
@@ -1475,6 +1488,10 @@ span.files-close { background:transparent; }
 .outbox-gallery-grid .outbox-thumb strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#d8e2f5; font-size:.72rem; font-weight:600; }
 /* One column pinned to the screen's width: an auto column grew to the head's
    widest line and letterboxed the picture into a box wider than the phone. */
+/* A markup view tucked away behind its tab's chat (Terminal's markupAway):
+   the host box stays, so hiding never remounts the viewer. */
+.markup-host { display:contents; }
+.markup-host.away { display:none; }
 .outbox-viewer { position:fixed; inset:0; z-index:13; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); background:rgba(4,5,9,.97); color:#e6e9f2; }
 .outbox-viewer-head { display:flex; align-items:center; gap:8px; min-width:0; min-height:0; padding:calc(8px + env(safe-area-inset-top)) 10px 8px; }
 .outbox-viewer-head > a, .outbox-viewer-head > button { flex:0 0 auto; }
@@ -1546,6 +1563,10 @@ span.files-close { background:transparent; }
 .outbox-confirm { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-left:auto; }
 .outbox-confirm button { border:1px solid #34384a; border-radius:999px; background:#141a26; color:#d8e2f5; font-size:.7rem; padding:4px 8px; }
 .outbox-confirm .outbox-delete-yes { border-color:#6b2f33; background:#2a1416; color:#f2b8b5; }
+/* The gallery's Delete all, under the count: the tile's red answer, as a pill. */
+.outbox-clear { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 6px 10px; }
+.outbox-clear .outbox-confirm { margin-left:0; color:#d8e2f5; font-size:.78rem; }
+.outbox-clear-all { border:1px solid #6b2f33; border-radius:999px; background:#2a1416; color:#f2b8b5; font-size:.78rem; padding:6px 12px; }
 .outbox-entry-error { padding:0 2px; color:#f2b8b5; font-size:.7rem; }
 .outbox-viewer-head a, .outbox-text-body a, .outbox-viewer > a { color:#8fb8ff; }
 /* The head's actions — Mark up, Save, Share — as one row of the same small
@@ -1580,6 +1601,10 @@ span.files-close { background:transparent; }
 .markup-round .markup-reload { margin-left:auto; min-height:32px; }
 .markup-round .markup-apply { margin-left:auto; min-height:32px; }
 .markup-round .markup-apply + .markup-reload { margin-left:0; }
+/* A dialog the tab's CLI waits on: its question on a line of its own, read
+   only; the chat button beside the pill leads there. */
+.markup-round .markup-round-dialog { flex:1 1 100%; order:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#e6e9f2; }
+.markup-round .markup-submit.markup-chat { margin-left:auto; min-height:32px; }
 .markup-round .outbox-action { display:inline-flex; align-items:center; padding:0 11px; border:1px solid #34384a; border-radius:999px; background:#141a26; color:#d8e2f5; font:500 .78rem/1 Inter,ui-sans-serif,system-ui,sans-serif; }
 .markup-scroller { position:relative; min-height:0; overflow:auto; overscroll-behavior:contain; touch-action:pan-x pan-y; -webkit-overflow-scrolling:touch; }
 .markup-scroller.finger-draws { touch-action:none; }

@@ -123,6 +123,7 @@ export function PdfPresentBar(p: PdfPresentBarProps) {
           {p.fileName}
         </span>
         <UntestedTag id="pdfPresent.barLabel" />
+        <UntestedTag id="pdfPresent.autoReload" />
       </div>
 
       <div className="pdf-present-bar-group is-nav">

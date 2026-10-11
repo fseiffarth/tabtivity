@@ -307,6 +307,9 @@ export function openGif(
 
   const maxPixelBytes = opts?.maxPixelBytes ?? DEFAULT_MAX_PIXEL_BYTES;
   const frameBytes = width * height * 4;
+  // Checked before the canvas below is allocated: the size is the file's claim,
+  // so a 30-byte GIF could otherwise ask for 65535² × 4 bytes (16 GiB) up front.
+  if (frameBytes > maxPixelBytes) throw new GifDecodeError("logical screen too large");
   // The persistent composite canvas; starts fully transparent.
   const canvas = new Uint8ClampedArray(frameBytes);
   let snapshot: Uint8ClampedArray | null = null;
@@ -359,6 +362,11 @@ export function openGif(
         const table = lct ?? gct;
         if (!table) throw new GifDecodeError("frame has no color table");
         if (w === 0 || h === 0) throw new GifDecodeError("empty frame");
+        // `lzwDecode` sizes its index buffer from the frame's own `w*h`, which
+        // the file claims: refused before decoding when the frame alone would
+        // pass the pixel budget. A frame merely wider or taller than the screen
+        // (broken but real files) still decodes and draws clipped.
+        if (w * h * 4 > maxPixelBytes) throw new GifDecodeError("frame too large");
         if ((delivered + 1) * frameBytes > maxPixelBytes) {
           truncated = true;
           return null;

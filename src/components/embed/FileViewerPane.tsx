@@ -175,6 +175,7 @@ import {
 import { DiffView } from "./DiffView";
 import { SyncMergeView } from "./SyncMergeView";
 import { OdtView } from "./OdtView";
+import { ViewerErrorBoundary } from "./ViewerErrorBoundary";
 import { MediaView } from "./MediaView";
 import { GifView } from "./GifView";
 import { ImageAnnotator } from "./ImageAnnotator";
@@ -247,6 +248,7 @@ import {
   actionMatches,
   chordLabel,
   chordMatches,
+  modifierLabel,
   resolveChord,
   zoomFor,
   type ShortcutMap,
@@ -332,9 +334,13 @@ export function useViewerState(tabKey: string | undefined) {
   return useMemo(() => ({ initial, persist }), [initial, persist]);
 }
 
-// The modifier that opens a recognised file link (Ctrl/Cmd+Click). Shown verbatim
-// in the hover hint, so it must read as the key the user actually presses.
-const OPEN_MODIFIER = IS_MAC ? "⌘" : "Ctrl";
+// The ghost-suggestion key legend's Alt chords, rendered once through
+// `chordLabel` so they read ⌥ on macOS and Alt elsewhere; the handler itself is
+// unchanged (`e.altKey`).
+const AC_KEY_LABELS = {
+  altRight: chordLabel({ key: "ArrowRight", alt: true }),
+  altBrackets: `${chordLabel({ key: "[", alt: true })}/]`,
+};
 
 /** A small floating "{Ctrl}+Click to open" hint, anchored just above a hovered
  *  file link (#49). `at` is viewport coordinates of the link's top-left, or null
@@ -350,7 +356,7 @@ function LinkOpenHint({
   if (!at) return null;
   return (
     <div className="link-open-hint" role="tooltip" style={{ left: at.left, top: at.top }}>
-      {label ?? t("fileViewer.linkOpenHint", { modifier: OPEN_MODIFIER })}
+      {label ?? t("fileViewer.linkOpenHint", { modifier: modifierLabel() })}
     </div>
   );
 }
@@ -726,7 +732,17 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
         <div className="presentation-host">
           {/* Fallback null: a lazy viewer's chunk loads in milliseconds off
               local disk, and any placeholder would flash for exactly that. */}
-          <Suspense fallback={null}>{view}</Suspense>
+          {/* One boundary for every viewer (threat model row 28): a viewer that
+              throws while rendering shows a card in this pane instead of
+              unmounting the window. Reset when the file or viewer changes. */}
+          <ViewerErrorBoundary
+            resetKey={`${viewer}\u0000${effectivePath}`}
+            sourcePath={TEXT_SOURCE_VIEWERS.has(viewer) ? effectivePath : null}
+            projectId={projectId}
+            onOpenExternally={NO_OPEN_EXTERNALLY_VIEWERS.has(viewer) ? null : openExternally}
+          >
+            <Suspense fallback={null}>{view}</Suspense>
+          </ViewerErrorBoundary>
           {!presenting && <PresentationOverlay />}
         </div>
       </ViewerHeaderInfoContext.Provider>
@@ -734,6 +750,20 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
     </FileScopeContext.Provider>
   );
 }
+
+/** Viewers whose file is text, so the error boundary can offer it as plain
+ *  source. Binary viewers (images, PDF, ODT, media, SQLite, spreadsheets) and
+ *  the comparison views, whose `path` means something else, are left out. */
+const TEXT_SOURCE_VIEWERS: ReadonlySet<InternalViewer> = new Set<InternalViewer>([
+  "text", "markdown", "tex", "texworkspace", "html", "yaml", "bib", "eldeck", "notebook",
+]);
+
+/** Views whose header has no "Open externally" (the merge resolvers: their
+ *  `path` names a conflict, not one file the OS should open), so the error
+ *  boundary's card does not offer it either. */
+const NO_OPEN_EXTERNALLY_VIEWERS: ReadonlySet<InternalViewer> = new Set<InternalViewer>([
+  "syncmerge", "gitmerge",
+]);
 
 /** The file identity a `ViewerHeader` needs to offer file-scoped actions (the
  *  auto-sync toggle, the Local/Remote source switch) without every sub-viewer
@@ -2957,6 +2987,7 @@ function CodeEditor({
   groupId?: string | null;
 }) {
   const t = useT();
+  const chordHint = useChordHint();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Proportional scroll-link to a paired subwindow (no-op unless linked).
   const reportScrollSync = useScrollSync(groupId, textareaRef);
@@ -3212,10 +3243,11 @@ function CodeEditor({
   // the textarea's own final empty line so scrolling stays aligned.
   const lang = useMemo(() => languageForPath(path), [path]);
   // #45a: Copilot serves this editor only for a consented local project's code
-  // file; everything else stays on Ollama. The backend enforces the same gates.
+  // file, or its text file under the second opt-in; everything else stays on
+  // Ollama. The backend enforces the same gates.
   const copilotEnabled = useExperimental("copilot_completion");
   const acRemote = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.remote);
-  const acCopilot = useSettingsStore((s) => copilotServes(s.settings, copilotEnabled, scope, acRemote, lang));
+  const acCopilot = useSettingsStore((s) => copilotServes(s.settings, copilotEnabled, scope, acRemote, lang, path));
   // Per mount, so a remount never inherits the previous mount's document versions.
   const [acEditorId] = useState(() => crypto.randomUUID());
   const acFeedback = useMemo(
@@ -5286,7 +5318,7 @@ function CodeEditor({
       )}
       {suggestion && !acStatus && (
         <div className="file-viewer-ac-status" role="status">
-          {acCopilot ? t("fileViewer.copilotControls") : t("fileViewer.autocompleteControls", { candidate: acCandidate.current + 1 })}
+          {acCopilot ? t("fileViewer.copilotControls", AC_KEY_LABELS) : t("fileViewer.autocompleteControls", { ...AC_KEY_LABELS, candidate: acCandidate.current + 1 })}
         </div>
       )}
       {acStatus && (
@@ -5492,7 +5524,7 @@ function CodeEditor({
               onClick={() => setReplaceOpen((v) => !v)}
               aria-pressed={replaceOpen}
               aria-label={replaceOpen ? t("fileViewer.hideReplace") : t("fileViewer.showReplace")}
-              title={replaceOpen ? t("fileViewer.hideReplace") : t("fileViewer.showReplaceTitle")}
+              title={replaceOpen ? t("fileViewer.hideReplace") : chordHint(t("fileViewer.showReplaceTitle"), "editorReplace")}
             >
               {replaceOpen ? "▾" : "▸"}
             </button>
@@ -5572,7 +5604,7 @@ function CodeEditor({
                 className="file-viewer-find-btn file-viewer-replace-btn"
                 onClick={replaceAll}
                 disabled={matches.length === 0}
-                title={t("fileViewer.replaceAllTitle")}
+                title={chordHint(t("fileViewer.replaceAllTitle"), { key: "Enter", ctrl: true })}
                 aria-label={t("fileViewer.replaceAllLabel")}
               >
                 {t("fileViewer.replaceAllBtn")}
@@ -5600,6 +5632,7 @@ export function SaveButton({
   title?: string;
 }) {
   const t = useT();
+  const chordHint = useChordHint();
   return (
     <button
       className={`file-viewer-save${isDirty ? " is-dirty" : ""}${saving ? " is-saving" : ""}`}
@@ -5609,7 +5642,7 @@ export function SaveButton({
       title={
         saving
           ? t("common.saving")
-          : title ?? (isDirty ? t("fileViewer.saveWithShortcut") : t("fileViewer.noUnsavedChanges"))
+          : title ?? (isDirty ? chordHint(t("fileViewer.saveWithShortcut"), "editorSave") : t("fileViewer.noUnsavedChanges"))
       }
     >
       {saving ? (
@@ -5665,6 +5698,7 @@ export function UndoRedoButtons({
   canRedo: boolean;
 }) {
   const t = useT();
+  const chordHint = useChordHint();
   return (
     <div className="file-viewer-history" role="group" aria-label={t("fileViewer.editHistory")}>
       <button
@@ -5672,7 +5706,7 @@ export function UndoRedoButtons({
         onClick={undo}
         disabled={!canUndo}
         aria-label={t("common.undo")}
-        title={t("fileViewer.undoShortcut")}
+        title={chordHint(t("fileViewer.undoShortcut"), "editorUndo")}
       >
         ↶
       </button>
@@ -5681,7 +5715,7 @@ export function UndoRedoButtons({
         onClick={redo}
         disabled={!canRedo}
         aria-label={t("common.redo")}
-        title={t("fileViewer.redoShortcut")}
+        title={chordHint(t("fileViewer.redoShortcut"), "editorRedo")}
       >
         ↷
       </button>
@@ -6374,11 +6408,12 @@ function useLocalModelLoaded(): boolean {
  */
 function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string }) {
   const t = useT();
+  const chordHint = useChordHint();
   const modelLoaded = useLocalModelLoaded();
   const scope = useFileScope();
   const enabled = useExperimental("copilot_completion");
   const remote = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.remote);
-  const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, languageForPath(path)));
+  const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, languageForPath(path), path));
   return (
     <div className="file-viewer-ai-controls" role="group" aria-label={t("fileViewer.aiAssistGroup")}>
       {/* Dictionary spelling needs no model, so it is offered regardless —
@@ -6405,8 +6440,8 @@ function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string }) {
             onClick={ai.toggleAutocomplete}
             aria-pressed={ai.autocomplete}
             title={
-              copilot ? t("fileViewer.copilotToggleHint") : ai.autocomplete
-                ? t("fileViewer.autocompleteOnHint")
+              copilot ? chordHint(t("fileViewer.copilotToggleHint"), "editorAutocomplete") : ai.autocomplete
+                ? chordHint(t("fileViewer.autocompleteOnHint"), "editorAutocomplete")
                 : t("fileViewer.autocompleteOffHint")
             }
           >
@@ -6741,13 +6776,14 @@ function FontSizeControls({
   reset: () => void;
 }) {
   const t = useT();
+  const chordHint = useChordHint();
   return (
     <div className="file-viewer-zoom file-viewer-fontsize" role="group" aria-label={t("fileViewer.textSizeGroup")}>
       <button
         className="file-viewer-zoom-btn"
         onClick={dec}
         disabled={fontSize <= EDITOR_FONT_MIN}
-        title={t("fileViewer.decreaseTextSize")}
+        title={chordHint(t("fileViewer.decreaseTextSize"), "zoomOut")}
         aria-label={t("fileViewer.decreaseTextSizeLabel")}
       >
         A−
@@ -6755,7 +6791,7 @@ function FontSizeControls({
       <button
         className="file-viewer-zoom-level file-viewer-fontsize-level"
         onClick={reset}
-        title={t("fileViewer.resetTextSize")}
+        title={chordHint(t("fileViewer.resetTextSize"), "zoomReset")}
         aria-label={t("fileViewer.resetTextSizeLabel")}
       >
         {fontSize}
@@ -6764,7 +6800,7 @@ function FontSizeControls({
         className="file-viewer-zoom-btn"
         onClick={inc}
         disabled={fontSize >= EDITOR_FONT_MAX}
-        title={t("fileViewer.increaseTextSize")}
+        title={chordHint(t("fileViewer.increaseTextSize"), "zoomIn")}
         aria-label={t("fileViewer.increaseTextSizeLabel")}
       >
         A+
@@ -9600,6 +9636,21 @@ function TexView({
   // Directory the build runs in — error paths in the log are relative to it.
   const rootDir = dirname(root) || "/";
 
+  // The engine "Auto" builds with: the backend reads it off the document (a
+  // `% !TEX program` comment, fontspec / luacode / xeCJK, …). Re-read whenever a
+  // compile ends, since the save before it is what puts a new `\usepackage` on disk.
+  const [autoEngine, setAutoEngine] = useState<string | null>(null);
+  const showEngineMenu = (cap?.engines?.length ?? 0) > 1;
+  useEffect(() => {
+    if (!showEngineMenu || compiling) return;
+    let cancelled = false;
+    invoke<string | null>("tex_auto_engine", { path: root }).then(
+      (e) => { if (!cancelled) setAutoEngine(e ?? null); },
+      () => {},
+    );
+    return () => { cancelled = true; };
+  }, [showEngineMenu, root, compiling]);
+
   // The output-folder picker browses the project this document belongs to,
   // opening at the main file's folder. A relative out-dir resolves against that
   // folder in `compile_tex`, so the pick is stored relative to it (`..` included)
@@ -10060,7 +10111,7 @@ function TexView({
               ? t("fileViewer.compileNamed", { name: rootName })
               : t("fileViewer.compileBtn")}
         </button>
-        {cap.engines.length > 1 && (
+        {showEngineMenu && (
           <Dropdown
             className="file-viewer-tex-engine"
             title={t(
@@ -10073,13 +10124,14 @@ function TexView({
             onChange={(v) => patchOpts({ engine: v })}
             disabled={compiling}
             options={[
-              // "" lets the backend pick; label it with the engine it would use
-              // (the first installed one, matching the backend's default order).
-              { value: "", label: t("fileViewer.engineDefault", { engine: cap.engines[0] }) },
+              // "" lets the backend pick from the document; label it with the
+              // engine it would use (the first installed one until that answers).
+              { value: "", label: t("fileViewer.engineAuto", { engine: autoEngine ?? cap.engines[0] }) },
               ...cap.engines.map((eng) => ({ value: eng, label: eng })),
             ]}
           />
         )}
+        {showEngineMenu && !engine && <UntestedTag id="fileViewer.engineAuto" />}
         {compiling && <span className="file-viewer-tex-spinner" aria-hidden="true" />}
         <button
           className={`file-viewer-tex-options-toggle${showOptions ? " active" : ""}`}
@@ -10220,6 +10272,7 @@ function TexView({
               : syncNote === "unavail"
                 ? "fileViewer.syncUnavailMsg"
                 : "fileViewer.syncMissMsg",
+            { modifier: modifierLabel() },
           )}
           {syncNote === "noPdf" && <UntestedTag id="fileViewer.syncNoPdfMsg" />}
         </div>

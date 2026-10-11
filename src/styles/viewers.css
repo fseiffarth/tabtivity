@@ -838,6 +838,17 @@
   font-size: 10px;
 }
 
+/* A worded button that leads with a shared icon (the PDF toolbar's ▶ Fullscreen
+   and ▶ Present). Inline, the icon's own `vertical-align: -0.2em` and 1.2em box
+   sit on the text baseline of an 18px button and spill past its border; laid
+   out as a centred row, the icon and the label share the box's middle. */
+.file-viewer-zoom-btn:has(> svg) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
 .file-viewer-zoom-btn:disabled {
   opacity: 0.5;
   cursor: var(--cur-default, default);
@@ -4528,6 +4539,15 @@
   gap: 6px;
   color: var(--text-primary);
 }
+/* The question of a dialog the target tab waits on, read-only beside the
+   pill: one line, the rest is the tab's to show. */
+.file-viewer-pdf-markup-dialog {
+  min-width: 0;
+  max-width: 40em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* The agent's markup questions (`PdfMarkupQuestions`): the reader's question
    card (`terminal-reader-question`, `subwindows.css`) on the markup strip's
    ground, scrolling on its own so a long ask never pushes the pages away.
@@ -4577,14 +4597,19 @@
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+/* Also the chat view's field under Claude's "Type something." row
+   (`LiveQuestion`, subwindows.css's `.terminal-reader-question`): one look for
+   an answer typed instead of picked. */
 .file-viewer-pdf-markup-question-other,
+.terminal-reader-question-type,
 .file-viewer-pdf-markup-question-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
-.file-viewer-pdf-markup-question-other input {
+.file-viewer-pdf-markup-question-other input,
+.terminal-reader-question-type input {
   flex: 1;
   min-width: 12em;
   padding: 4px 8px;
@@ -6672,4 +6697,16 @@
 :is([data-theme="dark"], [data-theme="light"]) .md-graph-node-missing circle {
   fill: none;
   stroke: var(--danger);
+}
+
+/* "Show source" in a viewer that stopped on an error (ViewerErrorBoundary):
+   the file as plain read-only text, nothing parsed. */
+.viewer-crash-source {
+  margin: 0;
+  padding: 8px 12px;
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: pre;
+  tab-size: 4;
 }

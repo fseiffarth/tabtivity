@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { promptClock, promptLines, promptsFromTranscript, scheduleClock } from "../agentPrompts";
 import { GitSheet } from "./GitSheet";
-import { ApiError, TAB_CREATE_TIMEOUT, api, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type TabSchedules } from "../api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type TabSchedules } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, writeChoice } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -19,7 +20,9 @@ import { AgentModeMarks, SubagentCount, SubagentWorktreeMarks, TurnDuration, Wor
 import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab } from "../components/OutboxViewer";
 import { FileGlyph, ProjectFiles, asViewerFile } from "../components/ProjectFiles";
-import { closeFileTab, onFileTabs, readFileTabs, refreshFileTab, type FileTab } from "../filesPlace";
+import { closeFileTab, findFileTab, onFileTabs, readFileTabs, refreshFileTab, type FileTab } from "../filesPlace";
+import { markCount } from "../markup/layer";
+import { layerKey, loadLayer } from "../markup/store";
 import { tabColorCss } from "../tabColors";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { GripHint } from "./Home";
@@ -131,6 +134,20 @@ function withoutClosed(detail: ProjectDetail, closed: Map<string, number>): Proj
     : { ...detail, tabs: detail.tabs.filter((row) => !closed.has(row.id)) };
 }
 
+/** A phone-side file card's key, for React and for the swipe that closes it;
+ * prefixed so it can never read as a session's id. */
+function fileTabKey(file: FileTab): string {
+  return file.from === "outbox" ? `outbox:${file.name}` : `file:${file.place}/${file.name}`;
+}
+
+/** A card's file as the viewer opens it: an outbox file's row as the
+ * project's outbox lists it now, else as the card last saw it. */
+function cardViewerFile(file: FileTab, outbox: readonly OutboxFile[]): OutboxFile {
+  if (file.from !== "outbox") return asViewerFile(file);
+  return outbox.find((row) => row.name === file.name)
+    ?? { name: file.name, kind: file.kind, size: file.size, modified: file.modified, ...(file.label ? { original: file.label } : {}) };
+}
+
 export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep }) => void }) {
   const t = useT();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
@@ -161,12 +178,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const [galleryOpen, setGalleryOpen] = useState(false);
   /** The file open full screen (a picture or a text preview). */
   const [fileOpen, setFileOpen] = useState<OutboxFile | null>(null);
-  /** The read-only file browser, a drawer a left→right swipe over the screen
-   * slides in from the left, there when the desktop's "Project files on the
-   * phone" switch is on (`detail.files`); the name's dropdown opens it too. */
-  const [filesOpen, setFilesOpen] = useState(false);
-  /** The PDFs this phone opened from the drawer (`filesPlace.ts`), a card
-   * each after the tabs while the drawer is offered, and the one open now. */
+  /** The project's drawer, slid in from the left by a left→right swipe over
+   * the screen or the header's ☰: the agent's files and Git, then the
+   * read-only file browser while the desktop's "Project files on the phone"
+   * switch is on (`detail.files`). */
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  /** The PDFs this phone opened from the drawer and the files it marked up
+   * (`filesPlace.ts`), a card each after the tabs, and the one open now. */
   const [fileTabs, setFileTabs] = useState<FileTab[]>(() => readFileTabs(id));
   const [fileTabOpen, setFileTabOpen] = useState<FileTab | null>(null);
   useEffect(() => {
@@ -178,44 +196,78 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * fresh token, size and time, which the card keeps too. */
   const refreshFileTabRow = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
     const tab = fileTabOpen;
-    if (!tab) return null;
+    if (!tab || tab.from === "outbox") return null;
     const fresh = await listProjectFiles(id, tab.folder);
     const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
     if (!entry) return null;
     refreshFileTab(id, { ...tab, token: entry.token, kind: entry.kind, size: entry.size, modified: entry.modified });
     return asViewerFile(entry);
   }, [id, fileTabOpen]);
-  /** The dropdown under the project's name (the gallery, the file drawer). */
-  const [projectMenu, setProjectMenu] = useState(false);
   /** The read-only git overview (`GitSheet`), for a project scope only: a box
    * or the root console has no repo of its own. */
   const [gitOpen, setGitOpen] = useState(false);
   const screenRef = useRef<HTMLElement | null>(null);
   const filesOffered = !!detail?.files;
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project";
-  const projectMenuOffered = outbox.length > 0 || filesOffered || gitOffered;
+  /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
+   * host with none (Windows) nothing can be opened, scheduled or sent to from
+   * here, so the ＋ sheet keeps only its send-a-file row, each card's ◷ and
+   * Mark up's Submit stay out and one line says why. An older desktop sends
+   * no field, which means tmux. */
+  const terminalsOffered = detail?.terminals !== "unsupported";
+  /** Whether the drawer has anything to hold, once the host has answered:
+   * no ☰ and no swipe else. */
+  const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || gitOffered);
+  /** What a right→left swipe over a card (`data-swipe-close`) does, read at
+   * the swipe: the listener below outlives the render that installed it, and
+   * would otherwise close against that render's list. Set further down, once
+   * the list and `close` are in hand. */
+  const swipeClose = useRef<(card: Element) => void>(() => {});
   useEffect(() => {
     const host = screenRef.current;
-    if (!filesOffered || filesOpen || !host) return;
+    if (drawerOpen || !host) return;
     // Not from a card's grip (its drag is its own, `touch-action:none`), and
-    // not through a sheet laid over the list.
-    return installFocusSwipe(host, { onSwipeRight: () => setFilesOpen(true), onSwipeLeft: () => {} }, { ignore: ".tab-card-grip, .sheet-backdrop, [role='dialog']", leftEdge: true });
-  }, [filesOffered, filesOpen]);
+    // not through a sheet laid over the list. Left→right pulls the drawer in,
+    // from the left edge too; right→left over a card closes it.
+    return installFocusSwipe(host, {
+      onSwipeRight: () => { if (drawerOffered) setDrawerOpen(true); },
+      onSwipeLeft: (_start, target) => {
+        const card = target?.closest("[data-swipe-close]");
+        if (card) swipeClose.current(card);
+      },
+    }, { ignore: ".tab-card-grip, .sheet-backdrop, [role='dialog']", leftEdge: drawerOffered });
+  }, [drawerOffered, drawerOpen]);
   const outboxScope = useMemo(() => ({ project: id }), [id]);
   const filesScope = useMemo(() => ({ files: id }), [id]);
   /** The pictures among them, which the full-screen viewer steps through. */
   const outboxPictures = useMemo(() => outbox.filter((file) => file.kind.startsWith("image/")), [outbox]);
+  /** The cards shown: a project file's only while the desktop's files switch
+   * is on, as it gates the files they read; a file the agent sent always. */
+  const shownFileTabs = useMemo(() => fileTabs.filter((file) => file.from === "outbox" || filesOffered), [fileTabs, filesOffered]);
+  /** Each card's marks not yet submitted, from the phone's layer store —
+   * read again whenever a viewer over this screen closes. */
+  const [unsentMarks, setUnsentMarks] = useState<Record<string, number>>({});
+  const viewerUp = fileTabOpen !== null || fileOpen !== null || drawerOpen || galleryOpen;
+  useEffect(() => {
+    if (viewerUp) return;
+    let live = true;
+    void Promise.all(shownFileTabs.map(async (file) => {
+      const stored = await loadLayer(layerKey(id, file.from === "outbox" ? { outbox: file.name } : { files: `${file.place}/${file.name}` }));
+      return [fileTabKey(file), stored && stored !== "unavailable" ? markCount(stored.layer).marks : 0] as const;
+    })).then((counts) => { if (live) setUnsentMarks(Object.fromEntries(counts)); });
+    return () => { live = false; };
+  }, [id, shownFileTabs, viewerUp]);
   /** The tab whose colour is being picked (#264), of any kind the phone lists —
    * colouring is how a row of look-alike sessions is told apart, which is as
    * true of five shells as of five agents. */
   const [colorTab, setColorTab] = useState<TabRow | null>(null);
   /** The tab whose subagent pill was tapped: its subagents are listed. */
   const [subagentsTab, setSubagentsTab] = useState<TabRow | null>(null);
-  /** The tab whose ✕ was pressed. The sheet asks before anything is closed: the
-   *  button sits a thumb-width from the one that opens the terminal, and the
-   *  answer is worth reading — closing leaves the session running. */
   /** The tab whose close is in flight — its ✕ is held until the desktop answers. */
   const [closingId, setClosingId] = useState<string | null>(null);
+  /** The card a swipe is closing: it slides out while the desktop answers,
+   *  and back in if the close is refused. */
+  const [swipedId, setSwipedId] = useState<string | null>(null);
   /** The tabs this phone has closed, each against the moment it was answered,
    *  held back from every load until the catalog agrees (`withoutClosed`). */
   const closed = useRef(new Map<string, number>());
@@ -226,6 +278,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * reading and sinks, keeping the tab bar's order among its kind. */
   const [sort, setSort] = useState<AgentSort>(() => readChoice("projectTabsSort", isAgentSort, DEFAULT_AGENT_SORT));
   const chooseSort = (next: AgentSort) => { setSort(next); writeChoice("projectTabsSort", next); };
+  /** The dropdown under the project's name, which picks the order. */
+  const [sortMenu, setSortMenu] = useState(false);
   const tabs = useMemo(() => sortAgentTabs(detail?.tabs ?? [], sort, (tab) => ({
     decision: tab.agent_status === "question",
     working: tab.agent_status === "working",
@@ -331,12 +385,32 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     });
     setFileOpen((open) => open?.name === file.name ? null : open);
   }, [id]);
+  /** The gallery's Delete all: the project's whole outbox goes, to free the
+   * space, and the sheet closes over the empty list. */
+  const removeAllFiles = useCallback(async () => {
+    await clearOutbox({ project: id });
+    setOutbox([]);
+    setGalleryOpen(false);
+    setFileOpen(null);
+  }, [id]);
+  /** The desktop's tabs as last listed, for `markupNewTab`'s `linked`: read
+   * at a markup view's opening, so a poll does not rebuild the prop. */
+  const tabRows = useRef<TabRow[]>([]);
+  tabRows.current = detail?.tabs ?? [];
   /** Mark up from here has no chat to send to: its Submit opens a new tab of
    * the desktop's default agent, which its Open tab shows — offered once
-   * there is one. */
+   * there is one. A file whose card names an agent tab still open sends
+   * there instead (`linked`). */
   const markupNewTab = useMemo<MarkupNewTab | undefined>(
-    () => detail?.agents.length ? { projectId: id, show: (tab: TabRow) => terminal(tab) } : undefined,
-    [detail?.agents.length, id, terminal],
+    () => detail?.agents.length && terminalsOffered ? {
+      projectId: id,
+      show: (tab: TabRow) => terminal(tab),
+      linked: (file) => {
+        const tabId = findFileTab(id, file)?.tab;
+        return tabId ? tabRows.current.find((row) => row.id === tabId && row.kind === "agent") : undefined;
+      },
+    } : undefined,
+    [detail?.agents.length, terminalsOffered, id, terminal],
   );
   const create = async (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => {
     setCreating(true); setError("");
@@ -376,6 +450,21 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     } finally {
       setClosingId(null);
     }
+  };
+  /** A swipe closes the card it ran over, as its ✕ would: a session through
+   *  the desktop (held while another close is in flight, as the ✕ is), a
+   *  phone-side PDF card at once. */
+  swipeClose.current = (card) => {
+    const key = card.getAttribute("data-swipe-close");
+    const tab = tabs.find((row) => row.id === key);
+    if (tab) {
+      if (closingId !== null) return;
+      setSwipedId(tab.id);
+      void close(tab).finally(() => setSwipedId(null));
+      return;
+    }
+    const file = shownFileTabs.find((row) => fileTabKey(row) === key);
+    if (file) closeFileTab(id, file);
   };
   /** The closed tab whose reopen is in flight. */
   const [reopeningId, setReopeningId] = useState<string | null>(null);
@@ -442,66 +531,62 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   };
   return <main className="screen project-screen" ref={screenRef}>
     {/* One dense row, shaped like an agent tab's header: chevron, the name
-        (ellipsized), then this list's own controls kept compact — the order
-        select at view-switch size and a small ＋ — so the name keeps the rest.
+        (ellipsized) with the order it sorts by under it, then the drawer's ☰
+        and a small ＋ — so the name keeps the rest.
 
-        The same three orders the desktop Agents view offers, remembered per
-        phone. "Manual" is this screen's name for the arrival order, because here
-        that order is the desktop's own tab order — the one a drag writes into. */}
+        The name is the order's dropdown, with the Focus switch's caret: the
+        same three orders the desktop Agents view offers, remembered per phone.
+        "Manual" is this screen's name for the arrival order, because here that
+        order is the desktop's own tab order — the one a drag writes into. Plain
+        text while there is only one tab to order. */}
     <header className="project-header">
       <button className="back" onClick={back}>‹</button>
-      {/* The name opens what this project has besides its tabs — the agent's
-          files (the 🖼 the Focus screen carries) and the file drawer a swipe
-          also opens — so the row keeps only the order and ＋. Plain text while
-          there is nothing to offer. */}
-      <div className="terminal-title"><h1>{projectMenuOffered
-        ? <button
+      <div className="terminal-title">{tabs.length > 1
+        ? <><h1><button
           className="project-title"
-          onClick={() => setProjectMenu((open) => !open)}
+          onClick={() => setSortMenu((open) => !open)}
           aria-haspopup="menu"
-          aria-expanded={projectMenu}
-          title={t("mobile.project.menu")}
-        ><span>{detail?.project.label ?? t("mobile.project.fallbackName")}</span><span className="view-caret" aria-hidden="true" /></button>
-        : detail?.project.label ?? t("mobile.project.fallbackName")}</h1></div>
+          aria-expanded={sortMenu}
+          title={t("mobile.project.sortAria")}
+        ><span>{detail?.project.label ?? t("mobile.project.fallbackName")}</span><span className="view-caret" aria-hidden="true" /></button></h1>
+          <small>{t("mobile.project.sortedBy", { order: t(SORT_LABEL[sort]) })}</small></>
+        : <h1>{detail?.project.label ?? t("mobile.project.fallbackName")}</h1>}</div>
       <div className="project-header-tools">
-        {tabs.length > 1 && <label className="activity-sort in-header">
-          <span>{t("agentPrompts.sort.label")}</span>
-          <select aria-label={t("mobile.project.sortAria")} value={sort} onChange={(event) => { if (isAgentSort(event.target.value)) chooseSort(event.target.value); }}>
-            {AGENT_SORTS.map((value) => <option key={value} value={value}>{t(SORT_LABEL[value])}</option>)}
-          </select>
-        </label>}
+        {/* What this project has besides its tabs — the agent's files (the
+            🖼 the Focus screen carries), Git and the file browser — lives in
+            the drawer a left→right swipe also pulls in. */}
+        {drawerOffered && <button
+          className="drawer-open"
+          onClick={() => setDrawerOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={drawerOpen}
+          aria-label={t("mobile.project.menu")}
+          title={t("mobile.project.menu")}
+        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg></button>}
         {/* Opening a session is what this screen is for, so it sits where the
             thumb already is rather than under however many cards the project has
             (`NewTabSheet`). It opens without the desktop too: sending a file
             from the phone needs only this host, and the sheet holds its create
-            buttons instead — the notice below says why. */}
+            buttons instead — the notice below says why. On a host with no
+            tmux it stays for that file row alone, and is named after it. */}
         <button
           className="primary new-tab"
           disabled={!detail}
           onClick={() => setNewTabOpen(true)}
           aria-haspopup="dialog"
           aria-expanded={newTabOpen}
-          aria-label={t("mobile.newTab.title")}
-          title={t("mobile.project.newTabTitle")}
+          aria-label={t(terminalsOffered ? "mobile.newTab.title" : "mobile.projectInbox.send")}
+          title={t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
         ><span aria-hidden="true">＋</span></button>
       </div>
     </header>
-    {projectMenu && projectMenuOffered && <div className="focus-menu-backdrop" role="presentation" onClick={() => setProjectMenu(false)}>
-      <div className="focus-menu project-menu" role="menu" aria-label={t("mobile.project.menu")} onClick={(event) => event.stopPropagation()}>
-        {outbox.length > 0 && <button
-          role="menuitem"
-          aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })}
-          onClick={() => { setProjectMenu(false); setGalleryOpen(true); }}
-        ><span aria-hidden="true" className="project-menu-icon">🖼</span><span><strong>{t("mobile.outbox.region")}</strong></span><small className="project-menu-count">{outbox.length}</small></button>}
-        {filesOffered && <button
-          role="menuitem"
-          onClick={() => { setProjectMenu(false); setFilesOpen(true); }}
-        ><span aria-hidden="true" className="project-menu-icon">📁</span><span><strong>{t("mobile.project.files")}</strong></span></button>}
-        {gitOffered && <button
-          role="menuitem"
-          onClick={() => { setProjectMenu(false); setGitOpen(true); }}
-        ><span aria-hidden="true" className="project-menu-icon">⎇</span><span><strong>{t("mobile.gitSheet.menu")}</strong>{isUntested("mobile.project.gitOverview") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span></button>}
-        {isUntested("mobile.project.nameMenu") && <p className="project-menu-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
+    {sortMenu && tabs.length > 1 && <div className="focus-menu-backdrop" role="presentation" onClick={() => setSortMenu(false)}>
+      <div className="focus-menu project-menu" role="menu" aria-label={t("mobile.project.sortAria")} onClick={(event) => event.stopPropagation()}>
+        {AGENT_SORTS.map((value) => <button key={value} role="menuitemradio" aria-checked={sort === value} onClick={() => { chooseSort(value); setSortMenu(false); }}>
+          <span><strong>{t(SORT_LABEL[value])}</strong></span>
+          {sort === value && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
+        </button>)}
+        {isUntested("mobile.project.sortMenu") && <p className="project-menu-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </div>
     </div>}
     {gitOpen && detail && <GitSheet projectId={id} label={detail.project.label} onClose={() => setGitOpen(false)} />}
@@ -509,12 +594,17 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         true while the first load was in flight, so every project opened on a
         "Desktop unavailable" notice that vanished a moment later. */}
     {detail && !detail.desktop_available && <p className="notice">{t("mobile.project.desktopUnavailable")} {isUntested("mobile.headless.tabs") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {/* The host has no tmux (Windows): its tabs never reach a phone, so the
+        controls that would open, schedule or send to one are not offered. */}
+    {!terminalsOffered && <p className="notice">{t("mobile.project.terminalsUnsupported")} {isUntested("mobile.project.terminalsUnsupported") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     {error && <p className="error">{error}</p>}
     {projectInbox.view}
     {canReorder && <p className="reorder-hint"><GripHint text={t("mobile.project.reorderHint")} /> {isUntested("mobile.project.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {tabs.length > 0 && isUntested("mobile.project.swipeClose") && <p className="reorder-hint">{t("mobile.project.swipeCloseHint")} <span className="untested">{t("mobile.newTab.untested")}</span></p>}
     <section className="cards">{tabs.map((tab) => <div
-      className={`tab-card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}${drag.rowClass(tab.id)}`}
+      className={`tab-card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}${drag.rowClass(tab.id)}${swipedId === tab.id ? " swiped-out" : ""}`}
       key={tab.id}
+      data-swipe-close={tab.id}
       ref={drag.rowRef(tab.id)}
       // The desktop marks a coloured tab with its bottom rule; a phone card has
       // no such edge to spend, so the colour becomes the card's left border —
@@ -559,7 +649,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             {/* Scheduling lives out here beside the tab, not inside the
                 session: reaching a schedule must not mean attaching a
                 terminal. The ◷ rides right of the model; agent tabs only. */}
-            {tab.kind === "agent" && <button className="tab-card-icon accent tab-card-schedule" onClick={() => setScheduleTab({ tab })} aria-haspopup="dialog" aria-expanded={scheduleTab?.tab.id === tab.id} aria-label={t("mobile.project.scheduledFor", { label: tab.label })} title={t("agentPrompts.scheduledHeading")}><span aria-hidden="true">◷</span></button>}
+            {tab.kind === "agent" && terminalsOffered && <button className="tab-card-icon accent tab-card-schedule" onClick={() => setScheduleTab({ tab })} aria-haspopup="dialog" aria-expanded={scheduleTab?.tab.id === tab.id} aria-label={t("mobile.project.scheduledFor", { label: tab.label })} title={t("agentPrompts.scheduledHeading")}><span aria-hidden="true">◷</span></button>}
             {tab.kind === "agent" && isUntested("mobile.project.scheduledInPrompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           </span>
         </span>
@@ -594,19 +684,33 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {/* The PDFs opened from the file drawer, after the sessions: the phone's
         own cards, so the desktop opens nothing and ✕ only forgets one. The
         drawer's switch gates them, as it gates the files they read. */}
-    {filesOffered && fileTabs.map((file) => <div className="tab-card file-tab-card" key={`${file.place}/${file.name}`}>
-      <div className="tab-card-head">
-        <FileGlyph kind={file.kind} />
-        <div className="card tab-card-main">
-          <span>
-            <span className="tab-card-title"><strong>{file.name}</strong>{isUntested("mobile.files.tabs") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
-            <small className="file-tab-place">{file.place || t("mobile.project.fileTab.root")}</small>
-          </span>
+    {shownFileTabs.map((file) => {
+      const name = file.label ?? file.name;
+      const unsent = unsentMarks[fileTabKey(file)] ?? 0;
+      /** The agent tab the file's markup rounds went to, while it is open. */
+      const linked = file.tab ? tabs.find((row) => row.id === file.tab && row.kind === "agent") : undefined;
+      const markup = file.from === "outbox" || file.tab !== undefined || unsent > 0;
+      return <div className="tab-card file-tab-card" key={fileTabKey(file)} data-swipe-close={fileTabKey(file)}>
+        <div className="tab-card-head">
+          <FileGlyph kind={file.kind} />
+          <div className="card tab-card-main">
+            <span>
+              <span className="tab-card-title"><strong>{name}</strong>{(markup ? isUntested("mobile.markup.tabs") : isUntested("mobile.files.tabs")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+              <small className="file-tab-place">{file.from === "outbox" ? t("mobile.outbox.region") : file.place || t("mobile.project.fileTab.root")}</small>
+              {(unsent > 0 || linked) && <small className="file-tab-markup">
+                {unsent > 0 && <span className="file-tab-unsent">{t(unsent === 1 ? "mobile.project.fileTab.unsentOne" : "mobile.project.fileTab.unsent", { count: unsent })}</span>}
+                {linked && <span>{t("mobile.project.fileTab.tab", { label: linked.label })}</span>}
+              </small>}
+            </span>
+          </div>
+          <button className="tab-card-icon tab-card-close" onClick={() => closeFileTab(id, file)} aria-label={t("mobile.project.fileTab.close", { name })} title={t("mobile.project.fileTab.close", { name })}><span aria-hidden="true">✕</span></button>
         </div>
-        <button className="tab-card-icon tab-card-close" onClick={() => closeFileTab(id, file)} aria-label={t("mobile.project.fileTab.close", { name: file.name })} title={t("mobile.project.fileTab.close", { name: file.name })}><span aria-hidden="true">✕</span></button>
-      </div>
-      <button className="tab-card-open" onClick={() => setFileTabOpen(file)} aria-label={t("mobile.project.fileTab.open", { name: file.name })} />
-    </div>)}</section>
+        <button className="tab-card-open" onClick={() => setFileTabOpen(file)} aria-label={t("mobile.project.fileTab.open", { name })} />
+        {/* The linked agent's state, on the card's left border as an agent
+            tab's card shows its own. */}
+        {linked?.agent_status && <AgentStatusMark status={linked.agent_status} />}
+      </div>;
+    })}</section>
     {/* Agent tabs closed on either surface, newest first: a tap reopens one
         on the desktop, resuming its conversation, and its card comes back. */}
     {!!detail?.closed?.length && <section className="create reopen-closed" aria-label={t("mobile.project.recentlyClosed")}>
@@ -633,12 +737,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       shells={detail.shells === true}
       busy={creating}
       headless={!detail.desktop_available}
+      creates={terminalsOffered}
       onClose={() => setNewTabOpen(false)}
       onPick={(kind, agent, mode, launch) => { setNewTabOpen(false); void create(kind, agent, mode, launch); }}
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}
     />}
     {subagentsTab && <SubagentsSheet tab={subagentsTab} onClose={() => setSubagentsTab(null)} onOpen={(step) => { const row = subagentsTab; setSubagentsTab(null); terminal(row, { subagent: step }); }} />}
-    {promptsOpen && detail && <PromptsSheet projectId={id} tabs={detail.tabs} onClose={() => setPromptsOpen(false)} onSchedule={(tab, initialMessage) => { setPromptsOpen(false); setScheduleTab({ tab, initialMessage }); }} />}
+    {promptsOpen && detail && <PromptsSheet projectId={id} tabs={detail.tabs} onClose={() => setPromptsOpen(false)} onSchedule={terminalsOffered ? (tab, initialMessage) => { setPromptsOpen(false); setScheduleTab({ tab, initialMessage }); } : undefined} />}
     {colorTab && <ColorSheet
       tab={colorTab}
       onClose={() => setColorTab(null)}
@@ -657,11 +762,27 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {scheduleTab && <ScheduleSheet tabId={scheduleTab.tab.id} label={scheduleTab.tab.label} initialMessage={scheduleTab.initialMessage} onClose={() => setScheduleTab(null)} />}
     {/* The viewer covers the phone; the gallery stays open behind it, so
         closing the file comes back to the list it was opened from. */}
-    {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onClose={() => setGalleryOpen(false)} />}
-    {filesOpen && detail?.files && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => setFilesOpen(false)}
-      showTab={markupNewTab?.show} />}
-    {fileTabOpen && filesOffered && <OutboxViewer key={`${id}/files/${fileTabOpen.place}/${fileTabOpen.name}`} scope={filesScope} file={asViewerFile(fileTabOpen)} onClose={() => setFileTabOpen(null)}
-      newTab={markupNewTab && { ...markupNewTab, place: fileTabOpen.place, refresh: refreshFileTabRow }} />}
+    {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onDeleteAll={removeAllFiles} onClose={() => setGalleryOpen(false)} />}
+    {drawerOpen && detail && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => setDrawerOpen(false)}
+      browse={filesOffered} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
+        {outbox.length > 0 && <button
+          role="menuitem"
+          aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })}
+          onClick={() => { setDrawerOpen(false); setGalleryOpen(true); }}
+        ><span aria-hidden="true" className="project-menu-icon"><FileImageIcon /></span><span><strong>{t("mobile.outbox.region")}</strong></span><small className="project-menu-count">{outbox.length}</small></button>}
+        {gitOffered && <button
+          role="menuitem"
+          onClick={() => { setDrawerOpen(false); setGitOpen(true); }}
+        ><span aria-hidden="true" className="project-menu-icon">⎇</span><span><strong>{t("mobile.gitSheet.menu")}</strong>{isUntested("mobile.project.gitOverview") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span></button>}
+        {isUntested("mobile.project.drawerMenu") && <p className="project-menu-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
+      </div> : undefined} />}
+    {/* A card's file: a picture opens in Mark up — its card is a markup under
+        way — and a PDF as the phone's "PDFs open in" says. */}
+    {fileTabOpen && (fileTabOpen.from === "outbox" || filesOffered) && <OutboxViewer key={`${id}/${fileTabKey(fileTabOpen)}`}
+      scope={fileTabOpen.from === "outbox" ? outboxScope : filesScope} file={cardViewerFile(fileTabOpen, outbox)} onClose={() => setFileTabOpen(null)}
+      startMarking={fileTabOpen.kind.startsWith("image/")}
+      newTab={markupNewTab && (fileTabOpen.from === "outbox" ? markupNewTab
+        : { ...markupNewTab, place: fileTabOpen.place, folder: fileTabOpen.folder, refresh: refreshFileTabRow })} />}
     {fileOpen && <OutboxViewer key={`${id}/${fileOpen.name}`} scope={outboxScope} file={fileOpen} pictures={outboxPictures} onStep={setFileOpen} onClose={() => setFileOpen(null)}
       newTab={markupNewTab} />}
   </main>;

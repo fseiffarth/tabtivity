@@ -6040,7 +6040,7 @@ dependencies = [
 
 [[package]]
 name = "tabtivity"
-version = "0.1.107"
+version = "0.1.115"
 dependencies = [
  "aes-gcm",
  "ammonia",
@@ -6052,6 +6052,7 @@ dependencies = [
  "base64ct",
  "bytes",
  "calamine",
+ "cfb",
  "chacha20poly1305",
  "chrono",
  "chrono-tz",

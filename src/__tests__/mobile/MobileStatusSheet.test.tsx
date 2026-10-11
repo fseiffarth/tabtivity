@@ -77,14 +77,14 @@ describe(`${BRAND.display} Mobile agent status sheet`, () => {
   });
 
   it("names the exact reset instant, not just the day the CLI printed", () => {
-    // 20:00 UTC is 22:00 in Berlin, so the 2pm reset two days out is 40h away
+    // 20:00 UTC is 22:00 in Berlin, so the 2pm reset two days out is 1d 16h away
     // whatever zone the test runs in.
     const now = new Date("2026-09-15T20:00:00Z");
     const text = resetText("Sep 17, 2pm (Europe/Berlin)", now);
     const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" })
       .format(new Date("2026-09-17T12:00:00Z"));
     expect(text).toContain(clock);
-    expect(text).toMatch(/ · in 40h 0m$/u);
+    expect(text).toMatch(/ · in 1d 16h$/u);
     expect(resetText("Mon 9am", new Date(2026, 8, 14, 8, 0))).toMatch(/ · in 1h 0m$/u);
     expect(resetText("Sep 15, 9am (Europe/Berlin)", now)).not.toContain(" · in ");
     // What cannot be placed is shown as the CLI said it, never guessed at.
@@ -97,12 +97,14 @@ describe(`${BRAND.display} Mobile agent status sheet`, () => {
     expect(resetCountdown("6:20pm", new Date(2026, 8, 15, 18, 21), readAt)).toBe("");
   });
 
-  it("shows minutes instead of a zero hours past two days", () => {
+  it("counts days from one day on, minutes instead of a zero hours", () => {
     const readAt = new Date(2026, 8, 14, 8, 0);
     // Mon 9am from Thu 8:23 is 4d 0h 37m away; from Thu 7:23 it is 4d 1h 37m.
     expect(resetCountdown("Mon 9am", new Date(2026, 8, 17, 8, 23), new Date(2026, 8, 17, 8, 0))).toBe("4d 37m");
     expect(resetCountdown("Mon 9am", new Date(2026, 8, 17, 7, 23), new Date(2026, 8, 17, 7, 0))).toBe("4d 1h");
     expect(resetCountdown("6:20pm", new Date(2026, 8, 14, 8, 0), readAt)).toBe("10h 20m");
+    // 42h 31m out reads as days, as the week window's countdown should.
+    expect(resetCountdown("Mon 9am", new Date(2026, 8, 19, 14, 29), new Date(2026, 8, 19, 14, 0))).toBe("1d 18h");
   });
 
   it("labels the project-wide counters as project-wide, not as this agent's", async () => {

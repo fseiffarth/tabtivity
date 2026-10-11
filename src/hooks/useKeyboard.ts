@@ -69,13 +69,11 @@ import {
   useRootOverlayStore,
 } from "../stores/rootOverlay";
 import { newTabRequestFor, requestNewTab, requestOverlayAgent } from "../lib/shortcuts/newTabChord";
-import {
-  clearAgentTab,
-  requestSteeringPrompt,
-  steeringActiveTab,
-} from "../lib/shortcuts/steeringAgent";
+import { requestSteeringPrompt, steeringActiveTab } from "../lib/shortcuts/steeringAgent";
+import { requestSteeringConfirm, steeringConfirmButton } from "../lib/shortcuts/steeringConfirm";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../lib/terminal/terminalScroll";
+import { documentScroller, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
 import { isPaneTerminalTarget, terminalMayTakeChord } from "../lib/shortcuts/terminalTabChord";
 import {
   actionMatches,
@@ -410,18 +408,34 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
       enterRegion(app);
     };
 
-    // The project level: ←/→ walk the station ring, ↓ goes into its windows.
+    // A focused subwindow for the levels below the projects: the first one
+    // when the scope has none focused.
+    const focusSomeGroup = () => {
+      const tabs = useTabsStore.getState();
+      const first = allGroups(tabs.layout)[0]?.id;
+      if (!tabs.focusedGroupId && first) tabs.focusGroup(first);
+    };
+    // A project switched to from the project level: steering goes straight
+    // down to its tabs, so the next switch is ↑ and ←/→ again. The subwindow
+    // is picked once the switch has swapped the tabs in.
+    const landOnTabs = (switched: Promise<unknown>) => {
+      useKeyboardSteeringStore.getState().setLevel("tabs");
+      void switched.then(focusSomeGroup, () => {});
+    };
+
+    // The project level: ←/→ walk the station ring and land on the tabs of
+    // the project switched to, ↓ goes into its windows.
     function steerProjects(e: KeyboardEvent, action: SteeringAction | null) {
       const steering = useKeyboardSteeringStore.getState();
       // The numbers — jump to the Nth station of the SAME ring cycleProject
       // walks: 1 = the root scope, 2 = the first project pill (display order)
-      // — the numbers the pill badges show. Stays on this level: ↓ goes in.
+      // — the numbers the pill badges show. Lands on its tabs, as ←/→ do.
       const slot = steeringSlot(action);
       if (slot !== null) {
         const target = projectStations()[slot - 1];
         if (target !== undefined) {
           const ps = useProjectsStore.getState();
-          if (target !== ps.activeId) void ps.setActive(target);
+          landOnTabs(target !== ps.activeId ? ps.setActive(target) : Promise.resolve());
         }
         return;
       }
@@ -430,16 +444,15 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
           exitSteering();
           return;
         case "left":
-        case "right":
-          cycleProject(action === "right" ? 1 : -1);
-          return;
-        case "down": {
-          const tabs = useTabsStore.getState();
-          const first = allGroups(tabs.layout)[0]?.id;
-          if (!tabs.focusedGroupId && first) tabs.focusGroup(first);
-          steering.setLevel("panes");
+        case "right": {
+          const switched = cycleProject(action === "right" ? 1 : -1);
+          if (switched) landOnTabs(switched);
           return;
         }
+        case "down":
+          focusSomeGroup();
+          steering.setLevel("panes");
+          return;
         // Above the projects: the top bar — its apps, menus and switches.
         case "up":
           enterRegion("header");
@@ -463,6 +476,12 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
       const ptyId = active ? `${active.scope}:${active.tab.key}` : null;
       return ptyId && terminalFor(ptyId) ? ptyId : null;
     };
+    // Otherwise the active tab itself, when a document in it scrolls.
+    const steeringActiveDocument = (): { scope: string; key: string } | null => {
+      const active = steeringActiveTab();
+      if (!active || steeringActivePty()) return null;
+      return documentScroller(active.scope, active.tab.key) ? { scope: active.scope, key: active.tab.key } : null;
+    };
 
     // The panes and tabs levels. With one subwindow there is nothing for ←/→
     // to walk between, so they step its tabs at once.
@@ -478,15 +497,23 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
       // back / forward (Shift: a whole one), ↓ back to its live end, ↑ out to
       // the tabs — which takes it back to live too (the subscription at the
       // bottom). Of the tab keys, only Work here and the prompt box act.
+      // A document tab (`documentScroll`) scrolls the same way, ↓ to its end
+      // (not on a held key's repeats — the ↓ that stepped in would run on to
+      // the end); it keeps its place when steering leaves.
       if (level === "scroll") {
         const pty = steeringActivePty();
+        const doc = pty ? null : steeringActiveTab();
         switch (action) {
           case "left":
-          case "right":
-            if (pty) scrollTerminal(pty, (action === "right" ? 1 : -1) * (e.shiftKey ? 1 : 0.5));
+          case "right": {
+            const pages = (action === "right" ? 1 : -1) * (e.shiftKey ? 1 : 0.5);
+            if (pty) scrollTerminal(pty, pages);
+            else if (doc) scrollDocument(doc.scope, doc.tab.key, pages);
             return;
+          }
           case "down":
             if (pty) scrollTerminalToLive(pty);
+            else if (doc && !e.repeat) scrollDocumentToEnd(doc.scope, doc.tab.key);
             return;
           case "up":
             steering.setLevel("tabs");
@@ -521,21 +548,46 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
           return;
         case "down":
           if (walksPanes) steering.setLevel("tabs");
-          else if (steeringActivePty()) steering.setLevel("scroll");
+          else if (steeringActivePty() || steeringActiveDocument()) steering.setLevel("scroll");
           return;
         case "left":
         case "right": {
           const fwd = action === "right";
-          if (walksPanes) {
+          const neighbour = (id: string | null) => {
+            const from = id ? ids.indexOf(id) : -1;
+            const base = from >= 0 ? from : 0;
+            return ids[(base + (fwd ? 1 : -1) + ids.length) % ids.length];
+          };
+          // A fullscreen subwindow hides the others: it moves along with the
+          // focus, or the focus would land on one nobody can see.
+          const carryFullscreen = (id: string) => {
+            if (tabs.fullscreenGroupId && tabs.fullscreenGroupId !== id) tabs.toggleFullscreen(id);
+          };
+          // Shift on the tabs level walks the subwindows too, without the
+          // round trip up to the panes level and back down.
+          if (walksPanes || (level === "tabs" && e.shiftKey && ids.length >= 2)) {
             // Document order, wrapping, committed at once via focusGroup (no
             // Shift-preview: the badges re-anchor each step).
-            const from = focused ? ids.indexOf(focused) : -1;
-            const base = from >= 0 ? from : 0;
-            tabs.focusGroup(ids[(base + (fwd ? 1 : -1) + ids.length) % ids.length]);
-          } else if (group && group.tabKeys.length > 1) {
+            const next = neighbour(focused);
+            tabs.focusGroup(next);
+            carryFullscreen(next);
+          } else if (group) {
             const len = group.tabKeys.length;
             const cur = group.activeKey ? group.tabKeys.indexOf(group.activeKey) : 0;
-            tabs.setGroupActive(group.id, group.tabKeys[(cur + (fwd ? 1 : -1) + len) % len]);
+            const step = cur + (fwd ? 1 : -1);
+            if (ids.length >= 2 && (step < 0 || step >= len)) {
+              // Past the subwindow's last (first) tab the arrows walk on into
+              // the next (previous) subwindow's first (last) tab, so every tab
+              // is a run of ←/→ away; the last tab of all wraps to the first.
+              const next = neighbour(group.id);
+              const nextGroup = findGroup(tabs.layout, next);
+              const key = nextGroup?.tabKeys[fwd ? 0 : nextGroup.tabKeys.length - 1];
+              if (key) tabs.setGroupActive(next, key);
+              else tabs.focusGroup(next);
+              carryFullscreen(next);
+            } else if (len > 1) {
+              tabs.setGroupActive(group.id, group.tabKeys[(step + len) % len]);
+            }
           }
           return;
         }
@@ -552,9 +604,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
         case "files": // toggle the focused subwindow's docked file viewer
           if (focused && group) tabs.setGroupFiles(focused, !group.filesOpen);
           return;
-        case "closeTab":
-          if (tabs.activeKey) closeTabWithConfirm(tabs.activeKey);
+        // Asked first (`steeringConfirm`): the box comes up as the overlay
+        // region, the Confirm key closes, Esc keeps the tab.
+        case "closeTab": {
+          const active = steeringActiveTab();
+          if (active) requestSteeringConfirm("closeTab", active.scope, active.tab);
           return;
+        }
         // The card over the active tab's terminal (Undo clear after K, a
         // sign-in link): its buttons under the region cursor.
         case "tabCard":
@@ -567,12 +623,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
           return;
         }
         // The phone composer's Clear / Plan / Goal, on the active agent tab
-        // (`steeringAgent`). Steering stays on: Clear just goes in (Undo clear
-        // shows on the tab), Plan / Goal open the prompt box below led with
-        // their command. A tab that takes none of them leaves the key swallowed.
+        // (`steeringAgent`). Steering stays on: Clear asks first, as Close
+        // does, then goes in (Undo clear shows on the tab); Plan / Goal open
+        // the prompt box below led with their command. A tab that takes none
+        // of them leaves the key swallowed.
         case "agentClear": {
           const active = steeringActiveTab();
-          if (active) void clearAgentTab(active.scope, active.tab);
+          if (active) requestSteeringConfirm("agentClear", active.scope, active.tab);
           return;
         }
         // A text box over the window for the active agent tab; Enter sends it
@@ -734,6 +791,11 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
               { once: true },
             );
           }
+          return;
+        // Steering's own "are you sure" (W, K): yes, whatever the cursor is on.
+        // The box closes and `syncSoon` takes steering back down.
+        case "confirm":
+          steeringConfirmButton(root)?.click();
           return;
         case "press": {
           const done = activateRegionCursor();
@@ -1082,12 +1144,12 @@ export function useKeyboard({ onTogglePanels, onSidePanel }: KeyboardOptions) {
       // Cycle to the next / previous active project.
       if (is("cycleProject")) {
         e.preventDefault();
-        cycleProject(1);
+        void cycleProject(1);
         return;
       }
       if (is("cycleProjectBack")) {
         e.preventDefault();
-        cycleProject(-1);
+        void cycleProject(-1);
         return;
       }
 
@@ -1366,13 +1428,13 @@ function stepSidePanelView(delta: 1 | -1) {
  * steering digits and pill badges number the same list, so the three surfaces
  * can never disagree about which project is station N.
  */
-function cycleProject(delta: 1 | -1) {
+function cycleProject(delta: 1 | -1): Promise<void> | null {
   const ps = useProjectsStore.getState();
   const stations = projectStations();
-  if (stations.length < 2) return;
+  if (stations.length < 2) return null;
   const idx = stations.indexOf(ps.activeId);
   const next = stations[(idx + delta + stations.length) % stations.length];
-  if (next !== ps.activeId) void ps.setActive(next);
+  return next !== ps.activeId ? ps.setActive(next) : null;
 }
 
 /**

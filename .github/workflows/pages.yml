@@ -22,13 +22,42 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: read
+    outputs:
+      enabled: ${{ steps.pages.outputs.enabled }}
     steps:
+      # Until the one-time setup above is done the repo has no Pages site, and
+      # configure-pages fails every push to main (its `enablement` needs an
+      # admin token, which the job's own token is not). A 404 here skips the
+      # build with a notice instead; any other answer is a real error.
+      - name: Check that Pages is enabled
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pages")
+          case "$code" in
+            200) echo "enabled=true" >> "$GITHUB_OUTPUT" ;;
+            404)
+              echo "::notice::GitHub Pages is not enabled for this repository; skipping the site. Turn it on under Settings → Pages → Source: GitHub Actions, then run this workflow."
+              echo "enabled=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Reading the Pages site answered HTTP $code."; exit 1 ;;
+          esac
+
       - name: Checkout
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The site reuses the README's already-reviewed images instead of
       # keeping its own copies.
       - name: Copy images into the site
+        if: steps.pages.outputs.enabled == 'true'
         run: |
           mkdir -p site/assets
           cp screenshots/eldrun-current.png screenshots/tabtivity-functionality.svg site/assets/
@@ -36,19 +65,23 @@ jobs:
              src/assets/logo-wordmark.svg src/assets/logo-wordmark-white.svg site/assets/
 
       - name: Configure Pages
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
       - name: Build with Jekyll
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
         with:
           source: ./site
           destination: ./_site
 
       - name: Upload site
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
 
   deploy:
     needs: build
+    if: needs.build.outputs.enabled == 'true'
     runs-on: ubuntu-24.04
     permissions:
       pages: write

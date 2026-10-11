@@ -18,7 +18,7 @@
 
 [![Tabtivity in 90 seconds: projects, any agent, local models, split tabs, Git, remote runs, PDF markup, the phone and iPad app, mail and calendar](screenshots/promo.gif)](screenshots/promo.mp4)
 
-▶ **[Watch the 90-second promo with sound](screenshots/promo.mp4)**
+▶ **[Watch the 90-second promo with sound](screenshots/promo.mp4)** · made with Tabtivity, by an AI agent working in a Tabtivity tab
 
 ## Introduction
 
@@ -83,22 +83,6 @@ relay in between.
 Built with **Tauri 2 + React + TypeScript** for Linux (X11 / KDE Wayland),
 Windows, and macOS. Linux X11 is the reference platform; see
 [Platforms and current limits](docs/guide/platforms.md) for the rest.
-
-## At a glance
-
-![Tabtivity functionality map](screenshots/tabtivity-functionality.svg)
-
-**①** pick a project — or a box, or the disposable trash project — and the
-desktop swaps to it. **②** inside, a tiling tab layout hosts agent terminals
-(27 built-in CLIs plus your own), shells, native file viewers, and the app tabs
-Tabtivity renders itself, with the side panel (Files · Git · Search · Apps ·
-Agents) beside them and mail, the calendar, the to-do board, the machine hub,
-and the VPN in the header. **③** the project-desktop layer — window parking,
-default-app mapping, time tracking, pop-out tab windows — follows the active
-project. **④** and the project carries the machines it runs on: an SSH host, a
-GPU box, an HPC cluster, a container, or a VM.
-
-![Current Tabtivity screen](screenshots/eldrun-current.png)
 
 ## Why Tabtivity
 

@@ -7,8 +7,10 @@ import { useProjectsStore } from "../../stores/projects";
 import { openTabInRootConsole } from "../../stores/rootOverlay";
 import { shellQuote } from "../../lib/terminal/shellScriptRun";
 import { useT } from "../../lib/i18n";
+import { IS_WINDOWS } from "../../lib/platform";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
+import { PauseIcon } from "../common/icons/Icon";
 
 /**
  * The background "Tabtivity (dev)" freeze that every commit queues
@@ -161,6 +163,7 @@ export function DevBuildIndicator() {
 
   let headline = "";
   let chipText: string | null = null;
+  let chipPaused = false;
   if (status) {
     if (building) {
       const phase = t(PHASE_KEY[status.phase ?? "prepare"]);
@@ -171,7 +174,7 @@ export function DevBuildIndicator() {
       chipText = t("devBuild.chipQueued");
     } else if (status.paused) {
       headline = t("devBuild.paused");
-      chipText = t("devBuild.chipPaused");
+      chipPaused = true;
     } else if (failed) {
       headline = t("devBuild.failed", { commit: failed.commit, status: failed.status });
       chipText = t("devBuild.chipFailed");
@@ -281,6 +284,13 @@ export function DevBuildIndicator() {
       >
         <HammerIcon tone={tone} />
         {chipText && <span className={`vpn-indicator-label dev-build-chip-text ${tone}`}>{chipText}</span>}
+        {/* Paused shows the app-wide pause mark, not a word; the headline in
+            the button's name and title says it in full. */}
+        {chipPaused && (
+          <span className="vpn-indicator-label dev-build-chip-text">
+            <PauseIcon />
+          </span>
+        )}
         {progress !== null && (
           <span className="dev-build-bar" aria-hidden>
             <span style={{ width: `${progress * 100}%` }} />
@@ -372,9 +382,13 @@ export function DevBuildIndicator() {
                   <UntestedTag id="devBuild.buildNow" />
                 </button>
               )}
-              <button type="button" className="vpn-indicator-connect" onClick={followLog}>
-                {t("devBuild.openLog")}
-              </button>
+              {/* `tail -F` in a shell tab: the dev-build chain is bash-only, so
+                  there is no log to follow on Windows. */}
+              {!IS_WINDOWS && (
+                <button type="button" className="vpn-indicator-connect" onClick={followLog}>
+                  {t("devBuild.openLog")}
+                </button>
+              )}
             </div>
           </div>
         </div>

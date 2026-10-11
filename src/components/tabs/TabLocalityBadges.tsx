@@ -14,7 +14,7 @@ import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
 import { UntestedTag } from "../common/UntestedTag";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useT } from "../../lib/i18n";
-import { CloudIcon, HomeIcon } from "../common/icons/Icon";
+import { CloudIcon, HomeIcon, PlayMark } from "../common/icons/Icon";
 import { useAgentModelsStore, agentTabLabel, tabModeMarks } from "../../stores/agents/agentModels";
 import { screenModeMarks } from "../../lib/agents/agentModel";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
@@ -375,11 +375,10 @@ export function TabStatusMark({ stateClass }: { stateClass: string }) {
           ? "interrupted"
           : null;
   if (!state) return null;
-  // ▶ is emoji-capable: pinned to text presentation (U+FE0E) so no window's
-  // font fallback swaps it for a colour emoji that ignores the ring's colour.
-  // ■ (the stop square) is not, so it needs no pin.
+  // ▶ is drawn (`PlayMark`): as a character, a window's font fallback could
+  // swap it for a colour emoji. ■ (the stop square) is not emoji-capable.
   const glyph =
-    state === "working" ? "▶\uFE0E" : state === "decision" ? "?" : state === "interrupted" ? "■" : "✓";
+    state === "working" ? <PlayMark /> : state === "decision" ? "?" : state === "interrupted" ? "■" : "✓";
   const label = t(
     state === "working"
       ? "tabBar.statusWorking"
@@ -400,7 +399,7 @@ export function TabStatusMark({ stateClass }: { stateClass: string }) {
       title={shellLabel}
       aria-label={shellLabel}
     >
-      {"▶\uFE0E"}
+      <PlayMark />
     </span>
   );
   if (commandOnly) return shellMark;

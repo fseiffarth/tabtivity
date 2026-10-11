@@ -44,7 +44,7 @@ export interface NewTabLaunch {
  * new session, and the sheet closes on the tap rather than waiting for the
  * desktop, so a slow create is a screen the reader can still read.
  */
-export function NewTabSheet({ projectId, agents, shells, busy, headless = false, onPick, onSendFile, onClose }: {
+export function NewTabSheet({ projectId, agents, shells, busy, headless = false, creates = true, onPick, onSendFile, onClose }: {
   projectId: string;
   agents: AgentRow[];
   /** The desktop lets the phone open shells (off by default). */
@@ -56,6 +56,11 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
    *  a mode, a worktree, a cloud session, a local model or a sign-in still
    *  needs the window — those leave the grid for one folded group. */
   headless?: boolean;
+  /** False on a host whose tabs never reach a phone (no tmux, Windows):
+   *  nothing that opens a tab is listed and `launch-options` is not asked;
+   *  the sheet is the send-a-file row alone, titled as such, since the
+   *  project inbox is a file the sidecar writes and needs no tab. */
+  creates?: boolean;
   onPick: (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => void;
   /** Opens the phone's file picker; runs inside the tap, which the picker needs. */
   onSendFile: () => void;
@@ -70,10 +75,11 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
   const [asking, setAsking] = useState<{ agent: AgentRow; launch: CloudLaunchRow } | null>(null);
   const [task, setTask] = useState("");
   useEffect(() => {
+    if (!creates) return;
     const abort = new AbortController();
     getLaunchOptions(projectId, abort.signal).then(setOptions, () => { /* plain sheet */ });
     return () => abort.abort();
-  }, [projectId]);
+  }, [projectId, creates]);
   const linked = options.worktrees.filter((row) => !row.main);
   const pickAgent = (agent: AgentRow, mode?: string) =>
     onPick("agent", agent, mode, where ? { worktree: where } : undefined);
@@ -81,10 +87,11 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
     if (launch.task) { setTask(""); setAsking({ agent, launch }); return; }
     onPick("agent", agent, undefined, { cloud: launch.action });
   };
+  const title = t(creates ? "mobile.newTab.title" : "mobile.projectInbox.send");
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
-    <section className="option-sheet new-tab-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.newTab.title")} onClick={(event) => event.stopPropagation()}>
+    <section className="option-sheet new-tab-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label={t("mobile.newTab.close")}>✕</button><h2>{t("mobile.newTab.title")}{isUntested("mobile.project.newTab") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("mobile.newTab.close")}>✕</button><h2>{title}{isUntested("mobile.project.newTab") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
       {signingIn ? <SignInList agents={agents} rows={options.sign_in} busy={busy} onPick={(agent, way) => onPick("agent", agent, undefined, { sign_in: way })} onBack={() => setSigningIn(false)} />
       : asking ? <div className="mobile-schedule-form">
         <h3>{t("mobile.newTab.cloudTaskTitle", { agent: asking.agent.label })}{isUntested("mobile.newTab.cloud") && <span className="untested">{t("mobile.newTab.untested")}</span>}</h3>
@@ -95,9 +102,12 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
           <button className="primary" disabled={busy || !task.trim()} onClick={() => onPick("agent", asking.agent, undefined, { cloud: asking.launch.action, task: task.trim() })}>{t("mobile.newTab.cloudTaskStart")}</button>
         </div>
       </div> : <>
-      <p className="sheet-note">{t("mobile.newTab.note")}</p>
-      {headless && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+      {creates && <p className="sheet-note">{t("mobile.newTab.note")}</p>}
+      {creates && headless && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       <div className="create">
+        {/* Every row that opens a tab is behind `creates`; the file row at the
+            foot is not — on a host with no tmux it is the whole sheet. */}
+        {creates && <>
         {shells && <button className="primary" disabled={busy} onClick={() => onPick("shell")}>{t("mobile.newTab.shell")}</button>}
         {linked.length > 0 && agents.length > 0 && !headless && <div className="new-tab-where" role="group" aria-label={t("mobile.newTab.where")}>
           <small>{t("mobile.newTab.where")}{isUntested("mobile.newTab.worktree") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
@@ -115,6 +125,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
         {!headless && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
         {options.sign_in.length > 0 && !headless && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
         {headless && <NeedsWindow agents={agents} options={options} linked={linked} />}
+        </>}
         {/* At the sheet's foot, under everything that opens a tab. No desktop
             round trip — the sidecar writes the file itself — so neither a
             create in flight nor an absent desktop holds it back. */}

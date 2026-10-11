@@ -817,14 +817,18 @@ fn mount_pair(pair: &str, read_only: bool) -> Option<BindMount> {
 /// ([`LOCAL_MODEL_CONTROL`]); vibe keeps writing its logs, history, cache and
 /// trusted-folder list beside them.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
-pub(crate) fn local_model_mounts(home: Option<&Path>) -> Vec<BindMount> {
+pub(crate) fn local_model_mounts(home: Option<&Path>) -> Result<(Vec<BindMount>, Vec<ControlPin>), String> {
     let Some(home) = home else {
-        return Vec::new();
+        return Ok((Vec::new(), Vec::new()));
     };
-    // Tabtivity's hook alone, whatever an earlier tab left in the file.
+    // Tabtivity's hook alone, whatever an earlier tab left in the file. First,
+    // so a missing file exists before it is pinned; a rewrite goes in place
+    // (same inode), so another spawn of the model rewriting it after these
+    // pins does not refuse this one, and running tabs keep their bind.
     if let Err(e) = crate::services::agent_session::register_vibe_hook_in(home) {
         eprintln!("agent_fence: reset local vibe hooks: {e}");
     }
+    let pins = local_model_control_paths(home)?;
     let path = home.to_string_lossy().into_owned();
     let mut mounts = vec![BindMount {
         src: path.clone(),
@@ -832,15 +836,15 @@ pub(crate) fn local_model_mounts(home: Option<&Path>) -> Vec<BindMount> {
         read_only: false,
     }];
     // Placed after the home mount, so they shadow it.
-    mounts.extend(local_model_control_paths(home).into_iter().map(|p| {
-        let p = p.to_string_lossy().into_owned();
+    mounts.extend(pins.iter().map(|pin| {
+        let p = pin.path.to_string_lossy().into_owned();
         BindMount {
             src: p.clone(),
             dst: p,
             read_only: true,
         }
     }));
-    mounts
+    Ok((mounts, pins))
 }
 
 /// What vibe reads from `VIBE_HOME` that makes it run or trust something:
@@ -859,34 +863,75 @@ const LOCAL_MODEL_CONTROL: &[(&str, bool)] = &[
     ("prompts", true),
 ];
 
+/// One [`LOCAL_MODEL_CONTROL`] path as [`local_model_control_paths`] left it,
+/// with the `(device, inode)` its handle saw (`None` on Windows, where this
+/// only runs in tests).
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ControlPin {
+    pub path: PathBuf,
+    ino: Option<(u64, u64)>,
+}
+
 /// Every [`LOCAL_MODEL_CONTROL`] path in `home`, created empty where missing:
 /// a path that doesn't exist can't be mounted read-only, and one the agent
 /// could create would be as good as writable. An empty `.env` or `AGENTS.md`
-/// changes nothing (vibe skips a blank instructions file). A symlink in one of
-/// these places is not Tabtivity's and is replaced.
+/// changes nothing (vibe skips a blank instructions file).
+///
+/// Another running tab of the same model can write this folder while the
+/// spawn sets it up (gap 30), so every step goes through a handle on `home`
+/// (`services::home_io`): a link, FIFO or socket at a control name is
+/// unlinked relative to the handle — never followed — and the file or folder
+/// made with `O_CREAT | O_NOFOLLOW` / `mkdirat`. Each path's identity comes
+/// from a handle opened on it, for [`verify_control_pins`] to compare just
+/// before the fence argv is built. Any path that cannot be set up refuses the
+/// spawn: an unmounted control path would stay writable to the agent.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
-pub(crate) fn local_model_control_paths(home: &Path) -> Vec<PathBuf> {
+pub(crate) fn local_model_control_paths(home: &Path) -> Result<Vec<ControlPin>, String> {
+    let refuse = |what: &Path, why: &dyn std::fmt::Display| {
+        format!(
+            "Agent sandbox: could not prepare the local model's {} ({why}), so this agent was not started.",
+            what.display()
+        )
+    };
+    let dir = crate::services::home_io::HomeDir::open_existing(home, "")
+        .ok_or_else(|| refuse(home, &"not a folder"))?;
     let mut out = Vec::new();
     for &(name, is_dir) in LOCAL_MODEL_CONTROL {
-        let path = home.join(name);
-        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
-            let _ = std::fs::remove_file(&path);
-        }
-        let ready = if is_dir {
-            std::fs::create_dir_all(&path).is_ok() && path.is_dir()
-        } else {
-            std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&path)
-                .is_ok()
-                && path.is_file()
-        };
-        if ready {
-            out.push(path);
+        let file = dir.file(name).ok_or_else(|| refuse(&home.join(name), &"bad name"))?;
+        let meta = file.ensure(is_dir).map_err(|e| refuse(&file.path(), &e))?;
+        out.push(ControlPin { path: file.path(), ino: meta.ino });
+    }
+    Ok(out)
+}
+
+/// Re-`lstat` each pinned control path and refuse unless the inode there is
+/// still the one set up (fail closed). bubblewrap and Seatbelt take the paths
+/// by name, so this runs as the last step before the fence argv is built; the
+/// window between it and the sandbox opening the path remains (gap 30's
+/// residual).
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+pub(crate) fn verify_control_pins(pins: &[ControlPin]) -> Result<(), String> {
+    for pin in pins {
+        let now = std::fs::symlink_metadata(&pin.path).ok();
+        let same = now.is_some_and(|m| {
+            #[cfg(unix)]
+            let ino = {
+                use std::os::unix::fs::MetadataExt;
+                Some((m.dev(), m.ino()))
+            };
+            #[cfg(not(unix))]
+            let ino = None;
+            !m.file_type().is_symlink() && ino == pin.ino
+        });
+        if !same {
+            return Err(format!(
+                "Agent sandbox: the local model's {} changed while this tab was starting, so this agent was not started. Start it again; if this keeps happening, close the model's other tabs first.",
+                pin.path.display()
+            ));
         }
     }
-    out
+    Ok(())
 }
 
 /// The spawn's own local-model home: its `VIBE_HOME`, when that is a direct
@@ -916,7 +961,7 @@ pub(crate) fn local_model_home(
 fn agent_state_mounts(
     scope_id: &str,
     env: &std::collections::HashMap<String, String>,
-) -> Vec<BindMount> {
+) -> Result<(Vec<BindMount>, Vec<ControlPin>), String> {
     let state_dir = storage::state_dir();
     let live_root = crate::services::agent_session::live_sessions_dir();
     let live_own = crate::services::agent_session::project_live_sessions_dir(scope_id);
@@ -931,7 +976,8 @@ fn agent_state_mounts(
             .into_iter()
             .filter_map(|m| mount_pair(&m, true)),
     );
-    mounts.extend(local_model_mounts(local_model_home(env, &state_dir).as_deref()));
+    let (local, pins) = local_model_mounts(local_model_home(env, &state_dir).as_deref())?;
+    mounts.extend(local);
     let bin = crate::services::agent_bin::bin_dir();
     let _ = std::fs::create_dir_all(&bin);
     let bin = bin.to_string_lossy().into_owned();
@@ -939,7 +985,7 @@ fn agent_state_mounts(
     // Logins are per-home copies in the home itself (`services::agent_auth`);
     // nothing shared is bound in.
     add_install_mount(&mut mounts, &state_dir);
-    mounts
+    Ok((mounts, pins))
 }
 
 /// Installs live inside private state, so they must be explicit support mounts
@@ -1017,20 +1063,20 @@ fn guard_git_control(args: &mut Vec<String>, guard: crate::services::git_guard::
 /// architecture and the 32-bit one its kernel also runs: a 32-bit binary
 /// reaches the same keyring through the compat table. x32 is x86-64's `arch`
 /// with bit 30 set in `nr` and shares its numbers, hence the mask.
-#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
     (0xC000_003E, 0xBFFF_FFFF, [248, 249, 250]),
     (0x4000_0003, u32::MAX, [286, 287, 288]),
 ];
-#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "aarch64"))]
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
     (0xC000_00B7, u32::MAX, [217, 218, 219]),
     (0x4000_0028, u32::MAX, [309, 310, 311]),
 ];
-#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "riscv64"))]
+#[cfg(all(target_os = "linux", target_arch = "riscv64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[(0xC000_00F3, u32::MAX, [217, 218, 219])];
 #[cfg(all(
-    any(target_os = "linux", all(test, unix)),
+    target_os = "linux",
     not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))
 ))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
@@ -1049,7 +1095,7 @@ const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
 ///
 /// Classic BPF over `seccomp_data` (`nr` at offset 0, `arch` at 4). An
 /// architecture outside the table gets `EPERM` for every syscall.
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(target_os = "linux")]
 pub(crate) fn keyring_seccomp_filter() -> Option<Vec<u8>> {
     const LD_W_ABS: u16 = 0x20;
     const ALU_AND_K: u16 = 0x54;
@@ -1229,7 +1275,8 @@ pub(crate) fn bwrap_args(
 
 /// Shadow the whole Tabtivity state tree, including its canonical alias. Explicit
 /// tool mounts are restored afterwards; future private files stay hidden too.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+/// Also the paths mail `attach` never reads from (`services::mail_attach`), on
+/// every platform.
 pub(crate) fn private_state_paths(state_dir: &Path) -> Vec<PathBuf> {
     let mut paths = vec![state_dir.to_path_buf()];
     if let Ok(real) = state_dir.canonicalize() { paths.push(real); }
@@ -1285,7 +1332,7 @@ pub fn wrap_pty_options_bwrap(
     let copilot = basename(&agent_cmd) == "copilot";
     let subcommand = runs_subcommand(&opts.args);
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
-    let mounts = agent_state_mounts(scope_id, &opts.env);
+    let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env)?;
     let support_mounts = mounts.clone();
     let mut extra_ro = configured_read_only_paths();
     // A root agent's read-only view of the projects (a switch, default off):
@@ -1348,6 +1395,9 @@ pub fn wrap_pty_options_bwrap(
         crate::services::agent_exec::has_carriers(&opts.env),
         crate::services::fence_scope::running_binary,
     );
+    // Last before the argv: the local model's control paths still hold the
+    // inodes set up above (gap 30).
+    verify_control_pins(&control_pins)?;
     (opts.cmd, opts.args) = seccomp_launcher(
         &bwrap.to_string_lossy(),
         step.as_ref().map(|(helper, mode)| (helper.as_str(), *mode)),
@@ -1373,8 +1423,14 @@ pub(crate) struct SeatbeltInputs {
     /// home is hidden, like the empty home tmpfs on Linux).
     pub readable: Vec<String>,
     /// Paths that must never be written even though a broader allow covers
-    /// them: the agents' hook-registration files and the hook scripts.
+    /// them: the agents' hook-registration files and the hook scripts, and the
+    /// repo's git control files (`git_guard`, #158).
     pub protected: Vec<String>,
+    /// Paths that must not be renamed, removed or replaced while what is inside
+    /// them stays writable: each guarded `.git` directory (`git_guard`'s
+    /// "pinned" — on Linux a bind mount onto itself). Denied as a `literal`,
+    /// which matches the directory entry and none of its children.
+    pub pinned: Vec<String>,
     /// Final read/write denials, after all broad toolchain/root grants.
     pub hidden: Vec<String>,
     /// The scope's own agent home, allowed last: it sits inside the hidden
@@ -1474,6 +1530,9 @@ pub(crate) fn sandbox_exec_profile(inputs: &SeatbeltInputs) -> String {
             sbpl_string(path)
         ));
     }
+    for path in &inputs.pinned {
+        p.push_str(&format!("(deny file-write* (literal {}))\n", sbpl_string(path)));
+    }
     for path in &inputs.hidden {
         p.push_str(&format!("(deny file-read* file-write* (subpath {}))\n", sbpl_string(path)));
     }
@@ -1483,13 +1542,72 @@ pub(crate) fn sandbox_exec_profile(inputs: &SeatbeltInputs) -> String {
     p
 }
 
+/// The Seatbelt form of `git_guard`'s re-mounts (#158): the control files
+/// join `protected`, each `.git` joins `pinned`. Seatbelt has no mount order,
+/// so both are explicit denials rendered after the root allows.
+#[cfg(any(target_os = "macos", test))]
+fn seatbelt_git_guard(inputs: &mut SeatbeltInputs, guard: crate::services::git_guard::GuardPaths) {
+    let text = |p: PathBuf| p.to_string_lossy().into_owned();
+    inputs.pinned.extend(guard.pinned.into_iter().map(text));
+    inputs.protected.extend(guard.read_only.into_iter().map(text));
+}
+
+/// Temp dirs a fenced process may write: macOS gives each user a private one
+/// under `/var/folders` (`$TMPDIR`), plus the shared `/tmp`.
+#[cfg(any(target_os = "macos", test))]
+fn seatbelt_temp_dirs(tmpdir: Option<String>) -> Vec<String> {
+    let mut dirs: Vec<String> = ["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    dirs.extend(tmpdir);
+    dirs
+}
+
+/// The profile inputs of [`one_shot_command`] on macOS. Pure, so the Linux
+/// test run checks them. Narrower than a tab's [`sandbox_exec_inputs`] in the
+/// same way the Linux one-shot is narrower than its PTY fence: the roots
+/// read-write, the allowlist read-only, temp writable (Linux: a private
+/// `/tmp`), the git control files guarded, Cargo credentials and the **whole**
+/// state dir hidden — no tool mount has to pierce it, since no agent home,
+/// live-session record or launcher is granted (`own_home: None`).
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn one_shot_seatbelt_inputs(
+    home: &str,
+    state_dir: &Path,
+    roots: &[PathBuf],
+    readable: Vec<String>,
+    guard: crate::services::git_guard::GuardPaths,
+    cargo_hidden: Vec<String>,
+    tmpdir: Option<String>,
+) -> SeatbeltInputs {
+    let mut inputs = SeatbeltInputs {
+        home: home.to_string(),
+        roots: roots.iter().map(|r| r.to_string_lossy().into_owned()).collect(),
+        writable: seatbelt_temp_dirs(tmpdir),
+        readable,
+        hidden: cargo_hidden
+            .into_iter()
+            .chain(private_state_paths(state_dir).into_iter().map(|p| p.to_string_lossy().into_owned()))
+            .collect(),
+        ..SeatbeltInputs::default()
+    };
+    seatbelt_git_guard(&mut inputs, guard);
+    inputs
+}
+
 /// Resolve the profile inputs for a scope from the same mount planners the
 /// bubblewrap fence uses, so the two fences agree on what an agent may touch.
 #[cfg(target_os = "macos")]
-fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, scope_home: &Path) -> SeatbeltInputs {
+fn sandbox_exec_inputs(
+    opts: &PtyOptions,
+    roots: &[PathBuf],
+    scope_id: &str,
+    scope_home: &Path,
+) -> Result<(SeatbeltInputs, Vec<ControlPin>), String> {
     let home = paths::home_dir_string();
     let state_dir = storage::state_dir();
-    let mounts = agent_state_mounts(scope_id, &opts.env);
+    let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env)?;
     let mut writable: Vec<String> = Vec::new();
     let mut readable: Vec<String> = Vec::new();
     let mut protected: Vec<String> = Vec::new();
@@ -1506,22 +1624,12 @@ fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, sco
     protected.push(state_dir.join("hooks").to_string_lossy().into_owned());
     // A local-model home is writable, its control files are not (gap 7):
     // Seatbelt has no mount order, so a read-only path inside a writable one
-    // has to be denied explicitly.
-    if let Some(home) = local_model_home(&opts.env, &state_dir) {
-        protected.extend(
-            local_model_control_paths(&home)
-                .into_iter()
-                .map(|p| p.to_string_lossy().into_owned()),
-        );
-    }
+    // has to be denied explicitly. The same paths `agent_state_mounts` set up.
+    protected.extend(control_pins.iter().map(|pin| pin.path.to_string_lossy().into_owned()));
     protected.push(crate::services::agent_bin::bin_dir().to_string_lossy().into_owned());
-    // Temp dirs: macOS gives each user a private one under /var/folders.
-    for tmp in ["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"] {
-        writable.push(tmp.to_string());
-    }
-    if let Some(dir) = std::env::var_os("TMPDIR") {
-        writable.push(dir.to_string_lossy().into_owned());
-    }
+    writable.extend(seatbelt_temp_dirs(
+        std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
+    ));
     readable.extend(configured_read_only_paths());
     readable.extend(root_project_read_only_paths_for(&opts.id, scope_id));
     readable.extend(crate::services::agent_install::fence_read_only_paths());
@@ -1536,12 +1644,13 @@ fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, sco
         &visible,
     ));
     let homes_root = crate::services::agent_home::homes_root_in(&state_dir);
-    SeatbeltInputs {
+    let mut inputs = SeatbeltInputs {
         home,
         roots: roots.iter().map(|r| r.to_string_lossy().into_owned()).collect(),
         writable,
         readable,
         protected,
+        pinned: Vec::new(),
         hidden: hidden_cargo_credentials(opts).into_iter().chain(
             private_state_paths(&state_dir).into_iter().filter(|p| {
                 // Deny private children on macOS: Seatbelt cannot restore a
@@ -1550,7 +1659,13 @@ fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, sco
             }).map(|p| p.to_string_lossy().into_owned())
         ).chain(std::iter::once(homes_root.to_string_lossy().into_owned())).collect(),
         own_home: Some(scope_home.to_string_lossy().into_owned()),
-    }
+    };
+    // The repo's git control files, as the bubblewrap fence re-mounts them.
+    seatbelt_git_guard(
+        &mut inputs,
+        crate::services::git_guard::guard_paths(roots, Some(Path::new(&opts.cwd))),
+    );
+    Ok((inputs, control_pins))
 }
 
 /// Rewrite a local agent spawn into its `sandbox-exec` boundary (macOS). The
@@ -1573,7 +1688,7 @@ pub fn wrap_pty_options_sandbox_exec(
     // Before `opts.args` becomes sandbox-exec's below.
     let subcommand = runs_subcommand(&opts.args);
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
-    let inputs = sandbox_exec_inputs(opts, roots, scope_id, scope_home);
+    let (inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
     std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
@@ -1584,6 +1699,9 @@ pub fn wrap_pty_options_sandbox_exec(
     } else {
         paths::resolve_executable(&opts.cmd).unwrap_or_else(|| PathBuf::from(&opts.cmd))
     };
+    // Last before the argv: the local model's control paths still hold the
+    // inodes set up above (gap 30).
+    verify_control_pins(&control_pins)?;
     let mut args = vec![
         "-f".to_string(),
         profile_path.to_string_lossy().into_owned(),
@@ -1728,30 +1846,112 @@ pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
     }
 }
 
-struct FencedTab {
-    scope_id: String,
+/// One PTY id's spawn generations (gap 18). Ids are reused: a pane remount
+/// respawns the same id while the unmount's kill may still be on its way, and
+/// that kill's teardown used to clear the respawn's fence registration, its
+/// API proxy tokens and its turn binding. Every spawn now gets a sequence
+/// number when [`begin_spawn`] runs (in `launch_prep::prepare`, before any
+/// grant), and every teardown names the spawn it ends ([`on_tab_gone`]).
+#[derive(Default)]
+struct TabSpawns {
+    /// The newest spawn begun for the id, committed or not.
+    latest: u64,
+    /// The spawn whose process exists ([`register_tab`]).
+    live: Option<LiveSpawn>,
 }
 
-fn fenced_tabs() -> &'static Mutex<HashMap<String, FencedTab>> {
-    static TABS: OnceLock<Mutex<HashMap<String, FencedTab>>> = OnceLock::new();
+struct LiveSpawn {
+    seq: u64,
+    /// The fence scope it runs in; `None` for an unfenced tab.
+    scope_id: Option<String>,
+}
+
+fn tab_spawns() -> &'static Mutex<HashMap<String, TabSpawns>> {
+    static TABS: OnceLock<Mutex<HashMap<String, TabSpawns>>> = OnceLock::new();
     TABS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn register_tab(tab_id: &str, scope_id: &str) {
-    fenced_tabs()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(tab_id.to_string(), FencedTab {
-            scope_id: scope_id.to_string(),
-        });
+static SPAWN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A fresh spawn sequence number, never 0. The PTY's output route uses the
+/// same number (`terminal::spawn_pty`), so the reader task's end names the
+/// spawn it belonged to.
+pub fn next_spawn_seq() -> u64 {
+    SPAWN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
-/// The scope a fenced tab was spawned into, or `None` for a tab that runs
-/// unfenced (or is not a fenced host agent tab at all). The one record that a
-/// tab *was* fenced; a caller that runs work on the tab's behalf keeps it
-/// inside the same boundary ([`one_shot_command`]).
-pub fn fenced_scope_of_tab(tab_id: &str) -> Option<String> {
-    fenced_tabs().lock().unwrap_or_else(|e| e.into_inner()).get(tab_id).map(|t| t.scope_id.clone())
+/// A spawn of `tab_id` starts: from here on a teardown of any earlier spawn
+/// of the id leaves the shared per-tab state alone. Returns the spawn's
+/// sequence number, which the PTY entry, [`register_tab`] and the teardown
+/// carry. A spawn that never commits hands it back through [`abandon_spawn`].
+pub fn begin_spawn(tab_id: &str) -> u64 {
+    let seq = next_spawn_seq();
+    tab_spawns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(tab_id.to_string())
+        .or_default()
+        .latest = seq;
+    seq
+}
+
+/// The process of spawn `seq` exists; `scope_id` is the fence scope it runs
+/// in (`None`: unfenced). Whether `seq` is still the tab's newest spawn —
+/// `false` when it was torn down already or a newer spawn has begun, and then
+/// nothing is recorded.
+pub fn register_tab(tab_id: &str, scope_id: Option<&str>, seq: u64) -> bool {
+    match tab_spawns().lock().unwrap_or_else(|e| e.into_inner()).get_mut(tab_id) {
+        Some(spawns) if spawns.latest == seq => {
+            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string) });
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Whether spawn `seq` is still the newest one begun for `tab_id` and not torn
+/// down. A spawn that is not may not put its process in the PTY registry
+/// (`PtyRegistry::insert_current_spawn`): a newer spawn of the id owns the
+/// tab's grants.
+pub fn is_current_spawn(tab_id: &str, seq: u64) -> bool {
+    tab_spawns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(tab_id)
+        .is_some_and(|s| s.latest == seq)
+}
+
+/// Spawn `seq` failed before its process existed: the id falls back to the
+/// spawn still live under it, or, with none, is gone (its proxy tokens too).
+/// Whether the id is gone — then the caller ends its MCP tokens and turn
+/// binding as well (`launch_prep::SpawnGeneration`), as no later kill finds a
+/// PTY to tear down.
+pub fn abandon_spawn(tab_id: &str, seq: u64) -> bool {
+    let mut map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(spawns) = map.get_mut(tab_id) else { return false };
+    if spawns.latest != seq {
+        return false;
+    }
+    if let Some(live) = spawns.live.as_ref().map(|l| l.seq) {
+        spawns.latest = live;
+        return false;
+    }
+    map.remove(tab_id);
+    drop(map);
+    untrack_host_agent_tab(tab_id);
+    crate::services::api_proxy::on_tab_gone(tab_id);
+    true
+}
+
+/// The scope the live spawn of a fenced tab runs in.
+#[cfg(test)]
+pub(crate) fn fenced_scope_of_tab(tab_id: &str) -> Option<String> {
+    tab_spawns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(tab_id)
+        .and_then(|s| s.live.as_ref())
+        .and_then(|l| l.scope_id.clone())
 }
 
 /// A one-shot command inside the fence of `scope_id`, for work Tabtivity runs on
@@ -1761,8 +1961,8 @@ pub fn fenced_scope_of_tab(tab_id: &str) -> Option<String> {
 /// git control files guarded, Cargo credentials and the private state masked —
 /// but *narrower*: no agent home, live-session or launcher mounts, and none of
 /// the per-tab registry state the PTY wrapper keeps. Fails closed like the
-/// rest of the fence: no working bubblewrap, no command. Linux only; other
-/// platforms answer the same refusal.
+/// rest of the fence: no working bubblewrap (macOS: `sandbox-exec`), no
+/// command. Windows has no fence and answers the same refusal.
 #[cfg(target_os = "linux")]
 pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) -> Result<std::process::Command, String> {
     if !bwrap_available() {
@@ -1798,17 +1998,67 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
     Ok(command)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: the same one-shot boundary as a `sandbox-exec` profile
+/// ([`one_shot_seatbelt_inputs`]), written as `preflight.sb` beside the
+/// scope's `fence.sb` and run as `sandbox-exec -f <profile> <cmd> <args>` in
+/// `cwd`. `HOME` stays the user's (reads under it are denied except the
+/// allowlist, as the Linux one-shot's empty home shows only the allowlist).
+#[cfg(target_os = "macos")]
+pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) -> Result<std::process::Command, String> {
+    if !bwrap_available() {
+        return Err(fence_unavailable_message());
+    }
+    let roots = roots_for_scope((scope_id != ROOT_SCOPE).then_some(scope_id), false)
+        .ok_or_else(|| format!("Agent sandbox: unknown project or box scope '{scope_id}'"))?;
+    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from);
+    let inputs = one_shot_seatbelt_inputs(
+        &paths::home_dir_string(),
+        &storage::state_dir(),
+        &roots,
+        configured_read_only_paths(),
+        crate::services::git_guard::guard_paths(&roots, Some(cwd)),
+        cargo_credential_paths(&paths::home_dir(), cargo_home.as_deref(), cwd,
+            settings().agent_fence_cargo_credentials.unwrap_or(false)),
+        std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
+    );
+    let stage = crate::services::sandbox::stage_dir(scope_id);
+    std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
+    let profile_path = stage.join("preflight.sb");
+    std::fs::write(&profile_path, sandbox_exec_profile(&inputs)).map_err(|e| format!("Agent sandbox: {e}"))?;
+    let mut command = crate::paths::command_no_window("/usr/bin/sandbox-exec");
+    command.arg("-f").arg(&profile_path).arg(cmd).args(args).current_dir(cwd);
+    command.env(crate::app_env!("AGENT_FENCE"), "1");
+    Ok(command)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn one_shot_command(_scope_id: &str, _cmd: &str, _args: &[String], _cwd: &Path) -> Result<std::process::Command, String> {
     Err(fence_unavailable_message())
 }
 
-pub fn on_tab_gone(tab_id: &str) {
-    let was_fenced = fenced_tabs()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(tab_id)
-        .is_some();
+/// Spawn `seq` of `tab_id` is gone (closed, exited, or the app is quitting).
+/// Only the tab's newest spawn takes the shared per-tab state with it: its
+/// registration, its host-agent tracking and its API proxy tokens. A stale
+/// teardown — a kill that lands after a respawn of the same id began — only
+/// forgets its own registration and answers `false`, and the caller then
+/// leaves the tab's MCP tokens and turn binding alone too
+/// (`launch_prep::on_tab_gone`). An id with nothing registered counts as
+/// current: no spawn of it is in flight.
+pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
+    let removed = {
+        let mut map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+        match map.get_mut(tab_id) {
+            None => None,
+            Some(spawns) if spawns.latest == seq => map.remove(tab_id).and_then(|s| s.live),
+            Some(spawns) => {
+                if spawns.live.as_ref().is_some_and(|l| l.seq == seq) {
+                    spawns.live = None;
+                }
+                return false;
+            }
+        }
+    };
+    let was_fenced = removed.is_some_and(|l| l.scope_id.is_some());
     untrack_host_agent_tab(tab_id);
     // Its API proxy tokens go with it (those of a tmux-held agent once the
     // session is gone too).
@@ -1819,6 +2069,7 @@ pub fn on_tab_gone(tab_id: &str) {
     if was_fenced {
         std::thread::spawn(crate::services::agent_auth::reconcile_now);
     }
+    true
 }
 
 /// A local agent tab whose agent runs on the host — not in a container, not on
@@ -2030,6 +2281,66 @@ mod tests {
     use super::*;
     use crate::schema::boxes::ProjectBox;
     use serde_json::{json, Value};
+
+    // ── spawn generations (gap 18) ──────────────────────────────────────────
+
+    #[test]
+    fn a_stale_teardown_leaves_the_respawns_registration_and_proxy_tokens() {
+        let tab = "gen-p:stale";
+        let old = begin_spawn(tab);
+        assert!(register_tab(tab, Some("gen-p"), old));
+        // The unmount's kill took the old PTY; the remount's spawn begins and
+        // is handed its proxy token before the kill's teardown lands.
+        let new = begin_spawn(tab);
+        let token = crate::services::api_proxy::issue_for_test("gen-p", tab).unwrap();
+        assert!(!on_tab_gone(tab, old), "a teardown of the older spawn is stale");
+        assert!(crate::services::api_proxy::token_live(&token));
+        assert!(register_tab(tab, Some("gen-p"), new), "the respawn commits");
+        assert!(!on_tab_gone(tab, old), "still stale after the commit");
+        assert_eq!(fenced_scope_of_tab(tab).as_deref(), Some("gen-p"));
+        assert!(crate::services::api_proxy::token_live(&token));
+        // The respawn's own teardown takes it all.
+        assert!(on_tab_gone(tab, new));
+        assert_eq!(fenced_scope_of_tab(tab), None);
+        assert!(!crate::services::api_proxy::token_live(&token));
+        // Nothing registered any more: a repeat teardown counts as current.
+        assert!(on_tab_gone(tab, new));
+    }
+
+    #[test]
+    fn a_kill_of_an_uncommitted_spawn_beats_its_commit() {
+        let tab = "gen-p:uncommitted";
+        let seq = begin_spawn(tab);
+        assert!(on_tab_gone(tab, seq));
+        assert!(!register_tab(tab, Some("gen-p"), seq), "the process is gone already");
+        assert_eq!(fenced_scope_of_tab(tab), None);
+    }
+
+    #[test]
+    fn an_abandoned_spawn_falls_back_to_the_live_one() {
+        let tab = "gen-p:abandon";
+        let live = begin_spawn(tab);
+        assert!(register_tab(tab, Some("gen-p"), live));
+        let failed = begin_spawn(tab);
+        abandon_spawn(tab, failed);
+        assert_eq!(fenced_scope_of_tab(tab).as_deref(), Some("gen-p"));
+        assert!(on_tab_gone(tab, live), "the live spawn is the newest again");
+        // A first spawn that fails leaves nothing, its proxy token included.
+        let only = begin_spawn(tab);
+        let token = crate::services::api_proxy::issue_for_test("gen-p", tab).unwrap();
+        abandon_spawn(tab, only);
+        assert!(!crate::services::api_proxy::token_live(&token));
+        assert!(!register_tab(tab, None, only));
+    }
+
+    #[test]
+    fn an_unfenced_spawn_registers_without_a_scope() {
+        let tab = "gen-p:unfenced";
+        let seq = begin_spawn(tab);
+        assert!(register_tab(tab, None, seq));
+        assert_eq!(fenced_scope_of_tab(tab), None);
+        assert!(on_tab_gone(tab, seq));
+    }
 
     #[test]
     fn a_failed_probe_under_the_userns_profile_names_the_namespace_not_the_package() {
@@ -2442,6 +2753,7 @@ mod tests {
                 "/Users/a/.claude/settings.json".into(),
                 concat!("/Users/a/.local/share/", crate::app_slug!(), "/hooks").into(),
             ],
+            pinned: Vec::new(),
             hidden: Vec::new(),
             own_home: None,
         };
@@ -2477,6 +2789,68 @@ mod tests {
         assert_eq!(lines.last().unwrap(), &concat!("(deny file-write* (subpath \"/Users/a/.local/share/", crate::app_slug!(), "/hooks\"))"));
         // Quoting: a path with a quote or backslash stays one Scheme string.
         assert_eq!(sbpl_string("/a/b\"c\\d"), "\"/a/b\\\"c\\\\d\"");
+    }
+
+    #[test]
+    fn the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home() {
+        let state = Path::new("/Users/a/state");
+        let guard = crate::services::git_guard::GuardPaths {
+            pinned: vec!["/Users/a/proj/.git".into()],
+            read_only: vec!["/Users/a/proj/.git/config".into(), "/Users/a/proj/.git/hooks".into()],
+        };
+        let inputs = one_shot_seatbelt_inputs(
+            "/Users/a",
+            state,
+            &[PathBuf::from("/Users/a/proj")],
+            vec!["/Users/a/.gitconfig".into()],
+            guard,
+            vec!["/Users/a/.cargo/credentials.toml".into()],
+            Some("/var/folders/xy/T/".into()),
+        );
+        assert_eq!(inputs.own_home, None);
+        let profile = sandbox_exec_profile(&inputs);
+        let lines: Vec<&str> = profile.lines().collect();
+        let pos = |needle: &str| {
+            lines
+                .iter()
+                .position(|l| *l == needle)
+                .unwrap_or_else(|| panic!("missing: {needle}\n{profile}"))
+        };
+        let root_write = pos("(allow file-write* (subpath \"/Users/a/proj\"))");
+        assert!(pos("(deny file-write*)") < root_write);
+        assert!(pos("(allow file-read* (subpath \"/Users/a/proj\"))") > pos("(deny file-read* (subpath \"/Users/a\"))"));
+        pos("(allow file-read* (subpath \"/Users/a/.gitconfig\"))");
+        // Temp is writable, as the Linux one-shot's private /tmp.
+        assert!(pos("(allow file-write* (subpath \"/var/folders/xy/T/\"))") > pos("(deny file-write*)"));
+        pos("(allow file-write* (subpath \"/private/tmp\"))");
+        // The git control files and the pinned `.git` come after the root allow.
+        assert!(pos("(deny file-write* (subpath \"/Users/a/proj/.git/hooks\"))") > root_write);
+        assert!(pos("(deny file-write* (subpath \"/Users/a/proj/.git/config\"))") > root_write);
+        assert!(pos("(deny file-write* (literal \"/Users/a/proj/.git\"))") > root_write);
+        assert!(!profile.contains("(deny file-write* (subpath \"/Users/a/proj/.git\"))"), "only the entry, not the tree");
+        // The whole state dir and the Cargo token are hidden, and nothing is
+        // restored after them: no agent home, no tool mount.
+        pos("(deny file-read* file-write* (subpath \"/Users/a/state\"))");
+        // Joined and quoted as the profile does it (on Windows the join adds a
+        // `\`, which the Scheme string literal doubles).
+        pos(&format!(
+            "(deny file-read* file-write* (subpath {}))",
+            sbpl_string(&state.join("settings.json").to_string_lossy())
+        ));
+        pos("(deny file-read* file-write* (subpath \"/Users/a/.cargo/credentials.toml\"))");
+        assert!(!profile.contains("(allow file-read* file-write*"), "{profile}");
+        assert!(lines.last().unwrap().starts_with("(deny file-read* file-write*"));
+
+        // A tab's profile keeps its own home, allowed after every hidden deny.
+        let tab = SeatbeltInputs {
+            own_home: Some("/Users/a/state/agent-homes/k".into()),
+            ..inputs
+        };
+        let profile = sandbox_exec_profile(&tab);
+        assert_eq!(
+            profile.lines().last(),
+            Some("(allow file-read* file-write* (subpath \"/Users/a/state/agent-homes/k\"))")
+        );
     }
 
     #[test]
@@ -2848,7 +3222,7 @@ mod tests {
 
         // Not a local-model tab (a Claude tab, the root console's agent): nothing.
         assert_eq!(local_model_home(&Default::default(), state.path()), None);
-        assert!(local_model_mounts(None).is_empty());
+        assert!(local_model_mounts(None).unwrap().0.is_empty());
         // The renderer names the home; only a direct, existing child counts.
         for bad in [
             root.to_string_lossy().into_owned(),
@@ -2868,7 +3242,9 @@ mod tests {
 
         let own = root.join("gemma4-e4b");
         let home = local_model_home(&env(&own.to_string_lossy()), state.path()).unwrap();
-        let mounts = local_model_mounts(Some(&home));
+        let (mounts, pins) = local_model_mounts(Some(&home)).unwrap();
+        assert_eq!(pins.len(), LOCAL_MODEL_CONTROL.len());
+        verify_control_pins(&pins).unwrap();
         let own_str = own.to_string_lossy().into_owned();
         // The home itself, writable — vibe keeps its logs and history there —
         // and never the sibling models' homes or the directory above.
@@ -2900,11 +3276,67 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, home.join("tools")).unwrap();
         std::os::unix::fs::symlink(outside.join("x.toml"), home.join("hooks.toml")).unwrap();
-        local_model_control_paths(&home);
+        local_model_control_paths(&home).unwrap();
         assert!(!std::fs::symlink_metadata(home.join("tools")).unwrap().file_type().is_symlink());
         assert!(home.join("tools").is_dir());
         assert!(!std::fs::symlink_metadata(home.join("hooks.toml")).unwrap().file_type().is_symlink());
         assert!(!outside.join("x.toml").exists());
+    }
+
+    /// Gap 30: the swap another tab of the model makes *after* setup — a link
+    /// in place of a pinned file or folder — refuses the spawn.
+    #[cfg(unix)]
+    #[test]
+    fn a_control_path_swapped_after_setup_refuses_the_spawn() {
+        let state = tempfile::tempdir().unwrap();
+        let home = state.path().join("vibe_local/gemma4-e4b");
+        std::fs::create_dir_all(&home).unwrap();
+        let outside = state.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let pins = local_model_control_paths(&home).unwrap();
+        verify_control_pins(&pins).unwrap();
+        // A raced link where a file was.
+        std::fs::remove_file(home.join("config.toml")).unwrap();
+        std::os::unix::fs::symlink(outside.join("c.toml"), home.join("config.toml")).unwrap();
+        let err = verify_control_pins(&pins).unwrap_err();
+        assert!(err.contains("config.toml"), "{err}");
+        // Set up again: the link is replaced and the new pins hold.
+        let pins = local_model_control_paths(&home).unwrap();
+        verify_control_pins(&pins).unwrap();
+        // A raced link where a folder was.
+        std::fs::remove_dir(home.join("plugins")).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("plugins")).unwrap();
+        assert!(verify_control_pins(&pins).unwrap_err().contains("plugins"));
+        // A different real file (a new inode) is a swap too. Made while the old
+        // one still exists and renamed over it: remove-then-create can be handed
+        // the freed inode straight back (ext4 on CI does).
+        let pins = local_model_control_paths(&home).unwrap();
+        std::fs::write(home.join(".env.new"), "").unwrap();
+        std::fs::rename(home.join(".env.new"), home.join(".env")).unwrap();
+        assert!(verify_control_pins(&pins).unwrap_err().contains(".env"));
+        // Gone altogether: refused.
+        let pins = local_model_control_paths(&home).unwrap();
+        std::fs::remove_file(home.join("AGENTS.md")).unwrap();
+        assert!(verify_control_pins(&pins).is_err());
+    }
+
+    /// A FIFO planted at a control name is replaced without blocking the spawn,
+    /// and a home that is not a plain folder refuses it.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_a_control_path_is_replaced_without_blocking() {
+        let state = tempfile::tempdir().unwrap();
+        let home = state.path().join("vibe_local/gemma4-e4b");
+        std::fs::create_dir_all(&home).unwrap();
+        crate::services::home_io::mkfifo(&home.join("config.toml"));
+        crate::services::home_io::mkfifo(&home.join("tools"));
+        let at = home.clone();
+        let pins = crate::services::home_io::within_deadline(move || local_model_control_paths(&at)).unwrap();
+        verify_control_pins(&pins).unwrap();
+        assert!(std::fs::symlink_metadata(home.join("config.toml")).unwrap().is_file());
+        assert!(std::fs::symlink_metadata(home.join("tools")).unwrap().is_dir());
+        let missing = state.path().join("vibe_local/missing");
+        assert!(local_model_control_paths(&missing).is_err());
     }
 
     #[test]

@@ -11,6 +11,7 @@ import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { installCrashReporter } from "./crashReporter";
 import { installCustomScrollbars } from "./lib/theme/customScrollbar";
+import { installStrayDropGuard } from "./lib/window/strayDropGuard";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "./styles/index.css";
@@ -24,6 +25,9 @@ installCrashReporter();
  * only be at the mercy of when that tree mounts.
  */
 installCustomScrollbars();
+/** Same reasoning: a file dropped where nothing takes it must not navigate the
+ *  window to it, in any window. */
+installStrayDropGuard();
 
 /**
  * Dev-only: hand each commit's duration to the perf monitor. Reached through

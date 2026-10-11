@@ -34,14 +34,20 @@ struct AgentSpec {
     /// Where this CLI keeps its sign-in under `$HOME` (Linux survey
     /// 2026-09-25): shared across every Tabtivity agent home by
     /// `services::agent_auth`. Only files that hold a credential and can
-    /// never name a command — a config that mixes both (Continue's
-    /// `config.yaml`, Crush's `crush.json`, Aider's `.env`) stays per scope,
-    /// as does a login kept in a database beside other state (Kiro, Kilo,
-    /// OpenClaw) or in the keyring (Copilot: `services::copilot_auth`).
+    /// never name a command. A config that mixes both (Continue's
+    /// `config.yaml`, Crush's `crush.json`, Cline's `providers.json`) stays
+    /// per scope, and so does a file the CLI loads as its environment —
+    /// Vibe's `.vibe/.env`, Aider's `.aider/oauth-keys.env` and `.env`,
+    /// mini-swe-agent's `.config/mini-swe-agent/.env` — since one
+    /// `GIT_CONFIG_*` line in it runs a command (threat recheck 2026-10-08,
+    /// gap 16; `agent_auth::RETIRED`). A login kept in a database beside
+    /// other state (Kiro, Kilo, OpenClaw) or in the keyring (Copilot:
+    /// `services::copilot_auth`) is per scope too. A login folder lists the
+    /// file names it shares (`agent_auth::DirNames`).
     auth_paths: &'static [AuthPath],
 }
 
-use crate::services::agent_auth::{dir as auth_dir, file as auth_file, AuthPath};
+use crate::services::agent_auth::{dir as auth_dir, file as auth_file, AuthPath, DirNames};
 
 /// The registry's login paths, for `services::agent_auth`.
 pub fn auth_registry() -> Vec<(&'static str, &'static [AuthPath])> {
@@ -159,7 +165,9 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("npm install -g cline"),
         extra_paths: &[],
         docs: "https://docs.cline.bot/getting-started/installing-cline",
-        auth_paths: &[auth_file(".cline/data/settings/providers.json")],
+        // `~/.cline/data/settings/providers.json` holds the login but also
+        // the provider config: per scope.
+        auth_paths: &[],
     },
     AgentSpec {
         id: "vibe",
@@ -170,7 +178,8 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: None,
         extra_paths: &[".local/bin/vibe", ".cargo/bin/vibe"],
         docs: "https://docs.mistral.ai/getting-started/quickstarts/vibe-code/install-cli",
-        auth_paths: &[auth_file(".vibe/.env")],
+        // `~/.vibe/.env` is loaded as environment: per scope.
+        auth_paths: &[],
     },
     AgentSpec {
         id: "aider",
@@ -187,7 +196,8 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("irm https://aider.chat/install.ps1 | iex"),
         extra_paths: &[".local/bin/aider"],
         docs: "https://aider.chat/docs/install.html",
-        auth_paths: &[auth_file(".aider/oauth-keys.env")],
+        // `~/.aider/oauth-keys.env` is loaded as environment: per scope.
+        auth_paths: &[],
     },
     AgentSpec {
         id: "opencode",
@@ -322,7 +332,7 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("npm install -g @tencent-ai/codebuddy-code"),
         extra_paths: &[],
         docs: "https://www.codebuddy.ai/docs/cli/README",
-        auth_paths: &[auth_dir(".local/share/CodeBuddyExtension/Data/Public/auth")],
+        auth_paths: &[auth_dir(".local/share/CodeBuddyExtension/Data/Public/auth", DirNames::CodeBuddyInfo)],
     },
     AgentSpec {
         id: "goose",
@@ -338,10 +348,10 @@ const AGENTS: &[AgentSpec] = &[
         id: "pi",
         label: "Pi",
         bin: "pi",
-        install_cmd: "npm install -g @mariozechner/pi-coding-agent",
-        install_cmd_windows: Some("npm install -g @mariozechner/pi-coding-agent"),
+        install_cmd: "npm install -g @earendil-works/pi-coding-agent",
+        install_cmd_windows: Some("npm install -g @earendil-works/pi-coding-agent"),
         extra_paths: &[],
-        docs: "https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",
+        docs: "https://github.com/earendil-works/pi/tree/main/packages/coding-agent",
         auth_paths: &[auth_file(".pi/agent/auth.json")],
     },
     AgentSpec {
@@ -372,7 +382,8 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("pip install mini-swe-agent"),
         extra_paths: &[".local/bin/mini"],
         docs: "https://mini-swe-agent.com/latest/quickstart/",
-        auth_paths: &[auth_file(".config/mini-swe-agent/.env")],
+        // `~/.config/mini-swe-agent/.env` is loaded as environment: per scope.
+        auth_paths: &[],
     },
     AgentSpec {
         id: "crush",
@@ -406,7 +417,7 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("Invoke-RestMethod https://code.kimi.com/kimi-code/install.ps1 | Invoke-Expression"),
         extra_paths: &[".kimi-code/bin/kimi", ".local/bin/kimi"],
         docs: "https://code.kimi.com/kimi-code",
-        auth_paths: &[auth_dir(".kimi-code/credentials")],
+        auth_paths: &[auth_dir(".kimi-code/credentials", DirNames::Json)],
     },
     AgentSpec {
         id: "qoder",
@@ -800,6 +811,10 @@ pub async fn list_agents() -> Vec<AgentInfo> {
 /// via PowerShell when the command is PowerShell-only (`irm … | iex`), else via
 /// `cmd /C` — plain `npm`/`python` installs may chain with `&&`, which Windows
 /// PowerShell 5.1 does not parse but cmd does.
+///
+/// Every OS runs the installer into Tabtivity's own install home, never the
+/// user's (`services::agent_install`): the home is created, the installer gets
+/// its environment and a `PATH` with the home's launcher dirs first.
 fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> {
     #[cfg(windows)]
     {
@@ -820,8 +835,9 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
             c = crate::paths::command_no_window("cmd");
             // cmd doesn't take an argv — hand it the raw line un-requoted.
             use std::os::windows::process::CommandExt;
-            c.raw_arg(format!("/C {cmd_str} 2>&1"));
+            c.raw_arg(format!("/D /C {cmd_str} 2>&1"));
         }
+        into_install_home(&mut c)?;
         Ok(c)
     }
     #[cfg(not(windows))]
@@ -834,19 +850,29 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
         }
         let mut c = crate::paths::command_no_window("sh");
         c.arg("-c").arg(format!("{} 2>&1", spec.install_cmd));
-        // Into Tabtivity's own install home, never the user's
-        // (`services::agent_install`).
-        let root = crate::services::agent_install::install_root();
-        std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
-        c.envs(crate::services::agent_install::install_env());
-        c.env("PATH", agent_install_path());
+        into_install_home(&mut c)?;
         Ok(c)
     }
 }
 
+/// Point an installer at Tabtivity's own install home: create it, hand over
+/// its environment and [`agent_install_path`].
+fn into_install_home(c: &mut std::process::Command) -> Result<(), String> {
+    let root = crate::services::agent_install::install_root();
+    std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
+    let env = crate::services::agent_install::install_env();
+    // The Windows `APPDATA` stand-in must exist: npm and PowerShell write
+    // into it without creating it first.
+    if let Some((_, appdata)) = env.iter().find(|(k, _)| k == "APPDATA") {
+        std::fs::create_dir_all(appdata).map_err(|e| format!("create {appdata}: {e}"))?;
+    }
+    c.envs(env);
+    c.env("PATH", agent_install_path());
+    Ok(())
+}
+
 /// PATH for an installer: the install home's launcher dirs first, so a
 /// second installer of the same vendor finds the first's tools there.
-#[cfg(not(windows))]
 fn agent_install_path() -> std::ffi::OsString {
     let mut dirs = crate::services::agent_install::bin_dirs_in(&crate::storage::state_dir());
     if let Some(path) = crate::paths::effective_path() {
@@ -1055,21 +1081,30 @@ fn should_retry_npm_install(spec: &AgentSpec, output: &str) -> bool {
 
 /// Build the `npm uninstall -g <pkg>` process for the host OS (same shell
 /// choice as the npm branch of `installer_command`: `cmd /C` on Windows, `sh -c`
-/// elsewhere).
-fn npm_uninstall_command(pkg: &str) -> std::process::Command {
+/// elsewhere). A CLI Tabtivity installed is removed from its install home's
+/// npm prefix (the installer's own environment); `npm -g` there would
+/// otherwise mean the user's prefix, missing the copy that was found.
+fn npm_uninstall_command(
+    pkg: &str,
+    in_install_home: bool,
+) -> Result<std::process::Command, String> {
     #[cfg(windows)]
-    {
+    let mut c = {
         use std::os::windows::process::CommandExt;
         let mut c = crate::paths::command_no_window("cmd");
-        c.raw_arg(format!("/C npm uninstall -g {pkg} 2>&1"));
+        c.raw_arg(format!("/D /C npm uninstall -g {pkg} 2>&1"));
         c
-    }
+    };
     #[cfg(not(windows))]
-    {
+    let mut c = {
         let mut c = crate::paths::command_no_window("sh");
         c.arg("-c").arg(format!("npm uninstall -g {pkg} 2>&1"));
         c
+    };
+    if in_install_home {
+        into_install_home(&mut c)?;
     }
+    Ok(c)
 }
 
 /// Remove an installed agent CLI so it can be cleanly reinstalled — the
@@ -1094,10 +1129,11 @@ pub async fn uninstall_agent(id: String) -> Result<String, String> {
     };
 
     if let Some(pkg) = npm_package_from_cmd(cmd_for_platform) {
-        if !spec_is_installed(spec) {
+        let Some(found) = resolve_spec_path(spec) else {
             return Ok(format!("{} is not installed.", spec.label));
-        }
-        let out = run_capture(npm_uninstall_command(pkg)).map_err(|e| {
+        };
+        let in_install_home = crate::services::agent_install::owns_path(&found);
+        let out = run_capture(npm_uninstall_command(pkg, in_install_home)?).map_err(|e| {
             if is_permission_error(&e) {
                 format!(
                     "Permission denied — this machine's npm global directory needs \
@@ -1496,6 +1532,7 @@ pub async fn agent_tab_transcript(
 /// Changes panel. Takes `agent_tab_transcript`'s arguments; never reaches
 /// the phone.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_changes(
     agent: String,
     project_id: Option<String>,
@@ -1505,9 +1542,20 @@ pub async fn agent_tab_changes(
     subagent: Option<String>,
     version: Option<String>,
     limit: Option<usize>,
+    local_model: Option<bool>,
 ) -> crate::services::agent_changes::AgentChanges {
     use crate::services::agent_changes::{self, AgentChanges, DEFAULT_LIMIT};
     tauri::async_runtime::spawn_blocking(move || {
+        if local_model == Some(true) && agent == "opencode" {
+            return agent_changes::local_opencode_changes(
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                since,
+                subagent.as_deref(),
+                version.as_deref(),
+                limit.unwrap_or(DEFAULT_LIMIT),
+            );
+        }
         agent_changes::agent_session_changes(
             &agent,
             project_id.as_deref(),
@@ -2182,7 +2230,7 @@ mod tests {
             ),
             ("cline", "cline", "npm install -g cline"),
             ("goose", "goose", "https://github.com/aaif-goose/goose/"),
-            ("pi", "pi", "npm install -g @mariozechner/pi-coding-agent"),
+            ("pi", "pi", "npm install -g @earendil-works/pi-coding-agent"),
             ("plandex", "plandex", "https://plandex.ai/install.sh"),
             ("swe-agent", "sweagent", "pip install swe-agent"),
             ("mini-swe-agent", "mini", "pip install mini-swe-agent"),
@@ -2471,17 +2519,15 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_installer_command_picks_interpreter_per_command() {
-        use std::ffi::OsStr;
+        // The program is the System32 path `paths::helper_program` resolves,
+        // so only its stem is compared.
+        let stem = |c: std::process::Command| {
+            std::path::Path::new(c.get_program()).file_stem().unwrap().to_string_lossy().to_ascii_lowercase()
+        };
         let claude = find_spec("claude").unwrap(); // irm | iex
-        assert_eq!(
-            installer_command(claude).unwrap().get_program(),
-            OsStr::new("powershell")
-        );
+        assert_eq!(stem(installer_command(claude).unwrap()), "powershell");
         let gemini = find_spec("gemini").unwrap(); // npm install -g …
-        assert_eq!(
-            installer_command(gemini).unwrap().get_program(),
-            OsStr::new("cmd")
-        );
+        assert_eq!(stem(installer_command(gemini).unwrap()), "cmd");
         let vibe = find_spec("vibe").unwrap(); // no Windows installer
         assert!(installer_command(vibe).is_err());
     }

@@ -2099,7 +2099,8 @@
   letter-spacing: 0.04em;
   transition: color var(--transition);
 }
-.mobile-indicator-btn {
+.mobile-indicator-btn,
+.vpn-indicator-btn {
   justify-content: center;
   width: 25px;
   padding-inline: 3px;
@@ -2111,8 +2112,14 @@
   flex: none;
   color: var(--text-secondary);
 }
-.mobile-indicator-icon.connected { color: var(--success); }
+.mobile-indicator-icon.connected,
+.vpn-indicator-glyph.connected,
+.vpn-indicator-btn:hover .vpn-indicator-glyph.connected,
+.vpn-indicator-btn[aria-expanded="true"] .vpn-indicator-glyph.connected { color: var(--success); }
 .mobile-indicator-icon.connecting,
+.vpn-indicator-glyph.connecting,
+.vpn-indicator-btn:hover .vpn-indicator-glyph.connecting,
+.vpn-indicator-btn[aria-expanded="true"] .vpn-indicator-glyph.connecting,
 .dev-build-icon.active { color: var(--warning); }
 .mobile-indicator-icon.error,
 .dev-build-icon.error { color: var(--danger); }

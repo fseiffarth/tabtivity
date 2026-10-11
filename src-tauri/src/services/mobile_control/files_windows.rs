@@ -8,6 +8,10 @@
 //! through the same handles: `FILE_CREATE` never opens an existing name (nor a
 //! reparse point standing there), and a delete marks the one handle-relative
 //! name it opened, reparse point included, never a link's target.
+//!
+//! A root agent's mail `attach` (`services::mail_attach`) reads through the
+//! same walk ([`ProjectDir::open_root`], [`ProjectDir::lookup_dir`],
+//! [`ProjectDir::lookup_file`]), hence the crate-wide visibility.
 
 use std::{
     fs,
@@ -49,7 +53,7 @@ use ::windows::{
 
 use super::{canonical_root, plain_segment, valid_rel, FilesError};
 
-pub(in crate::services::mobile_control) struct ProjectDir(fs::File);
+pub(crate) struct ProjectDir(fs::File);
 
 impl ProjectDir {
     pub(super) fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
@@ -66,7 +70,7 @@ impl ProjectDir {
     }
 
     /// The project root itself, held open — the one folder opened by path.
-    pub(in crate::services::mobile_control) fn open_root(root: &Path) -> Result<Self, FilesError> {
+    pub(crate) fn open_root(root: &Path) -> Result<Self, FilesError> {
         let root = canonical_root(root)?;
         // Only the configured root is opened by path. Reparse points in its
         // project-controlled leaf are refused, including a replacement after
@@ -84,30 +88,6 @@ impl ProjectDir {
 
     fn handle(&self) -> HANDLE {
         HANDLE(self.0.as_raw_handle())
-    }
-
-    fn open_at(&self, name: &str, directory: bool) -> Option<fs::File> {
-        let kind = if directory {
-            FILE_DIRECTORY_FILE
-        } else {
-            FILE_NON_DIRECTORY_FILE
-        };
-        let file = self
-            .nt_create(
-                name,
-                FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                FILE_OPEN,
-                kind | FILE_OPEN_REPARSE_POINT,
-                Default::default(),
-            )
-            .ok()?;
-        let meta = plain_metadata(&file)?;
-        (if directory {
-            meta.is_dir()
-        } else {
-            meta.is_file()
-        })
-        .then_some(file)
     }
 
     /// `NtCreateFile` of exactly one name relative to this folder, always
@@ -176,7 +156,7 @@ impl ProjectDir {
     /// The folder `name` in this one: `Ok(None)` when nothing has that name,
     /// `Err(())` when something does but is not a plain folder (a reparse
     /// point, a file) — never traversed either way.
-    pub(in crate::services::mobile_control) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
+    pub(crate) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
         match self.nt_create(
             name,
             FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
@@ -186,6 +166,27 @@ impl ProjectDir {
         ) {
             Ok(file) if plain_metadata(&file).is_some_and(|meta| meta.is_dir()) => Ok(Some(Self(file))),
             Ok(_) => Err(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// The regular file `name` in this one, opened for reading, with its
+    /// metadata: `Ok(None)` when nothing has that name, `Err(())` when
+    /// something does but is not a plain file (a reparse point, a folder) —
+    /// never followed either way.
+    pub(crate) fn lookup_file(&self, name: &str) -> Result<Option<(fs::File, fs::Metadata)>, ()> {
+        match self.nt_create(
+            name,
+            FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
+            Default::default(),
+        ) {
+            Ok(file) => match plain_metadata(&file) {
+                Some(meta) if meta.is_file() => Ok(Some((file, meta))),
+                _ => Err(()),
+            },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(_) => Err(()),
         }
@@ -238,7 +239,7 @@ impl ProjectDir {
     }
 
     pub(super) fn child_dir(&self, name: &str) -> Option<Self> {
-        self.open_at(name, true).map(Self)
+        self.lookup_dir(name).ok().flatten()
     }
 
     pub(super) fn child_dir_meta(&self, name: &str) -> Option<fs::Metadata> {
@@ -246,9 +247,7 @@ impl ProjectDir {
     }
 
     pub(in crate::services::mobile_control) fn open_file(&self, name: &str) -> Option<(fs::File, fs::Metadata)> {
-        let file = self.open_at(name, false)?;
-        let meta = plain_metadata(&file)?;
-        meta.is_file().then_some((file, meta))
+        self.lookup_file(name).ok().flatten()
     }
 
     pub(in crate::services::mobile_control) fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {

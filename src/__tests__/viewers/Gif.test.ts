@@ -428,6 +428,62 @@ describe("truncation and caps", () => {
     expect(decodeGif(bytes).frames).toHaveLength(2);
   });
 
+  it("refuses a huge claimed screen before allocating its canvas (row 41)", () => {
+    // A complete GIF that claims a 65535×65535 screen: 16 GiB of RGBA. Allocating
+    // that canvas would throw a RangeError (or take the renderer down); the
+    // refusal is a GifDecodeError, so the size check ran first.
+    const bomb = buildGif({ width: 65535, height: 65535, gct: [RED, GREEN], frames: [{ rect: [0, 0, 1, 1], indices: [0] }] });
+    expect(bomb.length).toBeLessThan(64);
+    expect(() => openGif(bomb)).toThrow(GifDecodeError);
+    expect(() => openGif(bomb)).toThrow(/screen too large/);
+    // The same check honours a caller's cap.
+    const small = buildGif({ width: 4, height: 4, gct: [RED, GREEN], frames: [{ indices: Array(16).fill(0) }] });
+    expect(() => openGif(small, { maxPixelBytes: 63 })).toThrow(/screen too large/);
+    expect(decodeGif(small, { maxPixelBytes: 64 }).frames).toHaveLength(1);
+  });
+
+  it("refuses a frame claiming a huge size before decoding it (row 41)", () => {
+    // A 2×2 screen whose frame claims 65535×65535: `lzwDecode` would size its
+    // index buffer from the frame's own w*h (4 GiB). A GifDecodeError, not a
+    // RangeError, so the check ran before any allocation.
+    const huge = buildGif({
+      width: 2,
+      height: 2,
+      gct: [RED, GREEN],
+      frames: [{ rect: [0, 0, 65535, 65535], indices: [0] }],
+    });
+    expect(() => decodeGif(huge)).toThrow(GifDecodeError);
+    expect(() => decodeGif(huge)).toThrow(/frame too large/);
+    // After a good frame, a frame past the budget ends the stream as truncated.
+    const tail = buildGif({
+      width: 2,
+      height: 2,
+      gct: [RED, GREEN],
+      frames: [{ indices: [0, 0, 0, 0] }, { rect: [0, 0, 3, 2], indices: [1, 1, 1, 1, 1, 1] }],
+    });
+    const capped = decodeGif(tail, { maxPixelBytes: 20 });
+    expect(capped.frames).toHaveLength(1);
+    expect(capped.truncated).toBe(true);
+  });
+
+  it("animates a frame wider than the screen, drawn clipped", () => {
+    // Out of spec but real: a 3×2 frame on a 2×2 screen. Within the memory
+    // budget it decodes, and the column past the edge is clipped.
+    const gif = decodeGif(
+      buildGif({
+        width: 2,
+        height: 2,
+        gct: [RED, GREEN],
+        frames: [{ indices: [0, 0, 0, 0] }, { rect: [0, 0, 3, 2], indices: [1, 1, 1, 1, 1, 1] }],
+      }),
+    );
+    expect(gif.frames).toHaveLength(2);
+    expect(gif.truncated).toBe(false);
+    expect(px(gif, 0, 1, 1)).toEqual(opaque(RED));
+    expect(px(gif, 1, 0, 0)).toEqual(opaque(GREEN));
+    expect(px(gif, 1, 1, 1)).toEqual(opaque(GREEN));
+  });
+
   it("streams frames one at a time via openGif", () => {
     const stream = openGif(
       buildGif({

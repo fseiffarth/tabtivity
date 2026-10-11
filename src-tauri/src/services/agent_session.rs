@@ -100,6 +100,9 @@ where
     opts
 }
 
+/// The most of a legacy Vibe session's `meta.json` read to match its id.
+const VIBE_META_CAP: u64 = 16 * 1024 * 1024;
+
 fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
     if !is_uuid_shaped(id) {
         return false;
@@ -118,7 +121,10 @@ fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
         if !path.is_dir() || !entry.file_name().to_string_lossy().starts_with("session_") {
             return false;
         }
-        let Ok(raw) = std::fs::read_to_string(path.join("meta.json")) else {
+        // Agent-written: a FIFO or a link here must not hang or steer a spawn.
+        // Not a small record: Vibe dumps its config, every tool schema and the
+        // whole system prompt (the user's AGENTS.md included) into it.
+        let Some(raw) = crate::services::home_io::read_record_capped(&path.join("meta.json"), VIBE_META_CAP) else {
             return false;
         };
         serde_json::from_str::<serde_json::Value>(&raw).ok()
@@ -166,10 +172,7 @@ where
         return opts;
     };
     if let Some(id) = live_lookup(&uid).filter(|id| {
-        codex_session_log(sessions_root, id).is_some()
-            || stores
-                .iter()
-                .any(|db| crate::services::codex_store::thread_exists(db, id))
+        codex_session_exists_in(sessions_root, stores.iter().map(PathBuf::as_path), id)
     })
     {
         opts.args = vec!["resume".to_string(), id];
@@ -184,11 +187,10 @@ where
 ///
 /// - the **rollout log** at
 ///   `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`, which is
-///   what every release up to 0.153.4 wrote (and what a *containerized* Codex
-///   still writes into the mounted `sessions/`);
-/// - the **thread store** `~/.codex/state_<n>.sqlite`, which is where 0.153.4
-///   puts it instead. Its rows still *name* a `rollout_path`, but no such file
-///   is created any more.
+///   what older releases wrote and Codex 0.160.1 writes again;
+/// - the **thread store** `~/.codex/state_<n>.sqlite`, where 0.153.4 could keep
+///   a thread without writing its named rollout. An archived row overrides a
+///   retained rollout: that conversation must not be resumed automatically.
 ///
 /// Asking only the first one is how Codex resume died silently: the hook kept
 /// recording live thread ids, the walk kept finding no file for them, and every
@@ -204,8 +206,23 @@ pub(crate) fn codex_session_exists(
     store: Option<&std::path::Path>,
     uuid: &str,
 ) -> bool {
-    codex_session_log(root, uuid).is_some()
-        || store.is_some_and(|db| crate::services::codex_store::thread_exists(db, uuid))
+    codex_session_exists_in(root, store, uuid)
+}
+
+fn codex_session_exists_in<'a>(
+    root: &std::path::Path,
+    stores: impl IntoIterator<Item = &'a std::path::Path>,
+    uuid: &str,
+) -> bool {
+    let mut live_in_store = false;
+    for db in stores {
+        match crate::services::codex_store::thread_archived(db, uuid) {
+            Some(true) => return false,
+            Some(false) => live_in_store = true,
+            None => {}
+        }
+    }
+    live_in_store || codex_session_log(root, uuid).is_some()
 }
 
 /// The rollout log behind [`codex_session_exists`], when there is one.
@@ -653,7 +670,9 @@ fn with_transcript_tail<T>(
     read: impl FnOnce(&[&str]) -> Option<T>,
 ) -> Option<T> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
+    // The agent writes its transcript: never a link, a FIFO or another
+    // special file.
+    let mut file = crate::services::home_io::open_regular(path)?;
     let len = file.metadata().ok()?.len();
     let start = len.saturating_sub(tail);
     file.seek(SeekFrom::Start(start)).ok()?;
@@ -1415,8 +1434,9 @@ pub fn undo_clear_plan(agent: &str, project_id: Option<&str>, uid: &str) -> Opti
             ];
             let stores = crate::services::codex_store::state_dbs(Some(project_id.unwrap_or("root")));
             let exists = |id: &str| {
-                roots.iter().any(|root| codex_session_log(root, id).is_some())
-                    || stores.iter().any(|db| crate::services::codex_store::thread_exists(db, id))
+                roots.iter().any(|root| {
+                    codex_session_exists_in(root, stores.iter().map(PathBuf::as_path), id)
+                })
             };
             if let Some(dir) = live_record_dir(project_id, uid) {
                 if let Some(cleared) = cleared_session_in(&dir, uid, exists) {
@@ -1447,7 +1467,7 @@ fn cleared_session_in(
         return None;
     }
     // Same guard as the id record: the hook wrote it from agent-visible JSON.
-    let raw = std::fs::read_to_string(dir.join(format!("{uid}{LIVE_CLEARED_SUFFIX}"))).ok()?;
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}{LIVE_CLEARED_SUFFIX}")))?;
     let cleared = raw.trim().to_string();
     (is_uuidish(&cleared) && cleared != live && session_exists(&cleared)).then_some(cleared)
 }
@@ -1457,7 +1477,7 @@ pub fn read_live_source_in(dir: &std::path::Path, uid: &str) -> Option<String> {
     if !is_uuid_shaped(uid) {
         return None;
     }
-    let raw = std::fs::read_to_string(dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}"))).ok()?;
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}")))?;
     let word = raw.trim().to_string();
     is_session_source(&word).then_some(word)
 }
@@ -1473,7 +1493,7 @@ pub fn read_live_session_in(dir: &std::path::Path, uid: &str) -> Option<String> 
     if !is_uuid_shaped(uid) {
         return None;
     }
-    let raw = std::fs::read_to_string(dir.join(uid)).ok()?;
+    let raw = crate::services::home_io::read_record(&dir.join(uid))?;
     let id = raw.trim().to_string();
     if is_uuidish(&id) {
         Some(id)
@@ -1521,7 +1541,7 @@ fn read_live_mode_in(dir: &std::path::Path, uid: &str) -> Option<String> {
     if !is_uuid_shaped(uid) {
         return None;
     }
-    let raw = std::fs::read_to_string(dir.join(format!("{uid}.mode"))).ok()?;
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}.mode")))?;
     let mode = raw.trim().to_string();
     if is_permission_mode(&mode) {
         Some(mode)
@@ -1608,7 +1628,10 @@ pub fn codex_hook_state() -> CodexHookState {
 /// Tabtivity's hook as the Codex of one agent home sees it.
 fn codex_hook_state_of_home(home: &std::path::Path) -> CodexHookState {
     let config = home.join(".codex").join("config.toml");
-    let src = std::fs::read_to_string(&config).unwrap_or_default();
+    // The agent can rewrite its own config: never a FIFO or a link.
+    let src = crate::services::home_io::open_regular(&config)
+        .and_then(|f| std::io::read_to_string(f).ok())
+        .unwrap_or_default();
     codex_hook_state_in(&src, &config.to_string_lossy(), &hook_command())
 }
 
@@ -1790,7 +1813,12 @@ fn write_vibe_hooks(file: &HomeFile, app_owned: bool) -> std::io::Result<()> {
     if app_owned {
         let fresh = vibe_hook_block()?;
         if file.read().as_deref() != Some(fresh.as_bytes()) {
-            file.write(fresh.as_bytes())?;
+            // In place: the file is bind-mounted read-only into the model's
+            // running tabs and pinned by inode for one that is starting
+            // (`agent_fence::verify_control_pins`). A rename over it would
+            // detach those mounts and refuse a second tab of the model that
+            // started at the same time.
+            file.write_in_place(fresh.as_bytes())?;
         }
         return Ok(());
     }
@@ -1908,7 +1936,8 @@ fn container_hook_script_path() -> PathBuf {
 /// — except that a Claude fired inside it (`CLAUDECODE` is set by Claude for its
 /// children, never by Codex) is refused outright. A `clear`/`resume` start is
 /// taken only from a Claude with no other Claude above it among the tab's
-/// processes (POSIX, via `/proc`): a `claude -p --resume <id>` run from the
+/// processes (POSIX, via `/proc`; where that is unreadable — macOS — via `ps`,
+/// whose `-E` shows a same-user process's environment): a `claude -p --resume <id>` run from the
 /// agent's Bash tool sent `source: resume` under its own id and moved the
 /// record, so the Reader showed that run's conversation until the tab's next
 /// `Stop` (2.1.287, 2026-10-02). Claude's env can't tell them apart — every
@@ -1932,6 +1961,14 @@ const HOOK_ENV: &[&str] = &["TAB_UID", "TAB_AGENT", "PROJECT_DIR"];
 /// The POSIX body itself — the hook on Unix, and on Windows the container twin
 /// (see `write_hook_script`), so it is compiled everywhere.
 fn posix_hook_script_body(live_dir: &str) -> String {
+    posix_hook_script_body_with(live_dir, "/proc")
+}
+
+/// `posix_hook_script_body` with the procfs root it walks baked in as a
+/// literal. Production passes `/proc`; a test passes an empty directory to
+/// drive the `ps` fallback (macOS). A literal, not an environment variable:
+/// the hook runs under the agent's environment, which a project can shape.
+fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
     let hint = crate::services::agent_hint::HINT;
     format!(
         "#!/bin/sh\n\
@@ -1981,13 +2018,25 @@ fn posix_hook_script_body(live_dir: &str) -> String {
          \x20        # the same start. Among the tab's processes — those carrying its\n\
          \x20        # id under either tab-id name, so unsetting one (the other fills it\n\
          \x20        # in above) can't hide a nested run — the tab's CLI has no claude\n\
-         \x20        # above it, a nested one has. Without /proc nothing is counted and\n\
-         \x20        # the start is taken.\n\
+         \x20        # above it, a nested one has. Without /proc (macOS) `ps` walks the\n\
+         \x20        # same chain: `-E` appends the environment of a process of this\n\
+         \x20        # user, `-ww` keeps BSD `ps` from cutting it at 79 columns (no tty);\n\
+         \x20        # a `claude` is one whose executable or argv[0] is named so.\n\
+         \x20        # Where neither answers nothing is counted and the start is taken.\n\
          \x20        clear|resume) n=0; p=$PPID\n\
-         \x20          while [ -r \"/proc/$p/environ\" ] && tr '\\0' '\\n' < \"/proc/$p/environ\" | grep -qx \"[A-Z]*_TAB_UID=${UPPER}_TAB_UID\"; do\n\
-         \x20            [ \"$(cat \"/proc/$p/comm\" 2>/dev/null)\" = claude ] && n=$((n + 1))\n\
-         \x20            p=$(sed 's/.*) [^ ]* \\([0-9]*\\).*/\\1/' \"/proc/$p/stat\" 2>/dev/null)\n\
+         \x20          if [ -r \"{proc_root}/$p/environ\" ]; then\n\
+         \x20          while [ -r \"{proc_root}/$p/environ\" ] && tr '\\0' '\\n' < \"{proc_root}/$p/environ\" | grep -qx \"[A-Z]*_TAB_UID=${UPPER}_TAB_UID\"; do\n\
+         \x20            [ \"$(cat \"{proc_root}/$p/comm\" 2>/dev/null)\" = claude ] && n=$((n + 1))\n\
+         \x20            p=$(sed 's/.*) [^ ]* \\([0-9]*\\).*/\\1/' \"{proc_root}/$p/stat\" 2>/dev/null)\n\
          \x20          done\n\
+         \x20          else\n\
+         \x20          while [ \"$p\" -gt 1 ] 2>/dev/null && e=$(ps -E -ww -o command= -p \"$p\" 2>/dev/null) &&\n\
+         \x20            printf '%s\\n' \"$e\" | tr ' ' '\\n' | grep -qx \"[A-Z]*_TAB_UID=${UPPER}_TAB_UID\"; do\n\
+         \x20            c=$(ps -ww -o comm= -p \"$p\" 2>/dev/null); a=${{e%% *}}\n\
+         \x20            if [ \"${{c##*/}}\" = claude ] || [ \"${{a##*/}}\" = claude ]; then n=$((n + 1)); fi\n\
+         \x20            p=$(ps -o ppid= -p \"$p\" 2>/dev/null | tr -d ' ')\n\
+         \x20          done\n\
+         \x20          fi\n\
          \x20          [ \"$n\" -lt 2 ] || exit 0 ;;\n\
          \x20        # Claude relaunches itself (switching its renderer, updating) and,\n\
          \x20        # while its session has no transcript yet, comes back under a fresh\n\
@@ -2040,6 +2089,7 @@ fn posix_hook_script_body(live_dir: &str) -> String {
          esac\n\
          exit 0\n",
         live_dir = live_dir,
+        proc_root = proc_root,
         legacy_env = crate::services::brand_migration::compat::script_preamble_sh(HOOK_ENV),
     )
 }
@@ -2279,6 +2329,51 @@ pub fn codex_registered_events(src: &str, cmd: &str) -> std::collections::HashSe
     out
 }
 
+/// The most a Codex `SessionEnd` hook may take, in seconds: Codex (0.160.1,
+/// 0.161.0) clamps a longer one to this and warns on every start.
+const CODEX_SESSION_END_TIMEOUT: u32 = 3;
+
+/// `src` with the `timeout` of our own `[[hooks.SessionEnd.hooks]]` table
+/// (the one whose `command` is `cmd`) lowered to
+/// [`CODEX_SESSION_END_TIMEOUT`], or `None` when nothing needs lowering.
+/// Earlier builds wrote `timeout = 10` there. Codex's trust hash does not
+/// cover the timeout (checked live on 0.161.0: the lowered hook stays trusted,
+/// no review menu), so the rewrite costs no re-approval. Other tables and
+/// lines are left byte for byte.
+fn cap_codex_session_end_timeout(src: &str, cmd: &str) -> Option<String> {
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(src.len());
+    let mut changed = false;
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim() != "[[hooks.SessionEnd.hooks]]" {
+            out.push_str(lines[i]);
+            i += 1;
+            continue;
+        }
+        let end = (i + 1..lines.len())
+            .find(|&j| lines[j].trim_start().starts_with('['))
+            .unwrap_or(lines.len());
+        let table = &lines[i..end];
+        let ours = table.iter().any(|l| toml_value(l.trim(), "command").as_deref() == Some(cmd));
+        for l in table {
+            let too_long = toml_value(l.trim(), "timeout")
+                .and_then(|v| v.parse::<f64>().ok())
+                .is_some_and(|t| t > f64::from(CODEX_SESSION_END_TIMEOUT));
+            if ours && too_long {
+                let eol = if l.ends_with("\r\n") { "\r\n" } else if l.ends_with('\n') { "\n" } else { "" };
+                let indent = &l[..l.len() - l.trim_start().len()];
+                out.push_str(&format!("{indent}timeout = {CODEX_SESSION_END_TIMEOUT}{eol}"));
+                changed = true;
+            } else {
+                out.push_str(l);
+            }
+        }
+        i = end;
+    }
+    changed.then_some(out)
+}
+
 /// Testable core of [`register_codex_hook`] against an explicit config path.
 /// Appends one block per event of [`CODEX_HOOK_EVENTS`] the file does not
 /// already hold.
@@ -2292,6 +2387,11 @@ pub(crate) fn register_codex_hook_as(config: &HomeFile, cmd: &str) -> std::io::R
         .read()
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
+    let capped = cap_codex_session_end_timeout(&content, cmd);
+    let changed = capped.is_some();
+    if let Some(c) = capped {
+        content = c;
+    }
     let have = codex_registered_events(&content, cmd);
     let missing: Vec<&str> = CODEX_HOOK_EVENTS
         .iter()
@@ -2299,6 +2399,9 @@ pub(crate) fn register_codex_hook_as(config: &HomeFile, cmd: &str) -> std::io::R
         .filter(|ev| !have.contains(*ev))
         .collect();
     if missing.is_empty() {
+        if changed {
+            config.write(content.as_bytes())?;
+        }
         return Ok(());
     }
     if !content.is_empty() && !content.ends_with('\n') {
@@ -2318,13 +2421,14 @@ pub(crate) fn register_codex_hook_as(config: &HomeFile, cmd: &str) -> std::io::R
         } else {
             ""
         };
+        let timeout = if ev == "SessionEnd" { CODEX_SESSION_END_TIMEOUT } else { 10 };
         content.push_str(&format!(
             "[[hooks.{ev}]]\n\
              {matcher}\n\
              [[hooks.{ev}.hooks]]\n\
              type = \"command\"\n\
              command = '{cmd}'\n\
-             timeout = 10\n\n",
+             timeout = {timeout}\n\n",
         ));
     }
     config.write(content.as_bytes())?;
@@ -2439,7 +2543,14 @@ mod tests {
         std::fs::write(sessions.join("unified").join(own).join("CURRENT"), "1").unwrap();
         let legacy = sessions.join("session_20260923_120000_ffffffff");
         std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("meta.json"), format!("{{\"session_id\":\"{other}\"}}")).unwrap();
+        // Vibe's real metadata carries its config, tool schemas and system
+        // prompt: far past a small record's cap, and still read.
+        let padding = "x".repeat(2 * crate::services::home_io::RECORD_CAP as usize);
+        std::fs::write(
+            legacy.join("meta.json"),
+            format!("{{\"session_id\":\"{other}\",\"system_prompt\":{{\"content\":\"{padding}\"}}}}"),
+        )
+        .unwrap();
 
         let mut opts = opts_with_args(&["--continue"]);
         opts.cmd = "vibe".into();
@@ -2483,6 +2594,35 @@ mod tests {
         write_vibe_hooks(&file, true).unwrap();
         assert_eq!(std::fs::read_to_string(&hooks).unwrap(), once);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// Two tabs of one local model starting together: the second spawn's
+    /// rewrite of a stale `hooks.toml` lands between the first spawn's pin and
+    /// its verify. The rewrite keeps the inode, so the first spawn is not
+    /// refused (and running tabs keep their read-only bind).
+    #[cfg(unix)]
+    #[test]
+    fn a_hooks_rewrite_between_pin_and_verify_keeps_the_pin_valid() {
+        let state = tempfile::tempdir().unwrap();
+        let home = state.path().join("vibe_local/gemma4-e4b");
+        std::fs::create_dir_all(&home).unwrap();
+        let hooks = home.join("hooks.toml");
+        let file = HomeFile::open(&home, "hooks.toml").unwrap();
+        // First tab ever: the first spawn creates the file and pins it.
+        write_vibe_hooks(&file, true).unwrap();
+        let pins = crate::services::agent_fence::local_model_control_paths(&home).unwrap();
+        // The second spawn read stale content (an update changed the block,
+        // or it raced the creation) and rewrites the file.
+        std::fs::OpenOptions::new().write(true).truncate(true).open(&hooks).unwrap();
+        write_vibe_hooks(&file, true).unwrap();
+        crate::services::agent_fence::verify_control_pins(&pins).unwrap();
+        let fresh = std::fs::read_to_string(&hooks).unwrap();
+        assert_eq!(fresh, vibe_hook_block().unwrap());
+        // Stale content under the pins: rewritten, still the pinned inode.
+        std::fs::write(&hooks, "[[hooks]]\nname = \"planted\"\ntype = \"post_agent\"\ncommand = \"true\"\n").unwrap();
+        write_vibe_hooks(&file, true).unwrap();
+        crate::services::agent_fence::verify_control_pins(&pins).unwrap();
+        assert_eq!(std::fs::read_to_string(&hooks).unwrap(), fresh);
     }
 
     #[test]
@@ -2800,6 +2940,32 @@ mod tests {
         });
         assert!(out.args.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_does_not_resume_an_archived_thread_with_a_rollout() {
+        let archived = "01a07c18-3a25-7fa1-9ac4-74fa84d4e12a";
+        let root = codex_sessions_with(archived);
+        let db = root.join("state_5.sqlite");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, archived INTEGER NOT NULL DEFAULT 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO threads (id, archived) VALUES (?1, 1)", [archived])
+            .unwrap();
+        drop(conn);
+
+        assert!(!codex_session_exists(&root, Some(&db), archived));
+        let mut opts = codex_opts();
+        opts.env
+            .insert(crate::app_env!("TAB_UID").to_string(), "tab-key".to_string());
+        let out = resolve_codex_session_impl(opts, &root, std::slice::from_ref(&db), |_| {
+            Some(archived.to_string())
+        });
+        assert!(out.args.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ── hook installer ──────────────────────────────────────────────────────
@@ -3201,6 +3367,120 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// The same guard where `/proc` is unreadable (macOS): the hook walks the
+    /// chain with `ps` instead. The procfs root is an empty directory and a
+    /// `ps` shim answers `ppid=` / `comm=` / `command=` (the environment only
+    /// with `-E`) from a scripted chain that starts at the hook's parent — this
+    /// test process. Like BSD `ps` with no tty, it cuts its line at 79 columns
+    /// unless given `-ww`.
+    #[cfg(unix)]
+    #[test]
+    fn hook_script_walks_the_chain_with_ps_where_proc_is_unreadable() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-hook-nested-ps"));
+        let live = tmp.join("live");
+        let bin = tmp.join("bin");
+        let no_proc = tmp.join("no-proc");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&no_proc).unwrap();
+        let script = tmp.join("hook.sh");
+        std::fs::write(&script, posix_hook_script_body_with(&live.to_string_lossy(), &no_proc.to_string_lossy())).unwrap();
+        // The production body is this one with `/proc` baked in.
+        assert_eq!(posix_hook_script_body("/l"), posix_hook_script_body_with("/l", "/proc"));
+        let chain = tmp.join("chain");
+        let ps = bin.join("ps");
+        std::fs::write(
+            &ps,
+            format!(
+                "#!/bin/sh\nf= p= env= w=\nwhile [ $# -gt 0 ]; do\n\
+                 \x20 case \"$1\" in -E) env=1 ;; -ww) w=1 ;; -o) f=$2; shift ;; -p) p=$2; shift ;; esac\n\
+                 \x20 shift\ndone\n\
+                 while IFS='|' read -r pid ppid comm args envs; do\n\
+                 \x20 [ \"$pid\" = \"$p\" ] || continue\n\
+                 \x20 case \"$f\" in\n\
+                 \x20   ppid=) out=\"  $ppid\" ;;\n\
+                 \x20   comm=) out=$comm ;;\n\
+                 \x20   command=) if [ -n \"$env\" ]; then out=\"$args $envs\"; else out=$args; fi ;;\n\
+                 \x20 esac\n\
+                 \x20 if [ -n \"$w\" ]; then printf '%s\\n' \"$out\"; else printf '%s\\n' \"$out\" | cut -c1-79; fi\n\
+                 \x20 exit 0\ndone < '{}'\nexit 1\n",
+                chain.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&ps, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        let uid = "11111111-1111-4111-8111-111111111111";
+        let other = "22222222-2222-4222-8222-222222222222";
+        let tab_uid = crate::app_env!("TAB_UID");
+        let legacy_tab_uid = crate::brand::PAIR.legacy_env_name("TAB_UID").unwrap();
+        let me = std::process::id();
+        let run = |src: &str, lines: &[String]| {
+            use std::io::Write as _;
+            std::fs::write(&chain, lines.join("\n") + "\n").unwrap();
+            std::fs::create_dir_all(&live).unwrap();
+            std::fs::write(live.join(uid), uid).unwrap();
+            let mut child = std::process::Command::new("sh")
+                .arg(&script)
+                .env_clear()
+                .env("PATH", &path)
+                .env(tab_uid, uid)
+                .env(TAB_AGENT_ENV, "claude")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            write!(
+                child.stdin.take().unwrap(),
+                r#"{{"session_id":"{other}","hook_event_name":"SessionStart","source":"{src}"}}"#
+            )
+            .unwrap();
+            assert!(child.wait().unwrap().success());
+            std::fs::read_to_string(live.join(uid)).unwrap()
+        };
+        let launchd = "1|0|/sbin/launchd|/sbin/launchd|".to_string();
+        for src in ["resume", "clear"] {
+            // The tab's own Claude (full executable path, as macOS `comm` prints it).
+            let alone = [format!("{me}|1|/Users/x/.local/bin/claude|claude --resume|{tab_uid}={uid} HOME=/h"), launchd.clone()];
+            assert_eq!(run(src, &alone), other, "{src} from the tab's own claude");
+            // A `claude -p --resume` from the agent's Bash tool, under the tab's.
+            let nested = [
+                format!("{me}|500|claude|claude -p --resume x|{tab_uid}={uid}"),
+                format!("500|1|/Users/x/.local/bin/claude|claude|{tab_uid}={uid}"),
+                launchd.clone(),
+            ];
+            assert_eq!(run(src, &nested), uid, "{src} from a claude nested under it");
+            // A `claude` above the tab's own that is not the tab's (no tab id).
+            let outside = [format!("{me}|500|claude|claude|{tab_uid}={uid}"), "500|1|claude|claude|PATH=/bin".to_string(), launchd.clone()];
+            assert_eq!(run(src, &outside), other, "{src} under a claude outside the tab");
+            // Only the legacy name set on the nested run, and an executable named
+            // otherwise whose argv[0] is `claude` (a retitled node): still nested.
+            let legacy = [
+                format!("{me}|500|node|claude -p|{legacy_tab_uid}={uid}"),
+                format!("500|1|claude|claude|{tab_uid}={uid} {legacy_tab_uid}={uid}"),
+                launchd.clone(),
+            ];
+            assert_eq!(run(src, &legacy), uid, "{src} nested, current name unset");
+            // Real lines are long: the native installer's versioned executable,
+            // and the tab id somewhere in a full environment. BSD `ps` without
+            // `-ww` would cut both at 79 columns and the nested run would pass.
+            let exe = "/Users/someone/.local/share/claude/versions/2.1.294/claude";
+            let envs = format!("TERM=xterm-256color SHELL=/bin/zsh HOME=/Users/someone LANG=en_US.UTF-8 {tab_uid}={uid}");
+            let long = [
+                format!("{me}|500|{exe}|claude -p --resume 33333333-3333-4333-8333-333333333333 --output-format json|{envs}"),
+                format!("500|1|/Users/someone/Library/Application Support/SomeLauncher/runtime/node_modules/.bin/claude|node|{envs}"),
+                launchd.clone(),
+            ];
+            assert_eq!(run(src, &long), uid, "{src} nested, long ps lines");
+            // Another tab's id stops the walk; a `ps` that knows nothing counts nothing.
+            let foreign = [format!("{me}|500|claude|claude|{tab_uid}={other}"), format!("500|1|claude|claude|{tab_uid}={uid}")];
+            assert_eq!(run(src, &foreign), other, "{src} under another tab's id");
+            assert_eq!(run(src, &[]), other, "{src} with nothing to walk");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// Claude relaunching itself before the first prompt (renderer switch,
     /// update) comes back under a fresh id with a plain `startup`: the record
     /// follows it while the tab's own session has no transcript, and only then.
@@ -3502,6 +3782,50 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn codex_session_end_hook_stays_under_codexs_clamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config.toml");
+        let cmd = hook_command();
+        let timeout_of = |src: &str, ev: &str| -> Vec<String> {
+            let mut cur = String::new();
+            src.lines()
+                .filter_map(|l| {
+                    if l.starts_with('[') {
+                        cur = l.to_string();
+                    }
+                    toml_value(l, "timeout").filter(|_| cur == format!("[[hooks.{ev}.hooks]]"))
+                })
+                .collect()
+        };
+
+        // A fresh registration writes 3 on SessionEnd, 10 elsewhere.
+        register_codex_hook_in(&HomeFile::open(tmp.path(), "config.toml").unwrap()).unwrap();
+        let out = std::fs::read_to_string(&config).unwrap();
+        assert_eq!(timeout_of(&out, "SessionEnd"), ["3"]);
+        assert_eq!(timeout_of(&out, "Stop"), ["10"]);
+
+        // An older build's `timeout = 10` on our SessionEnd is lowered in
+        // place; the user's own SessionEnd hook, the trust state and CRLF line
+        // ends survive untouched.
+        let old = format!(
+            "[[hooks.SessionEnd]]\r\n\r\n[[hooks.SessionEnd.hooks]]\r\ntype = \"command\"\r\ncommand = '/theirs.sh'\r\ntimeout = 30\r\n\r\n\
+             [[hooks.SessionEnd]]\r\n\r\n[[hooks.SessionEnd.hooks]]\r\ntype = \"command\"\r\ncommand = '{cmd}'\r\ntimeout = 10\r\n\r\n\
+             [hooks.state.\"{CFG}:session_end:1:0\"]\r\ntrusted_hash = \"sha256:d709\"\r\n"
+        );
+        let capped = cap_codex_session_end_timeout(&old, &cmd).unwrap();
+        assert_eq!(capped, old.replace("'\r\ntimeout = 10\r\n", "'\r\ntimeout = 3\r\n"));
+        assert!(capped.contains("timeout = 30\r\n"));
+        // Already low enough: nothing to do.
+        assert_eq!(cap_codex_session_end_timeout(&capped, &cmd), None);
+
+        // Registration applies it even when every event is already there.
+        std::fs::write(&config, out.replace("timeout = 3\n", "timeout = 10\n")).unwrap();
+        register_codex_hook_in(&HomeFile::open(tmp.path(), "config.toml").unwrap()).unwrap();
+        let again = std::fs::read_to_string(&config).unwrap();
+        assert_eq!(again, out);
     }
 
     // ── Codex hook trust state ──────────────────────────────────────────────
@@ -4099,5 +4423,102 @@ mod tests {
         assert_eq!(clean_model_name("evil\u{1b}]0;x\u{7}"), None);
         assert_eq!(clean_model_name("two words"), None);
         assert_eq!(clean_model_name(&"m".repeat(MAX_MODEL_NAME + 1)), None);
+    }
+
+    /// Gap 29: every record the host reads from the live-session slice, Vibe's
+    /// session metadata and a transcript are agent-writable. A planted FIFO
+    /// reads as nothing without blocking (a regression fails on the deadline
+    /// instead of hanging), so does a link or an oversized record, and a
+    /// normal record still reads.
+    #[cfg(unix)]
+    #[test]
+    fn planted_fifos_links_and_oversized_records_read_as_nothing() {
+        use crate::services::home_io::{mkfifo, within_deadline, RECORD_CAP};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("live");
+        std::fs::create_dir_all(&dir).unwrap();
+        let uid = "0a1b2c3d-0000-4000-8000-00000000abcd";
+        let prev = "0a1b2c3d-1111-4000-8000-00000000abcd";
+        let id_rec = dir.join(uid);
+        let src = dir.join(format!("{uid}{LIVE_SOURCE_SUFFIX}"));
+        let mode = dir.join(format!("{uid}.mode"));
+        let cleared = dir.join(format!("{uid}{LIVE_CLEARED_SUFFIX}"));
+        let write_all = || {
+            std::fs::write(&id_rec, format!("{uid}\n")).unwrap();
+            std::fs::write(&src, "clear\n").unwrap();
+            std::fs::write(&mode, "plan\n").unwrap();
+            std::fs::write(&cleared, format!("{prev}\n")).unwrap();
+        };
+        write_all();
+        assert_eq!(read_live_session_in(&dir, uid).as_deref(), Some(uid));
+        assert_eq!(read_live_source_in(&dir, uid).as_deref(), Some("clear"));
+        assert_eq!(read_live_mode_in(&dir, uid).as_deref(), Some("plan"));
+        assert_eq!(cleared_session_in(&dir, uid, |_| true).as_deref(), Some(prev));
+
+        // One FIFO at a time, the others valid, so each reader reaches its own file.
+        for fifo in [&id_rec, &src, &mode, &cleared] {
+            write_all();
+            std::fs::remove_file(fifo).unwrap();
+            mkfifo(fifo);
+            let at = dir.clone();
+            let got = within_deadline(move || {
+                (
+                    read_live_session_in(&at, uid),
+                    read_live_source_in(&at, uid),
+                    read_live_mode_in(&at, uid),
+                    cleared_session_in(&at, uid, |_| true),
+                )
+            });
+            let want = |hit: bool, ok: Option<&str>| if hit { None } else { ok.map(str::to_string) };
+            assert_eq!(got.0, want(fifo == &id_rec, Some(uid)), "{}", fifo.display());
+            assert_eq!(got.1, want(fifo == &src, Some("clear")), "{}", fifo.display());
+            assert_eq!(got.2, want(fifo == &mode, Some("plan")), "{}", fifo.display());
+            let undo = fifo == &mode;
+            assert_eq!(got.3, want(!undo, Some(prev)), "{}", fifo.display());
+            // Writing the next round's records must not open this FIFO.
+            std::fs::remove_file(fifo).unwrap();
+        }
+
+        // A link to a valid record elsewhere is not followed.
+        let outside = tmp.path().join("outside");
+        std::fs::write(&outside, format!("{uid}\n")).unwrap();
+        write_all();
+        std::fs::remove_file(&id_rec).unwrap();
+        std::os::unix::fs::symlink(&outside, &id_rec).unwrap();
+        assert_eq!(read_live_session_in(&dir, uid), None);
+
+        // An oversized record is refused even where its trimmed text is valid.
+        let mut huge = format!("{uid}\n").into_bytes();
+        huge.resize(RECORD_CAP as usize + 1, b' ');
+        std::fs::remove_file(&id_rec).unwrap();
+        std::fs::write(&id_rec, &huge).unwrap();
+        assert_eq!(read_live_session_in(&dir, uid), None);
+        std::fs::write(&id_rec, &huge[..RECORD_CAP as usize]).unwrap();
+        assert_eq!(read_live_session_in(&dir, uid).as_deref(), Some(uid));
+
+        // Vibe's `meta.json`.
+        let home = tmp.path().join("vibe");
+        let session = home.join("logs/session/session_1");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(session.join("meta.json"), format!(r#"{{"session_id":"{uid}"}}"#)).unwrap();
+        assert!(vibe_session_exists(&home, uid));
+        std::fs::remove_file(session.join("meta.json")).unwrap();
+        mkfifo(&session.join("meta.json"));
+        let at = home.clone();
+        assert!(!within_deadline(move || vibe_session_exists(&at, uid)));
+
+        // A transcript tail.
+        let transcript = tmp.path().join("t.jsonl");
+        std::fs::write(&transcript, "{\"a\":1}\n").unwrap();
+        assert_eq!(with_transcript_tail(&transcript, 1024, |lines| Some(lines.len())), Some(1));
+        std::fs::remove_file(&transcript).unwrap();
+        mkfifo(&transcript);
+        assert_eq!(within_deadline(move || with_transcript_tail(&transcript, 1024, |lines| Some(lines.len()))), None);
+
+        // Codex's config in an agent home, read for the hook check.
+        let agent_home = tmp.path().join("agent");
+        std::fs::create_dir_all(agent_home.join(".codex")).unwrap();
+        mkfifo(&agent_home.join(".codex/config.toml"));
+        within_deadline(move || codex_hook_state_of_home(&agent_home));
     }
 }

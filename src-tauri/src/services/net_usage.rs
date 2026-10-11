@@ -159,6 +159,9 @@ mod sampler {
                 Vec::new()
             } else {
                 tauri::async_runtime::spawn_blocking(move || {
+                    // A unit struct on macOS only: `default()` is the
+                    // spelling Linux compiles too.
+                    #[cfg_attr(target_os = "macos", allow(clippy::default_constructed_unit_structs))]
                     let mut ss = SsDump::default();
                     ids.into_iter()
                         .map(|id| {

@@ -18,7 +18,9 @@ import { newTmuxSessionName } from "../lib/terminal/tmuxSession";
 import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
 import { useSettingsStore } from "./settings";
+import { basename, relativePathWithin, resolvePath } from "../lib/paths";
 import { getDetachedWindowContext } from "./detachedContext";
+import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { envName, tabCommand } from "../lib/brand";
 import { currentTabCommand } from "../lib/brandMigration";
 
@@ -761,6 +763,11 @@ export interface TabEntry {
   // which is what lets the phone come back to it; the backend re-validates the
   // line on every load and drops one it would not have built.
   localLaunch?: LocalLaunch;
+  // A local-model tab's driver (`list_local_drivers` id), wherever it was
+  // started: its `cmd` is the launcher (`ollama`), so this is what tells the
+  // Reader an OpenCode one apart (`lib/agents/agentReader.localTabDriver`).
+  // Never saved; a restored tab has `localLaunch.driver` instead.
+  localDriver?: string;
 }
 
 /** See `TabEntry.localLaunch`. */
@@ -2466,6 +2473,9 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         .then(() => {
           if (get().scope === scope) get().respawnDetachedForScope(scope);
         });
+      // A PDF presented fullscreen belongs to a tab of the scope just left;
+      // unlike a popout it is closed, not parked (see `closePdfPresent`).
+      void closePdfPresentWindows();
     }
     set((s) => {
       const tabs = s.tabsByScope[scope] ?? [];
@@ -2919,22 +2929,31 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     set((s) => {
       const scope = s.scope;
       const tabs = s.tabsByScope[scope] ?? [];
-      const oldBase = oldAbs.slice(oldAbs.lastIndexOf("/") + 1);
-      const newBase = newAbs.slice(newAbs.lastIndexOf("/") + 1);
+      const oldBase = basename(oldAbs);
+      const newBase = basename(newAbs);
       let changed = false;
       const nextTabs = tabs.map((t) => {
         if (t.kind !== "embed" || !t.embedPath) return t;
-        if (t.embedPath === oldAbs) {
+        // Paths are native (`\` and a drive on Windows): compare on segment
+        // boundaries with either separator rather than by string prefix.
+        const rel = t.embedPath === oldAbs ? "" : relativePathWithin(oldAbs, t.embedPath);
+        if (rel === "") {
           changed = true;
           // Refresh the label to the new basename only when it still shows the
           // old one — don't clobber a tab the user renamed.
           const label = t.label === oldBase ? newBase : t.label;
           return { ...t, embedPath: newAbs, label };
         }
-        if (t.embedPath.startsWith(`${oldAbs}/`)) {
+        if (rel !== null) {
           // A tab under a renamed/moved directory: prefix-swap, keep the label.
+          // An exact prefix keeps the tail byte-for-byte (a POSIX name may hold
+          // a `\`, which the normalising helpers read as a separator); only a
+          // case-folded or mixed-separator match is re-joined by `resolvePath`,
+          // in the new path's own separator style.
           changed = true;
-          return { ...t, embedPath: `${newAbs}${t.embedPath.slice(oldAbs.length)}` };
+          const exact = t.embedPath.startsWith(`${oldAbs}/`) || t.embedPath.startsWith(`${oldAbs}\\`);
+          const embedPath = exact ? `${newAbs}${t.embedPath.slice(oldAbs.length)}` : resolvePath(newAbs, rel);
+          return { ...t, embedPath };
         }
         return t;
       });
@@ -5450,16 +5469,18 @@ function restoreSavedTab(
   // `--resume` rewrite (`services::agent_session`), and for every other
   // agent whatever its CLI does on resume.
   const args = base;
-  // Codex mints its conversation id itself, so `sessionId` is Tabtivity's
-  // stable *binding* key rather than a CLI argument. The backend resolves
-  // that key from TABTIVITY_TAB_UID before it spawns the restored tab. Layouts
-  // written before the key was persisted in `env` (and a stale layout whose
-  // env disagrees with its sessionId) would otherwise restore a visible
-  // Codex tab but launch a fresh conversation. Rebuild this identity field
-  // from the durable sessionId, just as `buildStaticTabSpec` does for a new
-  // tab; it is not a user-configurable environment override.
+  // Every resumable agent tab's TABTIVITY_TAB_UID is its `sessionId`
+  // (`buildStaticTabSpec` sets both from one uuid). The backend binds the
+  // agent's turn reports by it, and for Codex and Vibe — whose `sessionId`
+  // is Tabtivity's stable *binding* key rather than a CLI argument — resolves
+  // the conversation to resume from it. Rebuild it from the durable
+  // sessionId rather than read it from `env`: a layout written before the
+  // key was persisted, a stale one whose env disagrees, and one adopted from
+  // a folder or an import bundle (which carries no `env` at all, gap 17)
+  // would otherwise lose the binding. It is not a user-configurable
+  // environment override.
   const env = { ...(t.env ?? {}) };
-  if ((t.cmd === "codex" || t.cmd === "vibe") && t.sessionId) {
+  if (isResumableAgentTab(tabShape) && t.sessionId) {
     env[envName("TAB_UID")] = t.sessionId;
   }
   return {

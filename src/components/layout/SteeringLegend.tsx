@@ -5,6 +5,7 @@ import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import {
   STEERING_GROUPS,
+  modifierLabel,
   steeringKeysFor,
   steeringRowLabel,
   type SteeringKeyDef,
@@ -14,10 +15,12 @@ import { newTabSlotLabels } from "../../lib/shortcuts/newTabChord";
 import { activeTabCard, steeringAppEnabled } from "../../lib/shortcuts/steeringRegion";
 import { statusTabs } from "../../lib/shortcuts/statusJump";
 import { steeringAgentOffer } from "../../lib/shortcuts/steeringAgent";
+import { steeringConfirmButton } from "../../lib/shortcuts/steeringConfirm";
 import { useActivityStore } from "../../stores/activity";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
+import { documentScroller } from "../../lib/shortcuts/documentScroll";
 import { KeyboardIcon } from "../common/icons/Icon";
 import { HUB_BOTTOM, HUB_R, orbitLayout, type Orbit } from "../../lib/shortcuts/steeringOrbit";
 
@@ -176,7 +179,7 @@ export function SteeringLegend() {
     // Steering is off while lent, so the hub is a plain badge, not the fold toggle.
     const hub = (
       <span className="steering-legend-hub">
-        <KeyboardIcon size={22} />
+        <KeyboardIcon size={16} />
       </span>
     );
     return createPortal(
@@ -200,7 +203,7 @@ export function SteeringLegend() {
           onClick={toggleLegend}
           title={t("steering.fab.title", { key: legendKey })}
         >
-          <KeyboardIcon size={22} />
+          <KeyboardIcon size={16} />
           <kbd>{legendKey}</kbd>
         </button>
       </div>,
@@ -210,22 +213,33 @@ export function SteeringLegend() {
   const count = (kind: "decision" | "working" | "done") =>
     statusTabs(kind, busyByTab, attentionByTab, tabsByScope).length;
   const statusCounts = { decision: count("decision"), working: count("working"), done: count("done") };
+  const terminal = !!activeTab && !!terminalFor(`${tabScope}:${activeTab.key}`);
   const keys = steeringKeysFor({
     level,
     sideRegion: region === "side",
     settingsRegion: region === "settings",
     headerRegion: region === "header",
     overlayRegion: region === "overlay",
+    steeringConfirm: region === "overlay" && !!steeringConfirmButton(document),
     // Read at render: the legend redraws on every steering key.
     tabCard: inPane && !!activeTabCard(),
     multiPane,
     apps: { mail, calendar, todo },
     agent: steeringAgentOffer(activeTab),
-    terminal: !!activeTab && !!terminalFor(`${tabScope}:${activeTab.key}`),
+    terminal,
+    // Read at render too; only where ↓ could step into it.
+    document: !terminal && !!activeTab && (inPane || level === "scroll") && !!documentScroller(tabScope, activeTab.key),
     popouts,
     statusCounts,
   });
-  const where = level === "region" ? (region ? REGION_LABEL[region] : null) : LEVEL_LABEL[level];
+  const where =
+    level === "region"
+      ? region
+        ? REGION_LABEL[region]
+        : null
+      : level === "scroll" && !terminal
+        ? "steering.level.scrollDocument"
+        : LEVEL_LABEL[level];
 
   const item = (k: SteeringKeyDef) => {
     if (k.agentSlots) {
@@ -244,7 +258,7 @@ export function SteeringLegend() {
       }
     }
     return (
-      <span className="steering-legend-item" key={`${k.actions.join(",")}|${k.labelKey}`} title={t(k.descKey)}>
+      <span className="steering-legend-item" key={`${k.actions.join(",")}|${k.labelKey}`} title={t(k.descKey, { modifier: modifierLabel() })}>
         <kbd>{steeringRowLabel(k, steerKeys)}</kbd>
         <span className="steering-legend-label">{t(k.labelKey)}</span>
         {k.status && <span className="steering-legend-count">{statusCounts[k.status]}</span>}
@@ -268,7 +282,7 @@ export function SteeringLegend() {
       onClick={toggleLegend}
       title={t("steering.hub.title", { key: legendKey })}
     >
-      <KeyboardIcon size={22} />
+      <KeyboardIcon size={16} />
       <kbd>{legendKey}</kbd>
     </button>
   );

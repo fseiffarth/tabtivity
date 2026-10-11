@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -6,11 +6,12 @@ import {
   READER_STEP,
   composerHistory,
   mergeTranscript,
+  readerAgent,
   readerReasonKey,
   readerRequest,
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
-import { NO_LIVE, STOP_KEY, answerKeys, readReaderLive, sameReaderLive, tabStepKeys, type ReaderLive } from "../../lib/agents/readerLive";
+import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, type ReaderLive } from "../../lib/agents/readerLive";
 import { onSentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { clearAgentTab, sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
@@ -20,23 +21,31 @@ import { agentFamily, agentInputWrites } from "../../../shared/agentComposer";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
-import { isInterruptInput, noteUserInput, useActivityStore } from "../../stores/activity";
+import { noteUserInput, useActivityStore } from "../../stores/activity";
+import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { useUse24h } from "../../lib/timeFormat";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore, useReaderChangesOpen } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import type { TabEntry } from "../../stores/tabs";
+import { usePaneTab } from "../tabs/paneTabContext";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
 import { UntestedTag } from "../common/UntestedTag";
+import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
+import { PATH_LINK_ATTR, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
+import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
+import { relativePathWithin } from "../../lib/paths";
+import type { FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
 import { completedSlashCommand, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
+import { onReaderInsert } from "../../lib/terminal/terminalDrop";
 import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
@@ -54,23 +63,10 @@ const PENDING_MS = 60_000;
  * often regardless (the busy row's timer, a pane not created yet). */
 const LIVE_SETTLE_MS = 250;
 const LIVE_POLL_MS = 1500;
-/** The phone's key pacing for a dialog answer: arrows apart, Enter later. */
-const KEY_GAP_MS = 80;
-const SUBMIT_GAP_MS = 200;
 /** How long an answered dialog stays unclickable while the session redraws. */
 const ANSWER_WAIT_MS = 3000;
 const ENCODER = new TextEncoder();
 
-async function typeKeys(ptyId: string, keys: string[]): Promise<void> {
-  for (let index = 0; index < keys.length; index += 1) {
-    const bytes = ENCODER.encode(keys[index]);
-    noteUserInput(ptyId, isInterruptInput(keys[index]));
-    await writePtyInput(ptyId, bytes);
-    if (index + 1 < keys.length) {
-      await new Promise((resolve) => setTimeout(resolve, index + 2 === keys.length ? SUBMIT_GAP_MS : KEY_GAP_MS));
-    }
-  }
-}
 
 /** A shell command the agent waits on — or sent to the background, where it
  * runs on past the turn — as a line under its working row: what it does (the
@@ -115,20 +111,36 @@ const RECOMMENDED = /\s+\(Recommended\)$/u;
  * its question, then one row per option. A click sends the arrow keys and
  * Enter a walked highlight would. A question that asks several has its
  * headers as steps: ←/→ and a click on one walk the dialog's tabs, so an
- * answer can be changed before Submit. */
-function LiveQuestion({ live, answered, busy, onAnswer, onStep }: {
+ * answer can be changed before Submit. Claude Code's "Type something." row
+ * opens a field under it instead: its answer is words, sent as the phone's
+ * are (`answerTextKeys`). */
+function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
   live: ReaderLive;
   /** A row was clicked and the session has not redrawn yet. */
   answered: boolean;
   /** Keys of any kind are on their way: nothing can be clicked. */
   busy: boolean;
   onAnswer: (index: number) => void;
+  /** Answers the free-text row `index` with `text`. */
+  onType: (index: number, text: string) => void;
   /** Walks the tab row from step `from` to step `to`. */
   onStep: (from: number, to: number) => void;
 }) {
   const t = useT();
+  /** The free-text row whose field is open, and what is typed in it. A field
+   * belongs to the dialog step it was opened on. */
+  const [typing, setTyping] = useState<number | null>(null);
+  const [typed, setTyped] = useState("");
+  useEffect(() => {
+    setTyping(null);
+    setTyped("");
+  }, [live.signature]);
   const question = live.question;
   if (!question) return null;
+  const sendTyped = (index: number) => {
+    if (!typed.trim()) return;
+    onType(index, typed);
+  };
   const last = live.tabs.length - (live.tabSubmit ? 0 : 1);
   const stepped = last > 0;
   const focus = live.tabFocus;
@@ -190,23 +202,56 @@ function LiveQuestion({ live, answered, busy, onAnswer, onStep }: {
         {question.options.map((option) => {
           const recommended = RECOMMENDED.exec(option.label);
           const label = question.review ? t("terminal.reader.questionSubmitStep") : option.label;
+          const freeText = !question.review && freeTextRow(option);
+          const open = freeText && typing === option.index;
           return (
-            <button
-              key={`${option.index}:${option.label}`}
-              type="button"
-              className={option.index === question.current ? "terminal-reader-option current" : "terminal-reader-option"}
-              disabled={busy}
-              onClick={() => onAnswer(option.index)}
-            >
-              <span className="terminal-reader-option-number">{option.number}</span>
-              <span className="terminal-reader-option-label">
-                <span>
-                  {recommended ? option.label.slice(0, recommended.index) : label}
-                  {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
+            <Fragment key={`${option.index}:${option.label}`}>
+              <button
+                type="button"
+                className={option.index === question.current ? "terminal-reader-option current" : "terminal-reader-option"}
+                aria-expanded={freeText ? open : undefined}
+                disabled={busy}
+                onClick={() => (freeText ? setTyping(open ? null : option.index) : onAnswer(option.index))}
+              >
+                <span className="terminal-reader-option-number">{option.number}</span>
+                <span className="terminal-reader-option-label">
+                  <span>
+                    {recommended ? option.label.slice(0, recommended.index) : label}
+                    {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
+                  </span>
+                  {option.description && <small>{option.description}</small>}
                 </span>
-                {option.description && <small>{option.description}</small>}
-              </span>
-            </button>
+              </button>
+              {open && (
+                <form
+                  className="terminal-reader-question-type"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    sendTyped(option.index);
+                  }}
+                >
+                  <input
+                    autoFocus
+                    type="text"
+                    value={typed}
+                    disabled={busy}
+                    placeholder={t("mobile.question.typePlaceholder")}
+                    aria-label={t("mobile.question.typePlaceholder")}
+                    onChange={(event) => setTyped(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Escape") return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setTyping(null);
+                    }}
+                  />
+                  <button type="submit" className="file-viewer-zoom-btn file-viewer-zoom-text active" disabled={busy || !typed.trim()}>
+                    {t("mobile.question.typeSend")}
+                  </button>
+                  <UntestedTag id="terminal.reader.freeText" />
+                </form>
+              )}
+            </Fragment>
           );
         })}
       </div>
@@ -265,18 +310,30 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
 
 interface PendingPrompt { id: number; text: string; sentAt: number }
 
+/** The chat's path links (`lib/terminal/pathLinks`): every path-shaped word
+ * the shown conversation holds, looked up once — the file it opens, or null.
+ * A turn is drawn only once its words are in here (see the reads), and a word
+ * once looked up keeps its answer, so a shown bubble never gains or loses a
+ * link afterwards. */
+const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(new Map());
+
 /** One answer as formatted text (`answerHtml`, the phone's: formatting only,
- * nothing in it opens or loads). Memoized on the text, so a read that brings
- * a new turn does not re-render every answer above it. */
+ * nothing in it opens or loads), its file paths made links. Memoized on the
+ * text, so a read that brings a new turn does not re-render every answer
+ * above it. */
 const AnswerText = memo(function AnswerText({ text }: { text: string }) {
-  const html = useMemo(() => answerHtml(text), [text]);
+  const links = useContext(PathLinksContext);
+  const html = useMemo(() => linkPathsInHtml(answerHtml(text), links), [text, links]);
   return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 /** A prompt, formatted the same way (`promptHtml`: an answer's formatting,
- * its single line breaks kept) — a subagent's brief reads as written. */
-const PromptText = memo(function PromptText({ text }: { text: string }) {
-  const html = useMemo(() => promptHtml(text), [text]);
+ * its single line breaks kept) — a subagent's brief reads as written. A
+ * prompt still sending is drawn `unlinked`: its paths are looked up only with
+ * the record, and its bubble must not restyle when that arrives. */
+const PromptText = memo(function PromptText({ text, unlinked = false }: { text: string; unlinked?: boolean }) {
+  const links = useContext(PathLinksContext);
+  const html = useMemo(() => (unlinked ? promptHtml(text) : linkPathsInHtml(promptHtml(text), links)), [text, links, unlinked]);
   return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
@@ -418,6 +475,20 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (focused && visible && !steering) composerRef.current?.focus();
   }, [focused, visible, steering]);
 
+  // Files dropped onto the pane (`lib/terminal/terminalDrop`) land here while
+  // the Reader is up: at the cursor when the box has focus, else at the end.
+  useEffect(() => onReaderInsert(ptyId, (text) => {
+    const box = composerRef.current;
+    const focusedBox = box !== null && document.activeElement === box;
+    setDraft((current) => {
+      const at = focusedBox ? box.selectionEnd : current.length;
+      const before = current.slice(0, at);
+      return `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
+    });
+    setSendError("");
+    box?.focus();
+  }), [ptyId]);
+
   const send = async () => {
     const current = tabRef.current;
     const text = draft.trim();
@@ -457,7 +528,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
             noteUserInput(ptyId);
             return writePtyInput(ptyId, ENCODER.encode(key)).then(() => true, () => false);
           },
-          command: (command) => typeKeys(ptyId, agentInputWrites(command)).then(() => true, () => false),
+          command: (command) => typePaneKeys(ptyId, agentInputWrites(command)).then(() => true, () => false),
           type: () => submitScheduledAgentMessage(target, text, { whileBusy: true }).then(() => true, () => false),
         }, subagent);
         if (!result.ok) {
@@ -597,7 +668,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   focused: boolean;
 }) {
   const t = useT();
-  const tab = useTabsStore((state) => state.tabsByScope[scope]?.find((entry) => entry.key === tabKey));
+  const tab = usePaneTab(scope, tabKey);
   const [transcript, setTranscript] = useState<SessionTranscript | null>(null);
   const [limit, setLimit] = useState(READER_STEP);
   const [pending, setPending] = useState<PendingPrompt[]>([]);
@@ -644,14 +715,14 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   /** The working row's name for the agent, as the phone's says it: the model
    * the session prints, its first word (`Opus is working…`). */
   const workingModel = (live.status?.model ?? modelTag)?.trim().split(/\s+/)[0];
-  const typeIntoPane = useCallback((keys: string[]) => typeKeys(ptyId, keys), [ptyId]);
+  const typeIntoPane = useCallback((keys: string[]) => typePaneKeys(ptyId, keys), [ptyId]);
   /** Esc in the composer, once no status panel or subagent is open: the key
    * the terminal would get — it stops the turn, closes the CLI's own menus —
    * typed into the session, the chat staying shown (the prompt strip's switch
    * is the way back to the terminal). */
   const pressEscape = useCallback(() => { void typeIntoPane(["\u001b"]).catch(() => {}); }, [typeIntoPane]);
   /** The Changes panel beside the chat (the prompt strip's Diffs switch). */
-  const changesOpen = useReaderChangesOpen(tab?.cmd ?? "");
+  const changesOpen = useReaderChangesOpen(tab ? readerAgent(tab) : "");
   const changesWidth = useAgentReaderStore((state) => state.changesWidth);
   /** The reasoning effort last seen: Claude Code prints it only on its busy
    * row, so the facts row also takes the one its transcript records (every
@@ -703,24 +774,104 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
     if (!question || !option || answered) return;
+    const keys = answerKeys(question, option);
+    if (keys.length === 0) return;
     setAnswered(live.signature);
     setAnsweredBy("row");
     stuck.current = true;
-    void typeKeys(ptyId, answerKeys(question, option)).catch(() => setAnswered(""));
+    void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
+  };
+  /** Answers the free-text row with the words typed under it. */
+  const answerText = (index: number, text: string) => {
+    const question = live.question;
+    const option = question?.options.find((entry) => entry.index === index);
+    if (!question || !option || answered) return;
+    const keys = answerTextKeys(question, option, text);
+    if (keys.length === 0) return;
+    setAnswered(live.signature);
+    setAnsweredBy("row");
+    stuck.current = true;
+    void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
     if (!live.question || keys.length === 0 || answered) return;
     setAnswered(live.signature);
     setAnsweredBy("step");
-    void typeKeys(ptyId, keys).catch(() => setAnswered(""));
+    void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
   };
-  const stop = () => void typeKeys(ptyId, [STOP_KEY]).catch(() => {});
+  const stop = () => void typePaneKeys(ptyId, [STOP_KEY]).catch(() => {});
   const shownLive = picking ? NO_LIVE : live;
 
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const sessionId = tab?.sessionId;
+
+  // Path links: the paths a read brings are looked up before it is drawn
+  // (`learnPaths`), each once (`PathLinksContext`).
+  const projectId = scope === "root" ? null : scope;
+  const tabDir = tab?.cwd || cwd || "";
+  const pathContext = usePathLinkContext(projectId, tabDir);
+  const pathContextRef = useRef(pathContext);
+  pathContextRef.current = pathContext;
+  const [pathLinks, setPathLinks] = useState<ReadonlyMap<string, FileEntry | null>>(() => new Map());
+  const pathLinksRef = useRef(pathLinks);
+  const [pathHover, setPathHover] = useState<PathLinkHover | null>(null);
+  const learnPaths = useCallback(async (entries: readonly { text: string }[]) => {
+    const ask = unknownPaths(entries.map((entry) => entry.text), pathLinksRef.current);
+    if (!ask.length) return;
+    const ctx = pathContextRef.current;
+    const found = ctx.bases.length ? await resolvePathCandidates(ctx.bases, ask) : new Map<string, FileEntry>();
+    const next = new Map(pathLinksRef.current);
+    for (const path of ask) {
+      const entry = found.get(path);
+      next.set(path, entry && isLinkable(entry, ctx.projectDir, ctx.disabled) ? entry : null);
+    }
+    pathLinksRef.current = next;
+    setPathLinks(next);
+  }, []);
+  const pathLinkAt = (target: EventTarget | null) =>
+    target instanceof Element ? target.closest<HTMLElement>(`[${PATH_LINK_ATTR}]`) : null;
+  const openPathAt = (el: HTMLElement) => {
+    const entry = pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "");
+    if (!entry) return;
+    const ctx = pathContextRef.current;
+    setPathHover(null);
+    openPathLink(
+      entry,
+      { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined },
+      { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t },
+    );
+  };
+  const onPathClick = (event: ReactMouseEvent) => {
+    const el = pathLinkAt(event.target);
+    if (!el) return;
+    event.preventDefault();
+    openPathAt(el);
+  };
+  const onPathKey = (event: KeyboardEvent) => {
+    const el = event.key === "Enter" ? pathLinkAt(event.target) : null;
+    if (!el) return;
+    event.preventDefault();
+    openPathAt(el);
+  };
+  const onPathOver = (event: ReactMouseEvent) => {
+    const el = pathLinkAt(event.target);
+    const entry = el ? pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "") : null;
+    if (!el || !entry) return;
+    const rect = el.getBoundingClientRect();
+    setPathHover({
+      left: rect.left,
+      top: rect.top,
+      name: relativePathWithin(pathContextRef.current.projectDir || tabDir, entry.path) || entry.path,
+      line: Number(el.dataset.line) || undefined,
+      isDir: entry.is_dir,
+    });
+  };
+  const onPathOut = (event: ReactMouseEvent) => {
+    const el = pathLinkAt(event.target);
+    if (el && pathLinkAt(event.relatedTarget) !== el) setPathHover(null);
+  };
   // A new session (a restart, a `/clear` the hook followed) is a new chat,
   // with subagents of its own.
   useEffect(() => {
@@ -745,6 +896,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       busy = true;
       const next = await invoke<SessionTranscript>("agent_tab_transcript", args)
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
+      await learnPaths(next.entries);
       busy = false;
       if (cancelled) return;
       if (!next.unchanged) version.current = next.version;
@@ -756,7 +908,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       cancelled = true;
       clearInterval(timer);
     };
-  }, [visible, scope, cwd, limit, sessionId, readTick]);
+  }, [visible, scope, cwd, limit, sessionId, readTick, learnPaths]);
 
   // The open subagent's conversation, read as the session is: at once, then
   // every POLL_MS while shown — a subagent still at work keeps writing.
@@ -773,6 +925,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       busy = true;
       const next = await invoke<SessionTranscript>("agent_tab_transcript", args)
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
+      await learnPaths(next.entries);
       busy = false;
       if (cancelled) return;
       if (!next.unchanged) subVersion = next.version;
@@ -787,7 +940,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       cancelled = true;
       clearInterval(timer);
     };
-  }, [visible, scope, cwd, subToken, subLimit, sessionId]);
+  }, [visible, scope, cwd, subToken, subLimit, sessionId, learnPaths]);
 
   const storedEntries = useMemo(() => (transcript?.available ? transcript.entries : []), [transcript]);
   // A clear (`agentClearUndo`) empties the chat at once, before its card
@@ -1065,7 +1218,16 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
         </nav>
       )}
       <div className="terminal-reader-stream">
-        <div ref={listRef} className="terminal-reader-list" onScroll={onScroll}>
+        <PathLinksContext.Provider value={pathLinks}>
+        <div
+          ref={listRef}
+          className="terminal-reader-list"
+          onScroll={() => { onScroll(); setPathHover(null); }}
+          onClick={onPathClick}
+          onKeyDown={onPathKey}
+          onMouseOver={onPathOver}
+          onMouseOut={onPathOut}
+        >
           {levelTruncated && (
             <button type="button" className="terminal-reader-earlier" onClick={showEarlier}>
               {t("terminal.reader.earlier")}
@@ -1102,7 +1264,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
           })}
           {!openStep && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
-              <PromptText text={item.text} />
+              <PromptText text={item.text} unlinked />
               {/* Queued behind a busy turn: Esc stops it and Claude sends the
                   queue at once. */}
               {live.working && isClaudeCommand(tab?.cmd) && (
@@ -1119,6 +1281,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             busy={!!answered && answered === live.signature}
             onAnswer={answer}
+            onType={answerText}
             onStep={step}
           />
           {openStep ? subagentWorking && (
@@ -1160,6 +1323,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
             <RunningShellLine key={`${shell.at ?? ""}:${shell.command}:${runningShells.slice(0, index).filter((other) => other.at === shell.at && other.command === shell.command).length}`} shell={shell} />
           ))}
         </div>
+        </PathLinksContext.Provider>
+        <PathLinkHint hover={visible ? pathHover : null} />
         {!openStep && pinnedPrompt && (
           <button
             type="button"
@@ -1216,7 +1381,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
         visible={visible}
         subagent={subToken}
         subagentTitle={openStep ? openStep.task || openStep.role : undefined}
-        onClose={() => useAgentReaderStore.getState().setChanges(tab.cmd, false)}
+        onClose={() => useAgentReaderStore.getState().setChanges(readerAgent(tab), false)}
       />
     )}
   </>, host);

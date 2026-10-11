@@ -3,6 +3,8 @@ import { isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
 import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
 import {
+  freeTextRow,
+  freeTextWrites,
   questionTabKeys,
   readReviewStep,
   readSelectPrompt,
@@ -139,10 +141,24 @@ export function modelPickKeys(picker: SelectPrompt, option: SelectOption, agentL
 }
 
 /** The keystrokes that answer `question` with `option`: arrows from the
- * highlighted row, then Enter — what the phone sends for a tapped row. */
+ * highlighted row, then Enter — what the phone sends for a tapped row.
+ *
+ * None for Claude Code's free-text row (`freeTextRow`): Enter on its empty
+ * field does not pick it, it turns the whole question down ("User declined to
+ * answer questions", 2.1.288). That row is answered with words
+ * (`answerTextKeys`). */
 export function answerKeys(question: SelectPrompt, option: SelectOption): string[] {
+  if (freeTextRow(option)) return [];
   return selectKeys(question.current, option.index);
 }
+
+/** The keystrokes that answer `question`'s free-text row with `text` — the
+ * phone's (`freeTextWrites`). None for blank words. */
+export function answerTextKeys(question: SelectPrompt, option: SelectOption, text: string): string[] {
+  return freeTextRow(option) ? freeTextWrites(question.current, option, text) : [];
+}
+
+export { freeTextRow };
 
 /** The keys that move `live`'s several-question dialog from step `from` to
  * step `to` — Claude Code's ←/→, Codex's PageUp/PageDown; the answers given

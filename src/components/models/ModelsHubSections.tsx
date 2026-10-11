@@ -31,8 +31,8 @@ import { useAutoloadNotice, type HubAgentInfo, type ModelsHub } from "./useModel
 
 /**
  * True only when Ollama positively said this model has no tool-calling support
- * — the thing that makes it unusable for Codex, Claude Code, OpenCode, Droid
- * and OpenClaw, all of which drive a model through tool calls. Everything else
+ * — the thing that makes it unusable for every non-Mistral local driver
+ * (OpenCode, Pi, Claude Code, Codex, Droid, OpenClaw, Cline), all of which drive a model through tool calls. Everything else
  * (an empty list, an older backend that doesn't send the field) is *unknown*
  * and reads as fine, because a marker that appears when a probe fails teaches
  * the user to ignore it.

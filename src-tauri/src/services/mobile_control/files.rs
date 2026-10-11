@@ -422,7 +422,7 @@ fn segment_cstr(name: &str) -> std::io::Result<std::ffi::CString> {
 #[path = "files_windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub(super) use windows::ProjectDir;
+pub(crate) use windows::ProjectDir;
 
 fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }
@@ -860,6 +860,8 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("run.log"), "x").unwrap();
         fs::write(root.join("kept.log"), "x").unwrap();
+        // A name git would read as pathspec magic; `:` is no Windows name.
+        #[cfg(unix)]
         fs::write(root.join(":(top)odd.log"), "x").unwrap();
         fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
         fs::write(root.join("src/trace.log"), "x").unwrap();
@@ -868,7 +870,8 @@ mod tests {
             listing.entries.iter().filter(|e| e.ignored).map(|e| e.name.clone()).collect()
         };
         let top = list(root, "", KEY, "p1").unwrap();
-        assert_eq!(ignored(&top), ["target", ":(top)odd.log", "run.log"], "a tracked match is not ignored");
+        let expected: &[&str] = if cfg!(unix) { &["target", ":(top)odd.log", "run.log"] } else { &["target", "run.log"] };
+        assert_eq!(ignored(&top), expected, "a tracked match is not ignored");
         // `src` holds an ignored file but is not ignored itself.
         assert!(!top.entries.iter().find(|e| e.name == "src").unwrap().ignored);
         assert_eq!(ignored(&list(root, "src", KEY, "p1").unwrap()), ["trace.log"]);
@@ -971,8 +974,7 @@ mod tests {
     fn junction(target: &Path, link: &Path) {
         use std::os::windows::process::CommandExt;
         let output = std::process::Command::new("cmd")
-            .arg("/D")
-            .raw_arg(format!("/C mklink /J \"{}\" \"{}\"", link.display(), target.display()))
+            .raw_arg(format!("/D /C mklink /J \"{}\" \"{}\"", link.display(), target.display()))
             .output()
             .unwrap();
         assert!(output.status.success(), "mklink: {}", String::from_utf8_lossy(&output.stderr));

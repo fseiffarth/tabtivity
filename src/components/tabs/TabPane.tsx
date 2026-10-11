@@ -15,6 +15,7 @@ import { SkillsLibraryTab } from "../skills/SkillsLibraryTab";
 import { PromptChartTab } from "../agents/PromptChartTab";
 import { RemotePaneHold } from "../projects/RemotePaneHold";
 import { HostSessionHold } from "./HostSessionHold";
+import { PaneTabContext } from "./paneTabContext";
 import { effectiveTabLocation, remoteHostIdOf, type TabEntry } from "../../stores/tabs";
 
 /**
@@ -189,7 +190,10 @@ function TabPaneImpl({
       if (tab.hostSession && tab.hostSessionPaused && !attachOnly) {
         return <HostSessionHold scope={scope} tabKey={tab.key} />;
       }
+      // The tab itself rides along for the pane's prompt strip, Chat and
+      // Diffs: a popout's tabs store has no entry to look it up in.
       return (
+        <PaneTabContext.Provider value={{ scope, tab }}>
         <TerminalView
           // PTY ids include the scope: tab keys alone collide across projects.
           id={`${scope}:${tab.key}`}
@@ -220,6 +224,7 @@ function TabPaneImpl({
           focused={focused}
           attachOnly={attachOnly}
         />
+        </PaneTabContext.Provider>
       );
   }
 }

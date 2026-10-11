@@ -1,7 +1,13 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    fs,
+    io::Read,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use tauri::{AppHandle, State};
 
+use crate::services::mobile_control::inbox;
 use crate::terminal::{PtyOptions, PtyRegistry};
 
 pub type RegistryState = Arc<Mutex<PtyRegistry>>;
@@ -15,6 +21,10 @@ pub struct PtySpawned {
     /// The tab's previous process died mid-turn (`agent_turn::bind_tab`): the
     /// tab starts out marked interrupted.
     pub interrupted: bool,
+    /// The tab's previous process left its turn finished: its agent sits at
+    /// its composer, so the window reads no question off its screen until
+    /// the hooks speak again (`agent_turn::LeftTurn`).
+    pub resting: bool,
 }
 
 #[tauri::command]
@@ -43,16 +53,18 @@ pub async fn pty_spawn(
     }
 
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
-    let (named, interrupted) = (prepared.named, prepared.interrupted);
-    let result = crate::terminal::spawn_pty(app.clone(), registry.inner().clone(), prepared.opts.clone());
+    let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
+    let drop_dir = prepared.drop_dir.clone();
+    let result = crate::terminal::spawn_pty(app.clone(), registry.inner().clone(), prepared.opts.clone(), prepared.spawn_seq());
     if result.is_ok() {
+        registry.lock().unwrap().set_drop_dir(&prepared.opts.id, drop_dir);
         prepared.commit();
         if mcp_token_handed_out {
             // The MCP session access fold lists live sessions; a new token is one.
             let _ = tauri::Emitter::emit(&app, crate::commands::root_mcp::SESSIONS_EVENT, ());
         }
     }
-    result.map(|()| PtySpawned { named, interrupted })
+    result.map(|()| PtySpawned { named, interrupted, resting })
 }
 
 /// Honest per-scope fence status for the project-pill menu.  This performs no
@@ -224,6 +236,82 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
     .map_err(|e| e.to_string())
 }
 
+/// What a drop of OS files onto a terminal tab gives the tab to type.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PtyDropped {
+    /// One per file that made it, in drop order: for an agent tab the inbox
+    /// reference (`inbox::INBOX_DIR/<file>`, relative to the tab's folder),
+    /// for a shell tab the file's own path.
+    pub items: Vec<String>,
+    /// Why the first file that did not make it was refused — an inbox wire
+    /// code, `not_a_file` or `unreadable`. The files after it are not tried.
+    pub error: Option<String>,
+}
+
+/// Files dropped onto a local terminal tab from the OS file manager. An agent
+/// tab gets each file copied into the inbox of the folder it works in — the
+/// same git-ignored drop box a file sent from the phone lands in, and readable
+/// from inside the fence or container, which a path elsewhere on this disk is
+/// not. A shell runs on the host and gets the paths themselves, as a native
+/// terminal would. A remote tab is refused (`remote_tab`): its program cannot
+/// see this disk.
+#[tauri::command]
+pub async fn pty_drop_files(
+    registry: State<'_, RegistryState>,
+    id: String,
+    paths: Vec<String>,
+    agent: bool,
+) -> Result<PtyDropped, String> {
+    let dir = registry
+        .lock()
+        .unwrap()
+        .drop_dir(&id)
+        .ok_or("no_terminal")?
+        .ok_or("remote_tab")?;
+    tauri::async_runtime::spawn_blocking(move || drop_files(Path::new(&dir), &paths, agent))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn drop_files(dir: &Path, paths: &[String], agent: bool) -> PtyDropped {
+    let mut dropped = PtyDropped::default();
+    for path in paths {
+        match drop_file(dir, Path::new(path), agent) {
+            Ok(item) => dropped.items.push(item),
+            Err(code) => {
+                dropped.error = Some(code.to_string());
+                break;
+            }
+        }
+    }
+    dropped
+}
+
+fn drop_file(dir: &Path, path: &Path, agent: bool) -> Result<String, &'static str> {
+    if !path.is_absolute() {
+        return Err("not_a_file");
+    }
+    if !agent {
+        return Ok(path.to_string_lossy().into_owned());
+    }
+    let meta = fs::metadata(path).map_err(|_| "unreadable")?;
+    if !meta.is_file() {
+        return Err("not_a_file");
+    }
+    if meta.len() > inbox::MAX_INBOX_FILE as u64 {
+        return Err("file_too_large");
+    }
+    // Bounded even if the file grew since the check: `store` refuses the excess.
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(inbox::MAX_INBOX_FILE as u64 + 1).read_to_end(&mut bytes))
+        .map_err(|_| "unreadable")?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    inbox::store(dir, &name, &bytes)
+        .map(|stored| stored.reference)
+        .map_err(|e| e.code())
+}
+
 #[tauri::command]
 pub async fn pty_write(
     registry: State<'_, RegistryState>,
@@ -318,16 +406,17 @@ pub async fn pty_kill(registry: State<'_, RegistryState>, id: String) -> Result<
     // future PTY that reuses the id.
     crate::commands::credentials::forget_login_pty(&id);
     // Taken under the lock, torn down after it: the lock is on every
-    // keystroke's path, the teardown walks the process table.
+    // keystroke's path, the teardown walks the process table. The teardown
+    // ends the per-tab state of the spawn it took, and only while that spawn
+    // is still the id's newest: this kill can land after a remount began
+    // respawning the id (gap 18). Nothing taken, nothing to end — the
+    // reader task's end already cleaned up that spawn.
     let taken = registry.lock().unwrap().take(&id);
     if let Some(taken) = taken {
         tauri::async_runtime::spawn_blocking(move || taken.teardown())
             .await
             .map_err(|e| e.to_string())?;
     }
-    crate::services::agent_fence::on_tab_gone(&id);
-    crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), &id);
-    crate::services::agent_turn::on_tab_gone(&id);
     Ok(())
 }
 
@@ -352,14 +441,11 @@ pub async fn pty_kill_scope(
         crate::commands::credentials::forget_login_pty(id);
         crate::terminal::route_remove_all_views(id);
     }
+    // The teardown ends each taken spawn's per-tab state, generation-guarded
+    // like `pty_kill`'s.
     tauri::async_runtime::spawn_blocking(move || crate::terminal::teardown_taken(taken))
         .await
         .map_err(|e| e.to_string())?;
-    for id in &ids {
-        crate::services::agent_fence::on_tab_gone(id);
-        crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), id);
-        crate::services::agent_turn::on_tab_gone(id);
-    }
     Ok(ids)
 }
 
@@ -409,4 +495,49 @@ pub async fn project_cpu_percent(
 #[tauri::command]
 pub fn register_host_bound_tab(project_id: String, uid: String) -> Result<(), String> {
     crate::services::sandbox::register_host_bound_tab(&project_id, &uid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_drop_copies_into_the_tab_folders_inbox() {
+        let tab = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let shot = outside.path().join("shot one.png");
+        fs::write(&shot, b"png bytes").unwrap();
+        let dropped = drop_files(tab.path(), &[shot.to_string_lossy().into_owned()], true);
+        assert_eq!(dropped.error, None);
+        let reference = &dropped.items[0];
+        assert!(reference.starts_with(&format!("{}/", inbox::INBOX_DIR)), "{reference}");
+        assert_eq!(fs::read(tab.path().join(reference)).unwrap(), b"png bytes");
+    }
+
+    #[test]
+    fn shell_drop_hands_back_the_path_and_copies_nothing() {
+        let tab = tempfile::tempdir().unwrap();
+        // Absolute on this OS: a leading `/` alone is relative on Windows.
+        let path = if cfg!(windows) { r"C:\somewhere\a file.txt" } else { "/somewhere/a file.txt" }.to_string();
+        let dropped = drop_files(tab.path(), std::slice::from_ref(&path), false);
+        assert_eq!(dropped, PtyDropped { items: vec![path], error: None });
+        assert!(!tab.path().join(inbox::INBOX_DIR).exists());
+    }
+
+    #[test]
+    fn agent_drop_stops_at_the_first_refusal() {
+        let tab = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let good = outside.path().join("a.txt");
+        fs::write(&good, b"a").unwrap();
+        let paths = [
+            good.to_string_lossy().into_owned(),
+            outside.path().to_string_lossy().into_owned(),
+            good.to_string_lossy().into_owned(),
+        ];
+        let dropped = drop_files(tab.path(), &paths, true);
+        assert_eq!(dropped.items.len(), 1);
+        assert_eq!(dropped.error.as_deref(), Some("not_a_file"));
+        assert_eq!(drop_files(tab.path(), &["rel.txt".into()], true).error.as_deref(), Some("not_a_file"));
+    }
 }

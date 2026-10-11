@@ -128,6 +128,15 @@ export function isActionRow(lines: readonly { text: string }[], index: number): 
   return index > 0 && ACTION_ROW.test(lines[index].text) && CHECKBOX_ROW.test(lines[index - 1].text);
 }
 
+/** Whether `lines[index]` is a row of an unnumbered dialog
+ * (`readUnnumberedPrompt`). Its highlight is the input line's `❯` too, and
+ * taken for the input box it cut Claude Code's folder-trust question off the
+ * screen it was waiting on. */
+export function isUnnumberedRow(lines: readonly { text: string }[], index: number): boolean {
+  const prompt = readUnnumberedPrompt(lines, Math.max(0, lines.length - SEARCH_WINDOW));
+  return prompt !== null && index >= prompt.start;
+}
+
 /** Whether the tab's agent marks a dialog's highlighted row with `●` — and so
  * never opens a message with one. */
 export function radioMarkerAgent(agentLabel?: string): boolean {
@@ -455,7 +464,102 @@ export function readSelectPrompt(
       };
     }
   }
-  return null;
+  return readUnnumberedPrompt(lines, first, columns);
+}
+
+/** The highlighted row of a list that prints no numbers. No `>`: without a
+ * number beside it, that is a quote far more often than a highlight. */
+const UNNUMBERED_MARK = /^\s*[❯▸▶›→]\s+(\S.*)$/u;
+/** Claude Code's footer under a dialog it answers with Enter. */
+const CONFIRM_FOOTER = /^\s*Enter to confirm\b/u;
+
+/**
+ * Claude Code's select dialog without numbers — the folder-trust question
+ * 2.1.295 asks before a session starts in a folder not yet trusted:
+ *
+ *     ────────────────────────────
+ *      Accessing workspace:
+ *      …
+ *      Security guide
+ *
+ *      ❯ No, exit
+ *        Yes, I trust this folder
+ *
+ *      Enter to confirm · Esc to cancel
+ *
+ * Rows without numbers are any indented text, so this is held to the shape
+ * whole: the `Enter to confirm` footer under the run with only blanks between,
+ * every row at one label column, exactly one highlight. The rows are numbered
+ * here from 1, in screen order — callers key and show rows by number. A dialog
+ * ruled off above its rows (this one is drawn full screen under a rule) is its
+ * own question, read whole from the rule down; anything else is read as
+ * `readSelectPrompt`'s are.
+ */
+function readUnnumberedPrompt(lines: readonly SelectLineLike[], first: number, columns?: number): SelectPrompt | null {
+  // The footer is the last thing on screen: such a dialog replaces the input
+  // box, so one scrolled past above it is no longer waiting.
+  let footer = lines.length - 1;
+  while (footer >= first && !lines[footer].text.trim()) footer -= 1;
+  if (footer < first || !CONFIRM_FOOTER.test(lines[footer].text)) return null;
+  let end = footer - 1;
+  while (end >= first && !lines[end].text.trim()) end -= 1;
+  if (end < first) return null;
+  /** Where a row's label starts, past the highlight if it carries one. */
+  const labelAt = (text: string): number => text.length - (UNNUMBERED_MARK.exec(text)?.[1] ?? text.trimStart()).length;
+  // The run is the rows at the bottom row's column; a line at another one —
+  // the question, drawn with no blank under it — is where it starts.
+  const labelColumn = labelAt(lines[end].text);
+  let start = end;
+  while (start > first && lines[start - 1].text.trim() && labelAt(lines[start - 1].text) === labelColumn) start -= 1;
+  if (end - start + 1 > MAX_OPTIONS * 2) return null;
+
+  const options: SelectOption[] = [];
+  let current = -1;
+  let above = "";
+  for (let index = start; index <= end; index += 1) {
+    const text = lines[index].text;
+    if (OPTION.test(text) || RADIO_OPTION.test(text)) return null;
+    const marked = UNNUMBERED_MARK.exec(text);
+    const rest = marked ? marked[1] : text.trimStart();
+    const last = options[options.length - 1];
+    if (!marked && last && !last.description && wrapsLabel(above, text, columns)) {
+      last.label = `${last.label} ${rest.trim()}`.slice(0, MAX_LABEL);
+    } else {
+      if (marked) {
+        if (current >= 0) return null;
+        current = options.length;
+      }
+      const [label, ...beside] = rest.split(COLUMN_SPLIT);
+      const description = beside.join(" · ").trim();
+      options.push({
+        index: options.length,
+        number: options.length + 1,
+        label: label.trim().slice(0, MAX_LABEL),
+        ...(description && !PANEL_COLUMN.test(description) ? { description: description.slice(0, MAX_DESCRIPTION) } : {}),
+      });
+    }
+    above = text;
+  }
+  if (current < 0 || options.length < MIN_OPTIONS || options.length > MAX_OPTIONS) return null;
+
+  let ruled = -1;
+  for (let index = start - 1; index >= 0 && start - index <= DIALOG_LINES; index -= 1) {
+    if (busyRow(lines[index].text)) break;
+    if (lines[index].afterRule) {
+      ruled = index;
+      break;
+    }
+  }
+  if (ruled < 0) return { options, current, title: readTitle(lines, start), start, ...readContext(lines, start) };
+  const heading = lines[ruled].text.trim();
+  return {
+    options,
+    current,
+    title: heading && heading.length <= MAX_TITLE ? heading : undefined,
+    start,
+    question: ruled,
+    context: ruled,
+  };
 }
 
 /** What the list on screen *is*, as opposed to where its highlight sits: the

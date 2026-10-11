@@ -245,8 +245,20 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
   },
 
   updateTask: async (task) => {
+    // `updateEvent`'s calendar move, for a card: a VTODO is one row per
+    // resource, so there is no series to split, but the address still cannot
+    // come along — the same path `todo_update`'s `calendar` takes.
+    const prev = get().tasks.find((t) => t.id === task.id);
+    const moved =
+      prev && (prev.caldav_href ?? "").trim() && prev.calendar_id !== task.calendar_id
+        ? prev
+        : null;
+    if (moved) task = { ...task, caldav_href: undefined, caldav_etag: undefined };
     const updated = await invoke<CalendarTask>("update_task", { task });
     set((s) => ({ tasks: s.tasks.map((t) => (t.id === updated.id ? updated : t)) }));
+    if (moved) {
+      await notifyCalendarWrite({ op: "delete", kind: "task", row: moved }).catch(() => {});
+    }
     await notifyCalendarWrite({ op: "upsert", kind: "task", row: updated });
   },
 

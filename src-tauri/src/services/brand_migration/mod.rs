@@ -355,6 +355,67 @@ pub fn resolve_named_dir(pair: &Pair, name: Name, base: &Path, hit_id: &str) -> 
     }
 }
 
+/// [`resolve_named_dir`] for a tree no migration step moves, only the user
+/// (the home tree: projects, the root workspace, boxes). There "the current
+/// name exists" is not enough: a stray `mkdir`, or a run that briefly picked
+/// the new name, leaves a current-name folder with no file in it, and taking
+/// that over an old-name tree that holds the user's work would open the root
+/// console in an empty folder and orphan every root agent's conversation
+/// (each CLI files them by cwd). So a current-name folder without a single
+/// file loses to an old-name one that has files. Symlinks are not files here:
+/// a box farm is rebuilt from `boxes.json`. An unreadable or very large walk
+/// counts as "has files", which keeps the plain rule.
+pub fn resolve_user_tree(pair: &Pair, name: Name, base: &Path, hit_id: &str) -> PathBuf {
+    let picked = resolve_named_dir(pair, name, base, hit_id);
+    let Some(old) = pair.legacy(name) else {
+        return picked;
+    };
+    let old = base.join(old);
+    if picked == old || !old.exists() {
+        return picked;
+    }
+    if tree_files(&picked) == TreeFiles::None && tree_files(&old) == TreeFiles::Some {
+        crate::brand::legacy_hit(hit_id);
+        return old;
+    }
+    picked
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TreeFiles {
+    None,
+    Some,
+    Unknown,
+}
+
+/// Whether the tree under `dir` holds a regular file, looked for breadth
+/// first without following symlinks, stopping at the first one found.
+fn tree_files(dir: &Path) -> TreeFiles {
+    const BUDGET: usize = 4096;
+    let mut queue = std::collections::VecDeque::from([dir.to_path_buf()]);
+    let mut seen = 0usize;
+    while let Some(next) = queue.pop_front() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            return TreeFiles::Unknown;
+        };
+        for entry in entries {
+            seen += 1;
+            if seen > BUDGET {
+                return TreeFiles::Unknown;
+            }
+            let Ok(kind) = entry.and_then(|e| e.file_type().map(|t| (t, e.path()))) else {
+                return TreeFiles::Unknown;
+            };
+            match kind {
+                (t, _) if t.is_file() => return TreeFiles::Some,
+                (t, path) if t.is_dir() => queue.push_back(path),
+                _ => {}
+            }
+        }
+    }
+    TreeFiles::None
+}
+
 /// The record of the running app, for Settings → About and the lazy steps.
 pub fn record_in(state_dir: &Path) -> Record {
     crate::storage::read_json(&state_dir.join(RECORD_FILE)).unwrap_or_default()

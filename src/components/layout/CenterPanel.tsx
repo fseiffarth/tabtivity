@@ -1096,21 +1096,26 @@ function CenterPanelImpl() {
   }, [layoutByScope, scope]);
   // Groups whose active tab is a scroll-syncable viewer (text/code, markdown, or
   // PDF). Only these can host the divider scroll-link button, and only these are
-  // considered valid link endpoints. Rebuilt when the layout or tabs change.
+  // considered valid link endpoints. Taken over EVERY loaded scope, not just the
+  // showing one: a project switch keeps the other scopes' layouts (and their
+  // group ids) in memory, so their links must outlive the switch too. Group ids
+  // come from one session-wide counter, so scopes never share one.
   const syncableGroups = useMemo(() => {
-    const byKey = new Map(tabs.map((t) => [t.key, t]));
     const set = new Set<string>();
-    for (const g of allGroups(layoutByScope[scope] ?? null)) {
-      const t = g.activeKey ? byKey.get(g.activeKey) : undefined;
-      if (
-        t?.kind === "embed" &&
-        (t.viewer === "text" || t.viewer === "markdown" || t.viewer === "pdf")
-      ) {
-        set.add(g.id);
+    for (const [sc, root] of Object.entries(layoutByScope)) {
+      const byKey = new Map((sc === scope ? tabs : (tabsByScope[sc] ?? [])).map((t) => [t.key, t]));
+      for (const g of allGroups(root ?? null)) {
+        const t = g.activeKey ? byKey.get(g.activeKey) : undefined;
+        if (
+          t?.kind === "embed" &&
+          (t.viewer === "text" || t.viewer === "markdown" || t.viewer === "pdf")
+        ) {
+          set.add(g.id);
+        }
       }
     }
     return set;
-  }, [layoutByScope, scope, tabs]);
+  }, [layoutByScope, scope, tabs, tabsByScope]);
   // Drop any scroll-link whose endpoints are no longer both syncable viewers
   // (a subwindow's active tab changed to a shell/image, or the group vanished).
   useEffect(() => {

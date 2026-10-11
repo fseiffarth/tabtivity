@@ -199,6 +199,9 @@ describe("MarkupView · rounds", () => {
     expect(screen.queryByRole("button", { name: "Reload PDF" })).toBeNull();
     rerender(view("working"));
     expect(screen.getByText("Agent is working…")).toBeTruthy();
+    // With the tab's model known, the pill names it.
+    rerender(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} agent="working" model="Opus" onClose={() => {}} />);
+    expect(screen.getByText("Opus is working…")).toBeTruthy();
   });
 
   it("offers Make these changes once the agent listed them, and sends the phone's own wording once", async () => {
@@ -335,6 +338,42 @@ describe("MarkupView · rounds", () => {
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
     expect(await screen.findByText("Queued — the agent takes it after its current step")).toBeTruthy();
+  });
+
+  it("offers Chat once a round is out, which tucks the view away under the file's name", async () => {
+    desktop();
+    const toChat = vi.fn();
+    const onClose = vi.fn();
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "queued"} toChat={toChat} onClose={onClose} />);
+    showPicture();
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    expect(screen.queryByRole("button", { name: /^Chat/ })).toBeNull();
+    fireEvent.click(submitButton());
+    fireEvent.click(await screen.findByRole("button", { name: /^Chat/ }));
+    expect(toChat).toHaveBeenCalledWith("plot.png");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("shows a dialog the tab waits on and makes Answer in chat lead while it waits", async () => {
+    desktop();
+    const toChat = vi.fn();
+    const view = (agent: AgentSignal, dialog?: string) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE}
+      onSend={() => "queued"} agent={agent} dialog={dialog} toChat={toChat} onClose={() => {}} />;
+    const { rerender } = render(view("idle"));
+    showPicture();
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    expect(await screen.findByRole("button", { name: /^Chat/ })).toBeTruthy();
+    rerender(view("question", "Do you want to make this edit to main.tex?"));
+    expect(screen.getByText("“Do you want to make this edit to main.tex?”")).toBeTruthy();
+    const answer = screen.getByRole("button", { name: /^Answer in chat/ });
+    expect(answer.className).toContain("markup-submit");
+    fireEvent.click(answer);
+    expect(toChat).toHaveBeenCalledWith("plot.png");
+    // Answered: back to the plain Chat button, no line.
+    rerender(view("working"));
+    expect(screen.queryByText("“Do you want to make this edit to main.tex?”")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Chat/ }).className).toContain("outbox-action");
   });
 
   it("reloads the agent's newer copy under the same layer, with no 'changed' note", async () => {

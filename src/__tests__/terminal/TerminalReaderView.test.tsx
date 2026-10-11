@@ -491,6 +491,30 @@ describe("the Reader's live rows", () => {
     expect((screen.getByRole("button", { name: /No, and tell Claude/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("answers Claude's \"Type something.\" row with typed words, never with Enter on the empty row", async () => {
+    term = fakeTerminal([
+      "> ask me", "", "☐ Fruit", "", "Which fruit?", "",
+      "❯ 1. Apple", "     A red fruit.",
+      "  2. Banana", "     A yellow fruit.",
+      "  3. Type something.",
+      "──────────────────────────────────────────────────────────────────────",
+      "  4. Chat about this", "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    // The click opens a field: the empty row's Enter would decline the question.
+    fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(written).toEqual([]);
+    const field = screen.getByRole("textbox", { name: "Your answer…" });
+    fireEvent.change(field, { target: { value: "a pear" } });
+    fireEvent.submit(field.closest("form")!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(written).toEqual(["\u001b[B", "\u001b[B", "a pear", "\r"]);
+  });
+
   it("shows an agent's own question as its header, its question and tagged rows — not the screen", async () => {
     term = fakeTerminal([
       "> push it", "",
@@ -867,6 +891,10 @@ describe("agentReader helpers", () => {
     expect(readerOffered({ kind: "agent", cmd: "codex" })).toBe(true);
     expect(readerOffered({ kind: "agent", cmd: "gemini" })).toBe(false);
     expect(readerOffered({ kind: "local_agent", cmd: "ollama" })).toBe(false);
+    expect(readerOffered({ kind: "local_agent", cmd: "ollama", localDriver: "claude" })).toBe(false);
+    expect(readerOffered({ kind: "local_agent", cmd: "ollama", localDriver: "opencode" })).toBe(true);
+    expect(readerOffered({ kind: "local_agent", cmd: "ollama", localLaunch: { driver: "opencode", model: "m", args: [] } })).toBe(true);
+    expect(readerOffered({ kind: "agent", cmd: "gemini", localDriver: "opencode" })).toBe(false);
     expect(readerOffered({ kind: "shell", cmd: "bash" })).toBe(false);
     expect(readerOffered(undefined)).toBe(false);
   });
@@ -877,6 +905,14 @@ describe("agentReader helpers", () => {
     expect(readerRequest("p", { ...tab, args: ["--continue"] }, "/p", undefined, 60)).toMatchObject({ since: null });
     expect(readerRequest("p", tab, "/p", undefined, 60)).toMatchObject({ subagent: null });
     expect(readerRequest("p", tab, "/p", undefined, 60, "sa-1")).toMatchObject({ subagent: "sa-1" });
+  });
+
+  it("reads a local-model OpenCode tab by folder from the local-model home", () => {
+    const local = { kind: "local_agent" as const, cmd: "ollama", args: ["launch", "opencode"], localDriver: "opencode", launchedAt: 5, cwd: "/p" };
+    expect(readerRequest("p", local, "/p", undefined, 60)).toMatchObject({
+      agent: "opencode", sessionId: "", tabDir: "/p", since: 5, localModel: true,
+    });
+    expect(readerRequest("p", tab, "/p", undefined, 60)).toMatchObject({ localModel: false });
   });
 
   it("keeps what is shown when the read answers unchanged", () => {

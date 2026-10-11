@@ -202,10 +202,54 @@ fn generate_help_corpus() {
     fs::write(out, generated).expect("write help corpus");
 }
 
+/// tauri-build's default Windows app manifest: it binds Common Controls v6,
+/// the only comctl32 that exports `TaskDialogIndirect` (the dialog plugin's
+/// message boxes).
+const WINDOWS_APP_MANIFEST: &str = concat!(
+    r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+"#,
+    "        version=\"6.0.0.0\"\n", // privacy-check: ok — an assembly version, not an address
+    r#"        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
+"#
+);
+
+/// tauri-build puts the manifest in a resource that reaches only the app
+/// binary, so the lib's test binary loaded System32's comctl32 5.82 and died
+/// before its first test (0xc0000139, STATUS_ENTRYPOINT_NOT_FOUND, CI
+/// 2026-10-05). On MSVC the manifest goes through the linker instead, which
+/// reaches every linked target; tauri-build's copy is switched off so the
+/// app binary does not get two.
+fn build_tauri() {
+    let msvc = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if !msvc {
+        tauri_build::build();
+        return;
+    }
+    let path = PathBuf::from(env::var("OUT_DIR").expect("out dir")).join("windows-app-manifest.xml");
+    fs::write(&path, WINDOWS_APP_MANIFEST).expect("write the Windows app manifest");
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", path.display());
+    let windows = tauri_build::WindowsAttributes::new_without_app_manifest();
+    tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows))
+        .expect("failed to run tauri-build");
+}
+
 fn main() {
     watch_frontend_dist();
     embed_build_commit();
     generate_mobile_assets();
     generate_help_corpus();
-    tauri_build::build()
+    build_tauri();
 }

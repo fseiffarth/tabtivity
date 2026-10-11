@@ -8,6 +8,7 @@ import {
   STEERING_CONTEXTS,
   STEERING_KEYS,
   chordLabel,
+  modifierLabel,
   resolveChord,
   steeringRowLabel,
   type ShortcutMap,
@@ -119,11 +120,14 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.agentKeysStay" />
               <UntestedTag id="steering.overlays" />
               <UntestedTag id="steering.scroll" />
+              <UntestedTag id="steering.scrollDocument" />
               <UntestedTag id="steering.legendGroups" />
               <UntestedTag id="steering.handoffLegend" />
               <UntestedTag id="steering.dim" />
               <UntestedTag id="steering.popout" />
               <UntestedTag id="steering.pointer" />
+              <UntestedTag id="steering.landOnTabs" />
+              <UntestedTag id="steering.shiftPanes" />
             </h3>
             <p className="shortcut-help-intro">
               {t("shortcutHelp.steeringIntro", {
@@ -144,7 +148,7 @@ export function ShortcutHelpOverlay() {
                       <kbd>{steeringRowLabel(k, steerKeys)}</kbd>
                       <span className="shortcut-help-label">
                         {t(k.labelKey)}
-                        <span className="shortcut-help-desc"> — {t(k.descKey)}</span>
+                        <span className="shortcut-help-desc"> — {t(k.descKey, { modifier: modifierLabel() })}</span>
                       </span>
                     </div>
                   ))}

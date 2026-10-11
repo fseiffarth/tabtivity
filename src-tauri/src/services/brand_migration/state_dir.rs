@@ -114,20 +114,7 @@ fn link_dir(target: &Path, at: &Path) -> Result<(), String> {
     if std::os::windows::fs::symlink_dir(target, at).is_ok() {
         return Ok(());
     }
-    let (target, at) = (target.to_string_lossy(), at.to_string_lossy());
-    if target.contains('"') || at.contains('"') {
-        return Err("the path holds a quote".into());
-    }
-    use std::os::windows::process::CommandExt;
-    let status = crate::paths::command_no_window("cmd")
-        .raw_arg(format!("/C mklink /J \"{at}\" \"{target}\""))
-        .status()
-        .map_err(|e| e.to_string())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("mklink /J failed".into())
-    }
+    crate::services::win_links::make_junction(target, at).map_err(|e| e.to_string())
 }
 
 #[cfg(not(any(unix, windows)))]

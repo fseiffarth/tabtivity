@@ -527,6 +527,8 @@ export interface Settings {
     directory: string;
     copilot: boolean;
     local_only: boolean;
+    /** Copilot also serves the project's text files (Markdown, LaTeX, plain text). */
+    copilot_text?: boolean;
     [key: string]: unknown;
   }>;
   /** Hunspell dictionary code (e.g. `en_US`) for the editors' dictionary spell

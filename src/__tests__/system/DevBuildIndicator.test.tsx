@@ -141,9 +141,12 @@ describe("DevBuildIndicator", () => {
   it("shows a paused build as a quiet member and resumes it", async () => {
     answer({ ...idle, paused: true, behind: 3 });
     render(<DevBuildIndicator />);
-    expect(await screen.findByText("paused", undefined, { timeout: 5000 })).toBeTruthy();
+    const chip = await screen.findByLabelText("Dev build: Auto-builds paused", undefined, { timeout: 5000 });
+    // The chip shows the shared pause icon, not the word.
+    expect(chip.querySelector(".dev-build-chip-text .app-icon")).toBeTruthy();
+    expect(screen.queryByText("paused")).toBeNull();
     await waitFor(() => expect(useHeaderStatusStore.getState().reports.devBuild?.tone).toBe("ok"));
-    fireEvent.click(screen.getByLabelText("Dev build: Auto-builds paused"));
+    fireEvent.click(chip);
     fireEvent.click(await screen.findByText("Resume auto-builds"));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("dev_build_set_paused", { paused: false }));
   });

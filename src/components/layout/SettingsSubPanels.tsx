@@ -70,7 +70,7 @@ import {
   moveInAgentOrder,
   sortByAgentOrder,
 } from "../tabs/newTabItems";
-import { AGENT_TAB_ACTIONS, chordLabel, resolveChord } from "../../lib/shortcuts/shortcuts";
+import { AGENT_TAB_ACTIONS, chordLabel, modifierLabel, resolveChord } from "../../lib/shortcuts/shortcuts";
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
@@ -2372,7 +2372,7 @@ export function AgentsPanel({
             <button
               type="button"
               className="settings-btn sm icon"
-              title={t("agents.moveUp")}
+              title={t("agents.moveUp", { modifier: modifierLabel() })}
               aria-label={t("agents.moveUpLabel", { label: a.label })}
               disabled={visibleOrder.indexOf(a.bin) <= 0}
               onClick={() => moveAgent(a.bin, -1)}
@@ -2382,7 +2382,7 @@ export function AgentsPanel({
             <button
               type="button"
               className="settings-btn sm icon"
-              title={t("agents.moveDown")}
+              title={t("agents.moveDown", { modifier: modifierLabel() })}
               aria-label={t("agents.moveDownLabel", { label: a.label })}
               disabled={visibleOrder.indexOf(a.bin) >= visibleOrder.length - 1}
               onClick={() => moveAgent(a.bin, 1)}

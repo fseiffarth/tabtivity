@@ -18,8 +18,10 @@ const claude: LocalDriverInfo = {
   label: "Claude Code",
   available: true,
   needs_tools_unsupported: false,
-  heavy_harness: false,
+  heavy_harness: true,
 };
+
+const opencode: LocalDriverInfo = { ...claude, id: "opencode", label: "OpenCode", heavy_harness: false };
 
 function group(gpu: Partial<LocalModelPlacementState>, drivers = [claude], vibe = true) {
   return localModelMenuGroup({
@@ -37,6 +39,23 @@ function group(gpu: Partial<LocalModelPlacementState>, drivers = [claude], vibe 
 describe("local-model group GPU gate", () => {
   it("offers the agents only once the model is on the GPU", () => {
     expect(group({ placement: "ready" }).entries.map((e) => e.key)).toEqual(["vibe", "claude"]);
+  });
+
+  it("leads with the light-harness drivers, ahead of Mistral, and cautions only the heavy ones", () => {
+    const entries = group({ placement: "ready" }, [claude, opencode]).entries;
+    expect(entries.map((e) => e.key)).toEqual(["opencode", "vibe", "claude"]);
+    expect(entries.map((e) => !!e.caution)).toEqual([false, false, true]);
+  });
+
+  it("puts Pi with OpenCode and Cline with the cautioned agents, both tagged untested", () => {
+    const pi: LocalDriverInfo = { ...opencode, id: "pi", label: "Pi" };
+    const cline: LocalDriverInfo = { ...claude, id: "cline", label: "Cline" };
+    const entries = group({ placement: "ready" }, [opencode, pi, claude, cline]).entries;
+    expect(entries.map((e) => e.key)).toEqual(["opencode", "pi", "vibe", "claude", "cline"]);
+    expect(entries.map((e) => !!e.caution)).toEqual([false, false, false, true, true]);
+    expect(entries.map((e) => e.untested)).toEqual([
+      undefined, "localDriver.pi", undefined, undefined, "localDriver.cline",
+    ]);
   });
 
   it("offers a load row instead while the model is cold or on the CPU", () => {

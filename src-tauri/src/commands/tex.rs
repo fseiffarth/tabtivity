@@ -121,6 +121,280 @@ pub fn tex_capability() -> TexCapability {
     detect_capability()
 }
 
+// ---------------------------------------------------------------------------
+// Engine auto-detection
+// ---------------------------------------------------------------------------
+//
+// With no engine chosen, a build used to run pdflatex — and a document written
+// for fontspec, luacode or xeCJK then failed on its first package ("fontspec
+// requires either XeTeX or LuaTeX") until the reader found the engine menu. The
+// document usually says what it needs: a magic comment names the engine
+// outright, and a handful of packages and primitives exist under one engine
+// only. Read those, and build under what they ask for.
+
+/// What a document's source says about the engine it needs, strongest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EngineHint {
+    /// Named outright: `% !TEX program = …` / `% !TeX TS-program = …` /
+    /// `% arara: …` in the file's head.
+    Named(&'static str),
+    /// Runs under LuaTeX only (luacode, luatexja, `\directlua`, …).
+    Lua,
+    /// Runs under XeTeX only (xeCJK, xltxtra, bidi, mathspec, `\XeTeX…`).
+    Xe,
+    /// Needs a Unicode engine, either one (fontspec, unicode-math, polyglossia).
+    Unicode,
+}
+
+/// Packages that load under XeTeX only. Compared case-insensitively.
+const XE_ONLY_PACKAGES: &[&str] = &[
+    "xecjk", "xltxtra", "xunicode", "xepersian", "xgreek", "xecyr", "xetexko",
+    "xesearch", "xespotcolor", "xecolor", "xeindex", "bidi", "mathspec",
+];
+/// Packages that need a Unicode engine but run under either.
+const UNICODE_PACKAGES: &[&str] = &[
+    "fontspec", "unicode-math", "polyglossia", "realscripts", "fontsetup",
+    "newcomputermodern",
+];
+/// Packages that load under LuaTeX only, besides every `lua…`/`ltj…` one.
+const LUA_ONLY_PACKAGES: &[&str] = &["piton", "emoji", "pyluatex", "chickenize"];
+/// Font commands only fontspec defines — a preamble that calls them got
+/// fontspec from somewhere (a class, a package outside the document's folder).
+const UNICODE_COMMANDS: &[&str] = &[
+    "setmainfont", "setsansfont", "setmonofont", "newfontfamily", "setmathfont",
+    "defaultfontfeatures", "setdefaultlanguage", "setmainlanguage",
+];
+/// Primitives and environments that exist under LuaTeX only.
+const LUA_COMMANDS: &[&str] = &["directlua", "luaexec", "luadirect", "luaescapestring", "latelua"];
+
+/// The engine a `% !TEX program = …`-style value names, if one we drive.
+fn engine_named(value: &str) -> Option<&'static str> {
+    let v = value.trim().to_ascii_lowercase();
+    let v = v.split(|c: char| c.is_whitespace() || c == ':' || c == '{').next().unwrap_or("");
+    match v {
+        "lualatex" | "luatex" | "lualatexmk" | "lualatex-dev" => Some("lualatex"),
+        "xelatex" | "xetex" | "xelatexmk" | "xelatex-dev" => Some("xelatex"),
+        "pdflatex" | "pdftex" | "pdflatexmk" | "pdflatex-dev" | "latex" => Some("pdflatex"),
+        _ => None,
+    }
+}
+
+/// An engine named in the file's leading comments: `% !TEX program = X`,
+/// `% !TeX TS-program = X` (TeXShop / TeXstudio / VS Code LaTeX Workshop) or an
+/// `% arara: X` directive. Read from the same 20 head lines {@link magic_root}
+/// reads, which is where every editor that writes these puts them.
+fn magic_engine(source: &str) -> Option<&'static str> {
+    for raw in source.lines().take(20) {
+        let l = raw.trim_start();
+        if !l.starts_with('%') {
+            continue;
+        }
+        let body = l.trim_start_matches('%').trim();
+        let lower = body.to_ascii_lowercase();
+        let rest = lower
+            .strip_prefix("!tex ts-program")
+            .or_else(|| lower.strip_prefix("!tex program"));
+        if let Some(rest) = rest {
+            let rest = rest.trim_start();
+            if let Some(v) = rest.strip_prefix('=').or_else(|| rest.strip_prefix(':')) {
+                if let Some(e) = engine_named(v) {
+                    return Some(e);
+                }
+            }
+            continue;
+        }
+        if let Some(v) = lower.strip_prefix("arara:") {
+            if let Some(e) = engine_named(v) {
+                return Some(e);
+            }
+        }
+    }
+    None
+}
+
+/// `text` with every comment cut: from an unescaped `%` to the end of its line.
+/// A commented-out `%\usepackage{fontspec}` asks for nothing.
+fn strip_tex_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let bytes = line.as_bytes();
+        let mut cut = bytes.len();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 2, // `\%` is a literal percent, `\\` a line break
+                b'%' => {
+                    cut = i;
+                    break;
+                }
+                _ => i += 1,
+            }
+        }
+        out.push_str(&line[..cut.min(line.len())]);
+        out.push('\n');
+    }
+    out
+}
+
+/// The hint carried by one file's (comment-stripped) text: the packages it
+/// loads, the class it is, and the engine-only commands it calls. The strongest
+/// one found wins (Lua/Xe over Unicode); `None` for a document any engine runs.
+fn engine_hint_in(text: &str) -> Option<EngineHint> {
+    let mut lua = false;
+    let mut xe = false;
+    let mut unicode = false;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < bytes.len() && (bytes[j] as char).is_ascii_alphabetic() {
+            j += 1;
+        }
+        let cmd = &text[i + 1..j];
+        match cmd {
+            "usepackage" | "RequirePackage" | "documentclass" | "LoadClass" => {
+                // The brace list, past an optional `[...]`.
+                let mut k = j;
+                while k < bytes.len() && (bytes[k] as char).is_ascii_whitespace() {
+                    k += 1;
+                }
+                if k < bytes.len() && bytes[k] == b'[' {
+                    k = text[k..].find(']').map_or(bytes.len(), |c| k + c + 1);
+                    while k < bytes.len() && (bytes[k] as char).is_ascii_whitespace() {
+                        k += 1;
+                    }
+                }
+                if k < bytes.len() && bytes[k] == b'{' {
+                    if let Some(close) = text[k + 1..].find('}') {
+                        for name in text[k + 1..k + 1 + close].split(',') {
+                            let name = name.trim().to_ascii_lowercase();
+                            // `luatex85` is the exception: a shim classes load
+                            // under every engine, a no-op off LuaTeX.
+                            if (name.starts_with("lua") && name != "luatex85")
+                                || name.starts_with("ltj")
+                                || LUA_ONLY_PACKAGES.contains(&name.as_str())
+                            {
+                                lua = true;
+                            } else if XE_ONLY_PACKAGES.contains(&name.as_str()) {
+                                xe = true;
+                            } else if UNICODE_PACKAGES.contains(&name.as_str()) {
+                                unicode = true;
+                            }
+                        }
+                        i = k + 1 + close + 1;
+                        continue;
+                    }
+                }
+            }
+            "begin" if text[j..].starts_with("{luacode") => lua = true,
+            // `\XeTeX` alone is metalogo's logo, harmless anywhere; a primitive
+            // carries a suffix (`\XeTeXinputencoding`, `\XeTeXlinebreaklocale`).
+            _ if cmd.len() > 5 && cmd.starts_with("XeTeX") => xe = true,
+            _ if LUA_COMMANDS.contains(&cmd) => lua = true,
+            _ if UNICODE_COMMANDS.contains(&cmd) => unicode = true,
+            _ => {}
+        }
+        i = j.max(i + 1);
+    }
+    if lua {
+        Some(EngineHint::Lua)
+    } else if xe {
+        Some(EngineHint::Xe)
+    } else if unicode {
+        Some(EngineHint::Unicode)
+    } else {
+        None
+    }
+}
+
+/// What `source` (a document, or a hover preview's preamble) asks for, reading
+/// the local files its preamble pulls in from `dir` too — a `\input{preamble}`
+/// or a project `.sty` is where `fontspec` usually lives. Bounded: at most
+/// {@link ENGINE_SCAN_MAX_FILES} files, each read up to its first MiB, so a
+/// pathological project cannot turn a compile into a filesystem walk.
+fn detect_engine_hint(source: &str, dir: &Path) -> Option<EngineHint> {
+    const ENGINE_SCAN_MAX_FILES: usize = 32;
+    const MAX_READ: usize = 1024 * 1024;
+    if let Some(e) = magic_engine(source) {
+        return Some(EngineHint::Named(e));
+    }
+    let mut best: Option<EngineHint> = None;
+    let rank = |h: Option<EngineHint>| match h {
+        Some(EngineHint::Lua) => 3,
+        Some(EngineHint::Xe) => 2,
+        Some(EngineHint::Unicode) => 1,
+        _ => 0,
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut queue: Vec<String> = vec![strip_tex_comments(source)];
+    let mut read = 0;
+    while let Some(text) = queue.pop() {
+        let hint = engine_hint_in(&text);
+        if rank(hint) > rank(best) {
+            best = hint;
+        }
+        if rank(best) == 3 || read >= ENGINE_SCAN_MAX_FILES {
+            break;
+        }
+        for name in preamble_local_dep_names(&text) {
+            let p = dir.join(&name);
+            if read >= ENGINE_SCAN_MAX_FILES || !seen.insert(p.clone()) || !p.is_file() {
+                continue;
+            }
+            read += 1;
+            let Ok(bytes) = fs::read(&p) else { continue };
+            let bytes = &bytes[..bytes.len().min(MAX_READ)];
+            queue.push(strip_tex_comments(&String::from_utf8_lossy(bytes)));
+        }
+    }
+    best
+}
+
+/// The installed engine `hint` resolves to, or `None` to keep the default (no
+/// hint, or the engine it asks for is not installed — a build under the wrong
+/// one fails just as it would have, and says why in its log).
+fn engine_for_hint(hint: Option<EngineHint>, installed: &[String]) -> Option<String> {
+    let has = |e: &str| installed.iter().any(|g| g == e);
+    let pick = |order: &[&str]| order.iter().find(|e| has(e)).map(|e| e.to_string());
+    match hint? {
+        EngineHint::Named(e) => pick(&[e]),
+        EngineHint::Lua => pick(&["lualatex"]),
+        EngineHint::Xe => pick(&["xelatex"]),
+        // LuaLaTeX first: the LaTeX team's recommended Unicode engine, and the
+        // one fontspec's own manual leads with.
+        EngineHint::Unicode => pick(&["lualatex", "xelatex"]),
+    }
+}
+
+/// The engine a build of `src` with no engine chosen runs: what the document
+/// asks for when an installed engine serves it, else the first installed one
+/// (the {@link ENGINES} order). `None` only with no engine on `PATH` at all.
+fn auto_engine(src: &Path, installed: &[String]) -> Option<String> {
+    let dir = src.parent().unwrap_or_else(|| Path::new("."));
+    fs::read_to_string(src)
+        .ok()
+        .and_then(|text| engine_for_hint(detect_engine_hint(&text, dir), installed))
+        .or_else(|| installed.first().cloned())
+}
+
+/// The engine "Auto" builds `path` with — the label on the viewer's engine menu.
+/// `path` is the file Compile builds (the resolved root). `None` with no engine
+/// installed. Reads only; never runs anything.
+#[tauri::command]
+pub async fn tex_auto_engine(path: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let cap = detect_capability();
+        auto_engine(Path::new(&path), &cap.engines)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 struct RunOut {
     ok: bool,
     text: String,
@@ -187,7 +461,8 @@ fn run_in_within_env<S: AsRef<std::ffi::OsStr>>(
         // variable is ignored.
         .env("max_print_line", "1000")
         .env("error_line", "254")
-        .env("half_error_line", "238");
+        .env("half_error_line", "238")
+        .env(OPENOUT_PARANOID.0, OPENOUT_PARANOID.1);
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -316,13 +591,100 @@ fn flag_enables_shell_escape(arg: &str) -> bool {
 /// engine's final word even after the user's extra flags.
 const NO_SHELL_ESCAPE: &str = "-no-shell-escape";
 
-/// Environment for a hover preview's engine runs (#867): kpathsea's paranoid
-/// output mode — no `\openout` to an absolute path, a parent directory or a dot
-/// file. A preview runs the document's preamble on hover, with the document's
-/// folder as its working directory; it has no business writing anywhere but its
-/// scratch output directory, which `-output-directory` still reaches.
-fn preview_env() -> Vec<(String, String)> {
-    vec![("openout_any".to_string(), "p".to_string())]
+/// kpathsea's paranoid output mode, set on every engine run Tabtivity makes
+/// (builds, format dumps, previews; latexmk passes it on to the engine): no
+/// `\openout` — nor, under LuaTeX, `io.open` for writing — to an absolute path
+/// outside the output directory, a parent directory or a dot file. TeX Live's
+/// own `texmf.cnf` default is the same `p`, but a `texmf.cnf` or environment
+/// set to `a` used to let a document Build write anywhere the user can (gap 36:
+/// checked on LuaHBTeX 1.22 / TeX Live 2025, where `openout_any=a` let a
+/// Build's `io.open` and `\openout` write an absolute path and `../`, and `p`
+/// refused both). The environment outranks `texmf.cnf`. Output still reaches
+/// `-output-directory`, which the engine exports as `TEXMFOUTPUT`.
+const OPENOUT_PARANOID: (&str, &str) = ("openout_any", "p");
+
+/// Environment for a hover preview's engine runs (#867, gap 36), on top of
+/// {@link OPENOUT_PARANOID}: the paranoid *input* mode as well. A preview runs
+/// the document's preamble on hover, with the document's folder as its working
+/// directory, so it may read below that folder (a preamble's `\input{macros}`)
+/// and from the TeX trees by kpathsea search, but not an absolute path or a
+/// `../`. `TEXMFOUTPUT` — the one absolute prefix paranoid mode admits — is
+/// pinned to the preview's own `scratch` directory rather than left to whatever
+/// the user's environment holds. LuaTeX cannot
+/// run in this mode (luaotfload's font cache is an absolute path), which is
+/// one reason a preview never runs LuaTeX ({@link preview_engine}).
+fn preview_env(scratch: &Path) -> Vec<(String, String)> {
+    vec![
+        (OPENOUT_PARANOID.0.to_string(), OPENOUT_PARANOID.1.to_string()),
+        ("openin_any".to_string(), "p".to_string()),
+        ("TEXMFOUTPUT".to_string(), scratch.to_string_lossy().into_owned()),
+    ]
+}
+
+/// How a hover preview runs: the engine, and whether the document's preamble
+/// takes part.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PreviewPlan {
+    /// The snippet under the document's preamble.
+    Preamble(String),
+    /// The preamble needs LuaTeX: the body alone in the fallback document
+    /// ({@link fallback_preview_document}), the preamble never run.
+    BodyOnly(String),
+}
+
+/// The engine a hover preview runs, or why there is none. Never LuaTeX (gap
+/// 36): hovering a formula must not hand a document's preamble Lua's `io`
+/// library — LuaTeX keeps reads open whatever `openin_any` says, and an
+/// unpatched TeX Live < 2023 runs commands from Lua (CVE-2023-32700). A
+/// preamble that asks for LuaTeX (a magic comment, `luacode`, `\directlua`, …)
+/// previews the body alone under pdfLaTeX (else another non-Lua engine), as a
+/// preamble that fails does; otherwise an explicit engine choice of LuaLaTeX,
+/// or a fontspec preamble that would pick it, falls to XeLaTeX where
+/// installed, else to the first other engine. A Build still runs the engine
+/// the document asks for. `hint` is asked only when the requested engine
+/// cannot serve, so a hover reads the preamble's files no more often than
+/// before.
+fn preview_engine(
+    requested: Option<String>,
+    hint: impl FnOnce() -> Option<EngineHint>,
+    installed: &[String],
+) -> Result<PreviewPlan, String> {
+    let usable: Vec<String> = installed.iter().filter(|e| *e != "lualatex").cloned().collect();
+    if let Some(e) = requested.filter(|e| usable.contains(e)) {
+        return Ok(PreviewPlan::Preamble(e));
+    }
+    let none_usable = || {
+        if installed.is_empty() {
+            "no TeX engine found on PATH".to_string()
+        } else {
+            PREVIEW_NO_LUATEX.to_string()
+        }
+    };
+    let hint = hint();
+    if matches!(hint, Some(EngineHint::Lua) | Some(EngineHint::Named("lualatex"))) {
+        let body_engine = usable.iter().find(|e| *e == "pdflatex").or_else(|| usable.first());
+        return body_engine.cloned().map(PreviewPlan::BodyOnly).ok_or_else(none_usable);
+    }
+    engine_for_hint(hint, &usable)
+        .or_else(|| usable.first().cloned())
+        .map(PreviewPlan::Preamble)
+        .ok_or_else(none_usable)
+}
+
+/// What a hover says when only LuaLaTeX is installed ({@link preview_engine}).
+const PREVIEW_NO_LUATEX: &str = "no hover preview for a LuaLaTeX preamble";
+
+/// How a preview names its wrapper `.tex` (which lives in the scratch dir) on
+/// the engine's command line: by file name alone. The engine looks for a
+/// relative input in `-output-directory` first, so it opens the scratch copy
+/// even with a same-named file in the document's folder. An absolute path would
+/// be refused under `openin_any=p` wherever the scratch dir sits below a dot
+/// directory — `~/.local/share/…` on Linux — since kpathsea's paranoid mode
+/// refuses every dot component, `TEXMFOUTPUT` or not.
+fn preview_main_file(tex: &Path) -> String {
+    tex.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| tex.to_string_lossy().into_owned())
 }
 
 /// Filter user-supplied extra flags down to ones that can NEVER enable
@@ -893,9 +1255,13 @@ fn compile_tex_blocking(
     // SECURITY: filter user-supplied flags so none can enable shell-escape.
     let extra = filter_extra_flags(&extra_flags.unwrap_or_default());
 
-    // Only honour an explicitly requested engine we actually have; otherwise let
-    // latexmk / the first installed engine decide.
-    let engine = engine.filter(|e| cap.engines.iter().any(|g| g == e));
+    // Only honour an explicitly requested engine we actually have; otherwise run
+    // what the document asks for, else the first installed engine (see
+    // {@link auto_engine}). Resolved here rather than left to latexmk, whose
+    // default is pdflatex whether or not it is installed.
+    let engine = engine
+        .filter(|e| cap.engines.iter().any(|g| g == e))
+        .or_else(|| auto_engine(&src, &cap.engines));
     // The PDF lands in the output dir if one was given, else beside the source.
     let pdf = match &out_path {
         Some(p) => p.join(format!("{stem}.pdf")),
@@ -1503,10 +1869,12 @@ fn ensure_preview_fmt(
         format!("-jobname={key}"),
         format!("&{engine}"),
         "mylatexformat.ltx".to_string(),
-        tex.to_string_lossy().into_owned(),
+        // By name, not path: found in `-output-directory` first ({@link
+        // preview_main_file}).
+        preview_main_file(tex),
     ];
     // A spawn failure is the machine's problem, not this preamble's: no marker.
-    let built = run_in_within_env(cwd, engine, &args, PREVIEW_TIMEOUT, &preview_env()).ok()?;
+    let built = run_in_within_env(cwd, engine, &args, PREVIEW_TIMEOUT, &preview_env(scratch)).ok()?;
     let out_fmt = scratch.join(format!("{key}.fmt"));
     if built.ok && out_fmt.is_file() && fs::rename(&out_fmt, &fmt).is_ok() {
         return Some(fmt);
@@ -1574,10 +1942,12 @@ fn preview_snippet_blocking(
 
     let cap = detect_capability();
     // latexmk alone cannot serve this path: the preview runs the engine itself.
-    let eng = engine
-        .filter(|e| cap.engines.iter().any(|g| g == e))
-        .or_else(|| cap.engines.first().cloned())
-        .ok_or_else(|| "no TeX engine found on PATH".to_string())?;
+    // No engine chosen: the one the preamble asks for, as a build would pick —
+    // except LuaTeX, which a hover never runs ({@link preview_engine}).
+    let (eng, body_only) = match preview_engine(engine, || detect_engine_hint(&preamble, &cwd), &cap.engines)? {
+        PreviewPlan::Preamble(eng) => (eng, false),
+        PreviewPlan::BodyOnly(eng) => (eng, true),
+    };
 
     let scratch = make_preview_scratch()?;
     let stem = concat!(crate::app_slug!(), "-preview");
@@ -1592,16 +1962,33 @@ fn preview_snippet_blocking(
         // SECURITY: the same argument builder the full compile uses, so a preview
         // can no more enable shell-escape than a build can (no `extra` flags are
         // accepted here at all).
-        let mut args = engine_args(&tex.to_string_lossy(), Some(&out_arg), &[]);
+        let mut args = engine_args(&preview_main_file(&tex), Some(&out_arg), &[]);
         // …minus SyncTeX: nothing forward-searches into a hover card, and a
         // `.synctex.gz` written and thrown away per hover is pure latency.
         args.retain(|a| a != "-synctex=1");
         if let Some(f) = fmt {
             args.insert(0, format!("-fmt={}", f.display()));
         }
-        let out = run_in_within_env(&cwd, &eng, &args, PREVIEW_TIMEOUT, &preview_env())?;
+        let out = run_in_within_env(&cwd, &eng, &args, PREVIEW_TIMEOUT, &preview_env(&scratch))?;
         Ok(out.text)
     };
+
+    if body_only {
+        // A LuaLaTeX preamble: straight to the body-only document, no format
+        // dump and no run of the preamble under an engine it was not made for.
+        let result = run(&fallback_preview_document(&body), None);
+        let pdf_b64 = fs::read(&pdf)
+            .ok()
+            .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes));
+        let _ = fs::remove_dir_all(&scratch);
+        let log = result?;
+        return Ok(TexPreviewResult {
+            success: pdf_b64.is_some(),
+            log: tail(&log),
+            fallback: pdf_b64.is_some(),
+            pdf_b64,
+        });
+    }
 
     let wrapper = preview_document(&preamble, &body);
     let fmt = ensure_preview_fmt(&cwd, &eng, &wrapper, &scratch, &tex, &out_arg);
@@ -2541,7 +2928,56 @@ Count:2
         assert!(!args.iter().any(|a| flag_enables_shell_escape(a)));
         // …and turns it off outright, whatever the distribution's default (#867).
         assert!(args.iter().any(|a| a == NO_SHELL_ESCAPE), "{args:?}");
-        assert!(preview_env().iter().any(|(k, v)| k == "openout_any" && v == "p"));
+        let env = preview_env(Path::new("/scratch"));
+        assert!(env.iter().any(|(k, v)| k == "openout_any" && v == "p"));
+        // Gap 36: no reads by absolute path or `../` either, and the one
+        // absolute place it may read is its own scratch dir.
+        assert!(env.iter().any(|(k, v)| k == "openin_any" && v == "p"));
+        assert!(env.iter().any(|(k, v)| k == "TEXMFOUTPUT" && v == "/scratch"));
+        assert_eq!(OPENOUT_PARANOID, ("openout_any", "p"));
+    }
+
+    #[test]
+    fn a_hover_preview_never_runs_luatex() {
+        let all: Vec<String> = ENGINES.iter().map(|e| e.to_string()).collect();
+        let only = |names: &[&str]| -> Vec<String> { names.iter().map(|e| e.to_string()).collect() };
+        let never = || -> Option<EngineHint> { panic!("hint read although the request serves") };
+        let pre = |e: &str| Ok(PreviewPlan::Preamble(e.to_string()));
+        let body = |e: &str| Ok(PreviewPlan::BodyOnly(e.to_string()));
+        // An explicit non-Lua engine is used as is, without reading the preamble.
+        assert_eq!(preview_engine(Some("xelatex".into()), never, &all), pre("xelatex"));
+        assert_eq!(preview_engine(Some("pdflatex".into()), never, &all), pre("pdflatex"));
+        // A preamble that asks for LuaTeX previews the body alone under
+        // pdfLaTeX, whatever was requested; without pdfLaTeX another non-Lua
+        // engine.
+        for req in [None, Some("lualatex".to_string())] {
+            for hint in [EngineHint::Lua, EngineHint::Named("lualatex")] {
+                assert_eq!(preview_engine(req.clone(), || Some(hint), &all), body("pdflatex"));
+                assert_eq!(
+                    preview_engine(req.clone(), || Some(hint), &only(&["xelatex", "lualatex"])),
+                    body("xelatex")
+                );
+                assert_eq!(
+                    preview_engine(req.clone(), || Some(hint), &only(&["lualatex"])),
+                    Err(PREVIEW_NO_LUATEX.to_string())
+                );
+            }
+        }
+        // LuaLaTeX chosen in the engine menu, or a fontspec preamble that a
+        // Build would give LuaLaTeX: XeLaTeX where installed, else another one.
+        assert_eq!(preview_engine(Some("lualatex".into()), || None, &all), pre("pdflatex"));
+        assert_eq!(preview_engine(None, || Some(EngineHint::Unicode), &all), pre("xelatex"));
+        assert_eq!(preview_engine(Some("lualatex".into()), || Some(EngineHint::Unicode), &all), pre("xelatex"));
+        assert_eq!(
+            preview_engine(None, || Some(EngineHint::Unicode), &only(&["pdflatex", "lualatex"])),
+            pre("pdflatex")
+        );
+        // Only LuaLaTeX installed: no preview at all; nothing installed: as before.
+        assert_eq!(preview_engine(None, || None, &only(&["lualatex"])), Err(PREVIEW_NO_LUATEX.to_string()));
+        assert_eq!(preview_engine(None, || None, &[]), Err("no TeX engine found on PATH".to_string()));
+        assert_eq!(preview_engine(None, || Some(EngineHint::Lua), &[]), Err("no TeX engine found on PATH".to_string()));
+        // A Build still follows the document to LuaLaTeX.
+        assert_eq!(engine_for_hint(Some(EngineHint::Lua), &all).as_deref(), Some("lualatex"));
     }
 
     /// #867 end to end, where a TeX engine is installed: `shell_escape=t` in the
@@ -2551,7 +2987,8 @@ Count:2
     #[cfg(unix)]
     #[test]
     fn a_hover_preview_runs_no_shell_command_even_where_the_default_allows_it() {
-        let Some(eng) = ["pdflatex", "lualatex", "xelatex"]
+        // Previews never run LuaTeX ({@link preview_engine}).
+        let Some(eng) = ["pdflatex", "xelatex"]
             .into_iter()
             .find(|e| crate::paths::resolve_executable(e).is_some())
         else {
@@ -2575,8 +3012,8 @@ Count:2
             ),
         )
         .unwrap();
-        let args = engine_args(&tex.to_string_lossy(), Some(&out.to_string_lossy()), &[]);
-        let mut envs = preview_env();
+        let args = engine_args(&preview_main_file(&tex), Some(&out.to_string_lossy()), &[]);
+        let mut envs = preview_env(&out);
         envs.push(("shell_escape".to_string(), "t".to_string()));
         // Without the flag the plant must fire, or this test proves nothing.
         let bare: Vec<&String> = args.iter().filter(|a| *a != NO_SHELL_ESCAPE).collect();
@@ -2603,8 +3040,111 @@ Count:2
             ),
         )
         .unwrap();
-        let _ = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env());
+        let _ = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env(&out));
         assert!(!escaped.exists(), "\\openout wrote outside the preview's output dir");
+    }
+
+    /// Gap 36, where pdfLaTeX or XeLaTeX is installed: under the preview's
+    /// environment an `\input` of an absolute path outside the scratch dir or
+    /// of `../` is refused, while one relative to the document's folder still
+    /// resolves and the wrapper itself (named by file name, found in the
+    /// scratch `-output-directory`) opens.
+    #[cfg(unix)]
+    #[test]
+    fn a_hover_preview_reads_only_below_the_document() {
+        let Some(eng) = ["pdflatex", "xelatex"]
+            .into_iter()
+            .find(|e| crate::paths::resolve_executable(e).is_some())
+        else {
+            eprintln!("no TeX engine on PATH — skipping");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let doc = tmp.path().canonicalize().unwrap().join("doc");
+        let out = tmp.path().canonicalize().unwrap().join("out");
+        fs::create_dir_all(&doc).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let tex = out.join("p.tex");
+        let args = engine_args(&preview_main_file(&tex), Some(&out.to_string_lossy()), &[]);
+        let secret = tmp.path().canonicalize().unwrap().join("secret.tex");
+        fs::write(&secret, "\\def\\secretmacro{SECRETMARKER}").unwrap();
+        fs::write(doc.join("macros.tex"), "\\def\\localmacro{ok}").unwrap();
+        // A same-named file in the document's folder never stands in for the
+        // wrapper: the engine looks in `-output-directory` first. (`tmp` sits
+        // below a dot directory, `/tmp/.tmpXXXX`, as the state dir does on
+        // Linux — the reason the wrapper goes by name.)
+        fs::write(doc.join("p.tex"), "\\errmessage{decoy}\\end\n").unwrap();
+        let body = |input: &str| {
+            format!("\\documentclass{{article}}\\input{{macros}}\\input{{{input}}}\n\\begin{{document}}\\localmacro\\end{{document}}\n")
+        };
+        let _ = fs::remove_file(out.join("p.pdf"));
+        fs::write(&tex, body(&secret.to_string_lossy())).unwrap();
+        let run = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env(&out)).expect("engine ran");
+        assert!(!out.join("p.pdf").exists(), "an absolute \\input was read: {}", run.text);
+        assert!(run.text.contains("secret.tex"), "refused for another reason: {}", run.text);
+        assert!(!run.text.contains("SECRETMARKER"), "{}", run.text);
+        // The same read without the paranoid input mode goes through, so the
+        // refusal above is the mode's doing.
+        let open: Vec<(String, String)> = vec![("openin_any".to_string(), "a".to_string())];
+        let run = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &open).expect("engine ran");
+        assert!(out.join("p.pdf").is_file(), "control run failed: {}", run.text);
+        let _ = fs::remove_file(out.join("p.pdf"));
+        // A relative `../` is refused too.
+        fs::write(&tex, body("../secret")).unwrap();
+        let _ = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env(&out));
+        assert!(!out.join("p.pdf").exists(), "a ../ \\input was read");
+        // And a preamble that reads only below the document's folder typesets.
+        fs::write(&tex, "\\documentclass{article}\\usepackage{amsmath}\\input{macros}\n\\begin{document}\\localmacro\\end{document}\n").unwrap();
+        let run = run_in_within_env(&doc, eng, &args, PREVIEW_TIMEOUT, &preview_env(&out)).expect("engine ran");
+        assert!(out.join("p.pdf").is_file(), "a relative \\input must still work: {}", run.text);
+    }
+
+    /// Gap 36, where LuaLaTeX is installed: a Build's `io.open` for writing an
+    /// absolute path or `../` is refused even when the environment (standing in
+    /// for a user's `texmf.cnf`) says `openout_any=a`, because every engine run
+    /// sets {@link OPENOUT_PARANOID} after the inherited environment.
+    #[cfg(unix)]
+    #[test]
+    fn a_build_engine_run_confines_luatex_writes() {
+        if crate::paths::resolve_executable("lualatex").is_none() {
+            eprintln!("lualatex not on PATH — skipping");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let doc = root.join("doc");
+        let out = root.join("out");
+        fs::create_dir_all(&doc).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let abs = root.join("abs.txt");
+        fs::write(
+            doc.join("t.tex"),
+            format!(
+                "\\documentclass{{article}}\\begin{{document}}\\directlua{{\n\
+                 local f = io.open(\"{}\", \"w\") if f then f:write(\"x\") f:close() end\n\
+                 local g = io.open(\"../parent.txt\", \"w\") if g then g:write(\"x\") g:close() end\n\
+                 }}x\\end{{document}}\n",
+                abs.display()
+            ),
+        )
+        .unwrap();
+        let args = engine_args("t.tex", Some(&out.to_string_lossy()), &[]);
+        // The control: with `a` actually reaching the engine the writes land.
+        let mut cmd = crate::paths::command_no_window("lualatex");
+        cmd.args(&args).current_dir(&doc).env("openout_any", "a");
+        let _ = cmd.output();
+        if !abs.exists() {
+            eprintln!("lualatex refuses the write even with openout_any=a — skipping");
+            return;
+        }
+        fs::remove_file(&abs).unwrap();
+        let _ = fs::remove_file(root.join("parent.txt"));
+        // The same run through `run_in_within_env`: its own `openout_any=p`
+        // replaces any inherited value (`Command::env`), as it would a user's.
+        let run = run_in_within_env(&doc, "lualatex", &args, RUN_TIMEOUT, &[]).expect("engine ran");
+        assert!(out.join("t.pdf").is_file(), "the build itself must still typeset: {}", run.text);
+        assert!(!abs.exists(), "a Build's io.open wrote an absolute path");
+        assert!(!root.join("parent.txt").exists(), "a Build's io.open wrote ../");
     }
 
     #[test]
@@ -2896,6 +3436,76 @@ Count:2
         assert_eq!(latexmk_flag(Some("xelatex")), "-pdfxe");
         assert_eq!(latexmk_flag(Some("pdflatex")), "-pdf");
         assert_eq!(latexmk_flag(None), "-pdf");
+    }
+
+    fn hint(src: &str) -> Option<EngineHint> {
+        detect_engine_hint(src, Path::new("/nonexistent-tex-dir"))
+    }
+
+    #[test]
+    fn engine_hint_reads_magic_comments() {
+        assert_eq!(hint("% !TEX program = lualatex\n\\documentclass{article}"), Some(EngineHint::Named("lualatex")));
+        assert_eq!(hint("%!TeX TS-program = xelatex\n"), Some(EngineHint::Named("xelatex")));
+        assert_eq!(hint("% !TEX TS-program: pdflatex\n\\usepackage{fontspec}"), Some(EngineHint::Named("pdflatex")));
+        assert_eq!(hint("% arara: xelatex: { shell: false }\n"), Some(EngineHint::Named("xelatex")));
+        // `!TEX root` is the build root, not an engine; an unknown program is no hint.
+        assert_eq!(hint("% !TEX root = main.tex\n"), None);
+        assert_eq!(hint("% !TEX program = context\n"), None);
+    }
+
+    #[test]
+    fn engine_hint_reads_packages_and_primitives() {
+        let doc = |pre: &str| format!("\\documentclass{{article}}\n{pre}\n\\begin{{document}}x\\end{{document}}\n");
+        assert_eq!(hint(&doc("\\usepackage{amsmath}")), None);
+        assert_eq!(hint(&doc("\\usepackage{fontspec}\n\\setmainfont{Libertinus Serif}")), Some(EngineHint::Unicode));
+        assert_eq!(hint(&doc("\\usepackage[math-style=ISO]{unicode-math}")), Some(EngineHint::Unicode));
+        assert_eq!(hint(&doc("\\setmainfont{TeX Gyre Pagella}")), Some(EngineHint::Unicode));
+        assert_eq!(hint(&doc("\\usepackage{amsmath, luacode}")), Some(EngineHint::Lua));
+        assert_eq!(hint(&doc("\\usepackage{fontspec}\n\\directlua{tex.print(1)}")), Some(EngineHint::Lua));
+        assert_eq!(hint("\\documentclass{ltjsarticle}\n"), Some(EngineHint::Lua));
+        assert_eq!(hint(&doc("\\usepackage{xeCJK}\n\\usepackage{fontspec}")), Some(EngineHint::Xe));
+        assert_eq!(hint(&doc("\\XeTeXinputencoding \"utf8\"")), Some(EngineHint::Xe));
+        // metalogo's `\XeTeX` logo and the engine-agnostic luatex85 shim ask for nothing.
+        assert_eq!(hint(&doc("\\usepackage{metalogo}\\XeTeX{} and \\LuaTeX")), None);
+        assert_eq!(hint(&doc("\\usepackage{luatex85}")), None);
+        // A commented-out package is no request; an escaped percent is not a comment.
+        assert_eq!(hint(&doc("%\\usepackage{fontspec}\n50\\% \\usepackage{luacode}")), Some(EngineHint::Lua));
+        assert_eq!(hint(&doc("% \\usepackage{fontspec}")), None);
+    }
+
+    #[test]
+    fn engine_hint_follows_local_preamble_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("preamble.tex"), "\\usepackage{mystyle}\n").unwrap();
+        fs::write(tmp.path().join("mystyle.sty"), "\\RequirePackage{fontspec}\n").unwrap();
+        let main = "\\documentclass{article}\n\\input{preamble}\n\\begin{document}\\end{document}\n";
+        assert_eq!(detect_engine_hint(main, tmp.path()), Some(EngineHint::Unicode));
+    }
+
+    #[test]
+    fn engine_for_hint_picks_an_installed_engine() {
+        let all: Vec<String> = ENGINES.iter().map(|e| e.to_string()).collect();
+        let only = |e: &[&str]| e.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(engine_for_hint(None, &all), None);
+        assert_eq!(engine_for_hint(Some(EngineHint::Unicode), &all).as_deref(), Some("lualatex"));
+        assert_eq!(engine_for_hint(Some(EngineHint::Unicode), &only(&["pdflatex", "xelatex"])).as_deref(), Some("xelatex"));
+        assert_eq!(engine_for_hint(Some(EngineHint::Xe), &all).as_deref(), Some("xelatex"));
+        // An engine-only document never lands on the other Unicode engine.
+        assert_eq!(engine_for_hint(Some(EngineHint::Xe), &only(&["pdflatex", "lualatex"])), None);
+        assert_eq!(engine_for_hint(Some(EngineHint::Named("lualatex")), &only(&["pdflatex"])), None);
+    }
+
+    #[test]
+    fn auto_engine_falls_back_to_the_first_installed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plain = tmp.path().join("plain.tex");
+        let lua = tmp.path().join("lua.tex");
+        fs::write(&plain, "\\documentclass{article}\n").unwrap();
+        fs::write(&lua, "\\documentclass{article}\n\\usepackage{fontspec}\n").unwrap();
+        let installed: Vec<String> = ENGINES.iter().map(|e| e.to_string()).collect();
+        assert_eq!(auto_engine(&plain, &installed).as_deref(), Some("pdflatex"));
+        assert_eq!(auto_engine(&lua, &installed).as_deref(), Some("lualatex"));
+        assert_eq!(auto_engine(&lua, &[]), None);
     }
 
     #[test]

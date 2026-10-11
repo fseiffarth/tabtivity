@@ -13,8 +13,8 @@
 //! servers, skills) can only ever run in that project; what the user wants in
 //! every project comes from the Tabtivity-wide layer (`services::agent_global`),
 //! which no agent can write. Each home holds the
-//! agent's own config, transcripts, session stores and trust answers; logins
-//! are not kept here but hard-linked in from the per-CLI store
+//! agent's own config, transcripts, session stores and trust answers; a
+//! CLI's credential file is a copy the per-CLI store keeps in step
 //! (`services::agent_auth`), so a login made anywhere sticks everywhere.
 //! `~/.cache` of every home is a throwaway tmpfs on Linux.
 //!
@@ -70,6 +70,14 @@ pub fn scope_home(scope_id: Option<&str>) -> PathBuf {
 /// own home's key with [`LOCAL_MODEL_SUFFIX`].
 pub fn local_model_home_in(state_dir: &Path, scope_id: &str) -> PathBuf {
     homes_root_in(state_dir).join(format!("{}{LOCAL_MODEL_SUFFIX}", storage::project_key(scope_id)))
+}
+
+/// Whether `home` is a scope's local-model home ([`local_model_home_in`]):
+/// no scope's own key can end in [`LOCAL_MODEL_SUFFIX`].
+pub fn is_local_model_home(home: &Path) -> bool {
+    home.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(LOCAL_MODEL_SUFFIX))
 }
 
 /// The local-model home of a scope (`None` is the root console). A path only;

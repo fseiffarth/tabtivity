@@ -1,4 +1,5 @@
 import { NAMES } from "../../../src/lib/brand";
+import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { translate, useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
@@ -9,7 +10,7 @@ import { QuestionRows } from "../components/QuestionRows";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab, type MarkupSend, type MarkupTarget } from "../components/OutboxViewer";
-import type { AgentSignal } from "../markup/submitState";
+import { dialogLine, type AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
 import { OutboxPost } from "../components/OutboxPost";
 import { SentFilesIndex, sentFiles, type SentFile } from "../components/SentFilesIndex";
@@ -25,6 +26,7 @@ import {
   ApiError,
   api,
   attachDesktopImage,
+  clearOutbox,
   closeTab,
   deleteOutboxFile,
   getAgentStatus,
@@ -1106,6 +1108,10 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * Focus banner: its row, its folder trail (the layer's key) and its
    * folder's token (Reload lists it again). */
   const [askedFile, setAskedFile] = useState<{ file: OutboxFile; place: string; folder?: string } | null>(null);
+  /** The markup view tucked away behind the chat (its **Chat** button, while a
+   * round is with this tab): still mounted — layer, round pill, scroll — and
+   * brought back by the bar over the composer. Holds the file's name. */
+  const [markupAway, setMarkupAway] = useState<string | null>(null);
   /** The stored session behind an agent tab (`getTranscript`): `null` until
    * the first read answers. Focus reads from it whenever it is available and
    * the reader has not switched the view to the screen. */
@@ -2384,17 +2390,23 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     return () => window.clearInterval(timer);
   }, [tab.kind]);
   useEffect(() => {
-    if (!outboxOpen && !gallery && !inboxOpen) return;
-    // The viewer opens from the gallery, so Escape closes the top one first.
+    const viewerUp = outboxOpen !== null && markupAway === null;
+    if (!viewerUp && !gallery && !inboxOpen) return;
+    // The viewer opens from the gallery, so Escape closes the top one first;
+    // a tucked-away markup view is not on top.
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (outboxOpen) setOutboxOpen(null);
+      if (viewerUp) setOutboxOpen(null);
       else if (inboxOpen) setInboxOpen(null);
       else setGallery(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [outboxOpen, gallery, inboxOpen]);
+  }, [outboxOpen, gallery, inboxOpen, markupAway]);
+  // Another file opened, or the viewer closed: nothing stays tucked away.
+  useEffect(() => {
+    setMarkupAway(null);
+  }, [outboxOpen, askedFile, filesOpen]);
   /** A picture, a text or a PDF opens full-screen here; in an agent tab the
    * viewer also carries **Mark up**. */
   const openOutbox = useCallback((file: OutboxFile) => setOutboxOpen(file), []);
@@ -2422,6 +2434,15 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       return left;
     });
     setOutboxOpen((open) => open?.name === file.name ? null : open);
+  }, [tab.id]);
+  /** The gallery's Delete all, through this tab's scope: the project's whole
+   * outbox goes (every tab's sends, as the gallery lists them all), to free
+   * the space, and the sheet closes over the empty list. */
+  const removeAllOutbox = useCallback(async () => {
+    await clearOutbox({ tab: tab.id });
+    setOutbox([]);
+    setGallery(false);
+    setOutboxOpen(null);
   }, [tab.id]);
   /** Chunks above the revealed window stay in memory but out of the DOM — the
    * lazy half of the earlier-output log. */
@@ -3410,7 +3431,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     setSwitching("");
     setSwitchFailed(value);
   };
-  const sheetUp = modelSheet || modeSheet || statusSheet || desktopSheet || gallery || outboxOpen !== null || inboxOpen !== null;
+  const sheetUp = modelSheet || modeSheet || statusSheet || desktopSheet || gallery
+    || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
     setFrozenLines(sheetUp ? linesRef.current : null);
   }, [sheetUp]);
@@ -3735,6 +3757,24 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * it (`Opus 4.5` → `Opus`), else the stored session's, else the tab's
    * published model; a tab with none keeps the generic "Agent". */
   const workingModel = (status?.model ?? transcriptModel ?? tab.agent_model)?.trim().split(/\s+/)[0];
+  /** The dialog's question line for the markup view's pill, while the CLI
+   * waits on one: shown there, answered here. */
+  const markupDialog = useMemo(
+    () => (liveQuestion ? dialogLine(questionAsk.map((line) => line.text)) ?? liveQuestion.title : undefined),
+    [liveQuestion, questionAsk],
+  );
+  /** Mark up's target with that model, for the round pill's "Opus is
+   * working…" — `markupTarget` is built before the model is read. */
+  const markupFor = useMemo(
+    () => markupTarget && {
+      ...markupTarget,
+      model: workingModel,
+      // The gallery the viewer may have opened from would cover the chat.
+      toChat: (name: string) => { setGallery(false); setMarkupAway(name); },
+      dialog: markupDialog,
+    },
+    [markupTarget, workingModel, markupDialog],
+  );
   /** The screen's lines as the reading view shows them: the revealed history,
    * the open chunk, then the live tail. */
   const screenStream = useMemo(
@@ -3979,7 +4019,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           </div>}
         </div>}
   </>;
-  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>{outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true">🖼</span><small>{outbox.length}</small></button>}<div className="terminal-view-switch" aria-label={t("mobile.focus.outputView")}><button className={view === "focus" ? "selected" : ""} aria-pressed={view === "focus"} aria-haspopup={chat ? "menu" : undefined} aria-expanded={chat ? focusMenu : undefined} onClick={() => {
+  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>{outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{outbox.length}</small></button>}<div className="terminal-view-switch" aria-label={t("mobile.focus.outputView")}><button className={view === "focus" ? "selected" : ""} aria-pressed={view === "focus"} aria-haspopup={chat ? "menu" : undefined} aria-expanded={chat ? focusMenu : undefined} onClick={() => {
       // An agent tab's Reader is a list once it is up: where it reads from.
       if (chat && view === "focus") setFocusMenu((open) => !open);
       else chooseView("focus");
@@ -4216,6 +4256,13 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
         {markupAskFile && <button className="primary" onClick={() => setOutboxOpen(markupAskFile)}>{t("mobile.markup.questions.bannerOpen")}</button>}
         {markupAskRow && <button className="primary" onClick={() => openAskedRow(markupAskRow)}>{t("mobile.markup.questions.bannerOpen")}</button>}
       </div>}
+      {markupAway !== null && <div className="sign-in-notice markup-away-notice" role="status">
+        <span>
+          {t("mobile.markup.awayBanner", { file: markupAway })}
+          {isUntested("mobile.markup.chatLink") && <> · <em>{t("mobile.focus.untested")}</em></>}
+        </span>
+        <button className="primary" onClick={() => setMarkupAway(null)}>{t("mobile.markup.awayBack")}</button>
+      </div>}
       {signInError && !signInSheet && <div className="inbox-upload error" role="alert"><strong>{t("mobile.signIn.open")}</strong><span>{signInError}</span><button onClick={() => setSignInError("")} aria-label={t("mobile.signIn.hide")}>✕</button></div>}
       {(tab.kind === "agent" || status?.branch || contextLeft || shownLimits.session || shownLimits.week) && <div className="session-facts">
         {/* An agent tab's model, mode and status lead the row as tappable facts:
@@ -4395,15 +4442,23 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     />}
     {/* The viewer covers the phone; the gallery stays chosen behind it, so
         closing the file lands back on the grid. */}
-    {gallery && !outboxOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onClose={() => setGallery(false)} />}
-    {outboxOpen && <OutboxViewer key={`${tab.id}/${outboxOpen.name}`} scope={outboxScope} file={outboxOpen} pictures={outboxPictures} onStep={setOutboxOpen} onClose={() => setOutboxOpen(null)} markup={markupTarget}
-      newTab={markupNewTab} />}
+    {gallery && (!outboxOpen || markupAway !== null) && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
+    {/* A markup view's Chat tucks its viewer away (`markupAway`) without
+        unmounting it; the host is always there, so the switch never remounts. */}
+    {outboxOpen && <div className={markupAway === null ? "markup-host" : "markup-host away"}>
+      <OutboxViewer key={`${tab.id}/${outboxOpen.name}`} scope={outboxScope} file={outboxOpen} pictures={outboxPictures} onStep={setOutboxOpen} onClose={() => setOutboxOpen(null)} markup={markupFor}
+        newTab={markupNewTab} />
+    </div>}
     {/* What the reader sent is only looked at: no Mark up, no stepping. */}
-    {inboxOpen && !outboxOpen && <OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} />}
-    {askedFile && askedScope && <OutboxViewer key={`asked/${askedFile.file.ref}`} scope={askedScope} file={askedFile.file} onClose={() => setAskedFile(null)}
-      markup={markupTarget && { ...markupTarget, place: askedFile.place, refresh: refreshAskedFile }} />}
-    {filesOpen && project && filesLabel !== null && <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles}
-      markup={markupTarget && { tabId: markupTarget.tabId, onSend: markupTarget.onSend, agent: markupTarget.agent }} showTab={markupNewTab?.show} />}
+    {inboxOpen && (!outboxOpen || markupAway !== null) && <OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} />}
+    {askedFile && askedScope && <div className={markupAway === null ? "markup-host" : "markup-host away"}>
+      <OutboxViewer key={`asked/${askedFile.file.ref}`} scope={askedScope} file={askedFile.file} onClose={() => setAskedFile(null)}
+        markup={markupFor && { ...markupFor, place: askedFile.place, folder: askedFile.folder, refresh: refreshAskedFile }} />
+    </div>}
+    {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}>
+      <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles}
+        markup={markupFor && { tabId: markupFor.tabId, onSend: markupFor.onSend, agent: markupFor.agent, model: markupFor.model, toChat: markupFor.toChat, dialog: markupFor.dialog }} showTab={markupNewTab?.show} />
+    </div>}
 
   </main>;
 }

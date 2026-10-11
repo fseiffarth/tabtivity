@@ -1333,14 +1333,20 @@
 }
 
 .tab.active {
-  /* No background tint, no lift, no size change — same melt as every tab. The
-     current tab is marked by the bottom border recoloured to its accent (its
-     kind colour via --tab-accent, falling back to the theme accent): a straight
-     line across the bottom edge, mirroring the active project pill's top line.
-     It is ALSO the only tab with a side 3D shadow, so it reads as a raised chip
-     lifted off the flat, shadowless neighbours. */
+  /* No lift, no size change — same melt as every tab. The current tab is
+     marked by the bottom border recoloured to its accent (its kind colour via
+     --tab-accent, falling back to the theme accent): a straight line across
+     the bottom edge, mirroring the active project pill's top line. A wash of
+     that colour rising from the line fills the tab, so the current one reads
+     at a glance among many; and it is the only tab with a side 3D shadow, a
+     raised chip lifted off the flat, shadowless neighbours. */
   color: var(--text-primary);
   border-bottom-color: var(--tab-accent, var(--subwindow-tab-active));
+  background-image: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--tab-accent, var(--subwindow-tab-active)) 24%, transparent),
+    color-mix(in srgb, var(--tab-accent, var(--subwindow-tab-active)) 8%, transparent)
+  );
   box-shadow: 2px 0 3px -2px rgba(0, 0, 0, 0.4), -2px 0 3px -2px rgba(0, 0, 0, 0.4);
 }
 
@@ -1355,7 +1361,7 @@
 }
 
 .tab:not(.active):not(:hover) .tab-label {
-  opacity: 0.78;
+  opacity: 0.7;
 }
 
 /* #56: inline tab rename. The label is swapped for a borderless input that

@@ -8,10 +8,10 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveTheme, useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
-import { useT } from "../../lib/i18n";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { cmdToKind, isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { isInterruptInput, lastPtyOutputAt, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteInput } from "../../lib/agents/promptCount";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
@@ -30,6 +30,8 @@ import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
+import { deliverDrop, insertIntoReader } from "../../lib/terminal/terminalDrop";
+import { isExternalFileDrag, parseDroppedFilePaths } from "../files/importDrop";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
@@ -38,13 +40,19 @@ import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
 import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startKeySelect, type KeySelectState } from "../../lib/terminal/keyboardSelect";
 import { findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
+import { openPathLink } from "../../lib/terminal/pathLinks";
+import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
+import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
+import { relativePathWithin } from "../../lib/paths";
+import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard } from "./TerminalSignInCard";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
-import { readerOffered } from "../../lib/agents/agentReader";
+import { readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
 import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../stores/agents/agentReader";
-import { useTabsStore } from "../../stores/tabs";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
 import { TerminalVersionCard } from "./TerminalVersionCard";
 import { UntestedTag } from "../common/UntestedTag";
@@ -355,6 +363,16 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   // Keyboard select (Ctrl+Shift+X) is on: shows its key legend over the pane.
   const [keySelecting, setKeySelecting] = useState(false);
 
+  // Path links (`lib/terminal/pathLinks`), read by the link provider through
+  // a ref: it lives in the spawn effect, which must not respawn on a settings
+  // or project change.
+  const pathLinkContext = usePathLinkContext(projectId, cwd);
+  const pathLinkContextRef = useRef(pathLinkContext);
+  pathLinkContextRef.current = pathLinkContext;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const [pathHover, setPathHover] = useState<PathLinkHover | null>(null);
+
   const focusedRef = useRef(focused);
   visibleRef.current = visible;
   focusedRef.current = focused;
@@ -458,6 +476,33 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
             leave: linkHover.leave,
           })),
         );
+      },
+    });
+    // A file path the program printed opens the file's tab, on the same click
+    // (after the double-click window) — no question first, since it only ever
+    // opens an in-app viewer of a file inside the tab's folder or project; a
+    // double-click copies it, like a URL.
+    const pathLinks = registerPathLinkProvider(term, () => pathLinkContextRef.current, {
+      activate: (event, entry, at) => {
+        if (event.detail > 1) return;
+        cancelLinkOpen();
+        setPathHover(null);
+        linkOpenTimer = setTimeout(() => {
+          linkOpenTimer = null;
+          const ctx = pathLinkContextRef.current;
+          const scope = splitPtyId(id)?.scope ?? ROOT_SCOPE;
+          openPathLink(entry, at, { scope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled, t: tRef.current });
+        }, LINK_OPEN_DELAY_MS);
+      },
+      hover: (event, entry, at, text) => {
+        hoveredLink = text;
+        const ctx = pathLinkContextRef.current;
+        const name = relativePathWithin(ctx.projectDir || cwd, entry.path) || entry.path;
+        setPathHover({ left: event.clientX, top: event.clientY - 4, name, line: at.line, isDir: entry.is_dir });
+      },
+      leave: () => {
+        hoveredLink = null;
+        setPathHover(null);
       },
     });
     // OSC 8 hyperlinks (a link whose text is not its URL) take the same path;
@@ -738,13 +783,17 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       }
     };
 
-    // Scheduler input is registered by the PTY-owning main-window view only.
-    // A detached view attaches to the same PTY but must never become a second
-    // delivery owner. Readiness waits for terminal-ready plus real TUI output and
-    // a short settle cushion, matching the initial-input gate below.
+    // Scheduler input is registered by the PTY-owning main-window view, and by
+    // a popout's view in the popout's own heap — that heap's registry serves
+    // only its Chat composer (the schedule hosts run in the main window), so
+    // it never becomes a second delivery owner. An attach-only mirror in the
+    // main window (root console, overlay column) registers nothing. Readiness
+    // waits for terminal-ready plus real TUI output and a short settle
+    // cushion, matching the initial-input gate below.
+    const takesPrompts = !attachOnly || isDetachedWindow();
     let settledOnce = false;
     const armScheduledReady = () => {
-      if (!scheduleTargetId || attachOnly || !terminalReadySeen.current || firstOutputAt.current === null) return;
+      if (!scheduleTargetId || !takesPrompts || !terminalReadySeen.current || firstOutputAt.current === null) return;
       if (scheduledSettleTimer.current) clearTimeout(scheduledSettleTimer.current);
       scheduledReady.current = false;
       // Every new output chunk restarts the cushion. This closes the short gap
@@ -796,7 +845,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       if (!settledOnce && scheduledInputReady()) settledOnce = true;
       return settledOnce;
     };
-    const unregisterScheduled = scheduleTargetId && !attachOnly
+    const unregisterScheduled = scheduleTargetId && takesPrompts
       ? registerScheduledAgentInput(scheduleTargetId, {
           ptyId: id,
           ready: scheduledInputReady,
@@ -1353,6 +1402,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
           // An older backend has no such command — open blank, as before.
         }
         if (cancelled) return;
+        // Attached, the program is already up: the main window spawned it
+        // and saw its terminal-ready, which this view never hears.
+        terminalReadySeen.current = true;
         const live = historyOutput
           .map((chunk) => outputAfterScrollback(chunk.data, chunk.range, snapshotEnd))
           .join("");
@@ -1396,7 +1448,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       // replay can't ride an old input stamp into a "working"/"done" glow.
       notePtySpawn(id);
       const spawn = async () => {
-        const spawned = await invoke<{ named?: boolean; interrupted?: boolean } | null>("pty_spawn", {
+        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; resting?: boolean } | null>("pty_spawn", {
           opts: { id, cmd, args, env, cwd, cols: term.cols, rows: term.rows, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession },
           sessionName: launchName,
         });
@@ -1406,6 +1458,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         // The tab's last run died mid-turn (a quit or crash): mark it
         // interrupted, as its resumed transcript will say.
         if (spawned?.interrupted === true) noteTurnCutOff(id);
+        // Its last run finished its turn: the agent is at its composer, and
+        // the conversation a resume or reattach repaints is not a question.
+        if (spawned?.resting === true) noteAgentResting(id);
       };
       try {
         await spawn();
@@ -1705,6 +1760,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       oscHandler.dispose();
       mouseModeGuard.dispose();
       wrappedLinks.dispose();
+      pathLinks.dispose();
+      setPathHover(null);
       cancelLinkOpen();
       signInWatch.dispose();
       if (signInScanTimer) clearTimeout(signInScanTimer);
@@ -1844,12 +1901,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
 
   // The Reader over an agent pane (`TerminalReaderView`): offered only for a
   // CLI whose transcript Tabtivity reads, and only in the tab's own pane.
+  // `usePaneTab`: a popout's tabs store holds no tabs.
   const readerIds = splitPtyId(id);
-  const readerTab = useTabsStore((state) => readerIds
-    ? state.tabsByScope[readerIds.scope]?.find((entry) => entry.key === readerIds.key)
-    : undefined);
-  const readerAvailable = readerOffered(readerTab) && !attachOnly;
-  const readerAgent = readerTab?.cmd ?? cmd;
+  const readerTab = usePaneTab(readerIds?.scope, readerIds?.key);
+  // A popout's pane is that tab's own pane in its window; the main window's
+  // attach-only mirrors of a tab shown elsewhere are not.
+  const readerAvailable = readerOffered(readerTab) && (!attachOnly || isDetachedWindow());
+  const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerOn = useReaderOpen(readerAgent, readerAvailable);
   const changesOn = useReaderChangesOpen(readerAgent);
   /** The Changes panel over the terminal itself while the Reader is off —
@@ -1874,12 +1932,67 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
 
   // The spawn effect's own reading of the tab kind (see there).
   const paneKind: TabKind = declaredKind ?? (env[envName("LOCAL_MODEL")] || env.VIBE_ACTIVE_MODEL ? "local_agent" : cmdToKind(cmd));
+  const agentPane = paneKind === "agent" || paneKind === "local_agent";
+
+  // Files dragged in from the OS file manager (`lib/terminal/terminalDrop`):
+  // an agent gets them through its folder's inbox as `@` references, a shell
+  // their quoted paths — into the Reader's composer while it is up, else typed
+  // into the terminal. Native listeners on the pane, so a drop onto the
+  // composer (a portal into it) is caught too; a drag that carries no file path
+  // (text dragged into the composer) keeps its default.
+  const [dropActive, setDropActive] = useState(false);
+  const readerOnRef = useRef(readerOn);
+  readerOnRef.current = readerOn;
+  const dropTRef = useRef(t);
+  dropTRef.current = t;
+  useEffect(() => {
+    const pane = containerRef.current;
+    if (!pane) return;
+    const toast = (key: TranslationKey) => useProjectsStore.setState({ switchToast: dropTRef.current(key) });
+    const onDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer || !isExternalFileDrag(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      setDropActive(true);
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!pane.contains(e.relatedTarget as Node | null)) setDropActive(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      setDropActive(false);
+      if (!e.dataTransfer) return;
+      const paths = parseDroppedFilePaths(e.dataTransfer);
+      if (paths.length === 0) {
+        if (Array.from(e.dataTransfer.types ?? []).includes("Files")) {
+          e.preventDefault();
+          toast("terminal.drop.noPath");
+        }
+        return;
+      }
+      e.preventDefault();
+      void deliverDrop(id, paths, agentPane).then(({ text, error }) => {
+        if (text && !(readerOnRef.current && insertIntoReader(id, text))) {
+          termRef.current?.paste(text);
+          termRef.current?.focus();
+        }
+        if (error) toast(error);
+      });
+    };
+    pane.addEventListener("dragover", onDragOver);
+    pane.addEventListener("dragleave", onDragLeave);
+    pane.addEventListener("drop", onDrop);
+    return () => {
+      pane.removeEventListener("dragover", onDragOver);
+      pane.removeEventListener("dragleave", onDragLeave);
+      pane.removeEventListener("drop", onDrop);
+    };
+  }, [id, agentPane]);
   const splitId = splitPtyId(id);
   return (
     <>
     <div
       ref={containerRef}
-      className={terminalChanges ? "terminal-pane-with-changes" : undefined}
+      className={[terminalChanges && "terminal-pane-with-changes", dropActive && "terminal-drop-active"].filter(Boolean).join(" ") || undefined}
       style={{
         ...(terminalChanges ? changesWidthStyle(changesWidth) : null),
         flex: 1,
@@ -1929,6 +2042,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         subagentTitle={undefined}
         onClose={() => useAgentReaderStore.getState().setChanges(readerAgent, false)}
       />,
+      host,
+    )}
+    {dropActive && host && createPortal(
+      <div className="terminal-drop-banner">
+        {t(agentPane ? "terminal.drop.hintAgent" : "terminal.drop.hintShell")} <UntestedTag id="terminal.drop.hint" />
+      </div>,
       host,
     )}
     {readerOn && splitId && host && (
@@ -1989,6 +2108,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       </div>,
       host,
     )}
+    <PathLinkHint hover={visible ? pathHover : null} />
     {dialogs}
     </>
   );

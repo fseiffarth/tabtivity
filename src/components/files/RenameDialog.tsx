@@ -1,4 +1,5 @@
 import { useT } from "../../lib/i18n";
+import { basename, dirname } from "../../lib/paths";
 import { UntestedTag } from "../common/UntestedTag";
 import { TextPromptDialog } from "../common/PromptDialogs";
 
@@ -76,7 +77,5 @@ export function RenameDialog({
 /** The containing folder's display name for `folder`, from an entry's absolute
  *  path — the project root falls back to a phrase rather than an empty string. */
 export function containingFolderLabel(absPath: string, rootLabel: string): string {
-  const parent = absPath.slice(0, absPath.lastIndexOf("/"));
-  const base = parent.slice(parent.lastIndexOf("/") + 1);
-  return base || rootLabel;
+  return basename(dirname(absPath)) || rootLabel;
 }

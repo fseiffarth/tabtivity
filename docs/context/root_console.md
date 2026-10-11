@@ -308,7 +308,9 @@ so one call may emit several rows. Rows whose only change is `column`/`rank`
 carry `local: true` and are merged without a CalDAV push, which is what a drag
 on the board does too — no server stores those fields. A delete is permanent
 and its tool description says so; the row rides along so the CalDAV copy can
-still be addressed.
+still be addressed. `todo_add`/`todo_update` take every field the card dialog
+edits (calendar, progress below 100, checklist included); a `calendar` change
+of a synced card is the event move — old copy deleted, address-free upsert.
 
 **The sweeps answer for every project at once.** `projects_git_status`,
 `sync_status`, `time_summary`, `usage_recap` and `boxes_list` are the questions
