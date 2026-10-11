@@ -145,6 +145,7 @@ import {
   type DictationProgress,
 } from "../voiceInput";
 import { startDictation, type DictationSession } from "../voiceSession";
+import { usePenWriting } from "../penWriting";
 import { speak, speechOutputSupported, spokenText, stopSpeaking, unlockSpeech } from "../speechOutput";
 
 /** A line the dictation strip shows: a key, not a sentence, so switching the
@@ -815,6 +816,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   const wideHint = useRef<HTMLDivElement>(null);
   const readableHost = useRef<HTMLElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
+  /** A pen writes here: the composer opens a few lines tall, so the system's
+   * handwriting-to-text (iPad Scribble) has room to write in. */
+  const penWriting = usePenWriting();
   /** Re-reads the emulated screen on demand — used when Focus is opened, so the
    * reading view is current instead of waiting for the next output byte. */
   const refreshReadable = useRef<() => void>(() => {});
@@ -4280,7 +4284,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
         {shownLimits.week && <span className={`fact-limit${shownLimits.week.percent >= 90 ? " high" : ""}`} title={shownLimits.week.resets ? resetText(shownLimits.week.resets, limitTime, readTime) : undefined}>{t("mobile.facts.week", { percent: Math.round(100 - shownLimits.week.percent) })}{weekReset && <> · {t("mobile.facts.resetIn", { time: weekReset })}</>}</span>}
         {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
       </div>}
-      <div className="prompt-composer">
+      <div className={`prompt-composer${penWriting ? " pen-writing" : ""}`}>
         {slashMenu.length > 0 && <div className="slash-menu" role="group" aria-label={t("mobile.slash.title")}>
           <div className="slash-menu-head">{t("mobile.slash.title")} {isUntested("mobile.composer.slash") && <em>{t("mobile.focus.untested")}</em>}</div>
           {/* Pointer-down is held back so a tap does not take the focus off
@@ -4303,6 +4307,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
             event.preventDefault();
             submitDraft();
           }} />
+          {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
           {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}

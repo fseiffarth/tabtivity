@@ -1059,6 +1059,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .prompt-composer:focus-within { border-color:#8c7df4; box-shadow:0 0 0 2px rgba(120,104,217,.4),0 6px 20px rgba(0,0,0,.18); }
 .prompt-composer textarea { width:100%; min-height:42px; max-height:min(200px,32vh); resize:none; border:0; padding:8px 0; appearance:none; -webkit-appearance:none; background-color:#171a24 !important; color:#fff !important; -webkit-text-fill-color:#fff; caret-color:#fff; line-height:1.35; }
 .prompt-composer textarea:focus { outline:0; }
+/* A pen writes here (`penWriting.ts`): about four lines to handwrite in, as
+   the question box gives it; a longer draft still grows to the max-height. */
+.prompt-composer.pen-writing textarea { min-height:calc(5.4em + 16px); }
 .prompt-composer textarea:disabled { opacity:1; color:#9fa4b6 !important; -webkit-text-fill-color:#9fa4b6; }
 .composer-bar { display:flex; align-items:center; gap:6px; }
 .composer-bar svg,.composer-dictate svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
