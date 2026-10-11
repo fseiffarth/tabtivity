@@ -370,6 +370,8 @@ async fn pair(State(gw): State<Shared>, Extension(source): Extension<Source>, he
 /// `challenge` and `session`: routed by the device's owner. A device id no
 /// account owns is a stranger's request: counted by source and in the shared
 /// stranger window, never against a paired device's budget.
+// A refusal is the answer itself; boxing it would only move the size around.
+#[allow(clippy::result_large_err)]
 async fn by_device(gw: &Gateway, source: &Source, path: &str, headers: &HeaderMap, body: &Bytes) -> Result<(Account, String, Request), Response> {
     if !exact_origin(gw, headers) {
         return Err(api_error(StatusCode::FORBIDDEN, "invalid_origin"));

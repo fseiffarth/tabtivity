@@ -89,7 +89,7 @@ impl Acl {
             return Err("unknown ACL version".into());
         }
         let mut acl = Acl::default();
-        for chunk in bytes[4..].chunks_exact(8) {
+        for chunk in bytes[4..].as_chunks::<8>().0 {
             let tag = u16::from_le_bytes([chunk[0], chunk[1]]);
             let perm = u16::from_le_bytes([chunk[2], chunk[3]]) & 7;
             let id = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
