@@ -2640,12 +2640,29 @@ fn local_models_response(
     }
 }
 
-/// The phone's Local models are closed on a server daemon: the server's one
-/// shared Ollama is the administrator's to load, start and stop (hosted plan
-/// §3.3), and there is no window to answer the request — the phone leaves
-/// the section out, as for the switch turned off.
-fn local_models_closed(state: &HostState) -> bool {
-    state.web.on_server() || !local_models::local_models_open(&state.config.state_dir)
+/// Whether the phone's Local models are closed to this request: the switch is
+/// off, or — on a server daemon — the phone's account is not the
+/// administrator's, whose shared Ollama it is (hosted plan §3.3; the role is
+/// the gateway's header, which only the gateway can send). Closed, the phone
+/// leaves the section out.
+fn local_models_closed(state: &HostState, headers: &HeaderMap) -> bool {
+    let not_admin = state.web.on_server()
+        && crate::services::server::gateway_role_in(headers) != crate::services::core_dispatch::Role::Admin;
+    not_admin || !local_models::local_models_open(&state.config.state_dir)
+}
+
+/// A Local models request answered: by the window on a desktop, by this
+/// process on a server daemon, which has none (`local_models::answer_here`).
+async fn local_models_call(state: &HostState, request: DesktopRequest) -> Result<DesktopResponse, String> {
+    if state.web.on_server() {
+        let action = match request {
+            DesktopRequest::LocalModelMutate { action, .. } => Some(action),
+            _ => None,
+        };
+        return Ok(local_models::answer_here(state.web.ctx.clone(), &state.config.state_dir, action).await);
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    admin::desktop_call(&desktop_socket, &request).await
 }
 
 /// `GET /api/v1/local-models` — the desktop's installed Ollama models, their
@@ -2655,15 +2672,11 @@ async fn local_models_list(State(state): State<HostState>, headers: HeaderMap) -
     if let Err(error) = authenticate(&headers, &state) {
         return error;
     }
-    if local_models_closed(&state) {
+    if local_models_closed(&state, &headers) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
-    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    local_models_response(
-        admin::desktop_call(&desktop_socket, &DesktopRequest::LocalModels { request_id }).await,
-        StatusCode::OK,
-    )
+    local_models_response(local_models_call(&state, DesktopRequest::LocalModels { request_id }).await, StatusCode::OK)
 }
 
 /// `POST /api/v1/local-models` `{ action: load | unload | start, model? }`.
@@ -2679,7 +2692,7 @@ async fn local_models_mutate(
     if let Err(error) = mutation_guard(&headers, &state) {
         return error;
     }
-    if local_models_closed(&state) {
+    if local_models_closed(&state, &headers) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
     let Ok(body) = serde_json::from_slice::<serde_json::Value>(&body) else {
@@ -2693,12 +2706,8 @@ async fn local_models_mutate(
         LocalModelAction::Unload { .. } => StatusCode::OK,
         LocalModelAction::Load { .. } | LocalModelAction::Start => StatusCode::ACCEPTED,
     };
-    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    local_models_response(
-        admin::desktop_call(&desktop_socket, &DesktopRequest::LocalModelMutate { request_id, action }).await,
-        ok,
-    )
+    local_models_response(local_models_call(&state, DesktopRequest::LocalModelMutate { request_id, action }).await, ok)
 }
 
 /// Mail stays behind the live desktop for the same reason the board does: the
@@ -10292,10 +10301,21 @@ mod tests {
         let dismiss = DesktopRequest::MarkupDismiss { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), ask_id: ask };
         assert!(matches!(markup_call(&state, dismiss, &tab).await, Ok(DesktopResponse::Seen)), "dismissing a closed ask is idempotent");
 
-        // The phone's Local models are closed on a server (§3.3).
+        // The phone's Local models on a server: the administrator's phone
+        // only (§3.3), by the gateway's role header.
         std::fs::write(state.config.state_dir.join("settings.json"), json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true } }).to_string()).unwrap();
-        assert!(!local_models_closed(&host.state), "a desktop with the switch on");
-        assert!(local_models_closed(&state), "the same host behind the gateway");
+        let role = |role: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(role) = role {
+                headers.insert(crate::services::server::ROLE_HEADER, role.parse().unwrap());
+            }
+            headers
+        };
+        assert!(!local_models_closed(&host.state, &role(None)), "a desktop with the switch on");
+        assert!(!local_models_closed(&host.state, &role(Some("user"))), "a desktop has no roles");
+        assert!(local_models_closed(&state, &role(None)), "behind the gateway, no role is a user");
+        assert!(local_models_closed(&state, &role(Some("user"))));
+        assert!(!local_models_closed(&state, &role(Some("admin"))), "the administrator's phone");
 
         // A tab with no schedule target has no asks to read.
         tab.schedule_target_id = None;

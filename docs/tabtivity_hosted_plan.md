@@ -1205,10 +1205,12 @@ requests a window answers that `develop` added after this plan — the markup
 questions (`markup_ask`, its answer and dismiss) and the Local models
 sheet — are answered on a server as follows. Markup: the daemon serves the
 markup MCP lane on its own listener and answers the phone from the same
-asks (`host.rs` `markup_here`; `context/markup_mcp.md`). Local models:
-closed (`local_models_disabled`, the section is left out) — the shared
-Ollama is the administrator's (§3.3), whose `admin` commands run from the
-browser client, not the phone. Agent MCP tools (#2391): the daemon's own
+asks (`host.rs` `markup_here`; `context/markup_mcp.md`). Local models
+(#2392): the administrator's phone only — the shared Ollama is theirs
+(§3.3) — answered by the daemon itself (`local_models::answer_here`, the
+window bridge ported: list, load an installed model, unload, start); any
+other account's phone gets `local_models_disabled` and leaves the section
+out. The role is the gateway's header. Agent MCP tools (#2391): the daemon's own
 listener serves every lane the window's does — root, local-model, reader,
 markup, schedule, push, help — and the browser client holds their controls
 (review, sessions, imports, push cards; all `core`).

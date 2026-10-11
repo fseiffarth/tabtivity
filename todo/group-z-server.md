@@ -973,17 +973,15 @@ the desktop groundwork the hosted plan's P1 builds on.*
     phone's markup routes are answered from the daemon's own asks
     (`host.rs` `markup_here`: list with ticks, answer held for the tab as a
     no-window phone prompt and reopened when the hold fails, dismiss). A
-    desktop's Mobile host still never serves it. On a server the phone's
-    Local models routes are closed (`local_models_disabled`): the shared
-    Ollama is the administrator's (plan §3.3). Rationale:
+    desktop's Mobile host still never serves it. (The phone's Local models
+    on a server: #2392.) Rationale:
     `docs/context/markup_mcp.md`.
     - [ ] 🖐️ Manual test — on a server, one account with a browser and a
       phone: open a project Claude tab from the browser, mark up a PDF and
       Submit with "Ask always" — the question card shows in the browser's
       markup view and on the phone; answer on the phone → the prompt is
       typed into the tab and the browser's card closes; the agent's
-      `markup_done` ticks show on both; the phone's start page shows no
-      Local models section.
+      `markup_done` ticks show on both.
 
 2391. **Every agent MCP lane on a server.** ✅ **Built** (2026-10-11, never
     on a server; user asked "also give the server the mcp tools"). A server
@@ -1006,3 +1004,23 @@ the desktop groundwork the hosted plan's P1 builds on.*
       to draft a mail → the drafts reach the review strip, Apply writes them;
       revoke the session from the rights badge → its next call is refused.
       A project Claude tab still lists schedule, git, help and markup.
+
+2392. **Phone Local models on a server: the administrator's phone.** ✅
+    **Built** (2026-10-11, never on a server; user: "shouldn't the admin
+    also have a phone access"). With no window to answer the phone's Local
+    models requests, the daemon answers them itself
+    (`mobile_control::local_models::answer_here`, `lib/mobileLocalModels.ts`
+    ported: list with resident/loading state and the account's tab model,
+    load an installed model through `load_installed_ollama_model` — never a
+    download — unload, start on a task that outlives the answer). Only for a
+    phone whose gateway role is `admin`; every other account's phone gets
+    `403 local_models_disabled` and leaves the section out (plan §3.3: the
+    shared Ollama is the admin's). The host switch still applies. Start runs
+    `systemctl --no-ask-password start ollama` as the admin's own uid, which
+    a server without a polkit rule refuses: the phone then shows the start
+    failed.
+    - [ ] 🖐️ Manual test — on a server with an admin and a user account,
+      each with a paired phone: the admin's start page shows Local models
+      with the shared Ollama's installed models; Load one → it shows
+      loading, then loaded, also in the admin's browser client; Unload
+      → idle. The user's phone shows no Local models section.

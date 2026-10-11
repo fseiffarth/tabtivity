@@ -28,13 +28,17 @@ Read this first; keep it current when a decision or an open point changes.
   serves the markup MCP lane itself (it has no window), so a server user's
   agents get `markup_ask`/`markup_done` and the browser client and phone
   show their cards.
+- **Phone Local models on a server: the administrator's phone only
+  (2026-10-11, #2392).** The daemon answers the list, Load, Unload and
+  Start itself (no window); every other account's phone gets
+  `local_models_disabled` and leaves the section out — the shared Ollama is
+  the admin's (§3.3). With markup, the two phone requests `develop` added
+  after the branch base are now answered on a server.
 - **Every agent MCP lane on a server (2026-10-11, #2391).** The daemon's
   listener serves the root lane (the root console's mail, calendar, to-do
   and ICS-import tools, the staged-write review, the overlay-docked agent),
   local-model and reader lanes too, with their controls and events in the
-  browser client — everything the window's listener serves. The phone's Local models are closed on a server (the
-  shared Ollama is the admin's) — the two phone requests `develop` added
-  after the branch base, both now answered.
+  browser client — everything the window's listener serves.
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
 
@@ -198,7 +202,8 @@ Each step's exact clicks are in its `hosted_handoff.md` section.
 6. The final fix round's 15 steps.
 7. The one agent-API-key path (#2389): its five steps in
    `hosted_handoff.md` § "#2389".
-8. Markup questions on a server (#2390) and the root, local-model and
-   reader lanes (#2391): the TODOs' manual tests.
+8. Markup questions on a server (#2390), the root, local-model and reader
+   lanes (#2391) and the admin's phone Local models (#2392): the TODOs'
+   manual tests.
 
 An `UntestedTag` is cleared only when the user says that item is tested.

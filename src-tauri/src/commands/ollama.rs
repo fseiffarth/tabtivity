@@ -1470,6 +1470,16 @@ fn phone_loads() -> &'static std::sync::Mutex<std::collections::HashSet<String>>
     S.get_or_init(Default::default)
 }
 
+/// Whether a phone-started load of `listed` (the name as `/api/tags` lists
+/// it) is warming right now — a server daemon's Local models list reads it,
+/// having no window that tracks loads (`mobile_control::local_models`).
+pub fn phone_loading(listed: &str) -> bool {
+    phone_loads()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(listed)
+}
+
 /// A claim on one [`phone_loads`] entry, released on drop — so a load that
 /// errors or panics can never leave its model stuck as "already loading".
 struct PhoneLoadClaim(String);

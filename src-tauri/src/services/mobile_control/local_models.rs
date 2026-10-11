@@ -2,10 +2,13 @@
 //! the sidecar's half of listing the desktop's Ollama models and loading,
 //! unloading or starting them.
 //!
-//! All the work runs in the desktop window, over the desktop bridge
+//! On a desktop all the work runs in the window, over the desktop bridge
 //! (`lib/mobileLocalModels.ts`), so every desktop surface shows a load the
 //! phone started. The sidecar never talks to Ollama itself and has no headless
-//! answer: with no window, the phone is told to open the app. What it does
+//! answer: with no window, the phone is told to open the app. A server daemon
+//! has no window and answers itself ([`answer_here`], the bridge ported) —
+//! for the administrator's phone only, since the shared Ollama is theirs
+//! (hosted plan §3.3); every other account's phone is refused. What it does
 //! here is refuse early — the host-wide switch, any action but load / unload /
 //! start, a malformed model name — and shape the window's answer before it
 //! crosses: model names and the listed fields only, never a path, a command or
@@ -187,6 +190,187 @@ pub fn refusal(code: &str) -> (StatusCode, &'static str) {
         "response_too_large" => (StatusCode::BAD_REQUEST, "response_too_large"),
         _ => (StatusCode::BAD_GATEWAY, "desktop_error"),
     }
+}
+
+// ── A server daemon's own answer (no window) ────────────────────────────────
+
+/// A Start the admin's phone asked for runs past its answer (it can take 16 s
+/// or more); these say how it is going, as the bridge's module state does.
+static START_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static START_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// One list read, classified: the rows, or the server state a failure means
+/// (`snapshot` in `mobileLocalModels.ts`).
+pub enum Snapshot {
+    Rows(Vec<crate::commands::ollama::OllamaModelInfo>),
+    Down(&'static str),
+}
+
+async fn snapshot() -> Snapshot {
+    use crate::commands::ollama;
+    match ollama::list_ollama_models_detailed().await {
+        Ok(rows) => Snapshot::Rows(rows),
+        Err(error) => {
+            let local = ollama::ollama_server_kind().await.is_ok_and(|kind| kind == "local");
+            if !local || error != "not_running" {
+                Snapshot::Down("unreachable")
+            } else if ollama::ollama_is_installed().await {
+                Snapshot::Down("stopped")
+            } else {
+                Snapshot::Down("not_installed")
+            }
+        }
+    }
+}
+
+/// Whether `listed` (an `/api/tags` name, always tagged) is the model `wanted`
+/// names: exact, or `wanted:latest` for an untagged ref (`isListedModel`).
+pub fn is_listed_model(listed: &str, wanted: &str) -> bool {
+    if listed == wanted {
+        return true;
+    }
+    let leaf = wanted.rsplit('/').next().unwrap_or(wanted);
+    !leaf.contains(':') && listed == format!("{wanted}:latest")
+}
+
+/// The answer for `snap` (`listFrom`): `tabs_model` is the account's model for
+/// local-model tabs, `loading` whether a phone load of a listed name runs.
+pub fn list_from(
+    snap: &Snapshot,
+    tabs_model: Option<&str>,
+    loading: impl Fn(&str) -> bool,
+    start_pending: bool,
+    start_failed: bool,
+) -> super::protocol::DesktopResponse {
+    use super::protocol::DesktopResponse;
+    let rows = match snap {
+        Snapshot::Down(server) => {
+            let server = if start_pending { "starting" } else { server };
+            return DesktopResponse::LocalModels {
+                server: server.to_string(),
+                can_start: server == "stopped",
+                start_failed: start_failed && server != "starting",
+                models: Vec::new(),
+            };
+        }
+        Snapshot::Rows(rows) => rows,
+    };
+    let models = rows
+        .iter()
+        .filter(|row| !row.name.is_empty())
+        .take(MAX_MODELS)
+        .map(|row| {
+            // Resident wins over a load in flight.
+            let state = if row.running {
+                "loaded"
+            } else if loading(&row.name) {
+                "loading"
+            } else {
+                "idle"
+            };
+            MobileLocalModel {
+                name: row.name.clone(),
+                size: row.size,
+                parameter_size: row.parameter_size.clone(),
+                quantization: row.quantization.clone(),
+                state: state.to_string(),
+                loaded_size: row.running.then_some(row.loaded_size),
+                vram: row.running.then_some(row.size_vram),
+                pinned: row.running.then_some(row.pinned),
+                expires_in: if row.running && !row.pinned { row.expires_in_secs } else { None },
+                for_tabs: tabs_model.is_some_and(|m| is_listed_model(&row.name, m)),
+                remote: row.remote,
+            }
+        })
+        .collect();
+    DesktopResponse::LocalModels { server: "running".into(), can_start: false, start_failed: false, models }
+}
+
+fn refused(code: &str) -> super::protocol::DesktopResponse {
+    super::protocol::DesktopResponse::Error { code: code.to_string(), message: String::new() }
+}
+
+/// The account's model for local-model tabs: `ollama_roles.tabs`, else
+/// `ollama_model`.
+fn tabs_model(state_dir: &Path) -> Option<String> {
+    let settings: crate::schema::Settings = crate::storage::read_json(&state_dir.join("settings.json")).ok()?;
+    settings.ollama_roles.as_ref().and_then(|roles| roles.get("tabs").cloned()).or(settings.ollama_model)
+}
+
+async fn answer(state_dir: &Path) -> super::protocol::DesktopResponse {
+    let snap = snapshot().await;
+    answer_from(&snap, state_dir)
+}
+
+fn answer_from(snap: &Snapshot, state_dir: &Path) -> super::protocol::DesktopResponse {
+    use std::sync::atomic::Ordering;
+    let failed = START_FAILED.load(Ordering::Acquire);
+    if matches!(snap, Snapshot::Rows(_)) {
+        START_FAILED.store(false, Ordering::Release);
+    }
+    list_from(snap, tabs_model(state_dir).as_deref(), crate::commands::ollama::phone_loading, START_PENDING.load(Ordering::Acquire), failed)
+}
+
+/// `LocalModels` (`action` none) or `LocalModelMutate` answered in this
+/// process — a server daemon's, for the administrator's phone (the caller
+/// checks the role and the switch). The bridge's steps
+/// (`localModelsList` / `localModelMutate`): load through
+/// `load_installed_ollama_model` (installed names only, never a download),
+/// unload through `stop_ollama_model`, start through
+/// `ensure_ollama_running_unattended` on a task that outlives the answer.
+pub async fn answer_here(ctx: app_core::CoreCtx, state_dir: &Path, action: Option<LocalModelAction>) -> super::protocol::DesktopResponse {
+    use crate::commands::ollama;
+    use std::sync::atomic::Ordering;
+    let Some(action) = action else { return answer(state_dir).await };
+    let snap = snapshot().await;
+    let rows = match (&action, &snap) {
+        (LocalModelAction::Start, Snapshot::Rows(_)) => return answer_from(&snap, state_dir),
+        (LocalModelAction::Start, Snapshot::Down(server)) => {
+            if START_PENDING.load(Ordering::Acquire) {
+                return answer_from(&snap, state_dir);
+            }
+            if *server != "stopped" {
+                return refused("start_unavailable");
+            }
+            START_FAILED.store(false, Ordering::Release);
+            START_PENDING.store(true, Ordering::Release);
+            tokio::spawn(async {
+                let started = ollama::ensure_ollama_running_unattended().await;
+                START_FAILED.store(started.is_err(), Ordering::Release);
+                START_PENDING.store(false, Ordering::Release);
+            });
+            return answer_from(&snap, state_dir);
+        }
+        (_, Snapshot::Down(_)) => return refused("ollama_not_running"),
+        (_, Snapshot::Rows(rows)) => rows,
+    };
+    let (LocalModelAction::Load { model: wanted } | LocalModelAction::Unload { model: wanted }) = &action else {
+        return answer_from(&snap, state_dir);
+    };
+    let Some(row) = rows.iter().find(|r| r.name == *wanted).or_else(|| rows.iter().find(|r| is_listed_model(&r.name, wanted))) else {
+        return refused("model_not_installed");
+    };
+    if row.remote {
+        return refused("model_not_local");
+    }
+    match action {
+        LocalModelAction::Load { .. } => {
+            if let Err(code) = ollama::load_installed_ollama_model(crate::tauri_host::Ctx(ctx), row.name.clone()).await {
+                let known = ["ollama_not_running", "model_not_installed", "model_not_local"];
+                return refused(if known.contains(&code.as_str()) { &code } else { "unreachable" });
+            }
+        }
+        LocalModelAction::Unload { .. } => {
+            if !row.running {
+                return if ollama::phone_loading(&row.name) { refused("model_loading") } else { answer_from(&snap, state_dir) };
+            }
+            if let Err(error) = ollama::stop_ollama_model(row.name.clone()).await {
+                return refused(if error == "not_running" { "ollama_not_running" } else { "unreachable" });
+            }
+        }
+        LocalModelAction::Start => {}
+    }
+    answer(state_dir).await
 }
 
 #[cfg(test)]
@@ -374,5 +558,57 @@ mod tests {
         }
         assert_eq!(refusal("unreachable").0, StatusCode::BAD_GATEWAY);
         assert_eq!(refusal("connect ECONNREFUSED 127.0.0.1:11434 /home/u/.ollama"), (StatusCode::BAD_GATEWAY, "desktop_error"));
+    }
+
+    fn info(name: &str, running: bool) -> crate::commands::ollama::OllamaModelInfo {
+        crate::commands::ollama::OllamaModelInfo {
+            name: name.into(),
+            size: 5,
+            parameter_size: Some("8B".into()),
+            quantization: Some("Q4_K_M".into()),
+            family: None,
+            running,
+            size_vram: if running { 3 } else { 0 },
+            capabilities: Vec::new(),
+            digest: "d".into(),
+            loaded_size: if running { 4 } else { 0 },
+            expires_at: None,
+            pinned: false,
+            expires_in_secs: running.then_some(240),
+            remote: false,
+        }
+    }
+
+    /// A server daemon's own list (`list_from`, the bridge's `listFrom`
+    /// ported): resident wins over a load in flight, the tab model is marked
+    /// by the listed name, and a down server says whether Start can help.
+    #[test]
+    fn a_server_lists_like_the_window_bridge() {
+        use super::super::protocol::DesktopResponse;
+        assert!(is_listed_model("llama3:latest", "llama3"));
+        assert!(is_listed_model("reg:5000/ns/m:latest", "reg:5000/ns/m"));
+        assert!(!is_listed_model("qwen3.5:9b", "qwen3"));
+        assert!(!is_listed_model("llama3:8b", "llama3"));
+
+        let rows = Snapshot::Rows(vec![info("llama3:latest", false), info("qwen3:4b", true), info("mistral:7b", false), info("", false)]);
+        let DesktopResponse::LocalModels { server, can_start, models, .. } = list_from(&rows, Some("llama3"), |name| name == "llama3:latest" || name == "qwen3:4b", false, true) else {
+            panic!("a list")
+        };
+        assert_eq!((server.as_str(), can_start), ("running", false));
+        assert_eq!(models.len(), 3, "a nameless row is dropped");
+        assert_eq!((models[0].state.as_str(), models[0].for_tabs), ("loading", true));
+        assert_eq!(models[0].loaded_size, None, "only a resident model has sizes");
+        assert_eq!(models[1].state, "loaded", "resident wins over a load in flight");
+        assert_eq!((models[1].loaded_size, models[1].vram, models[1].expires_in), (Some(4), Some(3), Some(240)));
+        assert_eq!(models[2].state, "idle");
+
+        let down = |server, pending, failed| match list_from(&Snapshot::Down(server), None, |_| false, pending, failed) {
+            DesktopResponse::LocalModels { server, can_start, start_failed, models } => (server, can_start, start_failed, models.len()),
+            _ => panic!("a list"),
+        };
+        assert_eq!(down("stopped", false, false), ("stopped".into(), true, false, 0));
+        assert_eq!(down("stopped", false, true), ("stopped".into(), true, true, 0), "a failed Start is said");
+        assert_eq!(down("stopped", true, true), ("starting".into(), false, false, 0), "a Start in flight");
+        assert_eq!(down("unreachable", false, false), ("unreachable".into(), false, false, 0));
     }
 }

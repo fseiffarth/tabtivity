@@ -3724,7 +3724,7 @@ stayed empty.
   for the Focus banner; answer → `markup_mcp_answer` → the prompt held for
   the tab via `headless::hold_prompt` + `PhoneHolds::hold` (typed at once),
   `markup_mcp_reopen` and `delivery_failed` when the hold fails; dismiss.
-- My call: on a server the phone's Local models routes answer `403
+- My call (superseded by #2392, admin phone allowed): on a server the phone's Local models routes answer `403
   local_models_disabled` (`local_models_closed`) — no window to answer them,
   and the shared Ollama is the admin's (plan §3.3); the phone leaves the
   section out.
@@ -3769,3 +3769,32 @@ subagents, on top of #2390.
   #2391.
 
 **Live steps owed:** TODO #2391's manual test.
+
+## #2392: the admin's phone Local models on a server (2026-10-11)
+
+User, after my call to close phone Local models on a server: "shouldn't the
+admin also have a phone access". Built in the main session.
+
+- `local_models.rs`: `answer_here` — the window bridge
+  (`lib/mobileLocalModels.ts`) ported for a daemon: `snapshot` (rows, or
+  `stopped` / `not_installed` / `unreachable`), `list_from` (pure; resident
+  wins over a phone load in flight, `for_tabs` from the account's
+  `ollama_roles.tabs` / `ollama_model`), load via
+  `load_installed_ollama_model` (installed names only), unload via
+  `stop_ollama_model` (`model_loading` while a phone load warms it), start
+  via `ensure_ollama_running_unattended` on a spawned task with
+  `START_PENDING` / `START_FAILED`. `commands::ollama::phone_loading` reads
+  the existing phone-load claims.
+- `host.rs`: `local_models_closed(state, headers)` — on a server, closed
+  unless the gateway role header says `admin` (the gateway strips any
+  client-sent `x-gateway-*` and sets it on every forwarded request);
+  `local_models_call` answers in-process on a server, asks the window on a
+  desktop.
+- Not ported: the window's load map for loads started elsewhere (a load
+  the admin starts from the browser client shows as idle on the phone
+  until resident) — accepted.
+- Tests: `local_models` `a_server_lists_like_the_window_bridge`; the host
+  server test checks the role gate (no header / `user` closed, `admin`
+  open, a desktop never role-gated).
+
+**Live steps owed:** TODO #2392's manual test.
