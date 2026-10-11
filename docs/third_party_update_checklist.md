@@ -356,6 +356,37 @@ aliases, and anything about where or how credentials are stored.
 
 **Assumes**
 
+- **0.162.1 (2026-10-11), live but outside Tabtivity** — npm's linux-x64
+  tarball (`vendor/<triple>/bin/` still carries `codex-code-mode-host` beside
+  `codex`) run in a private tmux with its own `CODEX_HOME` and a local Ollama
+  model, inside a fenced agent tab, `--no-daemon`; 0.161.0 from npm run the
+  same way as the baseline. `--version` prints `codex-cli 0.162.1`;
+  `resume [SESSION_ID]`, `exec --skip-git-repo-check`, `--no-daemon`, `--oss`,
+  `-m`, `-c` stand and `-a` still takes `on-request | never`; the help text is
+  otherwise as on 0.161.0. Fed to the parsers as captured: the
+  approval menu (same three labels, `›` on row 1, now headed by
+  `Environment: local` and `Reason: …` lines above the `$ <command>` row that
+  `readSelectPrompt` takes as its title), the "Hooks need review" menu, both
+  `/model` steps (unchanged layout and footer), the mode line (CSI-u Shift+Tab
+  and tmux's backtab toggle the silent default and `Plan mode`, read as
+  `working` / `plan`), and an idle screen that is no decision. The first-run
+  folder question is "Folder access … Trust this folder?" (`Trust and
+  continue` / `Quit`), as on 0.161.0, which `showsAgentTrustDialog` matches.
+  Title frames `[ ! ]`/`[ . ] Action Required | <dir>` paint no text. Hook
+  payloads now also carry `model` and `permission_mode` (SessionStart,
+  UserPromptSubmit, Stop), `turn_id` (UserPromptSubmit, Stop) and Stop
+  `last_assistant_message`; the hook script's `permission_mode` record feeds
+  only Claude's `--resume` path, so Codex's value is never passed to a CLI.
+  Trusting all hooks writes bare `trusted_hash` tables; no SessionEnd timeout
+  warning with `timeout = 3`. Rollout: first line `session_meta` with
+  `session_id` and `cwd`, `turn_context.model`, user prompts as
+  `response_item` user messages, `event_msg` `token_count` totals unchanged.
+  `exec --skip-git-repo-check` (the warm-up) runs and exits without a TTY.
+  Writer lock: a TUI `resume` holds `thread-writer-locks/<id>.lock`, a second
+  `exec resume` exits 1 with "already has an active writer", and after the
+  TUI is SIGKILLed the same resume succeeds — the lock file is now removed
+  afterwards (Tabtivity reads none of them). SessionEnd was captured at an
+  `exec` exit (`reason` `other`), not at a TUI exit.
 - **0.161.0 (2026-10-07), live but outside Tabtivity** — the GitHub release's
   musl build (npm's linux-x64 tarball was not served yet) run in a private
   tmux with its own `CODEX_HOME`, inside a fenced agent tab, `--no-daemon`.
@@ -466,7 +497,7 @@ aliases, and anything about where or how credentials are stored.
   duplicate guard independent of hook trust; duplicates use the documented
   `codex resume` picker (no id). Never delete Codex's writer locks to force a
   resume. Verify this lifecycle again when its thread store changes (last
-  checked live on 0.161.0, with the CLI itself: a SIGKILLed writer releases
+  checked live on 0.162.1, with the CLI itself: a SIGKILLed writer releases
   the lock).
 - Session rollouts at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`
   whose **first line** is `{"type":"session_meta","payload":{"session_id","cwd",…}}`.
@@ -488,7 +519,7 @@ aliases, and anything about where or how credentials are stored.
   (`CODEX_HOOK_EVENTS`; 0.154.0 names those events and no `Notification`, read
   off the binary's strings, not live — so a Codex approval wait is still read
   off its screen). Their payloads carry `session_id` and `hook_event_name`
-  like Claude's (verified live on 0.161.0). Trust state is read from
+  like Claude's (verified live on 0.161.0 and 0.162.1). Trust state is read from
   `[hooks.state."…"]` tables (`trusted_hash`, enabled flag), each hook by
   position, so the new blocks need the same one-time `/hooks` trust.
   Text-appended per event, never reserialized.
@@ -499,7 +530,7 @@ aliases, and anything about where or how credentials are stored.
 - Preface commands `/new /compact /status`; `/status` is *not* available in
   exec mode, so there is no usage recipe.
 - The decision lamp reads Codex's screen off the PTY, and two habits of its
-  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.161.0):
+  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.162.1):
   - **A blocked Codex is not a quiet Codex.** It keeps repainting its terminal
     title on a ~100ms timer — a braille frame while working, and while blocked
     an `ESC ] 0 ; [ ! ] Action Required BEL` alternating with `[ . ]`. Those
@@ -524,7 +555,7 @@ aliases, and anything about where or how credentials are stored.
     options away from yes/no/allow/cancel wording is what would break it.
 - Mobile: modes `working (silent) | plan | read only | auto | full access`;
   Shift+Tab is sent as CSI-u. Verified against codex-cli 0.151.0; live on
-  0.161.0, where Shift+Tab toggles only the silent default and plan (the
+  0.161.0 and 0.162.1, where Shift+Tab toggles only the silent default and plan (the
   other three are not on its cycle).
 - Mobile's model sheet reads `/model` off the screen, and Codex answers it in
   **two steps** — `Select Model and Effort`, then `Select Reasoning Level for
@@ -533,7 +564,7 @@ aliases, and anything about where or how credentials are stored.
   the highlight marked `›`; the sheet holds until a *different* list is drawn
   and closes when none is. Renumbering, dropping the heading, or drawing the
   next step without clearing the previous one is what would break it. Verified
-  against codex-cli 0.153.4 and live against 0.159.2 and 0.161.0, whose reasoning step's
+  against codex-cli 0.153.4 and live against 0.159.2, 0.161.0 and 0.162.1, whose reasoning step's
   footer reads `enter default · s session · esc back`: the Enter the sheet
   sends saves the pick as the default, `s` would keep it to the session.
 
@@ -603,7 +634,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 | Kiro, Cline, OpenClaw, OpenHands, Plandex, SWE-agent, mini-SWE-agent, Mentat, gpt-engineer, Qoder | — | — | see `AGENTS` |
 
 Version probes (`agent_versions::VERSION_ARGV`) exist for Antigravity
-(`agy --version` → `1.2.9`) and Muse (`muse --version` →
+(`agy --version` → `1.3.3`, the same bare shape as 1.2.9) and Muse (`muse --version` →
 `Muse Code 1.3.0 (1.3.0-R3057.1)`) as well. Muse's launcher script starts a
 background self-update on any invocation once its interval has passed, so its
 probe sets `MUSE_NO_AUTO_UPDATE=1` (`VERSION_ENV`); a launcher that renames
@@ -669,10 +700,28 @@ the `fixed` flag in `agentModes.ts` be dropped.
 capture; 1.2.14 by a tmux capture at 80×24 on 2026-09-30, run through
 `readableScreen` and the parsers: six rows, `[1-6 of 7 items]`, three effort
 stops — the 1.2.11 gauge rework left the slider's shape as below, and 1.2.9's
-dialog is byte-identical). Since at least 1.2.9 an underline row
+dialog is byte-identical; 1.3.3 on 2026-10-11, live in a private tmux server
+at 80×24 beside 1.2.14 in the same setup: idle footer, `/model` with its
+three-stop gauge moved by →, Enter applying both, `/effort`, the sign-in
+menu and OAuth link page, each byte-identical to 1.2.14's but the banner's
+version (the captures are in `MobileAntigravity.test.ts`), and `--continue`
+reopening the last conversation, whose store is still
+`~/.gemini/antigravity-cli/conversations/<id>.db`). That run signs in with no
+account: a private `HOME`, `"modelProvider": "gemini"` in
+`~/.gemini/antigravity-cli/settings.json`, a dummy `GEMINI_API_KEY` and
+`GOOGLE_GEMINI_BASE_URL` at a dead local port — the UI draws fully, turns
+just fail. Its catalog is four Gemini models, so the window note and a
+model with xhigh/max stops were *not* seen live; strings only: the binary
+keeps `[%d-%d of %d items]`, and 1.3 adds an `xhigh` level (`--effort
+low|medium|high|xhigh|max`, a new `EffortXHigh` gauge colour) beside 1.2.14's
+`max`, which the footer reader now accepts after the ` · `. The CLI
+self-updates the binary it runs from, wherever it sits — check a pinned
+build from a read-only directory (the `/releases` list on the updater host
+gives each version's `execution_id` for its `antigravity-public` download
+URL). Since at least 1.2.9 an underline row
 (`──────────`) sits under `Search:`; `readableScreen` drops it, so a parser fed
 raw rows would miss the list. A fresh home opens on a theme picker, a
-data-sharing opt-in (leave it unticked) and a folder-trust prompt. It assumes, of `agy`: the footer row under the input box, with
+data-sharing opt-in (drawn ticked — untick it with Space, then ↓ → to `Done`) and a folder-trust prompt. It assumes, of `agy`: the footer row under the input box, with
 `? for shortcuts` on the left and the model right-aligned, the reasoning effort
 after a ` · ` where the model has one (`Gemini 3.8 Flash · high`); the `/model`
 dialog's heading `Switch Model` and its `Search:` field; unnumbered rows, two

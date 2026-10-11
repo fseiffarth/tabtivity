@@ -1,7 +1,7 @@
 /**
- * Google Antigravity's own screens (`agy` 1.2.7), for a tab whose label names
- * it: the model and reasoning effort its footer prints, and the `Switch Model`
- * dialog `/model` opens.
+ * Google Antigravity's own screens (`agy` 1.2.7, drawn the same through
+ * 1.3.3), for a tab whose label names it: the model and reasoning effort its
+ * footer prints, and the `Switch Model` dialog `/model` opens.
  *
  * Neither is the shape the other readers know. This is what the CLI draws,
  * captured from a live session:
@@ -256,7 +256,11 @@ export function antigravityEffortKeys(current: number, target: number): string[]
  * the column is found by the run of spaces before it — the CLI's own key hints
  * are columned two spaces apart and are not one. */
 const FOOTER = /^(?:.*\S)? {4,}(\S.*)$/u;
-const EFFORT_WORD = /^(?:low|medium|high)$/iu;
+/** The effort levels `agy --effort` takes. `max` has its own gauge colour
+ * since at least 1.2.14 and 1.3 added `xhigh`; a footer naming either is
+ * still the session's model, and a gauge label row ending in one is still not
+ * a model called "max". */
+const EFFORT_WORD = /^(?:low|medium|high|xhigh|max)$/iu;
 /** A model as this CLI names one: `Gemini 3.8 Flash`, `Claude Sonnet 4.6
  * (Thinking)`, `GPT-OSS 120B (Medium)`. Deliberately narrow — the same row
  * shape carries the account line of the banner above. */
