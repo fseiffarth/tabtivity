@@ -200,7 +200,8 @@ fn an_editor_pushes_only_under_her_own_name_and_session_files_are_refused() {
 /// that path; the transport (`--no-local`, `fetch`), which runs
 /// `upload-pack` against it, does not check (git 2.53). Tabtivity uses the
 /// transport and pins the exact hub anyway, never `*`: a git that starts
-/// checking the transport needs no change, and nothing else is opened.
+/// checking the transport needs no change, and nothing else is opened. On
+/// CI's git 2.55 the unpinned local-path clone succeeds as well.
 #[test]
 fn safe_directory_is_pinned_to_the_exact_hub() {
     let dir = tempfile::tempdir().unwrap();
@@ -221,10 +222,14 @@ fn safe_directory_is_pinned_to_the_exact_hub() {
         args.push(dir.path().join(name).to_string_lossy().into_owned());
         crate::commands::git::hookless_git_command_in(dir.path(), &args).env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap()
     };
+    // CI's git 2.55 opens the local-path clone's source unpinned (ci-cd #382),
+    // so only where git still refuses is the pin's exactness observable.
     let unpinned = clone("a", None, false);
-    assert!(!unpinned.status.success() && String::from_utf8_lossy(&unpinned.stderr).contains("dubious ownership"), "{}", String::from_utf8_lossy(&unpinned.stderr));
-    let elsewhere = clone("b", Some(&dir.path().join("other.git")), false);
-    assert!(!elsewhere.status.success(), "a pin of another path does not open this hub");
+    if !unpinned.status.success() {
+        assert!(String::from_utf8_lossy(&unpinned.stderr).contains("dubious ownership"), "{}", String::from_utf8_lossy(&unpinned.stderr));
+        let elsewhere = clone("b", Some(&dir.path().join("other.git")), false);
+        assert!(!elsewhere.status.success(), "a pin of another path does not open this hub");
+    }
     let exact = clone("c", Some(&hub), false);
     assert!(exact.status.success(), "{}", String::from_utf8_lossy(&exact.stderr));
     let transport = clone("d", Some(&hub), true);

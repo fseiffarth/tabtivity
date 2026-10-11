@@ -1406,6 +1406,13 @@ utun0 1380  <Link#16>                            123     0      45678      321  
         // arguments (another host or socket) are not it.
         let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
         let pid = child.id();
+        // spawn() can return before the exec has renamed the child (a vfork
+        // parent wakes ahead of the comm update); on a loaded CI runner the
+        // remember below then saw the test binary's name (ci-cd #382).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while start_time_of(pid, "sleep").is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         remember_master_as("net-test-b", args.clone(), pid, "sleep");
         assert_eq!(cached_master_as("net-test-b", &args, "sleep"), Some(pid));
         assert_eq!(cached_master_as("net-test-b", &["-S".to_string(), "/tmp/other".to_string()], "sleep"), None);
