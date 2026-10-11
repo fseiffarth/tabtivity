@@ -116,6 +116,12 @@ describe("Connect window command routing", () => {
     expect(calls).toContainEqual(["copy_text_to_clipboard", { text: "hi" }]);
     expect(calls).toContainEqual(["plugin:window|maximize", { label: "connect" }]);
     expect(calls).toContainEqual(["plugin:notification|notify", { options: { title: "t" } }]);
+    // A link takes the browser path, not this machine's URL handler (#2387).
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    await invoke("open_external_url", { url: "https://example.org/x" });
+    expect(opened).toHaveBeenCalledWith("https://example.org/x", "_blank", "noopener");
+    expect(calls.some(([c]) => c === "open_external_url")).toBe(false);
+    opened.mockRestore();
     void invoke("list_projects", {});
     await flush();
     const sent = calls.filter(([c]) => c === "connect_ws_send").map(([, a]) => JSON.parse((a as { text: string }).text));

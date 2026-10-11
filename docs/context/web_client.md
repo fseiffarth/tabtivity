@@ -215,7 +215,7 @@ own standalone workspace (Q12). As built:
   reaches it), and its app commands are narrowed in Rust before they run:
   `commands::connect::gate_connect_window` wraps the invoke handler and
   admits only `CONNECT_WINDOW_COMMANDS` (the socket bridge, the download
-  opener, `open_external_url`, the clipboard). A script injected through
+  opener, the clipboard; no link opener, #2387). A script injected through
   server-rendered data, or a co-member's file, reaches nothing else of the
   desktop's IPC. A Tauri app-manifest ACL would do the same but needs every
   one of the main windows' ~1000 commands listed; the wrapper keeps those
@@ -242,7 +242,8 @@ own standalone workspace (Q12). As built:
   with the standalone workspace's local storage.
 - **Native where it is the user's machine**: `wsInternals.ts` takes the
   window's own Tauri internals (captured before the shim replaces them) and
-  answers `CONNECT_NATIVE` client commands (clipboard, `open_external_url`)
+  answers `CONNECT_NATIVE` client commands (the clipboard; links take the
+  browser path, `window.open`, #2387)
   and the window and notification plugins natively;
   `open_file` asks the server for a download ticket and
   `connect_open_download` fetches it (the server's host, `/content/` only,

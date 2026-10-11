@@ -3848,5 +3848,51 @@ clean; Windows clippy (`src-tauri`, all targets) and `cargo check
 `tauri-runtime-wry` patch's 5 known macOS warnings; `app-serverd` links
 libc/libm/libgcc only; brand-check ok. Nothing run live.
 
-**Ready to land** on `develop` after one review of this merge's
-resolutions and the terminal path, and #2387.
+### Review of this merge (2026-10-11, same session, no subagents)
+
+Every conflict resolution re-read against `git show --remerge-diff`, and the
+terminal path traced end to end. One bug, fixed; the rest held.
+
+- **Fixed: a server client's sleeping pane went deaf.** A pane put to sleep
+  removes its view, and a server addresses a PTY's events to the windows
+  with a view, so a sleeping browser tab got no activity batch (no activity
+  dot, no decision-prompt glow) and no heir decision while asleep; and a
+  page that left with a shared tab asleep left the route asleep for good
+  (`reap_client`'s `route_forget_sleep` covers only the PTYs it tears down).
+  `OutputRoute.sleepers` now holds the windows whose view left sleeping;
+  `event_windows()` (viewers + sleepers) addresses the activity batch,
+  `terminal-exit`, the other PTY events and `release_client`'s heir; output
+  still goes to viewers only. A wake drops the sleepers whose window is
+  back; `route_drop_window_views` drops the gone window's and, when none is
+  left, ends the sleep. Test `a_sleeping_server_pane_hears_its_events_…`.
+- Held: the ordered browser calls (`ORDERED_TAIL` is per process, i.e. per
+  user daemon, like the window's one lane; a turn is taken after the call's
+  permit, so no wait cycle); the host's `transcript_watch::install` runs in
+  the host's own process, so it cannot displace the window's sink (first
+  `install` wins per process); watch ids carry a random per-window prefix;
+  `develop` added no `IS_WINDOWS`/`IS_MAC` use that should be the host's OS;
+  `file_size`, `agent_tab_*`, `net_usage`, `network.rs`, `git.rs`, the
+  CenterPanel/TerminalView/terminalBus hunks are both sides' intent.
+
+## #2387: no link opener in the Connect window (2026-10-11)
+
+User decision 2026-10-10. `open_external_url` left
+`CONNECT_WINDOW_COMMANDS` (`commands/connect.rs`) and `CONNECT_NATIVE`
+(`wsInternals.ts`): a link in server content now takes the browser adapter
+(`window.open`, http(s) only) and never reaches this machine's URL handler;
+the Rust gate refuses the command from that window. Whether the Connect
+webview then opens the link at all is untested — accepted with the
+decision. Tests: the gate's refused list, `ConnectTransport.test.ts`.
+
+#2388 (user, 2026-10-11): `src-tauri/gen/schemas/macOS-schema.json` is
+committed beside the Linux and Windows schemas; the macOS check no longer
+leaves an untracked file.
+
+Gates after the review fix, #2387 and #2388: `npm run build`; `npm test`
+796 files / 7956 tests; lint 0 errors, 28 warnings; `cargo test
+--workspace` 22 suites green (src-tauri 3823); the no-desktop build 3724 +
+1; clippy ×3 clean; Windows clippy clean; the macOS check green (the 5
+known `tauri-runtime-wry` warnings); brand-check ok. Nothing run live.
+
+**Ready to land** on `develop` after one more `develop` → `hosted` merge
+(`f5c77bbf`).

@@ -59,7 +59,9 @@ struct Frame {
 
 /// The app commands the Connect window may call — its whole native surface
 /// (user decision, P5 review finding 10): the socket bridge to the server,
-/// the download opener and an http(s) link opener, and the clipboard.
+/// the download opener and the clipboard. No link opener (#2387, user
+/// decision 2026-10-10): a link in server content takes the browser path
+/// (`window.open`) and never reaches this machine's URL handler.
 /// Window controls and notifications are plugins, granted by
 /// `capabilities/connect.json` alone. Any other command from that window is
 /// refused before it runs, so script injected through server-rendered data
@@ -69,7 +71,6 @@ pub const CONNECT_WINDOW_COMMANDS: &[&str] = &[
     "connect_ws_send",
     "connect_ws_close",
     "connect_open_download",
-    "open_external_url",
     "copy_text_to_clipboard",
     "clipboard_has_image",
 ];
@@ -262,15 +263,15 @@ mod tests {
     /// P5 review: a closed or reloaded Connect window takes its sockets
     /// with it.
     /// User decision (P5 review finding 10): the Connect window's app
-    /// commands are its bridge, downloads, links and the clipboard — nothing
-    /// else; the other windows are not narrowed.
+    /// commands are its bridge, downloads and the clipboard — nothing else,
+    /// not even the link opener (#2387); the other windows are not narrowed.
     #[test]
     fn the_connect_window_calls_only_its_own_commands() {
         use super::{window_may_call, WINDOW};
         for allowed in ["connect_ws_open", "connect_ws_send", "connect_ws_close", "connect_open_download", "copy_text_to_clipboard"] {
             assert!(window_may_call(WINDOW, allowed), "{allowed}");
         }
-        for refused in ["pty_spawn", "read_file_bytes", "save_settings", "connect_forget", "connect_pair", "openvpn_connect", "os_clock_format"] {
+        for refused in ["pty_spawn", "read_file_bytes", "save_settings", "connect_forget", "connect_pair", "openvpn_connect", "os_clock_format", "open_external_url"] {
             assert!(!window_may_call(WINDOW, refused), "{refused}");
         }
         assert!(window_may_call("main", "pty_spawn") && window_may_call("detached-p1", "connect_forget"));

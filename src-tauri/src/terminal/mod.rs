@@ -179,6 +179,11 @@ struct OutputRoute {
     /// (`route_wake_scrollback`), by `pty_kill` (`route_forget_sleep`), and by
     /// a respawn from a registered pane.
     asleep: bool,
+    /// The windows whose view left with `sleeping` and has not come back. A
+    /// server client's sleeping pane still owns its tab: its activity, exit
+    /// and heir decisions go to it though it has no view (`event_windows`).
+    /// A window that goes away ends its sleep (`route_drop_window_views`).
+    sleepers: Vec<String>,
     /// The spawn this route carried has ended (its task closed the route while
     /// something still held it). A respawn clears it.
     ended: bool,
@@ -225,6 +230,25 @@ impl OutputRoute {
             }
         }
         windows
+    }
+
+    /// The windows a PTY's events (activity, exit) go to: those with a view,
+    /// and those whose pane sleeps on it — a sleeping tab still shows its
+    /// activity. Output itself goes to `viewer_windows` only.
+    fn event_windows(&self) -> Vec<String> {
+        let mut windows = self.viewer_windows();
+        for w in &self.sleepers {
+            if w.as_str() != ClientId::MAIN && !windows.contains(w) {
+                windows.push(w.clone());
+            }
+        }
+        windows
+    }
+
+    /// The sleepers whose window registered a view again are awake.
+    fn drop_woken_sleepers(&mut self) {
+        let viewers = &self.visible_viewers;
+        self.sleepers.retain(|w| !viewers.values().any(|v| &v.window == w));
     }
 
     /// Append to the always-on catch-up tail. Called for every routed chunk,
@@ -615,13 +639,14 @@ fn arm_digest_tick(ctx: &CoreCtx, tick: DigestTick) {
 }
 
 /// Each drained digest as its event entry — under the tab an attach route
-/// names, else its own id — with the windows that view its route.
+/// names, else its own id — with the windows that view its route or sleep on
+/// it (`event_windows`).
 fn address_digest_batch(map: &HashMap<String, OutputRoute>, batch: Vec<(String, String)>) -> Vec<(TerminalOutput, Vec<String>)> {
     batch
         .into_iter()
         .map(|(id, data)| {
             let route = map.get(&id);
-            let windows = route.map(OutputRoute::viewer_windows).unwrap_or_default();
+            let windows = route.map(OutputRoute::event_windows).unwrap_or_default();
             let id = route.and_then(|r| r.tab.clone()).unwrap_or(id);
             (TerminalOutput { id, data, start_offset: None, end_offset: None }, windows)
         })
@@ -691,6 +716,7 @@ fn route_open_at(id: &str, tab: Option<&str>, seq: u64) {
     // pane is still asleep and its wake still needs the long tail.
     if !route.visible_viewers.is_empty() {
         route.asleep = false;
+        route.drop_woken_sleepers();
     }
 }
 
@@ -725,6 +751,7 @@ pub fn route_wake_scrollback(id: &str) -> TerminalScrollback {
         return TerminalScrollback::default();
     };
     route.asleep = false;
+    route.drop_woken_sleepers();
     // The tail covers everything the hidden-spell buffer holds. A pane woken
     // while still hidden (a relaunch, the setting turned off) would otherwise
     // get that buffer again as a replay on its first show — the same output
@@ -755,6 +782,7 @@ pub fn route_forget_sleep(id: &str) {
     let mut map = routes().lock().unwrap();
     let Some(route) = map.get_mut(id) else { return };
     route.asleep = false;
+    route.sleepers.clear();
     if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 {
         map.remove(id);
     }
@@ -849,7 +877,8 @@ fn emit_to_windows<S: Serialize>(ctx: &CoreCtx, windows: &[String], event: &str,
 
 /// A PTY's lifecycle or activity event (`terminal-ready`, `terminal-exit`,
 /// `terminal-activity`): a broadcast on the desktop, as ever; for a server
-/// host's client, delivered to the clients with a view of `route` only.
+/// host's client, delivered to the clients with a view of `route`, or a pane
+/// asleep on it, only (`event_windows`).
 fn emit_pty_event<S: Serialize>(ctx: &CoreCtx, route: &str, event: &str, payload: S) {
     if !per_client(ctx) {
         ctx.emit(event, payload);
@@ -859,7 +888,7 @@ fn emit_pty_event<S: Serialize>(ctx: &CoreCtx, route: &str, event: &str, payload
         .lock()
         .unwrap()
         .get(route)
-        .map(OutputRoute::viewer_windows)
+        .map(OutputRoute::event_windows)
         .unwrap_or_default();
     emit_to_windows(ctx, &windows, event, &payload);
 }
@@ -917,9 +946,14 @@ pub fn route_remove_view(id: &str, viewer_id: &str, update_seq: u64, sleeping: b
     {
         return;
     }
-    route.visible_viewers.remove(viewer_id);
+    let left = route.visible_viewers.remove(viewer_id);
     if sleeping {
         route.asleep = true;
+        if let Some(window) = left.map(|v| v.window) {
+            if !route.sleepers.contains(&window) {
+                route.sleepers.push(window);
+            }
+        }
         return;
     }
     if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 && !route.asleep {
@@ -945,6 +979,12 @@ pub fn route_drop_window_views(window: &str) -> usize {
         let before = route.visible_viewers.len();
         route.visible_viewers.retain(|_, v| v.window != window);
         dropped += before - route.visible_viewers.len();
+        // A window that slept the pane is gone: no wake will come from it.
+        let sleepers = route.sleepers.len();
+        route.sleepers.retain(|w| w != window);
+        if sleepers > 0 && route.sleepers.is_empty() {
+            route.asleep = false;
+        }
         // Same collection rule `route_remove_view` applies: a route whose spawn
         // has already ended and that nothing watches any more is dead weight —
         // unless a sleeping main pane still has its wake to show.
@@ -991,13 +1031,14 @@ pub fn route_move_window_views(from: &str, to: &str, window: &str) {
     target.visible_viewers.extend(moved);
 }
 
-/// The windows (server clients) with a view of route `id`, shown or hidden.
+/// The windows (server clients) with a view of route `id`, shown or hidden,
+/// or a pane asleep on it.
 fn route_viewer_windows(id: &str) -> Vec<String> {
     routes()
         .lock()
         .unwrap()
         .get(id)
-        .map(OutputRoute::viewer_windows)
+        .map(OutputRoute::event_windows)
         .unwrap_or_default()
 }
 
@@ -2000,7 +2041,7 @@ fn launch(
                 .lock()
                 .unwrap()
                 .get(&id)
-                .map(OutputRoute::viewer_windows)
+                .map(OutputRoute::event_windows)
                 .unwrap_or_default()
         });
         // A tab can be respawned before the prior reader task observes EOF
@@ -3543,6 +3584,45 @@ mod client_tests {
         for data in ["aa", "bb", "zz"] {
             assert!(sent[0].payload.contains(data), "{}", sent[0].payload);
         }
+    }
+
+    /// A server client's pane put to sleep has no view, yet its tab still
+    /// shows activity: its window stays addressed for the PTY's events (not
+    /// its output) until it wakes, or until it leaves — which ends the sleep,
+    /// as no wake will come.
+    #[test]
+    fn a_sleeping_server_pane_hears_its_events_until_it_wakes_or_leaves() {
+        let id = "client-t:sleeper";
+        let seq = route_open(id);
+        {
+            let mut map = routes().lock().unwrap();
+            view(&mut map, id, "v1", "web-91");
+            view(&mut map, id, "v2", "web-92");
+        }
+        let windows = |f: fn(&OutputRoute) -> Vec<String>| f(&routes().lock().unwrap()[id]);
+        let both = vec!["web-92".to_string(), "web-91".to_string()];
+
+        route_remove_view(id, "v1", 2, true);
+        assert_eq!(windows(OutputRoute::viewer_windows), vec!["web-92".to_string()], "no output without an xterm");
+        assert_eq!(windows(OutputRoute::event_windows), both);
+        let addressed = address_digest_batch(&routes().lock().unwrap(), vec![(id.to_string(), "x".to_string())]);
+        assert_eq!(addressed[0].1, both, "the sleeping tab's activity reaches it");
+
+        // The wake registers its view, then reads: one window, awake.
+        view(&mut routes().lock().unwrap(), id, "v1", "web-91");
+        route_wake_scrollback(id);
+        assert!(routes().lock().unwrap()[id].sleepers.is_empty());
+
+        // Asleep again, then the page goes: nobody is left to wake it.
+        route_remove_view(id, "v1", 3, true);
+        route_drop_window_views("web-91");
+        let route_asleep = routes().lock().unwrap()[id].asleep;
+        assert!(!route_asleep, "a gone sleeper's route closes with its spawn");
+        assert_eq!(windows(OutputRoute::event_windows), vec!["web-92".to_string()]);
+
+        route_remove_view(id, "v2", 3, false);
+        route_close(id, seq);
+        assert!(!routes().lock().unwrap().contains_key(id));
     }
 
     /// The desktop keeps its broadcast: the main window hears every chunk under

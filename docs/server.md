@@ -142,7 +142,8 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
 - Connect mode (desktop app as a client) runs its own local frontend, keeps
   its pairing key in a 0600 file, and is narrowed to its own commands.
   `open_external_url` is dropped from it (#2387, 2026-10-10): links in
-  server content never reach the client's OS browser handler. Not built yet.
+  server content never reach the client's OS browser handler. Built
+  2026-10-11.
 - Server containers are rootless Podman per user, off by default (admin
   switch).
 
@@ -171,21 +172,21 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
    #2391).** The daemon serves every lane the window does. Left as a known
    residual, as for the API proxy: a daemon restart drops every MCP token,
    so an agent in a tmux tab that outlived it has no tools until restarted.
-4. **To build:** drop `open_external_url` from the Connect window (#2387,
-   decided 2026-10-10).
+4. **Built 2026-10-11:** `open_external_url` dropped from the Connect
+   window (#2387, decided 2026-10-10).
 5. **Still deferred:** phone push for turn edges with no window (#2384); a
    second page re-typing a shared-PTY tab's launch input (#2358); the rest
    of the gateway/helper security review and a gateway body cap (#2353);
    Connect's Rust enrol/release half (#2379); hub GC and quotas (#2372);
    shared calendars in the phone's no-window views (#2369); presence chip and
    "no longer shared" pill (#2367, #2373); an agent's push through a proxy
-   (#2368); shared to-do column order (#2370); `macOS-schema.json` commit or
-   ignore (#2388); the 31 lint warnings on `develop` (#2385).
+   (#2368); shared to-do column order (#2370); the 31 lint warnings on
+   `develop` (#2385). `macOS-schema.json` is committed (#2388, 2026-10-11).
 
 ## Open decisions
 
-None. #2389 and #2387 were answered 2026-10-10; #2389 is built, #2387 not
-yet. The agent MCP lanes on a server were asked for 2026-10-11 and built. `hosted` → `develop` (#2386) waits by the user's
+None. #2389 and #2387 were answered 2026-10-10 and are built; #2388
+2026-10-11 (commit the macOS schema). The agent MCP lanes on a server were asked for 2026-10-11 and built. `hosted` → `develop` (#2386) waits by the user's
 call (2026-10-10) while heavy work continues on `develop`; re-merge
 `develop` → `hosted` as needed.
 

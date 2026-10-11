@@ -41,8 +41,10 @@ import type { NativeInternals } from "./bridgeSocket";
 /** `client` commands the Connect window runs natively on this machine — the
  *  only app commands it may call besides its socket bridge and the download
  *  opener (`commands::connect::CONNECT_WINDOW_COMMANDS`); the rest are
- *  answered by the browser adapters, as in a browser. */
-export const CONNECT_NATIVE = new Set(["copy_text_to_clipboard", "clipboard_has_image", "open_external_url"]);
+ *  answered by the browser adapters, as in a browser. `open_external_url` is
+ *  one of those (#2387): a link in server content goes to `window.open`, never
+ *  to this machine's URL handler. */
+export const CONNECT_NATIVE = new Set(["copy_text_to_clipboard", "clipboard_has_image"]);
 
 /** Plugins the Connect window answers natively (real window controls, OS notifications). */
 const CONNECT_NATIVE_PLUGINS = new Set(["window", "webview", "notification"]);
