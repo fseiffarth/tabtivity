@@ -56,7 +56,8 @@ Don't push new work while the branch's last ci-cd run is red; the next push is i
 
 ## Git & privacy (public repo)
 
-- Work on `develop`; `main` is reached by PR.
+- Work on `develop`; `main` is reached by PR. Every green push to `main` is
+  released automatically (`release.yml`), so a merge into `main` is a release.
 - Before any push: `scripts/privacy-check.sh` must pass (the pre-commit and
   pre-push hooks and CI run it; hooks need `git config core.hooksPath
   .githooks` once per clone). A plumbing commit (private index + `update-ref`)

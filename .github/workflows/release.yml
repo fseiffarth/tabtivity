@@ -4,23 +4,34 @@ name: release
 # push, and nothing is rebuilt: the signed assets are the bundles that very
 # run built and tested. Only main is released (RELEASE_BRANCH): develop
 # reaches it by PR, and the in-app updater installs whatever is released.
-# Two ways in:
+# Three ways in:
 #
+#   - Automatically: a green ci-cd run of a push to main (a merged PR)
+#     releases that commit as v<package.json version>, tagged here as below.
+#     A version that is already released is skipped quietly (a re-run of
+#     ci-cd on main, say), not failed.
 #   - Actions → release → Run workflow on main: releases main's tip as
 #     v<package.json version>. The annotated tag is created here, after
 #     every check below passed and right before the Release is published.
 #   - Pushing a v* tag on a commit main holds (the app's Release button,
 #     which already refuses while CI is running or red, or a plain
-#     `git push`): waits for the tagged commit's ci-cd run. If it did not pass, or anything below fails before
+#     `git push`): waits for the tagged commit's ci-cd run. If it did not
+#     pass, or anything below fails before
 #     the Release is out, the tag is deleted again — a v* tag on GitHub always
 #     has a Release behind it, and the same name can be pushed again.
 #
 # A tag this workflow creates with GITHUB_TOKEN starts no workflow run, so a
-# dispatch never triggers itself a second time through the tag.
+# release never triggers itself a second time through the tag.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+  # Runs this file as main has it, with github.sha main's tip at trigger
+  # time — the commit released is the run's own head_sha (SHA below).
+  workflow_run:
+    workflows: [ci-cd]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -32,6 +43,14 @@ concurrency:
 jobs:
   release:
     name: release
+    # Automatic only for a green ci-cd run that a push to this repo's main
+    # started; a PR's or a fork's run never releases.
+    if: >-
+      github.event_name != 'workflow_run' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
     # Waiting for ci-cd (about an hour when it has just started) is most of it.
     timeout-minutes: 150
@@ -41,7 +60,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      SHA: ${{ github.sha }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       RELEASE_BRANCH: main
 
     steps:
@@ -49,6 +68,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           sparse-checkout: |
             package.json
             src-tauri/release-signing.pub.pem
@@ -88,6 +108,11 @@ jobs:
               exit 1
             fi
             if gh api "repos/$GH_REPO/git/ref/tags/$want" >/dev/null 2>&1; then
+              if [ "$EVENT_NAME" = workflow_run ]; then
+                # No tag output: every step below is skipped, the run is green.
+                echo "::notice::$want is already released; nothing to do for ${SHA::7}."
+                exit 0
+              fi
               echo "::error::$want already exists. Push the bump commit first (every branch push bumps the version), then run this again."
               exit 1
             fi
@@ -101,6 +126,7 @@ jobs:
       # finished and none green → refuse. A commit pushed seconds ago may
       # have no run yet, so a missing run is waited for a little too.
       - name: Wait for the commit's ci-cd run to pass
+        if: steps.decide.outputs.tag != ''
         id: ci
         run: |
           set -euo pipefail
@@ -142,14 +168,16 @@ jobs:
           done
 
       - name: Download the bundles that run built
+        if: steps.decide.outputs.tag != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           run-id: ${{ steps.ci.outputs.run_id }}
           github-token: ${{ github.token }}
-          pattern: tabtivity-${{ github.sha }}-*
+          pattern: tabtivity-${{ env.SHA }}-*
           path: release-assets
 
       - name: Build release notes
+        if: steps.decide.outputs.tag != ''
         env:
           RELEASE_TAG: ${{ steps.decide.outputs.tag }}
         run: |
@@ -178,6 +206,7 @@ jobs:
       # signature is verified against the key the updater has compiled in, so
       # a wrong secret fails here instead of in users' updaters.
       - name: Sign release checksums
+        if: steps.decide.outputs.tag != ''
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
@@ -210,10 +239,11 @@ jobs:
           openssl dgst -sha256 -verify src-tauri/release-signing.pub.pem \
             -signature SHA256SUMS.sig SHA256SUMS
 
-      # Dispatch only: the tag is made last, once everything above passed.
+      # Dispatch and automatic only: the tag is made last, once everything
+      # above passed.
       - name: Create the tag
         id: tag
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name != 'push' && steps.decide.outputs.tag != ''
         env:
           TAG: ${{ steps.decide.outputs.tag }}
         run: |
@@ -223,6 +253,7 @@ jobs:
           echo "created=1" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
+        if: steps.decide.outputs.tag != ''
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ steps.decide.outputs.tag }}
