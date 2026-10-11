@@ -39,7 +39,7 @@ use crate::services::remote::RemotePoolState;
 
 /// How often the sampler wakes: it books (and flushes) on this clock, and
 /// samples on it while a Network pane is open.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const TICK_SECS: u64 = 15;
 /// How often each connected project's link counters are sampled while no
 /// Network pane is open. Each sample is an `ss -t -i -e` dump (no process
@@ -47,7 +47,7 @@ const TICK_SECS: u64 = 15;
 /// confirmed, an `ssh -O check`. The counters are cumulative, so a slower
 /// cadence books the same totals; it only widens the tail a master that dies
 /// between two samples takes with it.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const IDLE_SAMPLE_SECS: u64 = 60;
 /// Flush the in-memory accumulator to disk every this-many ticks (~30 s). The
 /// bytes for a project persist in memory between flushes, so a slower cadence
@@ -56,7 +56,7 @@ const IDLE_SAMPLE_SECS: u64 = 60;
 const FLUSH_EVERY_TICKS: u64 = 2;
 /// A Network pane counts as open this long after its last read (it reads
 /// every second while shown, every 12 s on a careful host).
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const PANE_OPEN_MS: u64 = 30_000;
 
 /// When a Network pane last read (ms since the epoch; 0 = never).
@@ -80,7 +80,7 @@ fn pane_open() -> bool {
     pane_open_at(PANE_READ_AT.load(std::sync::atomic::Ordering::Relaxed), now_ms())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn pane_open_at(read_at: u64, now: u64) -> bool {
     read_at != 0 && now.saturating_sub(read_at) < PANE_OPEN_MS
 }
@@ -88,7 +88,7 @@ fn pane_open_at(read_at: u64, now: u64) -> bool {
 /// Whether a tick samples: the first one does, then every tick while a pane
 /// is open and every [`IDLE_SAMPLE_SECS`] otherwise. A second of slack keeps
 /// a tick that wakes a little early from skipping a whole period.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn sample_due(since_last: Option<std::time::Duration>, pane_open: bool) -> bool {
     let period = if pane_open { TICK_SECS } else { IDLE_SAMPLE_SECS };
     since_last.is_none_or(|d| d.as_secs() + 1 >= period)

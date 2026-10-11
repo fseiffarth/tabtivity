@@ -76,7 +76,7 @@ rp() { [ -n "$renderer_pid" ] && echo "$renderer_pid" || echo "0"; }
 # utime+stime ticks of a /proc/<pid>/stat or /proc/<pid>/task/<tid>/stat file.
 cpu_ticks() { awk '{ s=$0; sub(/^.*\) /, "", s); n=split(s, f, " "); print f[12]+f[13] }' "$1" 2>/dev/null || echo 0; }
 nice_of()   { awk '{ s=$0; sub(/^.*\) /, "", s); n=split(s, f, " "); print f[17] }' "$1" 2>/dev/null || echo "?"; }
-mem_line()  { awk '/^VmRSS|^VmSwap/{printf "%s %s %s  ", $1, $2, $3}' "/proc/$1/status" 2>/dev/null; echo; }
+mem_line()  { awk '/^VmRSS|^VmSwap/{printf "%s%s %s %s", sep, $1, $2, $3; sep="  "}' "/proc/$1/status" 2>/dev/null; echo; }
 ctxt()      { awk '/^voluntary_ctxt_switches/{print $2}' "/proc/$1/status" 2>/dev/null || echo 0; }
 sched()     { [ "$1" != 0 ] && cat "/proc/$1/schedstat" 2>/dev/null || echo "0 0 0"; }
 threads_snapshot() { # pid -> "tid ticks" lines
@@ -97,7 +97,6 @@ threads_snapshot() { # pid -> "tid ticks" lines
   echo "- load: $(cut -d' ' -f1-3 /proc/loadavg) on $(nproc) cores"
   if [ "$mode" = rss ]; then
     echo "- memory snapshot only"
-    echo
   fi
 } | tee -a "$OUT"
 [ "$mode" = rss ] && { echo "perf-numbers: appended to $OUT"; exit 0; }
@@ -127,6 +126,7 @@ pct() { # ticks delta -> % of one core over WINDOW
   set -- $r_s0; r_run0=${1:-0}; r_wait0=${2:-0}
   set -- $r_s1; r_run1=${1:-0}; r_wait1=${2:-0}
   run_ms=$(( (r_run1 - r_run0) / 1000000 )); wait_ms=$(( (r_wait1 - r_wait0) / 1000000 ))
+  echo
   echo "### 1. Renderer (pid ${renderer_pid:-none})$renderer_note"
   echo
   echo "- whole process: $(pct $((r_c1 - r_c0))) % of one core; schedstat run ${run_ms} ms, runqueue wait ${wait_ms} ms over ${WINDOW} s"
@@ -160,7 +160,6 @@ pct() { # ticks delta -> % of one core over WINDOW
   echo
   echo "- switch to a streaming agent tab → first paint: ___ s"
   echo "- switch to a 100-page PDF tab → pages painted: ___ s"
-  echo
 } | tee -a "$OUT"
 
 echo "perf-numbers: appended to $OUT"
