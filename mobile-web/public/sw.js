@@ -25,6 +25,13 @@ const NETWORK_TIMEOUT = 3000;
  * the placeholder is still here, and precaching *it* would fail the install. */
 const ASSETS = "__APP_ASSETS__".split(",").filter((asset) => asset.startsWith("/assets/"));
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon.svg"].concat(ASSETS);
+/* The script the cached start page must name. A start page from a newer build
+ * names that build's script, which this cache does not hold until a newer
+ * worker installs: storing it over our own left a shell pointing at nothing,
+ * and when the tunnel died before that script arrived, every later open
+ * painted a black page with no app to say why (2026-10-11). Kept out, the
+ * offline open boots this worker's own build, which shows the tunnel steps. */
+const ENTRY = ASSETS.find((asset) => asset.endsWith(".js"));
 /* Take over on the next navigation rather than waiting for every client to
  * close. A phone PWA is rarely "closed", so waiting is what kept a superseded
  * worker — and the stale cache it answers from — alive for days. Dropping the
@@ -69,7 +76,10 @@ self.addEventListener("fetch", (event) => {
     const isDocument = type.includes("text/html");
     const cacheable = response.ok && (SHELL.includes(url.pathname) || (isAsset && !isDocument));
     if (cacheable) {
-      const copy = response.clone(); caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+      const copy = response.clone();
+      const store = () => caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+      if (url.pathname === "/" && ENTRY) response.clone().text().then((page) => page.includes(ENTRY) && store());
+      else store();
     }
     /* A navigation the proxy answered *for* the sidecar is a miss, not a page:
      * with the desktop closed, Tailscale Serve answers 502 with its own error
