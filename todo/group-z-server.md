@@ -984,3 +984,25 @@ the desktop groundwork the hosted plan's P1 builds on.*
       typed into the tab and the browser's card closes; the agent's
       `markup_done` ticks show on both; the phone's start page shows no
       Local models section.
+
+2391. **Every agent MCP lane on a server.** ✅ **Built** (2026-10-11, never
+    on a server; user asked "also give the server the mcp tools"). A server
+    daemon's listener (`root_mcp::start_headless` with the daemon's context)
+    now serves what the window's does: the root lane (mail, calendar, to-do,
+    ICS import, the staged-write review — the root console's agents and the
+    overlay-docked one), the local-model and reader lanes, beside markup
+    (#2390), schedule, push and help. Set up as the window's
+    (`serve_everything`): review copies swept at start, push and markup
+    events and the schedule/push notices rung to the browser clients, whose
+    review, session, import and push controls are `core` commands. A
+    desktop's Mobile host still serves only schedule, push and help. The
+    local-model lane needs no model-allowlist call (it forwards no model to
+    Ollama; `model_allowlist.rs`). A daemon restart drops every MCP token,
+    as it does the API proxy's (#2389): a tab that outlived it has no tools
+    until restarted.
+    - [ ] 🖐️ Manual test — on a server, one account with mail set up and
+      unlocked: in the browser client open the root console and start
+      Claude; `/mcp` lists the root server; ask it for today's calendar and
+      to draft a mail → the drafts reach the review strip, Apply writes them;
+      revoke the session from the rights badge → its next call is refused.
+      A project Claude tab still lists schedule, git, help and markup.

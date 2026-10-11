@@ -3739,3 +3739,33 @@ stayed empty.
   TODO #2390.
 
 **Live steps owed:** TODO #2390's manual test.
+
+## #2391: every agent MCP lane on a server (2026-10-11)
+
+User: "also give the server the mcp tools". Built in the main session, no
+subagents, on top of #2390.
+
+- `commands::root_mcp`: `start_headless(notify, server: Option<&CoreCtx>,
+  …)`. With the daemon's context the listener is set up as the window's
+  (`serve_everything`, shared with `start`): review sandboxes swept, push
+  and markup change hooks and the schedule/push notices emit through the
+  context (to the browser clients), and `serve` gets the context — so
+  `/mcp` (root, local-model, reader) and `/mcp/markup` are routed and
+  `Runtime { serves_root, serves_markup }` are both true. `ServerState`'s
+  separate `markup` flag from #2390 is gone: the context decides both.
+- `host.rs`: passes `core_ctx` when behind the gateway (`Listen::Unix`); a
+  desktop's Mobile host passes `None` (schedule, push, help only).
+- `model_allowlist.rs`: the `TODO(#2339)` resolved — the local-model lane
+  forwards no model to Ollama.
+- The browser client needed nothing: the review, session, import, status
+  and push commands are `core`, and the frontend has no server gate on the
+  root console or its badges.
+- Mail reads by a local-model root tab on a server go to the shared Ollama
+  (the admin's service; it persists nothing) — the admin is root-equivalent
+  there anyway. Not a new decision; noted.
+- Test: the router test now proves a server listener routes all five paths.
+- Docs: `server.md` (open problem 3 settled), plan §7.3 and the allowlist
+  note, `server_gateway.md` inventory row, `web_client.md`, filemap, TODO
+  #2391.
+
+**Live steps owed:** TODO #2391's manual test.

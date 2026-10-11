@@ -27,7 +27,12 @@ Read this first; keep it current when a decision or an open point changes.
 - **Markup questions on a server built (2026-10-11, #2390).** The daemon
   serves the markup MCP lane itself (it has no window), so a server user's
   agents get `markup_ask`/`markup_done` and the browser client and phone
-  show their cards. The phone's Local models are closed on a server (the
+  show their cards.
+- **Every agent MCP lane on a server (2026-10-11, #2391).** The daemon's
+  listener serves the root lane (the root console's mail, calendar, to-do
+  and ICS-import tools, the staged-write review, the overlay-docked agent),
+  local-model and reader lanes too, with their controls and events in the
+  browser client — everything the window's listener serves. The phone's Local models are closed on a server (the
   shared Ollama is the admin's) — the two phone requests `develop` added
   after the branch base, both now answered.
 - **Nothing has run on a real server** or in the user's running window.
@@ -154,14 +159,12 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
 2. **The merge (#2386).** `develop` → `hosted` done 2026-10-07 (39
    conflicts, class rows and desktop-feature attributes for develop's new
    commands included; TODO numbers did not collide), again 2026-10-10 and
-   2026-10-11. Owed: `hosted` → `develop`, and #2339's root-MCP local-model
-   lane through the model allowlist once the daemon serves that lane.
-3. **Agent tools a server has no window for.** The daemon's listener serves
-   the schedule, push, help and markup lanes; the root lane (the root
-   agent's mail, calendar and to-do tools, ICS import, the overlay-docked
-   agent) and the mail reader lane stay window-only (#2339), so on a server
-   the root console's agents have none of them. Not yet decided whether the
-   daemon should serve them.
+   2026-10-11. Owed: `hosted` → `develop`. (The root MCP's local-model lane
+   needs no model-allowlist call: it forwards no model to Ollama.)
+3. **Agent tools on a server: settled and built 2026-10-11 (#2390,
+   #2391).** The daemon serves every lane the window does. Left as a known
+   residual, as for the API proxy: a daemon restart drops every MCP token,
+   so an agent in a tmux tab that outlived it has no tools until restarted.
 4. **To build:** drop `open_external_url` from the Connect window (#2387,
    decided 2026-10-10).
 5. **Still deferred:** phone push for turn edges with no window (#2384); a
@@ -175,8 +178,8 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
 
 ## Open decisions
 
-Whether the daemon serves the root and reader lanes (open problem 3).
-#2389 and #2387 were answered 2026-10-10; #2389 is built, #2387 not yet. `hosted` → `develop` (#2386) waits by the user's
+None. #2389 and #2387 were answered 2026-10-10; #2389 is built, #2387 not
+yet. The agent MCP lanes on a server were asked for 2026-10-11 and built. `hosted` → `develop` (#2386) waits by the user's
 call (2026-10-10) while heavy work continues on `develop`; re-merge
 `develop` → `hosted` as needed.
 
@@ -195,6 +198,7 @@ Each step's exact clicks are in its `hosted_handoff.md` section.
 6. The final fix round's 15 steps.
 7. The one agent-API-key path (#2389): its five steps in
    `hosted_handoff.md` § "#2389".
-8. Markup questions on a server (#2390): the TODO's manual test.
+8. Markup questions on a server (#2390) and the root, local-model and
+   reader lanes (#2391): the TODOs' manual tests.
 
 An `UntestedTag` is cleared only when the user says that item is tested.

@@ -26,9 +26,12 @@
 //!   a row there, or it ships unchecked;
 //! * `services::mail_ai::chat` (summaries, drafts, events, tasks, and the
 //!   classifier an inbox sync runs);
-//! * TODO(#2339): the root MCP's local-model lane (`ollama_mcp_models`, read
-//!   from the same user-writable settings) must call [`check_model`] once it
-//!   is served from the daemon.
+//!
+//! The root MCP's local-model lane, served by a server daemon too (#2339),
+//! forwards no model to Ollama: `ollama_mcp_models` only picks which local
+//! models' Vibe configs name the MCP servers; the tab's own model is checked
+//! where a launch names it (the `prepare_local_*` rows of [`MODEL_ARG`]). Its recorded endpoint is the shared Ollama, since a server ignores
+//! `ollama_host`.
 
 use serde_json::Value;
 

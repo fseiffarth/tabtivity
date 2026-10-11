@@ -82,8 +82,8 @@ loops against one mirror and one `sync.json`. Now:
   endpoint is the shared loopback Ollama, so a user can neither egress
   elsewhere nor aim the daemon at another account's loopback port (A2). The
   desktop — window and sidecar — never checks and keeps both settings. The
-  root MCP's local-model lane (#2339) must call `check_model` once the daemon
-  serves it.
+  root MCP's local-model lane, which the daemon serves since 2026-10-11
+  (#2391), needs no `check_model`: it forwards no model to Ollama.
 - **Sessions and login are the browser's own**, separate from the phone's
   `AuthStore`: a different cookie (`<slug>_desktop_session`, no `__Host-`
   because loopback is plain http and that prefix needs `Secure`), a different
@@ -267,8 +267,9 @@ own standalone workspace (Q12). As built:
 
 Popout windows (`?popout=`), browser shortcut alternatives for Ctrl+T/W/N,
 `pdf_clip_*`/`run_script_detached`, a stale-bundle notice, the CSP and
-security review — and the root MCP lane in the sidecar (#2339: starting a
-second root listener would sweep a running window's review sandboxes). The
-sidecar's own listener serves the schedule, push and help lanes; a server
-daemon's serves the markup lane too (2026-10-11), so the browser client's
-markup view and the phone read the asks its tabs make.
+security review — and the root MCP lane in a desktop's sidecar (#2339:
+starting a second root listener would sweep a running window's review
+sandboxes). The sidecar's own listener serves the schedule, push and help
+lanes; a server daemon's serves every lane, root and markup included
+(2026-10-11, #2390/#2391), so the browser client's review, session and
+markup views read the state its tabs make.

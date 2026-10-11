@@ -6470,20 +6470,21 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     // The agent MCP servers of the tabs this host spawns with no window open
     // (`docs/headless_mcp_plan.md`): schedule, push and help on a listener of
     // its own, bound here, before the scheduler's first restart can need it.
-    // A server daemon has no window at all, so it also serves the markup
-    // lane: its asks live here, where its browser client's `markup_mcp_*`
-    // commands and the phone's markup routes (`markup_call`) read them.
+    // A server daemon has no window at all, so its listener serves every
+    // lane the window would — root, reader and markup too — with this host's
+    // context: the browser client's review, session and markup commands and
+    // the phone's markup routes (`markup_call`) read the same state here.
     // This process never reads the git token from the keychain.
     crate::services::git_push_mcp::serve_without_keyring();
     let notice_dir = config.control_dir.clone();
-    let serves_markup = matches!(listen, Listen::Unix { .. });
+    let on_server = matches!(listen, Listen::Unix { .. });
     let listener = crate::commands::root_mcp::start_headless(
         Arc::new(move |notice| {
             if notice == crate::commands::root_mcp::Notice::Schedules {
                 poke_desktop(&notice_dir, None, &["schedules"]);
             }
         }),
-        serves_markup.then_some(&core_ctx),
+        on_server.then_some(&core_ctx),
         shutdown_tx.subscribe(),
     )
     .await;

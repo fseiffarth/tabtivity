@@ -1208,7 +1208,10 @@ markup MCP lane on its own listener and answers the phone from the same
 asks (`host.rs` `markup_here`; `context/markup_mcp.md`). Local models:
 closed (`local_models_disabled`, the section is left out) — the shared
 Ollama is the administrator's (§3.3), whose `admin` commands run from the
-browser client, not the phone.
+browser client, not the phone. Agent MCP tools (#2391): the daemon's own
+listener serves every lane the window's does — root, local-model, reader,
+markup, schedule, push, help — and the browser client holds their controls
+(review, sessions, imports, push cards; all `core`).
 
 ---
 
@@ -1402,6 +1405,9 @@ Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P2.*
   5 s, off the async workers) — for the dispatcher and `mail_ai` (classify on
   sync included); a user's `ollama_host` is ignored on a server; the root
   MCP's local-model lane (#2339) must call it once served from the daemon.
+  *2026-10-11 (#2391):* the daemon serves that lane; it forwards no model to
+  Ollama (`ollama_mcp_models` only picks which Vibe configs name the MCP
+  servers), so there is nothing to check there.
 - **Localhost first.** Done as built: every `/desktop/*` route and the content
   origin refuse a non-loopback `Host`, the socket an inexact `Origin`; a
   request through Tailscale Serve is a 404. **Open:** the CSP review (the web
