@@ -218,6 +218,8 @@ Tabtivity keeps its state are in [docs/guide/building.md](docs/guide/building.md
 - [Features](docs/guide/features.md) — the full feature tour
 - [Platforms and current limits](docs/guide/platforms.md)
 - [Building, development and storage](docs/guide/building.md)
+- [Setting up a server](docs/guide/server.md) — run Tabtivity on one Linux
+  machine for a few people, used from a browser or phone (experimental)
 - [User help](docs/help/) — setup and troubleshooting per feature, also
   readable from inside the app
 - [DOCUMENTATION.md](DOCUMENTATION.md) — architecture, data schemas, behavior

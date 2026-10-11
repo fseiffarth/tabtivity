@@ -48,6 +48,7 @@ Read this first; keep it current when a decision or an open point changes.
 
 | Document | What it is |
 |---|---|
+| [`guide/server.md`](guide/server.md) | The step-by-step setup guide for administrators (linked from the README). |
 | [`tabtivity_hosted_plan.md`](tabtivity_hosted_plan.md) | The design: processes, crate split, command classes, identity, logins, sharing, threat model, phases, §12 questions with the user's answers. |
 | [`hosted_handoff.md`](hosted_handoff.md) | The build log, one section per step and per review: commits, design as built, gate counts and **the live steps of each step**. History; don't rewrite it. |
 | [`context/server_gateway.md`](context/server_gateway.md) | Rationale for the gateway, per-user daemon, admin helper, units, secrets vault, admin keys, key broker, OIDC, Connect, Podman — and the listener/socket inventory. |
