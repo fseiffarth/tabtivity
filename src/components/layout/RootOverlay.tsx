@@ -51,6 +51,7 @@ import { RootReviewStrip } from "./RootReviewStrip";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { useMailStore } from "../../stores/mail";
 import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
+import { usePoll } from "../../lib/usePoll";
 
 /** What the backend's `root-mcp-changed` event carries (`services::root_mcp::Change`). */
 type RootMcpChange = (
@@ -150,11 +151,9 @@ export function RootOverlayHost() {
   useEffect(() => {
     void useRootReviewStore.getState().refresh();
   }, [rootTabs, open]);
-  useEffect(() => {
-    if (!open) return;
-    const timer = window.setInterval(() => { void useRootReviewStore.getState().refresh(); }, 5000);
-    return () => window.clearInterval(timer);
-  }, [open]);
+  // The effect above reads on open; then every 5 s while the window is in front.
+  const refreshReview = useCallback(() => useRootReviewStore.getState().refresh(), []);
+  usePoll(refreshReview, 5000, { enabled: open, immediate: false });
   const rootLayout = useTabsStore((s) => s.layoutByScope[ROOT_SCOPE]);
   const activeScope = useTabsStore((s) => s.scope);
 

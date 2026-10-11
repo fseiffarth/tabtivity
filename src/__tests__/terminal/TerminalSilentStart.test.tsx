@@ -60,6 +60,9 @@ vi.mock("../../stores/settings", () => ({
 }));
 
 import { TerminalView } from "../../components/terminal/TerminalView";
+import { HPC_GUARD } from "../../lib/remote/hpc/hpcGuard";
+import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
+import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 
 function giveLayout() {
   Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, value: 800 });
@@ -141,6 +144,39 @@ describe("TerminalView — silent start notice", () => {
     expect(written()).toContain("[spawn error:");
     expect(written()).not.toContain("Still starting");
     expect(written()).not.toContain("has shown nothing");
+  });
+
+  it("speaks for a tab the HPC connect-then-spawn retry started, and lifts its launch hold", async () => {
+    // The retry set `ownsPty` but left `spawnState` at "failed", so a tab
+    // that came up silent after the user said "connect" got no notice.
+    let refused = false;
+    invoke.mockImplementation((cmd: unknown) => {
+      if (cmd !== "pty_spawn") return Promise.resolve(undefined);
+      if (refused) return Promise.resolve(undefined);
+      refused = true;
+      return Promise.reject(new Error(`${HPC_GUARD} connect alice@login.example.org:22`));
+    });
+    const drop = useHpcGuardStore.getState().registerHost();
+    const holds: boolean[] = [];
+    await act(async () => {
+      render(
+        <PaneSleepHoldContext.Provider value={(_t, on) => holds.push(on)}>
+          <TerminalView id="p:oc" cmd="opencode" cwd="/p" visible focused={false} />
+        </PaneSleepHoldContext.Provider>,
+      );
+    });
+    await vi.waitFor(() => expect(useHpcGuardStore.getState().pending).not.toBeNull());
+    await act(async () => {
+      useHpcGuardStore.getState().proceed();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SILENT_START_MS + 50);
+    });
+    drop();
+    expect(invoke.mock.calls.filter(([c]) => c === "remote_connect")).toHaveLength(1);
+    expect(invoke.mock.calls.filter(([c]) => c === "pty_spawn")).toHaveLength(2);
+    expect(written()).toContain("opencode was started but has shown nothing for 10 seconds");
+    expect(holds).toEqual([true, false]);
   });
 
   it("never speaks for an attach-only view, which spawns nothing", async () => {

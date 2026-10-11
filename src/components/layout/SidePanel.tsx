@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ProjectFilesView } from "../files/ProjectFilesView";
 import { useFileSource } from "../files/ProjectFilesPane";
@@ -31,6 +31,7 @@ import {
 // lockstep with the Tauri manifests on each version bump.
 import { version as APP_VERSION } from "../../../package.json";
 import { PinIcon, UndoIcon } from "../common/icons/Icon";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 
 interface Props {
   open: boolean;
@@ -124,22 +125,18 @@ function RendererRssDisplay() {
   const t = useT();
   const [rows, setRows] = useState<RendererRss[]>([]);
 
-  useEffect(() => {
-    let live = true;
-    const update = async () => {
-      const next = await readRendererRss();
-      if (live) setRows(next);
-    };
-    // Make sure this window has claimed its own renderer, so the row reads
-    // "main", not "pid 3715771" (each popout claims its own via its watchdog).
-    void ensureOwnRendererPid().then(update);
-    void update();
-    const timer = window.setInterval(() => void update(), 2000);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
+  const update = useCallback(async (poll: PollRun) => {
+    const next = await readRendererRss();
+    if (!poll.stopped) setRows(next);
   }, []);
+  // Make sure this window has claimed its own renderer, so the row reads
+  // "main", not "pid 3715771" (each popout claims its own via its watchdog).
+  useEffect(() => {
+    const once = { stopped: false };
+    void ensureOwnRendererPid().then(() => update(once));
+    return () => { once.stopped = true; };
+  }, [update]);
+  usePoll(update, 2000);
 
   if (rows.length === 0) return null;
   const hot = rows.some((r) => r.rss_kib / 1024 >= RENDERER_CEILING_MB / 2);

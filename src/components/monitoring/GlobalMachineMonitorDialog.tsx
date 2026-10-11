@@ -1,7 +1,12 @@
+import { lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import { useGlobalMachineMonitorStore } from "../../stores/remote/globalMachineMonitor";
-import { SystemMonitorPane } from "./SystemMonitorPane";
 import { useT } from "../../lib/i18n";
+
+// The same lazily split chunk a System Monitor tab loads (`TabPane`).
+const SystemMonitorPane = lazy(() =>
+  import("./SystemMonitorPane").then((m) => ({ default: m.SystemMonitorPane })),
+);
 
 /**
  * Mounted once (AppShell). Renders the full system-monitor dialog for whichever
@@ -39,11 +44,13 @@ function GlobalMachineMonitorDialog({
           </button>
         </div>
         <div className="sysmon-dialog-body">
-          <SystemMonitorPane
-            projectId={null}
-            visible
-            globalMachine={{ user: machine.user, host: machine.host, port: machine.port }}
-          />
+          <Suspense fallback={<div className="pane-loading" aria-busy="true" />}>
+            <SystemMonitorPane
+              projectId={null}
+              visible
+              globalMachine={{ user: machine.user, host: machine.host, port: machine.port }}
+            />
+          </Suspense>
         </div>
       </div>
     </div>,

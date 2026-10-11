@@ -30,9 +30,10 @@ use crate::tauri_host::Ctx;
 /// the frontend would receive a storm of `fs-change` events.
 const DEBOUNCE: Duration = Duration::from_millis(200);
 
-/// Currently-watched canonical directory and its live watcher. `None` when
-/// nothing is being watched (panel closed / unmounted).
-pub type FsWatchState = Arc<Mutex<Option<(PathBuf, notify::RecommendedWatcher)>>>;
+/// Currently-watched canonical directory, the path as the frontend spelled it
+/// (the `fs-change` payload), and the live watcher. `None` when nothing is
+/// being watched (panel closed / unmounted).
+pub type FsWatchState = Arc<Mutex<Option<(PathBuf, String, notify::RecommendedWatcher)>>>;
 
 pub fn new_state() -> FsWatchState {
     Arc::new(Mutex::new(None))
@@ -149,13 +150,17 @@ pub fn watch_dir(
     let canonical = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
 
     let mut guard = state.lock().unwrap();
-    if let Some((current, _)) = guard.as_ref() {
-        if *current == canonical {
+    if let Some((current, spelled, _)) = guard.as_ref() {
+        if *current == canonical && *spelled == path {
             return Ok(()); // already watching this directory
         }
     }
 
-    let emit_path = canonical.to_string_lossy().to_string();
+    // The payload is the path exactly as the frontend asked for it, not the
+    // canonical one: a tree compares it with its own folder to ignore events
+    // meant for another tree (the slot is shared by every window), and only
+    // the backend can canonicalize (perf plan §3.4).
+    let emit_path = path.clone();
     // Trailing-edge debounce: each raw event bumps a shared generation, and ONE
     // long-lived thread waits out `DEBOUNCE` and emits only if no newer event
     // arrived meanwhile. A burst of raw events thus collapses into a single
@@ -240,7 +245,7 @@ pub fn watch_dir(
     }
 
     // Replacing the stored watcher drops the previous one, unwatching it.
-    *guard = Some((canonical, watcher));
+    *guard = Some((canonical, path, watcher));
     Ok(())
 }
 

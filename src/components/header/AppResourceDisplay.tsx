@@ -24,6 +24,13 @@ interface AppResourceUsage {
   gpus: GpuSample[];
 }
 
+/** The header readout's cadence. 5 s, not the old 2.5 s: the figure is a coarse
+ *  readout of Tabtivity's own overhead, and each reading is an IPC round trip
+ *  plus two jiffy sums over the process tree. The backend's relaxed tree cache
+ *  (`sysstat::CACHE_TTL_RELAXED`) is sized to this, so every other poll skips
+ *  the `/proc` walk; the GPU half is cached 10 s there (`GPU_SECTION_TTL`). */
+export const RESOURCE_POLL_MS = 5_000;
+
 function usageTone(kind: "cpu" | "ram", value: number): "low" | "medium" | "high" {
   // CPU is a percentage; RAM is a byte count with its own thresholds. The GPU
   // row tones by ratio instead (`gpuTone`) — its figure is the whole device's.
@@ -47,7 +54,7 @@ export function AppResourceDisplay({ folded = false, peek = 0 }: { folded?: bool
   const showCpu = useSettingsStore((s) => s.settings?.show_cpu_usage ?? true);
   const showRam = useSettingsStore((s) => s.settings?.show_ram_usage ?? true);
   const showGpu = useSettingsStore((s) => s.settings?.show_gpu_usage ?? true);
-  // Fast mode withdraws the readout: a poll every 2.5 s, forever, for a figure
+  // Fast mode withdraws the readout: a poll every 5 s, forever, for a figure
   // that is by construction a readout of Tabtivity's own overhead — so the reading
   // and the cost of taking it are the same thing.
   const fastMode = useFastMode();
@@ -79,7 +86,7 @@ export function AppResourceDisplay({ folded = false, peek = 0 }: { folded?: bool
     };
 
     poll();
-    const id = window.setInterval(poll, saverInterval(2_500, quiesce));
+    const id = window.setInterval(poll, saverInterval(RESOURCE_POLL_MS, quiesce));
     return () => {
       cancelled = true;
       window.clearInterval(id);

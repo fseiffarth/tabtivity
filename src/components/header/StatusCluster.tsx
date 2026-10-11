@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ConnLamp } from "../common/ConnLamp";
 import { ConnTypeIcon, connLabel } from "./ConnTypeIcon";
@@ -6,7 +6,6 @@ import { BatteryIndicator } from "./BatteryIndicator";
 import { MobileIndicator } from "./MobileIndicator";
 import { AlertsToggle } from "./AlertsToggle";
 import { VpnIndicator } from "./VpnIndicator";
-import { MachinesIndicator } from "./MachinesIndicator";
 import { AppResourceDisplay } from "./AppResourceDisplay";
 import { DevBuildIndicator } from "./DevBuildIndicator";
 import { useQuiesce, saverInterval, usePowerStore } from "../../stores/power";
@@ -18,6 +17,16 @@ import {
   type HeaderStatusReport,
 } from "../../stores/headerStatus";
 import { useT } from "../../lib/i18n";
+
+// Code-split (perf plan §6): the Machines menu is off by default (Settings'
+// "Remote features") and renders nothing while off, so its module graph loads
+// only once `machines_enabled` is on. Once mounted it stays mounted: switching
+// the feature off is its own `!enabled` branch (no menu, header report
+// cleared), and a "sign in in a terminal" add/edit still waiting keeps its
+// poll and form instead of being dropped by an unmount.
+const MachinesIndicator = lazy(() =>
+  import("./MachinesIndicator").then((m) => ({ default: m.MachinesIndicator })),
+);
 
 /**
  * The header's machine-state readouts — connection, battery, Mobile, OpenVPN,
@@ -69,6 +78,11 @@ export function StatusCluster() {
   const onBattery = usePowerStore((s) => s.onBattery);
   const expanded = useSettingsStore((s) => s.settings?.header_status_expanded ?? false);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
+  // Off by default; the lazy Machines menu is mounted from its first switch-on
+  // and then kept (above).
+  const machinesEnabled = useSettingsStore((s) => s.settings?.machines_enabled ?? false);
+  const [machinesMounted, setMachinesMounted] = useState(machinesEnabled);
+  if (machinesEnabled && !machinesMounted) setMachinesMounted(true);
   const reports = useHeaderStatusStore((s) => s.reports);
   const [resourcePeek, setResourcePeek] = useState(0);
 
@@ -167,7 +181,11 @@ export function StatusCluster() {
         <VpnIndicator />
       </span>
       <span className="status-cluster-item" data-folded={collapsed}>
-        <MachinesIndicator />
+        {machinesMounted && (
+          <Suspense fallback={null}>
+            <MachinesIndicator />
+          </Suspense>
+        )}
       </span>
       <span className="status-cluster-item" data-folded={collapsed}>
         <AppResourceDisplay folded={collapsed} peek={resourcePeek} />

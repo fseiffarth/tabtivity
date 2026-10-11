@@ -6361,6 +6361,11 @@ fn start_background_relays(core_ctx: &app_core::CoreCtx, browser_clients: bool, 
     }
     if browser_clients || server {
         crate::services::agent_turn::start(core_ctx.clone());
+        // The browser Reader's transcript watches (`transcript-changed`), as
+        // the window installs its own: this process's `agent_tab_transcript`
+        // arms them, and without a sink the panel would only poll.
+        let events = core_ctx.clone();
+        crate::services::transcript_watch::install(move |id| events.emit("transcript-changed", id));
     }
     if server {
         if let Some(pool) = core_ctx.state.try_get::<crate::services::remote::RemotePoolState>() {
@@ -10324,6 +10329,7 @@ mod tests {
         assert_eq!(refused_code(&none), "tab_not_found");
     }
 
+    #[cfg(unix)]
     fn refused_code(refusal: &ApiRefusal) -> String {
         refusal.1["error"].as_str().unwrap_or_default().to_string()
     }

@@ -93,6 +93,21 @@ use tokio::sync::{mpsc, Semaphore};
 use crate::services::core_dispatch::{self, Role};
 use crate::services::server;
 
+/// The last state-file command taken (`commands::persist_lane::is_ordered`):
+/// each such call waits for the one before it, so two saves sent back to back
+/// — `patch_settings` is fired without waiting for the previous one — land in
+/// the order they arrived, as the window's ordered lane keeps them. Every
+/// other call runs at once.
+static ORDERED_TAIL: Mutex<Option<tokio::sync::oneshot::Receiver<()>>> = Mutex::new(None);
+
+/// Take the next place in the state-file order: what to wait for, and the
+/// sender whose drop lets the next one go.
+fn ordered_turn() -> (Option<tokio::sync::oneshot::Receiver<()>>, tokio::sync::oneshot::Sender<()>) {
+    let (done, next) = tokio::sync::oneshot::channel();
+    let before = ORDERED_TAIL.lock().unwrap_or_else(PoisonError::into_inner).replace(next);
+    (before, done)
+}
+
 /// The frame protocol version, in `hello` and `server_capabilities`.
 pub const PROTOCOL: u32 = 1;
 /// Frames queued per client before events are shed.
@@ -1153,8 +1168,20 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: Session
                                 let ctx = call_ctx.clone();
                                 let state = state.clone();
                                 let tx = answer_tx.clone();
+                                // Taken here, in arrival order, not in the task.
+                                let turn = crate::commands::persist_lane::is_ordered(&cmd).then(ordered_turn);
                                 tokio::spawn(async move {
+                                    let done = match turn {
+                                        Some((before, done)) => {
+                                            if let Some(before) = before {
+                                                let _ = before.await;
+                                            }
+                                            Some(done)
+                                        }
+                                        None => None,
+                                    };
                                     let answer = handle_call(&state, &ctx, role, id, &cmd, args).await;
+                                    drop(done);
                                     let _ = tx.send(answer);
                                     drop(permit);
                                 });
@@ -1256,8 +1283,11 @@ fn reap_client(state: &WebClientState, client: &ClientId) {
         let taken = registry.lock().unwrap_or_else(PoisonError::into_inner).release_client(client);
         for pty in &taken {
             // As `pty_kill` does: a login marking must not bless a later PTY
-            // that reuses the id.
+            // that reuses the id, and a pane this page put to sleep has no
+            // wake coming — its route closes with the spawn instead of
+            // outliving it (`route_forget_sleep`).
             crate::commands::credentials::forget_login_pty(pty.id());
+            crate::terminal::route_forget_sleep(pty.id());
         }
         crate::terminal::teardown_taken(taken);
     }

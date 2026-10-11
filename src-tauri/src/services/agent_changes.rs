@@ -81,6 +81,9 @@ pub struct AgentChanges {
     /// Earlier changes exist that this answer does not carry.
     #[serde(default)]
     pub truncated: bool,
+    /// Armed on a watch, as `AgentTranscript::watched`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub watched: bool,
 }
 
 impl AgentChanges {
@@ -122,6 +125,7 @@ impl AgentChanges {
             unchanged: false,
             changes,
             truncated,
+            watched: false,
         }
     }
 }

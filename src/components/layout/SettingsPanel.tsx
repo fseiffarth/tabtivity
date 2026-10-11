@@ -1,6 +1,6 @@
 import { HOW_TO_START_STEPS, focusModeTip } from "../../lib/shortcuts/hints";
 import { useModalFocus } from "../../hooks/useModalFocus";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -13,7 +13,11 @@ import {
 import { RootMcpSecurity } from "./RootMcpSecurity";
 import { CopilotCompletionCard } from "./CopilotCompletionCard";
 import { UntestedTag } from "../common/UntestedTag";
+import { SLEEP_TABS_CHOICES_MIN, SLEEP_TABS_DEFAULT_MIN } from "../../lib/sleepWhenHidden";
+import { AGENT_SCROLLBACK_ROWS, SHELL_SCROLLBACK_CHOICES, shellScrollbackRows } from "../../lib/terminal/scrollback";
 import { experimentalEnabled } from "../../lib/experimental";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { TabCostList } from "./TabCostList";
 import { usePowerStore, useEnergySaver } from "../../stores/power";
 import { useProjectsStore } from "../../stores/projects";
 import { DEFAULT_MIN_SUBWINDOW_PX } from "../../stores/tabs";
@@ -98,6 +102,7 @@ import {
   ToggleRow,
 } from "./settingsUi";
 import { ErrorNote } from "../common/ErrorNote";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 
 // The workspace-layout help text. The key is the one that works here, from
 // `livePanelToggleLabel` (unless rebound): a lone Super on a Linux desktop that leaves it to the
@@ -228,25 +233,23 @@ function VmInstallSettings() {
   const [error, setError] = useState(false);
   const [installing, setInstalling] = useState(false);
 
+  const check = useCallback((stale: () => boolean) =>
+    invoke<VmDoctorReport>("vm_doctor")
+      .then((report) => {
+        if (stale()) return;
+        setDoctor(report);
+        setError(false);
+        if (!report.install_command) setInstalling(false);
+      })
+      .catch(() => { if (!stale()) setError(true); }), []);
   useEffect(() => {
     let live = true;
-    const check = () => {
-      void invoke<VmDoctorReport>("vm_doctor")
-        .then((report) => {
-          if (!live) return;
-          setDoctor(report);
-          setError(false);
-          if (!report.install_command) setInstalling(false);
-        })
-        .catch(() => { if (live) setError(true); });
-    };
-    check();
-    if (installing) {
-      const timer = window.setInterval(check, 3000);
-      return () => { live = false; window.clearInterval(timer); };
-    }
+    void check(() => !live);
     return () => { live = false; };
-  }, [installing]);
+  }, [installing, check]);
+  // While an install runs: re-check every 3 s with the window in front.
+  const pollCheck = useCallback((poll: PollRun) => check(() => poll.stopped), [check]);
+  usePoll(pollCheck, 3000, { enabled: installing, immediate: false });
 
   return (
     <SettingRow
@@ -1187,9 +1190,9 @@ const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   remoteFeatures: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"],
   vm: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"],
   mobile: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"],
-  performance: ["settings.energySaver", "settings.fastMode"],
+  performance: ["settings.energySaver", "settings.fastMode", "settings.sleepTabs", "settings.shellScrollback", "settings.tabCosts"],
   resourceMonitor: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"],
-  experimental: ["settings.debug", "settings.terminalWebgl", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug"],
+  experimental: ["settings.debug", "settings.terminalWebgl", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter"],
   git: ["nav.git.blurb"],
   vpn: ["nav.vpn.blurb"],
   remoteHosts: ["nav.remoteHosts.blurb"],
@@ -1983,6 +1986,55 @@ export function SettingsDialog({
               onChange={(e) => void updateSettings({ fast_mode: e.target.checked })}
               help={t("settings.fastModeHelp")}
             />
+
+            {/* Sleeping tabs (performance plan §5.3): read by CenterPanel through
+                `sleepTabsAfterMs`; unset means the default. */}
+            <SettingRow
+              label={
+                <>
+                  {t("settings.sleepTabs")} <UntestedTag id="settings.sleepTabs" />
+                </>
+              }
+              help={t("settings.sleepTabsHelp")}
+              control={
+                <Dropdown
+                  value={String(settings?.sleep_tabs_after_min ?? SLEEP_TABS_DEFAULT_MIN)}
+                  onChange={(v) => void updateSettings({ sleep_tabs_after_min: Number(v) })}
+                  options={[
+                    { value: "0", label: t("settings.sleepTabsNever") },
+                    ...SLEEP_TABS_CHOICES_MIN.map((n) => ({
+                      value: String(n),
+                      label: t("settings.sleepTabsMinutes", { n }),
+                    })),
+                  ]}
+                />
+              }
+            />
+
+            {/* Shell scrollback (`lib/terminal/scrollback`): TerminalView
+                applies it live to open shells; agent tabs keep a fixed cap. */}
+            <SettingRow
+              label={
+                <>
+                  {t("settings.shellScrollback")} <UntestedTag id="settings.shellScrollback" />
+                </>
+              }
+              help={t("settings.shellScrollbackHelp", { n: AGENT_SCROLLBACK_ROWS.toLocaleString() })}
+              control={
+                <Dropdown
+                  value={String(shellScrollbackRows(settings?.shell_scrollback_rows))}
+                  onChange={(v) => void updateSettings({ shell_scrollback_rows: Number(v) })}
+                  options={SHELL_SCROLLBACK_CHOICES.map((n) => ({
+                    value: String(n),
+                    label: t("settings.shellScrollbackLines", { n: n.toLocaleString() }),
+                  }))}
+                />
+              }
+            />
+
+            {/* What each open tab holds (`lib/tabCost`), main window only: a
+                popout's registries know only its own tabs. */}
+            {!isDetachedWindow() && <TabCostList onClose={onClose} />}
             </>)}
 
             {section === "resourceMonitor" && (<>
@@ -2028,19 +2080,21 @@ export function SettingsDialog({
               anchor="settings-anchor-experimental" title={t("settings.experimental")}
               help={
                 <>
-                  {t("settings.experimentalHelp1")}{" "}
-                  <b>{t("settings.experimentalHelpBold")}</b> {t("settings.experimentalHelp2")}{" "}
+                  {t("settings.experimentalHelp1")} {t("settings.experimentalHelp2")}{" "}
                   {t("settings.experimentalHelp3")}
                 </>
               }
             />
 
-            {/* Debug mode sits with the experiments because it is their fallback
-                gate: an unset experiment flag follows it (`lib/experimental`). */}
+            {/* Debug mode sits with the experiments because it used to be their
+                fallback gate. It no longer is: an unset flag is off once the
+                profile is migrated to explicit ticks (`lib/experimental`), and the
+                help says so for anyone who still expects the old behaviour. */}
             <ToggleCard
-              label={t("settings.debug")}
+              label={<>{t("settings.debug")} <UntestedTag id="settings.debugNoExperiments" /></>}
               checked={settings?.debug ?? false}
               onChange={(e) => void updateSettings({ debug: e.target.checked })}
+              help={t("settings.debugHelp")}
             />
 
 
@@ -2131,6 +2185,15 @@ export function SettingsDialog({
                   {t("settings.webBrowserHelp2")}
                 </>
               }
+            />
+
+            {/* The deck presenter's one switch. It had none while Debug mode
+                carried it; without that default a profile could not reach it. */}
+            <ToggleCard
+              label={<>{t("settings.deckPresenter")} <UntestedTag id="settings.deckPresenter" /></>}
+              checked={experimentalEnabled(settings, "deck_presenter")}
+              onChange={(e) => void updateSettings({ deck_presenter: e.target.checked })}
+              help={t("settings.deckPresenterHelp")}
             />
 
             <ToggleCard

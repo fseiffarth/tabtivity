@@ -4,12 +4,17 @@ pub mod agent_session;
 // relayed from the hook script's per-tab record to the window's activity
 // store — the authority for the tab's working and finished marks.
 pub mod agent_turn;
+// One shared, at-most-a-second-old reading of the process table for the
+// background loops that each walked `/proc` on their own timer.
+pub mod proc_table;
 // The stored conversation behind an agent tab (Claude's session log, Codex's
 // rollout) as the prompt/answer entries the phone's Focus view lays out.
 pub mod agent_transcript;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.
 pub mod agent_changes;
+// Change notifications for the transcripts the desktop Reader shows.
+pub mod transcript_watch;
 pub mod agent_bin;
 pub mod agent_tasks;
 pub mod schedule_mcp;
@@ -235,3 +240,5 @@ pub mod window_state;
 pub mod worker_sync;
 
 pub use app_core::services::text_completion;
+// One FIFO worker thread: the state-file commands' way off the GTK thread.
+pub mod ordered_lane;

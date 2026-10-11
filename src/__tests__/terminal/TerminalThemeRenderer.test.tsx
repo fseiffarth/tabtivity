@@ -140,7 +140,8 @@ describe("TerminalView — theme writes never reach a rendererless xterm", () =>
       const r = render(<TerminalView id="p:a" cmd="bash" cwd="/p" visible={false} focused={false} />);
       rerender = r.rerender;
     });
-    expect(liveTerminals[0]?.opened).toBe(false);
+    // Not even built: the xterm is constructed on the pane's first show.
+    expect(liveTerminals).toHaveLength(0);
 
     // Settings land: `color_scheme` goes undefined → "dark". Before the fix this
     // threw straight out of the effect on every unopened terminal.
@@ -207,9 +208,9 @@ describe("TerminalView — theme writes never reach a rendererless xterm", () =>
       rerender(<TerminalView id="p:d" cmd="zsh" cwd="/p" visible focused={false} />);
     });
 
-    expect(liveTerminals).toHaveLength(2);
+    // The old terminal is gone; the replacement is built on its first open.
+    expect(liveTerminals).toHaveLength(1);
     expect(liveTerminals[0].disposed).toBe(true);
-    expect(liveTerminals[1].disposed).toBe(false);
 
     // Neither the ResizeObserver (stubbed) nor the `visible` effect (its deps did
     // not change) reopens the replacement — the open watchdog does, which is
@@ -218,6 +219,8 @@ describe("TerminalView — theme writes never reach a rendererless xterm", () =>
     await act(async () => {
       await new Promise((r) => setTimeout(r, 300));
     });
+    expect(liveTerminals).toHaveLength(2);
+    expect(liveTerminals[1].disposed).toBe(false);
     expect(liveTerminals[1].opened).toBe(true);
   });
 });

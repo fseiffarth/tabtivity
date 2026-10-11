@@ -68,6 +68,20 @@ vi.mock("../../stores/settings", () => ({
 import { TerminalView } from "../../components/terminal/TerminalView";
 import { useProjectsStore } from "../../stores/projects";
 
+/** The xterm is built on the pane's first visible, sized show (perf plan
+ *  §5.2), and jsdom lays nothing out: give every element a size so the drop's
+ *  text has a terminal to be pasted into, as a pane one can drop onto does. */
+function giveLayout() {
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, value: 800 });
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, value: 600 });
+  Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+    configurable: true,
+    get() {
+      return document.body;
+    },
+  });
+}
+
 /** A drop event as WebKitGTK delivers an OS file drag: the path only inside a
  *  `file://` URL among the text payloads. */
 function fileDrop(type: string, uri: string): Event {
@@ -104,6 +118,7 @@ async function dropOnto(cmd: string, answer: unknown): Promise<{ drop: Event; ov
 
 describe("TerminalView — files dropped from the file manager", () => {
   beforeEach(() => {
+    giveLayout();
     invoke.mockReset();
     pasted.length = 0;
     useProjectsStore.setState({ switchToast: null });

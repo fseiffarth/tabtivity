@@ -125,6 +125,7 @@ import { useT } from "../../../lib/i18n";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { basename } from "../../../lib/paths";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
+import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
 import { ArrowUpRightIcon, PlayIcon } from "../../common/icons/Icon";
 
 /** Bounds for the rail's user-resizable width (px). Wide enough at the max that
@@ -255,6 +256,10 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
   const [mode, setMode] = useState<"design" | "animate" | "notes" | "tex" | "deck">("design");
   const [previewStep, setPreviewStep] = useState(0);
   const [presenting, setPresenting] = useState(false);
+  // A talk in progress keeps a sleepable pane awake (performance plan §5.3):
+  // the presenter (and its audience window) is portaled out of this view, so
+  // the tab can be hidden under it — sleeping would end the talk mid-slide.
+  usePaneSleepHold(presenting);
   const [exporting, setExporting] = useState(false);
   const [generating, setGenerating] = useState(false);
   /** Set when writing this deck back would lose something — see the module note.
@@ -514,8 +519,9 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
   // **History is pushed OUTSIDE the state updater.** `commit` used to mutate
   // `past.current` inside a `setDeck` callback, and `undo`/`redo` `pop()`ed
   // inside theirs — but React 18 StrictMode is on (`main.tsx`) and double-invokes
-  // updaters in development, which is precisely the build where the
-  // `deck_presenter` flag defaults on. So anyone who could try the feature saw
+  // updaters in development, which is precisely the build the feature was
+  // tried in (the `deck_presenter` flag used to default on in Debug mode). So
+  // anyone who could try the feature saw
   // doubled or broken undo (TODO V #104). Every mutation now computes its next
   // deck from `deckRef` and calls `setDeck` non-functionally, which makes the
   // updater pure and running it twice harmless.

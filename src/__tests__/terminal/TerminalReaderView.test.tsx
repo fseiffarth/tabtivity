@@ -34,11 +34,23 @@ import { setReaderDraft } from "../../lib/agents/readerDrafts";
 import type { Terminal } from "@xterm/xterm";
 import { NAMES, storageKey } from "../../lib/brand";
 
-/** A pane's xterm as far as the Reader reads it: its active buffer. */
+/** A pane's xterm as far as the Reader reads it: its active buffer, and the
+ * write event it reads on — a splice into `rows` is this fake's write, as a
+ * real write changes the buffer and then fires `onWriteParsed`. */
 function fakeTerminal(rows: string[]): Terminal {
+  const listeners = new Set<() => void>();
+  const splice = rows.splice.bind(rows);
+  rows.splice = ((...args: [number, number, ...string[]]) => {
+    const out = splice(...args);
+    for (const cb of [...listeners]) cb();
+    return out;
+  }) as typeof rows.splice;
   return {
     buffer: { active: { get length() { return rows.length; }, getLine: (row: number) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }) } },
-    onWriteParsed: () => ({ dispose() {} }),
+    onWriteParsed: (cb: () => void) => {
+      listeners.add(cb);
+      return { dispose() { listeners.delete(cb); } };
+    },
   } as unknown as Terminal;
 }
 
@@ -113,7 +125,11 @@ describe("the agent pane's Reader", () => {
 
   it("shows a prompt steering's box sent at once, and keeps it while the agent works", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const term = fakeTerminal(["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"]);
+    const rows = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
+    const term = fakeTerminal(rows);
+    // A working agent repaints its busy row every second; the Reader reads on
+    // those writes (no clock), and that is what keeps the sent prompt waiting.
+    const repaint = setInterval(() => rows.splice(2, 1, rows[2]), 1000);
     try {
       useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
       registerTerminal("p:agent-1", term);
@@ -126,6 +142,7 @@ describe("the agent pane's Reader", () => {
       expect(host.querySelector(".terminal-reader-turn.pending")?.textContent).toContain("queued while busy");
       expect(host.textContent).not.toContain("another tab's prompt");
     } finally {
+      clearInterval(repaint);
       unregisterTerminal("p:agent-1", term);
       vi.useRealTimers();
     }
@@ -949,5 +966,44 @@ describe("agentReader helpers", () => {
     act(() => useAgentReaderStore.getState().set("claude", false));
     expect(claude.current).toBe(false);
     expect(otherClaude.current).toBe(false);
+  });
+});
+
+describe("the Reader's transcript watch", () => {
+  let host: HTMLElement;
+  beforeEach(() => {
+    localStorage.clear();
+    invoke.mockReset();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [tab] } }));
+    useAgentReaderStore.setState({ byAgent: {} });
+    host = document.createElement("div");
+    document.body.appendChild(host);
+  });
+  afterEach(() => {
+    host.remove();
+    vi.useRealTimers();
+  });
+
+  it("reads on the watch's change instead of every 2 s, and disarms it when hidden", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { _notifyTranscriptChangedForTest } = await import("../../lib/agents/transcriptWatch");
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, watched: true } : []));
+    const reads = () => invoke.mock.calls.filter((call) => call[0] === "agent_tab_transcript");
+    const view = render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);
+    await screen.findByText("fix the parser");
+    const watch = (reads()[0][1] as { watch?: string }).watch;
+    expect(watch).toMatch(/^rw-/);
+    const before = reads().length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(reads().length).toBe(before);
+    await act(async () => {
+      _notifyTranscriptChangedForTest(watch!);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(reads().length).toBe(before + 1);
+    expect(reads()[before][1]).toEqual(expect.objectContaining({ watch, version: "v1" }));
+    view.rerender(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible={false} focused />);
+    expect(invoke).toHaveBeenCalledWith("agent_transcript_unwatch", { watchId: watch });
   });
 });

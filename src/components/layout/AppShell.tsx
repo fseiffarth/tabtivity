@@ -7,6 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type MutableRefObject,
+  type ReactNode,
 } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
@@ -14,7 +15,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { PLATFORM } from "../../lib/window/dragPlatform";
 import { nextWindowState } from "../../lib/window/windowState";
-import { noteAgentSessionStart, noteAgentTurn, notePtyOutput, useActivityStore } from "../../stores/activity";
+import { noteAgentSessionStart, noteAgentTurn, notePtyOutput, startActivityTicks } from "../../stores/activity";
+import { onAnyTerminalOutput } from "../../lib/terminal/terminalBus";
+import { noteActivityDigests, type ActivityDigest } from "../../lib/terminal/activityDigests";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import type { AgentTurnState } from "../../stores/activity";
 import {
@@ -40,10 +43,7 @@ import { SteeringPromptOverlay } from "./SteeringPromptOverlay";
 import { SteeringConfirmOverlay } from "./SteeringConfirmOverlay";
 import { ShortcutHelpOverlay } from "./ShortcutHelpOverlay";
 import { RemoteConnectDialog } from "../projects/RemoteConnectDialog";
-import { RemoteMachinesDialogHost } from "../projects/RemoteMachinesWindow";
 import { GlobalMachineMonitorDialogHost } from "../monitoring/GlobalMachineMonitorDialog";
-import { MachinesOverlayHost } from "../header/MachinesIndicator";
-import { HpcPipelineWizardHost } from "../projects/HpcPipelineWizard";
 import { BigFolderDialogHost } from "../projects/BigFolderExcludeDialog";
 import { BoxEditorHost } from "../projects/BoxEditorDialog";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
@@ -57,7 +57,6 @@ import { AgentScheduleHost } from "./AgentScheduleHost";
 import { TimerLeaseHost } from "./TimerLeaseHost";
 import { WorkspacePatchHost } from "./WorkspacePatchHost";
 import { CalDavConflictDialog } from "../calendar/CalDavConflictDialog";
-import { ModelsOverlayHost } from "../models/ModelsOverlay";
 import { RootOverlayHost } from "./RootOverlay";
 import { LocalLossDialog } from "../common/LocalLossDialog";
 import {
@@ -78,9 +77,6 @@ import { QuickOpen } from "../files/QuickOpen";
 import { HintHost } from "./HintHost";
 import { TourHost } from "./TourHost";
 import { StatsRecapHost } from "../stats/StatsRecapHost";
-import { HowToStart } from "./HowToStart";
-import { RemoteFeaturesPrompt } from "./RemoteFeaturesPrompt";
-import { LessonsMenu } from "./LessonsMenu";
 import { useHintsStore } from "../../stores/hints";
 import {
   useProjectsStore,
@@ -99,6 +95,7 @@ import { listenSyncProgress } from "../../stores/remote/sync";
 import { autoConnectVpnOnLaunch } from "../../lib/remote/vpn/vpnAutoConnect";
 import { initRemoteAutoReconnect } from "../../lib/remote/remoteAutoReconnect";
 import { initExperimentalSweep } from "../../lib/experimentalSweep";
+import { migrateExperimentalOnce } from "../../lib/experimental";
 import { initMachineSync } from "../../lib/remote/machineSync";
 import { installWindowsEvents } from "../../stores/windows";
 import { listenEditorJump } from "../../stores/viewers/editorJump";
@@ -110,6 +107,10 @@ import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { useTimerStore } from "../../stores/timer";
 import { useMailStore } from "../../stores/mail";
 import { useTodoStore } from "../../stores/todo";
+import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
+import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
+import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
+import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { flushUsage } from "../../stores/usage";
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { useT, useI18nStore, translate, type TranslationKey } from "../../lib/i18n";
@@ -117,6 +118,7 @@ import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePan
 import type { FilesPanelView } from "../../types";
 import { noteTerminalOutputChars } from "../../dev/terminalOutputRate";
 import { BRAND } from "../../lib/brand";
+import { PdfLoadWarningHost } from "./PdfLoadWarningHost";
 
 // Dev-only perf panel (src/dev/). The ternary is statically resolved at build
 // time (`import.meta.env.DEV` → false), so in a shipped bundle the lazy() —
@@ -135,8 +137,8 @@ const DevPerfHost = import.meta.env.DEV
 // its first-open work (the Escape listener, `openCard`'s `focusTaskId`) runs on
 // mount exactly as it did on the closed-to-open transition: the pane was never
 // mounted while closed. The stores are eager anyway (the header indicators read
-// them). Calendar and Skills stay static on purpose: `TabPane` imports their
-// panes eagerly, so splitting their hosts would save nothing.
+// them). The calendar overlay's chrome stays static (its hooks run while
+// closed too); its pane is the same lazy chunk a calendar tab loads (`TabPane`).
 const MailOverlayHost = lazy(() =>
   import("../mail/MailOverlay").then((m) => ({ default: m.MailOverlayHost })),
 );
@@ -165,6 +167,74 @@ function LazyTodoOverlayHost() {
     <Suspense fallback={null}>
       <TodoOverlayHost />
     </Suspense>
+  );
+}
+
+// Code-split (perf plan §6), the same bargain as mail and to-do above: each of
+// these hosts renders null until its store says open, so this shell reads that
+// one flag and mounts the lazy host only then; the host keeps its own full
+// gate. Their stores live in their own modules, so reading the flag here pulls
+// in none of the host's graph. Same DOM position as before (the stacking order
+// among `.modal-backdrop`s is DOM order), and the fallback is null, the same
+// nothing a closed host renders.
+const MachinesOverlayHost = lazy(() =>
+  import("../header/MachinesIndicator").then((m) => ({ default: m.MachinesOverlayHost })),
+);
+const RemoteMachinesDialogHost = lazy(() =>
+  import("../projects/RemoteMachinesWindow").then((m) => ({ default: m.RemoteMachinesDialogHost })),
+);
+const HpcPipelineWizardHost = lazy(() =>
+  import("../projects/HpcPipelineWizard").then((m) => ({ default: m.HpcPipelineWizardHost })),
+);
+const ModelsOverlayHost = lazy(() =>
+  import("../models/ModelsOverlay").then((m) => ({ default: m.ModelsOverlayHost })),
+);
+// First-run and on-demand pages, mounted only while this shell's own state
+// shows them.
+const HowToStart = lazy(() => import("./HowToStart").then((m) => ({ default: m.HowToStart })));
+const RemoteFeaturesPrompt = lazy(() =>
+  import("./RemoteFeaturesPrompt").then((m) => ({ default: m.RemoteFeaturesPrompt })),
+);
+const LessonsMenu = lazy(() => import("./LessonsMenu").then((m) => ({ default: m.LessonsMenu })));
+
+function LazyWhen({ when, children }: { when: boolean; children: ReactNode }) {
+  if (!when) return null;
+  return <Suspense fallback={null}>{children}</Suspense>;
+}
+
+function LazyMachinesOverlayHost() {
+  const open = useMachinesOverlayStore((s) => s.open);
+  return (
+    <LazyWhen when={open}>
+      <MachinesOverlayHost />
+    </LazyWhen>
+  );
+}
+
+function LazyRemoteMachinesDialogHost() {
+  const open = useRemoteMachinesStore((s) => !!s.projectId);
+  return (
+    <LazyWhen when={open}>
+      <RemoteMachinesDialogHost />
+    </LazyWhen>
+  );
+}
+
+function LazyHpcPipelineWizardHost() {
+  const open = useHpcPipelineStore((s) => s.open);
+  return (
+    <LazyWhen when={open}>
+      <HpcPipelineWizardHost />
+    </LazyWhen>
+  );
+}
+
+function LazyModelsOverlayHost() {
+  const open = useModelsOverlayStore((s) => s.open);
+  return (
+    <LazyWhen when={open}>
+      <ModelsOverlayHost />
+    </LazyWhen>
   );
 }
 
@@ -353,7 +423,11 @@ export function AppShell() {
   const panelCloseTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    loadSettings();
+    // Load settings, then move this profile's experimental flags onto the
+    // explicit rule, once (`lib/experimental`). Main window only — popouts never
+    // mount AppShell — and only after a load that succeeded: a rejected load
+    // never reaches it (and stays an unhandled rejection, as before).
+    void Promise.resolve(loadSettings()).then(() => migrateExperimentalOnce());
     loadProjects();
     // Startup window geometry — which monitor, what size, maximized or not — is
     // owned ENTIRELY by the backend now (`restore_main_window` in lib.rs), which
@@ -544,7 +618,7 @@ export function AppShell() {
   // Withdraw the tabs (and live browser windows) of any experiment that is
   // switched off — now and on every settings change. Installed here rather than
   // in the Settings panel because a flag can go off without that panel being
-  // open: Debug mode carries every unset flag with it, and settings arrive
+  // open (another window's write reaches this one's store), and settings arrive
   // asynchronously at launch. See lib/experimentalSweep.
   useEffect(() => initExperimentalSweep(), []);
 
@@ -863,31 +937,30 @@ export function AppShell() {
   // One global listener covers background projects too (their PTYs keep
   // emitting even while their tab views are unmounted).
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
     let unlistenDigest: (() => void) | undefined;
-    listen<{ id: string; data: string }>("terminal-output", (ev) => {
+    // Off the terminal bus's one `terminal-output` listener rather than a
+    // second `listen()` of our own: Tauri evaluates a script per listener with
+    // the payload inlined, so a second one parsed every chunk twice.
+    const unlisten = onAnyTerminalOutput((id, data) => {
       // The chunk itself rides along: the store classifies a quiet agent tab —
       // finished vs blocked on a prompt — off its tail.
-      notePtyOutput(ev.payload.id, ev.payload.data);
+      notePtyOutput(id, data);
       // Development-only transport-rate readout in the side-panel footer.
-      // Count here because this is already the one app-wide listener: adding a
-      // second listener just for profiling would add dispatch work to the hot
+      // Count here because this is already the one app-wide tap: adding a
+      // second one just for profiling would add dispatch work to the hot
       // path being measured. Vite folds this branch away in production.
       if (import.meta.env.DEV) {
-        noteTerminalOutputChars(ev.payload.id, ev.payload.data.length);
+        noteTerminalOutputChars(id, data.length);
       }
-    })
-      .then((fn) => { unlisten = fn; })
-      .catch(() => {});
+    });
     // A HIDDEN pane's PTY emits no terminal-output at all (visible-only
-    // streaming): the backend condenses its output into these throttled
-    // digests, which carry the same tail the classifier needs — so background
-    // agent tabs keep their working/decision/done pills without their full
-    // streams ever crossing IPC. (`terminal-replay`, the show-again catch-up,
-    // is deliberately NOT fed in here: its bytes were already digested live,
-    // and re-noting them would flash a quiet tab "working" on every show.)
-    listen<{ id: string; data: string }>("terminal-activity", (ev) => {
-      notePtyOutput(ev.payload.id, ev.payload.data);
+    // streaming): the backend condenses its output into throttled digests,
+    // every hidden PTY's in one event per tick (`noteActivityDigests`).
+    // (`terminal-replay`, the show-again catch-up, is deliberately NOT fed in
+    // here: its bytes were already digested live, and re-noting them would
+    // flash a quiet tab "working" on every show.)
+    listen<ActivityDigest[]>("terminal-activity-batch", (ev) => {
+      noteActivityDigests(ev.payload);
     })
       .then((fn) => { unlistenDigest = fn; })
       .catch(() => {});
@@ -913,20 +986,15 @@ export function AppShell() {
     })
       .then((fn) => { unlistenRoll = fn; })
       .catch(() => {});
-    return () => { unlisten?.(); unlistenDigest?.(); unlistenTurn?.(); unlistenRoll?.(); };
+    return () => { unlisten(); unlistenDigest?.(); unlistenTurn?.(); unlistenRoll?.(); };
   }, []);
 
-  // Recompute the running-task indicators on a fixed cadence. Split from the
-  // listener above so re-arming it on a quiesce flip doesn't drop the
-  // terminal-output listener. On battery — or unfocused — the pill lags a
-  // little more but the 300ms churn stops.
-  useEffect(() => {
-    const id = setInterval(
-      () => useActivityStore.getState().recompute(),
-      saverInterval(300, quiesce),
-    );
-    return () => clearInterval(id);
-  }, [quiesce]);
+  // The running-task indicators recompute on demand — a chunk, a keystroke, a
+  // hook verdict, a tab-list change, a window expiring (`stores/activity`) —
+  // not on a clock. On battery — or unfocused — the trailing delay stretches,
+  // so the pill lags a little more while a streaming tab is classified a
+  // third as often.
+  useEffect(() => startActivityTicks(saverInterval(300, quiesce)), [quiesce]);
 
   // Poll AC/battery state so Energy Saver ("on battery") can react to plug/unplug.
   useEffect(() => usePowerStore.getState().start(), []);
@@ -1182,6 +1250,7 @@ export function AppShell() {
       {panelsHiddenToast != null && (
         <div key={panelsHiddenToast} className="project-switch-toast">{panelsHiddenToast}</div>
       )}
+      <PdfLoadWarningHost />
       <div
         className={`app-body${
           revealPanel && panelPinned
@@ -1347,7 +1416,7 @@ export function AppShell() {
           because each of them is raised by a gesture made inside it and must
           land on top — and the root console (a terminal sign-in) is later
           still. */}
-      <MachinesOverlayHost />
+      <LazyMachinesOverlayHost />
       {/* "Is this the right machine?" — shown before a password is sent to a host
           whose SSH key has never been accepted here. At the shell because it can be
           raised by any connect surface (the Connect modal, a create/extend dialog,
@@ -1370,12 +1439,12 @@ export function AppShell() {
       <RemoteConnectDialog />
       {/* Multi-host remote: the "Remote machines" manager, opened from a pill's
           Runtime menu or a right-click on its remote lamp. */}
-      <RemoteMachinesDialogHost />
+      <LazyRemoteMachinesDialogHost />
       {/* The header Machines menu's "System monitor…" button, per global machine. */}
       <GlobalMachineMonitorDialogHost />
       {/* The guided HPC/SLURM pipeline wizard (login → create → load → run → watch),
           launched from the project-switcher + menu (docs/quirky-knitting-umbrella). */}
-      <HpcPipelineWizardHost />
+      <LazyHpcPipelineWizardHost />
       {/* "These folders are giant — sync them?", asked once when a project is first
           paired with a host. Lives at the shell for the same reason the manager
           above does: the project that asked may not be the active one by the time
@@ -1446,7 +1515,7 @@ export function AppShell() {
           because it is opened from a header button that sits over them, and
           before the root console so a one-click install started from one of
           its tabs opens the console on top of it. */}
-      <ModelsOverlayHost />
+      <LazyModelsOverlayHost />
       {/* The root console (Ctrl+Shift+R): the root scope as a floating subwindow
           instead of a scope to switch to, and the one overlay onto the root
           terminal — a one-click install (`runInstallInTab`) and a parked login
@@ -1485,7 +1554,7 @@ export function AppShell() {
           <DevPerfHost />
         </Suspense>
       )}
-      {showHowToStart && (
+      <LazyWhen when={showHowToStart}>
         <HowToStart
           onClose={() => {
             setShowHowToStart(false);
@@ -1495,11 +1564,13 @@ export function AppShell() {
             }
           }}
         />
-      )}
-      {showRemoteFeaturesPrompt && (
+      </LazyWhen>
+      <LazyWhen when={showRemoteFeaturesPrompt}>
         <RemoteFeaturesPrompt onClose={() => setShowRemoteFeaturesPrompt(false)} />
-      )}
-      {showLessons && <LessonsMenu onClose={() => setShowLessons(false)} />}
+      </LazyWhen>
+      <LazyWhen when={showLessons}>
+        <LessonsMenu onClose={() => setShowLessons(false)} />
+      </LazyWhen>
     </div>
   );
 }

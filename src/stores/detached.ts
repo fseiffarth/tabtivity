@@ -16,6 +16,7 @@ import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWind
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   useTabsStore,
+  flushViewerState,
   orderedTabKeys,
   findGroupOfTab,
   mapGroup,
@@ -938,6 +939,9 @@ export function detachedNewTabCwd(
  * badges and turned its docked viewer into a plain local folder.
  */
 export function reseedDetached(scope: string, groupId: string, landedKey?: string): void {
+  // The seed is the popout's one-time copy of each payload: ship the latest
+  // staged viewer positions, not the ones of up to a flush interval ago (§3.1).
+  flushViewerState();
   const store = useTabsStore.getState();
   const entry = store.detachedGroupsByScope[scope]?.find((d) => d.id === groupId);
   if (!entry) return;
@@ -1046,6 +1050,7 @@ export async function listenDetachedHost(): Promise<() => void> {
   const queuedSeeds: DetachedSeedRequest[] = [];
   let publishStatus = (_force = false) => {};
   const answerSeed = ({ label, scope, groupId }: DetachedSeedRequest) => {
+    flushViewerState();
     const store = useTabsStore.getState();
     const entry = (store.detachedGroupsByScope[scope] ?? []).find(
       (d) => d.id === groupId,

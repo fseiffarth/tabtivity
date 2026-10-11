@@ -26,6 +26,7 @@ import {
   readFileText,
   writeFileBytes,
   fileMtime,
+  fileSize,
   describeFileErrorKey,
 } from "../fileAccess";
 import { useExperimental } from "../../../lib/experimental";
@@ -81,6 +82,7 @@ import {
   markedSheetCount,
   type Rect,
 } from "../../../lib/viewers/redact";
+import { registerPdfDoc, unregisterPdfDoc, updatePdfDoc } from "../../../lib/tabCost";
 import {
   openSource,
   sourceBytes,
@@ -175,6 +177,8 @@ import { useT, type TranslationKey } from "../../../lib/i18n";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { pdfRasterRatio } from "./raster";
 import { PdfWorkerSlot } from "../../../lib/viewers/pdfLoad";
+import { usePaneSleepHold, useSleepWhenHidden } from "../../../lib/sleepWhenHidden";
+import { isTabInPopout, splitSubPaneKey, useTabsStore } from "../../../stores/tabs";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { ArrowUpRightIcon, CommentIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
 
@@ -190,6 +194,44 @@ const RELOAD_POLL_MS = 1500;
  *  error, at this spacing, while the last good document stays on screen. */
 const RELOAD_RETRY_MS = 250;
 const RELOAD_MAX_RETRIES = 12;
+
+/** The stat-twice gate before a reload's read: the file's size must agree across
+ *  two stats this far apart (a compiler writes a PDF in one go, so a size that
+ *  held for this long is a finished one), for at most this many rounds before
+ *  the read goes ahead regardless and the parse retry above takes over. */
+export const RELOAD_SETTLE_MS = 300;
+const RELOAD_SETTLE_ROUNDS = 10;
+
+/** The longest a running build (`beginCompile`) holds the viewer's mtime poll:
+ *  a compile that long is not a compile, it is a window that died mid-build. */
+const PDF_COMPILE_HOLD_MAX_MS = 10 * 60_000;
+
+/**
+ * Wait until the file's size holds still across two stats `RELOAD_SETTLE_MS`
+ * apart, or `RELOAD_SETTLE_ROUNDS` have passed. A stat that fails, or a backend
+ * without the command (a test's mocked `invoke`), ends the wait at once — the
+ * read that follows carries its own retry.
+ */
+async function settledFileSize(
+  path: string,
+  scope: string | null,
+  cancelled: () => boolean,
+): Promise<void> {
+  let last: number | null = null;
+  for (let round = 0; round < RELOAD_SETTLE_ROUNDS; round++) {
+    let size: unknown;
+    try {
+      size = await fileSize(path, scope);
+    } catch {
+      return;
+    }
+    if (cancelled() || typeof size !== "number") return;
+    if (last === size) return;
+    last = size;
+    await new Promise<void>((r) => setTimeout(r, RELOAD_SETTLE_MS));
+    if (cancelled()) return;
+  }
+}
 
 /** How long after the last remark edit the file is written, when autosaving remarks
  *  is on (#pdf-notes). Long enough that writing a sentence, correcting it and moving
@@ -214,6 +256,105 @@ const PDF_MIN_SCALE = 0.1;
 const PDF_MAX_SCALE = 8;
 const PDF_ZOOM_STEP = 1.2;
 const clampPdfScale = (s: number) => Math.min(PDF_MAX_SCALE, Math.max(PDF_MIN_SCALE, s));
+
+/** How long after the last Ctrl+wheel tick the zoom is COMMITTED — the page
+ *  canvases rasterised at the new scale and the scale persisted. Until then the
+ *  page stack is scaled with a CSS transform, so a wheel gesture of a dozen ticks
+ *  costs one render per page instead of a dozen (each allocating a canvas up to
+ *  `PDF_MAX_CANVAS_PIXELS` and cancelling the one before it). Short enough that
+ *  the crisp page follows the gesture almost at once. */
+export const PDF_ZOOM_COMMIT_MS = 120;
+
+/** How long a painted page keeps its canvas after its pane is hidden. Long
+ *  enough that flipping to another tab and back repaints nothing; short enough
+ *  that a PDF left behind a terminal for a while does give its memory up (a
+ *  near page at fit width on a 2× screen is tens of MB). Mirrors the terminal's
+ *  `RENDERER_RELEASE_MS`. */
+export const PDF_PAGE_RELEASE_MS = 30_000;
+
+/** How long a PDF tab stays hidden before its viewer sleeps: the parsed document
+ *  (1.5–4× the file in the worker) and the worker itself are released, and the
+ *  tab reloads from disk on show, at the persisted page/zoom/scroll. Composes with
+ *  the page release above: hidden under 30 s the pages stay painted; up to this
+ *  long the canvases are gone but the document answers at once; past it the
+ *  document is gone too. Held off by unsaved marks or page edits, a running
+ *  build of the file, and a popout mirroring the tab. */
+export const PDF_DOC_RELEASE_MS = 5 * 60_000;
+
+/** A zoom in progress: the scale the reader has wheeled to, previewed by scaling
+ *  the page stack with CSS around the point under the cursor (in the stack's own
+ *  untransformed coordinates), until it is committed (`PDF_ZOOM_COMMIT_MS`).
+ *  Everything but `scale` is measured on the gesture's first tick and kept: it
+ *  is what the commit anchors the scroll offset to (`commitZoomPreview`). */
+interface ZoomPreview {
+  scale: number;
+  originX: number;
+  originY: number;
+  /** The cursor at the first tick, relative to the scroller's padding box. */
+  cursorX: number;
+  cursorY: number;
+  /** The scroll offset at the first tick: a plain scroll while the preview is
+   *  up moves the origin point on screen by the difference. */
+  scrollLeft: number;
+  scrollTop: number;
+  /** The stack's offset inside the scroll content (the scroller's padding) —
+   *  the fallback anchor when no page wrap could be found under the cursor. */
+  stackLeft: number;
+  stackTop: number;
+  /** The origin point as a fraction of the page wrap it lies on (or the nearest
+   *  wrap's edge, when it lies in a gap). The inter-page gaps do not scale with
+   *  the zoom, so a target expressed against the whole stack drifts by a gap
+   *  per page above the cursor; one expressed against the page itself does not. */
+  anchor: { wrap: HTMLElement; fx: number; fy: number } | null;
+}
+
+/** The scroll offset the page stack is moved to once it has relaid out after a
+ *  zoom commit: either absolute, or "put this point of this page wrap under the
+ *  cursor", resolved against the wrap's box at apply time (`anchoredScrollTarget`). */
+type PendingScroll =
+  | { top: number; left: number }
+  | { wrap: HTMLElement; fx: number; fy: number; cursorX: number; cursorY: number };
+
+/** The page wrap under (`clientX`, `clientY`) in the stack, with the point as
+ *  fractions of its box — or, for a point in a gap or beside the pages, the
+ *  nearest wrap with the fraction clamped to its edge. `null` with no wraps. */
+function pageAnchorAt(
+  stack: HTMLElement,
+  clientX: number,
+  clientY: number,
+): { wrap: HTMLElement; fx: number; fy: number } | null {
+  const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+  let below: HTMLElement | null = null;
+  let last: HTMLElement | null = null;
+  for (const wrap of stack.querySelectorAll<HTMLElement>(":scope > .file-viewer-pdf-page-wrap")) {
+    const r = wrap.getBoundingClientRect();
+    if (r.height <= 0 || r.width <= 0) continue;
+    if (clientY >= r.top && clientY < r.bottom) {
+      return { wrap, fx: clamp01((clientX - r.left) / r.width), fy: (clientY - r.top) / r.height };
+    }
+    if (clientY < r.top && !below) below = wrap;
+    last = wrap;
+  }
+  const wrap = below ?? last;
+  if (!wrap) return null;
+  const r = wrap.getBoundingClientRect();
+  return { wrap, fx: clamp01((clientX - r.left) / r.width), fy: below ? 0 : 1 };
+}
+
+/** Resolve an anchored scroll target against the wrap's live, relaid-out box.
+ *  `null` when the wrap is gone (a reload replaced the pages meanwhile). */
+function anchoredScrollTarget(
+  el: HTMLElement,
+  a: Extract<PendingScroll, { wrap: HTMLElement }>,
+): { top: number; left: number } | null {
+  if (!a.wrap.isConnected) return null;
+  const er = el.getBoundingClientRect();
+  const wr = a.wrap.getBoundingClientRect();
+  return {
+    top: wr.top - er.top - el.clientTop + el.scrollTop + a.fy * wr.height - a.cursorY,
+    left: wr.left - er.left - el.clientLeft + el.scrollLeft + a.fx * wr.width - a.cursorX,
+  };
+}
 
 /** Is the key going to somewhere that types? The host div wraps the find bar, the
  *  go-to-page box and every remark card, so the page-stepping arrow keys have to
@@ -479,6 +620,7 @@ function PdfPageCanvas({
   markup,
   questionPins,
   tickBadges,
+  onSize,
 }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -493,6 +635,12 @@ function PdfPageCanvas({
    *  grows page-by-page and a deep restored scroll position is unreachable until
    *  every page above it has rendered (#viewerpos PDF restore). */
   cssSize?: { w: number; h: number };
+  /** The page's own scale-1 size turned out to differ from `cssSize`: a reload
+   *  kept the reserved sizes (same page count, same first and last page) and
+   *  this page, in the middle, was the one the build resized. Reported from the
+   *  fetch the render needs anyway, so the reservation and every layer laid out
+   *  by it (remarks, markup, copy region) follow the page as drawn. */
+  onSize?: (size: { w: number; h: number }) => void;
   /** SyncTeX reverse search: a click maps to big points on this page. */
   onSyncClick?: (page: number, xBp: number, yBp: number) => void;
   /** True while Ctrl/⌘ is held, so the page shows the reverse-search cursor. */
@@ -635,18 +783,70 @@ function PdfPageCanvas({
   // unaffected. In jsdom (tests) there is no observer, so it renders eagerly as
   // before.
   const [near, setNear] = useState(typeof IntersectionObserver === "undefined");
+  // Whether the pane this page sits in is on screen. A hidden pane
+  // (`display:none`) reports every page as not intersecting, which used to
+  // release every painted page the moment the reader switched tabs — and
+  // re-decode and repaint all of them on the way back. Read through a ref by the
+  // observer callback and the render effect, so neither re-runs on a tab switch.
+  const paneVisible = usePaneVisible();
+  const paneVisibleRef = useRef(paneVisible);
+  paneVisibleRef.current = paneVisible;
   useEffect(() => {
     const el = wrapRef.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
+    // A page that leaves the margin because its PANE was hidden keeps its pixels
+    // for `PDF_PAGE_RELEASE_MS` (the terminal's `RENDERER_RELEASE_MS` pattern):
+    // flipping to another tab and back costs nothing, a tab left behind for a
+    // while still gives its canvases up. On show the observer reports again —
+    // a page still near is kept, one the pane is no longer near is released
+    // then, as a scroll-away would have.
+    let holdTimer: number | null = null;
     const io = new IntersectionObserver(
-      (entries) => setNear(entries.some((e) => e.isIntersecting)),
-      // A generous margin paints a page a screenful or two before it scrolls into
-      // view (no blank flash in normal scrolling) and drops it once well past.
-      { root: null, rootMargin: "150% 0px" },
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          if (holdTimer != null) window.clearTimeout(holdTimer);
+          holdTimer = null;
+          setNear(true);
+          return;
+        }
+        if (!paneVisibleRef.current) {
+          if (holdTimer == null) {
+            holdTimer = window.setTimeout(() => {
+              holdTimer = null;
+              setNear(false);
+            }, PDF_PAGE_RELEASE_MS);
+          }
+          return;
+        }
+        if (holdTimer != null) window.clearTimeout(holdTimer);
+        holdTimer = null;
+        setNear(false);
+      },
+      // A screenful either side paints a page before it scrolls into view (no
+      // blank flash in normal scrolling) and drops it once well past — about
+      // three pages at fit width, rather than the four or five a wider margin
+      // held (and rebuilt) at once.
+      { root: null, rootMargin: "100% 0px" },
     );
     io.observe(el);
-    return () => io.disconnect();
+    return () => {
+      if (holdTimer != null) window.clearTimeout(holdTimer);
+      io.disconnect();
+    };
   }, []);
+
+  // A near page whose document changed while its pane was hidden is NOT
+  // repainted there (work in a hidden pane); the render effect notes it and
+  // this re-runs it on show, where the fingerprint decides whether the pixels
+  // can stay. A counter rather than `paneVisible` in the effect's deps, so a
+  // plain tab flip with nothing changed re-runs nothing.
+  const [catchUp, setCatchUp] = useState(0);
+  const hiddenStale = useRef(false);
+  useEffect(() => {
+    if (!paneVisible || !hiddenStale.current) return;
+    hiddenStale.current = false;
+    setCatchUp((n) => n + 1);
+  }, [paneVisible]);
 
   // What is currently ON this canvas: the fingerprint of the content it was
   // painted from, and the geometry it was painted at. A recompile hands the
@@ -666,6 +866,15 @@ function PdfPageCanvas({
      *  highlight the viewer has since taken over and is now drawing itself. */
     hidden: string;
   } | null>(null);
+  // The document whose page this canvas last fetched to draw (or compare) —
+  // the one a scroll-away's `cleanup()` has something to give back for.
+  const touchedDoc = useRef<PDFDocumentProxy | null>(null);
+  // Read by the render effect without being among its deps: a corrected
+  // reservation must not repaint the page that corrected it.
+  const cssSizeRef = useRef(cssSize);
+  cssSizeRef.current = cssSize;
+  const onSizeRef = useRef(onSize);
+  onSizeRef.current = onSize;
 
   useEffect(() => {
     // Scrolled well away: release the backing store (keeping the reserved CSS
@@ -687,7 +896,20 @@ function PdfPageCanvas({
       // `cleanup()` keeps the page itself (so returning to it re-renders from the
       // file rather than reloading the document) and refuses while a render is in
       // flight, which is exactly the case this must not disturb.
-      void doc.getPage(pageNumber).then((p) => p.cleanup()).catch(() => {});
+      //
+      // Only for a document this canvas has actually drawn from: a reload hands
+      // every page a fresh document, and fetching a page this canvas never
+      // touched just to clean it was a worker round trip per page per build.
+      if (touchedDoc.current === doc) {
+        touchedDoc.current = null;
+        void doc.getPage(pageNumber).then((p) => p.cleanup()).catch(() => {});
+      }
+      return;
+    }
+    if (!paneVisibleRef.current) {
+      // Held while its pane is hidden (see the observer above): whatever changed
+      // — a recompile's new document, a turn — is painted on show, not now.
+      hiddenStale.current = true;
       return;
     }
     let cancelled = false;
@@ -702,7 +924,19 @@ function PdfPageCanvas({
         return;
       }
       if (cancelled) return;
+      touchedDoc.current = doc;
       const rotation = (((page.rotate + rot) % 360) + 360) % 360;
+      // The reserved box was measured once per document, or kept across a
+      // reload whose ends did not change (`measuredRef` in the viewer); a page
+      // the build resized in between is caught here, from the page already in
+      // hand, and the viewer corrects the reservation.
+      const reserved = cssSizeRef.current;
+      if (reserved) {
+        const natural = page.getViewport({ scale: 1, rotation });
+        if (reserved.w !== natural.width || reserved.h !== natural.height) {
+          onSizeRef.current?.({ w: natural.width, h: natural.height });
+        }
+      }
       // The screen's pixel ratio, capped so one page canvas stays within
       // `PDF_MAX_CANVAS_PIXELS` at high zoom or on a poster-sized page (see
       // `raster.ts`); the canvas is still laid out at its full CSS size.
@@ -806,7 +1040,7 @@ function PdfPageCanvas({
       cancelled = true;
       task?.cancel();
     };
-  }, [doc, pageNumber, rot, scale, near, hiddenHighlights]);
+  }, [doc, pageNumber, rot, scale, near, hiddenHighlights, catchUp]);
 
   // The page's own hyperlinks (#pdf-links). Keyed off the sheet and its turn but
   // NOT off `scale` — the boxes are stored in big points and multiplied into CSS
@@ -1666,6 +1900,7 @@ function PdfCanvas({
   tabKey,
   groupId,
   onReverseSource,
+  onHoldChange,
 }: {
   path: string;
   /** When set, an "Open externally" button is shown at the end of the toolbar.
@@ -1682,6 +1917,9 @@ function PdfCanvas({
    *  Absent ⇒ today's standalone behavior (a real source tab), so the plain PDF
    *  tab and its tests are unaffected. */
   onReverseSource?: (src: SyncSource, anchor: string) => void;
+  /** Tells the host whether this canvas holds unsaved work (marks not yet
+   *  written, page edits not yet saved), which must keep it from sleeping. */
+  onHoldChange?: (held: boolean) => void;
 }) {
   const t = useT();
   const chordHint = useChordHint();
@@ -2389,7 +2627,53 @@ function PdfCanvas({
   // After a Ctrl+wheel zoom changes `scale`, the page canvases re-render to the
   // new size asynchronously. We stash the scroll target that keeps the cursor's
   // document point fixed and apply it once the content has actually resized.
-  const pendingScroll = useRef<{ top: number; left: number } | null>(null);
+  const pendingScroll = useRef<PendingScroll | null>(null);
+  // A Ctrl+wheel zoom between its first tick and its commit (`ZoomPreview`).
+  // `scale` — what the canvases are rasterised at, what the layers are laid out
+  // by, what is persisted — does not move until the gesture has paused for
+  // `PDF_ZOOM_COMMIT_MS`; the stack is CSS-scaled by `preview.scale / scale`
+  // meanwhile. The ref is the wheel handler's view of it (bound once).
+  const [zoomPreview, setZoomPreview] = useState<ZoomPreview | null>(null);
+  const zoomPreviewRef = useRef<ZoomPreview | null>(null);
+  const zoomCommitTimer = useRef<number | null>(null);
+  /** Forget a pending preview without committing it — for a zoom set by other
+   *  means (fit width) that would otherwise be overwritten by the stale commit. */
+  const dropZoomPreview = useCallback(() => {
+    if (zoomCommitTimer.current != null) window.clearTimeout(zoomCommitTimer.current);
+    zoomCommitTimer.current = null;
+    zoomPreviewRef.current = null;
+    setZoomPreview(null);
+  }, []);
+  /** Commit the previewed zoom: one raster render per near page, one persist. The
+   *  scroll target that keeps the previewed picture in place — the origin point
+   *  of the preview, where it shows NOW (a plain scroll meanwhile moved it) — is
+   *  stashed for the ResizeObserver to apply once the stack has relaid out at the
+   *  new size; the CSS preview comes off in the same React commit. A gesture that
+   *  wheeled back to the committed scale commits nothing and leaves no target. */
+  const commitZoomPreview = useCallback(() => {
+    const preview = zoomPreviewRef.current;
+    dropZoomPreview();
+    if (!preview || preview.scale === scaleRef.current) return;
+    const el = scrollRef.current;
+    if (el) {
+      const cursorX = preview.cursorX - (el.scrollLeft - preview.scrollLeft);
+      const cursorY = preview.cursorY - (el.scrollTop - preview.scrollTop);
+      const eff = preview.scale / scaleRef.current;
+      pendingScroll.current = preview.anchor
+        ? { ...preview.anchor, cursorX, cursorY }
+        : {
+            top: preview.stackTop + preview.originY * eff - cursorY,
+            left: preview.stackLeft + preview.originX * eff - cursorX,
+          };
+    }
+    setScale(preview.scale);
+  }, [dropZoomPreview]);
+  useEffect(
+    () => () => {
+      if (zoomCommitTimer.current != null) window.clearTimeout(zoomCommitTimer.current);
+    },
+    [],
+  );
   // Bumped whenever the file's mtime advances on disk, forcing a byte reload.
   const [diskVersion, setDiskVersion] = useState(0);
   // The diskVersion that produced `doc`. Compile-triggered forward search waits
@@ -2429,6 +2713,17 @@ function PdfCanvas({
   });
   const markupRef = useRef(markup);
   markupRef.current = markup;
+  // Unsaved work holds the viewer awake (`PdfView`): a sleep is an unmount, and
+  // an unmount would drop unwritten marks (a layer the store could not take,
+  // while it holds marks or a round), a Submit going out, or unsaved page edits
+  // on the floor.
+  const held =
+    (markup.storage === "unsaved" && (markup.hasUnsent || markup.round !== null)) ||
+    markup.sending ||
+    dirty;
+  useEffect(() => {
+    onHoldChange?.(held);
+  }, [held, onHoldChange]);
   // The agent's questions (`markup_ask`), pinned at the words they quote.
   const questionPins = useQuestionPins(marking ? doc ?? null : null, markup.questions.asks);
   const pinnedQuestions = useMemo(
@@ -2636,6 +2931,19 @@ function PdfCanvas({
   // routed through the stale banner when page edits are pending, exactly like
   // the poll — a reload replaces the arrangement.
   const reloadNonce = usePdfSyncStore((s) => s.reloadByPath[path] ?? 0);
+
+  // A build of this PDF is running (`beginCompile`): the mtime poll stands
+  // down until it ends — bounded, so a window that dies mid-build (its
+  // `endCompile` never arrives) cannot leave the poll off for good.
+  const compiling = usePdfSyncStore((s) => (s.compilingByPath[path] ?? 0) > 0);
+  const [compileHoldExpired, setCompileHoldExpired] = useState(false);
+  useEffect(() => {
+    setCompileHoldExpired(false);
+    if (!compiling) return;
+    const id = window.setTimeout(() => setCompileHoldExpired(true), PDF_COMPILE_HOLD_MAX_MS);
+    return () => window.clearTimeout(id);
+  }, [compiling]);
+  const compileHeld = compiling && !compileHoldExpired;
   useEffect(() => {
     if (!reloadNonce || (!doc && !error)) return;
     diskChanged(() => {
@@ -3656,8 +3964,16 @@ function PdfCanvas({
   // TeX PDF behind another tab in its group) polled an SFTP stat per tick on a
   // remote project forever. The immediate check on re-show catches a recompile
   // that happened while the tab was hidden.
+  //
+  // Held while a build of this PDF is running in a TeX editor (`beginCompile`):
+  // latexmk rewrites the file once per pass, and the poll used to read every
+  // intermediate PDF — retrying each one it caught mid-write — before the
+  // compile's own reload request at the end read the one that counts.
+  const wasCompiling = useRef(false);
   useEffect(() => {
-    if (!paneVisible) return;
+    const afterCompile = wasCompiling.current;
+    wasCompiling.current = compileHeld;
+    if (!paneVisible || compileHeld) return;
     let cancelled = false;
     const check = () => {
       fileMtime(path, scope)
@@ -3673,10 +3989,15 @@ function PdfCanvas({
         })
         .catch(() => {});
     };
-    check();
+    // Resuming after a build: its reload request (or its SyncTeX reveal) has
+    // just asked for the bytes and is recording the mtime it read them at. An
+    // immediate check here would see the same advance first and read the file
+    // a second time; the interval's first tick is soon enough for a build that
+    // ended without asking (a failed one).
+    if (!afterCompile) check();
     const id = setInterval(check, RELOAD_POLL_MS);
     return () => { cancelled = true; clearInterval(id); };
-  }, [path, scope, paneVisible, diskChanged]);
+  }, [path, scope, paneVisible, diskChanged, compileHeld]);
 
   // Load (and reload on path / disk change) the document. pdf.js detaches the
   // backing buffer, so each load gets a fresh Uint8Array; the prior documents are
@@ -3744,6 +4065,15 @@ function PdfCanvas({
     (async () => {
       for (let attempt = 0; ; attempt++) {
         try {
+          // A recompile is caught mid-write more often than not: the mtime
+          // advances on the compiler's first write, the poll fires, and a read
+          // of a 100 MB thesis moves the whole truncated file over IPC — once
+          // per retry. So a same-path reload (and any retry) first waits for
+          // the size to hold still across two stats, and reads once.
+          if (attempt > 0 || (samePathReload && hasPrevDoc)) {
+            await settledFileSize(path, scope, () => cancelled);
+            if (cancelled) return;
+          }
           const bytes = await readFileBytes(path, scope);
           if (cancelled) return;
           // Taken before pdf.js detaches the buffer: the markup mode's size gate
@@ -3840,16 +4170,41 @@ function PdfCanvas({
   // It also owns the viewer's pdf.js worker (`PdfWorkerSlot`), created here rather
   // than at render so a StrictMode remount gets a live one, and ended only once the
   // documents on it have been torn down.
+  //
+  // The slot doubles as this viewer's token in the tab cost registry
+  // (`lib/tabCost`): registered with it, unregistered beside its disposal.
+  const costMeta = useRef({ tabKey, path });
+  costMeta.current = { tabKey, path };
   useEffect(() => {
     const slot = new PdfWorkerSlot();
     workerSlot.current = slot;
+    registerPdfDoc(slot, costMeta.current);
     return () => {
       const pending = [...sourcesRef.current.values()].map((s) => s.doc.loadingTask.destroy());
       sourcesRef.current = new Map();
       if (workerSlot.current === slot) workerSlot.current = null;
+      unregisterPdfDoc(slot);
       slot.dispose(pending);
     };
   }, []);
+
+  // What this viewer holds, for the tab cost readout: pages over every open
+  // source, the viewed file's bytes plus any merged source's own copy. No
+  // document on screen (a file switch in flight, a failed load) counts as none.
+  // Read off state the load path already sets; the load itself is untouched.
+  useEffect(() => {
+    const slot = workerSlot.current;
+    if (!slot) return;
+    let pages = 0;
+    let bytes = doc ? (docBytes ?? 0) : 0;
+    if (doc) {
+      for (const [id, src] of sources) {
+        pages += src.doc.numPages;
+        if (id !== SELF) bytes += src.bytes?.byteLength ?? 0;
+      }
+    }
+    updatePdfDoc(slot, { pages, bytes, tabKey, path });
+  }, [sources, docBytes, doc, tabKey, path]);
 
   // Intrinsic (scale-1) CSS dimensions of every page, computed once per document
   // load. Lets each PdfPageCanvas reserve its true size before rendering so the
@@ -3859,6 +4214,57 @@ function PdfCanvas({
   // restore deadline. getPage()/getViewport() read only page metadata (no
   // rasterisation), so this is cheap relative to actually rendering the pages.
   const [pageSizes, setPageSizes] = useState<{ w: number; h: number }[] | null>(null);
+  // The last full measurement of THIS file's own pages, in file order: a
+  // same-path reload (a recompile) with the same page count and unchanged
+  // first and last pages keeps it instead of asking the worker about every
+  // page again — on a long document that pass was the first thing between a
+  // build and its pages. Only the identity arrangement is ever kept, and never
+  // across a file switch (reset with the path below).
+  const measuredRef = useRef<{ n: number; sizes: { w: number; h: number }[] } | null>(null);
+  useEffect(() => {
+    measuredRef.current = null;
+  }, [path, scope]);
+  // A page canvas found its page a different size from the one reserved for it
+  // (`onSize`): a reload kept the measurement because the count and the two end
+  // pages were unchanged, and this page in the middle was the one that changed.
+  // Correct the reservation — and the kept measurement, so the next reload's
+  // comparison starts from the truth. A page above the viewport that changes
+  // height would shift everything on screen by the difference; the page under
+  // the viewport's top edge is pinned where it is, through the same anchored
+  // target a zoom commit uses, unless one is already pending.
+  const correctPageSize = useCallback((i: number, size: { w: number; h: number }) => {
+    const kept = measuredRef.current;
+    if (kept && i < kept.n) {
+      measuredRef.current = { n: kept.n, sizes: kept.sizes.map((s, k) => (k === i ? size : s)) };
+    }
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (el && content && !pendingScroll.current && !zoomPreviewRef.current) {
+      const wraps = content.querySelectorAll<HTMLElement>(":scope > .file-viewer-pdf-page-wrap");
+      const er = el.getBoundingClientRect();
+      const top = er.top + el.clientTop;
+      const left = er.left + el.clientLeft;
+      const changed = wraps[i]?.getBoundingClientRect();
+      if (changed && changed.height > 0 && changed.bottom <= top) {
+        const anchor = pageAnchorAt(content, left, top);
+        if (anchor) {
+          const r = anchor.wrap.getBoundingClientRect();
+          pendingScroll.current = {
+            ...anchor,
+            cursorX: r.left + anchor.fx * r.width - left,
+            cursorY: r.top + anchor.fy * r.height - top,
+          };
+        }
+      }
+    }
+    setPageSizes((prev) => {
+      const cur = prev?.[i];
+      if (!prev || !cur || (cur.w === size.w && cur.h === size.h)) return prev;
+      const next = prev.slice();
+      next[i] = size;
+      return next;
+    });
+  }, []);
   useEffect(() => {
     if (pages.length === 0) {
       setPageSizes(null);
@@ -3879,6 +4285,19 @@ function PdfCanvas({
           });
           return { w: vp.width, h: vp.height };
         };
+        const identity = pages.every((r, i) => r.src === SELF && r.page === i + 1 && r.rot === 0);
+        const kept = measuredRef.current;
+        if (identity && kept && kept.n === pages.length && pages.length > 0) {
+          const same = (a: { w: number; h: number }, b: { w: number; h: number }) =>
+            a.w === b.w && a.h === b.h;
+          const first = await measure(pages[0]);
+          const last = pages.length > 1 ? await measure(pages[pages.length - 1]) : first;
+          if (cancelled) return;
+          if (same(first, kept.sizes[0]) && same(last, kept.sizes[kept.n - 1])) {
+            // The sizes already reserved stand; `pageSizes` is still that array.
+            return;
+          }
+        }
         // Windowed for the reason the text scan is (see `PAGE_SCAN_CONCURRENCY`):
         // this runs on every load, so on a long document it is the first thing
         // between the reader and their pages.
@@ -3889,7 +4308,9 @@ function PdfCanvas({
             sizes[i + j] = s;
           });
         }
-        if (!cancelled) setPageSizes(sizes);
+        if (cancelled) return;
+        measuredRef.current = identity ? { n: pages.length, sizes } : null;
+        setPageSizes(sizes);
       } catch {
         /* leave heights unreserved — restore falls back to the old behaviour */
       }
@@ -3915,6 +4336,7 @@ function PdfCanvas({
         restoreScroll.current = rescaleScrollTarget(restoreScroll.current, from, nextScale);
         restoreScale.current = nextScale;
       }
+      dropZoomPreview();
       setScale(nextScale);
       fittedRef.current = true;
       setInitialZoomReady(true);
@@ -3924,7 +4346,7 @@ function PdfCanvas({
       // fires — and the flag is the whole point. `viewPos.persist` dedups.
       viewPos.persist({ pdfFitted: true });
     }
-  }, [viewPos]);
+  }, [viewPos, dropZoomPreview]);
 
   // Fit to width when a document loads — UNLESS this is the first load and a
   // DELIBERATE zoom was persisted from a prior session, in which case honour the
@@ -4158,9 +4580,12 @@ function PdfCanvas({
   );
 
   // Ctrl/Cmd+wheel zooms the page stack toward the cursor (a plain wheel keeps
-  // native scrolling). Because the canvases resize asynchronously, we only
-  // compute the cursor-anchored scroll target here and let the ResizeObserver
-  // below apply it once the content has grown/shrunk.
+  // native scrolling). A tick does not rasterise: it moves the PREVIEW (the
+  // stack CSS-scaled around the cursor) and re-arms the commit timer, so a
+  // gesture of many ticks lands as one render at its final scale. The scroll
+  // target that keeps the picture where the preview showed it is derived at the
+  // commit from what the first tick measured (`ZoomPreview`), and applied by the
+  // ResizeObserver below once the stack has relaid out at the committed size.
   const onWheel = useCallback((e: WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
@@ -4168,22 +4593,47 @@ function PdfCanvas({
     if (!el) return;
     // A user zoom takes over; abandon any in-flight recompile scroll restore.
     restoreScroll.current = null;
-    const rect = el.getBoundingClientRect();
-    const cursorX = e.clientX - rect.left;
-    const cursorY = e.clientY - rect.top;
-    setScale((prev) => {
-      const factor = e.deltaY < 0 ? PDF_ZOOM_STEP : 1 / PDF_ZOOM_STEP;
-      const next = clampPdfScale(prev * factor);
-      if (next === prev) return prev;
-      fittedRef.current = false; // manual zoom opts out of resize re-fit
-      const eff = next / prev;
-      pendingScroll.current = {
-        top: (el.scrollTop + cursorY) * eff - cursorY,
-        left: (el.scrollLeft + cursorX) * eff - cursorX,
+    const committed = scaleRef.current;
+    const held = zoomPreviewRef.current;
+    const base = held?.scale ?? committed;
+    const factor = e.deltaY < 0 ? PDF_ZOOM_STEP : 1 / PDF_ZOOM_STEP;
+    let next = clampPdfScale(base * factor);
+    // Wheeled back to where it started (1.2 × 1.2 / 1.2 is not always 1.2 in
+    // floating point): nothing to commit, rather than a re-render of every near
+    // page at a scale a rounding error away from the one they are at.
+    if (Math.abs(next - committed) < 1e-9) next = committed;
+    if (next === base) return;
+    fittedRef.current = false; // manual zoom opts out of resize re-fit
+    let preview: ZoomPreview;
+    if (held) {
+      // Later ticks keep the first tick's origin and anchor — the stack is
+      // already transformed, so measuring again would move the origin under
+      // its own transform and the picture would jump.
+      preview = { ...held, scale: next };
+    } else {
+      const rect = el.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left - el.clientLeft;
+      const cursorY = e.clientY - rect.top - el.clientTop;
+      const content = contentRef.current;
+      const cr = content?.getBoundingClientRect();
+      preview = {
+        scale: next,
+        originX: cr ? e.clientX - cr.left : 0,
+        originY: cr ? e.clientY - cr.top : 0,
+        cursorX,
+        cursorY,
+        scrollLeft: el.scrollLeft,
+        scrollTop: el.scrollTop,
+        stackLeft: cr ? cr.left - rect.left - el.clientLeft + el.scrollLeft : 0,
+        stackTop: cr ? cr.top - rect.top - el.clientTop + el.scrollTop : 0,
+        anchor: content ? pageAnchorAt(content, e.clientX, e.clientY) : null,
       };
-      return next;
-    });
-  }, []);
+    }
+    zoomPreviewRef.current = preview;
+    setZoomPreview(preview);
+    if (zoomCommitTimer.current != null) window.clearTimeout(zoomCommitTimer.current);
+    zoomCommitTimer.current = window.setTimeout(commitZoomPreview, PDF_ZOOM_COMMIT_MS);
+  }, [commitZoomPreview]);
 
   // Bind the zoom wheel non-passively so `preventDefault()` above actually
   // cancels the native scroll — a React `onWheel` is passive, so Ctrl+wheel
@@ -4224,11 +4674,14 @@ function PdfCanvas({
     if (!content || !el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       // Cursor-anchored zoom target: apply once, the moment the canvases resize.
-      const target = pendingScroll.current;
-      if (target) {
+      const pending = pendingScroll.current;
+      if (pending) {
         pendingScroll.current = null;
-        el.scrollTop = target.top;
-        el.scrollLeft = target.left;
+        const target = "wrap" in pending ? anchoredScrollTarget(el, pending) : pending;
+        if (target) {
+          el.scrollTop = target.top;
+          el.scrollLeft = target.left;
+        }
       }
       // Recompile reload: the page stack grows over several frames as canvases
       // render, so keep re-applying the saved position until it's reached, then
@@ -4286,6 +4739,7 @@ function PdfCanvas({
           className="file-viewer-zoom-btn"
           onClick={() => {
             fittedRef.current = false;
+            commitZoomPreview();
             setScale((s) => clampPdfScale(s / PDF_ZOOM_STEP));
           }}
           disabled={!doc || scale <= PDF_MIN_SCALE}
@@ -4294,11 +4748,12 @@ function PdfCanvas({
         >
           −
         </button>
-        <span className="file-viewer-zoom-level">{Math.round(scale * 100)}%</span>
+        <span className="file-viewer-zoom-level">{Math.round((zoomPreview?.scale ?? scale) * 100)}%</span>
         <button
           className="file-viewer-zoom-btn"
           onClick={() => {
             fittedRef.current = false;
+            commitZoomPreview();
             setScale((s) => clampPdfScale(s * PDF_ZOOM_STEP));
           }}
           disabled={!doc || scale >= PDF_MAX_SCALE}
@@ -4877,7 +5332,23 @@ function PdfCanvas({
           ) : !doc ? (
             <div className="file-viewer-loading">{t("common.loading")}</div>
           ) : (
-            <div className="file-viewer-pdf-pages" ref={contentRef}>
+            <div
+              className="file-viewer-pdf-pages"
+              ref={contentRef}
+              // A zoom in progress: the stack scaled with CSS around the cursor
+              // until the gesture pauses and the canvases are rendered at the new
+              // size (`PDF_ZOOM_COMMIT_MS`). A transform changes no layout, so the
+              // scroll offset holds still underneath it — which is what lets the
+              // committed, cursor-anchored scroll target be computed up front.
+              style={
+                zoomPreview
+                  ? {
+                      transform: `scale(${zoomPreview.scale / scale})`,
+                      transformOrigin: `${zoomPreview.originX}px ${zoomPreview.originY}px`,
+                    }
+                  : undefined
+              }
+            >
               {/* The reader renders the ARRANGEMENT, sheet by sheet — each pulled
                   from its own source document — so an edit shows up immediately with
                   nothing re-parsed. An unedited PDF is the identity arrangement over
@@ -4894,6 +5365,7 @@ function PdfCanvas({
                     rot={ref.rot}
                     scale={scale}
                     cssSize={pageSizes?.[i]}
+                    onSize={(size) => correctPageSize(i, size)}
                     // SyncTeX only means anything for pages of the file itself: a
                     // page merged in from another PDF has no line in this source.
                     // Wired whether or not a map exists: without one the click
@@ -5021,18 +5493,45 @@ export function PdfView({
    *  it to keep a reverse click inside its own tab; a standalone PDF omits it. */
   onReverseSource?: (src: SyncSource, anchor: string) => void;
 }) {
+  // Sleep (§4.3): a tab hidden for `PDF_DOC_RELEASE_MS` unmounts its canvas —
+  // whose own teardown destroys the documents and ends the worker — and mounts
+  // it afresh on show, where the first load restores the persisted position
+  // (`viewPos.initial`, seeded from the §3.1 stage before the store). Never
+  // with unsaved work in the canvas, while a build is rewriting the file (its
+  // reload request would find no viewer), or for a tab a popout shows (the
+  // popout's writes land on this tab's payload; its pane here is the mirror).
+  const paneVisible = usePaneVisible();
+  const [held, setHeld] = useState(false);
+  const compiling = usePdfSyncStore((s) => (s.compilingByPath[path] ?? 0) > 0);
+  // A TeX workspace's PDF pane (`<tab>#<path>`) is mirrored with its tab.
+  const mirrored = useTabsStore(
+    (s) => tabKey != null && isTabInPopout(s, splitSubPaneKey(tabKey)?.tab ?? tabKey),
+  );
+  const asleep = useSleepWhenHidden({
+    hidden: !paneVisible,
+    afterMs: PDF_DOC_RELEASE_MS,
+    hold: held || compiling || mirrored,
+  });
+  // The same holds keep a sleepable pane around this viewer awake (§5.3): the
+  // pane's sleep unmounts this whole component, canvas and marks with it.
+  usePaneSleepHold(held || compiling);
   // No ViewerHeader: the tab already shows the file name, so a filename row would
   // be redundant. The "Open externally" action lives in the PdfCanvas toolbar.
   return (
     <div className="file-viewer">
       <div className="file-viewer-body">
-        <PdfCanvas
-          path={path}
-          onOpenExternally={onOpenExternally}
-          tabKey={tabKey}
-          groupId={groupId}
-          onReverseSource={onReverseSource}
-        />
+        {asleep ? (
+          <div className="file-viewer-pdf-host file-viewer-sleeping" data-sleeping="pdf" />
+        ) : (
+          <PdfCanvas
+            path={path}
+            onOpenExternally={onOpenExternally}
+            tabKey={tabKey}
+            groupId={groupId}
+            onReverseSource={onReverseSource}
+            onHoldChange={setHeld}
+          />
+        )}
       </div>
     </div>
   );

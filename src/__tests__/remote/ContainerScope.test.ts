@@ -4,7 +4,8 @@
  *
  * The rule lives in the backend (`services::sandbox::resolve_spawn_authority`,
  * which re-derives it from the trusted project record and is the authority). What
- * is tested here is the renderer's *copy* of it in `CenterPanel`, which exists for
+ * is tested here is the renderer's *copy* of it in `PaneSlot` (the pane layer's
+ * per-tab derivation, `components/layout/PaneSlot.tsx`), which exists for
  * two things the backend cannot do: the flag is one of `TerminalView`'s spawn
  * dependencies, so it is what respawns a live shell when the scope changes — a
  * frontend that ignored `scope` would leave that shell running inside the
@@ -12,7 +13,7 @@
  * backend is about to take away, which would otherwise log an authority downgrade
  * on every ordinary shell spawn.
  *
- * The derivation is inlined in `CenterPanel`'s pane map, so it is restated here
+ * The derivation is inlined in `PaneSlot`'s body, so it is restated here
  * rather than imported. That is a real duplication, and it is why the last test
  * pins the *shape* of the expression: if the component's version gains a term,
  * this file must be updated deliberately rather than silently passing.
@@ -25,7 +26,7 @@ import type { SandboxScope } from "../../types";
 
 type Kind = "agent" | "shell" | "local_agent" | "files";
 
-/** `CenterPanel`'s rule, verbatim. */
+/** `PaneSlot`'s rule, verbatim. */
 function sandboxFor(opts: {
   kind: Kind;
   scopeKey: string;
@@ -104,13 +105,13 @@ describe("container scope", () => {
     );
   });
 
-  it("still matches the expression CenterPanel actually spawns with", () => {
+  it("still matches the expression PaneSlot actually spawns with", () => {
     // The tripwire for the duplication above: the component reads the scope and
     // gates agent-vs-shell on it. A refactor that drops either term makes every
     // assertion in this file describe code that no longer runs.
     // Repo-relative, the convention the other tripwire tests use (vitest runs
     // from the repo root).
-    const src = readFileSync("src/components/layout/CenterPanel.tsx", "utf8") as string;
+    const src = readFileSync("src/components/layout/PaneSlot.tsx", "utf8") as string;
     expect(src).toContain('const containerScope = paneProject?.sandbox?.scope ?? "all";');
     expect(src).toContain('(containerScope === "all" || tab.kind === "agent")');
   });

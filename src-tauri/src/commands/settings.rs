@@ -99,8 +99,7 @@ fn patch_settings_at(path: &std::path::Path, mut patch: Map<String, Value>) -> R
 fn invalidate_copilot(previous: &Settings, next: &Settings) {
     if previous.code_completion_provider != next.code_completion_provider
         || previous.completion_project_policies != next.completion_project_policies
-        || previous.copilot_completion.unwrap_or(previous.debug.unwrap_or(false))
-            != next.copilot_completion.unwrap_or(next.debug.unwrap_or(false)) {
+        || previous.copilot_completion() != next.copilot_completion() {
         crate::services::copilot::session::sessions().stop_all_now();
     }
 }

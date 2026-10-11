@@ -12,7 +12,7 @@
 //! - Explicit terminal-ready event when the shell starts.
 //! - Linux XDG sandbox env in a cfg(target_os="linux") block.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -21,6 +21,9 @@ use std::time::{Duration, Instant};
 use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
 use app_core::{Caller, ClientId, CoreCtx};
+
+mod replay_trim;
+use replay_trim::{trim_replay, ScreenState, REPLAY_TRIM_FLOOR};
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -59,12 +62,16 @@ const INPUT_CHANNEL_CAP: usize = 64;
 // accumulates in an in-Rust `pending` buffer (front-trimmed at
 // `ROUTE_PENDING_CAP`; agent TUIs repaint whole screens, so the replay
 // converges on the current frame), and the pills stay honest through
-// `terminal-activity` digests: the accumulated tail, emitted leading-edge and
-// then at most once per `ACTIVITY_INTERVAL`, with a trailing flush so the
-// decision prompt that arrives right before quiet is still reported.
+// activity digests: the accumulated tail, batched across every hidden PTY
+// into one `terminal-activity-batch` per `ACTIVITY_INTERVAL` window
+// (`DigestClock`) — emitted leading-edge after quiet, then at the window's
+// end, so the decision prompt that arrives right before quiet is still
+// reported.
 //
 // Showing the pane again (`pty_set_visible`) drains `pending` as ONE
-// `terminal-replay` event — a separate event name because replayed output is
+// `terminal-replay` event — cut at its last full clear with the terminal
+// state the dropped frames set re-applied in front (`replay_trim`), so a
+// long hidden spell replays a screen, not a megabyte of dead frames. It is
 // STALE output written late: the frontend must route it through its
 // stripTerminalQueries guard, never a bare `term.write` (a terminal query in
 // it would be answered on parse and typed into the shell). The drain is
@@ -78,8 +85,8 @@ const INPUT_CHANNEL_CAP: usize = 64;
 // visible. A watch's rising edge drains `pending` the same way, so the hidden
 // pane's own buffer stays in byte order across the watch.
 
-/// How often a hidden PTY's buffered output is condensed into a
-/// `terminal-activity` digest. Must stay well under the activity store's
+/// How often hidden PTYs' buffered output is condensed into one
+/// `terminal-activity-batch` of digests. Must stay well under the activity store's
 /// BUSY_WINDOW_MS (800 ms): the "working" classifier treats a gap that long
 /// as the end of a burst, so a slower cadence would make every hidden
 /// streaming tab read as idle between digests.
@@ -107,6 +114,13 @@ const ROUTE_PENDING_CAP: usize = 1_000_000;
 /// is what the reader actually wants. A TUI repaints its whole frame, so the
 /// replay converges on the current screen either way.
 const ROUTE_SCROLLBACK_CAP: usize = 256_000;
+
+/// The catch-up tail of a PTY whose pane is ASLEEP (performance plan §5.3):
+/// its `TerminalView` was unmounted after a long while hidden, so no xterm
+/// holds its history any more and the wake repaints from this tail alone. A
+/// sleeping shell keeps a few screens more than a popout's catch-up needs.
+/// Applies from the sleeping `pty_remove_view` until the wake reads it back.
+const ROUTE_SLEEP_SCROLLBACK_CAP: usize = 1_000_000;
 
 /// How much tail one `terminal-activity` digest carries — enough for the
 /// activity store's 8 KB decision-prompt scan.
@@ -141,24 +155,43 @@ struct OutputRoute {
     watchers: u32,
     /// Output accumulated while unsubscribed, replayed on the next rising edge.
     pending: String,
+    /// The terminal state set by bytes `ROUTE_PENDING_CAP` already trimmed off
+    /// the front of `pending` (a mode switch there must still reach xterm when
+    /// the pane is shown). Folded on each trim, spent by the replay.
+    carried: ScreenState,
     /// A bounded tail of everything routed for this PTY (see
     /// `ROUTE_SCROLLBACK_CAP`), so a viewer attaching to an already-running
     /// terminal can catch up instead of opening blank.
     retained: String,
+    /// The terminal state set by bytes the cap already trimmed off the front of
+    /// `retained` — the modes a TUI switched on at its start (bracketed paste,
+    /// the alternate screen, mouse reporting, cursor keys) are long gone from a
+    /// tail of a session that has run for hours. A catch-up read puts it in
+    /// front of the tail, so a fresh xterm (a woken pane, a popout) reads keys
+    /// and pastes the way the program expects. Folded on each trim, never spent.
+    retained_carried: ScreenState,
     /// Absolute UTF-8 byte offset of `retained[0]` in this spawn's output.
     retained_start: u64,
+    /// The PTY's pane is asleep (§5.3): its view left with `sleeping`, so no
+    /// xterm holds this terminal's history. The tail is kept to
+    /// `ROUTE_SLEEP_SCROLLBACK_CAP`, and a spawn that ends meanwhile keeps its
+    /// route (and tail) for the wake to show. Cleared by the wake's read
+    /// (`route_wake_scrollback`), by `pty_kill` (`route_forget_sleep`), and by
+    /// a respawn from a registered pane.
+    asleep: bool,
+    /// The spawn this route carried has ended (its task closed the route while
+    /// something still held it). A respawn clears it.
+    ended: bool,
     /// Absolute UTF-8 byte offset of `pending[0]`.
     pending_start: u64,
     /// Absolute UTF-8 byte offset immediately after the latest routed chunk.
     output_offset: u64,
     /// Output since the last activity digest (tail-capped).
     digest: String,
+    /// When a tick last drained `digest`; `None` = the next chunk is due at once.
+    last_digest: Option<Instant>,
     /// UTF-8 decoder state shared by every output chunk for this spawn.
     decoder: Utf8StreamDecoder,
-    /// When the last digest was emitted; `None` = the next one is leading-edge.
-    last_activity: Option<Instant>,
-    /// A trailing-flush task is sleeping toward `last_activity + interval`.
-    digest_armed: bool,
     /// Spawn generation, so a respawn under the same id survives the previous
     /// spawn's task-end cleanup.
     seq: u64,
@@ -171,6 +204,14 @@ struct OutputRoute {
 impl OutputRoute {
     fn subscribed(&self) -> bool {
         self.visible_viewers.values().any(|v| v.visible) || self.watchers > 0
+    }
+
+    /// When a hidden chunk arriving at `now` must be digested by: at once
+    /// after a quiet window (or ever), else by the end of the window its last
+    /// drain opened — the per-PTY cadence `DigestClock` keeps.
+    fn digest_due_by(&self, now: Instant) -> Instant {
+        self.last_digest
+            .map_or(now, |last| (last + ACTIVITY_INTERVAL).max(now))
     }
 
     /// Every window other than the main one with a view of this PTY registered,
@@ -198,7 +239,12 @@ impl OutputRoute {
         let start_offset = self.output_offset;
         self.output_offset += text.len() as u64;
         self.retained.push_str(&text);
-        self.retained_start += trim_with_hysteresis(&mut self.retained, ROUTE_SCROLLBACK_CAP) as u64;
+        let cap = if self.asleep { ROUTE_SLEEP_SCROLLBACK_CAP } else { ROUTE_SCROLLBACK_CAP };
+        if let Some(cut) = hysteresis_cut(&self.retained, cap) {
+            self.retained_carried.observe(&self.retained[..cut]);
+            self.retained.drain(..cut);
+            self.retained_start += cut as u64;
+        }
         OutputSlice {
             text,
             start_offset,
@@ -212,17 +258,29 @@ impl OutputRoute {
             self.pending_start = slice.start_offset;
         }
         self.pending.push_str(&slice.text);
-        self.pending_start += trim_with_hysteresis(&mut self.pending, ROUTE_PENDING_CAP) as u64;
+        if let Some(cut) = hysteresis_cut(&self.pending, ROUTE_PENDING_CAP) {
+            self.carried.observe(&self.pending[..cut]);
+            self.pending.drain(..cut);
+            self.pending_start += cut as u64;
+        }
     }
 
     /// Drain the hidden-spell buffer for a replay emit. Also drops the digest:
     /// its bytes are a subset of `pending` and have just been delivered.
+    ///
+    /// The slice's offsets are the stream range the replay *covers*; its text
+    /// is that range cut down to what xterm needs (`replay_trim`), so the two
+    /// no longer agree byte for byte. The only reader of replay offsets drops
+    /// a replay that ends inside its scrollback snapshot (`TerminalView`'s
+    /// `outputAfterScrollback`), which a whole-range comparison still answers.
     fn take_pending(&mut self) -> Option<OutputSlice> {
         self.digest.clear();
         if self.pending.is_empty() {
+            self.carried = ScreenState::default();
             return None;
         }
-        let text = std::mem::take(&mut self.pending);
+        let carried = std::mem::take(&mut self.carried);
+        let text = trim_replay(std::mem::take(&mut self.pending), &carried, REPLAY_TRIM_FLOOR);
         let start_offset = self.pending_start;
         self.pending_start = self.output_offset;
         Some(OutputSlice {
@@ -301,6 +359,69 @@ fn routes() -> &'static Mutex<HashMap<String, OutputRoute>> {
     ROUTES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// The one clock every hidden PTY's digests ride on (performance plan §7.6).
+///
+/// One `terminal-activity` event per hidden streaming PTY per window made
+/// thirty working agents sixty events a second into the main renderer. Now a
+/// tick drains EVERY hidden route's digest into one `terminal-activity-batch`.
+/// Each route keeps the per-PTY cadence it had with its own timer: its chunk
+/// after a quiet window is digested at once (leading edge), a chunk inside the
+/// window by the window's end (trailing: the decision prompt right before
+/// quiet still goes out) — `OutputRoute::digest_due_by`. The clock holds the
+/// earliest such deadline over every hidden route: a chunk whose own deadline
+/// is earlier than the armed tick pulls the tick forward (the later task wakes
+/// superseded and does nothing), so no PTY's digests are ever further apart
+/// than `max(ACTIVITY_INTERVAL, its chunk gap)` — the gap `BUSY_WINDOW_MS`
+/// relies on. Routes streaming through the same windows share one tick, and
+/// while no hidden PTY streams nothing is armed.
+///
+/// Lock order: this clock is taken BEFORE the routes lock, always.
+#[derive(Debug, Default)]
+struct DigestClock {
+    /// The deadline the armed tick task sleeps toward, if one is armed.
+    deadline: Option<Instant>,
+    /// The armed tick's generation: a superseded task wakes to a newer one.
+    generation: u64,
+}
+
+impl DigestClock {
+    /// A hidden route wants its digest out by `by`: the tick to arm for it,
+    /// unless the armed tick already fires by then.
+    fn arm(&mut self, by: Instant) -> Option<DigestTick> {
+        if self.deadline.is_some_and(|d| d <= by) {
+            return None;
+        }
+        self.generation += 1;
+        self.deadline = Some(by);
+        Some(DigestTick {
+            deadline: by,
+            generation: self.generation,
+        })
+    }
+
+    /// A tick task woke: whether it is the armed one (then it drains), or
+    /// one a later, earlier arm superseded (then the newer task drains).
+    fn tick(&mut self, generation: u64) -> bool {
+        if self.generation != generation {
+            return false;
+        }
+        self.deadline = None;
+        true
+    }
+}
+
+/// An armed digest tick, for the task that sleeps toward it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DigestTick {
+    deadline: Instant,
+    generation: u64,
+}
+
+fn digest_clock() -> &'static Mutex<DigestClock> {
+    static CLOCK: OnceLock<Mutex<DigestClock>> = OnceLock::new();
+    CLOCK.get_or_init(|| Mutex::new(DigestClock::default()))
+}
+
 
 /// Trim with hysteresis (the frontend buffer's rule): cutting exactly to the
 /// cap on every chunk past it re-copies the whole buffer per chunk; letting it
@@ -308,15 +429,26 @@ fn routes() -> &'static Mutex<HashMap<String, OutputRoute>> {
 /// The buffer already contains decoded text, so advance the cut to a character
 /// boundary rather than creating replacement characters during replay.
 fn trim_with_hysteresis(buf: &mut String, cap: usize) -> usize {
+    match hysteresis_cut(buf, cap) {
+        Some(cut) => {
+            buf.drain(..cut);
+            cut
+        }
+        None => 0,
+    }
+}
+
+/// Where `trim_with_hysteresis` would cut, for a caller that reads the cut-off
+/// front before dropping it.
+fn hysteresis_cut(buf: &str, cap: usize) -> Option<usize> {
     if buf.len() > cap * 2 {
         let mut cut = buf.len() - cap;
         while cut < buf.len() && !buf.is_char_boundary(cut) {
             cut += 1;
         }
-        buf.drain(..cut);
-        return cut;
+        return Some(cut);
     }
-    0
+    None
 }
 
 #[derive(Debug)]
@@ -335,17 +467,30 @@ struct OutputSlice {
 enum Routed {
     /// Subscribed: emit as ordinary `terminal-output`.
     Data(OutputSlice),
-    /// Hidden, digest due: emit as `terminal-activity`.
-    Activity(String),
-    /// Hidden, inside the digest window: spawn a trailing flush for this
-    /// deadline (nothing was armed yet).
-    ArmDigest(Instant),
-    /// Hidden, a trailing flush is already armed: nothing to do.
+    /// Hidden, and no digest tick fires soon enough for this route: spawn one
+    /// for this deadline (`arm_digest_tick`).
+    ArmDigest(DigestTick),
+    /// Hidden, a digest tick is already armed in time: nothing to do.
     Quiet,
 }
 
 fn route_chunk_at(id: &str, bytes: &[u8], now: Instant, seq: u64) -> Routed {
+    let mut clock = digest_clock().lock().unwrap();
     let mut map = routes().lock().unwrap();
+    route_chunk_in(&mut map, &mut clock, id, bytes, now, seq)
+}
+
+/// `route_chunk_at` against a given route map and digest clock (the tests'
+/// own, so a tick armed by another test's route can't make a chunk read as
+/// quiet, and a test's drain never takes a sibling's digest).
+fn route_chunk_in(
+    map: &mut HashMap<String, OutputRoute>,
+    clock: &mut DigestClock,
+    id: &str,
+    bytes: &[u8],
+    now: Instant,
+    seq: u64,
+) -> Routed {
     // Generation guard, the same one the task-end cleanup uses (`route_close`).
     // A superseded spawn keeps draining its PTY after the replacement opened the
     // route: `insert()` flips the dead flag and reaps the child, but the reader
@@ -373,19 +518,9 @@ fn route_chunk_at(id: &str, bytes: &[u8], now: Instant, seq: u64) -> Routed {
     route.push_pending(&slice);
     route.digest.push_str(&slice.text);
     trim_with_hysteresis(&mut route.digest, ACTIVITY_TAIL_CAP);
-    let due = route
-        .last_activity
-        .is_none_or(|t| now.duration_since(t) >= ACTIVITY_INTERVAL);
-    if due {
-        route.last_activity = Some(now);
-        let text = std::mem::take(&mut route.digest);
-        Routed::Activity(text)
-    } else if !route.digest_armed {
-        route.digest_armed = true;
-        // `!due` implies `last_activity` is Some.
-        Routed::ArmDigest(route.last_activity.unwrap() + ACTIVITY_INTERVAL)
-    } else {
-        Routed::Quiet
+    match clock.arm(route.digest_due_by(now)) {
+        Some(tick) => Routed::ArmDigest(tick),
+        None => Routed::Quiet,
     }
 }
 
@@ -397,6 +532,7 @@ fn route_chunk(id: &str, bytes: &[u8], seq: u64) -> Routed {
 /// produce no extra event; a genuinely truncated codepoint produces one
 /// replacement character and follows the current visible/hidden route.
 fn route_finish(id: &str, seq: u64) -> Routed {
+    let mut clock = digest_clock().lock().unwrap();
     let mut map = routes().lock().unwrap();
     let Some(route) = map.get_mut(id) else {
         return Routed::Quiet;
@@ -418,27 +554,102 @@ fn route_finish(id: &str, seq: u64) -> Routed {
     route.push_pending(&slice);
     route.digest.push_str(&slice.text);
     trim_with_hysteresis(&mut route.digest, ACTIVITY_TAIL_CAP);
-    route.last_activity = Some(Instant::now());
-    Routed::Activity(std::mem::take(&mut route.digest))
-}
-
-/// The trailing digest flush: drain whatever the window's remaining chunks
-/// left, so the last output before a quiet spell (the decision prompt, above
-/// all) always reaches the activity store.
-fn route_digest_take_at(id: &str, now: Instant) -> Option<String> {
-    let mut map = routes().lock().unwrap();
-    let route = map.get_mut(id)?;
-    route.digest_armed = false;
-    if route.subscribed() || route.digest.is_empty() {
-        return None;
+    let now = Instant::now();
+    match clock.arm(route.digest_due_by(now)) {
+        Some(tick) => Routed::ArmDigest(tick),
+        None => Routed::Quiet,
     }
-    route.last_activity = Some(now);
-    let text = std::mem::take(&mut route.digest);
-    Some(text)
 }
 
-fn route_digest_take(id: &str) -> Option<String> {
-    route_digest_take_at(id, Instant::now())
+/// The digest tick of `generation`: drain every hidden route's digest for one
+/// `terminal-activity-batch`, in id order, stamping each route's drain so its
+/// next chunk knows its window. Empty when nothing is due (no event) — and
+/// when a later, earlier arm superseded this tick (that one drains).
+fn digest_batch_take_in(
+    map: &mut HashMap<String, OutputRoute>,
+    now: Instant,
+    clock: &mut DigestClock,
+    generation: u64,
+) -> Vec<(String, String)> {
+    if !clock.tick(generation) {
+        return Vec::new();
+    }
+    let mut batch: Vec<(String, String)> = map
+        .iter_mut()
+        .filter(|(_, route)| !route.subscribed() && !route.digest.is_empty())
+        .map(|(id, route)| {
+            route.last_digest = Some(now);
+            (id.clone(), std::mem::take(&mut route.digest))
+        })
+        .collect();
+    batch.sort_by(|a, b| a.0.cmp(&b.0));
+    batch
+}
+
+fn route_digest_batch_take(generation: u64) -> Vec<(String, String)> {
+    let mut clock = digest_clock().lock().unwrap();
+    let mut map = routes().lock().unwrap();
+    digest_batch_take_in(&mut map, Instant::now(), &mut clock, generation)
+}
+
+/// Sleep toward a digest tick's deadline, then emit what every hidden PTY
+/// accumulated as one `terminal-activity-batch`. A short-lived task, alive
+/// only while some hidden PTY is mid-burst: an idle or visible PTY arms
+/// nothing, keeping the zero-idle-wakeups discipline of `batch_output`.
+///
+/// Each entry names the tab its events go under (an attach PTY's route names
+/// its tab, [`attach_pty_id`]). On the desktop the batch is one broadcast; a
+/// server host's client (`per_client`) gets only the entries of the PTYs it
+/// has a view of, as [`emit_pty_event`] addresses a single PTY's events.
+fn arm_digest_tick(ctx: &CoreCtx, tick: DigestTick) {
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep_until(tokio::time::Instant::from_std(tick.deadline)).await;
+        let batch = route_digest_batch_take(tick.generation);
+        if batch.is_empty() {
+            return;
+        }
+        let addressed = address_digest_batch(&routes().lock().unwrap(), batch);
+        emit_activity_batch(&ctx, addressed);
+    });
+}
+
+/// Each drained digest as its event entry — under the tab an attach route
+/// names, else its own id — with the windows that view its route.
+fn address_digest_batch(map: &HashMap<String, OutputRoute>, batch: Vec<(String, String)>) -> Vec<(TerminalOutput, Vec<String>)> {
+    batch
+        .into_iter()
+        .map(|(id, data)| {
+            let route = map.get(&id);
+            let windows = route.map(OutputRoute::viewer_windows).unwrap_or_default();
+            let id = route.and_then(|r| r.tab.clone()).unwrap_or(id);
+            (TerminalOutput { id, data, start_offset: None, end_offset: None }, windows)
+        })
+        .collect()
+}
+
+/// One `terminal-activity-batch`: a broadcast on the desktop; for a server
+/// host's client, each viewing client gets its own entries only.
+fn emit_activity_batch(ctx: &CoreCtx, addressed: Vec<(TerminalOutput, Vec<String>)>) {
+    if !per_client(ctx) {
+        let payload: Vec<TerminalOutput> = addressed.into_iter().map(|(entry, _)| entry).collect();
+        ctx.emit("terminal-activity-batch", payload);
+        return;
+    }
+    let mut per_window: BTreeMap<String, Vec<TerminalOutput>> = BTreeMap::new();
+    for (entry, windows) in addressed {
+        for window in windows {
+            per_window.entry(window).or_default().push(TerminalOutput {
+                id: entry.id.clone(),
+                data: entry.data.clone(),
+                start_offset: None,
+                end_offset: None,
+            });
+        }
+    }
+    for (window, payload) in per_window {
+        emit_to_windows(ctx, &[window], "terminal-activity-batch", &payload);
+    }
 }
 
 /// A route under a fresh generation, for the tests.
@@ -460,16 +671,27 @@ fn route_open_at(id: &str, tab: Option<&str>, seq: u64) {
     let route = map.entry(id.to_string()).or_default();
     route.tab = tab.map(str::to_string);
     route.pending.clear();
+    // The state the cap trimmed off the predecessor's buffer is its, not the
+    // new program's: replaying it would put xterm on the old program's screen.
+    route.carried = ScreenState::default();
     route.digest.clear();
+    route.last_digest = None;
     // A respawn is a new program: its predecessor's screen is not this one's
     // catch-up. (Same reason the pending buffer is cleared.)
     route.retained.clear();
+    route.retained_carried = ScreenState::default();
     route.retained_start = 0;
     route.pending_start = 0;
     route.output_offset = 0;
     route.decoder = Utf8StreamDecoder::default();
-    route.last_activity = None;
     route.seq = seq;
+    route.ended = false;
+    // A pane that registered and is spawning anew is awake. A spawn with no
+    // view (a backend-side restart under a sleeping pane) keeps the flag: the
+    // pane is still asleep and its wake still needs the long tail.
+    if !route.visible_viewers.is_empty() {
+        route.asleep = false;
+    }
 }
 
 /// The retained catch-up tail for `id` (Group B #235), or an empty string when
@@ -479,11 +701,62 @@ pub fn route_scrollback(id: &str) -> TerminalScrollback {
     let map = routes().lock().unwrap();
     match map.get(id) {
         Some(route) => TerminalScrollback {
-            data: route.retained.clone(),
+            // Whole (no cut: `usize::MAX`), behind the state its trimmed-off
+            // front left, if any.
+            data: trim_replay(route.retained.clone(), &route.retained_carried, usize::MAX),
             start_offset: route.retained_start,
             end_offset: route.output_offset,
+            exited: route.ended,
         },
         None => TerminalScrollback::default(),
+    }
+}
+
+/// The catch-up for a pane WAKING from sleep (§5.3): the retained tail, cut at
+/// its last full clear like a hidden spell's replay (`trim_replay`, nothing
+/// below `REPLAY_TRIM_FLOOR` is cut), so up to a megabyte of a TUI's redraws
+/// does not reach the new xterm as one parse. Ends the route's sleep: the pane
+/// registered its view before asking, so the tail returns to the ordinary cap
+/// as output continues. `exited` says the program ended while asleep — the
+/// pane has no `terminal-exit` listener then, so the wake says it.
+pub fn route_wake_scrollback(id: &str) -> TerminalScrollback {
+    let mut map = routes().lock().unwrap();
+    let Some(route) = map.get_mut(id) else {
+        return TerminalScrollback::default();
+    };
+    route.asleep = false;
+    // The tail covers everything the hidden-spell buffer holds. A pane woken
+    // while still hidden (a relaunch, the setting turned off) would otherwise
+    // get that buffer again as a replay on its first show — the same output
+    // twice. Dropped only when the waking view is the only one: another view
+    // still hidden is owed its replay.
+    if route.visible_viewers.len() <= 1 {
+        route.pending.clear();
+        route.carried = ScreenState::default();
+        route.pending_start = route.output_offset;
+    }
+    let data = trim_replay(route.retained.clone(), &route.retained_carried, REPLAY_TRIM_FLOOR);
+    let snapshot = TerminalScrollback {
+        data,
+        start_offset: route.retained_start,
+        end_offset: route.output_offset,
+        exited: route.ended,
+    };
+    if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 {
+        map.remove(id);
+    }
+    snapshot
+}
+
+/// A sleeping pane's tab was closed (`pty_kill`): the route no longer waits
+/// for a wake. A route whose spawn already ended is dropped now (nothing else
+/// would); a live one closes with its spawn, as any other.
+pub fn route_forget_sleep(id: &str) {
+    let mut map = routes().lock().unwrap();
+    let Some(route) = map.get_mut(id) else { return };
+    route.asleep = false;
+    if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 {
+        map.remove(id);
     }
 }
 
@@ -496,13 +769,16 @@ fn route_close(id: &str, seq: u64) -> bool {
     if !map.get(id).is_some_and(|r| r.seq == seq) {
         return false;
     }
+    // A sleeping pane's route outlives its spawn: the wake shows what the
+    // program printed and that it ended (`route_wake_scrollback`).
     let remove = map
         .get(id)
-        .is_some_and(|r| r.visible_viewers.is_empty() && r.watchers == 0);
+        .is_some_and(|r| r.visible_viewers.is_empty() && r.watchers == 0 && !r.asleep);
     if remove {
         map.remove(id);
     } else if let Some(route) = map.get_mut(id) {
         route.seq = 0;
+        route.ended = true;
         route.decoder = Utf8StreamDecoder::default();
     }
     true
@@ -626,7 +902,12 @@ pub fn route_set_visible(
 }
 
 /// Remove a TerminalView instance without changing any sibling view's state.
-pub fn route_remove_view(id: &str, viewer_id: &str, update_seq: u64) {
+///
+/// `sleeping`: the view leaves because its pane is going to sleep (§5.3), not
+/// because its tab closed. The PTY keeps running with no xterm behind it, so
+/// the route keeps the longer catch-up tail and outlives the spawn's end until
+/// the wake reads it (or the tab's `pty_kill` forgets it).
+pub fn route_remove_view(id: &str, viewer_id: &str, update_seq: u64, sleeping: bool) {
     let mut map = routes().lock().unwrap();
     let Some(route) = map.get_mut(id) else { return };
     if route
@@ -637,7 +918,11 @@ pub fn route_remove_view(id: &str, viewer_id: &str, update_seq: u64) {
         return;
     }
     route.visible_viewers.remove(viewer_id);
-    if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 {
+    if sleeping {
+        route.asleep = true;
+        return;
+    }
+    if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 && !route.asleep {
         map.remove(id);
     }
 }
@@ -661,8 +946,9 @@ pub fn route_drop_window_views(window: &str) -> usize {
         route.visible_viewers.retain(|_, v| v.window != window);
         dropped += before - route.visible_viewers.len();
         // Same collection rule `route_remove_view` applies: a route whose spawn
-        // has already ended and that nothing watches any more is dead weight.
-        if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 {
+        // has already ended and that nothing watches any more is dead weight —
+        // unless a sleeping main pane still has its wake to show.
+        if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 && !route.asleep {
             empty.push(id.clone());
         }
     }
@@ -845,6 +1131,8 @@ pub struct TerminalScrollback {
     pub data: String,
     pub start_offset: u64,
     pub end_offset: u64,
+    /// The spawn has ended (see `OutputRoute::ended`).
+    pub exited: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1694,53 +1982,16 @@ fn launch(
     let markup_token = env.and_then(|env| env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned());
     tokio::spawn(async move {
         let emitter = ctx.clone();
-        let activity = |text: String| {
-            emit_pty_event(
-                &emitter,
-                &id,
-                "terminal-activity",
-                TerminalOutput {
-                    id: payload_id.clone(),
-                    data: text,
-                    start_offset: None,
-                    end_offset: None,
-                },
-            );
-        };
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
             Routed::Data(slice) => emit_output(&emitter, "terminal-output", &payload_id, slice),
-            Routed::Activity(text) => activity(text),
-            Routed::ArmDigest(deadline) => {
-                // A short-lived task per digest window, only while a hidden PTY
-                // is mid-burst — an idle or visible PTY arms nothing, keeping
-                // the zero-idle-wakeups discipline of `batch_output` intact.
-                let ctx2 = emitter.clone();
-                let id2 = id.clone();
-                let payload_id2 = payload_id.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-                    if let Some(text) = route_digest_take(&id2) {
-                        emit_pty_event(
-                            &ctx2,
-                            &id2,
-                            "terminal-activity",
-                            TerminalOutput {
-                                id: payload_id2,
-                                data: text,
-                                start_offset: None,
-                                end_offset: None,
-                            },
-                        );
-                    }
-                });
-            }
+            Routed::ArmDigest(tick) => arm_digest_tick(&emitter, tick),
             Routed::Quiet => {}
         })
         .await;
         match route_finish(&id, route_seq) {
             Routed::Data(slice) => emit_output(&emitter, "terminal-output", &payload_id, slice),
-            Routed::Activity(text) => activity(text),
-            Routed::ArmDigest(_) | Routed::Quiet => {}
+            Routed::ArmDigest(tick) => arm_digest_tick(&emitter, tick),
+            Routed::Quiet => {}
         }
         // Who to tell the spawn ended, read before `route_close` may drop the
         // route (a server client's events go to the route's viewers).
@@ -2003,7 +2254,7 @@ pub(crate) fn insert_test_pty(registry: &Arc<Mutex<PtyRegistry>>, id: &str, meta
 }
 
 /// End every PTY a test left in `registry`, without the tab cleanups.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn kill_test_ptys(registry: &Arc<Mutex<PtyRegistry>>) {
     let mut reg = registry.lock().unwrap();
     for (_, mut entry) in reg.entries.drain() {
@@ -2144,8 +2395,20 @@ mod route_tests {
             Routed::Data(t) if t.text == "hello"
         ));
         set_visible(id, false);
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
+    }
+
+    /// This route's digest alone (a tick's drain of only it), so a test never
+    /// takes a sibling test's digest out of the shared map.
+    fn take_digest(id: &str, at: Instant) -> Option<String> {
+        let mut map = routes().lock().unwrap();
+        let route = map.get_mut(id)?;
+        if route.digest.is_empty() {
+            return None;
+        }
+        route.last_digest = Some(at);
+        Some(std::mem::take(&mut route.digest))
     }
 
     #[test]
@@ -2153,30 +2416,181 @@ mod route_tests {
         let id = "route-t-digest";
         let seq = route_open(id);
         assert_eq!(set_visible(id, false), None);
+        let mut clock = DigestClock::default();
         let t0 = Instant::now();
-        // First hidden chunk: leading-edge digest, no batching delay.
+        let chunk = |bytes: &[u8], at: Instant, clock: &mut DigestClock| {
+            let mut map = routes().lock().unwrap();
+            route_chunk_in(&mut map, clock, id, bytes, at, seq)
+        };
+        // First hidden chunk after quiet: a tick at once (leading edge).
+        let Routed::ArmDigest(tick) = chunk(b"abc", t0, &mut clock) else {
+            panic!("the first hidden chunk arms a tick");
+        };
+        assert_eq!(tick.deadline, t0);
+        assert!(clock.tick(tick.generation));
+        assert_eq!(take_digest(id, t0).as_deref(), Some("abc"));
+        // Inside the window: buffered, one tick armed for the window's end.
+        let Routed::ArmDigest(tick) = chunk(b"def", t0 + Duration::from_millis(10), &mut clock)
+        else {
+            panic!("a chunk inside the window arms the window's end");
+        };
+        assert_eq!(tick.deadline, t0 + ACTIVITY_INTERVAL);
         assert!(matches!(
-            route_chunk_at(id, b"abc", t0, seq),
-            Routed::Activity(t) if t == "abc"
-        ));
-        // Inside the window: buffered, one trailing flush armed at the window end.
-        assert!(matches!(
-            route_chunk_at(id, b"def", t0 + Duration::from_millis(10), seq),
-            Routed::ArmDigest(d) if d == t0 + ACTIVITY_INTERVAL
-        ));
-        assert!(matches!(
-            route_chunk_at(id, b"ghi", t0 + Duration::from_millis(20), seq),
+            chunk(b"ghi", t0 + Duration::from_millis(20), &mut clock),
             Routed::Quiet
         ));
-        // The trailing flush drains what the window accumulated — the decision
-        // prompt that arrived right before quiet is never stranded.
-        assert_eq!(
-            route_digest_take_at(id, t0 + ACTIVITY_INTERVAL).as_deref(),
-            Some("defghi")
-        );
-        assert_eq!(route_digest_take_at(id, t0 + ACTIVITY_INTERVAL), None);
-        route_remove_view(id, "test-view", 2);
+        // The tick drains what the window accumulated — the decision prompt
+        // that arrived right before quiet is never stranded.
+        assert!(clock.tick(tick.generation));
+        assert_eq!(take_digest(id, t0 + ACTIVITY_INTERVAL).as_deref(), Some("defghi"));
+        assert_eq!(take_digest(id, t0 + ACTIVITY_INTERVAL), None);
+        // Quiet for a window: the next chunk ticks at once again.
+        let Routed::ArmDigest(tick) = chunk(b"jkl", t0 + ACTIVITY_INTERVAL * 2, &mut clock) else {
+            panic!("a chunk after a quiet window ticks at once");
+        };
+        assert_eq!(tick.deadline, t0 + ACTIVITY_INTERVAL * 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
+    }
+
+    /// A PTY's digests are never further apart than `max(ACTIVITY_INTERVAL,
+    /// its chunk gap)` — the cadence its own timer gave it — while other
+    /// hidden PTYs stream through the shared clock. Without this, a PTY
+    /// speaking every 700 ms beside a continuous one was drained only at the
+    /// other's window ends, up to 1 s apart: past `BUSY_WINDOW_MS`, so its
+    /// pill flickered between working and idle.
+    #[test]
+    fn a_pty_keeps_its_own_cadence_beside_a_continuous_one() {
+        let ms = Duration::from_millis;
+        let hidden = || {
+            let mut route = OutputRoute {
+                seq: 1,
+                ..Default::default()
+            };
+            route
+                .visible_viewers
+                .insert("v".to_string(), viewer(false, "main"));
+            route
+        };
+        let mut map: HashMap<String, OutputRoute> = HashMap::new();
+        for id in ["a", "b", "c"] {
+            map.insert(id.to_string(), hidden());
+        }
+        let mut clock = DigestClock::default();
+        let t0 = Instant::now();
+        let chunk = |map: &mut HashMap<String, OutputRoute>,
+                     clock: &mut DigestClock,
+                     id: &str,
+                     at: Duration| {
+            match route_chunk_in(map, clock, id, b"x", t0 + at, 1) {
+                Routed::ArmDigest(tick) => Some(tick),
+                _ => None,
+            }
+        };
+        let drain = |map: &mut HashMap<String, OutputRoute>,
+                     clock: &mut DigestClock,
+                     at: Duration,
+                     tick: DigestTick| {
+            digest_batch_take_in(map, t0 + at, clock, tick.generation)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        // Both speak at t0: one tick, at once, drains both.
+        let tick = chunk(&mut map, &mut clock, "b", ms(0)).expect("the first chunk arms");
+        assert_eq!(tick.deadline, t0);
+        assert_eq!(chunk(&mut map, &mut clock, "a", ms(0)), None, "same tick");
+        assert_eq!(drain(&mut map, &mut clock, ms(0), tick), ["a", "b"]);
+        // B streams on through its windows; A is silent at the 500 ms tick.
+        let tick = chunk(&mut map, &mut clock, "b", ms(10)).expect("window's end");
+        assert_eq!(tick.deadline, t0 + ms(500));
+        assert_eq!(drain(&mut map, &mut clock, ms(500), tick), ["b"]);
+        let b_tick = chunk(&mut map, &mut clock, "b", ms(510)).expect("window's end");
+        assert_eq!(b_tick.deadline, t0 + ms(1000));
+        // A, drained at 0, speaks at 700: due at once, so it pulls the tick
+        // forward instead of waiting for B's at 1000.
+        let pulled = chunk(&mut map, &mut clock, "a", ms(700)).expect("pulled forward");
+        assert_eq!(pulled.deadline, t0 + ms(700));
+        assert_eq!(drain(&mut map, &mut clock, ms(700), pulled), ["a", "b"]);
+        // B re-arms from the pulled tick's window; its superseded 1000 ms task
+        // wakes to a newer generation and drains nothing.
+        let tick = chunk(&mut map, &mut clock, "b", ms(710)).expect("window's end");
+        assert_eq!(tick.deadline, t0 + ms(1200));
+        assert!(drain(&mut map, &mut clock, ms(1000), b_tick).is_empty());
+        assert_eq!(map["b"].digest, "x", "kept for the live tick");
+        // A inside its own window (drained at 700, speaks at 1150) is due by
+        // 1200, which the armed tick already covers.
+        assert_eq!(chunk(&mut map, &mut clock, "a", ms(1150)), None);
+        assert_eq!(drain(&mut map, &mut clock, ms(1200), tick), ["a", "b"]);
+        // A's window end can be earlier than the armed tick too: C's leading
+        // edge at 1450 ticks early (A silent, B drained), B arms 1950 from
+        // it, and A speaking at 1600 — drained last at 1200 — is due by 1700,
+        // so the tick is pulled to 1700, not left at 1950.
+        let tick = chunk(&mut map, &mut clock, "b", ms(1210)).expect("window's end");
+        assert_eq!(tick.deadline, t0 + ms(1700));
+        let early = chunk(&mut map, &mut clock, "c", ms(1450)).expect("leading edge");
+        assert_eq!(early.deadline, t0 + ms(1450));
+        assert_eq!(drain(&mut map, &mut clock, ms(1450), early), ["b", "c"]);
+        let tick = chunk(&mut map, &mut clock, "b", ms(1460)).expect("window's end");
+        assert_eq!(tick.deadline, t0 + ms(1950));
+        let pulled = chunk(&mut map, &mut clock, "a", ms(1600)).expect("pulled to A's window end");
+        assert_eq!(pulled.deadline, t0 + ms(1700));
+        assert_eq!(drain(&mut map, &mut clock, ms(1700), pulled), ["a", "b"]);
+        assert!(drain(&mut map, &mut clock, ms(1950), tick).is_empty());
+        // A's drains: 0, 700, 1200, 1700 — never more than its 700 ms gap apart.
+    }
+
+    /// One tick, one event: every hidden route with a digest is in it (§7.6);
+    /// nothing due means no event at all.
+    #[test]
+    fn one_tick_batches_every_hidden_digest_due() {
+        let hidden = |digest: &str| {
+            let mut route = OutputRoute::default();
+            route
+                .visible_viewers
+                .insert("v".to_string(), viewer(false, "main"));
+            route.digest = digest.to_string();
+            route
+        };
+        let mut map: HashMap<String, OutputRoute> = HashMap::new();
+        map.insert("b".to_string(), hidden("two"));
+        map.insert("a".to_string(), hidden("one"));
+        map.insert("quiet".to_string(), hidden(""));
+        let mut shown = hidden("streams live");
+        shown
+            .visible_viewers
+            .insert("w".to_string(), viewer(true, "main"));
+        map.insert("shown".to_string(), shown);
+        let mut clock = DigestClock::default();
+        let t0 = Instant::now();
+        let tick = clock.arm(t0).expect("nothing armed yet");
+        assert_eq!(
+            digest_batch_take_in(&mut map, t0, &mut clock, tick.generation),
+            vec![
+                ("a".to_string(), "one".to_string()),
+                ("b".to_string(), "two".to_string()),
+            ]
+        );
+        // Each drained route knows its window now; the quiet one is still due
+        // at once.
+        assert_eq!(map["a"].last_digest, Some(t0));
+        assert_eq!(map["quiet"].last_digest, None);
+        assert_eq!(map["a"].digest_due_by(t0 + Duration::from_millis(100)), t0 + ACTIVITY_INTERVAL);
+        assert_eq!(map["quiet"].digest_due_by(t0 + Duration::from_millis(100)), t0 + Duration::from_millis(100));
+        // Drained: nothing due, no event. A shown route is never digested.
+        let tick = clock.arm(t0).expect("the tick disarmed the clock");
+        assert!(digest_batch_take_in(&mut map, t0, &mut clock, tick.generation).is_empty());
+        assert_eq!(map["shown"].digest, "streams live");
+        // One tick covers every deadline at or past it; an earlier deadline
+        // supersedes it, and the superseded generation drains nothing.
+        let later = clock.arm(t0 + ACTIVITY_INTERVAL).expect("nothing armed");
+        assert_eq!(clock.arm(t0 + ACTIVITY_INTERVAL), None);
+        assert_eq!(clock.arm(t0 + ACTIVITY_INTERVAL * 2), None);
+        let earlier = clock.arm(t0 + Duration::from_millis(100)).expect("pulled forward");
+        assert_eq!(earlier.deadline, t0 + Duration::from_millis(100));
+        assert!(!clock.tick(later.generation));
+        assert!(clock.tick(earlier.generation));
+        assert!(clock.arm(t0 + ACTIVITY_INTERVAL * 3).is_some(), "disarmed by the tick");
     }
 
     #[test]
@@ -2196,8 +2610,8 @@ mod route_tests {
             Routed::Data(t) if t.text == "live"
         ));
         // No leftover digest fires after the drain.
-        assert_eq!(route_digest_take_at(id, t0 + ACTIVITY_INTERVAL), None);
-        route_remove_view(id, "test-view", 2);
+        assert_eq!(take_digest(id, t0), None);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -2223,12 +2637,15 @@ mod route_tests {
             Routed::Data(t) if t.text == "marker"
         ));
         route_unwatch(id);
-        // Released: back to buffering (leading-edge digest again).
-        assert!(matches!(
-            route_chunk_at(id, b"after", t0 + ACTIVITY_INTERVAL * 2, seq),
-            Routed::Activity(t) if t == "after"
-        ));
-        route_remove_view(id, "test-view", 2);
+        // Released: back to buffering (a digest tick armed again).
+        let t1 = t0 + ACTIVITY_INTERVAL * 2;
+        let armed = {
+            let mut map = routes().lock().unwrap();
+            route_chunk_in(&mut map, &mut DigestClock::default(), id, b"after", t1, seq)
+        };
+        assert!(matches!(armed, Routed::ArmDigest(t) if t.deadline == t1));
+        assert_eq!(take_digest(id, t1).as_deref(), Some("after"));
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -2245,6 +2662,80 @@ mod route_tests {
             "past 2x it cuts back to the cap"
         );
         assert!(buf.ends_with('y'), "the newest bytes survive");
+    }
+
+    /// A long hidden spell replays from its last full clear, with the modes
+    /// the dropped frames switched on re-applied in front (§3.2b).
+    #[test]
+    fn showing_replays_from_the_last_clear_with_the_modes_in_front() {
+        let id = "route-t-replay-trim";
+        let seq = route_open(id);
+        set_visible(id, false);
+        let t0 = Instant::now();
+        let _ = route_chunk_at(id, b"\x1b[?1049h\x1b[?1000h\x1b[?2004h", t0, seq);
+        let dead = "dead frame ".repeat(REPLAY_TRIM_FLOOR / 10);
+        let _ = route_chunk_at(id, dead.as_bytes(), t0, seq);
+        let _ = route_chunk_at(id, b"\x1b[?1000l\x1b[2J\x1b[Hlast frame", t0, seq);
+        assert_eq!(
+            set_visible(id, true).as_deref(),
+            Some("\x1b[?1049h\x1b[?1000l\x1b[?2004h\x1b[2J\x1b[Hlast frame")
+        );
+        route_remove_view(id, "test-view", 2, false);
+        route_close(id, seq);
+    }
+
+    /// A short spell replays whole, even across a clear: nothing to save.
+    #[test]
+    fn a_short_hidden_spell_replays_whole() {
+        let id = "route-t-replay-short";
+        let seq = route_open(id);
+        set_visible(id, false);
+        let t0 = Instant::now();
+        let _ = route_chunk_at(id, b"\x1b[?1000hold\x1b[2J\x1b[Hnew", t0, seq);
+        assert_eq!(
+            set_visible(id, true).as_deref(),
+            Some("\x1b[?1000hold\x1b[2J\x1b[Hnew")
+        );
+        route_remove_view(id, "test-view", 2, false);
+        route_close(id, seq);
+    }
+
+    /// A mode switch the pending cap already trimmed off still reaches the
+    /// replay: the cut-off front is folded into the route's carried state.
+    #[test]
+    fn a_mode_trimmed_off_by_the_cap_still_replays() {
+        let mut route = OutputRoute::default();
+        let push = |route: &mut OutputRoute, text: &str| {
+            let slice = route.retain(text.to_string());
+            route.push_pending(&slice);
+        };
+        push(&mut route, "\x1b[?1049h\x1b[?2004h");
+        push(&mut route, &"x".repeat(ROUTE_PENDING_CAP * 2));
+        assert_eq!(route.pending.len(), ROUTE_PENDING_CAP, "the cap cut the front off");
+        assert!(!route.carried.is_empty(), "…and kept what it switched on");
+        push(&mut route, "\x1b[2J\x1b[Hframe");
+        let replay = route.take_pending().unwrap().text;
+        assert_eq!(replay, "\x1b[?1049h\x1b[?2004h\x1b[2J\x1b[Hframe");
+        assert!(route.carried.is_empty(), "spent by the replay");
+    }
+
+    /// A respawn under the same id is a new program: what the cap trimmed
+    /// off its predecessor's buffer is not its state. Replaying it put xterm
+    /// on the old program's alternate screen for the new one's output.
+    #[test]
+    fn a_respawn_drops_the_state_carried_from_its_predecessor() {
+        let id = "route-t-carried-respawn";
+        let seq = route_open(id);
+        set_visible(id, false);
+        let t0 = Instant::now();
+        let _ = route_chunk_at(id, b"\x1b[?1049h\x1b[?1000h", t0, seq);
+        let _ = route_chunk_at(id, "x".repeat(ROUTE_PENDING_CAP * 2).as_bytes(), t0, seq);
+        assert!(!routes().lock().unwrap()[id].carried.is_empty(), "the cap folded the modes");
+        let seq2 = route_open(id);
+        let _ = route_chunk_at(id, b"fresh", t0, seq2);
+        assert_eq!(set_visible(id, true).as_deref(), Some("fresh"));
+        route_remove_view(id, "test-view", 2, false);
+        route_close(id, seq2);
     }
 
     #[test]
@@ -2412,7 +2903,7 @@ mod route_tests {
         );
 
         set_visible(id, false);
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -2476,7 +2967,7 @@ mod route_tests {
         );
         // And the respawn kept the pane's hidden state.
         assert!(!routes().lock().unwrap().get(id).unwrap().subscribed());
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         assert!(
             route_close(id, new),
             "the current spawn closes its own route"
@@ -2519,8 +3010,197 @@ mod route_tests {
         );
 
         set_visible(id, false);
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, new);
+    }
+
+    /// Sleeping tabs (§5.3): a pane put to sleep leaves with `sleeping`, and
+    /// its PTY's catch-up tail grows to the sleep cap — the wake repaints from
+    /// it alone, there being no xterm left that holds the history.
+    #[test]
+    fn a_sleeping_pane_keeps_the_longer_tail_until_it_wakes() {
+        let id = "route-t-sleep-cap";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_remove_view(id, "test-view", 2, true);
+        let chunk = "x".repeat(100_000);
+        for _ in 0..8 {
+            route_chunk_at(id, chunk.as_bytes(), Instant::now(), seq);
+        }
+        assert_eq!(
+            route_scrollback(id).data.len(),
+            800_000,
+            "past the awake bound of 2x {ROUTE_SCROLLBACK_CAP}, all of it kept"
+        );
+
+        // The wake registers its view, then reads: the whole tail (no clear in
+        // it to cut at), and the route is awake again.
+        set_visible(id, true);
+        assert_eq!(route_wake_scrollback(id).data.len(), 800_000);
+        assert!(!routes().lock().unwrap().get(id).unwrap().asleep);
+        route_chunk_at(id, b"y", Instant::now(), seq);
+        assert!(
+            route_scrollback(id).data.len() <= ROUTE_SCROLLBACK_CAP * 2,
+            "back to the ordinary cap once awake"
+        );
+
+        set_visible(id, false);
+        route_remove_view(id, "test-view", 3, false);
+        route_close(id, seq);
+        assert!(!routes().lock().unwrap().contains_key(id));
+    }
+
+    /// A pane woken while hidden reads the tail, which already holds what the
+    /// hidden-spell buffer has: its first show must not replay it again.
+    #[test]
+    fn a_hidden_wake_is_not_replayed_the_same_output_on_show() {
+        let id = "route-t-sleep-hidden-wake";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_remove_view(id, "test-view", 2, true);
+        route_chunk_at(id, b"while asleep\r\n", Instant::now(), seq);
+        // Woken hidden: the view registers hidden, then reads.
+        set_visible(id, false);
+        assert!(route_wake_scrollback(id).data.contains("while asleep"));
+        assert_eq!(set_visible(id, true), None, "nothing to replay on show");
+        route_chunk_at(id, b"later", Instant::now(), seq);
+        set_visible(id, false);
+        route_chunk_at(id, b"hidden again", Instant::now(), seq);
+        assert_eq!(set_visible(id, true).as_deref(), Some("hidden again"));
+
+        set_visible(id, false);
+        route_remove_view(id, "test-view", 3, false);
+        route_close(id, seq);
+    }
+
+    /// A program that ends while its pane sleeps has nobody to tell: the route
+    /// (and its tail) outlives the spawn so the wake shows the output and that
+    /// it exited. Before, a viewless route was dropped at the spawn's end and
+    /// the woken pane came up blank.
+    #[test]
+    fn a_spawn_that_ends_asleep_keeps_its_tail_for_the_wake() {
+        let id = "route-t-sleep-exit";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_chunk_at(id, b"build done\r\n", Instant::now(), seq);
+        route_remove_view(id, "test-view", 2, true);
+        route_chunk_at(id, b"bye\r\n", Instant::now(), seq);
+        assert!(route_close(id, seq), "the current spawn ends");
+        assert!(routes().lock().unwrap().contains_key(id), "kept for the wake");
+
+        set_visible(id, true);
+        let wake = route_wake_scrollback(id);
+        assert!(wake.data.contains("build done") && wake.data.contains("bye"));
+        assert!(wake.exited, "the wake learns the program ended");
+        // The woken pane's eventual close collects the route as before.
+        route_remove_view(id, "test-view", 3, false);
+        assert!(!routes().lock().unwrap().contains_key(id));
+    }
+
+    /// Closing a sleeping tab (`pty_kill` → `route_forget_sleep`): nothing
+    /// waits for a wake any more, so the route goes with the spawn — at once
+    /// when the spawn already ended, at its end when it is still running.
+    #[test]
+    fn closing_a_sleeping_tab_forgets_its_route() {
+        let ended = "route-t-sleep-close-ended";
+        let seq = route_open(ended);
+        set_visible(ended, true);
+        route_remove_view(ended, "test-view", 2, true);
+        route_close(ended, seq);
+        assert!(routes().lock().unwrap().contains_key(ended));
+        route_forget_sleep(ended);
+        assert!(!routes().lock().unwrap().contains_key(ended), "dropped at once");
+
+        let live = "route-t-sleep-close-live";
+        let seq = route_open(live);
+        set_visible(live, true);
+        route_remove_view(live, "test-view", 2, true);
+        route_forget_sleep(live);
+        assert!(routes().lock().unwrap().contains_key(live), "still running");
+        route_close(live, seq);
+        assert!(!routes().lock().unwrap().contains_key(live), "gone with its spawn");
+    }
+
+    /// An ordinary close (no `sleeping`) still collects an ended route, and a
+    /// popout's catch-up read leaves a sleeping route asleep.
+    #[test]
+    fn only_the_wake_read_ends_a_routes_sleep() {
+        let id = "route-t-sleep-popout-read";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_remove_view(id, "test-view", 2, true);
+        let _ = route_scrollback(id);
+        assert!(routes().lock().unwrap().get(id).unwrap().asleep);
+        let _ = route_wake_scrollback(id);
+        assert!(!routes().lock().unwrap().get(id).unwrap().asleep);
+        route_close(id, seq);
+        assert!(!routes().lock().unwrap().contains_key(id));
+    }
+
+    /// The modes a TUI switched on at its start fall off a long session's
+    /// tail; a woken pane's fresh xterm (and a popout's) must still get them,
+    /// or it pastes without bracketed-paste markers — a multi-line paste into
+    /// an agent woken from sleep submitted its first line. The cap's cut-off
+    /// front is folded into the route's carried state and written ahead of the
+    /// tail by both reads; a respawn drops it.
+    #[test]
+    fn a_catch_up_keeps_the_modes_the_tail_cap_cut_off() {
+        let id = "route-t-sleep-carried-modes";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_chunk_at(id, b"\x1b[?2004h\x1b[?1049h", Instant::now(), seq);
+        let filler = "y".repeat(100_000);
+        for _ in 0..6 {
+            route_chunk_at(id, filler.as_bytes(), Instant::now(), seq);
+        }
+        let popout = route_scrollback(id);
+        assert!(popout.data.len() < 600_000, "the cap cut the front off");
+        assert!(popout.data.starts_with("\x1b[?2004h\x1b[?1049h"), "the popout read carries the modes");
+
+        route_remove_view(id, "test-view", 2, true);
+        set_visible(id, true);
+        let wake = route_wake_scrollback(id);
+        assert!(wake.data.starts_with("\x1b[?2004h\x1b[?1049h"), "so does the wake");
+        assert!(wake.data.ends_with('y'));
+
+        // A respawn is a new program: the predecessor's modes are not its own.
+        let seq2 = route_open(id);
+        route_chunk_at(id, b"fresh", Instant::now(), seq2);
+        assert_eq!(route_scrollback(id).data, "fresh");
+
+        set_visible(id, false);
+        route_remove_view(id, "test-view", 3, false);
+        route_close(id, seq);
+        route_close(id, seq2);
+    }
+
+    /// The wake's catch-up is cut at the last full clear, as a hidden spell's
+    /// replay is: a TUI's megabyte of redraws arrives as its last frame. The
+    /// popout's read of the same tail stays whole.
+    #[test]
+    fn the_wake_tail_is_cut_at_the_last_clear() {
+        let id = "route-t-sleep-trim";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_remove_view(id, "test-view", 2, true);
+        let frame = format!("\x1b[2J\x1b[3J\x1b[H{}", "old frame ".repeat(1000));
+        for _ in 0..20 {
+            route_chunk_at(id, frame.as_bytes(), Instant::now(), seq);
+        }
+        route_chunk_at(id, b"\x1b[2J\x1b[3J\x1b[Hlast frame", Instant::now(), seq);
+        let whole = route_scrollback(id);
+        assert!(whole.data.len() > REPLAY_TRIM_FLOOR);
+
+        set_visible(id, true);
+        let wake = route_wake_scrollback(id);
+        assert!(wake.data.ends_with("last frame"));
+        assert!(!wake.data.contains("old frame"), "cut at the last clear");
+        assert_eq!(wake.end_offset, whole.end_offset, "offsets cover the same range");
+        assert!(!wake.exited);
+
+        set_visible(id, false);
+        route_remove_view(id, "test-view", 3, false);
+        route_close(id, seq);
     }
 }
 
@@ -2832,6 +3512,39 @@ mod client_tests {
         routes().lock().unwrap().remove(id);
     }
 
+    /// The activity batch: on a server each viewing client gets only its own
+    /// routes' entries, an attach route's under its tab's id; the desktop
+    /// gets one broadcast of every entry.
+    #[test]
+    fn a_server_clients_activity_batch_holds_only_its_routes() {
+        let mut map = HashMap::new();
+        view(&mut map, "tab-a", "v1", "web-1");
+        view(&mut map, "tab-b@web-2", "v2", "web-2");
+        map.get_mut("tab-b@web-2").unwrap().tab = Some("tab-b".into());
+        let batch = vec![("tab-a".to_string(), "aa".to_string()), ("tab-b@web-2".to_string(), "bb".to_string()), ("gone".to_string(), "zz".to_string())];
+        let addressed = address_digest_batch(&map, batch);
+        assert_eq!(addressed[1].0.id, "tab-b", "an attach route's entry names its tab");
+
+        let events = RecordingEvents::new();
+        emit_activity_batch(&ctx_as(Caller::Client(web(1)), events.clone()), addressed.clone());
+        let sent = events.take();
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert_eq!((sent[0].client.clone(), sent[0].event.as_str()), (Some(web(1)), "terminal-activity-batch"));
+        assert!(sent[0].payload.contains(r#""id":"tab-a""#) && !sent[0].payload.contains("bb"), "{}", sent[0].payload);
+        assert_eq!(sent[1].client, Some(web(2)));
+        assert!(sent[1].payload.contains(r#""id":"tab-b""#) && !sent[1].payload.contains("aa"), "{}", sent[1].payload);
+        assert!(!sent.iter().any(|e| e.payload.contains("zz")), "a route nobody views reaches nobody");
+
+        let events = RecordingEvents::new();
+        emit_activity_batch(&ctx_as(Caller::Local(ClientId::main()), events.clone()), addressed);
+        let sent = events.take();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].client, None, "the desktop's batch is one broadcast");
+        for data in ["aa", "bb", "zz"] {
+            assert!(sent[0].payload.contains(data), "{}", sent[0].payload);
+        }
+    }
+
     /// The desktop keeps its broadcast: the main window hears every chunk under
     /// the plain name, a popout its own copy under `<event>:<label>`.
     #[test]
@@ -2982,6 +3695,7 @@ mod client_tests {
         kill_test_ptys(&registry);
     }
 
+    #[cfg(unix)]
     fn test_opts() -> PtyOptions {
         PtyOptions {
             id: String::new(),

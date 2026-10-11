@@ -270,8 +270,8 @@ export interface Settings {
    *  its cards *are* the calendar's tasks) and reaches no network. Its one
    *  network-adjacent half, the urgent-mail rail, is already gated by
    *  `mail_client`, so a second experimental flag would gate the same thing twice
-   *  — and `experimental()` additionally means "on in debug", which would put a
-   *  third header button in every developer's window unasked. */
+   *  — and an experimental flag used to mean "on in debug", which would have put
+   *  a third header button in every developer's window unasked. */
   todo_board?: boolean;
   /** Root console: whether Tabtivity serves its own MCP tools to root agents
    *  (`services::root_mcp`). **Default true** — absent means on. Off hands new
@@ -347,8 +347,9 @@ export interface Settings {
    *  work. It hides a row and nothing else: the mail stays marked, the card
    *  stays due, and the group's reveal (🔕 N) is how a mute is taken back. */
   files_alerts_muted?: string[];
-  /** Mail: the experimental gate for the embedded mail client (`lib/experimental`
-   *  — unset means "on in debug mode", which is NOT the same as false).
+  /** Mail: the experimental gate for the embedded mail client. Read through
+   *  `lib/experimental` — unset is off, but on a profile not yet marked
+   *  `experimental_explicit` it still follows Debug mode.
    *
    *  The ONE mail switch. It turns on the header's ✉ button and the overlay
    *  behind it, which since the mail tab was retired is the whole client; the old
@@ -368,7 +369,8 @@ export interface Settings {
   /** Mail: raise an OS notification for new inbox mail. Default true. */
   mail_notify_new?: boolean;
   /** Browser: the experimental gate for the in-app browser (#61). Read through
-   *  `lib/experimental` — unset means "on in debug mode", NOT false. */
+   *  `lib/experimental` — unset is off, but on a profile not yet marked
+   *  `experimental_explicit` it still follows Debug mode. */
   web_browser?: boolean;
   /** Browser: where a fresh browser tab opens. **Empty/unset is the built-in
    *  start page, not a remote request** — a home page that fires on every new
@@ -390,7 +392,7 @@ export interface Settings {
   /** Browser: whether the hardened **live-page window** may be opened at all.
    *
    *  **Default false, and off in debug mode too** — deliberately not read through
-   *  `useExperimental`, which would turn it on for anyone running a debug build.
+   *  `useExperimental`, whose unmarked-profile rule follows Debug mode.
    *  Reader mode needs no such switch: it runs no JavaScript and its bytes are
    *  sanitized in Rust. A live page runs the real web page, and two of its holes
    *  cannot be closed from app code — it can reach a service on this machine via
@@ -646,6 +648,12 @@ export interface Settings {
   md_graph?: boolean;
   /** EXPERIMENTAL, default OFF. Project-wide per-file remarks in REMARKS.md. */
   project_remarks?: boolean;
+  /** Marker (tab cost plan step 3): this profile's experimental flags are
+   *  explicit, so an unset one is off whatever `debug` says. Written once by
+   *  `migrateExperimentalOnce` (`lib/experimental`), together with an explicit
+   *  `true` for every flag Debug mode used to carry; absent means the profile
+   *  still follows the old rule (unset → `debug`). */
+  experimental_explicit?: boolean;
   /** Persistent LOCAL (tmux) sessions (TODO #85): when true (the default on Unix),
    *  a local project's shell/script tabs run inside a tmux session on the machine,
    *  so a long run keeps going if Tabtivity crashes and the tab reattaches on restart.
@@ -712,6 +720,17 @@ export interface Settings {
    *  off a *standing preference*, and one merged control could not say "plugged
    *  in, still want it lean" — which is the case that asks for this. */
   fast_mode?: boolean;
+  /** Sleeping tabs (performance plan §5.3): minutes a hidden viewer tab (a
+   *  file viewer, a Files (Project) tab) stays loaded before it is unloaded,
+   *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
+   *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
+  sleep_tabs_after_min?: number;
+  /** Lines of history a shell terminal keeps (`docs/tab_cost_plan.md` step
+   *  2): every `TerminalView` whose kind is not `agent`/`local_agent`. Unset or
+   *  invalid → 2,000; clamped to [100, 50,000]. Agent tabs keep a fixed 5,000.
+   *  Read through `shellScrollbackRows` (`lib/terminal/scrollback`), applied
+   *  live to open terminals. */
+  shell_scrollback_rows?: number;
   /** When true, the side panel is docked open (reflows layout) instead of hover-revealed. */
   side_panel_pinned?: boolean;
   /** Width of the side (files/git/search/sessions) panel in px. Set by dragging the

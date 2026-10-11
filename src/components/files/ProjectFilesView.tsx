@@ -24,7 +24,9 @@ import { useSyncStore, amberPaths, localNewPaths, type SyncSkippedFile } from ".
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
 import { useWindowsStore } from "../../stores/windows";
-import { useGitDirtyStore, gitDirtyState } from "../../stores/gitDirty";
+import { useGitDirtyStore, gitDirtyState, GIT_WATCH_COALESCE_MS, type GitDirtyState } from "../../stores/gitDirty";
+import { coalescedRun, type CoalescedRun } from "../../lib/coalescedRun";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 import { resolveLocalMirror, type FilesPanelView, type GitReleasePreview, type ProjectEntry } from "../../types";
 import { fmtModified, type SortKey } from "../../lib/viewers/fileUtils";
 import {
@@ -51,6 +53,7 @@ import {
   useShowAllSessions,
   type SessionRow,
 } from "../../stores/remote/hostSessions";
+import { useMobileHostStatus } from "../../stores/mobileHostStatus";
 import {
   slurmAvailable,
   slurmQueue,
@@ -88,17 +91,39 @@ import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../li
 import { MobileAccessPicker, phoneReachLabel } from "../mobile/MobileAccessPicker";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
+import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
 
 /** How long the pointer must rest on a session row before its stats card opens
  *  (TODO #85) — same value and rationale as `FileTree`'s `TOOLTIP_DWELL_MS`:
  *  long enough that a mouse merely passing over the list never triggers it. */
 const TOOLTIP_DWELL_MS = 400;
-const MOBILE_STATUS_POLL_MS = 15_000;
 /** Git view re-read cadence: nothing watches the repo while that view shows. */
 const GIT_VIEW_POLL_MS = 5_000;
 
-interface MobileHostStatus {
-  running: boolean;
+/** The Git button's flag colour for a pill-dot level; `undefined` for a level
+ *  that says nothing about the counts (no reading, an errored or broken one). */
+function dotFlagColor(level: GitDirtyState | undefined): string | null | undefined {
+  switch (level) {
+    case "dirty":
+      return GIT_STATE_COLOR.modified;
+    case "staged":
+      return GIT_STATE_COLOR.staged;
+    case "unpushed":
+      return GIT_STATE_COLOR.unpushed;
+    case "clean":
+      return null;
+    default:
+      return undefined;
+  }
+}
+
+/** Whether an `fs-change` payload (the watched folder, as `FileTree` asked
+ *  for it) lies in `dir`. A payload that is not a string is not filtered. */
+function fsChangeIsUnder(payload: unknown, dir: string): boolean {
+  if (typeof payload !== "string") return true;
+  if (payload === dir) return true;
+  const base = dir.replace(/[/\\]+$/, "");
+  return payload.startsWith(`${base}/`) || payload.startsWith(`${base}\\`);
 }
 
 /** Phone glyph for the header's Mobile access button — the same silhouette as
@@ -174,7 +199,7 @@ function relativeDuration(epochSecs: number): string {
  *  (`handleEntryMouseEnter`/`.file-tooltip`), applied to a session row. Carries
  *  only the (host, name) identity, not a snapshot of the session — the card
  *  looks the live row up from `sessionRows` on every render, so its stats keep
- *  advancing with the Sessions view's own 7s poll while it's open, rather than
+ *  advancing with the Sessions view's shared poll (`HOST_SESSIONS_POLL_MS`) while it's open, rather than
  *  freezing at whatever "working"/uptime the session had when the dwell fired. */
 interface SessionTooltip {
   rect: DOMRect;
@@ -468,7 +493,6 @@ export function ProjectFilesView({
     && !project.remote
     && !project.sandbox?.enabled
     && !project.vm?.enabled;
-  const [mobileHostConnected, setMobileHostConnected] = useState(false);
   const [mobileAccessBusy, setMobileAccessBusy] = useState(false);
   const [mobileAccessError, setMobileAccessError] = useState<string | null>(null);
   // Kept here (not in the pane): the pane unmounts while the view shows Git or
@@ -480,30 +504,10 @@ export function ProjectFilesView({
   // terminal surface is a per-project decision. Keep the quick toggle out of
   // the viewer until the host is actually reachable, matching the header's
   // green Mobile indicator rather than trusting its persisted enabled setting.
-  useEffect(() => {
-    if (!active || !mobileHostEnabled || !mobileEligible) {
-      setMobileHostConnected(false);
-      return;
-    }
-    let cancelled = false;
-    const refresh = () => {
-      void invoke<MobileHostStatus>("mobile_host_status")
-        .then((status) => {
-          if (!cancelled) setMobileHostConnected(status.running);
-        })
-        .catch(() => {
-          if (!cancelled) setMobileHostConnected(false);
-        });
-    };
-    refresh();
-    window.addEventListener("focus", refresh);
-    const interval = window.setInterval(refresh, MOBILE_STATUS_POLL_MS);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", refresh);
-      window.clearInterval(interval);
-    };
-  }, [active, mobileEligible, mobileHostEnabled]);
+  // The reading is the header's own shared poll (`stores/mobileHostStatus`).
+  const mobileStatusWanted = active && mobileHostEnabled && mobileEligible;
+  const mobileHostStatus = useMobileHostStatus(mobileStatusWanted);
+  const mobileHostConnected = mobileStatusWanted && (mobileHostStatus?.running ?? false);
 
   const mobileAccessOn = project?.[MOBILE_ACCESS_KEY] ?? false;
 
@@ -545,6 +549,11 @@ export function ProjectFilesView({
   const [openTree, setOpenTree] = useState<"add" | "commit" | "push" | null>(null);
   const [commitMsg, setCommitMsg] = useState<string | null>(null);
   const [gitBusy, setGitBusy] = useState(false);
+  // An open commit box (its message may be the user's own text) or a git verb
+  // in flight keeps a sleepable Files (Project) pane awake: a sleeping pane is
+  // unmounted, which would drop both (performance plan §5.3). No-op outside a
+  // pane (the side panel).
+  usePaneSleepHold(commitMsg !== null || gitBusy);
   const [gitWorktree, setGitWorktree] = useState<{ root: string; selection: GitWorktreeSelection | null } | null>(null);
   // Bumped by the Pull button: GitHistory owns the pull preview it opens.
   const [pullRequest, setPullRequest] = useState(0);
@@ -578,10 +587,10 @@ export function ProjectFilesView({
   // Run both git probes concurrently (Eff #9): they hit independent
   // subprocesses, so `Promise.all` collapses two serially-awaited chains into
   // one round of parallel work. Each result still applies independently.
-  const runRefreshGit = (dir: string) => {
+  const runRefreshGit = (dir: string): Promise<void> => {
     const context = gitContextKey;
     const worktreeArgs = gitWorktreeArgs(selectedGitWorktree);
-    void Promise.all([
+    return Promise.all([
       invoke<GitStatus>("git_status", { projectDir: dir, ...worktreeArgs }).catch(() => null),
       // A failed read (git refused or timed out, #2349) is no reading, not
       // "nothing to push": `null`, so neither this bar nor the pill draws clean.
@@ -949,21 +958,17 @@ export function ProjectFilesView({
       .catch(() => { if (!cancelled) setSlurmSupported(false); });
     return () => { cancelled = true; };
   }, [active, projectDir, primaryReady]);
-  useEffect(() => {
-    if (!active || view !== "jobs" || !slurmSupported || !projectDir) return;
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const jobs = await slurmQueue(projectDir);
-        if (!cancelled) setJobRows(jobs);
-      } catch {
-        if (!cancelled) setJobRows([]);
-      }
-    };
-    void poll();
-    const iv = setInterval(() => void poll(), 7000);
-    return () => { cancelled = true; clearInterval(iv); };
-  }, [active, view, slurmSupported, projectDir]);
+  // The queue, every 7 s while the Jobs view shows and the window is in front.
+  const pollJobs = useCallback(async (poll: PollRun) => {
+    if (!projectDir) return;
+    try {
+      const jobs = await slurmQueue(projectDir);
+      if (!poll.stopped) setJobRows(jobs);
+    } catch {
+      if (!poll.stopped) setJobRows([]);
+    }
+  }, [projectDir]);
+  usePoll(pollJobs, 7000, { enabled: active && view === "jobs" && slurmSupported && !!projectDir });
 
   // Watch a job: open a log tab tailing its stdout. Use the session store's path
   // if we submitted it this session, else resolve via scontrol.
@@ -1271,34 +1276,63 @@ export function ProjectFilesView({
   // repo's index/HEAD/refs, `fs_watch.rs`), and in the Git view — which mounts
   // no tree, and must not steal the backend's single watch slot from one shown
   // elsewhere — re-read on entry and on a slow poll while it is on screen.
+  //
+  // Perf plan §3.4: the full reading (`git_status` + `git_unpushed_commits`,
+  // five git spawns) follows `fs-change` only while the Git view — the bar —
+  // is on screen, at most once a second and never twice at once
+  // (`coalescedRun`). Elsewhere the event refreshes the project's pill dot (one
+  // spawn, shared with the switcher, `stores/gitDirty`), which is what the Git
+  // button's flag then shows; the full counts are re-read on show and on
+  // entering the Git view (a scope with no project keeps the coalesced full
+  // reading). Only events for this project's own tree count.
+  const gitViewFullRef = useRef<CoalescedRun | null>(null);
   useEffect(() => {
     if (!active || !effectiveGitRoot || remoteBlocked) return;
     const root = effectiveGitRoot;
     const local = !project?.remote;
+    const inGitView = view === "git";
+    const full = coalescedRun(() => runRefreshGit(root), GIT_WATCH_COALESCE_MS);
+    const dotProject = projectId;
+    const dot =
+      !inGitView && dotProject && projectDir
+        ? coalescedRun(() => useGitDirtyStore.getState().refresh(dotProject, projectDir), GIT_WATCH_COALESCE_MS)
+        : null;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     if (local) {
-      void listen("fs-change", () => refreshGit(root)).then((un) => {
+      void listen<string>("fs-change", (event) => {
+        if (projectDir && !fsChangeIsUnder(event?.payload, projectDir)) return;
+        // No project to hang a dot on (the root scope): the counts, coalesced.
+        (inGitView || !dot ? full : dot).request();
+      }).then((un) => {
         if (cancelled) un();
         else unlisten = un;
       });
     }
-    let poll: ReturnType<typeof setInterval> | null = null;
-    if (view === "git") {
+    if (inGitView) {
       refreshGit(root);
-      if (local) {
-        poll = setInterval(() => {
-          if (document.visibilityState === "visible") refreshGit(root);
-        }, GIT_VIEW_POLL_MS);
-      }
+      // The backstop poll below asks this coalesced reading.
+      if (local) gitViewFullRef.current = full;
     }
     return () => {
       cancelled = true;
       unlisten?.();
-      if (poll) clearInterval(poll);
+      full.cancel();
+      dot?.cancel();
+      if (gitViewFullRef.current === full) gitViewFullRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, effectiveGitRoot, remoteBlocked, project?.remote, view, gitContextKey]);
+  }, [active, effectiveGitRoot, remoteBlocked, project?.remote, view, gitContextKey, projectId, projectDir]);
+
+  // The Git view's backstop for what `fs-change` misses (a commit made outside,
+  // `.git` internals): every GIT_VIEW_POLL_MS while the Git view of a local
+  // project shows and the window is in front (`usePoll`), through the effect's
+  // coalesced full reading.
+  const requestGitView = useCallback(() => gitViewFullRef.current?.request(), []);
+  usePoll(requestGitView, GIT_VIEW_POLL_MS, {
+    enabled: active && view === "git" && !!effectiveGitRoot && !remoteBlocked && !project?.remote,
+    immediate: false,
+  });
 
   // The gear dialog belongs to the project it was opened on; a project switch
   // reloads the filters under it, so close it rather than let it re-target.
@@ -1420,7 +1454,16 @@ export function ProjectFilesView({
   // Keep pending Git work visible from the Files view without keeping the
   // action controls in a separate header row. The colour matches the next
   // actionable step: add, then commit, then push.
-  const gitPendingColor = !gitStatus?.is_repo
+  //
+  // Outside the Git view the counts are only read on show, so the flag follows
+  // the project's pill dot instead, which the `.git` watcher keeps current
+  // (above); a nested repo, a remote project or no dot reading yet falls back
+  // to the last counts.
+  const dotLevel = useGitDirtyStore((s) => (projectId ? s.byId[projectId] : undefined));
+  const dotFlag = view !== "git" && !onNestedRepo && !project?.remote && !activeBox ? dotFlagColor(dotLevel) : undefined;
+  const gitPendingColor = dotFlag !== undefined
+    ? dotFlag
+    : !gitStatus?.is_repo
     ? null
     : gitStatus.unstaged + gitStatus.untracked > 0
       ? GIT_STATE_COLOR.modified

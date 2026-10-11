@@ -6,6 +6,7 @@ import { formatBytes } from "../../lib/formatBytes";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { UntestedTag } from "../common/UntestedTag";
 import { InboxGlyph } from "./HeaderGlyphs";
+import { usePoll } from "../../lib/usePoll";
 
 const MENU_ID = "inbox";
 
@@ -55,18 +56,9 @@ export function InboxIndicator() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const id = window.setInterval(() => {
-      if (document.visibilityState === "visible") void load();
-    }, POLL_MS);
-    const onFocus = () => void load();
-    window.addEventListener("focus", onFocus);
-    return () => {
-      window.clearInterval(id);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [load]);
+  // Read now and every POLL_MS while the window is in front (`usePoll` stops
+  // while it is blurred or hidden), and again on every return to it.
+  usePoll(load, POLL_MS, { catchUpAfterMs: 0 });
 
   useEffect(() => {
     if (!menuOpen) return;

@@ -1416,6 +1416,14 @@ pub fn run() {
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
             services::agent_turn::start(tauri_host::system_ctx(_app.handle()));
+            {
+                // The Reader's transcript watches (`services::transcript_watch`)
+                // announce a change as `transcript-changed` with the watch id.
+                let ctx = tauri_host::system_ctx(_app.handle());
+                services::transcript_watch::install(move |id| {
+                    ctx.emit("transcript-changed", id);
+                });
+            }
             // Install the global Claude SessionStart hook so Tabtivity can follow a
             // tab's live session id across `/clear` (see services::agent_session).
             if let Err(e) = services::agent_bin::install() {
@@ -1520,8 +1528,9 @@ pub fn run() {
         })
         // The Connect window reaches only its own few app commands
         // (`commands::connect::CONNECT_WINDOW_COMMANDS`); every other window
-        // the whole set, as before.
-        .invoke_handler(commands::connect::gate_connect_window(tauri::generate_handler![
+        // the whole set, as before. The state-file commands run on an ordered
+        // worker, not the GTK thread (`commands::persist_lane`).
+        .invoke_handler(commands::connect::gate_connect_window(commands::persist_lane::ordered(tauri::generate_handler![
             // Settings
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -2041,6 +2050,7 @@ pub fn run() {
             commands::pdf_markup::pdf_markup_undo_preview,
             commands::pdf_markup::pdf_markup_undo,
             commands::fs::file_mtime,
+            commands::fs::file_size,
             commands::format::format_source,
             commands::format::formatter_available,
             commands::format::check_syntax,
@@ -2307,6 +2317,7 @@ pub fn run() {
             commands::agents::agent_tab_recent_prompts,
             commands::agents::agent_tab_transcript,
             commands::agents::agent_tab_changes,
+            commands::agents::agent_transcript_unwatch,
             commands::agents::agent_tab_undo_clear,
             commands::ollama::ollama_is_running,
             commands::ollama::ollama_status,
@@ -2356,7 +2367,7 @@ pub fn run() {
             commands::spell::spell_dictionaries,
             commands::spell::spell_install_language,
             commands::spell::spell_remove_language,
-        ]))
+        ])))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_notification::init())
@@ -2448,6 +2459,9 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                // Saves the window sent on its way out are still queued on the
+                // ordered worker; let them land before anything is torn down.
+                commands::persist_lane::drain_at_exit();
                 // Old-name lookups counted since the last write (nothing
                 // while the app's name is unchanged).
                 services::brand_migration::hits::flush();

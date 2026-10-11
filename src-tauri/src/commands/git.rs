@@ -766,6 +766,12 @@ pub struct GitStatus {
     /// target is that commit. Probed only for a local repo with a remote (the
     /// sole case the button shows); `false` otherwise.
     pub head_tagged: bool,
+    /// Commits ahead of a live upstream, from the same `## …` header as
+    /// `behind`; `None` with no upstream (or a `[gone]` one), where the
+    /// unpushed count needs [`unpushed_base`]'s namesake lookup instead.
+    /// Internal: lets the dot probe skip two git spawns ([`unpushed_count`]).
+    #[serde(skip)]
+    pub upstream_ahead: Option<usize>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -816,6 +822,7 @@ fn git_status_probe_selected(
             is_repo: false,
             behind: 0,
             head_tagged: false,
+            upstream_ahead: None,
         });
     }
 
@@ -832,12 +839,15 @@ fn git_status_probe_selected(
     let mut unstaged = 0usize;
     let mut untracked = 0usize;
     let mut behind = 0usize;
+    let mut upstream_ahead = None;
     for line in text.lines() {
         if let Some(header) = line.strip_prefix("## ") {
-            behind = header
+            let (ahead, back) = header
                 .rfind('[')
-                .map(|at| parse_track(&header[at..]).1)
-                .unwrap_or(0);
+                .map(|at| parse_track(&header[at..]))
+                .unwrap_or((0, 0));
+            behind = back;
+            upstream_ahead = header_has_live_upstream(header).then_some(ahead);
             continue;
         }
         if line.len() < 2 {
@@ -875,7 +885,29 @@ fn git_status_probe_selected(
         is_repo: true,
         behind,
         head_tagged,
+        upstream_ahead,
     })
+}
+
+/// Whether a `git status --branch` header names an upstream that still
+/// exists: `main...origin/main [ahead 1]` does, `main` (none), `HEAD (no
+/// branch)` and `main...origin/main [gone]` do not. A ref name cannot hold
+/// `..`, so `...` is always the separator.
+fn header_has_live_upstream(header: &str) -> bool {
+    header.contains("...") && !header.contains("[gone]")
+}
+
+/// The dot's unpushed count for a status just read: the header's `ahead` when
+/// the branch tracks a live upstream (no further spawn — `git log @{u}..`
+/// counts the same commits), else [`git_unpushed_commits_blocking`]'s
+/// namesake fallback. Best-effort: a failed read counts as zero.
+pub(crate) fn unpushed_count(status: &GitStatus, project_dir: String) -> usize {
+    match status.upstream_ahead {
+        Some(ahead) => ahead,
+        None => git_unpushed_commits_blocking(project_dir)
+            .map(|v| v.len())
+            .unwrap_or(0),
+    }
 }
 
 /// `(ahead, behind)` out of git's tracking text — `[ahead 1, behind 2]`,
@@ -911,8 +943,10 @@ pub struct GitDirtyProbe {
 }
 
 /// `git_status` + the unpushed-commit count as ONE command, for the switcher's
-/// 12 s per-project dot poll: one git spawn and one IPC round trip in the
-/// common (dirty, non-repo, or no-upstream-relevant) case instead of two each.
+/// 12 s per-project dot poll and its `.git` watcher refresh: one git spawn and
+/// one IPC round trip — a clean tree tracking an upstream reads its unpushed
+/// count off the status header too ([`unpushed_count`]); only a clean branch
+/// with no upstream pays the namesake lookup.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_dirty_probe(project_dir: String) -> Result<GitDirtyProbe, String> {
     run_off_thread(move || {
@@ -925,9 +959,7 @@ pub async fn git_dirty_probe(project_dir: String) -> Result<GitDirtyProbe, Strin
         let unpushed = if clean {
             // Best-effort, like the frontend's old `.catch(() => [])`: a failed
             // unpushed read must not blank a dot the status half already earned.
-            git_unpushed_commits_blocking(project_dir)
-                .map(|v| v.len())
-                .unwrap_or(0)
+            unpushed_count(&status, project_dir)
         } else {
             0
         };
@@ -4351,6 +4383,70 @@ filename note.txt
         assert_eq!(statuses.get("src").map(String::as_str), Some("unpushed"));
         assert_eq!(statuses.get("pushed.txt"), None);
         assert_eq!(git_unpushed_commits_blocking(d).expect("unpushed").len(), 1);
+    }
+
+    #[test]
+    fn a_status_header_names_a_live_upstream() {
+        assert!(header_has_live_upstream("main...origin/main"));
+        assert!(header_has_live_upstream("main...origin/main [ahead 2]"));
+        assert!(header_has_live_upstream("feature/x...origin/feature/x [ahead 1, behind 3]"));
+        assert!(!header_has_live_upstream("main"));
+        assert!(!header_has_live_upstream("HEAD (no branch)"));
+        assert!(!header_has_live_upstream("No commits yet on main"));
+        assert!(!header_has_live_upstream("main...origin/main [gone]"));
+    }
+
+    /// Perf plan §3.4: the dot probe reads a tracked branch's unpushed count
+    /// off the status header (no `rev-parse @{u}` + `log` spawns) and agrees
+    /// with the full lookup; an untracked branch still gets the namesake one.
+    #[test]
+    fn the_dot_probe_reads_unpushed_off_the_status_header() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping the_dot_probe_reads_unpushed_off_the_status_header");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("work");
+        fs::create_dir(&dir).expect("mkdir work");
+        let git = |cwd: &Path, args: &[&str]| {
+            let ok = crate::paths::command_no_window("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .expect("git should run")
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        git(tmp.path(), &["init", "--bare", "remote.git"]);
+        init_repo(&dir);
+        git(&dir, &["checkout", "-b", "develop"]);
+        fs::write(dir.join("a.txt"), "a\n").expect("write");
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-m", "first"]);
+        let remote = tmp.path().join("remote.git");
+        git(&dir, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        let d = dir.to_string_lossy().to_string();
+
+        // Pushed without `-u`: no upstream, the namesake lookup answers.
+        git(&dir, &["push", "origin", "develop:develop"]);
+        git(&dir, &["commit", "--allow-empty", "-m", "local one"]);
+        let status = git_status_probe(d.clone(), false).expect("status");
+        assert_eq!(status.upstream_ahead, None);
+        assert_eq!(unpushed_count(&status, d.clone()), 1);
+
+        // Tracking: the header carries it, and it matches `log @{u}..`.
+        git(&dir, &["branch", "--set-upstream-to", "origin/develop"]);
+        git(&dir, &["commit", "--allow-empty", "-m", "local two"]);
+        let status = git_status_probe(d.clone(), false).expect("status");
+        assert_eq!(status.upstream_ahead, Some(2));
+        assert_eq!(unpushed_count(&status, d.clone()), 2);
+        assert_eq!(git_unpushed_commits_blocking(d.clone()).expect("unpushed").len(), 2);
+
+        git(&dir, &["push", "origin", "develop"]);
+        let status = git_status_probe(d.clone(), false).expect("status");
+        assert_eq!(status.upstream_ahead, Some(0));
+        assert_eq!(unpushed_count(&status, d), 0);
     }
 
     #[test]

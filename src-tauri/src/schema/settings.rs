@@ -296,9 +296,9 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_alerts_muted: Option<Vec<String>>,
     /// Mail: the experimental gate for the embedded mail client
-    /// (`src/lib/experimental.ts` — unset falls back to debug mode, so a flag
-    /// still moving is invisible to someone *using* Tabtivity and on by default
-    /// for someone building it).
+    /// (`src/lib/experimental.ts` — unset is off, so a flag still moving is
+    /// invisible until someone ticks it; see [`Settings::experimental`] for the
+    /// one exception, a profile not yet marked `experimental_explicit`).
     ///
     /// It is the ONE mail switch, and it gates the whole feature: the header's
     /// ✉ button and the overlay behind it, which is the entire client since the
@@ -610,10 +610,19 @@ pub struct Settings {
     /// EXPERIMENTAL, default OFF. Project-wide per-file remarks in REMARKS.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_remarks: Option<bool>,
+    /// Marker (tab cost plan step 3): this profile's experimental flags are
+    /// explicit, so an unset flag is off whatever `debug` says. Written once by
+    /// the frontend's `migrateExperimentalOnce` (`src/lib/experimental.ts`),
+    /// together with an explicit `true` for every flag Debug mode used to
+    /// carry. Absent → the profile still follows the old rule (unset → `debug`)
+    /// in [`Settings::experimental`]. A named field so the backend can read it;
+    /// an older settings file without it still loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experimental_explicit: Option<bool>,
     /// EXPERIMENTAL, default OFF. The in-app browser (TODO J #61,
     /// `docs/browser_plan_{a,b,c}.md`): a JS-free reader tab plus a separate
     /// hardened live-page window. Read via `web_browser()`, which applies the
-    /// same unset-means-debug rule every other experimental flag follows.
+    /// same rule every other experimental flag follows ([`Settings::experimental`]).
     ///
     /// It is declared here rather than left to ride in `extra` for the reason
     /// every other flag is: a field that only exists in the catch-all cannot be
@@ -658,11 +667,11 @@ pub struct Settings {
     pub browser_restore_navigate: Option<bool>,
     /// Browser: whether the hardened **live-page window** may be opened at all.
     ///
-    /// **Default false, and deliberately not an `experimental()` flag** — unlike
-    /// every other opt-in here, unset must mean *off in a debug build too*. That
-    /// is the whole point: a debug build is what the author runs all day, and
-    /// this is the one browser surface whose central security claim does not
-    /// hold.
+    /// **Default false, and deliberately not an `experimental()` flag** — unset
+    /// must mean *off in a debug build too*, including on a profile not yet
+    /// marked `experimental_explicit`, where `experimental()` still follows
+    /// Debug mode. A debug build is what the author runs all day, and this is
+    /// the one browser surface whose central security claim does not hold.
     ///
     /// Reader mode carries no such switch because it needs none: it runs no
     /// JavaScript, owns no webview, and its bytes are sanitized in Rust before
@@ -804,6 +813,20 @@ pub struct Settings {
     /// exact list); kept here only so it round-trips.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast_mode: Option<bool>,
+    /// Sleeping tabs (performance plan §5.3): minutes a hidden viewer tab stays
+    /// loaded before the window unloads it (it reloads where it was when shown
+    /// again). Absent → 10, `0` → never. Read entirely on the frontend
+    /// (`src/lib/sleepWhenHidden.ts`, `sleepTabsAfterMs`); a named field so the
+    /// frontend type declares it and it round-trips as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sleep_tabs_after_min: Option<u32>,
+    /// Lines of history a shell terminal keeps (tab cost plan step 2): every
+    /// terminal but agent tabs, which keep a fixed 5,000. Absent → 2,000;
+    /// clamped to [100, 50,000]. Read entirely on the frontend
+    /// (`src/lib/terminal/scrollback.ts`); a named field so it round-trips as
+    /// written and an older settings file without it still loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_scrollback_rows: Option<u32>,
     /// Header resource-monitor row toggles. Each defaults ON when unset so the
     /// pill shows CPU/RAM/GPU by default; flip one off to hide that row. Shown in
     /// every build (independent of `debug`).
@@ -1065,17 +1088,31 @@ impl Settings {
     }
 
     /// The rule every experimental flag follows (mirrors `src/lib/experimental.ts`):
-    /// unset means **debug mode decides**, so someone building Tabtivity gets each new
-    /// experiment without re-ticking a list, and everyone else gets none of them. An
-    /// explicit value always wins, in both directions — otherwise "turn this off"
-    /// would silently fail for exactly the people most likely to hit a broken one.
+    /// an explicit value wins, in both directions, and an unset flag is **off**.
+    ///
+    /// The one exception is a profile not yet marked `experimental_explicit`:
+    /// there unset still means *Debug mode decides*, as it did before tab cost
+    /// plan step 3. That keeps a debug user's experiments on until the
+    /// frontend's one-shot migration has written them as explicit ticks
+    /// together with the marker; from then on Debug mode no longer turns any
+    /// experiment on.
     fn experimental(&self, flag: Option<bool>) -> bool {
-        flag.unwrap_or_else(|| self.debug.unwrap_or(false))
+        flag.unwrap_or_else(|| {
+            !self.experimental_explicit.unwrap_or(false) && self.debug.unwrap_or(false)
+        })
+    }
+
+    /// Whether the experimental Copilot completion entry point is on — the one
+    /// spelling of the rule for the backend's policy (`services::copilot::policy`)
+    /// and the session teardown on a settings change. It alone never authorizes
+    /// cloud context: the provider choice and per-project consent are checked
+    /// separately.
+    pub fn copilot_completion(&self) -> bool {
+        self.experimental(self.copilot_completion)
     }
 
     /// Whether the experimental Python Run/Debug buttons and breakpoint gutter are
-    /// offered in the code viewer. Run *executes the file*, so outside debug mode it
-    /// is opt-in.
+    /// offered in the code viewer. Run *executes the file*, so it is opt-in.
     pub fn python_run_debug(&self) -> bool {
         self.experimental(self.python_run_debug)
     }
@@ -1132,14 +1169,14 @@ impl Settings {
     }
 
     /// Whether the experimental native presenter ("deck") is offered — the
-    /// `*.eldeck.json` viewer and its fullscreen presenter. Off outside debug mode
+    /// `*.eldeck.json` viewer and its fullscreen presenter. Off until ticked
     /// while the surface is still moving.
     pub fn deck_presenter(&self) -> bool {
         self.experimental(self.deck_presenter)
     }
 
     /// Whether the experimental in-app browser is offered (TODO J #61). Off
-    /// outside debug mode while the surface is still moving. It gates the add-tab
+    /// until ticked while the surface is still moving. It gates the add-tab
     /// entry points only — see the field's doc for why the commands themselves
     /// stay reachable.
     pub fn web_browser(&self) -> bool {
@@ -1225,11 +1262,12 @@ mod tests {
 
     use super::Settings;
 
-    /// The experimental rule, backend side (the frontend twin lives in
-    /// `src/__tests__/shell/Experimental.test.ts`): unset defers to debug mode, and an
+    /// The experimental rule on an UNMARKED profile, backend side (the frontend
+    /// twin lives in `src/__tests__/shell/Experimental.test.ts`): unset still
+    /// defers to debug mode until the migration marks the profile, and an
     /// explicit value wins in BOTH directions.
     #[test]
-    fn experimental_flags_default_to_debug_mode() {
+    fn unmarked_experimental_flags_default_to_debug_mode() {
         let off = Settings::default();
         assert!(!off.python_run_debug());
         assert!(!off.deck_presenter());
@@ -1255,6 +1293,67 @@ mod tests {
             ..Default::default()
         };
         assert!(opted_in.python_run_debug());
+    }
+
+    /// Once a profile is marked `experimental_explicit`, Debug mode turns no
+    /// experiment on; an explicit value still wins in both directions.
+    #[test]
+    fn marked_experimental_flags_are_off_unless_ticked() {
+        let marked_debug = Settings {
+            debug: Some(true),
+            experimental_explicit: Some(true),
+            ..Default::default()
+        };
+        assert!(!marked_debug.python_run_debug());
+        assert!(!marked_debug.deck_presenter());
+        assert!(!marked_debug.web_browser());
+        assert!(!marked_debug.mail_client());
+        assert!(!marked_debug.copilot_completion());
+
+        let ticked = Settings {
+            debug: Some(true),
+            experimental_explicit: Some(true),
+            web_browser: Some(true),
+            copilot_completion: Some(true),
+            mail_client: Some(false),
+            ..Default::default()
+        };
+        assert!(ticked.web_browser());
+        assert!(ticked.copilot_completion());
+        assert!(!ticked.mail_client());
+
+        // An explicit `false` marker is no marker: the old rule still holds.
+        let unmarked = Settings {
+            debug: Some(true),
+            experimental_explicit: Some(false),
+            ..Default::default()
+        };
+        assert!(unmarked.web_browser());
+        assert!(unmarked.copilot_completion());
+    }
+
+    /// The marker is absent by default, an older settings file without it still
+    /// loads, it is a real field rather than an `extra` passenger, and it
+    /// survives a round trip.
+    #[test]
+    fn experimental_explicit_defaults_absent_and_round_trips() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            !raw.contains("experimental_explicit"),
+            "default settings must omit experimental_explicit: {raw}"
+        );
+        let old: Settings =
+            serde_json::from_str(r#"{"debug":true,"web_browser":true}"#).expect("parse old settings");
+        assert_eq!(old.experimental_explicit, None);
+        assert!(old.extra.is_empty(), "{:?}", old.extra.keys().collect::<Vec<_>>());
+        let s: Settings =
+            serde_json::from_str(r#"{"debug":true,"experimental_explicit":true}"#).expect("parse");
+        assert_eq!(s.experimental_explicit, Some(true));
+        assert!(s.extra.is_empty(), "fell through to `extra`: {:?}", s.extra.keys());
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
+        assert_eq!(back.experimental_explicit, Some(true));
+        assert!(!back.web_browser());
     }
 
     /// The browser's settings must be **named fields**, not `extra` passengers.
@@ -1322,6 +1421,52 @@ mod tests {
         let back: Settings =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
         assert_eq!(back.fast_mode, Some(true));
+    }
+
+    /// The sleeping-tabs delay is absent by default (the frontend reads 10
+    /// minutes), a real field rather than an `extra` passenger, and both an
+    /// explicit `0` (never) and a chosen value survive a round trip.
+    #[test]
+    fn sleep_tabs_after_min_defaults_absent_and_round_trips() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            !raw.contains("sleep_tabs_after_min"),
+            "default settings must omit sleep_tabs_after_min: {raw}"
+        );
+        for n in [0u32, 30] {
+            let s: Settings =
+                serde_json::from_str(&format!(r#"{{"sleep_tabs_after_min":{n}}}"#)).expect("parse");
+            assert_eq!(s.sleep_tabs_after_min, Some(n));
+            assert!(s.extra.is_empty(), "fell through to `extra`: {:?}", s.extra.keys());
+            let back: Settings =
+                serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
+            assert_eq!(back.sleep_tabs_after_min, Some(n));
+        }
+    }
+
+    /// The shell scrollback is absent by default (the frontend reads 2,000),
+    /// an older settings file without it still loads, it is a real field
+    /// rather than an `extra` passenger, and a chosen value survives a round
+    /// trip.
+    #[test]
+    fn shell_scrollback_rows_defaults_absent_and_round_trips() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            !raw.contains("shell_scrollback_rows"),
+            "default settings must omit shell_scrollback_rows: {raw}"
+        );
+        let old: Settings =
+            serde_json::from_str(r#"{"sleep_tabs_after_min":10}"#).expect("parse old settings");
+        assert_eq!(old.shell_scrollback_rows, None);
+        for n in [1000u32, 10_000] {
+            let s: Settings =
+                serde_json::from_str(&format!(r#"{{"shell_scrollback_rows":{n}}}"#)).expect("parse");
+            assert_eq!(s.shell_scrollback_rows, Some(n));
+            assert!(s.extra.is_empty(), "fell through to `extra`: {:?}", s.extra.keys());
+            let back: Settings =
+                serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
+            assert_eq!(back.shell_scrollback_rows, Some(n));
+        }
     }
 
     /// Local-model mail reads are absent by default (off), a real field the MCP
@@ -1443,7 +1588,8 @@ mod default_rule_tests {
     }
 
     /// Live pages are the one browser surface that stays off in debug mode:
-    /// unset means off everywhere, unlike the flag that enables the browser.
+    /// unset means off everywhere, even on an unmarked profile where the flag
+    /// that enables the browser still follows Debug mode.
     #[test]
     fn browser_live_pages_stay_off_even_in_debug_mode() {
         let debug = Settings {
@@ -1452,6 +1598,13 @@ mod default_rule_tests {
         };
         assert!(debug.web_browser());
         assert!(!debug.browser_live_pages());
+        let marked = Settings {
+            debug: Some(true),
+            experimental_explicit: Some(true),
+            ..Default::default()
+        };
+        assert!(!marked.web_browser());
+        assert!(!marked.browser_live_pages());
         let on = Settings {
             browser_live_pages: Some(true),
             ..Default::default()

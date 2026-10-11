@@ -739,6 +739,7 @@ pub async fn network_host_snapshot(
     include_connections: bool,
 ) -> Result<NetworkHostSnapshot, String> {
     let pool = ctx.get::<RemotePoolState>();
+    crate::services::net_usage::note_pane_read();
     let Some(target) = remote::remote_target_for(&project_id) else {
         return Ok(local_snapshot(include_connections));
     };
@@ -792,12 +793,13 @@ fn parse_master_pid(text: &str) -> Option<u32> {
         .ok()
 }
 
-/// One shared system-wide `ss -H -t -i -n -p` reading, run **at most once**
+/// One shared system-wide `ss -H -t -i -n -e` reading, run **at most once**
 /// however many projects are sampled against it. The output is system-wide —
 /// the per-project part of a link snapshot is only slicing out that master's
-/// row — yet `local_ssh_link` used to spawn it per call, and `-p` makes each
-/// run walk every `/proc/<pid>/fd` on the machine to resolve sockets to their
-/// processes. The run is lazy, so a caller whose master turns out to be gone
+/// row, found by the socket inode the master holds ([`socket_inodes`]). No
+/// `-p`: resolving every socket to its process made each run walk every
+/// `/proc/<pid>/fd` on the machine, where the inode needs only the master's
+/// own fds. The run is lazy, so a caller whose master turns out to be gone
 /// never pays for it; the inner `None` means `ss` itself failed to spawn.
 #[cfg(target_os = "linux")]
 #[derive(Default)]
@@ -816,13 +818,85 @@ impl SsDump {
         self.0
             .get_or_insert_with(|| {
                 Command::new("ss")
-                    .args(["-H", "-t", "-i", "-n", "-p"])
+                    .args(["-H", "-t", "-i", "-n", "-e"])
                     .env("LC_ALL", "C")
                     .output()
                     .ok()
                     .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             })
             .as_deref()
+    }
+}
+
+/// The socket inodes `pid` holds open (`/proc/<pid>/fd/*` → `socket:[N]`):
+/// for a ControlMaster, its one TCP connection to the host among them.
+#[cfg(target_os = "linux")]
+fn socket_inodes(pid: u32) -> Vec<u64> {
+    let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+        return Vec::new();
+    };
+    fds.flatten()
+        .filter_map(|fd| std::fs::read_link(fd.path()).ok())
+        .filter_map(|target| parse_socket_link(target.to_str()?))
+        .collect()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_socket_link(target: &str) -> Option<u64> {
+    target.strip_prefix("socket:[")?.strip_suffix(']')?.parse().ok()
+}
+
+/// The project's ControlMaster as last confirmed by `ssh -O check`: the check
+/// arguments it answered (they name the control socket and host), its pid and
+/// start time. While that process still runs, the next sample asks no `ssh`.
+#[cfg(target_os = "linux")]
+type KnownMaster = (Vec<String>, u32, u64);
+
+#[cfg(target_os = "linux")]
+fn known_masters() -> &'static std::sync::Mutex<std::collections::HashMap<String, KnownMaster>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, KnownMaster>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// The start time of `pid` if its `comm` is `comm`.
+#[cfg(target_os = "linux")]
+fn start_time_of(pid: u32, comm: &str) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let proc_ = crate::services::proc_table::parse_stat(pid, &stat)?;
+    (proc_.comm == comm).then_some(proc_.start)
+}
+
+/// A master [`ssh_master_pid`] confirmed earlier for `project_id` with the
+/// same check arguments, while that very process (pid and start time) runs.
+#[cfg(target_os = "linux")]
+fn cached_master(project_id: &str, args: &[String]) -> Option<u32> {
+    cached_master_as(project_id, args, "ssh")
+}
+
+#[cfg(target_os = "linux")]
+fn cached_master_as(project_id: &str, args: &[String], comm: &str) -> Option<u32> {
+    let mut known = known_masters().lock().unwrap_or_else(|p| p.into_inner());
+    let (known_args, pid, start) = known.get(project_id)?.clone();
+    if known_args == args && start_time_of(pid, comm) == Some(start) {
+        return Some(pid);
+    }
+    known.remove(project_id);
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn remember_master(project_id: &str, args: Vec<String>, pid: u32) {
+    remember_master_as(project_id, args, pid, "ssh");
+}
+
+#[cfg(target_os = "linux")]
+fn remember_master_as(project_id: &str, args: Vec<String>, pid: u32, comm: &str) {
+    if let Some(start) = start_time_of(pid, comm) {
+        known_masters()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(project_id.to_string(), (args, pid, start));
     }
 }
 
@@ -853,8 +927,13 @@ fn ssh_master_pid(project_id: &str) -> Result<u32, Box<SshLinkSnapshot>> {
             warning: Some("SSH-link traffic is only available for remote projects.".to_string()),
         }));
     };
+    let args = crate::services::ssh_exec::ssh_control_check_args(&target.spec);
+    #[cfg(target_os = "linux")]
+    if let Some(pid) = args.as_deref().ok().and_then(|args| cached_master(project_id, args)) {
+        return Ok(pid);
+    }
     let check =
-        match crate::services::ssh_exec::ssh_control_check_args(&target.spec).and_then(|args| {
+        match args.clone().and_then(|args| {
             crate::paths::command_no_window("ssh")
                 .args(args)
                 .output()
@@ -880,7 +959,12 @@ fn ssh_master_pid(project_id: &str) -> Result<u32, Box<SshLinkSnapshot>> {
         String::from_utf8_lossy(&check.stdout),
         String::from_utf8_lossy(&check.stderr)
     );
-    parse_master_pid(&check_text).ok_or_else(|| Box::new(SshLinkSnapshot {
+    let pid = parse_master_pid(&check_text);
+    #[cfg(target_os = "linux")]
+    if let (Some(pid), Ok(args)) = (pid, args) {
+        remember_master(project_id, args, pid);
+    }
+    pid.ok_or_else(|| Box::new(SshLinkSnapshot {
         supported: true,
         connected: false,
         sampled_at_ms: now_ms(),
@@ -966,7 +1050,7 @@ pub(crate) fn local_ssh_link_shared(project_id: &str, ss: &mut SsDump) -> SshLin
             ),
         };
     };
-    let parsed = parse_ssh_link_ss(ss_text, master_pid);
+    let parsed = parse_ssh_link_ss(ss_text, master_pid, &socket_inodes(master_pid));
     parsed.unwrap_or_else(|| SshLinkSnapshot {
         supported: true,
         connected: true,
@@ -1082,12 +1166,20 @@ fn counter(text: &str, key: &str) -> Option<u64> {
         .ok()
 }
 
+/// The master's row of an `ss -H -t -i -n -e` dump: the socket whose `ino:`
+/// is one the master holds (`inodes`), its counters on the line after it.
 #[cfg(any(target_os = "linux", test))]
-fn parse_ssh_link_ss(text: &str, master_pid: u32) -> Option<SshLinkSnapshot> {
-    let needle = format!("pid={master_pid},");
+fn parse_ssh_link_ss(text: &str, master_pid: u32, inodes: &[u64]) -> Option<SshLinkSnapshot> {
+    if inodes.is_empty() {
+        return None;
+    }
     let lines: Vec<&str> = text.lines().collect();
     for (index, line) in lines.iter().enumerate() {
-        if !line.contains(&needle) {
+        let ino = line
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("ino:"))
+            .and_then(|n| n.parse::<u64>().ok());
+        if !ino.is_some_and(|ino| ino != 0 && inodes.contains(&ino)) {
             continue;
         }
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -1118,6 +1210,7 @@ pub async fn network_ssh_link_snapshot(
     project_id: String,
 ) -> Result<SshLinkSnapshot, String> {
     let pool = ctx.get::<RemotePoolState>();
+    crate::services::net_usage::note_pane_read();
     if remote::remote_target_for(&project_id).is_none() {
         return Ok(local_ssh_link(&project_id));
     }
@@ -1277,12 +1370,51 @@ utun0 1380  <Link#16>                            123     0      45678      321  
     }
 
     #[test]
-    fn parses_ssh_transport_counters() {
-        let input = "ESTAB 0 0 192.0.2.2:40000 198.51.100.4:22 users:((\"ssh\",pid=8123,fd=3))\n\t cubic wscale:7,7 bytes_sent:4567 bytes_received:8910 segs_out:2\n";
-        let parsed = parse_ssh_link_ss(input, 8123).unwrap();
+    fn parses_ssh_transport_counters_by_the_masters_socket_inode() {
+        let input = concat!(
+            "ESTAB 0 0 192.0.2.2:40001 198.51.100.9:443 timer:(keepalive,4.2sec,0) uid:1000 ino:111 sk:1 <->\n",
+            "\t cubic wscale:7,7 bytes_sent:1 bytes_received:2 segs_out:2\n",
+            "ESTAB 0 0 192.0.2.2:40000 198.51.100.4:22 timer:(keepalive,4.2sec,0) uid:1000 ino:222 sk:2 <->\n",
+            "\t cubic wscale:7,7 bytes_sent:4567 bytes_received:8910 segs_out:2\n",
+        );
+        let parsed = parse_ssh_link_ss(input, 8123, &[5, 222]).unwrap();
         assert_eq!(parsed.tx_bytes, 4567);
         assert_eq!(parsed.rx_bytes, 8910);
         assert_eq!(parsed.remote_endpoint.as_deref(), Some("198.51.100.4:22"));
+        assert_eq!(parsed.connection_id.as_deref(), Some("8123:192.0.2.2:40000:198.51.100.4:22"));
+        // No socket of the master's in the dump (a ProxyJump master talks
+        // through pipes), or none known: not visible.
+        assert!(parse_ssh_link_ss(input, 8123, &[333]).is_none());
+        assert!(parse_ssh_link_ss(input, 8123, &[]).is_none());
+    }
+
+    #[test]
+    fn socket_links_name_their_inode() {
+        assert_eq!(parse_socket_link("socket:[26027921]"), Some(26027921));
+        assert_eq!(parse_socket_link("pipe:[5]"), None);
+        assert_eq!(parse_socket_link("/dev/null"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_master_is_asked_for_again_once_its_process_is_gone() {
+        let args = vec!["-S".to_string(), "/tmp/cm".to_string()];
+        // Not an ssh process (this test binary): never remembered.
+        remember_master("net-test-a", args.clone(), std::process::id());
+        assert_eq!(cached_master("net-test-a", &args), None);
+        // A master that runs is answered without a check; other check
+        // arguments (another host or socket) are not it.
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        remember_master_as("net-test-b", args.clone(), pid, "sleep");
+        assert_eq!(cached_master_as("net-test-b", &args, "sleep"), Some(pid));
+        assert_eq!(cached_master_as("net-test-b", &["-S".to_string(), "/tmp/other".to_string()], "sleep"), None);
+        remember_master_as("net-test-b", args.clone(), pid, "sleep");
+        // Gone: dropped, the next sample asks `ssh -O check` again.
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(cached_master_as("net-test-b", &args, "sleep"), None);
+        assert!(!known_masters().lock().unwrap().contains_key("net-test-b"));
     }
 
     #[test]

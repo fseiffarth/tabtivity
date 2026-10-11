@@ -14,7 +14,7 @@ import {
   type DetachedDragMove,
   type DetachedDragStart,
 } from "../../stores/detached";
-import { TabPane } from "../tabs/TabPane";
+import { PaneSlot } from "./PaneSlot";
 import { Subwindow } from "../tabs/Subwindow";
 import { pickEdge, previewInset } from "../tabs/dragGeometry";
 import { dragPreviewLayout } from "../tabs/dragPreview";
@@ -25,15 +25,8 @@ import {
   EMPTY_GROUP_ID,
   allGroups,
   dividerFraction,
-  effectiveTabLocation,
   findGroup,
   hydrateScopeFromDisk,
-  isRelaunchableLocalTab,
-  isResumableAgentTab,
-  isSavedWhileLive,
-  isPtyTabKind,
-  localTabCwd,
-  remoteHostIdOf,
   useTabsStore,
   type DetachedDockTarget,
   type LayoutNode,
@@ -71,15 +64,14 @@ import {
   type WindowFrame,
 } from "../../lib/window/coords";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
-import { shouldPersistTab, shouldPersistLocalTab } from "../../lib/terminal/tmuxSession";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxFolderOfScope, restoreBoxScope, useBoxesStore } from "../../stores/boxes";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
-import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
+import { resolveProjectDirectory } from "../../types";
 import { useT } from "../../lib/i18n";
-import { MOBILE_ACCESS_KEY } from "../../lib/brand";
+import { sleepTabsAfterMs } from "../../lib/sleepWhenHidden";
 
 /** Pixel coordinates of a group's pane region, relative to the center panel. */
 interface Rect {
@@ -204,7 +196,25 @@ function CenterPanelImpl() {
   const localPersistEnabled = useSettingsStore(
     (s) => !IS_HOST_WINDOWS && s.settings?.persist_local_sessions !== false,
   );
-  // Stable per-scope connect handler. TabPane is memoized, so the pane layer only
+  // Sleeping tabs (performance plan §5.3): how long a hidden viewer pane stays
+  // mounted, null when the setting turns sleeping off. A scalar per slot.
+  const sleepAfterMs = useSettingsStore((s) => sleepTabsAfterMs(s.settings?.sleep_tabs_after_min));
+  // Every tab a popout shows, keyed `<scope>/<key>` (§4.5): its pane here is a
+  // hidden duplicate, which a viewer kind sleeps at once. Rebuilt only when a
+  // popout's layout changes; each slot gets a boolean.
+  const detachedGroupsByScope = useTabsStore((s) => s.detachedGroupsByScope);
+  const popoutTabKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const [scopeKey, entries] of Object.entries(detachedGroupsByScope ?? {})) {
+      for (const d of entries) {
+        for (const g of allGroups(d.subtree)) {
+          for (const k of g.tabKeys) keys.add(`${scopeKey}/${k}`);
+        }
+      }
+    }
+    return keys;
+  }, [detachedGroupsByScope]);
+  // Stable per-scope connect handler. PaneSlot/TabPane are memoized, so the pane layer only
   // stays cheap to re-render (e.g. every frame of a divider drag) if its props are
   // referentially stable — a fresh `() => openRemoteMachines(scopeKey)` arrow every
   // render would break the memo for every pane. Cached by scope; reads the store
@@ -1215,133 +1225,12 @@ function CenterPanelImpl() {
                 ...(fsActive && groupId === fullscreenGroupId ? { zIndex: 5 } : {}),
               }
             : { display: "none" };
-          // Mount-free remote, per-pane gating. A remote project's LOCAL panes
-          // run on the mirror and work offline; only remote-I/O panes must wait
-          // for the pool. Keyed by THIS pane's scope (not the active project) so
-          // a disconnected remote project switched away from never un-holds.
+          // The pane project / box, resolved here (not the active one) so a pane
+          // keeps its own remote/mirror/sandbox answers across scope switches.
           const paneProject = projects.find((p) => p.id === scopeKey);
-          // A box scope's Mobile switch (#31aa) plays the project's part below:
-          // an agent tab of the box gets tmux underneath it — the one thing
-          // that makes it attachable from the phone — by the box's own switch.
           const paneBox = scopeKey.startsWith(BOX_SCOPE_PREFIX)
             ? boxes.find((b) => `${BOX_SCOPE_PREFIX}${b.id}` === scopeKey)
             : undefined;
-          const paneRemoteProj = !!paneProject?.remote;
-          const paneDisconnected =
-            paneRemoteProj && remoteSshByProject[scopeKey]?.ssh !== "connected";
-          // A terminal pane runs on a remote host when its effective locality
-          // resolves to one (primary or a worker). Held while THAT host's pool is
-          // down: spawning `ssh -tt` now would block on the dead pool. Multi-host:
-          // a pane on gpu-2 holds iff gpu-2 is down, independent of the primary
-          // (plan §4.5).
-          const rawHostId = remoteHostIdOf(
-            effectiveTabLocation(tab, { vmProject: !!paneProject?.vm?.enabled }),
-          );
-          // A tab naming a worker that no longer exists (machine removed) falls
-          // back to the primary — matching the backend's wrap_pty_options (plan §8).
-          const paneHostId =
-            rawHostId && rawHostId !== "primary" &&
-            !paneProject?.compute_hosts?.some((h) => h.id === rawHostId)
-              ? "primary"
-              : rawHostId;
-          const paneHostSsh =
-            paneHostId === "primary"
-              ? remoteSshByProject[scopeKey]?.ssh
-              : paneHostId
-                ? remoteSshByHost[scopeKey]?.[paneHostId]?.ssh
-                : undefined;
-          const holdRemoteTerminal =
-            paneRemoteProj &&
-            isPtyTabKind(tab.kind) &&
-            paneHostId !== null &&
-            paneHostSsh !== "connected";
-          // The label of the host this pane runs on (primary host, or the worker's
-          // label), for the hold placeholder + hover card.
-          const paneHostLabel =
-            paneHostId === "primary" || paneHostId === null
-              ? (paneProject?.remote?.host ?? "")
-              : (() => {
-                  const w = paneProject?.compute_hosts?.find((h) => h.id === paneHostId);
-                  return w?.label || w?.host || paneHostId;
-                })();
-          // The Files-tab browse dir: while a remote project is disconnected the
-          // SFTP tree can't be listed (it would freeze the main thread), so browse
-          // the local mirror instead — the same synced working copy the local tabs
-          // use. FileBrowser re-lists on `projectDir` change, so it swaps back to
-          // the remote tree once the pool connects. (Resolved here, not inside
-          // TabPane, because the popout has no projects store to resolve it.)
-          const filesProjectDir = paneDisconnected
-            ? localTabCwd(
-                { kind: "files" },
-                {
-                  isRemoteProject: true,
-                  projectDirectory: resolveProjectDirectory(paneProject),
-                  mirror: resolveLocalMirror(paneProject),
-                  fallback: tab.cwd,
-                },
-              )
-            : tab.cwd;
-          // SSH-sync Phase 0: a local-on-remote tab runs in the project's local
-          // mirror (state dir), not the remote tree it can't reach.
-          const terminalCwd = localTabCwd(tab, {
-            isRemoteProject: !!paneProject?.remote,
-            projectDirectory: resolveProjectDirectory(paneProject),
-            mirror: resolveLocalMirror(paneProject),
-            fallback: tab.cwd,
-          });
-          // Run this tab inside the project's session container when the toggle is
-          // on: every PTY tab except `local_agent` (host-bound) execs into the one
-          // shared container. Local projects only. Derived here so restored tabs
-          // are covered too. NOTE: this flag is in TerminalView's spawn deps —
-          // flipping the toggle respawns every live tab (ProjectPill confirms when
-          // that would destroy a non-resumable agent conversation).
-          //
-          // `scope: "agents"` narrows it to agent tabs, leaving shells (and the
-          // viewer's Run/Debug, which IS a shell tab) on the host. This mirrors
-          // `services::sandbox::resolve_spawn_authority`, which re-derives the same
-          // answer from the trusted project record and remains the authority — the
-          // copy is here for the two things only the renderer can do: keep a live
-          // shell from staying inside the container after the scope changes (the
-          // flag is a spawn dep, so the change respawns exactly the affected tabs),
-          // and avoid claiming a container the backend is about to take away.
-          const containerScope = paneProject?.sandbox?.scope ?? "all";
-          const sandbox =
-            (tab.kind === "agent" || tab.kind === "shell") &&
-            (containerScope === "all" || tab.kind === "agent") &&
-            scopeKey !== "root" &&
-            !!paneProject?.sandbox?.enabled &&
-            !paneProject?.remote;
-          // Persistent sessions (TODO #85): the stable, persisted session name to
-          // wrap a shell/script tab in a tmux session, so a long run survives — for a
-          // REMOTE tab an SSH drop / relaunch (default ON per project, opt out via
-          // the pill toggle), for a LOCAL tab a Tabtivity crash (default ON on Unix via
-          // `persist_local_sessions`). Remote shell/script AND remote agent tabs
-          // (`shouldPersistTab`; the agent's process reattaches, composing with its
-          // own `--resume`); local persistence stays shell-only
-          // (`shouldPersistLocalTab`); never the root scope. In TerminalView's spawn
-          // deps, so toggling respawns the tab. Undefined ⇒ no tmux wrap.
-          const localRunning =
-            !paneProject?.remote ||
-            effectiveTabLocation(tab, { vmProject: !!paneProject?.vm?.enabled }) === "local";
-          const mobileReadyKey = `${scopeKey}/${tab.key}`;
-          if (!mobileAgentTmuxReady.current.has(mobileReadyKey)) {
-            mobileAgentTmuxReady.current.set(
-              mobileReadyKey,
-              !!paneProject?.[MOBILE_ACCESS_KEY] || !!paneBox?.[MOBILE_ACCESS_KEY],
-            );
-          }
-          const tmuxSession =
-            shouldPersistTab(tab.kind, paneHostId, paneProject?.remote, tab.ephemeral) ||
-            shouldPersistLocalTab(
-              tab.kind,
-              scopeKey,
-              localRunning,
-              localPersistEnabled,
-              mobileAgentTmuxReady.current.get(mobileReadyKey) === true,
-              isResumableAgentTab(tab) || isRelaunchableLocalTab(tab) || isSavedWhileLive(tab),
-            )
-              ? tab.tmuxSession
-              : undefined;
           return (
             <div
               key={`${scopeKey}/${tab.key}`}
@@ -1362,27 +1251,32 @@ function CenterPanelImpl() {
               }}
               style={style}
             >
-              {/* The shared per-tab render switch (`components/tabs/TabPane`), the
-                  SAME one every detached popout renders. The main window owns the
-                  projects store, so it resolves the mirror/sandbox/hold props the
-                  popout can't. New pane kinds/props go in TabPane so they reach
-                  both windows at once. */}
-              <TabPane
+              {/* The per-tab derivation + the shared `TabPane` switch, memoised
+                  per slot (`PaneSlot`): only scalar/stable inputs cross this
+                  boundary, so a rect measure or another scope's tab change
+                  re-renders no slot, and a change to one tab re-renders one. */}
+              <PaneSlot
                 tab={tab}
-                scope={scopeKey}
+                scopeKey={scopeKey}
+                groupId={groupId}
                 visible={visible}
                 // The root console owns the keyboard while it is up; flipping
                 // this back on close is what returns focus to the pane under it.
                 focused={visible && windowFocused && !rootConsoleOpen && groupId === focusedGroupId}
-                groupId={groupId}
+                paneProject={paneProject}
+                paneBox={paneBox}
+                projectSsh={remoteSshByProject[scopeKey]?.ssh}
+                hostSsh={remoteSshByHost[scopeKey]}
+                localPersistEnabled={localPersistEnabled}
                 onConnect={getConnect(scopeKey)}
-                holdRemoteTerminal={holdRemoteTerminal}
-                remoteHost={paneHostLabel}
-                filesProjectDir={filesProjectDir}
-                terminalCwd={terminalCwd}
-                sandbox={sandbox}
-                tmuxSession={tmuxSession}
-                vmProject={!!paneProject?.vm?.enabled}
+                mobileAgentTmuxReady={mobileAgentTmuxReady.current}
+                sleepAfterMs={sleepAfterMs}
+                inPopout={popoutTabKeys.has(`${scopeKey}/${tab.key}`)}
+                // The root console / a docked agent column draws this PTY:
+                // its owning pane here stays mounted (§5.3, terminal kinds).
+                drawnElsewhere={
+                  scopeKey === ROOT_SCOPE && (rootConsoleOpen || overlayAgentShown.has(tab.key))
+                }
               />
             </div>
           );

@@ -17,6 +17,8 @@ import { useFileSourcesStore } from "../../stores/viewers/fileSources";
 import type { InternalViewer } from "../../lib/viewers/fileUtils";
 import { TAB_ACCENT } from "./newTabItems";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { describeTabCost, tabCost } from "../../lib/tabCost";
+import { UntestedTag } from "../common/UntestedTag";
 
 /** Friendly, human-readable name for a tab kind, shown as the card's muted
  *  sub-line. Falls back to the raw kind for anything unmapped. */
@@ -202,6 +204,11 @@ export function TabHoverCard({
 
   const path = cardPath(tab);
 
+  // What the tab holds in this window (an estimate; `lib/tabCost`). Read in
+  // render — the 10 s tick above refreshes it while the card is up.
+  const costInfo = tabCost(scope, tab);
+  const cost = costInfo ? describeTabCost(costInfo, t) : null;
+
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -215,7 +222,7 @@ export function TabHoverCard({
       top = Math.max(MARGIN, anchorY - height - GAP);
     }
     setPos({ left, top });
-  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path]);
+  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost]);
 
   return createPortal(
     <div
@@ -248,6 +255,14 @@ export function TabHoverCard({
         <span className="pill-popup-path-row">
           <span className="pill-popup-path-label">{t("tabHoverCard.restartLabel")}</span>
           <span className="tab-popup-meta">{restart}</span>
+        </span>
+      )}
+      {cost && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabCost.label")} <UntestedTag id="tabCost.hover" />
+          </span>
+          <span className="tab-popup-meta">{cost}</span>
         </span>
       )}
       {path && <span className="pill-popup-path">{path}</span>}

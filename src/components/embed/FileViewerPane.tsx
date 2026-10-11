@@ -1,6 +1,7 @@
 import { PreviewImages } from "./previewImages";
 import { DraftSaver } from "./draftSaver";
 import { registerUnsavedWork } from "../../lib/window/unsavedWork";
+import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
 import { lineStarts, indexedLine } from "./lineIndex";
 import { Suspense, createContext, lazy, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -18,7 +19,9 @@ import {
   ROOT_SCOPE,
   findGroupOfTab,
   findTabByKey,
-  getDetachedViewerState,
+  flushViewerState,
+  pendingViewerState,
+  persistedViewerState,
   useTabsStore,
   type TabEntry,
   type ViewerState,
@@ -47,13 +50,11 @@ import { Dropdown } from "../common/Dropdown";
 import { PrinterIcon } from "../common/PrinterIcon";
 import { SaveIcon } from "../common/SaveIcon";
 import { CompareView } from "./CompareView";
-import { GitMergeView } from "./GitMergeView";
 import { PresentationOverlay } from "./PresentationOverlay";
 import { usePresentationStore } from "../../stores/viewers/presentation";
 import { matchAnchorId, renderMarkdown, splitLineHint, toggleTaskCheckbox } from "../../lib/viewers/markdown";
 import { useMdAnchorStore } from "../../stores/viewers/mdAnchor";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
-import { MdGraphView } from "./MdGraphView";
 import {
   highlight,
   languageForPath,
@@ -173,12 +174,7 @@ import {
   describeFileErrorKey,
 } from "./fileAccess";
 import { DiffView } from "./DiffView";
-import { SyncMergeView } from "./SyncMergeView";
-import { OdtView } from "./OdtView";
 import { ViewerErrorBoundary } from "./ViewerErrorBoundary";
-import { MediaView } from "./MediaView";
-import { GifView } from "./GifView";
-import { ImageAnnotator } from "./ImageAnnotator";
 import {
   type TexCapability,
   type TexCompileResult,
@@ -269,9 +265,6 @@ import {
   unregisterTexCompile,
   unregisterTexWorkspace,
 } from "../../stores/viewers/texCenter";
-import { YamlTree } from "./YamlTree";
-import { YamlGrid } from "./YamlGrid";
-import { BibCards } from "./BibCards";
 import { isTreePath, isJsonPath } from "../../lib/viewers/yaml";
 import { isBibPath } from "../../lib/viewers/tex/bib";
 import { hasCards } from "../../lib/viewers/yamlGrid";
@@ -296,6 +289,21 @@ const NotebookView = lazy(() => import("./NotebookView").then((m) => ({ default:
 const SqliteView = lazy(() => import("./SqliteView").then((m) => ({ default: m.SqliteView })));
 const PdfView = lazy(() => import("./pdf/PdfViewer").then((m) => ({ default: m.PdfView })));
 const DeckView = lazy(() => import("./deck/DeckView").then((m) => ({ default: m.DeckView })));
+// Perf plan §6: the rest of the viewers a plain text/markdown/code tab never
+// shows. The top-level ones render under the pane's own `<Suspense>` (below);
+// the nested ones (a text tab's tree/grid/card preview half, the markdown link
+// graph, the image annotator) each get a local boundary at their site, so a
+// first switch to one never blanks the editor around it.
+const GifView = lazy(() => import("./GifView").then((m) => ({ default: m.GifView })));
+const SyncMergeView = lazy(() => import("./SyncMergeView").then((m) => ({ default: m.SyncMergeView })));
+const GitMergeView = lazy(() => import("./GitMergeView").then((m) => ({ default: m.GitMergeView })));
+const OdtView = lazy(() => import("./OdtView").then((m) => ({ default: m.OdtView })));
+const MediaView = lazy(() => import("./MediaView").then((m) => ({ default: m.MediaView })));
+const YamlTree = lazy(() => import("./YamlTree").then((m) => ({ default: m.YamlTree })));
+const YamlGrid = lazy(() => import("./YamlGrid").then((m) => ({ default: m.YamlGrid })));
+const BibCards = lazy(() => import("./BibCards").then((m) => ({ default: m.BibCards })));
+const MdGraphView = lazy(() => import("./MdGraphView").then((m) => ({ default: m.MdGraphView })));
+const ImageAnnotator = lazy(() => import("./ImageAnnotator").then((m) => ({ default: m.ImageAnnotator })));
 
 /**
  * Persisted reader-position plumbing for an in-app viewer. Snapshots the tab's
@@ -315,10 +323,13 @@ const DeckView = lazy(() => import("./deck/DeckView").then((m) => ({ default: m.
  */
 function seedViewerState(tabKey: string | undefined): ViewerState | undefined {
   if (!tabKey) return undefined;
-  return (
-    findTabByKey(useTabsStore.getState(), tabKey)?.viewerState ??
-    getDetachedViewerState(tabKey)
-  );
+  // A TeX workspace sub-pane's key (`<tab>#<path>`) reads its entry in the
+  // workspace tab's `texPanes`.
+  const stored = persistedViewerState(useTabsStore.getState(), tabKey);
+  // A position written since the last flush (performance plan §3.1) outranks
+  // the store's: a viewer remounting (a sleeping PDF waking) restores it.
+  const pending = pendingViewerState(tabKey);
+  return pending ? { ...stored, ...pending } : stored;
 }
 
 export function useViewerState(tabKey: string | undefined) {
@@ -326,6 +337,19 @@ export function useViewerState(tabKey: string | undefined) {
   const persist = useCallback(
     (patch: ViewerState) => {
       if (tabKey) useTabsStore.getState().setViewerState(tabKey, patch);
+    },
+    [tabKey],
+  );
+  // §3.1: a position is staged, not written, while the reader moves. Fold it
+  // into the store when the pane leaves the screen and when the viewer unmounts
+  // — the two moments after which nothing else would write it.
+  const visible = usePaneVisible();
+  useEffect(() => {
+    if (!visible && tabKey) flushViewerState(tabKey);
+  }, [visible, tabKey]);
+  useEffect(
+    () => () => {
+      if (tabKey) flushViewerState(tabKey);
     },
     [tabKey],
   );
@@ -1487,6 +1511,9 @@ export function useEditableFile(path: string, enabled = true) {
   const isDirty = loaded && baseline != null && draft !== baseline;
   const isDirtyRef = useRef(isDirty);
   isDirtyRef.current = isDirty;
+  // An unsaved buffer (or a save in flight) keeps the pane awake: a sleeping
+  // pane is unmounted, and the buffer lives here (performance plan §5.3).
+  usePaneSleepHold(isDirty || saving);
   // The poll's `.then` closes over the render that armed it, so the baseline is
   // read through a ref — same reason `isDirtyRef` exists beside it.
   const baselineRef = useRef(baseline);
@@ -7432,7 +7459,7 @@ function TextView({
   // `if __name__ == "__main__":` guard — not for every importable .py module,
   // which has nothing useful to execute. Debug (pdb) and the breakpoint gutter
   // that only exists to feed it sit behind the experimental `python_run_debug`
-  // flag — off by default, on in debug mode (`lib/experimental.ts`).
+  // flag — off until ticked in Settings → Experimental (`lib/experimental.ts`).
   // Go-to-definition is deliberately NOT gated: it reads, it never runs anything.
   const isPy = useMemo(() => isPythonPath(path), [path]);
   const pyDebugEnabled = useExperimental("python_run_debug");
@@ -7873,33 +7900,39 @@ function TextView({
           ) : isBib ? (
             // One card per bibliography entry, splicing the same draft — a field
             // edit here is dirty, undoable and saveable exactly like a typed one.
-            <BibCards
-              text={draft}
-              onChange={setDraft}
-              tabKey={tabKey}
-              fontSize={font.isCustom ? font.fontSize : undefined}
-            />
+            <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
+              <BibCards
+                text={draft}
+                onChange={setDraft}
+                tabKey={tabKey}
+                fontSize={font.isCustom ? font.fontSize : undefined}
+              />
+            </Suspense>
           ) : showGrid ? (
             // The grid edits the same draft by splice, just like the tree — a cell
             // edit is dirty, undoable and saveable exactly like a typed one.
-            <YamlGrid
-              text={draft}
-              onChange={setDraft}
-              tabKey={tabKey}
-              fontSize={font.isCustom ? font.fontSize : undefined}
-              strict={jsonStrict}
-            />
+            <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
+              <YamlGrid
+                text={draft}
+                onChange={setDraft}
+                tabKey={tabKey}
+                fontSize={font.isCustom ? font.fontSize : undefined}
+                strict={jsonStrict}
+              />
+            </Suspense>
           ) : isYaml ? (
             // The tree edits the draft in place — the same draft Source shows and
             // Ctrl+S writes, so an edit made here is dirty, undoable and saveable
             // exactly like a typed one.
-            <YamlTree
-              text={draft}
-              onChange={setDraft}
-              tabKey={tabKey}
-              fontSize={font.isCustom ? font.fontSize : undefined}
-              strict={jsonStrict}
-            />
+            <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
+              <YamlTree
+                text={draft}
+                onChange={setDraft}
+                tabKey={tabKey}
+                fontSize={font.isCustom ? font.fontSize : undefined}
+                strict={jsonStrict}
+              />
+            </Suspense>
           ) : (
             // Preview reflects the live draft, so it tracks unsaved edits.
             previewKind === "svg" ? (
@@ -8417,18 +8450,20 @@ function MarkdownView({
         onScroll={reportPreviewSync}
       >
         {mode === "graph" ? (
-          <MdGraphView
-            path={path}
-            onOpen={(target) => {
-              const viewer = viewerForPath(target);
-              openLinkedFile(tabKey, dirname(path), {
-                path: target,
-                viewer,
-                label: basename(target),
-                mdGraphOriginKey: viewer === "markdown" ? tabKey : undefined,
-              });
-            }}
-          />
+          <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
+            <MdGraphView
+              path={path}
+              onOpen={(target) => {
+                const viewer = viewerForPath(target);
+                openLinkedFile(tabKey, dirname(path), {
+                  path: target,
+                  viewer,
+                  label: basename(target),
+                  mdGraphOriginKey: viewer === "markdown" ? tabKey : undefined,
+                });
+              }}
+            />
+          </Suspense>
         ) : mode === "edit" && compareOpen ? (
           <CompareView
             path={path}
@@ -9533,6 +9568,9 @@ function TexView({
     [onCompileOptsChange, viewPos],
   );
   const [compiling, setCompiling] = useState(false);
+  // A build in flight keeps the pane awake: its result (diagnostics, the PDF
+  // reload it asks for) lands in this component (performance plan §5.3).
+  usePaneSleepHold(compiling);
   const [compileError, setCompileError] = useState<string | null>(null);
   // True when the last compile ran with shell-escape (`\write18`) active despite
   // our args never enabling it — a system texmf.cnf / latexmkrc turned it on.
@@ -9804,6 +9842,10 @@ function TexView({
   const compile = useCallback(async () => {
     if (compiling) return;
     setCompiling(true);
+    // The PDF this build rewrites (known from the last one) holds its mtime
+    // poll until the build is over and asks for the one reload itself below.
+    const rewriting = pdfPath;
+    if (rewriting) usePdfSyncStore.getState().beginCompile(rewriting);
     setCompileError(null);
     setErrors([]);
     setWarnings([]);
@@ -9907,10 +9949,12 @@ function TexView({
     } catch (e) {
       setCompileError(String(e));
     } finally {
+      if (rewriting) usePdfSyncStore.getState().endCompile(rewriting);
       setCompiling(false);
     }
   }, [
     compiling,
+    pdfPath,
     save,
     onSaveAll,
     path,
@@ -10776,12 +10820,14 @@ function ImageView({
       </ViewerHeader>
       <div className="file-viewer-body file-viewer-image-body">
         {annotating && url != null && (
-          <ImageAnnotator
-            src={url}
-            path={path}
-            fileName={fileName}
-            onClose={() => setAnnotating(false)}
-          />
+          <Suspense fallback={null}>
+            <ImageAnnotator
+              src={url}
+              path={path}
+              fileName={fileName}
+              onClose={() => setAnnotating(false)}
+            />
+          </Suspense>
         )}
         {error != null ? (
           <div className="file-viewer-error">{error}</div>

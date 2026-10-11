@@ -22,6 +22,13 @@ class ResizeObserverStub {
 }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver =
   ResizeObserverStub;
+// The pane builds its xterm only once it has a layout box (it is constructed
+// on first show, not at mount), and jsdom lays nothing out: give every
+// element one, so the mocked terminal — and its keyboard callback — exist.
+for (const [prop, value] of [["clientWidth", 800], ["clientHeight", 600]] as const) {
+  Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, value });
+}
+Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get: () => document.body });
 
 const { invoke } = vi.hoisted(() => ({
   invoke: vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve(undefined)),

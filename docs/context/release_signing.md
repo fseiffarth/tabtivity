@@ -77,8 +77,12 @@ A release only ever ships a commit `ci-cd.yml` passed on a branch push, and
 `release.yml` never rebuilds: it signs and publishes the bundles that green
 run built (its `package*` artifacts). `ci-cd.yml` itself no longer runs on
 tags. Only `main` is released — `develop` reaches it by PR, and the in-app
-updater installs whatever is released. Two ways in:
+updater installs whatever is released. Three ways in:
 
+- **Automatically**, on merging into `main`: when ci-cd passes on a push to
+  `main`, `release.yml` (its `workflow_run` trigger) releases that commit as
+  `v<package.json version>`, creating the tag itself. A version already
+  released is skipped quietly. So every PR merged into `main` is a release.
 - **Actions → release → Run workflow** on `main` (or `gh workflow run release
   --ref main`): releases its tip as `v<package.json version>`; any other
   branch is refused. The workflow waits for the tip's ci-cd run,

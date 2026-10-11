@@ -1,21 +1,32 @@
 /**
  * Experimental features and the rule that governs them.
  *
- * Most experimental features are **off for everyone and on in debug mode**: the
- * flag is a tri-state, and when it is unset the answer is `settings.debug`. That
- * is the whole point of the gate — a feature that is still moving needs to be
- * invisible to someone using Tabtivity to work, and present *by default* for someone
- * using Tabtivity to build Tabtivity, without them having to re-tick a list of toggles
- * every time a new one lands. `terminal_webgl` is the exception: it exercises the
- * GPU/driver path and must be explicitly opted into even in Debug mode.
+ * Every experimental feature is **off until someone ticks it**: the flag is a
+ * tri-state, an explicit value is the answer, and an unset flag is off — Debug
+ * mode included. A feature that is still moving needs to be invisible to someone
+ * using Tabtivity to work, and Debug mode is now just Debug mode: turning it on
+ * shows no experiment (tab cost plan step 3, user decision 2026-10-10).
  *
- * Unset is therefore NOT the same as false. An explicit value always wins, in both
- * directions: a user can opt into one experiment without debug mode, and can switch
- * one off while *in* debug mode — otherwise "turn this off" would silently fail for
- * exactly the people most likely to hit a broken experiment.
+ * **The migration that made that safe.** Unset used to mean `settings.debug`, so
+ * a Debug-mode profile had every experiment on without a single tick. Those
+ * profiles keep what they had: `migrateExperimentalOnce` (AppShell, after the
+ * first `loadSettings()`) writes an explicit `true` for every flag Debug mode was
+ * carrying and the marker `experimental_explicit`. Until a profile carries that
+ * marker it keeps the OLD rule (unset → `debug`), in every window and in the
+ * backend's `experimental()`: the first render, a popout that loads before the
+ * main window has migrated, and the restore filter in `stores/tabs` must never
+ * see a debug user's browser flag as off — `withdrawnTabKinds` would close their
+ * browser tabs before the ticks landed. From a profile's first main-window load
+ * on, the legacy branch is dead.
+ *
+ * `terminal_webgl` was never carried by Debug mode (it rides the GPU/driver path
+ * and is opt-in everywhere), so the migration leaves it unset.
+ *
+ * An explicit value always wins, in both directions: a user can opt into one
+ * experiment, and switch one off again.
  *
  * Most gates hide an *entry point* and nothing else: `python_run_debug` takes the
- * Run button off a viewer that keeps working. Those flags have nothing to
+ * Debug button off a viewer that keeps working. Those flags have nothing to
  * withdraw beyond the button.
  *
  * A flag that owns a whole TAB is different, and `EXPERIMENTAL_TAB_KINDS` is that
@@ -35,10 +46,11 @@
  * Adding an experiment: add its key to `Settings` (and to the Rust `Settings`, so
  * it round-trips through `save_settings`), list it here, and read it through
  * `useExperimental`. Never read `settings.<flag> ?? false` at the call site — that
- * spelling is what makes a flag miss the debug default. If it owns a tab kind, add
- * it to `EXPERIMENTAL_TAB_KINDS` too, which is what wires the withdrawal
- * (`lib/experimentalSweep`) and the restore filter (`stores/tabs`'s
- * `loadFromLayout`).
+ * spelling would miss the unmarked-profile rule above. Give it a switch in
+ * Settings → Experimental: with no debug default, a flag without one cannot be
+ * reached. If it owns a tab kind, add it to `EXPERIMENTAL_TAB_KINDS` too, which
+ * is what wires the withdrawal (`lib/experimentalSweep`) and the restore filter
+ * (`stores/tabs`'s `loadFromLayout`).
  */
 
 import { useSettingsStore } from "../stores/settings";
@@ -59,7 +71,10 @@ export const EXPERIMENTAL_FLAGS = [
 
 export type ExperimentalFlag = (typeof EXPERIMENTAL_FLAGS)[number];
 
-/** Is `flag` live? Explicit setting if there is one, else debug mode, else off. */
+/** Is `flag` live? The explicit setting if there is one, else off — except on a
+ *  profile not yet marked `experimental_explicit`, where an unset flag still
+ *  follows Debug mode until `migrateExperimentalOnce` has written the ticks (see
+ *  the module header). */
 export function experimentalEnabled(
   settings: Settings | null | undefined,
   flag: ExperimentalFlag,
@@ -67,8 +82,66 @@ export function experimentalEnabled(
   // WebGL can fall back to software rendering (notably while DMABUF is disabled),
   // which makes a visible terminal slower rather than faster. Keep the renderer
   // opt-in until that platform path is dependable; an explicit true still wins.
-  if (flag === "terminal_webgl" && settings?.terminal_webgl === undefined) return false;
-  return settings?.[flag] ?? settings?.debug ?? false;
+  if (flag === "terminal_webgl" && settings?.terminal_webgl == null) return false;
+  const explicit = settings?.[flag];
+  if (explicit != null) return explicit;
+  if (settings?.experimental_explicit === true) return false;
+  return settings?.debug ?? false;
+}
+
+/** The flags an unmarked Debug-mode profile had on without a tick: every one but
+ *  `terminal_webgl`, which Debug mode never carried. */
+const DEBUG_CARRIED_FLAGS = EXPERIMENTAL_FLAGS.filter((f) => f !== "terminal_webgl");
+
+/**
+ * The one-shot patch that moves a profile onto the explicit rule without
+ * changing what it shows — `null` once the profile is marked.
+ *
+ * In Debug mode every *unset* carried flag becomes an explicit `true` (an
+ * explicit value, `false` included, is the user's and is never touched); outside
+ * it nothing was on by default, so the marker alone is the whole migration.
+ * Idempotent: applied twice it writes the same values, which is what lets a
+ * failed write simply run again at the next launch.
+ */
+export function explicitExperimentalPatch(settings: Settings): Partial<Settings> | null {
+  if (settings.experimental_explicit === true) return null;
+  const patch: Partial<Settings> = { experimental_explicit: true };
+  if (settings.debug === true) {
+    for (const flag of DEBUG_CARRIED_FLAGS) {
+      if (settings[flag] == null) patch[flag] = true;
+    }
+  }
+  return patch;
+}
+
+/**
+ * Apply `explicitExperimentalPatch` once, from the main window's load effect
+ * (`AppShell`, after `loadSettings()` resolves). Popouts and the other window
+ * roots never call it; they keep the unmarked rule until the main window's write
+ * reaches them through `SETTINGS_CHANGED_EVENT`, which shows the same thing.
+ *
+ * A store that has not loaded writes nothing (the patch would land on a guess).
+ * A failed write is logged and left: the store rolls its optimistic guess back,
+ * the profile stays unmarked — so the old rule still holds — and the next launch
+ * tries again. Concurrent calls (StrictMode runs the load effect twice in a dev
+ * build) share one write.
+ */
+let migrationInFlight: Promise<void> | null = null;
+
+export function migrateExperimentalOnce(): Promise<void> {
+  if (migrationInFlight) return migrationInFlight;
+  const { settings, loaded, updateSettings } = useSettingsStore.getState();
+  if (!loaded || !settings) return Promise.resolve();
+  const patch = explicitExperimentalPatch(settings);
+  if (!patch) return Promise.resolve();
+  migrationInFlight = updateSettings(patch)
+    .catch((err) => {
+      console.warn("experimental flags: migration write failed, retrying next launch", err);
+    })
+    .finally(() => {
+      migrationInFlight = null;
+    });
+  return migrationInFlight;
 }
 
 /** `experimentalEnabled` as a store subscription — the call site for a component. */

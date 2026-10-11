@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { targetLabel } from "../../lib/remote/machineLabel";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -29,6 +30,7 @@ import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
 import { MachinesOverlayFrame } from "./MachinesOverlay";
 import { MachinesGlyph } from "./HeaderGlyphs";
 import { BRAND } from "../../lib/brand";
+import { usePoll } from "../../lib/usePoll";
 
 const MENU_ID = "machines";
 
@@ -208,9 +210,7 @@ function UtilBar({ label, pct, title }: { label: string; pct: number; title: str
   );
 }
 
-export function targetLabel(m: { user?: string; host: string; port?: number }): string {
-  return `${m.user ? `${m.user}@` : ""}${m.host}${m.port ? `:${m.port}` : ""}`;
-}
+export { targetLabel };
 
 /**
  * Global worker machines, in the header — the VPN indicator's pattern applied
@@ -678,26 +678,22 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // Inline utilization bars: while the menu is open, read every connected
   // Detailed machine's CPU/GPU once now and every `UTIL_POLL_MS` after. A
   // *background* read (the backend refuses it on a tagged host), never stacked
-  // (`recheck` skips a key already in flight), and it stops with the menu.
-  useEffect(() => {
-    if (!open) return;
-    const sweep = () => {
-      const gm = useGlobalMachinesStore.getState();
-      const s = useSettingsStore.getState().settings;
-      const recheck = useRemoteUsageStore.getState().recheck;
-      for (const m of gm.machines) {
-        if ((gm.status[m.id] ?? "off") !== "connected") continue;
-        if (!showsUtilization(s, m) || !mayAutoTouch(s, targetOfSpec(m))) continue;
-        void recheck(
-          { kind: "machine", key: machineKey(m.id), label: m.label || m.host, user: m.user, host: m.host, port: m.port },
-          { background: true },
-        );
-      }
-    };
-    sweep();
-    const timer = window.setInterval(sweep, UTIL_POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [open]);
+  // (`recheck` skips a key already in flight), and it stops with the menu and
+  // while the window is blurred (`usePoll`).
+  const sweepUtilization = useCallback(() => {
+    const gm = useGlobalMachinesStore.getState();
+    const s = useSettingsStore.getState().settings;
+    const recheck = useRemoteUsageStore.getState().recheck;
+    for (const m of gm.machines) {
+      if ((gm.status[m.id] ?? "off") !== "connected") continue;
+      if (!showsUtilization(s, m) || !mayAutoTouch(s, targetOfSpec(m))) continue;
+      void recheck(
+        { kind: "machine", key: machineKey(m.id), label: m.label || m.host, user: m.user, host: m.host, port: m.port },
+        { background: true },
+      );
+    }
+  }, []);
+  usePoll(sweepUtilization, UTIL_POLL_MS, { enabled: open });
 
   const orderKey = machines.map((m) => m.id).join("|");
 

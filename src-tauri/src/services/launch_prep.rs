@@ -260,19 +260,44 @@ fn append_claude_name(args: &mut Vec<String>, name: Option<&str>) -> bool {
 /// mistaken for nesting. O#149's hard gate: mirrors `services::sandbox::cwd_is_within`
 /// in shape, kept as a separate function because that one only ever *classifies*
 /// a docker mount as rw/ro, while this one refuses the spawn outright.
+/// Run a home preparation on the blocking pool. `agent_home::prepare_*_home`
+/// is synchronous fs work — the home's directory listings, the Tabtivity-wide
+/// layer's copy/merge pass, the login links, and on a fresh home the
+/// transcript copies — and at launch every restored tab runs it at once, on
+/// the tokio workers that also carry the window's other commands and the
+/// remote dials. `spawn_blocking` keeps those workers free; `what` names the
+/// home in the error, and a panic inside comes back as an error rather than
+/// taking the worker down. Needs a tokio runtime, which every caller of
+/// [`prepare`] (the window's command, the sidecar's headless spawn) has.
+async fn home_off_thread<F>(what: &str, prepare: F) -> Result<crate::services::agent_home::PreparedHome, String>
+where
+    F: FnOnce() -> std::io::Result<crate::services::agent_home::PreparedHome> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(prepare).await {
+        Ok(Ok(home)) => Ok(home),
+        Ok(Err(e)) => Err(format!("{what}: {e}")),
+        Err(e) => Err(format!("{what}: {e}")),
+    }
+}
+
 /// The home a local agent spawn of `scope_id` runs in: the scope's own, or
 /// for a local-model tab its local-model home (`PtyOptions::local_model`).
-fn prepare_agent_home(
+/// Prepared off the async worker ([`home_off_thread`]).
+async fn prepare_agent_home(
     scope_id: &str,
     roots: &[std::path::PathBuf],
     local_model: bool,
 ) -> Result<crate::services::agent_home::PreparedHome, String> {
-    let home = if local_model {
-        crate::services::agent_home::prepare_local_model_home(scope_id, roots)
-    } else {
-        crate::services::agent_home::prepare_scope_home(scope_id, roots)
-    };
-    home.map_err(|e| format!("Agent home: {e}"))
+    let scope_id = scope_id.to_string();
+    let roots = roots.to_vec();
+    home_off_thread("Agent home", move || {
+        if local_model {
+            crate::services::agent_home::prepare_local_model_home(&scope_id, &roots)
+        } else {
+            crate::services::agent_home::prepare_scope_home(&scope_id, &roots)
+        }
+    })
+    .await
 }
 
 fn cwd_within(cwd: &str, allowed: &std::path::Path) -> bool {
@@ -920,7 +945,7 @@ pub async fn prepare(
                 // agent's `$HOME` from here on: bound by the Linux fence, set
                 // by environment where the fence cannot redirect a path. A
                 // local-model tab gets the scope's local-model home instead.
-                let home = prepare_agent_home(&scope_id, roots, opts.local_model)?;
+                let home = prepare_agent_home(&scope_id, roots, opts.local_model).await?;
                 #[cfg(target_os = "linux")]
                 crate::services::agent_fence::wrap_pty_options_bwrap(
                     &mut opts, roots, &scope_id, &home.dir,
@@ -944,8 +969,7 @@ pub async fn prepare(
             crate::services::agent_fence::FenceDecision::NotApplicable {
                 reason: crate::services::agent_fence::HOST_SESSION_REASON,
             } if local_agent => {
-                let home = crate::services::agent_home::prepare_host_home()
-                    .map_err(|e| format!("Host session home: {e}"))?;
+                let home = home_off_thread("Host session home", crate::services::agent_home::prepare_host_home).await?;
                 for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
                     opts.env.entry(k).or_insert(v);
                 }
@@ -959,7 +983,7 @@ pub async fn prepare(
             crate::services::agent_fence::FenceDecision::NotApplicable { reason: "platform" }
                 if local_agent =>
             {
-                let home = prepare_agent_home(&scope_id, roots, opts.local_model)?;
+                let home = prepare_agent_home(&scope_id, roots, opts.local_model).await?;
                 for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
                     opts.env.entry(k).or_insert(v);
                 }
@@ -1398,5 +1422,35 @@ mod tests {
         let list = vec![entry("p1", None)];
         assert!(agent_remote_control_effective(&list, Some("p1"), true));
         assert!(!agent_remote_control_effective(&list, Some("p1"), false));
+    }
+
+    // The home preparation runs on the blocking pool (performance plan §5.2):
+    // its result comes back as is, its error is named, and a panic inside it
+    // is an error of the spawn, not of the worker.
+    #[tokio::test]
+    async fn home_off_thread_hands_the_prepared_home_back() {
+        let home = crate::services::agent_home::PreparedHome {
+            dir: std::path::PathBuf::from("/tmp/home-of-scope"),
+            fresh: true,
+        };
+        let expected = home.clone();
+        let got = home_off_thread("Agent home", move || Ok(home)).await;
+        assert_eq!(got, Ok(expected));
+    }
+
+    #[tokio::test]
+    async fn home_off_thread_names_the_home_in_its_error() {
+        let got = home_off_thread("Host session home", || {
+            Err(std::io::Error::other("disk full"))
+        })
+        .await;
+        assert_eq!(got, Err("Host session home: disk full".to_string()));
+    }
+
+    #[tokio::test]
+    async fn home_off_thread_turns_a_panic_into_an_error() {
+        let got = home_off_thread("Agent home", || panic!("seeding blew up")).await;
+        let err = got.expect_err("a panic on the blocking pool is an error");
+        assert!(err.starts_with("Agent home: "), "{err}");
     }
 }

@@ -60,6 +60,7 @@ import {
   type AgentFenceStatus,
 } from "../../lib/agents/agentFence";
 import { ErrorNote } from "../common/ErrorNote";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 
 interface Props {
   project: ProjectEntry;
@@ -1517,21 +1518,14 @@ export function ProjectPill({
   const [showVmSettings, setShowVmSettings] = useState(false);
   const isVmProject = Boolean(project.vm?.enabled);
   const [vmRunning, setVmRunning] = useState(false);
-  useEffect(() => {
-    if (!isVmProject) return;
-    let cancelled = false;
-    const poll = () => {
+  const pollVm = useCallback(
+    (poll: PollRun) =>
       invoke<{ running: boolean }>("vm_status", { projectId: project.id })
-        .then((s) => !cancelled && setVmRunning(s.running))
-        .catch(() => {});
-    };
-    poll();
-    const timer = window.setInterval(poll, 6000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [isVmProject, project.id]);
+        .then((s) => !poll.stopped && setVmRunning(s.running))
+        .catch(() => {}),
+    [project.id],
+  );
+  usePoll(pollVm, 6000, { enabled: isVmProject });
   const openRemoteMachines = useRemoteMachinesStore((s) => s.open);
   // A global machine picked for THIS (local) project in the header's Machines
   // menu: that menu can't own the extend dialog, so it parks the request here

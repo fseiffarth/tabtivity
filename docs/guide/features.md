@@ -338,11 +338,11 @@ app — a `mailto:` or `webcal:` from a terminal or the file tree — the router
 opens the in-app surface when it is enabled and falls back to your configured
 external app when it is not.
 
-**Several of these are experimental and off by default** in a release build —
-mail (`mail_client`), the browser (`web_browser`), the deck presenter
-(`deck_presenter`), and Python run/debug (`python_run_debug`). Turn them on
-under Settings → Experimental; an unset flag
-follows debug mode, so they are all on in a development build.
+**Several of these are experimental and off by default** — mail
+(`mail_client`), the browser (`web_browser`), the deck presenter
+(`deck_presenter`), and Python run/debug (`python_run_debug`). Turn each on
+under Settings → Experimental. Debug mode no longer turns them on; a profile
+that had Debug mode on before this change keeps the ones it was showing, ticked.
 
 - **Mail** *(IMAP/SMTP)*: a full client over the whole window — folders, message
   list, compose/reply, attachments (saved into the active project by opaque id,

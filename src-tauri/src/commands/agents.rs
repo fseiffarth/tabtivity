@@ -1521,32 +1521,78 @@ pub async fn agent_tab_transcript(
     version: Option<String>,
     limit: Option<usize>,
     local_model: Option<bool>,
+    watch: Option<String>,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
     app_core::rt::spawn_blocking(move || {
-        if local_model == Some(true) && agent == "opencode" {
-            return agent_transcript::local_opencode_transcript(
+        let local = local_model == Some(true) && agent == "opencode";
+        let mut read = if local {
+            agent_transcript::local_opencode_transcript(
                 project_id.as_deref(),
                 tab_dir.as_deref(),
                 since,
                 subagent.as_deref(),
                 version.as_deref(),
                 limit.unwrap_or(DEFAULT_LIMIT),
-            );
-        }
-        agent_transcript::agent_session_transcript(
+            )
+        } else {
+            agent_transcript::agent_session_transcript(
+                &agent,
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                since,
+                &session_id,
+                subagent.as_deref(),
+                version.as_deref(),
+                limit.unwrap_or(DEFAULT_LIMIT),
+            )
+        };
+        read.watched = arm_transcript_watch(
+            watch.as_deref(),
+            read.unchanged,
             &agent,
             project_id.as_deref(),
-            tab_dir.as_deref(),
-            since,
             &session_id,
             subagent.as_deref(),
-            version.as_deref(),
-            limit.unwrap_or(DEFAULT_LIMIT),
-        )
+            local,
+        );
+        read
     })
     .await
     .unwrap_or_else(|_| AgentTranscript::unavailable("read_failed"))
+}
+
+/// Arm (or keep) the Reader's watch `watch` on what a read of this
+/// conversation goes by (`services::transcript_watch`), answering whether it
+/// is armed. A read answered `unchanged` went by the same files, so an armed
+/// watch is kept as it is; any other read re-points it — which is how a
+/// `/clear`'s new transcript is followed.
+#[allow(clippy::too_many_arguments)]
+fn arm_transcript_watch(
+    watch: Option<&str>,
+    unchanged: bool,
+    agent: &str,
+    project_id: Option<&str>,
+    session_id: &str,
+    subagent: Option<&str>,
+    local_model: bool,
+) -> bool {
+    use crate::services::{agent_transcript, transcript_watch};
+    let Some(id) = watch.filter(|id| transcript_watch::valid_id(id)) else {
+        return false;
+    };
+    if unchanged && transcript_watch::keep(id) {
+        return true;
+    }
+    let targets = agent_transcript::watch_targets(agent, project_id, session_id, subagent, local_model);
+    transcript_watch::arm(id, targets)
+}
+
+/// Stop the Reader's watch `watch_id` (its pane hid, or it moved to another
+/// conversation).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn agent_transcript_unwatch(watch_id: String) {
+    crate::services::transcript_watch::disarm(&watch_id);
 }
 
 /// The files the tab's conversation — or `subagent`'s — changed, as the
@@ -1564,10 +1610,13 @@ pub async fn agent_tab_changes(
     subagent: Option<String>,
     version: Option<String>,
     limit: Option<usize>,
+    watch: Option<String>,
     local_model: Option<bool>,
 ) -> crate::services::agent_changes::AgentChanges {
     use crate::services::agent_changes::{self, AgentChanges, DEFAULT_LIMIT};
     app_core::rt::spawn_blocking(move || {
+        // A local-model OpenCode tab's changes come from its own store and arm
+        // no watch: `watched` stays false, so the panel keeps its 2 s poll.
         if local_model == Some(true) && agent == "opencode" {
             return agent_changes::local_opencode_changes(
                 project_id.as_deref(),
@@ -1578,7 +1627,7 @@ pub async fn agent_tab_changes(
                 limit.unwrap_or(DEFAULT_LIMIT),
             );
         }
-        agent_changes::agent_session_changes(
+        let mut read = agent_changes::agent_session_changes(
             &agent,
             project_id.as_deref(),
             tab_dir.as_deref(),
@@ -1587,7 +1636,17 @@ pub async fn agent_tab_changes(
             subagent.as_deref(),
             version.as_deref(),
             limit.unwrap_or(DEFAULT_LIMIT),
-        )
+        );
+        read.watched = arm_transcript_watch(
+            watch.as_deref(),
+            read.unchanged,
+            &agent,
+            project_id.as_deref(),
+            &session_id,
+            subagent.as_deref(),
+            false,
+        );
+        read
     })
     .await
     .unwrap_or_else(|_| AgentChanges::unavailable("read_failed"))

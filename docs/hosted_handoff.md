@@ -3798,3 +3798,55 @@ admin also have a phone access". Built in the main session.
   open, a desktop never role-gated).
 
 **Live steps owed:** TODO #2392's manual test.
+
+## Merge `develop` → `hosted` (2026-10-11, the performance work)
+
+`develop` at `80142cc7` (140 commits past `32d65f6a`: the performance plan
+S1–S13 and the tab cost plan T1–T3, CI changes, the thin-LTO revert) merged
+in one session, no subagents. 13 files conflicted; the terminal path is
+where the two met.
+
+- **`terminal/mod.rs`: activity digests.** `develop` replaced the per-PTY
+  `terminal-activity` event with one `terminal-activity-batch` per digest
+  tick across every hidden route (`DigestClock`). Kept, on `hosted`'s
+  Tauri-free emitter: `arm_digest_tick(&CoreCtx, …)` →
+  `address_digest_batch` (an attach route's entry names its tab, as its
+  other events do) → `emit_activity_batch` (a broadcast on the desktop; on a
+  server each viewing client gets only its routes' entries, #2345). The
+  per-PTY `Routed::Activity` path and its closure are gone.
+- **Sleeping panes × attach PTYs.** `develop`'s sleeping route outlives its
+  spawn until a wake or `pty_kill`. A browser client that leaves never
+  wakes its panes, so `web_client::reap_client` now calls
+  `route_forget_sleep` for each PTY it tears down (else the route leaked).
+- **`commands/terminal.rs`:** `pty_scrollback` takes `wake`,
+  `pty_remove_view` takes `sleeping`; both keep `Ctx` and `pty_id_for`.
+- **`persist_lane` (state-file commands in arrival order).** The window's
+  `invoke_handler` is `gate_connect_window(persist_lane::ordered(…))`; the
+  Tauri half is `desktop`-gated, `is_ordered` is not. The browser client
+  had the bug the lane fixes — each call ran on its own task, so two
+  `patch_settings` sent back to back could land out of order — and now
+  takes the same commands in arrival order (`web_client` `ordered_turn`).
+- **Transcript watches** (`transcript-changed`): installed in the window on
+  its system context and in a browser-serving host
+  (`start_background_relays`), so the browser Reader is pushed, not polled.
+- New commands `file_size`, `agent_transcript_unwatch`: `cfg_attr`, `Ctx`,
+  class rows (`core`), `commandClasses.ts` regenerated.
+- `net_usage`, `network.rs`, `git.rs`, `agents.rs`, `services/mod.rs`
+  (`ordered_lane` beside the core crate's `text_completion`), CenterPanel
+  (`IS_HOST_WINDOWS` kept), TerminalView (`waking` + `launchAttached`),
+  terminalBus (output taps + `lastEndOffset`), filemaps row by row,
+  AGENTS.md's two cross-OS paragraphs folded into one.
+- Cross-checks found four test helpers used only by Unix tests (two from
+  #2390 today, two from #2347): gated `cfg(unix)`.
+
+Gates: `npm run build`; `npm test` 796 files / 7956 tests; `npm run lint` 0
+errors, 28 warnings (= develop); `cargo test --workspace` src-tauri 3822,
+core 95, gateway/serverd 134; the no-desktop build 3723 + 1; clippy ×3
+clean; Windows clippy (`src-tauri`, all targets) and `cargo check
+--workspace --all-targets` for `x86_64-pc-windows-msvc` and
+`aarch64-apple-darwin` (check-only shims) green — only the vendored
+`tauri-runtime-wry` patch's 5 known macOS warnings; `app-serverd` links
+libc/libm/libgcc only; brand-check ok. Nothing run live.
+
+**Ready to land** on `develop` after one review of this merge's
+resolutions and the terminal path, and #2387.

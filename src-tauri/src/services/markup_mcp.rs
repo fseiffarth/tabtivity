@@ -944,7 +944,7 @@ pub fn handle_with(session: &Session, message: &Value, ctx: &Context) -> Option<
 
 /// Open an ask for `(project, target)` as tab `tab`'s agent would, bound to
 /// no file; its id. For another module's tests (`mobile_control::host`).
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn test_open_ask(tab: &str, project: &str, target: &str, questions: Value) -> String {
     let (_, session) = super::root_mcp::test_session_bound(Caller::Marker, tab, project, target);
     let msg = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":TOOL_ASK,"arguments":{"questions":questions}}});

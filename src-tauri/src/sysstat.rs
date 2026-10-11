@@ -205,6 +205,15 @@ const CACHE_ENTRIES: usize = 4;
 /// agent forking children), so a short TTL keeps the readout from going stale.
 const CACHE_TTL: Duration = Duration::from_millis(1500);
 
+/// The reuse bound for callers that only draw a coarse number
+/// ([`descendant_pids_relaxed`]). The header's resource readout asks every
+/// 5 s (`AppResourceDisplay`'s `RESOURCE_POLL_MS`), so under [`CACHE_TTL`] it
+/// never hit the cache and walked all of `/proc` each time; at 9 s every
+/// other reading reuses the tree (an agent's own forks show within 10 s). Not the default: the window resolvers on Windows and
+/// macOS poll [`descendant_pids`] for a launcher's just-forked child, and the
+/// CPU pills want a tree no older than a hover.
+const CACHE_TTL_RELAXED: Duration = Duration::from_secs(9);
+
 /// Invalidate the cached descendant-pid set. Called by the PTY layer on every
 /// spawn and death so the next CPU sample reflects the new process tree without
 /// waiting for the TTL. Cheap: a single atomic increment.
@@ -228,6 +237,16 @@ pub fn clk_tck() -> u64 {
 /// younger than [`CACHE_TTL`], a backstop for tree changes Tabtivity didn't trigger
 /// directly (an agent forking its own children).
 pub fn descendant_pids(roots: &[u32]) -> Vec<u32> {
+    descendant_pids_within(roots, CACHE_TTL)
+}
+
+/// [`descendant_pids`] for a periodic readout that tolerates a tree up to
+/// [`CACHE_TTL_RELAXED`] old. A PTY spawn or death still invalidates at once.
+pub fn descendant_pids_relaxed(roots: &[u32]) -> Vec<u32> {
+    descendant_pids_within(roots, CACHE_TTL_RELAXED)
+}
+
+fn descendant_pids_within(roots: &[u32], max_age: Duration) -> Vec<u32> {
     if roots.is_empty() {
         return Vec::new();
     }
@@ -239,20 +258,28 @@ pub fn descendant_pids(roots: &[u32]) -> Vec<u32> {
     {
         let cache = DESCENDANT_CACHE.lock().unwrap();
         if let Some(entry) = cache.iter().find(|e| {
-            e.generation == generation && e.roots == key && e.computed_at.elapsed() < CACHE_TTL
+            e.generation == generation && e.roots == key && e.computed_at.elapsed() < max_age
         }) {
             return entry.pids.clone();
         }
     }
 
-    let pids = compute_descendant_pids(&key);
+    // The relaxed readout may share the process-table walk another loop took
+    // within the last second; the default needs the table as it is now (the
+    // PTY layer reaps subtrees with it), and its walk is then shared instead.
+    let table_age = if max_age > CACHE_TTL {
+        crate::services::proc_table::MAX_AGE
+    } else {
+        Duration::ZERO
+    };
+    let pids = compute_descendant_pids(&key, table_age);
 
     let mut cache = DESCENDANT_CACHE.lock().unwrap();
     // A spawn/death or the TTL stales every entry at once (they all describe
     // the one process table), so dead entries are pruned wholesale — along
     // with any previous entry for this key, which the push below replaces.
     cache.retain(|e| {
-        e.generation == generation && e.computed_at.elapsed() < CACHE_TTL && e.roots != key
+        e.generation == generation && e.computed_at.elapsed() < CACHE_TTL_RELAXED && e.roots != key
     });
     while cache.len() >= CACHE_ENTRIES {
         let oldest = cache
@@ -272,9 +299,16 @@ pub fn descendant_pids(roots: &[u32]) -> Vec<u32> {
     pids
 }
 
-/// Build a pid → ppid map from the backend, then collect every pid whose ancestor
-/// chain reaches one of the roots. The uncached core of [`descendant_pids`].
-fn compute_descendant_pids(roots: &[u32]) -> Vec<u32> {
+/// Every pid whose ancestor chain reaches one of the roots: from the shared
+/// process table on Linux (a snapshot at most `table_age` old), from a fresh
+/// pid → ppid map elsewhere. The uncached core of [`descendant_pids`].
+#[cfg(target_os = "linux")]
+fn compute_descendant_pids(roots: &[u32], table_age: Duration) -> Vec<u32> {
+    crate::services::proc_table::snapshot_within(table_age).descendants(roots)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn compute_descendant_pids(roots: &[u32], _table_age: Duration) -> Vec<u32> {
     use std::collections::{HashSet, VecDeque};
 
     let parent = platform::parent_map();
@@ -2932,6 +2966,22 @@ M\t44000
         // Different roots → cache miss → recompute (no 222222 from a real walk).
         let other = descendant_pids(&[333333]);
         assert!(!other.contains(&222222));
+    }
+
+    #[test]
+    fn relaxed_lookup_reuses_an_entry_the_default_would_recompute() {
+        let _guard = lock_cache_for_test();
+        let gen = PROC_TREE_GEN.load(Ordering::Relaxed);
+        // Older than CACHE_TTL, younger than CACHE_TTL_RELAXED.
+        let stale = Instant::now() - CACHE_TTL - Duration::from_millis(100);
+        DESCENDANT_CACHE.lock().unwrap().push(DescendantCache {
+            roots: vec![454545u32],
+            pids: vec![454545u32, 777777u32],
+            generation: gen,
+            computed_at: stale,
+        });
+        assert_eq!(descendant_pids_relaxed(&[454545]), vec![454545, 777777], "relaxed reuse");
+        assert_ne!(descendant_pids(&[454545]), vec![454545, 777777], "the default recomputes");
     }
 
     #[test]

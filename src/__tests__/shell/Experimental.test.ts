@@ -1,7 +1,9 @@
 /**
  * The experimental-flag rule (`lib/experimental.ts`): a flag is a tri-state, and
- * *unset* means "whatever debug mode says" except for the GPU-sensitive WebGL
- * renderer, which is explicit opt-in. Explicit always wins — in both directions.
+ * explicit always wins — in both directions. *Unset* is off on a profile marked
+ * `experimental_explicit`; on an UNMARKED one (not yet migrated) it still means
+ * "whatever debug mode says", except for the GPU-sensitive WebGL renderer, which
+ * is explicit opt-in everywhere. The unmarked cases below are the old rule.
  */
 import { describe, it, expect } from "vitest";
 import { experimentalEnabled, EXPERIMENTAL_FLAGS } from "../../lib/experimental";
@@ -15,8 +17,8 @@ describe("experimentalEnabled", () => {
     expect(experimentalEnabled(s({ debug: false }), "python_run_debug")).toBe(false);
   });
 
-  it("is on when the flag is unset and debug mode is on", () => {
-    // The point of the gate: a new experiment reaches a debug build with no toggle.
+  it("is on when the flag is unset and debug mode is on, while unmarked", () => {
+    // Until the migration has written the ticks, a debug profile keeps what it had.
     expect(experimentalEnabled(s({ debug: true }), "python_run_debug")).toBe(true);
     expect(experimentalEnabled(s({ debug: true }), "deck_presenter")).toBe(true);
   });
@@ -40,11 +42,28 @@ describe("experimentalEnabled", () => {
     expect(experimentalEnabled(undefined, "deck_presenter")).toBe(false);
   });
 
-  it("applies the debug default to every non-WebGL flag", () => {
+  it("applies the debug default to every non-WebGL flag, while unmarked", () => {
     for (const flag of EXPERIMENTAL_FLAGS) {
       expect(experimentalEnabled(s({}), flag)).toBe(false);
       expect(experimentalEnabled(s({ debug: true }), flag)).toBe(flag !== "terminal_webgl");
       expect(experimentalEnabled(s({ debug: true, [flag]: false }), flag)).toBe(false);
     }
+  });
+
+  it("turns no flag on through debug mode once the profile is marked", () => {
+    for (const flag of EXPERIMENTAL_FLAGS) {
+      const marked = { debug: true, experimental_explicit: true };
+      expect(experimentalEnabled(s(marked), flag)).toBe(false);
+      // An explicit value still wins, in both directions.
+      expect(experimentalEnabled(s({ ...marked, [flag]: true }), flag)).toBe(true);
+      expect(experimentalEnabled(s({ ...marked, [flag]: false }), flag)).toBe(false);
+      expect(experimentalEnabled(s({ experimental_explicit: true, [flag]: true }), flag)).toBe(true);
+    }
+  });
+
+  it("treats a false marker as no marker", () => {
+    expect(
+      experimentalEnabled(s({ debug: true, experimental_explicit: false }), "web_browser"),
+    ).toBe(true);
   });
 });

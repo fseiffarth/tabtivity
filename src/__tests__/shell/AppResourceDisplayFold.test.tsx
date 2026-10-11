@@ -11,7 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
 
-import { AppResourceDisplay } from "../../components/header/AppResourceDisplay";
+import { AppResourceDisplay, RESOURCE_POLL_MS } from "../../components/header/AppResourceDisplay";
 import { useHeaderStatusStore } from "../../stores/headerStatus";
 import { usePowerStore } from "../../stores/power";
 import { useSettingsStore } from "../../stores/settings";
@@ -77,5 +77,23 @@ describe("AppResourceDisplay folded", () => {
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: true }),
     );
+  });
+});
+
+describe("AppResourceDisplay cadence", () => {
+  it("polls every 5 s while shown (perf plan §3.3), 15 s while the window is quiesced", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const { unmount } = render(<AppResourceDisplay folded={false} peek={0} />);
+    await screen.findByText(/12/);
+    expect(RESOURCE_POLL_MS).toBe(5_000);
+    expect(setIntervalSpy.mock.calls.map(([, ms]) => ms)).toContain(5_000);
+    expect(setIntervalSpy.mock.calls.map(([, ms]) => ms)).not.toContain(2_500);
+    unmount();
+
+    setIntervalSpy.mockClear();
+    act(() => usePowerStore.setState({ blurred: true }));
+    render(<AppResourceDisplay folded={false} peek={0} />);
+    await flush();
+    expect(setIntervalSpy.mock.calls.map(([, ms]) => ms)).toContain(15_000);
   });
 });

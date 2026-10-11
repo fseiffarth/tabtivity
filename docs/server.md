@@ -18,8 +18,10 @@ Read this first; keep it current when a decision or an open point changes.
   `hosted_handoff.md` § "Merge `develop` → `hosted`". The other direction,
   `hosted` → `develop`, is still owed (#2386). Merged again 2026-10-10
   (`develop` `6754d5cd`, 13 conflicted files; § "Merge `develop` → `hosted`
-  (2026-10-10)") and 2026-10-11 (`develop` `32d65f6a`, one conflicted file;
-  § "Merge `develop` → `hosted` (2026-10-11)").
+  (2026-10-10)") and twice 2026-10-11 (`develop` `32d65f6a`, one conflicted
+  file; then `80142cc7`, the performance work, 13 conflicted files —
+  § "Merge `develop` → `hosted` (2026-10-11, the performance work)"). All
+  gates green incl. the Windows/macOS cross-checks and the daemon's `ldd`.
 - **One agent-API-key path built (2026-10-10, #2389).** Admin keys, a
   server user's own key and the desktop's own key all reach agents through
   `api_proxy`; limits in billed tokens; one "runs on" control per CLI.

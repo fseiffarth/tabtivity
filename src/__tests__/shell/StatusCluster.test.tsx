@@ -3,15 +3,27 @@
  * the summary lamp carries the worst tone instead.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve("none")) }));
 vi.mock("../../components/header/AlertsToggle", () => ({ AlertsToggle: () => <i data-testid="alerts" /> }));
 vi.mock("../../components/header/MobileIndicator", () => ({ MobileIndicator: () => <i data-testid="mobile" /> }));
 vi.mock("../../components/header/VpnIndicator", () => ({ VpnIndicator: () => <i data-testid="vpn" /> }));
-vi.mock("../../components/header/MachinesIndicator", () => ({
-  MachinesIndicator: () => <i data-testid="machines" />,
-}));
+const machinesLife = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
+vi.mock("../../components/header/MachinesIndicator", async () => {
+  const { useEffect } = await import("react");
+  return {
+    MachinesIndicator: () => {
+      useEffect(() => {
+        machinesLife.mounts++;
+        return () => {
+          machinesLife.unmounts++;
+        };
+      }, []);
+      return <i data-testid="machines" />;
+    },
+  };
+});
 vi.mock("../../components/header/AppResourceDisplay", () => ({
   AppResourceDisplay: ({ folded, peek }: { folded?: boolean; peek?: number }) => (
     <i data-testid="resources" data-folded-prop={String(!!folded)} data-peek={peek ?? 0} />
@@ -42,7 +54,8 @@ beforeEach(() => {
     },
   });
   useSettingsStore.setState({
-    settings: { header_status_expanded: false } as never,
+    // The Machines menu is lazily split and mounted only while its feature is on.
+    settings: { header_status_expanded: false, machines_enabled: true } as never,
     updateSettings,
   } as never);
 });
@@ -53,8 +66,9 @@ afterEach(() => {
 });
 
 describe("StatusCluster", () => {
-  it("folds failing members too while collapsed, and says so on the summary lamp", () => {
+  it("folds failing members too while collapsed, and says so on the summary lamp", async () => {
     render(<StatusCluster />);
+    await screen.findByTestId("machines");
     for (const id of ["vpn", "machines", "resources"]) expect(folded(id)).toBe("true");
     const toggle = screen.getByRole("button", { expanded: false });
     expect(toggle.getAttribute("title")).toContain("VPN failed");
@@ -72,12 +86,44 @@ describe("StatusCluster", () => {
     expect(screen.getByTestId("resources").getAttribute("data-peek")).toBe("1");
   });
 
-  it("shows every member once expanded", () => {
-    useSettingsStore.setState({ settings: { header_status_expanded: true } as never } as never);
+  it("shows every member once expanded", async () => {
+    useSettingsStore.setState({
+      settings: { header_status_expanded: true, machines_enabled: true } as never,
+    } as never);
     render(<StatusCluster />);
+    await screen.findByTestId("machines");
     for (const id of ["vpn", "machines", "resources"]) expect(folded(id)).toBe("false");
     expect(screen.getByTestId("resources").getAttribute("data-folded-prop")).toBe("false");
     fireEvent.click(screen.getByRole("button", { expanded: true }));
     expect(updateSettings).toHaveBeenCalledWith({ header_status_expanded: false });
+  });
+
+  it("mounts no Machines menu while the feature is off (perf plan §6)", async () => {
+    useSettingsStore.setState({ settings: { header_status_expanded: true } as never } as never);
+    render(<StatusCluster />);
+    // The other members are eager: once they are on screen, a mounted lazy
+    // member would have had its chance to resolve too.
+    await screen.findByTestId("vpn");
+    await Promise.resolve();
+    expect(screen.queryByTestId("machines")).toBeNull();
+  });
+
+  it("keeps the Machines menu mounted once it was on, so a pending sign-in survives switching it off", async () => {
+    machinesLife.mounts = 0;
+    machinesLife.unmounts = 0;
+    render(<StatusCluster />);
+    await screen.findByTestId("machines");
+    const setMachines = (on: boolean) =>
+      act(() => {
+        useSettingsStore.setState({
+          settings: { header_status_expanded: false, machines_enabled: on } as never,
+        } as never);
+      });
+    setMachines(false);
+    // The member's own `!enabled` branch hides it; the cluster must not unmount
+    // it, or a "sign in in a terminal" add/edit loses its poll and form.
+    expect(screen.getByTestId("machines")).toBeTruthy();
+    setMachines(true);
+    expect(machinesLife).toEqual({ mounts: 1, unmounts: 0 });
   });
 });

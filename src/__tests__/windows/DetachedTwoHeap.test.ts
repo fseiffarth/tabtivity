@@ -182,6 +182,24 @@ describe("Group B — two heaps, one protocol", () => {
     expect(popout.tabs.getDetachedViewerState(b.key)?.breakpoints).toEqual([12]);
   });
 
+  it("a TeX workspace sub-pane's position written in a popout survives the dock-back", async () => {
+    const { main, b, groupId, label } = await setup();
+    const popout = await popoutHeapFor("p", groupId, label);
+    const sub = `${b.key}#/p/chapters/intro.tex`;
+
+    // `<tab>#<path>` names no tab: it used to be staged, then dropped.
+    popout.tabs.useTabsStore.getState().setViewerState(sub, { scrollTop: 640, fontSize: 15 });
+    expect(popout.tabs.persistedViewerState(popout.tabs.useTabsStore.getState(), sub)).toEqual({
+      scrollTop: 640,
+      fontSize: 15,
+    });
+    main.tabs.flushViewerState();
+    const payload = main.tabs.useTabsStore
+      .getState()
+      .tabsByScope["p"]!.find((t) => t.key === b.key);
+    expect(payload?.viewerState?.texPanes?.["/p/chapters/intro.tex"]).toEqual({ scrollTop: 640, fontSize: 15 });
+  });
+
   it("a tmux rename and a browsed folder from a popout reach the main payload", async () => {
     const { main, b, groupId, label } = await setup();
     const popout = await popoutHeapFor("p", groupId, label);

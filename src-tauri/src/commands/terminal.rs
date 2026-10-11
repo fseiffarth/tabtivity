@@ -388,7 +388,7 @@ pub async fn pty_resize(
 
 /// A pane's visibility report (visible-only streaming): a hidden pane's PTY
 /// stops emitting `terminal-output` over IPC entirely — the backend buffers it
-/// and condenses throttled `terminal-activity` digests for the pill
+/// and condenses throttled digests (`terminal-activity-batch`) for the pill
 /// indicators — and re-showing drains the buffer as one `terminal-replay`.
 /// See the routing block in `terminal/mod.rs`.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -422,21 +422,38 @@ pub async fn pty_set_visible(
 /// the router keeps a bounded tail of everything it routed (visible or not) and
 /// hands it back here, to be written into the new terminal before its first live
 /// byte. A read, not a drain: a third window attaching later gets it too.
+///
+/// `wake`: the pane that owns this PTY is waking from sleep (performance plan
+/// §5.3) — the tail comes back cut at its last full clear and the route's
+/// sleep ends (`route_wake_scrollback`). Absent from older frontends.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_scrollback(
     ctx: Ctx,
     id: String,
+    wake: Option<bool>,
 ) -> Result<crate::terminal::TerminalScrollback, String> {
     // A server client's catch-up is its own stream's: the offsets it saw are
     // that PTY's (TODO #2347).
     let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
+    if wake == Some(true) {
+        return Ok(crate::terminal::route_wake_scrollback(&id));
+    }
     Ok(crate::terminal::route_scrollback(&id))
 }
 
+/// A view leaves (`TerminalView` unmount). `sleeping`: its pane is going to
+/// sleep with the PTY still running (§5.3) — absent from older frontends,
+/// which never sleep a terminal.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn pty_remove_view(ctx: Ctx, id: String, viewer_id: String, update_seq: u64) -> Result<(), String> {
+pub async fn pty_remove_view(
+    ctx: Ctx,
+    id: String,
+    viewer_id: String,
+    update_seq: u64,
+    sleeping: Option<bool>,
+) -> Result<(), String> {
     let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
-    crate::terminal::route_remove_view(&id, &viewer_id, update_seq);
+    crate::terminal::route_remove_view(&id, &viewer_id, update_seq, sleeping == Some(true));
     Ok(())
 }
 
@@ -478,6 +495,8 @@ pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
     // The terminal is gone, so its login marking must not outlive it and bless a
     // future PTY that reuses the id.
     crate::commands::credentials::forget_login_pty(&id);
+    // A sleeping pane's route waits for a wake that will not come now (§5.3).
+    crate::terminal::route_forget_sleep(&id);
     // Taken under the lock, torn down after it: the lock is on every
     // keystroke's path, the teardown walks the process table. The teardown
     // ends the per-tab state of the spawn it took, and only while that spawn

@@ -1,22 +1,65 @@
-import { memo } from "react";
+import { lazy, memo, Suspense, type ReactNode } from "react";
 import { TerminalView } from "../terminal/TerminalView";
 import { FileBrowser } from "../files/FileBrowser";
 import { ProjectFilesTab } from "../files/ProjectFilesTab";
 import { EmbedPane } from "../embed/EmbedPane";
 import { FileViewerPane } from "../embed/FileViewerPane";
-import { ProjectBlobPane } from "../common/ProjectBlobPane";
-import { NetworkTrafficPane } from "../monitoring/NetworkTrafficPane";
-import { SystemMonitorPane } from "../monitoring/SystemMonitorPane";
-import { DiskUsagePane } from "../monitoring/DiskUsagePane";
-import { CalendarPane } from "../calendar/CalendarPane";
-import { BrowserPane } from "../browser/BrowserPane";
-import { PrintManagerPane } from "../printing/PrintManagerPane";
-import { SkillsLibraryTab } from "../skills/SkillsLibraryTab";
-import { PromptChartTab } from "../agents/PromptChartTab";
 import { RemotePaneHold } from "../projects/RemotePaneHold";
 import { HostSessionHold } from "./HostSessionHold";
+import { tabTerminalSpawn } from "../../lib/terminal/terminalSpawn";
+
+// Code-split (perf plan §6): the terminal, the Files tabs and the file viewer
+// are what nearly every window shows at launch, so they stay in the startup
+// chunk. Every other pane kind is fetched the first time a tab of that kind
+// mounts (an in-process asset read; the frontend is embedded), so a window
+// that never opens a calendar, browser, printer, monitor, skills or prompt-chart
+// tab never parses their module graphs — nor does a popout, which shares this
+// switch. Their other importers (the calendar overlay, the schedules view's
+// chart, the stats recap's traffic card, the global machine monitor) are split
+// the same way, or the chunk would be pulled back into startup through them.
+const ProjectBlobPane = lazy(() =>
+  import("../common/ProjectBlobPane").then((m) => ({ default: m.ProjectBlobPane })),
+);
+const NetworkTrafficPane = lazy(() =>
+  import("../monitoring/NetworkTrafficPane").then((m) => ({ default: m.NetworkTrafficPane })),
+);
+const SystemMonitorPane = lazy(() =>
+  import("../monitoring/SystemMonitorPane").then((m) => ({ default: m.SystemMonitorPane })),
+);
+const DiskUsagePane = lazy(() =>
+  import("../monitoring/DiskUsagePane").then((m) => ({ default: m.DiskUsagePane })),
+);
+const CalendarPane = lazy(() =>
+  import("../calendar/CalendarPane").then((m) => ({ default: m.CalendarPane })),
+);
+const BrowserPane = lazy(() =>
+  import("../browser/BrowserPane").then((m) => ({ default: m.BrowserPane })),
+);
+const PrintManagerPane = lazy(() =>
+  import("../printing/PrintManagerPane").then((m) => ({ default: m.PrintManagerPane })),
+);
+const SkillsLibraryTab = lazy(() =>
+  import("../skills/SkillsLibraryTab").then((m) => ({ default: m.SkillsLibraryTab })),
+);
+const PromptChartTab = lazy(() =>
+  import("../agents/PromptChartTab").then((m) => ({ default: m.PromptChartTab })),
+);
+
+/**
+ * The boundary around a split pane while its chunk loads. It sits INSIDE the
+ * host's `.center-pane` box (CenterPanel / DetachedCenterPanel / the root
+ * overlay), which is what carries the steering, drag-ghost and focus hooks
+ * (`data-scope-key`, `data-tab-key`, `onMouseDownCapture`) — so those work on
+ * the loading pane too. The placeholder only fills the box (`.pane-loading`)
+ * so the pane does not collapse for the frame or two the fetch takes.
+ */
+function LazyPane({ children }: { children: ReactNode }) {
+  return (
+    <Suspense fallback={<div className="pane-loading" aria-busy="true" />}>{children}</Suspense>
+  );
+}
 import { PaneTabContext } from "./paneTabContext";
-import { effectiveTabLocation, remoteHostIdOf, type TabEntry } from "../../stores/tabs";
+import type { TabEntry } from "../../stores/tabs";
 
 /**
  * The single per-tab `kind → pane` render switch, shared by the main window
@@ -100,49 +143,82 @@ function TabPaneImpl({
 }: TabPaneProps) {
   // Identical in both windows: null for the root scope, else the scope id.
   const projectId = scope === "root" ? null : scope;
-  const zoomable = tab.kind === "agent" || tab.kind === "local_agent";
 
   switch (tab.kind) {
     case "projects3d":
       // `visible` stops the 3D rAF loop while the root scope is backgrounded.
-      return <ProjectBlobPane visible={visible} />;
+      return (
+        <LazyPane>
+          <ProjectBlobPane visible={visible} />
+        </LazyPane>
+      );
     case "calendar":
-      return <CalendarPane visible={visible} />;
+      return (
+        <LazyPane>
+          <CalendarPane visible={visible} />
+        </LazyPane>
+      );
     case "browser":
       // Reader mode is ordinary DOM (a sanitized page in a script-less iframe),
       // so this pane needs none of the native-view plumbing Plan A anticipated —
       // no bounds, no visibility sync, no suppression.
-      return <BrowserPane tab={tab} scope={scope} visible={visible} />;
+      return (
+        <LazyPane>
+          <BrowserPane tab={tab} scope={scope} visible={visible} />
+        </LazyPane>
+      );
     case "printing":
       // Printers belong to the machine, so — like the calendar pane — this one
       // takes no project props at all. `visible` is not cosmetic here: it arms
       // the queue poll, so a background print tab shells out to nothing.
-      return <PrintManagerPane visible={visible} />;
+      return (
+        <LazyPane>
+          <PrintManagerPane visible={visible} />
+        </LazyPane>
+      );
     case "network":
       // `projectId`, not `scope`: a root tab is the machine's own traffic, and
       // the pane's whole remote half (host tabs, SSH link, usage totals) hangs
       // off there being a project — the same `null` the monitor below takes.
-      return <NetworkTrafficPane projectId={projectId} visible={visible} onConnect={onConnect} />;
+      return (
+        <LazyPane>
+          <NetworkTrafficPane projectId={projectId} visible={visible} onConnect={onConnect} />
+        </LazyPane>
+      );
     case "monitor":
-      return <SystemMonitorPane projectId={projectId} visible={visible} />;
+      return (
+        <LazyPane>
+          <SystemMonitorPane projectId={projectId} visible={visible} />
+        </LazyPane>
+      );
     case "diskusage":
       return (
-        <DiskUsagePane
-          projectId={projectId}
-          projectCwd={tab.cwd}
-          tabKey={tab.key}
-          visible={visible}
-        />
+        <LazyPane>
+          <DiskUsagePane
+            projectId={projectId}
+            projectCwd={tab.cwd}
+            tabKey={tab.key}
+            visible={visible}
+          />
+        </LazyPane>
       );
     case "skillslibrary":
       // Same thin-host shape as ProjectFilesTab: resolves its own project from
       // `scope` rather than taking a prop, since a popout has no `filesProjectDir`
       // to hand it either.
-      return <SkillsLibraryTab scope={scope} cwd={tab.cwd} visible={visible} />;
+      return (
+        <LazyPane>
+          <SkillsLibraryTab scope={scope} cwd={tab.cwd} visible={visible} />
+        </LazyPane>
+      );
     case "promptchart":
       // Reads the scope's own agent tabs from the store, so it needs nothing a
       // popout could not hand it either. `visible` gates the clock tick.
-      return <PromptChartTab scope={scope} visible={visible} />;
+      return (
+        <LazyPane>
+          <PromptChartTab scope={scope} visible={visible} />
+        </LazyPane>
+      );
     case "files":
       return <FileBrowser projectDir={filesProjectDir} projectId={projectId} active={visible} />;
     case "projectfiles":
@@ -195,31 +271,9 @@ function TabPaneImpl({
       return (
         <PaneTabContext.Provider value={{ scope, tab }}>
         <TerminalView
-          // PTY ids include the scope: tab keys alone collide across projects.
-          id={`${scope}:${tab.key}`}
-          cmd={tab.cmd}
-          args={tab.args ?? []}
-          env={tab.env ?? {}}
-          // A popout is attach-only and never spawns, and its `terminal-ready`
-          // never fires, so it takes no initialInput (matches its old behavior).
-          initialInput={attachOnly ? undefined : tab.initialInput}
-          cwd={terminalCwd}
-          localOnly={effectiveTabLocation(tab, { vmProject }) === "local"}
-          projectId={projectId}
-          // Multi-host: the worker id (or "primary") this tab runs on, so the
-          // backend resolves the right host's RemoteSpec (null for a local tab).
-          remoteHostId={remoteHostIdOf(effectiveTabLocation(tab, { vmProject }))}
-          sandbox={sandbox}
-          // Persistent remote session (TODO #85). An explicit attach (opened from
-          // the Sessions view) wins over the tab's own persistent session.
-          tmuxSession={tmuxSession ?? null}
-          tmuxAttach={tab.tmuxAttach ?? null}
-          hostBoundUid={tab.hostBoundUid ?? null}
-          hostSession={!!tab.hostSession}
-          kind={tab.kind}
-          scheduleTargetId={tab.scheduleTargetId}
-          relaunchSeq={tab.relaunchSeq ?? 0}
-          zoomable={zoomable}
+          // The spawn inputs, mapped once (`tabTerminalSpawn`): the pane layer
+          // reads the same identity to tell when a sleeping tab must wake.
+          {...tabTerminalSpawn(tab, scope, { terminalCwd, sandbox, tmuxSession, vmProject, attachOnly })}
           visible={visible}
           focused={focused}
           attachOnly={attachOnly}

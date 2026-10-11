@@ -12,6 +12,13 @@ on:
 permissions:
   contents: read
 
+# A newer push to a branch (or commit on a PR) cancels the run it supersedes,
+# so a red run's fix doesn't queue behind it. Never on main: release.yml
+# releases only a main commit whose run passed, and waits for that run.
+concurrency:
+  group: ci-cd-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -226,14 +233,39 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Fail fast: what failed in this branch's last run on this OS runs
+      # before anything else (scripts/ci-failed-first.sh), and the full
+      # suites below record what fails for the next run.
+      - name: Restore the last run's failed tests
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ci-failed-${{ runner.os }}-${{ github.ref_name }}-
+            ci-failed-${{ runner.os }}-
+
+      - name: Re-run the last run's failed tests first
+        shell: bash
+        run: bash scripts/ci-failed-first.sh previous
+
       - name: Build frontend
         run: npm run build
 
       - name: Run frontend tests
-        run: npm test
+        shell: bash
+        run: bash scripts/ci-failed-first.sh frontend
 
       - name: Run backend tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        shell: bash
+        run: bash scripts/ci-failed-first.sh backend
+
+      - name: Save this run's failed tests
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Run core crate tests
         run: cargo test --manifest-path src-core/Cargo.toml
@@ -287,14 +319,39 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Fail fast: what failed in this branch's last run on this OS runs
+      # before anything else (scripts/ci-failed-first.sh), and the full
+      # suites below record what fails for the next run.
+      - name: Restore the last run's failed tests
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ci-failed-${{ runner.os }}-${{ github.ref_name }}-
+            ci-failed-${{ runner.os }}-
+
+      - name: Re-run the last run's failed tests first
+        shell: bash
+        run: bash scripts/ci-failed-first.sh previous
+
       - name: Build frontend
         run: npm run build
 
       - name: Run frontend tests
-        run: npm test
+        shell: bash
+        run: bash scripts/ci-failed-first.sh frontend
 
       - name: Run backend tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        shell: bash
+        run: bash scripts/ci-failed-first.sh backend
+
+      - name: Save this run's failed tests
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Run core crate tests
         run: cargo test --manifest-path src-core/Cargo.toml
@@ -338,14 +395,39 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Fail fast: what failed in this branch's last run on this OS runs
+      # before anything else (scripts/ci-failed-first.sh), and the full
+      # suites below record what fails for the next run.
+      - name: Restore the last run's failed tests
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ci-failed-${{ runner.os }}-${{ github.ref_name }}-
+            ci-failed-${{ runner.os }}-
+
+      - name: Re-run the last run's failed tests first
+        shell: bash
+        run: bash scripts/ci-failed-first.sh previous
+
       - name: Build frontend
         run: npm run build
 
       - name: Run frontend tests
-        run: npm test
+        shell: bash
+        run: bash scripts/ci-failed-first.sh frontend
 
       - name: Run backend tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        shell: bash
+        run: bash scripts/ci-failed-first.sh backend
+
+      - name: Save this run's failed tests
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Run core crate tests
         run: cargo test --manifest-path src-core/Cargo.toml
