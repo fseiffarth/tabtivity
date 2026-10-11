@@ -76,14 +76,18 @@ Run these in your own terminal, not in a fenced agent tab — the fence hides
 A release only ever ships a commit `ci-cd.yml` passed on a branch push, and
 `release.yml` never rebuilds: it signs and publishes the bundles that green
 run built (its `package*` artifacts). `ci-cd.yml` itself no longer runs on
-tags. Two ways in:
+tags. Only `main` is released — `develop` reaches it by PR, and the in-app
+updater installs whatever is released. Two ways in:
 
-- **Actions → release → Run workflow** on a branch: releases its tip as
-  `v<package.json version>`. The workflow waits for the tip's ci-cd run,
+- **Actions → release → Run workflow** on `main` (or `gh workflow run release
+  --ref main`): releases its tip as `v<package.json version>`; any other
+  branch is refused. The workflow waits for the tip's ci-cd run,
   and creates the annotated tag itself only once that run is green and the
   checksums are signed — the tag never precedes CI.
 - **Push a `v*` tag** (the git bar's Release button, or `git push`): the tag
-  must equal `v<package.json version>` at its commit. The workflow waits for
+  must equal `v<package.json version>` at its commit, and that commit must be
+  on `main` (its tip or older; the pre-push hook checks this against the last
+  fetch, the workflow against GitHub). The workflow waits for
   that commit's ci-cd run; if it did not pass, or anything fails before the
   Release is published, it **deletes the tag again**, so every `v*` tag on
   GitHub has a Release and the name can be pushed again after a fix. The
