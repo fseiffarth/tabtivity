@@ -16,6 +16,7 @@
  * real one.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, renderHook, screen, act, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NAMES } from "../../lib/brand";
@@ -140,6 +141,8 @@ async function resetStores() {
   const { usePdfSyncStore } = await import("../../stores/viewers/pdfSync");
   usePdfSyncStore.setState({ byPath: {} });
 }
+
+warmFileViewer();
 
 describe("openTexWorkspace — one tab per document", () => {
   beforeEach(async () => {

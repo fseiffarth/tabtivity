@@ -46,6 +46,9 @@ describe("globalMachines — a no-op status write must not notify", () => {
       machines: MACHINES as never,
       status: { m1: "connected", m2: "connected" },
       reachable: { m1: true, m2: true },
+      // A probe error an earlier test left would be cleared by the sweep — a
+      // real change that notifies.
+      errors: {},
       loaded: true,
     });
     // `probeAll` skips HPC-tagged machines via `mayAutoTouch`, which fails closed on

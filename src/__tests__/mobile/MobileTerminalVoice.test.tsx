@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 import type {
   MobileSpeechRecognition,
   MobileSpeechRecognitionErrorEvent,
@@ -93,6 +94,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     FakeWebSocket.instances = [];
     Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: FakeRecognition });
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    stubTerminalSideChannels();
     // These read the Focus view; the phone opens on Terminal until the
     // reader chose Focus for the agent, so the stored choice is preset.
     localStorage.setItem(storageKey("mobile.view.agent"), "focus");

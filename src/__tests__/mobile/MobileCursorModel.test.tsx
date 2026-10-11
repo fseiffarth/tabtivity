@@ -8,6 +8,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -128,6 +129,7 @@ describe(`${BRAND.display} Mobile — Cursor agent's model sheet`, () => {
     FakeWebSocket.instances = [];
     FakeWebSocket.sent = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    stubTerminalSideChannels();
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
   afterEach(() => vi.unstubAllGlobals());

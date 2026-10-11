@@ -9,6 +9,7 @@
  *    toggles it (sentence → block → scope) then re-requests.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 import { completionModelOrder, completionWindow, pickCompletionModel, typeThrough } from "../../lib/viewers/completion/autocomplete";
 
@@ -89,6 +90,8 @@ async function renderTextView(path = "/p/foo.py") {
     <FileViewerPane viewer="text" path={path} projectId="proj" visible={visible} />,
   ) };
 }
+
+warmFileViewer();
 
 describe("local autocomplete (#45)", () => {
   beforeEach(() => {

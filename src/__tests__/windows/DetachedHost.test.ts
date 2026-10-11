@@ -64,12 +64,16 @@ import {
   DETACHED_HIDE,
   DETACHED_WINDOW_DESTROYED,
   DETACHED_GAVE_UP,
+  _resetDetachedHostForTest,
   detachedRespawnDelay,
   detachedSeedEvent,
   type DetachedSeed,
 } from "../../stores/detached";
 
 function reset() {
+  // App-quit teardown marks the host as shutting down for good, and deaths
+  // are counted per label: neither may carry over to the next test.
+  _resetDetachedHostForTest();
   handlers.clear();
   emitted.length = 0;
   destroyed.length = 0;

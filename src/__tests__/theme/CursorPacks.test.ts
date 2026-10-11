@@ -68,12 +68,16 @@ describe("normalizeCursorPack", () => {
   });
 });
 
-// FIRST, deliberately: `buildCursorVars` caches by pack + palette, so a
-// successful stubbed render of the default palette would be handed back here.
+// `buildCursorVars` caches by pack + palette, so a successful stubbed render
+// of the default palette by an earlier test would be handed back here: load a
+// fresh copy of the module (and of the store that calls it) with an empty
+// cache, whatever ran before.
 describe("a pack that cannot be drawn", () => {
-  it("applies nothing at all, leaving the stylesheet's keyword fallbacks", () => {
+  it("applies nothing at all, leaving the stylesheet's keyword fallbacks", async () => {
+    vi.resetModules();
+    const fresh = await import("../../stores/settings");
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
-    applyCursor("aurora");
+    fresh.applyCursor("aurora");
     expect(document.documentElement.getAttribute("data-cursor")).toBeNull();
     for (const name of CURSOR_VAR_NAMES) {
       expect(document.documentElement.style.getPropertyValue(name)).toBe("");

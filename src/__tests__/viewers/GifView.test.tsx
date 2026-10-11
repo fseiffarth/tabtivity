@@ -6,6 +6,7 @@
  * covered by the mtime-advance case.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, act, waitFor, fireEvent, screen } from "@testing-library/react";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
@@ -51,6 +52,8 @@ async function renderGifView() {
     render(<FileViewerPane viewer="gif" path="/p/anim.gif" projectId="proj" />);
   });
 }
+
+warmFileViewer();
 
 describe("GifView", () => {
   beforeEach(() => {

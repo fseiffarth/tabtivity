@@ -177,26 +177,30 @@ function press(pane: HTMLElement, detail: number, init: MouseEventInit = {}): Mo
   return ev;
 }
 
-describe("agent pane mouse gestures", () => {
-  beforeEach(() => {
-    termSpy.paste.mockClear();
-    termSpy.focus.mockClear();
-    termSpy.seen.length = 0;
-    termSpy.mouseTrackingMode = "none";
-    termSpy.selection = "";
-    termSpy.onSelection = null;
-    termSpy.moves = 0;
-    termSpy.lines = [];
-    termSpy.cursorY = 0;
-    termSpy.selected = null;
-    invoke.mockReset();
-    invoke.mockImplementation(() => Promise.resolve(undefined));
-    useProjectsStore.setState({ switchToast: null });
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { readText: () => Promise.resolve("from the clipboard"), writeText: () => Promise.resolve() },
-    });
+/** Every test starts from the same pane stubs and clipboard, whichever
+ * describe block (or shuffled order) ran before it. */
+function resetPaneStubs() {
+  termSpy.paste.mockClear();
+  termSpy.focus.mockClear();
+  termSpy.seen.length = 0;
+  termSpy.mouseTrackingMode = "none";
+  termSpy.selection = "";
+  termSpy.onSelection = null;
+  termSpy.moves = 0;
+  termSpy.lines = [];
+  termSpy.cursorY = 0;
+  termSpy.selected = null;
+  invoke.mockReset();
+  invoke.mockImplementation(() => Promise.resolve(undefined));
+  useProjectsStore.setState({ switchToast: null });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { readText: () => Promise.resolve("from the clipboard"), writeText: () => Promise.resolve() },
   });
+}
+
+describe("agent pane mouse gestures", () => {
+  beforeEach(resetPaneStubs);
 
   /** Drag `text` out of the pane: the selection settles, the button comes up. */
   async function drag(text: string) {
@@ -427,13 +431,7 @@ describe("terminal links", () => {
   const click = (detail: number) => new MouseEvent("mouseup", { button: 0, detail });
   const calls = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd);
 
-  beforeEach(() => {
-    invoke.mockClear();
-    termSpy.paste.mockClear();
-    termSpy.seen.length = 0;
-    termSpy.mouseTrackingMode = "none";
-    useProjectsStore.setState({ switchToast: null });
-  });
+  beforeEach(resetPaneStubs);
 
   it("a click asks first, then opens the link in the real browser", async () => {
     vi.useFakeTimers();

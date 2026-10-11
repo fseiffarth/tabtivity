@@ -976,6 +976,15 @@ const gaveUpWindows = new Set<string>();
 /** Per label: the first and the latest death of its current give-up streak. */
 const gaveUpStreaks = new Map<string, { since: number; last: number }>();
 
+/** Tests only: forget a quit in progress and every popout's death history, so
+ *  one test's shutdown or crash streak cannot leak into the next. */
+export function _resetDetachedHostForTest(): void {
+  shuttingDown = false;
+  unexpectedWindowDeaths.clear();
+  gaveUpWindows.clear();
+  gaveUpStreaks.clear();
+}
+
 /** How long a popout must keep giving up on its seed, every respawn, before it
  *  is docked. A display switch stalls the main window and kills popouts for
  *  seconds, not minutes — docking on the third give-up within a minute put

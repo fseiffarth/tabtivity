@@ -8,6 +8,7 @@
  *  - None of it appears for a non-Python file.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 import { envName } from "../../lib/brand";
 
@@ -126,6 +127,8 @@ function launchedTab() {
   const [scope, tab] = addTabToScope.mock.calls[0] as [string, Record<string, unknown>];
   return { scope, tab };
 }
+
+warmFileViewer();
 
 describe("python run/debug (#py)", () => {
   beforeEach(() => {

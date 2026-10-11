@@ -18,6 +18,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -62,6 +63,7 @@ const agent: TabRow = { id: "tab-4", label: "Claude", kind: "agent", available: 
 describe(`${BRAND.display} Mobile — the terminal header stays on screen`, () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    stubTerminalSideChannels();
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
 

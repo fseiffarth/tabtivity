@@ -11,6 +11,10 @@ const store = vi.hoisted(() => ({
   updateSettings: vi.fn(async () => {}),
 }));
 
+// The sub-cards (agent keys, sharing, calendar sharing) ask the backend for
+// their lists; with nothing to list they render empty.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
+
 vi.mock("../../stores/settings", () => ({
   useSettingsStore: (selector?: (s: typeof store) => unknown) => (selector ? selector(store) : store),
 }));
@@ -37,9 +41,13 @@ describe("ServerSettings", () => {
   });
 
   it("renders nothing outside the browser client", async () => {
+    // `markServerClient` is one-way and the other tests set it; a fresh module
+    // graph starts outside the browser client whatever ran before.
+    vi.resetModules();
+    const { ServerSettings: Fresh } = await import("../../components/server/ServerSettings");
     const fetch = vi.fn(() => answer({ policy: policy(true), role: "user" }));
     vi.stubGlobal("fetch", fetch);
-    const { container } = render(<ServerSettings />);
+    const { container } = render(<Fresh />);
     await Promise.resolve();
     expect(container.textContent).toBe("");
     expect(fetch).not.toHaveBeenCalled();

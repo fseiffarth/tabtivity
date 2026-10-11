@@ -4,6 +4,7 @@
  * state once the buffer diverges from disk.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
@@ -35,6 +36,8 @@ async function renderTextView() {
     render(<FileViewerPane viewer="text" path="/p/notes.txt" projectId="proj" />);
   });
 }
+
+warmFileViewer();
 
 describe("SaveButton icon (#47)", () => {
   beforeEach(() => {

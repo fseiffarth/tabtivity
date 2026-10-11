@@ -34,6 +34,15 @@ import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
 
 const invokeMock = vi.mocked(invoke);
+/** Counts render in the runtime's locale (`toLocaleString`, compact
+ * notation); build the expected text the same way, so the suite holds under
+ * any `LANG`, as a regex fragment. Testing Library collapses whitespace in the
+ * page's text, the narrow no-break spaces some locales group digits with
+ * included, so the expectation does too. */
+const escape = (text: string) => text.replace(/\s+/g, " ").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const count = (n: number) => escape(n.toLocaleString());
+const compact = (n: number) =>
+  escape(new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n));
 const calls = (cmd: string) => invokeMock.mock.calls.filter(([name]) => name === cmd);
 
 // Placeholder words only: never a real-looking key shape.
@@ -189,7 +198,7 @@ describe("API keys for agent CLIs", () => {
     // administrator's key on.
     await waitFor(() => expect(order).toEqual(["settings:agent_api_key_clis", "admin:true"]));
     expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: [] });
-    expect(await screen.findByText(/key broker: 1,234 of 5,000 tokens this month/)).toBeTruthy();
+    expect(await screen.findByText(new RegExp(`key broker: ${count(1234)} of ${count(5000)} tokens this month`))).toBeTruthy();
     order = [];
     pick("Claude", /its own login/);
     await waitFor(() => expect(order).toEqual(["admin:false"]));
@@ -265,10 +274,15 @@ describe("API keys for agent CLIs", () => {
     render(<AgentApiKeysRows />);
     expect(
       await screen.findByText(
-        /budget reached \(20\.5M of 20M billed tokens\) — new requests are refused until 2026-11-01 or a higher limit/,
+        new RegExp(
+          `budget reached \\(${compact(20_500_000)} of ${compact(20_000_000)} billed tokens\\) — ` +
+            "new requests are refused until 2026-11-01 or a higher limit",
+        ),
       ),
     ).toBeTruthy();
-    expect(screen.getByText(/1\.2M of 10M billed tokens this month \(≈ \$1\.23\)/)).toBeTruthy();
+    expect(
+      screen.getByText(new RegExp(`${compact(1_234_000)} of ${compact(10_000_000)} billed tokens this month \\(≈ \\$1\\.23\\)`)),
+    ).toBeTruthy();
     expect(screen.getByText(/highest Anthropic rate: claude-next/)).toBeTruthy();
     expect(screen.getByText(/starts again on 2026-11-01 \(UTC\)/)).toBeTruthy();
     expect(screen.getByText(/price table dated 2026-10-04/)).toBeTruthy();

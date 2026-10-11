@@ -136,7 +136,10 @@ describe("ServerAgentKeys (administrator)", () => {
     });
     vi.stubGlobal("fetch", fetch);
     render(<ServerAgentKeys />);
-    expect(await screen.findByText(/bob: 400 of 1,000 tokens this month/)).toBeTruthy();
+    // Counts render in the runtime's locale; Testing Library collapses the
+    // no-break spaces some locales group digits with, so the expectation does.
+    const n = (value: number) => value.toLocaleString().replace(/\s+/g, " ");
+    expect(await screen.findByText(`bob: ${n(400)} of ${n(1000)} tokens this month`, { exact: false })).toBeTruthy();
     expect(screen.getByText(/carol: 0 of 50 tokens this month/)).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Deliver directly" })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "Deliver through the key broker" })).toBeNull();

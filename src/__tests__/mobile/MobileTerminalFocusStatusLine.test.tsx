@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 // The harness is MobileTerminalReadableView.test.tsx's: xterm faked down to a
 // buffer the test writes whole, and a WebSocket that opens on its own.
@@ -116,6 +117,7 @@ describe(`${BRAND.display} Mobile Focus status line`, () => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    stubTerminalSideChannels();
     localStorage.setItem(storageKey("mobile.view.agent"), "focus");
     localStorage.setItem(storageKey("mobile.view.shell"), "focus");
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
@@ -218,6 +220,7 @@ describe(`${BRAND.display} Mobile Focus — the project's files drawer`, () => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    stubTerminalSideChannels();
     localStorage.setItem(storageKey("mobile.view.agent"), "focus");
     localStorage.setItem(storageKey("mobile.view.shell"), "focus");
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });

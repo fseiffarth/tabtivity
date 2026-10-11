@@ -27,6 +27,8 @@ function seedGroup() {
     tabsByScope: {},
     layoutByScope: {},
     focusedGroupByScope: {},
+    // A popout an earlier test detached would otherwise still be listed.
+    detachedGroupsByScope: {},
     tabs: [],
     layout: null,
     focusedGroupId: null,

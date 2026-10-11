@@ -10,6 +10,7 @@
  * module registry and re-imports FileViewerPane to get a fresh probe.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -74,6 +75,8 @@ async function renderTexView(path = "/p/paper.tex", projectId = "proj") {
     render(<FileViewerPane viewer="tex" path={path} projectId={projectId} />);
   });
 }
+
+warmFileViewer();
 
 describe("TexView", () => {
   beforeEach(() => {

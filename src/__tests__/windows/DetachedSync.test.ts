@@ -18,8 +18,13 @@ function tab(key: string, label = key): TabEntry {
   return { key, scope: "p", label, cmd: "bash", cwd: "/p", kind: "shell" };
 }
 
+/** The fixture group's id stays clear of the store's own `g-<n>` counter: a
+ * split mints the next `g-<n>`, which on a fresh counter (this file first, or
+ * shuffled) would otherwise be `g-1` again — two groups with one id. */
+const G = "g-fixture";
+
 function group(tabKeys: string[], activeKey: string | null = tabKeys[0] ?? null): GroupNode {
-  return { type: "group", id: "g-1", tabKeys, activeKey };
+  return { type: "group", id: G, tabKeys, activeKey };
 }
 
 describe("detached — parseDetachedParam", () => {
@@ -73,9 +78,9 @@ describe("detached — parseDetachedParam", () => {
 describe("detached — buildSeed", () => {
   it("ships only the group's own tabs + the subtree", () => {
     const sub = group(["a", "b"]);
-    const seed = buildSeed("p", "g-1", [tab("a"), tab("b"), tab("c")], sub);
+    const seed = buildSeed("p", G, [tab("a"), tab("b"), tab("c")], sub);
     expect(seed.scope).toBe("p");
-    expect(seed.groupId).toBe("g-1");
+    expect(seed.groupId).toBe(G);
     expect(seed.subtree).toBe(sub);
     expect(seed.tabs.map((t) => t.key)).toEqual(["a", "b"]);
   });
@@ -125,7 +130,7 @@ describe("detached — applyEditToSubtree", () => {
     const next = applyEditToSubtree(sub, {
       kind: "split",
       key: "b",
-      targetGroupId: "g-1",
+      targetGroupId: G,
       edge: "right",
     }) as SplitNode;
     expect(next.type).toBe("split");
@@ -138,7 +143,7 @@ describe("detached — applyEditToSubtree", () => {
   it("split of a group's only tab is a no-op (keeps the subtree)", () => {
     const sub = group(["a"], "a");
     expect(
-      applyEditToSubtree(sub, { kind: "split", key: "a", targetGroupId: "g-1", edge: "right" }),
+      applyEditToSubtree(sub, { kind: "split", key: "a", targetGroupId: G, edge: "right" }),
     ).toBe(sub);
   });
 
@@ -148,7 +153,7 @@ describe("detached — applyEditToSubtree", () => {
     const split = applyEditToSubtree(group(["a", "b", "c"], "a"), {
       kind: "split",
       key: "c",
-      targetGroupId: "g-1",
+      targetGroupId: G,
       edge: "right",
     }) as SplitNode;
     const [leftG, rightG] = split.children as GroupNode[];
@@ -170,7 +175,7 @@ describe("detached — applyEditToSubtree", () => {
     const split = applyEditToSubtree(group(["a", "b"], "a"), {
       kind: "split",
       key: "b",
-      targetGroupId: "g-1",
+      targetGroupId: G,
       edge: "right",
     }) as SplitNode;
     const [leftG, rightG] = split.children as GroupNode[];
@@ -187,14 +192,14 @@ describe("detached — applyEditToSubtree", () => {
 
   it("move into the tab's own group is a no-op (within-group reorder is separate)", () => {
     const sub = group(["a", "b"], "a");
-    expect(applyEditToSubtree(sub, { kind: "move", key: "a", targetGroupId: "g-1" })).toBe(sub);
+    expect(applyEditToSubtree(sub, { kind: "move", key: "a", targetGroupId: G })).toBe(sub);
   });
 
   it("resize adjusts a split's divider fractions, clamped, leaving the pair sum", () => {
     const sub: LayoutNode = applyEditToSubtree(group(["a", "b"], "a"), {
       kind: "split",
       key: "b",
-      targetGroupId: "g-1",
+      targetGroupId: G,
       edge: "right",
     })!;
     const split = sub as SplitNode;

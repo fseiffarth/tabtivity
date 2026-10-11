@@ -10,6 +10,7 @@
  */
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -60,6 +61,7 @@ describe(`${BRAND.display} Mobile — the composer's status lamp`, () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    stubTerminalSideChannels();
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
 
