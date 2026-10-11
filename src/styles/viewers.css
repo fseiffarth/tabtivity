@@ -4655,8 +4655,8 @@
   flex: none;
   box-shadow: none;
 }
-/* A tick's ✓ (`PdfMarkupTicks`): the same pin at a sent mark's top-right
-   corner, in the success colour — the agent says it handled the mark; a click
+/* A tick's ✓ (`PdfMarkupTicks`): the same pin just outside a sent mark's
+   top-right corner (`tickBadgeSpot`, never over its words), in the success colour — the agent says it handled the mark; a click
    approves and removes it. */
 .file-viewer-pdf-question-pin.is-tick {
   border-color: color-mix(in srgb, var(--success) 70%, #000);

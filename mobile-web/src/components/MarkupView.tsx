@@ -8,7 +8,7 @@ import type { TextRun } from "../markup/findText";
 import { readFlag, writeFlag } from "../prefs";
 import {
   addMark, approveMark, approveMarks, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, finishStroke, forgetRound, stylusErases, hasSent, inkWidth, isEmpty, MARK_COLORS, markAnchors, markBox, markedPages,
-  markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickedMarks, undo,
+  markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickBadgeSpot, tickedMarks, undo,
   type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type TextMark,
 } from "../markup/layer";
 import { composedPng, drawMark, drawPage, INK, LAYER_WIDTH, layerPng, pagePng, type Paint } from "../markup/rasterize";
@@ -1697,18 +1697,15 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       return marks.length ? commit(now, approveMarks(now.present, marks)) : now;
     });
   };
-  /** One page's ✓ badges, centred on each ticked mark's top-right corner and
-   * kept on the page — placed as the question pins are. */
+  /** One page's ✓ badges, just outside each ticked mark's top-right corner
+   * (`tickBadgeSpot`: never over the words it was on) and kept on the page. */
   const tickLayer = (n: number, size: Size) => {
     const badges = tickBadges.get(n);
     if (!badges?.length) return null;
     const scale = cssWidth / size[0];
-    const maxLeft = Math.max(0, cssWidth - TICK_BADGE);
-    const maxTop = Math.max(0, size[1] * scale - TICK_BADGE);
+    const page: [number, number] = [cssWidth, size[1] * scale];
     return badges.map(({ index, mark, box }) => {
-      const [x, y, w] = box;
-      const left = Math.min(maxLeft, Math.max(0, (x + w) * scale - TICK_BADGE / 2));
-      const top = Math.min(maxTop, Math.max(0, y * scale - TICK_BADGE / 2));
+      const [left, top] = tickBadgeSpot(box, scale, page, TICK_BADGE);
       return <button key={`${tickKey(mark)}:${index}`} className="markup-pin is-tick" style={{ left, top }} disabled={sending !== null}
         aria-label={t("mobile.markup.ticks.approveTitle")} title={t("mobile.markup.ticks.approveTitle")}
         onClick={(event) => { if (event.detail <= 1) approveTicked(n, index, mark); }}>✓</button>;

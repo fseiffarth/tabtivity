@@ -645,6 +645,28 @@ export function markBox(mark: Mark): [number, number, number, number] {
   return [x0 - half, y0 - half, x1 - x0 + 2 * half, y1 - y0 + 2 * half];
 }
 
+/** Where a tick's ✓ badge goes — its top-left corner in CSS px, given the
+ * mark's `markBox`, the page's scale and its size in CSS px: just outside the
+ * box, diagonally above its top-right corner (left of the box when the page
+ * ends on the right, below it when the page ends above), so the badge never
+ * covers the words the mark was on and the change stays readable. Always on
+ * the page. */
+export function tickBadgeSpot(
+  box: [number, number, number, number],
+  scale: number,
+  page: [number, number],
+  badge: number,
+): [number, number] {
+  const GAP = 2;
+  const [x, y, w, h] = box;
+  let left = (x + w) * scale + GAP;
+  if (left + badge > page[0]) left = x * scale - GAP - badge;
+  let top = y * scale - GAP - badge;
+  if (top < 0) top = (y + h) * scale + GAP;
+  const clamp = (v: number, max: number) => Math.min(Math.max(0, max - badge), Math.max(0, v));
+  return [clamp(left, page[0]), clamp(top, page[1])];
+}
+
 /** The sent marks gone for good, and the round log with them; the unsent
  * ones stay. */
 export function clearSent(layer: Layer): Layer {

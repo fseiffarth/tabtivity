@@ -149,9 +149,9 @@ describe("desktop markup ticks", () => {
     ring();
     await waitFor(() => expect(badges()).toHaveLength(1));
     expect(screen.getByText("1 done")).toBeTruthy();
-    // At the box's top-right corner.
-    expect(badges()[0].style.left).toBe(`${150 - 11}px`);
-    expect(badges()[0].style.top).toBe(`${200 - 11}px`);
+    // Just outside the box's top-right corner, clear of the words under it.
+    expect(badges()[0].style.left).toBe(`${150 + 2}px`);
+    expect(badges()[0].style.top).toBe(`${200 - 2 - 22}px`);
     expect(calls("markup_mcp_ticks")[calls("markup_mcp_ticks").length - 1]?.[1]).toEqual({ projectId: "p1", scheduleTargetId: "s1", path: PATH });
     fireEvent.click(badges()[0]);
     await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE]));
