@@ -500,9 +500,10 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
     // reason this can be called unconditionally from the calendar store.
     if (!target) return "skipped";
     const { account, href } = target;
-    if (!account.allow_write) return "skipped";
     const ref = account.calendars.find((c) => c.href === href);
-    if (!ref || ref.read_only) return "skipped";
+    // The same gate the calendars' read-only flag and the dirty mark use: push
+    // off, a read-only collection, or an `http://` account (E2b, never synced).
+    if (!ref || notWritable(account, ref.read_only)) return "skipped";
 
     const resourceHref = (row.caldav_href ?? "").trim();
     const etag = (row.caldav_etag ?? "").trim();
@@ -587,10 +588,35 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
         caldav_dirty: outcome.dirty ? true : undefined,
         caldav_server_deleted: undefined,
       };
+      // The resource's other rows (a series' overrides rode in the same body)
+      // take the new ETag too, as the backend stamped them, so their next push
+      // is not a `412` against this very write.
+      const sibling = (r: CalendarEvent | CalendarTask) =>
+        r.id !== row.id &&
+        resourceHref !== "" &&
+        r.calendar_id === row.calendar_id &&
+        (r.caldav_href ?? "").trim() === resourceHref &&
+        outcome.href === resourceHref;
       useCalendarStore.setState((s) =>
         kind === "event"
-          ? { events: s.events.map((e) => (e.id === row.id ? { ...e, ...patch } : e)) }
-          : { tasks: s.tasks.map((t) => (t.id === row.id ? { ...t, ...patch } : t)) },
+          ? {
+              events: s.events.map((e) =>
+                e.id === row.id
+                  ? { ...e, ...patch }
+                  : sibling(e)
+                    ? { ...e, caldav_etag: outcome.etag }
+                    : e,
+              ),
+            }
+          : {
+              tasks: s.tasks.map((t) =>
+                t.id === row.id
+                  ? { ...t, ...patch }
+                  : sibling(t)
+                    ? { ...t, caldav_etag: outcome.etag }
+                    : t,
+              ),
+            },
       );
       return "pushed";
     } catch (err) {

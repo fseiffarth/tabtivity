@@ -136,6 +136,20 @@ describe("a failed push keeps the edit (gap 32)", () => {
     expect(row.caldav_etag).toBe('"8"');
   });
 
+  it("gives the resource's other rows the new ETag, so their own push is no conflict", async () => {
+    // A series' override row rides in the same body; left on the old ETag, its
+    // next push would be a 412 against this machine's own write.
+    const override = { ...ROW, id: "e2", recurrence_id: "2026-08-10T09:00", caldav_dirty: true };
+    const elsewhere = { ...ROW, id: "e3", calendar_id: "cal-2" };
+    seed(account(), [{ ...ROW, caldav_dirty: true }, override, elsewhere]);
+    backend();
+    await useCalDavStore.getState().pushRow({ op: "upsert", kind: "event", row: { ...ROW, caldav_dirty: true } });
+    const rows = useCalendarStore.getState().events;
+    expect(rows.find((e) => e.id === "e2")?.caldav_etag).toBe('"8"');
+    expect(rows.find((e) => e.id === "e2")?.caldav_dirty).toBe(true);
+    expect(rows.find((e) => e.id === "e3")?.caldav_etag).toBe('"7"');
+  });
+
   it("marks the row in the same local write when its calendar pushes", async () => {
     seed(account());
     const uninstall = installCalDavPush();
@@ -317,6 +331,15 @@ describe("plain http:// CalDAV is refused (E2b)", () => {
     const updated = invoke.mock.calls.find((c) => c[0] === "update_calendar")![1] as { calendar: Calendar };
     expect(updated.calendar.readonly).toBe(true);
     expect(caldavErrorText(status.error, en)).toBe(en("caldav.httpRefused"));
+  });
+
+  it("an edit in an http account's calendar is not sent and not marked", async () => {
+    seed(account({ base_url: "http://dav.example.org/dav/" }));
+    backend();
+    const out = await useCalDavStore.getState().pushRow({ op: "upsert", kind: "event", row: ROW });
+    expect(out).toBe("skipped");
+    expect(commands()).not.toContain("caldav_push");
+    expect(useCalendarStore.getState().events[0].caldav_dirty).toBeUndefined();
   });
 
   it("the account dialog says why and will neither search nor save", () => {

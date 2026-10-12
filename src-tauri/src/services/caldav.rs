@@ -1145,21 +1145,31 @@ pub async fn change_tokens(
 
 /// Turn a multistatus into resources and deletions.
 ///
-/// A resource href outside the credential `origin` is dropped, never stored: it
-/// would become a row's `caldav_href`, and every later push or delete of that
-/// row would aim the password at it (gap 26).
-fn changes_from(base: &Url, origin: &Url, parsed: &Multistatus, incremental: bool) -> CalDavChanges {
+/// A resource href outside the credential `origin` is never stored: it would
+/// become a row's `caldav_href`, and every later push or delete of that row
+/// would aim the password at it (gap 26). It fails the whole read, with the
+/// recoverable sentence, rather than being dropped: a full listing is
+/// authoritative about what exists, so a silently dropped resource would delete
+/// its local copy and report the sync as a success (a server behind a proxy that
+/// names its resources `http://…` would empty the calendar). A deletion stub
+/// outside the origin is ignored — no stored row can carry that address.
+fn changes_from(
+    base: &Url,
+    origin: &Url,
+    parsed: &Multistatus,
+    incremental: bool,
+) -> Result<CalDavChanges, String> {
     let mut resources = Vec::new();
     let mut removed = Vec::new();
     for resp in &parsed.responses {
         let Some(href) = absolute(base, &resp.href) else {
             continue;
         };
-        if !href_in_origin(origin, &href) {
-            continue;
-        }
+        let inside = href_in_origin(origin, &href);
         if resp.deleted() {
-            removed.push(href);
+            if inside {
+                removed.push(href);
+            }
             continue;
         }
         // The collection itself comes back in its own report; it is not a
@@ -1172,16 +1182,25 @@ fn changes_from(base: &Url, origin: &Url, parsed: &Multistatus, incremental: boo
         if etag.is_empty() && data.is_empty() {
             continue;
         }
+        if !inside {
+            return Err(match Url::parse(&href) {
+                Ok(u) if u.scheme() != "https" => {
+                    http_refused("the server listed this calendar's entries at http:// addresses")
+                }
+                Ok(u) => off_origin(&u, origin),
+                Err(_) => "the server listed an entry at an unusable address".to_string(),
+            });
+        }
         resources.push(CalDavResource { href, etag, data });
     }
-    CalDavChanges {
+    Ok(CalDavChanges {
         resources,
         removed,
         sync_token: parsed.sync_token.clone(),
         ctag: String::new(),
         incremental,
         unchanged: false,
-    }
+    })
 }
 
 /// Fetch resources whose data did not ride along with their etag.
@@ -1217,7 +1236,7 @@ async fn fill_missing_data(
         .await?;
         let body = require_ok(status, body, "fetching changed events")?;
         let parsed = parse_multistatus(&body)?;
-        let fetched = changes_from(collection, &cred.origin, &parsed, true);
+        let fetched = changes_from(collection, &cred.origin, &parsed, true)?;
         for got in fetched.resources {
             if let Some(slot) = changes.resources.iter_mut().find(|r| r.href == got.href) {
                 if !got.data.trim().is_empty() {
@@ -1279,7 +1298,7 @@ pub async fn fetch_all(
         .await?;
         let body = require_ok(status, body, "reading the calendar")?;
         let parsed = parse_multistatus(&body)?;
-        let mut got = changes_from(&final_url, &cred.origin, &parsed, false);
+        let mut got = changes_from(&final_url, &cred.origin, &parsed, false)?;
         out.resources.append(&mut got.resources);
     }
 
@@ -1317,7 +1336,7 @@ pub async fn fetch_changes(
     .await?;
     let body = require_ok(status, body, "reading the calendar's changes")?;
     let parsed = parse_multistatus(&body)?;
-    let mut out = changes_from(&final_url, &cred.origin, &parsed, true);
+    let mut out = changes_from(&final_url, &cred.origin, &parsed, true)?;
     if out.sync_token.is_none() {
         return Err("the server's incremental sync reply carried no token".to_string());
     }
@@ -1777,7 +1796,7 @@ END:VCALENDAR
 </multistatus>"#;
         let base = Url::parse("https://dav.example.org/calendars/user/personal/").unwrap();
         let parsed = parse_multistatus(xml).unwrap();
-        let changes = changes_from(&base, &base, &parsed, false);
+        let changes = changes_from(&base, &base, &parsed, false).unwrap();
         assert_eq!(changes.resources.len(), 1);
         let res = &changes.resources[0];
         assert_eq!(
@@ -1814,7 +1833,7 @@ END:VCALENDAR</C:calendar-data></D:prop>
             parsed.sync_token.as_deref(),
             Some("http://example.com/sync/2")
         );
-        let changes = changes_from(&base, &base, &parsed, true);
+        let changes = changes_from(&base, &base, &parsed, true).unwrap();
         assert_eq!(changes.resources.len(), 1);
         assert_eq!(
             changes.resources[0].href,
@@ -1837,7 +1856,7 @@ END:VCALENDAR</C:calendar-data></D:prop>
   </D:response>
 </D:multistatus>"#;
         let base = Url::parse("https://dav.example.org/cal/").unwrap();
-        let changes = changes_from(&base, &base, &parse_multistatus(xml).unwrap(), true);
+        let changes = changes_from(&base, &base, &parse_multistatus(xml).unwrap(), true).unwrap();
         assert_eq!(changes.resources.len(), 1);
         assert!(
             changes.resources[0].data.is_empty(),
@@ -2352,29 +2371,79 @@ END:VCALENDAR</c:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:
 
     #[tokio::test]
     async fn resources_outside_the_origin_are_never_stored() {
+        // Not dropped either: a full listing is authoritative, so a dropped
+        // resource would delete its local copy behind a "synced" status. The
+        // read fails, naming the host.
         let _server = fake::serve(|req| {
             if req.body.contains("calendar-query") {
-                fake::reply(
-                    207,
-                    &resources(&[
-                        "/dav/cal/ok.ics",
-                        "https://evil.example.net/x.ics",
-                        "http://dav.example.org/dav/cal/plain.ics",
-                    ]),
-                )
+                fake::reply(207, &resources(&["/dav/cal/ok.ics", "https://evil.example.net/x.ics"]))
             } else {
                 fake::reply(207, &listing(&[]))
             }
         });
-        let got = fetch_all(
+        let err = fetch_all(
             "https://dav.example.org/dav/cal/",
             &cred("https://dav.example.org/dav/"),
             &["VEVENT".to_string()],
         )
         .await
-        .unwrap();
-        let hrefs: Vec<&str> = got.resources.iter().map(|r| r.href.as_str()).collect();
-        assert_eq!(hrefs, ["https://dav.example.org/dav/cal/ok.ics"]);
+        .unwrap_err();
+        assert!(err.contains("evil.example.net"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_listing_of_http_entries_fails_the_sync_instead_of_emptying_the_calendar() {
+        // A TLS proxy in front of a server that builds absolute `http://` hrefs:
+        // every entry is outside the origin. Read as "nothing there", the merge
+        // would delete every local row and call it a success.
+        let _server = fake::serve(|req| {
+            if req.body.contains("calendar-query") {
+                fake::reply(
+                    207,
+                    &resources(&["http://dav.example.org/dav/cal/a.ics", "http://dav.example.org/dav/cal/b.ics"]),
+                )
+            } else {
+                fake::reply(207, &listing(&[]))
+            }
+        });
+        let cred = cred("https://dav.example.org/dav/");
+        let err = fetch_all("https://dav.example.org/dav/cal/", &cred, &["VEVENT".to_string()])
+            .await
+            .unwrap_err();
+        assert!(err.starts_with(HTTP_REFUSED), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_read_redirected_off_the_origin_fails_rather_than_reading_empty() {
+        // A read may follow a redirect bare; what that host lists resolves
+        // against it and is outside the origin — an error, not an empty listing.
+        let server = fake::serve(|req| {
+            if req.url.starts_with("https://dav.example.org/") {
+                fake::redirect("https://elsewhere.example.net/cal/")
+            } else {
+                fake::reply(207, &resources(&["/cal/a.ics"]))
+            }
+        });
+        let err = fetch_all(
+            "https://dav.example.org/dav/cal/",
+            &cred("https://dav.example.org/dav/"),
+            &["VEVENT".to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("elsewhere.example.net"), "{err}");
+        assert!(server.to_host("elsewhere.example.net").iter().all(|s| !s.auth));
+    }
+
+    #[test]
+    fn a_deletion_stub_outside_the_origin_is_ignored() {
+        let xml = r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">
+<d:response><d:href>https://evil.example.net/x.ics</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>
+<d:response><d:href>/dav/cal/gone.ics</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>
+<d:sync-token>t2</d:sync-token></d:multistatus>"#;
+        let base = u("https://dav.example.org/dav/cal/");
+        let got = changes_from(&base, &base, &parse_multistatus(xml).unwrap(), true).unwrap();
+        assert_eq!(got.removed, ["https://dav.example.org/dav/cal/gone.ics"]);
     }
 
     #[tokio::test]

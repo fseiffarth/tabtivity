@@ -1300,6 +1300,13 @@ fn merge_caldav_calendar_in(
 /// already older than the row) keeps it. Returns whether the row is still
 /// dirty. A row the server now holds is no longer "deleted on the server", so
 /// [`CALDAV_SERVER_DELETED_KEY`] goes either way.
+///
+/// The other rows of the same resource (a series' occurrence overrides, which
+/// went to the server in the same body) get the new ETag too, or the next push
+/// of one of them would be conditional on a version the server no longer has
+/// and come back as a `412` against this machine's own write. Their marks stay:
+/// only the pushed row's revision is known here, so a dirty sibling is pushed
+/// once more, now conditional on the right ETag.
 pub(crate) fn set_caldav_identity_at(
     path: &Path,
     kind: &str,
@@ -1309,6 +1316,24 @@ pub(crate) fn set_caldav_identity_at(
     pushed_rev: Option<u64>,
 ) -> Result<bool, String> {
     transact(path, |data| {
+        let sibling_of = row_extra(data, kind, row_id).map(|(extra, _)| extra_str(extra, CALDAV_HREF_KEY))?;
+        if !sibling_of.is_empty() && sibling_of == href {
+            let calendar = match kind {
+                "event" => data.events.iter().find(|e| e.id == row_id).map(|e| e.calendar_id.clone()),
+                _ => data.tasks.iter().find(|t| t.id == row_id).map(|t| t.calendar_id.clone()),
+            }
+            .unwrap_or_default();
+            let same_resource = |id: &str, cal: &str, extra: &std::collections::HashMap<String, serde_json::Value>| {
+                id != row_id && cal == calendar && extra_str(extra, CALDAV_HREF_KEY) == href
+            };
+            let fresh = serde_json::Value::String(etag.to_string());
+            for e in data.events.iter_mut().filter(|e| same_resource(&e.id, &e.calendar_id, &e.extra)) {
+                e.extra.insert(CALDAV_ETAG_KEY.to_string(), fresh.clone());
+            }
+            for t in data.tasks.iter_mut().filter(|t| same_resource(&t.id, &t.calendar_id, &t.extra)) {
+                t.extra.insert(CALDAV_ETAG_KEY.to_string(), fresh.clone());
+            }
+        }
         let (extra, rev) = row_extra(data, kind, row_id)?;
         extra.insert(
             CALDAV_HREF_KEY.to_string(),
@@ -3169,6 +3194,44 @@ mod tests {
         let rev = rev_of(&path);
         assert!(!set_caldav_identity_at(&path, "event", &eid, "https://d/e/b.ics", "\"5\"", Some(rev)).unwrap());
         assert!(!read_data(&path).unwrap().events[0].extra.contains_key(CALDAV_SERVER_DELETED_KEY));
+    }
+
+    #[test]
+    fn a_push_gives_the_resources_other_rows_its_etag_so_their_push_is_no_conflict() {
+        // A series with an override row: both edited while a push could not get
+        // through. The sync pushes the resource once (both rows ride in the
+        // body); the override must not keep the old ETag, or its own push is a
+        // `412` and the merge reports the server as having changed it.
+        let (_dir, path) = tmp_path();
+        let cal = caldav_calendar(&path);
+        let mut over = parsed_event("https://d/e/s.ics", "\"1\"", "series", "2026-07-08T09:00");
+        let second = over.events[0].clone();
+        over.events.push(CalendarEvent { start: "2026-07-15T10:00".into(), ..second });
+        let data = merge_caldav_calendar_at(&path, &cal, vec![over], &[], true).unwrap();
+        assert_eq!(data.events.len(), 2);
+        let (a, b) = (data.events[0].id.clone(), data.events[1].id.clone());
+        edit_dirty(&path, &a, "series (mine)");
+        edit_dirty(&path, &b, "override (mine)");
+        let (_, rev) = mark_caldav_dirty_at(&path, "event", &a).unwrap();
+
+        assert!(!set_caldav_identity_at(&path, "event", &a, "https://d/e/s.ics", "\"2\"", Some(rev)).unwrap());
+        let stored = read_data(&path).unwrap();
+        let row_b = stored.events.iter().find(|e| e.id == b).unwrap();
+        assert_eq!(extra_str(&row_b.extra, CALDAV_ETAG_KEY), "\"2\"");
+        assert!(is_dirty(&row_b.extra), "its own revision was not the one pushed");
+
+        // The server holds what was pushed: nothing to ask about.
+        let mut back = parsed_event("https://d/e/s.ics", "\"2\"", "series (mine)", "2026-07-08T09:00");
+        let second = back.events[0].clone();
+        back.events.push(CalendarEvent { start: "2026-07-15T10:00".into(), ..second });
+        let (_, kept) = merge_caldav_calendar_kept_at(&path, &cal, vec![back], &[], true, &[]).unwrap();
+        assert!(kept.is_empty(), "{kept:?}");
+
+        // A create (no address before) touches no other row.
+        let lone = create_event_at(&path, CalendarEvent { calendar_id: cal.clone(), title: "new".into(), ..Default::default() }).unwrap();
+        set_caldav_identity_at(&path, "event", &lone.id, "https://d/e/s.ics", "\"9\"", None).unwrap();
+        let stored = read_data(&path).unwrap();
+        assert_eq!(extra_str(&stored.events.iter().find(|e| e.id == b).unwrap().extra, CALDAV_ETAG_KEY), "\"2\"");
     }
 
     #[test]

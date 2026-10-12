@@ -149,9 +149,15 @@ next request. Now:
 - a **redirect hop** outside it goes out without credentials for a read (its
   `401` gets the sentence below) and is refused for a write, whose body is the
   user's own event;
-- collections and resources a server lists outside the origin are **dropped**,
-  never stored (a stored `caldav_href` is what every later push aims at); a
-  listing whose calendars all sit elsewhere says so instead of "no calendars";
+- collections a server lists outside the origin are **dropped** from discovery;
+  a listing whose calendars all sit elsewhere says so instead of "no
+  calendars";
+- a resource a calendar read lists outside the origin is never stored (a stored
+  `caldav_href` is what every later push aims at), and it **fails the read**
+  with the same sentence rather than being dropped: a full listing is
+  authoritative, so a dropped entry would delete its local copy behind a
+  "synced" status (a proxy whose server names its entries `http://…` would
+  empty the calendar). A deletion stub outside the origin is ignored;
 - `caldav_account_upsert` refuses a newly picked calendar outside the origin.
   A ref an older account already holds is left alone (refusing would block
   unsubscribing from it); its sync fails visibly instead.
@@ -280,7 +286,10 @@ overwrote the matched row with the server's copy: the edit was gone. Now:
   and `set_caldav_identity_at` clears the mark only if the row still has the
   revision the mark gave it. An edit that lands while the write is in flight
   keeps it, so that edit is pushed too. The other way out is the user's "Use
-  the server's".
+  the server's". The resource's other rows (a series' overrides, sent in the
+  same body) take the new ETag in the same write, and the window mirrors it;
+  their own marks stay, so a dirty sibling is pushed once more, conditional on
+  the right ETag, instead of hitting a `412` against this machine's own write.
 - **The sync pushes first.** `syncCalendar` pushes a collection's dirty rows
   (one per resource, conditional on each row's stored ETag) before it fetches.
   A `412` is a conflict as always.
