@@ -284,8 +284,8 @@ describe("API keys for agent CLIs", () => {
       screen.getByText(new RegExp(`${compact(1_234_000)} of ${compact(10_000_000)} billed tokens this month \\(≈ \\$1\\.23\\)`)),
     ).toBeTruthy();
     expect(screen.getByText(/highest Anthropic rate: claude-next/)).toBeTruthy();
-    expect(screen.getByText(/starts again on 2026-11-01 \(UTC\)/)).toBeTruthy();
-    expect(screen.getByText(/price table dated 2026-10-04/)).toBeTruthy();
+    expect(screen.getByText(/resets on 2026-11-01 \(UTC\)/)).toBeTruthy();
+    expect(screen.getByText(/prices dated 2026-10-04/)).toBeTruthy();
     // Raise it: the saved row offers the limit, unchanged until edited.
     const limit = screen.getByLabelText<HTMLInputElement>("Monthly limit for Anthropic, million billed tokens");
     expect(limit.value).toBe("20");

@@ -128,11 +128,11 @@ it("explains where headless tabs' sessions live only while Mobile is on", async 
     useSettingsStore.setState({ settings: { ...(before ?? {}), [MOBILE_HOST_KEY]: { enabled: false } } as never });
     render(<RootMcpSecurity />);
     await heading("Root <script> · Root agent");
-    expect(screen.queryByText(/started while no window was open/)).toBeNull();
+    expect(screen.queryByText(/Mobile while no window was open/)).toBeNull();
     cleanup();
     useSettingsStore.setState({ settings: { ...(before ?? {}), [MOBILE_HOST_KEY]: { enabled: true } } as never });
     render(<RootMcpSecurity />);
-    expect(await screen.findByText(/started while no window was open/)).toBeTruthy();
+    expect(await screen.findByText(/Mobile while no window was open/)).toBeTruthy();
   } finally {
     useSettingsStore.setState({ settings: before });
   }
