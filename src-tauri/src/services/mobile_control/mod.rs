@@ -29,6 +29,7 @@ pub mod scheduler;
 pub mod push;
 pub mod sign_in;
 pub mod store;
+pub mod uploads;
 // The browser desktop client's transport (hosted plan §3.5, §10 P2).
 pub mod web_client;
 

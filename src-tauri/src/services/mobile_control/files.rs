@@ -12,6 +12,8 @@
 //!
 //! Nothing here writes. A file is served exactly as the outbox serves one —
 //! typed by its bytes (`outbox::classify`), opened without following a link.
+//! The one write into a browsed folder — the phone's *Upload here*, add-only,
+//! behind a second switch — is `uploads.rs`, through the same [`ProjectDir`].
 
 use std::{
     collections::HashSet,
@@ -222,8 +224,9 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
 /// holds the real one. Windows uses the same boundary through native
 /// handle-relative opens and handle-based directory enumeration.
 ///
-/// The phone's drop boxes (`outbox.rs`, `inbox.rs`) walk, list, read, create
-/// and delete through the same handles ([`ProjectDir::open_root`],
+/// The phone's drop boxes (`outbox.rs`, `inbox.rs`) and its uploads into a
+/// browsed folder (`uploads.rs`) walk, list, read, create and delete through
+/// the same handles ([`ProjectDir::open`], [`ProjectDir::open_root`],
 /// [`ProjectDir::lookup_dir`], [`ProjectDir::create_dir`],
 /// [`ProjectDir::create_file`], [`ProjectDir::remove_file`]).
 #[cfg(unix)]
@@ -231,7 +234,10 @@ pub(super) struct ProjectDir(fs::File);
 
 #[cfg(unix)]
 impl ProjectDir {
-    fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
+    /// The folder `rel` (a path the browser would list; `""` is the root),
+    /// walked from the root without following a link: `Unavailable` for a
+    /// gone root, `NotFound` for anything else on the way.
+    pub(super) fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
         let mut dir = Self::open_root(root)?;
         if !valid_rel(rel) {
             return Err(FilesError::NotFound);

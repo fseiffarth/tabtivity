@@ -84,10 +84,30 @@ impl InboxError {
     }
 }
 
+/// Windows' reserved device names. A file named one (any case, any
+/// extension: `CON.txt`, `nul`, `com1.tar.gz`) can be created handle-relative,
+/// but Explorer can neither open nor delete it.
+const DEVICE_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
 /// A file name rebuilt from the phone's: the last path component only, drawn
 /// from letters, digits, `.`, `-` and `_`, never starting with a dot, bounded
-/// in length with its extension kept. Empty in, `attachment` out.
+/// in length with its extension kept. Empty in, `attachment` out. A Windows
+/// device name gets a `_` after it (`CON.txt` → `CON_.txt`) on every OS, so
+/// a project synced to Windows never carries one.
 pub fn safe_name(raw: &str) -> String {
+    let name = safe_name_unchecked(raw);
+    // Windows reads the part before the first dot as the device.
+    let head = name.split('.').next().unwrap_or("");
+    if DEVICE_NAMES.iter().any(|device| head.eq_ignore_ascii_case(device)) {
+        return format!("{head}_{}", &name[head.len()..]);
+    }
+    name
+}
+
+fn safe_name_unchecked(raw: &str) -> String {
     let leaf = raw
         .rsplit(['/', '\\'])
         .next()
@@ -215,12 +235,21 @@ fn store_at(
         return Err(InboxError::Full);
     }
     let base = format!("{}-{}", stamp(now), safe_name(raw_name));
+    let name = create_unique(&dir, &base, bytes).map_err(|error| InboxError::Io(error.to_string()))?;
+    Ok(Stored { reference: format!("{rel_dir}/{name}"), name, size: bytes.len() as u64 })
+}
+
+/// Writes `bytes` to a new file in the held `dir` named `base`, or — when
+/// that name is taken — `stem-2.ext`, `stem-3.ext`, …; never an existing file
+/// (`create_file` is `O_EXCL`). Returns the name written. A file whose write
+/// fails is removed again. `base` is a [`safe_name`] (stamped or not).
+pub(super) fn create_unique(dir: &ProjectDir, base: &str, bytes: &[u8]) -> std::io::Result<String> {
     let (mut stem, ext) = match base.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
-        _ => (base.clone(), String::new()),
+        _ => (base.to_string(), String::new()),
     };
     // `safe_name` bounds characters; one file name holds 255 bytes (Linux,
-    // `files::plain_segment`). Cut the stem at a character so the stamp, the
+    // `files::plain_segment`). Cut the stem at a character so a stamp, the
     // extension and a `-1000` suffix still fit.
     let room = 255 - "-1000".len() - ext.len();
     while stem.len() > room {
@@ -238,19 +267,15 @@ fn store_at(
                 if let Err(error) = file.write_all(bytes).and_then(|()| file.flush()) {
                     drop(file);
                     let _ = dir.remove_file(&name);
-                    return Err(InboxError::Io(error.to_string()));
+                    return Err(error);
                 }
-                return Ok(Stored {
-                    reference: format!("{rel_dir}/{name}"),
-                    name,
-                    size: bytes.len() as u64,
-                });
+                return Ok(name);
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(InboxError::Io(error.to_string())),
+            Err(error) => return Err(error),
         }
     }
-    Err(InboxError::Io("no free name in the inbox".into()))
+    Err(std::io::Error::other("no free name in the folder"))
 }
 
 /// The longest project-inbox leaf the read side admits: a stamp, an
@@ -414,6 +439,20 @@ mod tests {
         assert_eq!(safe_name(""), "attachment");
         assert_eq!(safe_name("Größe.pdf"), "Größe.pdf");
         assert_eq!(safe_name("a\0b\n.txt"), "a_b.txt");
+    }
+
+    #[test]
+    fn a_windows_device_name_gets_an_underscore_on_every_os() {
+        assert_eq!(safe_name("CON.txt"), "CON_.txt");
+        assert_eq!(safe_name("nul"), "nul_");
+        assert_eq!(safe_name("Com1.tar.gz"), "Com1_.tar.gz");
+        assert_eq!(safe_name("lpt9.log"), "lpt9_.log");
+        assert_eq!(safe_name("aux/../prn"), "prn_");
+        // Only the whole head before the first dot is a device.
+        assert_eq!(safe_name("CONSOLE.txt"), "CONSOLE.txt");
+        assert_eq!(safe_name("COM10.txt"), "COM10.txt");
+        assert_eq!(safe_name("my-con.txt"), "my-con.txt");
+        assert_eq!(safe_name("notes.con"), "notes.con");
     }
 
     #[test]
