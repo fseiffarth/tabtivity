@@ -2253,3 +2253,118 @@ landing).
 6. Mail: "Save to project" an attachment twice: `tabtivity-emails/name`
    and `name (2)`. Replace `tabtivity-emails` with a symlink to `/tmp` and
    save again: refused ("not a plain folder"), nothing in `/tmp`.
+
+## Agent step 2 — reviewer — 2026-10-12
+
+**Reviewed:** `git diff 301d67d1..f69aee8e` and the implementer section
+above. **Fix commit:** `66447df8` fix(deck,files): review fixes for gaps
+22/31 (deck `..` assets, link error key).
+
+**Checked, no change needed:**
+- `open_confined`: saves canonicalize only the folder and open the leaf by
+  name with `O_NOFOLLOW` / `FILE_OPEN_REPARSE_POINT`, so a link at the leaf
+  (dangling or not) never gets written through, and a folder swapped
+  between canonicalize and the walk fails the walk. Reads open the
+  canonical path through the same walk. `Write` falls back to `O_EXCL`
+  and then to the no-follow open once more. Truncation happens only after
+  `fstat` proves the file regular. FIFOs are opened non-blocking and
+  refused. Size caps run before the open.
+- Windows: `:` (ADS) and `\` names are refused by `plain_segment` in
+  `nt_create`. A trailing-dot or trailing-space leaf goes to NT unstripped,
+  so it names a different (odd) file inside the folder, not a link. An 8.3
+  leaf naming a link opens the link itself and is refused. Verbatim
+  `\\?\` input with `/` in it fails `plain_segment`. Roots and targets are
+  both canonical (verbatim), so `starts_with` matches. Share mode is
+  read|write|delete, as `fs::write` used. `FILE_GENERIC_WRITE` carries the
+  `SYNCHRONIZE` that `FILE_SYNCHRONOUS_IO_NONALERT` needs. The new
+  `STATUS_FILE_IS_A_DIRECTORY` → `IsADirectory` mapping changes nothing for
+  the phone browser: its callers only match `NotFound`/`AlreadyExists`.
+- Ordinary use: saves in the project root and in subfolders work. Like
+  `fs::write` before, a save never creates a folder; TeX create-file makes
+  the folder first. `Overwrite` (text saves, `HpcPipelineWizard`, deck
+  `create.ts`, merge views) still needs an existing file, as before. The
+  inode, owner and mode are kept. Atomicity is unchanged: `fs::write`
+  truncated in place too. Remote (SFTP) projects route before the
+  `_local` helpers, and mail refuses remote projects first. Mail checks: a
+  name taken by a file or a link is skipped (`O_EXCL`), and the folder is
+  `mkdirat` + no-follow lookup. Opening files for `Stat` raises inotify
+  `IN_OPEN`/`IN_CLOSE_NOWRITE`; `fs_watch::is_read_only_access` already
+  drops those, so the 1 s mtime polls cause no watcher loop.
+- Callers of every changed command in `src/` (99 sites): TeX, markdown
+  images, the md graph, completion context, Python go-to-definition,
+  remarks and the PDF viewer all build paths through `resolvePath` /
+  `normalizePath`, so they send no `..`. The deck did not (bug 1).
+- "Open as deck" by `fileMtime`: a dangling or out-of-project link there
+  counts as "no deck", and the write that follows is refused as a link.
+  The figure-poll change marks the PDF version done only on the link
+  refusal.
+- `resolve_for_confinement` callers (`sqlite`, `sheets`,
+  `run_script_detached`, `core_dispatch::user_path`): the server picker
+  navigates by the backend's `parent`, never by `..`.
+
+**Bugs found and fixed (`66447df8`):**
+1. **Deck assets above the deck stopped loading.** `deckRelative` stores a
+   figure beside or above the deck as `../figures/x.png` on purpose (V #108,
+   and step 3's plan note keeps such reads). `resolveRel` joined it as
+   `<deck dir>/../figures/x.png`, and `open_confined` refuses any `..`, so
+   those images, fonts, interstitial GIFs and a relative `base` PDF all
+   failed to load in the editor, the audience window and the PDF export.
+   Now `resolveRel` folds `.`/`..` segments (`normalizePath`) and leaves
+   other paths exactly as joined. The backend rule stays as it is. Test:
+   `DeckView.test.ts` "resolveRel" (round trip of a `deckRelative` path, a
+   Windows path, plain paths unchanged). The implementer's note "the
+   frontend sends tree paths, so this should not show" was wrong for decks.
+2. **The link refusal could read as a permission error.**
+   `describeFileErrorKey` tested `/permission|denied/` first, and the
+   refusal quotes the path. A project under a folder named e.g.
+   `permissions` showed the wrong sentence, and the deck figure poll, which
+   stops retrying only on `fileError.link`, went back to re-rastering every
+   tick. The link check now comes first. Test: `FileErrorKey.test.ts`.
+
+**Gates:** (at `66447df8`) `npm run build` ok. `npm test`: 799 files / 7984
+tests passed (7982 plus the 2 new `resolveRel` cases). `cargo test
+--workspace`: 4248 passed, 4 ignored, 0 failed. `cargo test -p tabtivity
+--no-default-features --lib --test server_secrets`: 3750 + 1 passed, 4
+ignored. `npm run lint` (via `rtk proxy`): 0 errors, 28 warnings
+(unchanged). All three clippy gates clean. Windows cross-check (`clippy
+--target x86_64-pc-windows-msvc --all-targets -D warnings` and `cargo check
+--workspace --all-targets`) clean. `aarch64-apple-darwin` `cargo check
+--workspace --all-targets` with the check-only CC/AR stand-ins clean (the 5
+vendored `tauri-runtime-wry` warnings as before). `scripts/brand-check.sh`
+ok. `scripts/privacy-check.sh` clean. `git diff --check` clean. `npm run
+backend:stale` was not run (the main agent runs it at landing). Nothing was
+run live.
+
+**Flagged for user:**
+- **Windows + OneDrive (biggest practical risk):** the walk refuses *every*
+  reparse point, including the root (`plain_metadata`). Under OneDrive
+  Files On-Demand every file and folder carries a cloud reparse tag. With
+  Known Folder Move, `Documents` lives there, so viewer reads and saves,
+  `file_mtime` polls and mail "Save to project" would all fail for a
+  project in `Documents`. The implementer flagged it too. A fix means
+  refusing only name-surrogate tags (`FileAttributeTagInfo`), plus
+  checking how a placeholder behaves when opened as the reparse point
+  itself. That is a design call, so it is not made here.
+- **Roots nested inside another root's tree:** `compute_allowed_roots`
+  canonicalizes each root on every call, and `open_root` canonicalizes it
+  again. When project B (a box member, or a box sibling) sits inside
+  folder A that an agent can write, the agent can replace B's folder (or a
+  folder above it) with a link. B's root then *becomes* wherever the link
+  leads, for every confined command, not only these. This was there
+  before the change, and the held-handle walk does not close it, since the
+  root set itself moves. A fix would pin roots, or refuse a root that
+  resolves outside where it is registered. Picking the shortest root in
+  `open_confined` would close only the race window, so it is not made here.
+- **Error wording for unreadable paths:** `lookup_file`/`lookup_dir` drop
+  the OS error. An unreadable file therefore reports "not a file", and an
+  unreadable (`--x`) folder reports "… changed while it was opened (a
+  folder on the way is now a link or gone)" instead of "Permission
+  denied". `file_mtime`/`file_size` on a file without read permission now
+  fail, where `stat` used to work. On Windows, `Stat` opens with
+  `FILE_READ_DATA`, so a file another program holds with a deny-read
+  share mode now fails `file_mtime`, where `fs::metadata` did not.
+- `open_confined_walks_from_the_longest_root` cannot tell which root was
+  walked: both succeed. It shows only that nested roots work.
+- The implementer's residuals stand: the root is opened by path, the mail
+  download mark is set by path, and `sqlite`/`sheets` open by path after
+  `confine_project_path`.
