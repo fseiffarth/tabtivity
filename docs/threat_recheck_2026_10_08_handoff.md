@@ -1879,3 +1879,126 @@ Plan: "Run 2026-10-12" section of the plan. Branch `threat/1012`, worktree
 `.claude/worktrees/threat1012`, from develop `5d82c988`. Same rules as above:
 each implementer and reviewer appends a short section (commits, files, tests,
 gates with counts, choices, gotchas, "Flagged for user").
+
+## Agent step 1 — implementer (gap 19, A2) — 2026-10-12
+
+**Commit:** `04a0b8b2` fix(git-mcp): read CI only for the confirmed repo (gap 19).
+
+**Files:** `src-tauri/src/services/git_push_mcp.rs` (`git_ci_repos` helpers
+`ci_repo_key`/`ci_repos`/`ci_repo_allowed`/`add_ci_repo`/`allow_ci_repo`;
+`Category::{CiRepoUnconfirmed, RepoChanged}`, `Status::Allowed`,
+`Kind::CiRepo`, `Proposal::repo`; `stage_ci_card`, `ci_unconfirmed`,
+`ci_target`, `call_ci`, `release_ci_gate`, `release_failure`,
+`decide_ci_repo`; `git_entry_identity`, `repo_changed`; pending-limit counts
+skip CI cards; tool descriptions, `CONTRACT`, `INSTRUCTIONS`),
+`services/git_ci.rs` (`resolve` → `CiRepo`; `runs`/`run`/`security_alerts`
+take the resolved repo), `services/git_release.rs` (`plan` takes a
+`ci_allowed` gate, checked right after `local_target`, before any request),
+`services/root_mcp.rs` (`PushBinding::git_at_spawn`, set in
+`grant_git_push`), `commands/git.rs` (Release button passes `|_| true`),
+`services/git_guard.rs` (module doc), `src/components/agents/GitPushMcp.tsx`
+("Allow CI" card, `statusLabel`), `src/types/index.ts`, `src/lib/i18n.ts` +
+de/es/fr/it (`gitPushMcp.ciStatus.*`, `ciAllowTitle`, `ciAllowHelp`,
+`ciAllow`; `gitPushMcp.help` sentence), `src/lib/untested.ts`
+(`gitPushMcp.ciAllow`), `docs/context/git_push_mcp.md` (CI repo rule, card,
+`repo_changed`, known limit, QA step 11), `docs/threat_model.md` (row 19
+**Fixed, not live-verified.**; the agent push/release/CI row's macOS
+residual no longer claims CI redirection), `docs/filemap_backend.md`
+(`git_push_mcp.rs`, `git_ci.rs` rows).
+
+**Tests added:** `git_push_mcp.rs`:
+`ci_reads_go_only_to_a_confirmed_repo_and_stage_one_card` (confirmed URL
+passes across spellings and case; unconfirmed refused with one card, deduped
+across calls and tabs; another repo's confirmed URL does not cover it; a
+second repo gets its own card; CI cards leave push admission's pending slots
+free; Dismiss; Allow records the repo and the next read passes; `not_github`
+stages nothing; the keyring-free host refuses without a card),
+`a_release_refused_for_an_unconfirmed_ci_repo_stages_the_card`,
+`the_ci_repo_list_is_optional_lowercase_and_outside_the_policy_block` (old
+entry round-trips unchanged; once-only, lowercase-only, malformed rows
+ignored; the strict policy block untouched),
+`a_repo_made_after_spawn_is_refused_for_push_release_and_ci` (`git init`
+after spawn → `repo_changed` for `git_push`, `git_release`, `ci_runs`,
+`ci_run`, `ci_security_alerts` through the RPC, nothing staged; the spawn
+repo passes; a nearer `.git` planted under a parent repo is refused; none at
+spawn is refused). `git_release.rs`:
+`an_unconfirmed_github_repo_is_refused_before_any_ci_read` (gate asked with
+the URL, refused before `ls-remote`/`tip_ci`; non-GitHub never asks).
+`root_mcp.rs`: `a_push_grant_records_the_git_dir_found_at_spawn`.
+`GitPushProposals.test.tsx`: two card tests (Allow through
+`git_push_mcp_decide`, allowed outcome, Dismiss).
+
+**Gates (at `04a0b8b2`):** `npm run build` ok; `npm test` 798 files / 7980
+tests passed; `cargo test --workspace` 4233 passed, 4 ignored, 0 failed (lib
+3834); `cargo test -p tabtivity --no-default-features --lib --test
+server_secrets` 3735 + 1 passed, 4 ignored; `npm run lint` (via `rtk proxy`)
+0 errors, 28 warnings (unchanged count, none new); the three clippy gates
+clean; Windows cross-check (`clippy --target x86_64-pc-windows-msvc
+--all-targets -D warnings` and `cargo check --workspace --all-targets`)
+clean; `aarch64-apple-darwin` `cargo check --workspace --all-targets` with
+the ci-local check-only CC/AR stand-ins clean (5 pre-existing warnings in the
+vendored `tauri-runtime-wry`); `scripts/brand-check.sh` ok;
+`scripts/privacy-check.sh` clean; `git diff --check` clean.
+`npm run backend:stale` not run (main agent at landing).
+
+**Choices:**
+- The gate lives in `git_push_mcp::ci_target`, which resolves the repo once
+  (`git_ci::resolve`) and hands the same `CiRepo` to the read, so nothing
+  re-reads `.git/config` between the check and the request.
+- The release gate is a `ci_allowed` closure on `git_release::plan`, checked
+  right after `local_target` (before `ls-remote` and `tip_ci`) and only for a
+  github.com URL. The user's Release button and its preview pass `|_| true`
+  (the user acts there and the workflow names reach only the dialog).
+  A gated release, at `git_release` or when the user presses Release on the
+  card, fails `ci_repo_unconfirmed` and stages the same "Allow CI" card.
+- `git_entry_identity` takes the nearest `<ancestor>/.git` via
+  `symlink_metadata` (folder, pointer file or link, never followed). Bare
+  layouts need no check (`safe.bareRepository=explicit`). On non-Unix it
+  records presence only as `(0, 0)`: std has no stable file index, and there
+  is no fence on Windows.
+- The `repo_changed` check runs after the keyring-free `window_required`
+  short-cut and after admission (an inadmissible call costs nothing), before
+  the policy read.
+- Allowed repos are appended through `projects::patch_project_entry`; a
+  malformed `git_ci_repos` value is read as empty and replaced on the next
+  Allow.
+- The card id prefix is `ci-`; `git_push_cancel` withdraws a tab's own
+  waiting CI card like a push.
+
+**Gotchas:**
+- `ProjectEntry.extra` is a `HashMap`: compare a round-trip as
+  `serde_json::Value`, not as a string (key order varies between runs).
+- `scripts/untested.mjs check` only sees literal `UntestedTag id="…"`; an id
+  inside a three-way ternary counted as unused, so the CI card renders its
+  own `<UntestedTag id="gitPushMcp.ciAllow" />`.
+- `t()` takes `TranslationKey`; a template key whose status union includes
+  `allowed` fails `tsc` for push/release, hence the typed `statusLabel`.
+
+**Flagged for user:**
+- Behaviour change: an agent's `ci_runs`/`ci_run`/`ci_security_alerts` in a
+  project whose push URL was never confirmed now asks once per repo ("Allow
+  CI for <owner/repo>" card in the git bar / Agents view) instead of reading
+  at once. An agent `git_release` there is refused with the same card.
+- Behaviour change: a tab started in a folder with no repo (or before you ran
+  `git init` yourself) gets `repo_changed` for push, release and CI until
+  you restart it.
+- Residuals: an allowed repo stays allowed for the project (no UI lists or
+  removes `git_ci_repos`; edit `projects.json` by hand). After a Dismiss the
+  next CI read stages a new card (bounded by the 60 reads/hour budget).
+  Windows records only whether a `.git` was present. The card is per
+  project, so another project with the same repo asks again.
+- Not verified live; the card has the `gitPushMcp.ciAllow` untested pill.
+
+**Live click-through (user only):**
+1. Load a build with this backend. In a project whose push URL is
+   confirmed, ask the agent for `ci_runs`: runs come back, no card.
+2. In the tab, `git remote set-url origin https://github.com/<other>/<repo>`
+   and ask for `ci_runs`: expect `ci_repo_unconfirmed` and an "Allow CI for
+   <other>/<repo>" card; ask again, still one card.
+3. Press Allow; ask again: runs come back. Restore the URL.
+4. Open a project folder with no git repo, start a fresh agent tab, have it
+   `git init` and add a github `origin`, ask for `ci_runs` and a push:
+   both `repo_changed`. Restart the tab: the lane works (CI then asks via
+   the card, step 2).
+5. Ask for `git_release` with an unconfirmed repo: refused
+   `ci_repo_unconfirmed`, the same card shows.
