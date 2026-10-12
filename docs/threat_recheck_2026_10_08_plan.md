@@ -554,6 +554,59 @@ default is step 1's migration: fenced homes keep their existing copy, so
 logins survive but a pre-fix plant persists there; the Host copy is
 dropped. List it under "Flagged for user" in the handoff.
 
+## Run 2026-10-12 — fixed decisions and agent steps
+
+Branch `threat/1012` in `.claude/worktrees/threat1012`, from develop
+`5d82c988`. Handoff: `docs/threat_recheck_2026_10_08_handoff.md`, new
+sections under "Run 2026-10-12". This run does plan steps 4, 5, 7, 9, 10, 11
+and 12. Another session's uncommitted CodeQL fixes sit in the main checkout
+(39 files, `fs.rs`, `git_ci.rs`, `agent_fence.rs`, `root_mcp.rs`,
+`mobile_control/*` among them); they are not on this branch, and landing
+merges with whatever develop holds then.
+
+Fixed decisions (not up for review; answered 2026-10-12, see "Decisions for
+the user"):
+- **A2:** agent CI reads only reach the repo confirmed for pushes, or one the
+  user allowed once on an "Allow CI for <repo>" card (reuse the push-card
+  flow and its store); anything else answers a new `ci_repo_unconfirmed`
+  category. Plus the plan's defence in depth (a git dir that appeared after
+  spawn is refused by push and CI).
+- **D1:** viewer writes refuse every symlinked leaf, in-root links included;
+  a dangling leaf link is refused too.
+- **D3:** the deck keeps its automatic re-raster, writing only `.png` files
+  under its own figure folder; absolute and `..` paths are refused for
+  deck-written `src`/`texSrc`.
+- **C2:** every no-viewer hand-off to the OS asks first, naming the file;
+  launcher types (`.desktop`, `.exe`, `.jar`, `.lnk`, `.cmd`, `.bat`,
+  `.vbs`, `.ps1`, `.app`, `.command`, `.sh`, … — the implementer completes
+  the list per OS) and executable-bit files are refused outright with a
+  message. Same for Reader change cards.
+- **D6:** add an app-wide navigation gate on the `main`, `detached-*` and
+  `present-*` windows that refuses navigation off the app origin.
+- **E3:** mail-derived cards and events served to a cloud root tab keep
+  title and notes, with URLs removed and an `external` mark. Agent writes to
+  a CalDAV-synced calendar always stage for approval, whatever the level.
+- **E2b:** refuse `http://` CalDAV entirely: discovery, stored hrefs and
+  accounts added as http, with an i18n message saying why. No migration
+  deletes an existing http account; it stops syncing and says so.
+- **B1:** drop `live_pwa` (the no-relaunch phone update); the phone app
+  always comes from the binary. Remove its build-side plumbing too.
+- **C3:** keep auto-queueing dev builds from the window; document the
+  residual in `docs/threat_model.md` and `docs/context/dev_builds.md`. The
+  launcher adopts `target/release/<bin>` only when its hash matches one the
+  unfenced build wrote into the state dir (no fence can write there).
+
+| Agent step | Plan step | Gaps | Main files |
+|---|---|---|---|
+| 1 | 4 | 19 | `services/git_ci.rs`, `services/git_push_mcp.rs`, `services/git_guard.rs`, the push-card UI |
+| 2 | 5 | 22, 31 | `commands/fs.rs`, `commands/mail.rs`, `services/files.rs` |
+| 3 | 7 + 11 (gap 38 hosts) | 23, 38 | `DeckView.tsx`, `deckAssets.ts`, `deck/sidecar.ts`, `NotebookView.tsx`, `SkillsLibraryView.tsx`, `MarkdownPromptField.tsx`, `markdown.ts::safeHref` |
+| 4 | 11 (gap 21 + D6) | 21, 38 | `openFileEntry.ts`, `commands/apps.rs::open_file`, `TerminalReaderChanges.tsx`, window creation (navigation gate) |
+| 5 | 9 (mail stays local) | 25, 33 | `services/mail_ai.rs`, `commands/ollama.rs`, `services/root_mcp.rs` (`Identity`, `record_read_mail`), `root_mcp_mail.rs`, `LocalModelMenu.tsx` |
+| 6 | 9 (provenance, drafts, staging) | 27, 34 | `src/lib/todoBoard.ts`, `MailAiMessageActions.tsx`, `root_mcp.rs` (`task_view`, `event_view`), `mail_store.rs::file_agent_drafts`, `commands/root_mcp.rs:354`, CalDAV staging |
+| 7 | 10 | 26, 32 | `services/caldav.rs`, `commands/caldav.rs`, `stores/calendar/caldav.ts`, `commands/calendar.rs`, `services::local_loss` |
+| 8 | 12 | 20 | `mobile_control/live_pwa.rs` (removed), `scripts/package-dev.sh`, `build.rs`, `services/dev_build.rs`, the dev launcher, `docs/context/dev_builds.md` |
+
 ## Decisions for the user
 
 - **A1 (step 1) — decided 2026-10-08: per-scope.** per-scope logins for every env- or config-shaped file (a login is entered once per scope), or keep sharing behind a per-CLI content validator. Reviewer's recommendation: per-scope for the dotenv files and Cline.

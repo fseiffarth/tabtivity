@@ -1872,3 +1872,10 @@ after `npm test`; `rtk proxy npm run lint` 0 errors, 28 advisory warnings
   read-verified only; CI on those platforms is its first compile.
 - The macOS push preflight with a `pre-push` hook is now reachable for an
   agent (scope recorded) and has never run on a Mac.
+
+# Run 2026-10-12
+
+Plan: "Run 2026-10-12" section of the plan. Branch `threat/1012`, worktree
+`.claude/worktrees/threat1012`, from develop `5d82c988`. Same rules as above:
+each implementer and reviewer appends a short section (commits, files, tests,
+gates with counts, choices, gotchas, "Flagged for user").
