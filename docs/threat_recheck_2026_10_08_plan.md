@@ -612,6 +612,14 @@ the user"):
   Built in follow-up agent step 9, with the step 4 reviewer's minor items
   (the `ExecTrust` store's replace-the-pending-question pattern; the raw
   `open_refused_launcher` code shown when revealing a macOS `.app`).
+  (c) Answered after the step 5 review: add a "Clear conversations" action
+  per local model in the local model menu that, after a confirm, deletes
+  that model's stored Vibe conversations and its read-mail taint marker
+  together (never the marker alone). Follow-up step 9 also takes the step 5
+  reviewer's hardening items: send the mail chat through the same Ollama
+  address the local-model check used (`ollama_http_at`, `capabilities_of`
+  too); refuse a model whose alias collides with another installed model's;
+  a `/api/tags` timeout says "not running", not "not installed".
 
 | Agent step | Plan step | Gaps | Main files |
 |---|---|---|---|
