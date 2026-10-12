@@ -273,6 +273,9 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
       (next) => {
         if (controller.signal.aborted) return;
         restored.current = false;
+        // A re-list after an upload is not blanked first: a refusal it met
+        // before must not outlive this answer.
+        setFailure(null);
         setListing(next);
       },
       (reason) => {
@@ -282,6 +285,9 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
           setTrail((current) => current.slice(0, -1));
           return;
         }
+        // Nor may the listing it replaced: its `uploads` would keep Upload
+        // here on screen beside the refusal (files switched off).
+        setListing(null);
         setFailure(key);
       },
     );

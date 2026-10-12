@@ -564,4 +564,40 @@ describe("Mobile project — Upload here", () => {
     expect((await within(sheet).findByRole("alert")).textContent).toContain("is larger than 24 MB.");
     expect(posts(fetch)).toEqual([]);
   });
+
+  it("a re-list that fails hides Upload here, and the next good one clears the refusal", async () => {
+    const landed: Entry[] = [];
+    let lists = 0;
+    const host = hostWith(true);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/projects/p1/files/upload?name=") && init?.method === "POST") {
+        const name = new URL(url, "http://phone").searchParams.get("name") ?? "";
+        const entry = { token: `tok-${name}`, name, kind: "text/plain; charset=utf-8", size: 1, modified: 1_770_000_100 };
+        landed.push(entry);
+        return new Response(JSON.stringify({ file: entry }), { status: 201 });
+      }
+      if (url === "/api/v1/projects/p1/files?dir=tok-src") {
+        lists += 1;
+        // The re-list after the first upload meets a refusal.
+        if (lists === 2) return new Response(JSON.stringify({ error: "files_unavailable" }), { status: 503 });
+        return new Response(JSON.stringify({ ...SRC, entries: [...SRC.entries, ...landed], uploads: true }), { status: 200 });
+      }
+      return host(input, init);
+    }));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const sheet = await openSrc();
+
+    fireEvent.click(within(sheet).getByRole("button", { name: /^Upload here/ }));
+    pick([new File(["a"], "a.txt")]);
+    await within(sheet).findByText("The folder could not be read.");
+    expect(within(sheet).queryByRole("button", { name: /^Upload here/ })).toBeNull();
+
+    // The picker's input stays (still stamped with `src`): the next landing
+    // lists the folder again, and that answer replaces the refusal.
+    pick([new File(["b"], "b.txt")]);
+    await within(sheet).findByRole("button", { name: "Open b.txt" });
+    expect(within(sheet).queryByText("The folder could not be read.")).toBeNull();
+    expect(within(sheet).getByRole("button", { name: /^Upload here/ })).toBeTruthy();
+  });
 });
