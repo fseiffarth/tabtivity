@@ -3153,3 +3153,86 @@ landing). The commit hook printed "MOBILE BUNDLE IS STALE" — no
    same model and add a to-do: it stages (tainted). A tab of another model
    does not.
 6. Turn "keep the tools local" on; the cloud-model Vibe tab gets no tools.
+
+## Agent step 5 — reviewer — 2026-10-12
+
+**Commits:** `26be0efe` fix(root_mcp): an open tab of a model that read mail
+elsewhere is tainted (gap 33 review) · this handoff commit.
+
+**Checked:** every mail-AI entry point (`commands/mail.rs` summarise,
+formalise, event/task extraction, both auto-classify spawns: all go through
+`mail_ai::chat` → `preflight`; no other backend or frontend path sends mail
+text to Ollama, the overlay dock forwards none, the phone reaches the same
+commands); root MCP mail tools (cloud root tabs get no read tools; a
+local tab's read gate: switch → loopback → model confirmed → latch → markers);
+model-name handling (`is_cloud_name` over tags, case, digests, host/namespace
+paths; `installed_match` exact or `:latest`, so an unusual spelling fails
+closed); the check endpoint vs the chat endpoint (same `settings.json`, same
+resolution; see flagged item 1); cache keys `(endpoint, model)`, only
+definite verdicts kept; fail-closed on unreadable/empty lists, read errors,
+no server; `test_tags` is `#[cfg(test)]` only and unset reads as no server;
+`Identity::model` from the spawn env only (the Vibe `config.toml` is pinned
+read-only in the fence, `agent_fence::LOCAL_MODEL_CONTROL`, so a tab cannot
+re-point its model); alias mapping and its collisions; the taint ordering
+(latch → marker write → read, refuse on write error), marker key (hashed
+alias: no traversal, matches the `VIBE_HOME` keying including its
+collisions), the "present on error" rule; `local_model_confirmed` runs inside
+`spawn_blocking` within the 15 s deadline, only while a switch is on, an `Ok`
+cached a minute; daemon build compiles and tests it; frontend `remote`
+plumbing from `list_ollama_models_detailed`, auto-assign skip, disabled chip,
+`localModel.mailCloudTitle` in all five dictionaries, the `UntestedTag` row.
+The implementer's tests do test what they claim.
+
+**Bug found and fixed (`26be0efe`):**
+- Gap 33, two tabs at once. The per-model marker was read only at spawn, but
+  tabs of one model share its Vibe home — conversation logs included — so a
+  tab already open when another tab of the model read mail kept writing
+  unstaged calendar/board changes and `agent` drafts. New
+  `Session::tainted(state)`: the in-memory latch, or (local-model tab) its
+  model's marker looked at live, latched once seen. Used by
+  `root_mcp_review::call` (staging) and `ScopedMail::read_mail` (draft
+  origin). Tests: `root_mcp_review::an_open_tab_of_a_model_that_read_mail_elsewhere_stages_from_then_on`,
+  `root_mcp_mail::an_open_twin_of_a_model_that_read_mail_writes_reader_drafts`
+  (both fail without the fix). Docs: `root_console.md`, threat model row 33,
+  filemap row. Also moved `local_model_has_tools`' doc comment back above it
+  (the new `local_model_of` had been inserted between them).
+
+**Gates (at `26be0efe`):** `npm run build` ok; `npm test` 802 files / 8058
+tests passed; `cargo test --workspace` 4275 passed, 0 failed, 4 ignored;
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`
+3777 + 1 passed, 4 ignored (no flake); `npm run lint` (via `rtk proxy`) 0
+errors, 28 warnings (unchanged); the three clippy gates clean;
+`scripts/brand-check.sh` ok; `scripts/privacy-check.sh` clean;
+`git diff --check` clean. No path/spawn/`cfg` code touched: Windows and
+`aarch64-apple-darwin` cross-checks not run. `npm run backend:stale` not run.
+
+**Flagged for user:**
+1. `mail_ai::chat_with` checks the model against the endpoint from its
+   settings snapshot, then sends `/api/chat` through `ollama_http`, which
+   re-reads `settings.json`. If the user switched `ollama_host` to a remote
+   host (with remote allowed) in the milliseconds between, the mail would go
+   there. No agent can write that setting, so not fixed here; the fix is
+   `ollama_http_at(&addr, …)` for the chat (and ideally `capabilities_of`),
+   but a hermetic regression test needs `capabilities_of` routed through the
+   same address first.
+2. `sanitize_alias` is not injective (`a:b-c` and `a-b:c` share alias and
+   `VIBE_HOME`). An alias-only tab maps to the one chipped model of that
+   alias, while the shared `config.toml` names whichever model was prepared
+   last. A local model would have to be named like a cloud one's alias
+   (`gpt-oss-120b-cloud`) for this to send mail out; contrived. A cheap
+   hardening: refuse (`None`) when any installed model other than the mapped
+   one shares the alias, or key `VIBE_HOME` by a hash.
+3. `local_model_of` trusts the env pair and ignores `VIBE_HOME`; Vibe runs the
+   model block of `VIBE_HOME/config.toml`. Every renderer path sets the three
+   consistently, so this is defence in depth only: require
+   `VIBE_HOME`'s leaf == `sanitize_alias(model)`.
+4. A `/api/tags` read timeout (10 s, e.g. a swamped Ollama) answers the
+   *unlisted model* reason ("pull it…") rather than "not running": misleading
+   text, still fail-closed.
+5. Under `root_mcp_mail_local_only`, an unconfirmed local tab still *lists*
+   the mail tools (`tools/list` follows `serves_mail` by class) and is refused
+   by name on call. Cosmetic; a cloud agent sees none.
+6. Implementer's residuals stand (verdict reused up to a minute; `-cloud` tag
+   rule on a hand-named local model; remote endpoint judged by its own
+   list). With `26be0efe` the taint trade-off widens slightly: an open tab
+   of the model also starts staging the moment another tab reads mail.
