@@ -2094,3 +2094,162 @@ at landing).
 - The implementer's residuals stand: there is no UI to list or remove
   `git_ci_repos`; Dismiss followed by another read stages a new card;
   Windows records presence only.
+
+## Agent step 2 — implementer (gaps 22, 31, D1) — 2026-10-12
+
+**Commit:** `f69aee8e` fix(fs,mail): viewer and attachment I/O through held
+folder handles (gaps 22, 31).
+
+**Files:** `src-tauri/src/commands/fs.rs` (`open_confined` + `Confined`
+{Read, Stat, Overwrite, Write}, `read_opened`, `write_opened`,
+`outside_roots`; `read_file_text_local`, `write_file_text_local`,
+`write_file_bytes_local`, `read_file_bytes_local`, `file_mtime_local`,
+`file_size_local`, `detect_mime_local` go through it;
+`resolve_for_confinement` returns `Option`, refuses `..`, uses
+`symlink_metadata` and falls back to `canonical_or_new`; dead
+`confine_abs_write` removed), `src-tauri/src/commands/mail.rs`
+(`save_into_emails_dir` = `open_emails_dir` + `save_unique_in`, replacing
+`emails_dir_in` + `write_unique_in_dir`; the toast path goes through
+`fs::display_path`), `src-tauri/src/services/mobile_control/files.rs`
+(Unix `ProjectDir` and `open_root`/`lookup_dir`/`create_dir`/`create_file`
+`pub(crate)`; new `lookup_file`, `open_existing_for_write`, `into_file`;
+shared `WriteRefusal` {Link, NotFile, Io}),
+`services/mobile_control/files_windows.rs` (`open_existing_for_write`:
+`FILE_OPEN` + `FILE_GENERIC_WRITE|FILE_READ_ATTRIBUTES` +
+`FILE_OPEN_REPARSE_POINT`, a reparse point is `Link`; `into_file`;
+`create_dir`/`create_file` `pub(crate)`; `STATUS_FILE_IS_A_DIRECTORY` →
+`IsADirectory`), `src/components/embed/fileAccess.ts`
+(`describeFileErrorKey` → `fileError.link`), `DeckView.tsx` (figure poll),
+`PdfViewer.tsx` ("Open as deck"), `src/lib/i18n.ts` + de/es/fr/it
+(`fileError.link`), `docs/threat_model.md` (rows 22 and 31 **Fixed, not
+live-verified.**), `docs/filemap_backend.md` (`fs.rs`,
+`mobile_control/files_windows.rs` rows).
+
+**Tests added:** `fs.rs`:
+`a_viewer_save_refuses_a_dangling_leaf_link_and_creates_nothing_at_its_target`
+(out-of-root and in-root dangling targets, Write and Overwrite),
+`a_viewer_save_refuses_an_in_root_link_that_still_reads` (save refused,
+read and stat follow it, a link out of the project neither reads nor stats),
+`a_viewer_save_through_a_linked_folder_inside_the_project_still_works`,
+`a_viewer_save_rewrites_a_regular_file_in_place` (truncates; inode and
+`0640` kept on Unix), `a_viewer_save_creates_a_missing_file_but_never_a_missing_folder`
+(Overwrite never creates; folders are "not a file" but stat),
+`open_confined_refuses_dot_components_outside_roots_and_relative_paths`,
+`open_confined_walks_from_the_longest_root`,
+`read_opened_refuses_a_file_over_the_cap`,
+`confine_abs_within_refuses_a_dot_dot_through_a_missing_folder`,
+`confine_abs_within_judges_a_dangling_link_by_its_target`, Windows-only
+`a_viewer_save_refuses_a_reparse_point_leaf_on_windows` (returns early
+without the symlink privilege). `confine_abs_within_allows_paths_inside_current_project`
+now uses a real temp root (the old literal `/home/u/...` root only passed
+through the removed literal fallback). `mail.rs`: the two old tests
+rewritten for `save_into_emails_dir` (linked folder and a file at the name
+refused, nothing through the link; dangling link and existing name skipped
+to `x (3).desktop`), plus
+`a_save_makes_the_folder_and_never_clobbers_a_file_already_there`
+(cross-OS), `an_emails_folder_swapped_for_a_link_after_it_was_opened_gets_nothing_through_it`,
+`a_project_root_swapped_for_a_link_after_it_was_opened_gets_nothing_through_it`.
+Frontend: `src/__tests__/files/FileErrorKey.test.ts`.
+
+**Gates (at `f69aee8e`):** `npm run build` ok; `npm test` 799 files / 7982
+tests passed (798 + the new file); `cargo test --workspace` 4248 passed, 4
+ignored, 0 failed (lib 3849); `cargo test -p tabtivity --no-default-features
+--lib --test server_secrets` 3750 + 1 passed, 4 ignored; `npm run lint` (via
+`rtk proxy`) 0 errors, 28 warnings (unchanged); the three clippy gates
+clean; Windows cross-check (`clippy --target x86_64-pc-windows-msvc
+--all-targets -D warnings`, `cargo check --workspace --all-targets`) clean;
+`aarch64-apple-darwin` `cargo check --workspace --all-targets` with the
+ci-local check-only CC/AR stand-ins clean (the 5 vendored
+`tauri-runtime-wry` warnings as before); `scripts/brand-check.sh` ok;
+`scripts/privacy-check.sh` clean (staged and `301d67d1..HEAD`);
+`git diff --check` clean. `npm run backend:stale` not run (main agent at
+landing).
+
+**Choices:**
+- `open_confined` is the confinement for the viewer helpers (it checks the
+  roots itself with the same "not in the current project" message), so
+  there is no separate check-then-open. `detect_mime_local` keeps its
+  `confine_abs_read` first, so a refused path still errors while an
+  unopenable one falls back to the extension, as before.
+- Saves canonicalize only the folder; the leaf is opened by name with
+  `O_NOFOLLOW` / `FILE_OPEN_REPARSE_POINT`. `Write` tries the existing file
+  first, then `create_file` (`O_EXCL`), and on `AlreadyExists` tries the
+  existing-file open once more (a link that appeared is still refused).
+  Text saves (`Overwrite`) never create, as before.
+- `Stat` serves a folder too (`lookup_file`, then `lookup_dir`), and the
+  root itself, since `file_mtime` may be asked for one.
+- Size caps run before the open, so an oversized save no longer empties
+  the file first; reads cap on the handle's length and on the bytes read.
+- `resolve_for_confinement` (used by `confine_project_path` /
+  `confine_user_path`: sqlite, spreadsheets, `run_script_detached`, the
+  browser's file grants) now resolves a missing path by its nearest
+  existing ancestor (`canonical_or_new`) instead of the literal path.
+- Mail: the folder is made with `mkdirat` then opened with `lookup_dir`
+  (refuses a link or a file at the name); the returned path is display
+  only. `mark_downloaded` stays by path (accepted residual, see below).
+- `write_project_file{,_bytes}_local` untouched, per the plan review (the
+  pinning test still passes).
+
+**Sibling fixes (same hazard, in the touched code):**
+- "Open as deck" (`PdfViewer.tsx`) decided "no deck yet" from
+  `readFileText` failing, which also fails for a non-UTF-8 or over-cap
+  `.eldeck.json`; that deck was then overwritten with an empty one. It now
+  asks `fileMtime`. (Step 3's note covers the same bug in `generateBase`.)
+- The deck figure poll swallowed every write error and retried each tick;
+  a PNG that is a link would have re-rastered forever. It now records the
+  PDF's mtime and shows `fileError.link` once.
+- `detect_mime_local` opened the file with a blocking `File::open`; a FIFO
+  at the path hung the command. The walk opens `O_NONBLOCK` and requires a
+  regular file.
+
+**Gotchas:**
+- `clippy::cloned_ref_to_slice_refs` fires on `&[root.clone()]` in tests;
+  use `std::slice::from_ref(&root)`.
+- `ProjectDir`'s inner `File` is private; `into_file` exists for the
+  metadata-only (`Stat`) path.
+- No figure-poll test harness exists (step 3 reworks the poll for D3); the
+  poll change is covered only by the `describeFileErrorKey` test.
+
+**Flagged for user:**
+- Behaviour change (D1): saving from the text editor, PDF viewer, deck,
+  image annotator or TeX create-file onto a file that is a symlink — even
+  one pointing inside the project — now fails with "This file is a link, so
+  it was not saved…" (the PDF and annotator show the backend sentence
+  "… is a link; viewers do not save through links"). Opening/reading such a
+  file still works. Drag-and-drop and project writes still follow in-root
+  links.
+- Behaviour change: a viewer path with `..` in it is refused (the frontend
+  sends tree paths, so this should not show).
+- Windows (unverified, alpha): `ProjectDir` refuses *every* reparse point,
+  not only links. Files or folders that are reparse points for other
+  reasons — OneDrive Files On-Demand placeholders, dedup — can no longer be
+  opened or saved by the viewers (the phone browser and mail `attach`
+  already behaved so). If projects in OneDrive matter, the walk would need
+  to refuse only name-surrogate tags (`FileAttributeTagInfo`).
+- Residuals: the allowed root itself is opened by path (it comes from
+  `projects.json`; replacing it needs write access to its parent). The
+  mail download mark (macOS quarantine, Windows `Zone.Identifier`) is set
+  by path after the write, so a swapped-in link can at most get the mark
+  onto its target. Linux needs read permission on each folder of the walk
+  (`O_RDONLY|O_DIRECTORY`), where the path-based code needed only search
+  permission; an `--x` folder inside a project now fails viewer I/O.
+  `sqlite`/`spreadsheet` still open by path after `confine_project_path`.
+- Not verified live; no new UI, so no untested pill.
+
+**Live click-through (user only):**
+1. Load a build with this backend. Open a Markdown file in a project, edit,
+   let it save: saved as before; `ls -i` shows the same inode.
+2. In a terminal, `ln -s notes.md link.md`; open `link.md`: it shows the
+   text. Edit it: the save fails with the link message; `notes.md` is
+   unchanged.
+3. `ln -s /tmp/planted.png figure.png` (target missing); open an image and
+   "Save as" onto `figure.png` (or annotate an image named so): refused,
+   `/tmp/planted.png` does not exist.
+4. With the deck presenter on, make a deck's TeX figure PNG a symlink and
+   recompile the figure's `.tex` in its own tab: the deck shows the link
+   notice once, not every second.
+5. Open a PDF whose `.eldeck.json` holds non-UTF-8 bytes and press "Open as
+   deck": the sidecar is opened (and reported broken), not overwritten.
+6. Mail: "Save to project" an attachment twice: `tabtivity-emails/name`
+   and `name (2)`. Replace `tabtivity-emails` with a symlink to `/tmp` and
+   save again: refused ("not a plain folder"), nothing in `/tmp`.
