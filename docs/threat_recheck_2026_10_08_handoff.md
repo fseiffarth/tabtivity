@@ -2368,3 +2368,168 @@ run live.
 - The implementer's residuals stand: the root is opened by path, the mail
   download mark is set by path, and `sqlite`/`sheets` open by path after
   `confine_project_path`.
+
+## Agent step 3 — implementer (gaps 23, 38 hosts, D3; Windows reparse fix) — 2026-10-12
+
+**Commits:** `5edc4353` fix(files,windows): refuse only link-type reparse
+points (OneDrive placeholders) · `0be5b884` fix(deck,markdown): deck writes
+only its own figure PNGs; no link navigates the app (gaps 23, 38) · this
+handoff commit (also two `threat_model.md` wording fixes for rows 12 and the
+phone-files surface).
+
+**Files:**
+- Item 0 (step 2 review, Windows): `services/mobile_control/files_windows.rs`
+  (`is_name_surrogate`, `Unlinked`, `by_handle`, `identity`, `unlinked`,
+  `ProjectDir::open_unlinked`; `open_root`, `lookup_dir`, `lookup_file`,
+  `open_existing_for_write`, `child_dir_meta`, `entries` use them;
+  `plain_metadata` removed), `files.rs` (`WriteRefusal::Link` doc, 2 tests),
+  doc comments in `commands/fs.rs` (`open_confined`) and
+  `services/mail_attach.rs`, `docs/filemap_backend.md` row,
+  `docs/threat_model.md` rows 22, 31 (+ row 12 and the phone-files surface).
+  `commands/fs.rs` and `commands/mail.rs` have no reparse check of their own:
+  every Windows refusal is in `files_windows.rs`.
+- Gap 23: `src/components/embed/deck/deckAssets.ts` (`texFigureDir` moved
+  here, `figureTarget`, `figureSource`), `DeckView.tsx` (`refuseFigure`,
+  `rasterizeInto(pdfAbs, src)` re-checks, guards in the poll, Recompile and
+  Edit, `addTexFigure` passes the deck-relative `src`; `generateBase` by
+  `fileMtime`), i18n `deckView.figureOutside` in all five dictionaries.
+- Gap 38: new `src/lib/viewers/markdownLinks.ts` (`onMarkdownLinkClick`,
+  `resolveLocalHref` moved from `FileViewerPane.tsx`, `uncShare`),
+  `FileViewerPane.tsx` (`openMarkdownTarget` exported; `onPreviewClick`'s
+  link half → helper), `NotebookView.tsx`, `SkillsLibraryView.tsx`,
+  `MarkdownPromptField.tsx`, `DevTodoView.tsx` (helper),
+  `src/lib/viewers/markdown.ts` (`urlForm`, `namesAnotherHost`; `safeHref`
+  now exported for tests; `isLocalHref` and `imgSrc` use the same rules),
+  `docs/filemap_frontend.md` row, `docs/threat_model.md` rows 23 (fixed) and
+  38 (partly fixed; D6 gate still open).
+
+**Item 0, how it works:** each name is still opened first with
+`FILE_OPEN_REPARSE_POINT`. `FileAttributeTagInfo` on that handle: no reparse
+attribute → the handle is used as is (one open, as before); a name-surrogate
+tag (`0x20000000`: symlink, junction/mount point, WSL link) → refused as a
+link; any other tag (cloud, dedup, WOF, …) → the same name is opened again
+without the flag (the filter serves/hydrates it) and that handle is kept only
+when its `FileIdInfo` (volume serial + 128-bit id) equals the first one's, so
+a link swapped in between the two opens is refused. The root (opened by path)
+gets the same treatment. Listings keep entries whose `EaSize` (the reparse
+tag, MS-FSCC 2.4.17) is not a name surrogate. `remove_file` still deletes the
+reparse point itself (a placeholder or a link, never a target).
+
+**Tests added:**
+- Windows-only (compile here, run on Windows CI):
+  `only_name_surrogate_reparse_tags_count_as_links` (tag table),
+  `unlinked_keeps_plain_handles_refuses_links_and_tells_files_apart` (plain
+  file/folder kept without a second open, junction refused, `identity` same
+  for two opens of one file and different for two files, the walk refuses the
+  junction). No test creates a real cloud placeholder: that needs the cloud
+  filter and a sync root (or a third-party tag the OS refuses to open). The
+  existing junction tests still cover link refusal.
+- `src/__tests__/deck/DeckView.test.ts`: `figureTarget / figureSource` table
+  (accepts own folder, Windows deck path, round trip of what Add stores;
+  refuses absolute, Windows absolute, drive-relative, `..` in three places,
+  other folder, another deck's folder, beside the deck, nested, empty
+  component, `.svg`, bare `.png`, `:` stream, control char, empty).
+- `src/__tests__/deck/DeckFigurePoll.test.tsx` (new, RTL on the real
+  `DeckView`): the poll re-rasters an own-folder figure; a deck with five
+  hostile figures writes nothing and shows the notice exactly once;
+  `generateBase` does not write over an unreadable existing `.tex`, still
+  writes the starter when there is none.
+- `src/__tests__/viewers/Markdown.test.ts`: network paths refused by
+  `safeHref` and `isLocalHref` (`//h`, `\\h`, `/\h`, `\/h`, `/\t/h`, `\t//h`,
+  `/\n/h`, `\u0001//h`, `file://h/…`, `file:\\h\…`), `java\tscript:`
+  refused, `docs/a.md`, `C:\x`, absolute, `file:///`, `file://localhost/`,
+  `https:` and `#` kept; a network-path image renders no `<img>`.
+- `src/__tests__/viewers/MarkdownLinks.test.tsx` (new): helper behaviour
+  (local link → `open` with the resolved path; no `basePath` → stopped, no
+  open; `#` scrolls; `target=_blank` left alone; a bare targetless anchor
+  stopped; non-link clicks pass), `resolveLocalHref` network rules, and an
+  RTL click on every link in each real host (prompt preview, dev to-do,
+  Skills preview, notebook cell) is default-prevented (external ones not).
+
+**Gates (at `0be5b884`, Rust unchanged since `5edc4353`):** `npm run build`
+ok (only the usual chunk-size notes). `npm test`: 801 files / 8033 tests
+passed (799 + 2 new files). `cargo test --workspace`: 4248 passed, 0 failed,
+4 ignored (the new tests are Windows-only). `cargo test -p tabtivity
+--no-default-features --lib --test server_secrets`: 3750 + 1 passed, 4
+ignored. `npm run lint` (via `rtk proxy`): 0 errors, 28 warnings
+(unchanged). The three clippy gates clean. Windows cross-check (`clippy
+--target x86_64-pc-windows-msvc --all-targets -D warnings`, `cargo check
+--workspace --all-targets`) clean. `aarch64-apple-darwin` `cargo check
+--workspace --all-targets` with the check-only CC/AR stand-ins clean (the 5
+vendored `tauri-runtime-wry` warnings as before). `scripts/brand-check.sh`
+ok. `scripts/privacy-check.sh` clean (staged and `529b20ca..HEAD`). `git
+diff --check` clean. `npm run backend:stale` not run (main agent at landing).
+Nothing run live.
+
+**Choices:**
+- The helper lives in `lib/` and takes the opener as `open` instead of
+  importing `openLinkedFile`: `FileViewerPane.tsx` imports the helper, so
+  the reverse import would be a cycle. `FileViewerPane.openMarkdownTarget`
+  is the one opener (tab, `:line` jump, cross-file `#fragment`), passed by
+  the viewer and the notebook. The Skills preview (a catalog body, no local
+  file), the prompt field and the dev to-do board have no file context:
+  their local links are stopped and open nothing, `#` anchors scroll.
+- Notice once per object for the poll, every time for a Recompile/Edit
+  click. `rasterizeInto` re-checks as a backstop and throws (unreachable
+  from today's callers).
+- `figureTarget` accepts `.PNG` (case-insensitive extension) and either
+  separator in the deck-relative `src`; it returns `<figure dir>/<name>`
+  joined with `/` as `addTexFigure` always did.
+- No untested pill: no new UI surface, only a notice string.
+
+**Sibling fixes (same hazard, in touched code):**
+- `generateBase` decided "no `.tex`" from a failed read (plan review note):
+  a non-UTF-8 or over-cap source was overwritten. Now `fileMtime`.
+- `imgSrc` classified `//host/x.png` and `\\host\x.png` as local images,
+  which the viewer resolves and reads on render (no click): Windows would
+  contact the host over SMB. Now refused, as is `file://host/…`.
+- `file://host/…` links passed `safeHref` and opened `\\host\…` in a viewer
+  tab; an encoded `%5C%5Chost/x` link decoded to the same. Both refused
+  (`namesAnotherHost`, `resolveLocalHref`'s own-share rule).
+- `java\tscript:` slipped past the scheme check (the URL parser drops the
+  tab); the check now runs on the parser's form. The link regex excludes
+  whitespace, so this was not reachable from `[x](…)` today.
+
+**Gotchas:**
+- The deck's sidecar poll also calls `file_mtime`; a test fake that changes
+  every mtime triggers a sidecar reload whose notice overwrites the one under
+  test. `DeckFigurePoll.test.tsx` changes only `.pdf` mtimes.
+- The "Create a starter" button shows only for a deck with no slides and a
+  TeX engine (`tex_capability.available`).
+
+**Flagged for user:**
+- Behaviour change (D3): an existing deck whose TeX figure files are not
+  directly in `<deck>.tex-figures` (renamed deck, hand-edited JSON, a figure
+  moved elsewhere) no longer recompiles or re-rasters; Recompile and Edit
+  show "This TeX figure's files are outside the deck's own figure folder…".
+  The image still shows. Re-adding the figure fixes it.
+- Behaviour change (gap 38): absolute `\\server\share\…` and
+  `file://server/…` links and images in Markdown no longer render as links
+  or images; relative links in a Markdown file that itself sits on a UNC
+  share still work (same share only).
+- Windows OneDrive fix is unverified at runtime: placeholder handling,
+  hydration on the second open and `FileIdInfo` equality across the two
+  opens are per the documented API, not observed. A filter that redirects a
+  reparse point to another file id (e.g. container layers) is refused, on
+  purpose.
+- Gap 38 stays open until agent step 4 lands the D6 navigation gate.
+
+**Live click-through (user only):**
+1. Deck presenter on. Open a deck, "Add TeX figure", edit its `.tex` in the
+   tab that opens, Compile: the slide updates within ~2 s, as before.
+2. Close the deck. In its `.eldeck.json`, set that figure's `src` to
+   `../elsewhere.png` (or an absolute path). Reopen, recompile the `.tex`:
+   one notice "…outside the deck's own figure folder…", no
+   `elsewhere.png` appears; Recompile shows the notice again.
+3. Deck with no slides and a TeX engine: put non-UTF-8 bytes in
+   `<deck>.tex`, press "Create a starter presentation": the file is
+   unchanged (compile fails or recompiles), not replaced by the starter.
+4. Markdown file with `[a](docs/x.md)`, `[b](#heading)`,
+   `[c](https://example.com)`, `[d](//example.com/x)`: a opens a tab, b
+   scrolls, c opens in the browser, d renders as text. Same links in a
+   notebook markdown cell, the Agents prompt preview, a Skills preview and
+   the dev to-do board: the app window never reloads.
+5. Windows, project in OneDrive (Files On-Demand, file online-only): open a
+   Markdown file in the viewer, edit and save; "Save to project" a mail
+   attachment; browse the project from the phone. All work, the file
+   hydrates. A junction or symlink in the project is still refused.
