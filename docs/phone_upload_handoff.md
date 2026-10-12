@@ -646,3 +646,49 @@ Related files run explicitly: `MobileProjectFiles` 17 (+1),
 `MobileFocusInboxPreviews`, `MobileInboxRefs`, `MobileMarkupNewTab`,
 `i18n.test.ts` — 8 files / 62 tests PASS. Rust gates skipped (no Rust
 change). Not run live.
+
+## Step E
+
+Commit: `13ae78d6` (`docs(mobile): Upload here — help, documentation, threat
+model, file maps, QA 31cg`) on `phone-upload`; this section in the
+`docs(mobile)` commit after it.
+
+### What was written where
+
+- `docs/help/mobile.md`: intro line no longer says "read-only look"; the
+  *Project files on the phone* section names Upload here as its one write;
+  new `### Upload here` inside it (the switch, button, rows, `-2` names, safe
+  names, dot folders + note Read-only/Add-only, 24 MiB / 1 GB a day, lands
+  untracked, phone Undo per folder visit, desktop *Added to projects* with
+  Undo/Keep, switching off). Keyword `upload` added; to stay at the corpus's
+  32-keyword cap `connecting` went (`not connecting` still carries it).
+- `DOCUMENTATION.md`: paragraph **Upload here (phone → a project folder)**
+  after *Git on the phone* (routes, switch key, add-only rules, limits, log,
+  Undo on both sides).
+- `docs/context/mobile_access.md`: section *Writing into a project (Upload
+  here)* (why add-only, why dot folders, threat note) before *Known gaps*,
+  plus a gap bullet: phone Undo bound to neither time nor phone (review B).
+- `docs/threat_model.md`: row *Phone project files and PDFs* gains the write
+  route, its switch, add-only/dot rules, log + Undo, residuals (non-dot tool
+  names, hash → unlink race, unbound phone Undo); its stale "`.eldrun`" hidden
+  name corrected to `.tabtivity` (`brand::is_project_dir` hides both names);
+  row *Pair a phone* names the second switch.
+- File maps: backend `mobile_control/` row (`uploads.rs`, `safe_name` device
+  suffix, `files.rs` "its one write"), `files_windows.rs` row,
+  `commands/mobile_control.rs` row (`phone_uploads_list`/`phone_upload_undo`),
+  `schema/settings.rs` row (`AppMobileHostSettings` flatten); frontend
+  `ProjectFiles.tsx` (Upload here), new `phonePicks.tsx` row,
+  `InboxIndicator.tsx` (rewritten), `MobileSettings.tsx` (the dependent
+  switch; whole-object writers must carry each kept key).
+- `todo/group-h-crossplatform.md`: **31cg** right after 31bo (31cf is taken
+  on `develop`), untested ids, open items, 🖐️ click-through in seven steps
+  matching the shipped labels (an edited file's row *drops off* the desktop
+  list within ~10 s rather than showing a refused Undo), four platform ✅/❌
+  pairs.
+
+### Gates (Linux, after `13ae78d6`)
+
+`scripts/gates.sh` (docs only): brand, whitespace — PASS. The help corpus is
+compiled into the binary (`build.rs` → `HELP_CORPUS`), which `gates.sh` does
+not select for a docs-only diff, so run by hand: `cargo test -p tabtivity
+--lib -- help_mcp` 9 passed (incl. `real_corpus_parses`). Not run live.
