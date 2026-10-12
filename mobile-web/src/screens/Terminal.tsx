@@ -75,7 +75,8 @@ import { type TerminalEvent } from "../terminal/protocol";
 import { createVisibilityReporter } from "../terminal/visibility";
 import { installTerminalTouchScroll } from "../terminal/touchScroll";
 import { installWideOutputHint, type WideOutputHint } from "../terminal/wideOutput";
-import { inputFrameStart, sessionStatus, statusFrameLines, type SessionStatus } from "../terminal/statusLine";
+import { inputFrameStart, sessionStatus, statusFrameLines, statusModelTag, type SessionStatus } from "../terminal/statusLine";
+import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { sessionLimits } from "../terminal/sessionUsage";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import {
@@ -3254,7 +3255,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * drawn its first frame: sent any earlier, `/model` lands before the agent's
    * prompt exists, and the sheet's own wait for the picker would run out on
    * the attach rather than on the agent. */
-  const pickModelPending = useRef(pickModel && tab.kind === "agent");
+  const pickModelPending = useRef(pickModel && tab.kind === "agent" && !tab.local_model);
   useEffect(() => {
     if (!pickModelPending.current || !connected || liveScreen.length === 0) return;
     pickModelPending.current = false;
@@ -3768,7 +3769,15 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * (`claude-opus-4-5-…` → `Opus`). Read on every transcript poll, so it
    * follows the session — unlike `tab.agent_model`, which is the row as it
    * was when this screen opened (a tab the phone just created has none yet). */
-  const transcriptModel = sinceClear ? undefined : workingModelName(transcript?.model);
+  const storedModelId = sinceClear ? undefined : transcript?.model?.trim() || undefined;
+  const transcriptModel = workingModelName(storedModelId);
+  /** The model the session's own status line names, kept while the screen
+   * shows none — the desktop keeps its reading the same way (`screenByTab`),
+   * so a dialog over the footer does not drop the chip to an older answer's
+   * model while the tab's card still says the current one. */
+  const screenModel = statusModelTag(status);
+  const [shownScreenModel, setShownScreenModel] = useState(screenModel);
+  if (screenModel && screenModel !== shownScreenModel) setShownScreenModel(screenModel);
   /** Who the working row names: the model's family word as the session prints
    * it (`Opus 4.5` → `Opus`), else the stored session's, else the tab's
    * published model; a tab with none keeps the generic "Agent". */
@@ -3918,14 +3927,16 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** What the sheet paints: the live step, or — between the tap and the
    * session's redraw — the answered one, listed but not tappable, so the sheet
    * does not blink empty on the way to the next step. */
-  /** The model chip's label: the model the session prints, with the reasoning
-   * effort beside it where the session prints one too (Antigravity). Without a
-   * readable status it falls back to the stored session's model, then the
-   * tab's published one — the desktop's reading of this same line, composed
-   * the same way, or the transcript's id behind it. */
-  const modelChip = status?.model
-    ? (status.effort ? `${status.model} · ${status.effort}` : status.model)
-    : transcriptModel ?? tab.agent_model ?? t("terminal.reader.model");
+  /** The model chip's label, read exactly as the desktop reads the tag its
+   * tab cards carry (`agentTabModelTag`): the model the session prints, by
+   * the one composition (`statusModelTag`); while the screen shows none (a
+   * dialog, output mid-scroll), the last one it did; else the stored
+   * session's model by the one fallback (`transcriptModelTag`); else the
+   * tab's published tag. */
+  const modelChip = shownScreenModel
+    ?? (storedModelId ? transcriptModelTag(storedModelId, /^claude$/iu.test(agentLabel)) : undefined)
+    ?? tab.agent_model
+    ?? t("terminal.reader.model");
   const shownStep = listedStep ?? (answered && picker ? answered : null);
   /** The highlighted row — where it was before a reveal walk moved it. */
   const shownAt = reveal?.origin ?? picker?.options[picker.current]?.number;
@@ -4322,7 +4333,11 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
             the composer keeps the whole bar for the draft and its buttons. */}
         {tab.kind === "agent" && <>
           <button className="fact-action" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title={t("mobile.facts.statusHint")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="fact-action-label">{t("terminal.reader.status.button")}</span></button>
-          <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>
+          {/* A local-model tab keeps the model it was launched on: the
+              driver's list would only offer to move it off. */}
+          {tab.local_model
+            ? <span className="fact-model">{modelChip}</span>
+            : <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
           <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
@@ -4427,7 +4442,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
         busy={shownStep != null && (pickerStep == null || reveal != null || effortFor != null)}
         onPick={chooseModel}
         onClose={closeModelSheet}
-      />)}
+      />}</div>}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}
     {addSheet && <AttachSheet
       title={t("mobile.add.title")}

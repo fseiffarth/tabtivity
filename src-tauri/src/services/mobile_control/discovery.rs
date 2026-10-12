@@ -295,6 +295,11 @@ pub struct PublicTab {
     /// flag crosses; never the login command.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub sign_in: bool,
+    /// The tab drives a local Ollama model (`local_agent`), so the phone shows
+    /// its model rather than offering the driver's `/model` list, which would
+    /// only move it off that model.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub local_model: bool,
     /// The linked worktree an agent tab runs in (`git_overview::tab_worktrees`),
     /// filled by the project route; absent for the project folder's checkout.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1099,6 +1104,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         last_activity: None,
         color: None,
         sign_in: false,
+        local_model: false,
         turn_started_at: None,
         worktree: None,
         subagent_worktrees: Vec::new(),
@@ -1226,6 +1232,7 @@ fn resolve_scope(
                 .filter(|id| TAB_COLORS.contains(id))
                 .map(str::to_string),
             sign_in: agent && tab.sign_in,
+            local_model: local_agent,
             worktree: None,
             subagent_worktrees: Vec::new(),
         };
@@ -1836,6 +1843,11 @@ mod tests {
             listed,
             vec![("Local 1", "agent", Some("Mistral")), ("Local 2", "agent", Some("Claude"))]
         );
+        // Flagged as local, so the phone shows the model and offers no list.
+        for listed in tabs {
+            let row = serde_json::to_value(&listed.public).expect("row");
+            assert_eq!(row["local_model"], serde_json::json!(true));
+        }
     }
 
     /// A sign-in tab and a cloud session have no session to resume, yet the

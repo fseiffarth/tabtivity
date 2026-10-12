@@ -1736,6 +1736,7 @@ mod tests {
                 last_activity: None,
                 color: None,
                 sign_in: false,
+                local_model: false,
                 worktree: None,
                 subagent_worktrees: Vec::new(),
             },
