@@ -215,9 +215,29 @@ inside their own agent tabs.
 | Who did what | `sudo cat /var/lib/tabtivity-gateway/audit.jsonl` |
 | All admin commands | `tt-admin help` |
 
-**Updating:** pull the new version, repeat steps 2 and 3, then
-`sudo systemctl restart tabtivity-gateway`. Agents keep running during the
-restart.
+**Updating:** pull the new version, build it (step 2), copy it into place
+(step 3), then restart every server service. Restarting only the gateway is
+not enough: each person's session and the key, sharing and calendar services
+would keep running the old version.
+
+```bash
+cd tabtivity && git pull
+npm ci && npm run build
+cargo build --release -p app-serverd -p app-gateway
+sudo install -D -m 0755 target/release/tabtivity-serverd \
+    target/release/tabtivity-gateway target/release/tabtivity-admin-helper \
+    -t /usr/lib/tabtivity/
+sudo rm -rf /usr/share/tabtivity/web-dist /usr/share/tabtivity/mobile-dist
+sudo cp -r web-dist mobile-dist /usr/share/tabtivity/
+for u in tabtivity-gateway tabtivity-auth-keeper tabtivity-keybroker \
+    tabtivity-hub tabtivity-calendar \
+    $(systemctl list-units --plain --no-legend 'tabtivity-serverd@*.service' | awk '{print $1}'); do
+  sudo systemctl try-restart "$u"
+done
+```
+
+Agents keep running during the restart: their tabs live in tmux, which is
+not restarted.
 
 ## More
 
