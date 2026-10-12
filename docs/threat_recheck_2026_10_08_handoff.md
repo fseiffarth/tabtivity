@@ -3710,3 +3710,109 @@ behind a TLS proxy, push on):**
 6. Hostile-server check (optional): a server answering its principal on
    another host is refused with a sentence naming that host; no request
    reaches it (server logs).
+
+## Agent step 7 — reviewer — 2026-10-13
+
+**Reviewed:** `a2fb35b4..79248ef3` + handoff `c8bfbf04`. **Fix commit:**
+`4e7934d7` fix(caldav): off-origin entries fail the read; push stamps the
+resource's other rows (step 7 review) · this handoff commit.
+
+**Checked:**
+- Gap 26: `dav_reply` judges every hop against `cred.origin`, refuses hop 0 and
+  redirected writes off-origin and every `http:` hop; reqwest's own redirect
+  policy is `none` (it never re-sends the header itself) and `https_only` is a
+  real backstop (builder error). Origin is host-only (scheme, host, default
+  port; https subdomains); case is normalized by `url`, a trailing dot, IPv6,
+  IDN and userinfo hrefs all fail closed; relative, `//host` and `..` hrefs
+  are judged after `join`. Discovery: principal, home set and `.well-known`
+  hops held to the typed URL. `credentials()` and `caldav_discover` refuse
+  http before the keyring is read. `check_account_origin` and the
+  `cfg(test)`-only fake (not in release builds) are fine.
+- E2b entry points: typed URL, upsert (new / changed / grown), discovery,
+  stored hrefs, redirects, listings. Only the window and web client reach
+  these commands (`Core`); the phone's calendar writes go through the window,
+  and the headless sidecar refuses CalDAV calendars. ICS subscribe is
+  separate code. No import path writes `accounts.json`.
+- Gap 32: the mark is set in the window's local write and again before every
+  PUT; `keep_caldav_dirty` stops a markless copy clearing it; clearing is
+  rev-guarded (traced the in-flight edit, agent rows, legacy `rev` 0 rows);
+  the merge skips a dirty group, keeps server-deleted dirty rows local-only;
+  `discard` removes or unmarks only the named row in that calendar; deletes of
+  dirty rows still go server-first; PUT targets are deterministic
+  (`If-None-Match: *` on uid), so a lost-reply create cannot duplicate on the
+  server; failures retry once per sync tick, not in a loop. Old JSON round
+  trips. i18n keys in all five dictionaries, two `UntestedTag` rows, the
+  dialog's disabled Find/Save.
+
+**Bugs found and fixed (`4e7934d7`):**
+1. **An off-origin resource silently emptied the calendar.** `changes_from`
+   dropped a listed resource outside the origin, and a full listing then
+   deleted its local copy while the sync showed success. A server behind a
+   TLS proxy that names entries `http://…` (or a stored collection whose read
+   redirects to another host) would empty the calendar locally and turn its
+   dirty rows into "deleted on the server". Now such an entry fails the read
+   with the off-origin / `caldav_http_refused` sentence; off-origin deletion
+   stubs are still ignored. Tests: `resources_outside_the_origin_are_never_stored`
+   (now expects the error),
+   `a_listing_of_http_entries_fails_the_sync_instead_of_emptying_the_calendar`,
+   `a_read_redirected_off_the_origin_fails_rather_than_reading_empty`,
+   `a_deletion_stub_outside_the_origin_is_ignored`.
+2. **A series' second dirty row hit a 412 against our own write.**
+   `set_caldav_identity_at` stamped the new ETag only on the pushed row. With
+   two dirty rows of one resource (master + override), `pushDirty` sent the
+   resource once and cleared only the first; the other kept the old ETag, so the
+   merge reported it "changed on the server" and its push was a 412 every sync.
+   Before gap 32 the next merge healed this; with the mark it stuck. The other
+   rows of the resource now take the ETag (backend, and `pushRow`'s window
+   mirror); their marks stay, so they are pushed once more on the right ETag.
+   Tests: `a_push_gives_the_resources_other_rows_its_etag_so_their_push_is_no_conflict`
+   (Rust), "gives the resource's other rows the new ETag…" (vitest).
+3. **Sibling of the E2b gate:** `pushRow` checked push-on and read-only but not
+   the http scheme, so an edit reaching an http account's calendar (an
+   approved agent row) still called `caldav_push`, which marked it dirty and
+   failed. Now it uses `notWritable`. Test: "an edit in an http account's
+   calendar is not sent and not marked".
+Each Rust test was checked to fail with its fix disabled (4 of 5; the
+deletion-stub one guards behaviour that was already right). Docs:
+`context/caldav.md`, `threat_model.md` rows 26 and the Calendar-sync row.
+
+**Gates (at `4e7934d7`):** `npm run build` ok; `npm test` 804 files / 8080
+tests passed; `cargo test --workspace` 4309 passed, 4 ignored;
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`
+3812 passed, 4 ignored (no flake); `npm run lint` (via `rtk proxy`) 0 errors,
+28 warnings (unchanged); the three clippy gates clean;
+`scripts/brand-check.sh` ok; `scripts/privacy-check.sh` clean (staged);
+`npm run untested -- check` agrees; `git diff --check` clean. Windows /
+`aarch64-apple-darwin` cross-checks not run (no path, spawn or `cfg` code).
+`npm run backend:stale` not run (main agent at landing). Not run live.
+
+**Flagged for user (not changed):**
+1. Sibling-host providers (the implementer's flag 1) also hit fix 1: if a
+   collection on the typed host lists its entries on a sibling host, that
+   calendar's sync now fails with the sentence naming the host, rather than
+   reading empty and deleting local rows.
+2. An http account later switched to `https://` keeps its old `http://`
+   calendar refs, and each of them fails ("stored address is not https").
+   The user has to unsubscribe and pick the calendars again. Nothing says
+   that beyond the error.
+3. Overlapping syncs of one collection (timer tick, "Sync now", "Use the
+   server's", an edit's own push) can push the same dirty row twice. The
+   second PUT is a 412 on our own write, so a spurious "changed" question
+   (no loss). There is no in-flight guard per collection.
+4. A create whose reply was lost: the retry's `If-None-Match: *` gets a 412,
+   the next sync imports the server copy as a second local row (as before),
+   and the question has an empty resource href, so "Keep mine" errors (the
+   ETag read has no URL). "Use the server's" unmarks the local row, which
+   stays as a local-only duplicate. Same for "Keep mine" on a series whose
+   rows the server deleted, after the first row was put back. No loss.
+5. When the server deletes a series where only an override row is dirty, the
+   clean master is deleted and the override is kept local-only alone. "Keep
+   mine" re-creates just that component.
+6. The credential rule allows an https subdomain on **any** port
+   (`credentials_may_follow` checks ports only for same-host). This is older
+   than this step, but it is now the rule for every hop.
+7. A row moved from a CalDAV calendar into a local one keeps a stale
+   `caldav_dirty` from the window copy (`keep_caldav_dirty` keeps the incoming
+   mark on a move). The doc comment says a move "drops it". This is harmless
+   unless the row later lands in a calendar whose push was off, where it would
+   be sent once push is turned on.
