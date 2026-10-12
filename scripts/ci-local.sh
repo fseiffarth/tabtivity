@@ -39,6 +39,8 @@
 # as every crate. Any other file outside docs/, todo/, scripts/, .github/,
 # .githooks/ and *.md counts as frontend: the frontend build, and vitest's
 # `--changed <base>` (tests related to changed files) instead of the full suite.
+# The areas come from scripts/lib/changed.sh (shared with scripts/gates.sh),
+# which also counts a file outside a crate that the crate's tests read.
 #
 # The test steps run with a CI runner's environment (ci_like_env below:
 # symlinked TMPDIR, no global git config); CI_LOCAL_HOST_ENV=1 opts out.
@@ -52,6 +54,8 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
 workflow="${CI_LOCAL_WORKFLOW:-$repo/.github/workflows/ci-cd.yml}"
+# The change's areas (--fast), shared with scripts/gates.sh.
+. "$repo/scripts/lib/changed.sh"
 
 # ---------------------------------------------------------------------------
 # The steps, in run order: cheap checks first, then the lint job, the test
@@ -504,34 +508,16 @@ run_ci_text() {
 }
 
 compute_fast() {
-  local up branch f
+  local up branch
   if ! up="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
     branch="$(git branch --show-current)"
     up="origin/${branch:-develop}"
   fi
   git rev-parse -q --verify "$up^{commit}" >/dev/null || up=origin/develop
   FAST_BASE="$(git merge-base "$up" HEAD)" || die "--fast: no merge base with $up"
-  CHANGED="$( { git diff --name-only "$FAST_BASE"; git ls-files --others --exclude-standard; } | sort -u)"
-  A_FE=0 A_CORE=0 A_GATEWAY=0 A_TAURI=0 A_SERVERD=0 A_ALL=0
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    case "$f" in
-      src-core/*) A_CORE=1 ;;
-      src-gateway/*) A_GATEWAY=1 ;;
-      src-tauri/*) A_TAURI=1 ;;
-      src-serverd/*) A_SERVERD=1 ;;
-      Cargo.toml|Cargo.lock|rust-toolchain.toml) A_ALL=1 ;;
-      docs/*|todo/*|scripts/*|.github/*|.githooks/*|*.md) ;;
-      *) A_FE=1 ;;
-    esac
-  done <<<"$CHANGED"
-  local areas=""
-  [ "$A_FE" = 1 ] && areas+=" frontend"
-  [ "$A_CORE" = 1 ] && areas+=" src-core"
-  [ "$A_GATEWAY" = 1 ] && areas+=" src-gateway"
-  [ "$A_TAURI" = 1 ] && areas+=" src-tauri"
-  [ "$A_SERVERD" = 1 ] && areas+=" src-serverd"
-  [ "$A_ALL" = 1 ] && areas+=" cargo-workspace"
+  changed_areas "$FAST_BASE"
+  local areas
+  areas="$(changed_area_names)"
   echo "--fast: $(grep -c . <<<"$CHANGED" || true) files changed since $(git rev-parse --short "$FAST_BASE") ($up):${areas:- nothing that runs tests}"
 }
 

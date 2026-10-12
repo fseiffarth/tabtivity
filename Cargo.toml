@@ -19,5 +19,17 @@ tauri-runtime-wry = { path = "src-tauri/patches/tauri-runtime-wry" }
 # release build. The price is a slower first build of the dependency tree
 # (once per target dir; CI's rust-cache keeps it). Release builds are
 # unaffected.
+#
+# Debug info: line tables only for the workspace's crates, none for the
+# dependencies. Backtraces, panics and scripts/crash-symbolize.sh keep
+# function + file:line for our frames (a dependency frame keeps its function
+# name); a debugger loses locals and types. In exchange the linker moves a
+# fraction of the bytes and target/ shrinks. Tests use this profile too; the
+# frozen dev build and releases are the release profile, unaffected. Full
+# info for a debugging session: CARGO_PROFILE_DEV_DEBUG=true.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
