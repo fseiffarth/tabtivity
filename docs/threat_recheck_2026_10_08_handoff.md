@@ -3504,3 +3504,209 @@ Windows and `aarch64-apple-darwin` cross-checks were not run.
 6. After fix 2, a scoped session reads a card as external when its linked
    event was deleted (it can't be told apart from hidden). URLs in such a
    card's text show as `[link]` to that session.
+
+## Agent step 7 — implementer (gaps 26, 32, E2b) — 2026-10-13
+
+**Commit:** `79248ef3` fix(caldav): fixed credential origin, https only,
+unpushed edits kept (gaps 26, 32) · this handoff commit.
+
+**Files:** `src-tauri/src/services/caldav.rs` (`Credentials.origin` +
+`Credentials::new`; `HTTP_REFUSED`, `http_refused`, `off_origin`,
+`href_in_origin`; `normalize_base_url` refuses http; `client()` →
+`Dav { client }` with `https_only(true)`; `Dav::send` + `Wire` (the test
+seam); `dav_reply` judges every hop against `cred.origin`; `in_origin` for
+listings; `changes_from` drops off-origin hrefs; tests incl. `tests::fake`),
+`commands/caldav.rs` (`credentials()` checks the origin before the keyring;
+`check_account_origin` in `caldav_account_upsert`; `caldav_discover` builds
+the origin from the typed URL; `caldav_fetch` `full: Option<bool>`;
+`caldav_apply` `discard: Option<Vec<String>>` → `CalDavApplied`;
+`caldav_push` `rev: Option<u64>`, gate → mark dirty → credentials → PUT →
+rev-guarded clear; tests), `commands/calendar.rs` (`CALDAV_DIRTY_KEY`,
+`CALDAV_SERVER_DELETED_KEY`, `is_dirty`, `keep_caldav_dirty` in
+`update_event_at`/`update_task_at`, `forget_server_identity` in
+`relocate_*`; `merge_caldav_calendar_kept_at` + `discard_local_edits` +
+`keep_server_deleted`; the old `merge_caldav_calendar_at` is now a
+`#[cfg(test)]` wrapper; `set_caldav_identity_at(.., pushed_rev)` returns
+still-dirty; `mark_caldav_dirty_at`, `row_extra`; tests),
+`schema/caldav.rs` (`CalDavWrite.dirty`, `CalDavKept`, `CalDavApplied`),
+`services/root_mcp_review.rs` (four test call sites get `None`),
+`src/lib/calendar/caldav.ts` (`CALDAV_HTTP_REFUSED`, `isHttpRefused`,
+`isHttpBaseUrl`, `caldavErrorText`; `full`, `discard`, `rev` args),
+`lib/calendar/calendarWriteHook.ts` (`setCalendarDirtyPredicate`,
+`markForPush`), `stores/calendar/calendar.ts` (create/update mark in the
+local write), `stores/calendar/caldav.ts` (`notWritable` counts http;
+`pushTarget`, `keptConflict`, `markDirty`; `syncCalendar(.., options)`
+refuses http accounts, pushes dirty rows first, turns `caldav_kept` into
+conflicts; `pushDirty`; `pushRow` sends `rev`, mirrors the mark, fixed the
+"next sync will carry it" comment; `deferred` + `deferConflict`;
+`resolveTakeServer` = forced full sync with `discard`; `resolveKeepMine`
+skips the ETag read for a server-deleted row; `installCalDavPush` installs
+the predicate too), `CalDavConflictDialog.tsx` (server-deleted lede +
+`UntestedTag`, Later → `deferConflict`), `CalDavAccountDialog.tsx` (http →
+`caldav.httpRefused` strip + `UntestedTag`, Find/Save off),
+`CalendarSidebar.tsx` / `CalendarPane.tsx` (`caldavErrorText`),
+`lib/errors.ts` (rule), `types/index.ts` (`caldav_dirty`,
+`caldav_server_deleted`, `rev` on events/tasks), `types/caldav.ts`
+(`CalDavWrite.dirty`, `CalDavKept`), i18n English + de/es/fr/it
+(`caldav.insecureUrl` replaced by `caldav.httpRefused`;
+`caldavConflict.ledeServerDeleted`), `lib/untested.ts` (two rows), test
+`src/__tests__/calendar/CalDavDirtyAndHttp.test.tsx` (new); docs
+`threat_model.md` (rows 26, 32 **Fixed, not live-verified.**; the
+Calendar-sync surface row's #869 residual replaced), `context/caldav.md`
+(fixed origin, http refusal, "A failed push keeps the edit"),
+`help/mail-calendar.md`, `DOCUMENTATION.md` (CalDAV paragraph),
+`filemap_backend.md`, `filemap_frontend.md`.
+
+**Tests added:** Rust `services::caldav` (via the in-process fake):
+`a_principal_on_another_host_is_refused_before_any_request_reaches_it`,
+`a_home_set_on_another_host_is_refused_before_any_request_reaches_it`,
+`a_redirect_target_naming_itself_principal_never_gets_the_password` (the
+hop goes out bare; the self-named principal is never requested),
+`the_well_known_hop_into_a_subdomain_still_signs_in` (RFC 6764 shape still
+works; an off-origin calendar in the listing is dropped),
+`a_listing_whose_calendars_all_sit_elsewhere_says_so`,
+`stored_hrefs_outside_the_origin_get_no_request` (fetch_all, fetch_changes,
+change_tokens, collection_read_only, put, delete, current_etag on an
+off-host or `http:` href: nothing sent),
+`resources_outside_the_origin_are_never_stored`,
+`a_redirect_to_http_is_refused_outright`,
+`a_write_redirected_off_the_origin_is_refused_not_sent_bare`,
+`an_http_account_has_no_credentials_and_hrefs_check_the_origin`,
+`the_real_client_refuses_plain_http_before_connecting` (`https_only`:
+builder error, not a connect error); `a_bare_host_gets_https_never_http`
+flipped (http incl. localhost refused with the code).
+`commands::caldav`: `an_account_added_as_http_is_refused_with_the_fixed_code`
+(new, changed-to-http, and `credentials()` before the keyring),
+`an_existing_http_account_can_still_be_saved_unchanged_but_gains_no_calendar`,
+`a_picked_calendar_outside_the_origin_is_refused`.
+`commands::calendar`: `a_failed_push_stays_dirty_and_the_merge_keeps_the_edit`
+(unchanged server copy kept silently; changed one kept + reported;
+`discard` takes the server's), `a_dirty_row_the_server_deleted_becomes_local_only_and_is_reported`
+(event by full-listing absence, card by 404; `discard` deletes them),
+`a_clean_row_is_still_overwritten_and_deleted_as_before`,
+`a_push_clears_the_mark_only_for_the_revision_it_sent` (mid-push edit keeps
+it; stale bytes keep it; the server-deleted marker goes),
+`an_edit_from_a_copy_without_the_mark_cannot_clear_it` (events, tasks; a
+move drops mark + marker; `relocate_task` too),
+`calendar_json_without_the_dirty_mark_round_trips` (no key gained; old rows
+merge as before). Frontend (16): failed push keeps the row marked; `rev`
+sent; mark cleared/kept per `dirty`; `updateEvent` marks only for a
+writable account; sync pushes dirty before fetch (stored ETag), skips
+clean/deferred/read-only; push 412 → question, still marked; `caldav_kept`
+→ changed/deleted questions, deferred not re-asked; server-deleted row
+re-asked, not pushed; Take server → `full: true` + `discard`; Keep mine on a
+server-deleted row → create without an ETag read; Decide later → deferred,
+edit kept; http account never fetched/pushed, read-only, translated reason;
+dialog refuses http (Find/Save disabled); `friendlyError` maps the code.
+Checked with the fixes disabled: the five gap 26 transport tests and five of
+the store tests fail.
+
+**Gates (at `79248ef3`):** `npm run build` ok; `npm test` 804 files / 8078
+tests passed; `cargo test --workspace` 4305 passed, 0 failed, 4 ignored;
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`
+3807 + 1 passed, 4 ignored (no flake); `npm run lint` (via `rtk proxy`) 0
+errors, 28 warnings (unchanged); the three clippy gates clean;
+`scripts/brand-check.sh` ok; `scripts/privacy-check.sh` clean (staged);
+`npm run untested -- check` agrees; `git diff --check` clean. No path,
+spawn or platform `cfg` code touched (only a `cfg(test)` hook in
+`Dav::send`), so the Windows and `aarch64-apple-darwin` cross-checks were
+not run. `npm run backend:stale` not run (main agent at landing). No new
+Tauri command, so `command_class` / `commandClasses.ts` are unchanged; three
+commands gained optional arguments (`caldav_fetch.full`,
+`caldav_apply.discard`, `caldav_push.rev`) and `caldav_apply`'s reply gained
+`caldav_kept` (flattened, so it still reads as `CalendarData`).
+
+**Choices:**
+- Followed the plan's **Chosen** origin design. A redirect hop outside the
+  origin still goes out *without* credentials for reads (keeps the helpful
+  401 sentence; content from there is dropped anyway); for `PUT`/`DELETE` it
+  is refused (sibling fix: a redirected write would carry the event to the
+  other host).
+- Off-origin collections are dropped from discovery (the user never sees
+  them); upsert refuses a *newly added* off-origin ref as the backstop, but
+  not refs an account already had, so unsubscribing from one is never
+  blocked.
+- E2b for existing accounts: `caldav_account_upsert` still saves an http
+  account *unchanged* (same URL, no new calendar), so unsubscribe/toggles
+  work; a new account, a URL changed to http, or a new calendar on one is
+  refused. The dialog disables Save outright, as the plan said; Remove
+  account stays available.
+- Gap 32 mark: set in the window's local write (predicate registered next to
+  the push handler — no store import cycle) **and** by `caldav_push` before
+  sending. That answers the plan's "check which" for agent rows: since step 6
+  they are user-approved writes that reach `pushRow` through `RootOverlay` →
+  `notifyCalendarWrite`, and the backend mark covers them. `root_mcp*` is not
+  touched.
+- Clearing is revision-guarded (`rev` from the window, compared before and
+  after the mark), so an edit made while a push is in flight is not lost when
+  the older push succeeds.
+- Merge: a resource group with any dirty row is skipped whole (a series is one
+  object). Reported only when the server's ETag differs (an unchanged server
+  copy just means a push is still owed). Server-deleted dirty rows keep their
+  old href under `caldav_server_deleted`, so the question survives a restart
+  instead of the next sync silently re-creating the event.
+- "Use the server's" became a forced **full** read + `discard`: the merge kept
+  the edit on an earlier sync and moved the token past the server's change, so
+  an incremental read would not bring the server copy back.
+- "Decide later" defers per session (in-memory `deferred`): without it, the
+  dirty push at every sync would raise the same 412 every interval.
+
+**Sibling bugs fixed (same hazard):**
+- A redirected `PUT`/`DELETE` off the origin was sent without credentials but
+  with the event body; now refused.
+- `relocate_event`/`relocate_task` (agent moves) and a window move between
+  calendars now also drop the push bookkeeping, so a moved row cannot raise a
+  stale "deleted on the server" question in its new calendar.
+
+**Gotchas:**
+- `merge_caldav_calendar_at` is test-only now; production calls
+  `merge_caldav_calendar_kept_at`. `set_caldav_identity_at` takes a sixth
+  `pushed_rev` (`None` = never clear the mark).
+- The transport test seam is a thread-local in `services::caldav::tests::fake`;
+  it relies on `#[tokio::test]`'s current-thread runtime. A multi-thread test
+  runtime would not see the handler.
+- `rtk` mangles some `sed -n` output of Rust files; read source via
+  `rtk proxy` (as the memory says).
+
+**Flagged for user:**
+1. **Providers that put calendars on a sibling host break** unless the parent
+   domain is typed: e.g. typing `caldav.example.org` when collections live on
+   `p42-caldav.example.org` (iCloud-shaped). Typing `example.org` works (both
+   are subdomains of it). The refusal names the host and says to set the
+   server URL. Older accounts with such refs now fail each sync visibly.
+2. Behaviour change (E2b, decided): every `http://` account, `localhost`
+   included, stops syncing on this build; its calendars turn read-only and
+   the sync mark / dialog say why. Nothing is deleted.
+3. "Decide later" lasts for the session; after a restart the dirty row is
+   pushed again, re-raising the question (412) or, for a server-deleted row,
+   the marker re-asks it.
+4. A dirty row in a calendar whose push was later turned off (or the server
+   made read-only) keeps its edit and is never merged over — but also never
+   sent — until push is back or the user answers a conflict with "Use the
+   server's". No UI says a row is waiting.
+5. Residual: if the app dies between an approved agent write landing and its
+   push starting, that row is not marked (the window's local-write mark does
+   not apply to agent applies); the next sync could overwrite it.
+
+**Live click-through (user only; needs an https CalDAV server, e.g. Radicale
+behind a TLS proxy, push on):**
+1. CalDAV → set the server URL to `http://…` (or `http://localhost:5232/`):
+   the amber strip explains why, Find and Save are greyed out.
+2. With an account that was saved as `http://` by an older build: its sync
+   mark shows `!` with the same sentence on hover; its calendars are
+   read-only; the account dialog still opens and Remove works.
+3. https account, push on: take the network down (or stop the server), edit a
+   synced event — the conflict dialog's error line or nothing visible; bring
+   the network back, click the calendar's sync mark: the edit reaches the
+   server (check in another client) and is not overwritten.
+4. Edit the same event offline here *and* on the server (another client);
+   reconnect and sync: "Changed somewhere else too" appears; "Use the
+   server's" shows the server version; repeat and "Keep mine" puts yours on
+   the server.
+5. Edit an event offline, delete it on the server, sync: the dialog says it
+   was deleted on the server; "Keep mine" re-creates it there, "Use the
+   server's" removes it here; "Decide later" leaves it, and the next sync
+   does not ask again until restart.
+6. Hostile-server check (optional): a server answering its principal on
+   another host is refused with a sentence naming that host; no request
+   reaches it (server logs).
