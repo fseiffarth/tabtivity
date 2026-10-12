@@ -33,10 +33,12 @@ use crate::commands::git::{hardened_git_command_in, push_transport_command, reso
 pub const SERVER_NAME: &str = crate::brand::MCP_GIT_SERVER;
 /// Emitted whenever a proposal is created or changes state.
 pub const CHANGED_EVENT: &str = "git-push-mcp-changed";
-pub const CONTRACT: &str = concat!("Pushes the branch checked out in this tab's project, fast-forward only, to its existing upstream branch — never a tag, a force-push, a delete, a new remote branch or the remote's default branch. ", crate::app_name!(), " pushes from outside your sandbox with the user's stored token; you never see it. The repo's pre-push hook runs first, inside your sandbox and without any token (", crate::app_upper!(), "_PUSH_PREFLIGHT=1); other hooks do not run. Depending on the project's level the push is applied at once or staged for the user's approval — then poll git_push_status for the outcome. Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six pushes per hour and two pending proposals per tab.");
+pub const CONTRACT: &str = concat!("Pushes the branch checked out in this tab's project, fast-forward only, to its existing upstream branch — never a tag, a force-push, a delete, a new remote branch or the remote's default branch. ", crate::app_name!(), " pushes from outside your sandbox with the user's stored token; you never see it. The repo's pre-push hook runs first, inside your sandbox and without any token (", crate::app_upper!(), "_PUSH_PREFLIGHT=1); other hooks do not run. Depending on the project's level the push is applied at once or staged for the user's approval — then poll git_push_status for the outcome. A repository made or swapped in after this tab started is never pushed (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six pushes per hour and two pending proposals per tab.");
+/// What every CI tool's description says about which repo it reads (gap 19).
+const CI_REPO_RULE: &str = "Only for the repository the user confirmed for this project's pushes or allowed on a card; any other answers ci_repo_unconfirmed and puts an \"Allow CI\" card in front of the user — ask again once they allowed it.";
 /// The server's `instructions`: the push contract plus the release and CI
 /// tools that share the lane.
-pub const INSTRUCTIONS: &str = concat!("Pushes, release tags and CI for the project this tab works in, done by ", crate::app_name!(), " outside your sandbox with the user's stored token (you never see it). git_push pushes the checked-out branch fast-forward to its existing upstream (never a tag, force-push, delete, new remote branch or the remote's default branch); the repo's pre-push hook runs first inside your sandbox without a token. git_release proposes an annotated release tag on the checked-out branch's tip once that tip is on the remote; it always waits for the user to press Release on the card. Staged requests: poll git_push_status for the outcome. ci_runs, ci_run and ci_security_alerts read GitHub Actions runs, failed-job logs and annotations, and open code-scanning alerts of this repo — read-only, sixty reads per tab per hour. Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six push or release requests per hour and two pending per tab.");
+pub const INSTRUCTIONS: &str = concat!("Pushes, release tags and CI for the project this tab works in, done by ", crate::app_name!(), " outside your sandbox with the user's stored token (you never see it). git_push pushes the checked-out branch fast-forward to its existing upstream (never a tag, force-push, delete, new remote branch or the remote's default branch); the repo's pre-push hook runs first inside your sandbox without a token. git_release proposes an annotated release tag on the checked-out branch's tip once that tip is on the remote; it always waits for the user to press Release on the card. Staged requests: poll git_push_status for the outcome. ci_runs, ci_run and ci_security_alerts read GitHub Actions runs, failed-job logs and annotations, and open code-scanning alerts of this repo — read-only, sixty reads per tab per hour, and only for the repo the user confirmed for pushes or allowed on a card (ci_repo_unconfirmed otherwise: a card is waiting, ask again once the user allowed it). A repository created or swapped after this tab started is never used (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six push or release requests per hour and two pending per tab.");
 
 /// How long the whole request may block the tool call before it answers
 /// `running` and lets the agent poll — inside the listener's 30 s socket life.
@@ -116,6 +118,52 @@ pub fn set_policy(project: &str, level: Option<Level>, protected: Option<Vec<Str
     })
 }
 
+// ── Which repo CI may be read for (gap 19) ──────────────────────────────────
+
+/// The `projects.json` entry key listing the repos the user allowed on an
+/// "Allow CI" card: lowercase `owner/repo` strings. Kept beside the
+/// `git_push_mcp` block, not in it: [`ProjectPolicy`] is `deny_unknown_fields`,
+/// so an older build would read a new field there as an invalid policy and
+/// lose the whole lane.
+const CI_REPOS_KEY: &str = "git_ci_repos";
+
+/// Lowercase `owner/repo` of a github.com URL: what CI confirmations compare.
+pub(crate) fn ci_repo_key(url: &str) -> Option<String> {
+    super::git_ci::github_repo(url).map(|(owner, repo)| format!("{owner}/{repo}").to_ascii_lowercase())
+}
+
+/// The repos allowed on a card. Missing or malformed reads as none.
+fn ci_repos_of(entry: &crate::schema::projects::ProjectEntry) -> Vec<String> {
+    entry.extra.get(CI_REPOS_KEY).and_then(Value::as_array).into_iter().flatten()
+        .filter_map(Value::as_str).filter(|r| ci_repo_key(&format!("https://github.com/{r}")).as_deref() == Some(*r))
+        .map(str::to_string).collect()
+}
+pub fn ci_repos(project: &str) -> Vec<String> {
+    let projects = crate::storage::state_dir().join("projects.json");
+    crate::storage::read_json::<crate::schema::projects::ProjectsList>(&projects).ok()
+        .and_then(|list| list.iter().find(|p| p.id == project).map(ci_repos_of)).unwrap_or_default()
+}
+
+/// Whether CI may be read for the repo `url` names: the repo of the push URL
+/// the user confirmed, or one they allowed on a card. Compared as lowercase
+/// `owner/repo` (GitHub's own names are case-insensitive).
+pub(crate) fn ci_repo_allowed(policy: &ProjectPolicy, listed: &[String], url: &str) -> bool {
+    let Some(key) = ci_repo_key(url) else { return false };
+    policy.confirmed_url.as_deref().and_then(ci_repo_key).as_deref() == Some(key.as_str()) || listed.contains(&key)
+}
+
+/// Add `repo` (a [`ci_repo_key`]) to the entry's allowed list, once.
+fn add_ci_repo(entry: &mut crate::schema::projects::ProjectEntry, repo: &str) -> Result<(), String> {
+    if ci_repo_key(&format!("https://github.com/{repo}")).as_deref() != Some(repo) { return Err(format!("'{repo}' is not a GitHub owner/repo")); }
+    let mut list = ci_repos_of(entry);
+    if !list.iter().any(|r| r == repo) { list.push(repo.to_string()); }
+    entry.extra.insert(CI_REPOS_KEY.into(), json!(list));
+    Ok(())
+}
+fn allow_ci_repo(project: &str, repo: &str) -> Result<(), String> {
+    crate::commands::projects::patch_project_entry(project, |entry| add_ci_repo(entry, repo))
+}
+
 // ── Categories and results ──────────────────────────────────────────────────
 
 /// The fixed enum the agent branches on. Also the only thing about a failure
@@ -133,6 +181,12 @@ pub enum Category {
     /// The tab was started by the Mobile host with no window open, whose lane
     /// never reads the stored token (`docs/headless_mcp_plan.md`).
     WindowRequired,
+    /// A CI read (or a release's CI gate) for a repo the user has neither
+    /// confirmed for pushes nor allowed on a card (gap 19).
+    CiRepoUnconfirmed,
+    /// The git dir the tab would push or read CI from is not the one that
+    /// was there when the tab started — or there was none (gap 19).
+    RepoChanged,
 }
 impl Category {
     pub fn as_str(self) -> &'static str {
@@ -152,6 +206,7 @@ impl Category {
             Category::NotGithub => "not_github", Category::NotAvailable => "not_available",
             Category::CiPending => "ci_pending", Category::CiFailed => "ci_failed",
             Category::WindowRequired => "window_required",
+            Category::CiRepoUnconfirmed => "ci_repo_unconfirmed", Category::RepoChanged => "repo_changed",
         }
     }
     fn from_str(s: &str) -> Option<Category> {
@@ -688,13 +743,18 @@ fn transport(dir: &Path, plan: &Plan, token: Option<&str>, origins: &[String]) -
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Status { Running, Pending, Pushed, Failed, Dismissed, Expired }
+pub enum Status { Running, Pending, Pushed, Failed, Dismissed, Expired,
+    /// A [`Kind::CiRepo`] card the user allowed.
+    Allowed }
 
-/// What a proposal asks for: a branch push, or a release tag on a pushed tip
-/// (`services::git_release`).
+/// What a proposal asks for: a branch push, a release tag on a pushed tip
+/// (`services::git_release`), or leave to read CI for a repo (gap 19).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Kind { Push, Release }
+pub enum Kind { Push, Release,
+    /// "Allow CI for <owner/repo>": staged by a CI read of an unconfirmed
+    /// repo, never counted against the push budget or the pending limit.
+    CiRepo }
 
 /// One agent request, from admission to its terminal state. The card and
 /// `git_push_status` both read this; the audit ring only ever sees the
@@ -714,6 +774,8 @@ pub struct Proposal {
     pub kind: Kind,
     /// The release tag (`Kind::Release` only).
     pub tag: Option<String>,
+    /// The lowercase `owner/repo` a [`Kind::CiRepo`] card allows.
+    pub repo: Option<String>,
     pub branch: Option<String>,
     pub remote: Option<String>,
     pub url: Option<String>,
@@ -772,12 +834,16 @@ fn prune(list: &mut Vec<Proposal>) -> bool {
     changed | (list.len() != before)
 }
 
+fn proposal_id(prefix: &str) -> String {
+    format!("{prefix}-{}", super::root_mcp::mint_token().map(|t| t[..16].to_string()).unwrap_or_else(|| format!("{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default())))
+}
+
 fn new_proposal(session: &Session, project: &str, dir: &Path, note: String) -> Proposal {
     Proposal {
-        id: format!("push-{}", super::root_mcp::mint_token().map(|t| t[..16].to_string()).unwrap_or_else(|| format!("{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()))),
+        id: proposal_id("push"),
         session: session.id.clone(), tab: session.identity.tab.clone(), project: project.to_string(), dir: dir.to_path_buf(),
         fence_scope: session.identity.push.as_ref().and_then(|b| b.fence_scope.clone()),
-        kind: Kind::Push, tag: None, branch: None, remote: None, url: None, head: None, remote_sha: None, commits: Vec::new(), diffstat: String::new(), note,
+        kind: Kind::Push, tag: None, repo: None, branch: None, remote: None, url: None, head: None, remote_sha: None, commits: Vec::new(), diffstat: String::new(), note,
         needs_url_confirm: false, created_at: chrono::Local::now().to_rfc3339(), created: Instant::now(), status: Status::Running,
         category: None, message: String::new(), output: String::new(), state: RepoState::default(), preflight_output: String::new(),
         cleared: false,
@@ -815,6 +881,79 @@ fn apply_plan(p: &mut Proposal, plan: &Plan) {
     p.needs_url_confirm = plan.needs_url_confirm;
     p.state = local_state(&p.dir);
     p.state.remote_sha = Some(plan.remote_sha.clone());
+}
+
+/// Stage the "Allow CI for <repo>" card for `base`'s session and project, or
+/// find the one already waiting for that repo (one per project and repo).
+/// Outside the push budget and the pending limit, so a CI card never blocks
+/// a push. Returns the card's id.
+fn stage_ci_card(base: &Proposal, url: &str, repo: &str) -> String {
+    let mut list = proposals().lock().unwrap_or_else(|p| p.into_inner());
+    prune(&mut list);
+    if let Some(waiting) = list.iter().find(|p| p.kind == Kind::CiRepo && p.status == Status::Pending && p.project == base.project && p.repo.as_deref() == Some(repo)) {
+        return waiting.id.clone();
+    }
+    let mut card = base.clone();
+    card.id = proposal_id("ci");
+    card.kind = Kind::CiRepo;
+    card.tag = None;
+    card.repo = Some(repo.to_string());
+    card.url = Some(url.to_string());
+    (card.branch, card.remote, card.head, card.remote_sha) = (None, None, None, None);
+    (card.commits, card.diffstat, card.note, card.output, card.preflight_output) = (Vec::new(), String::new(), String::new(), String::new(), String::new());
+    card.needs_url_confirm = false;
+    card.created_at = chrono::Local::now().to_rfc3339();
+    card.created = Instant::now();
+    card.status = Status::Pending;
+    card.category = None;
+    card.message = format!("Waiting for the user to allow CI reads for {repo}.");
+    card.state = RepoState::default();
+    card.cleared = false;
+    let id = card.id.clone();
+    list.push(card);
+    drop(list);
+    changed();
+    id
+}
+
+/// What a CI read of an unconfirmed repo answers.
+fn ci_unconfirmed(card: Option<&str>, repo: &str) -> Value {
+    let message = match card {
+        Some(_) => format!("CI for {repo} is not read without the user's leave: it is neither the repository confirmed for this project's pushes nor one the user allowed. A card \"Allow CI for {repo}\" is waiting in the git bar; ask the user to allow it, then call this again."),
+        None => format!(concat!("CI for {repo} is not read without the user's leave, and this tab was started by ", crate::app_name!(), " Mobile while no window was open, where no card can be shown. Ask the user to restart this tab from the ", crate::app_name!(), " window and ask again; the window then shows an \"Allow CI\" card."), repo = repo),
+    };
+    let mut value = json!({"status":"refused","category":Category::CiRepoUnconfirmed,"message":message,"output":"","state":Value::Null});
+    if let Some(id) = card { value["requestId"] = json!(id); }
+    value
+}
+
+/// The repo a CI read goes to — only once it is confirmed (gap 19). An
+/// unconfirmed one stages the card and answers `ci_repo_unconfirmed`;
+/// `no_upstream` / `not_github` come first. `Err` is the tool result.
+fn ci_target(session: &Session, project: &str, dir: &Path, policy: &ProjectPolicy, listed: &[String]) -> Result<super::git_ci::CiRepo, Value> {
+    let target = super::git_ci::resolve(dir).map_err(|f| ci_result(Err(f)))?;
+    if ci_repo_allowed(policy, listed, &target.url) { return Ok(target); }
+    let repo = ci_repo_key(&target.url).unwrap_or_default();
+    if keyring_free() { return Err(ci_unconfirmed(None, &repo)); }
+    let id = stage_ci_card(&new_proposal(session, project, dir, String::new()), &target.url, &repo);
+    Err(ci_unconfirmed(Some(&id), &repo))
+}
+
+/// The confirmed-repo check of a release's CI gate, read now.
+fn release_ci_gate(project: &str) -> impl Fn(&str) -> bool {
+    let (policy, listed) = (policy(project).unwrap_or_default(), ci_repos(project));
+    move |url: &str| ci_repo_allowed(&policy, &listed, url)
+}
+
+/// A release refused for an unconfirmed CI repo stages the card too.
+fn release_failure(p: &Proposal, failure: Failure) -> Failure {
+    if failure.category != Category::CiRepoUnconfirmed { return failure; }
+    let Ok(target) = super::git_ci::resolve(&p.dir) else { return failure };
+    let url = target.url;
+    let Some(repo) = ci_repo_key(&url) else { return failure };
+    let card = (!keyring_free()).then(|| stage_ci_card(p, &url, &repo));
+    let message = ci_unconfirmed(card.as_deref(), &repo)["message"].as_str().unwrap_or_default().to_string();
+    Failure::new(Category::CiRepoUnconfirmed, format!("A release checks the tip's CI first. {message}"))
 }
 
 /// The proposals of one project (the card) or of one tab (`git_push_status`).
@@ -924,6 +1063,7 @@ fn push_now(id: &str, plan: &Plan, token: Option<&str>, origins: &[String]) {
 pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
     let p = get(id).ok_or("proposal not found")?;
     if p.status != Status::Pending { return Err("this proposal is no longer pending".into()); }
+    if p.kind == Kind::CiRepo { return decide_ci_repo(&p, approve, allow_ci_repo); }
     if !approve {
         let out = update(id, |p| { p.status = Status::Dismissed; p.category = Some(Category::Dismissed); p.message = "The user dismissed the push.".into(); });
         changed();
@@ -961,6 +1101,25 @@ pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
     get(id).ok_or("proposal not found".into())
 }
 
+/// The user pressed Allow (or Dismiss) on an "Allow CI" card: Allow records
+/// the repo in the project's `git_ci_repos`, so the agent's next read goes.
+/// `allow` is the `projects.json` write (a test seam).
+fn decide_ci_repo(p: &Proposal, approve: bool, allow: impl FnOnce(&str, &str) -> Result<(), String>) -> Result<Proposal, String> {
+    let repo = p.repo.clone().ok_or("incomplete proposal")?;
+    if approve { allow(&p.project, &repo)?; }
+    let out = update(&p.id, |p| if approve {
+        p.status = Status::Allowed;
+        p.category = None;
+        p.message = format!("The user allowed CI reads for {repo}; ask again.");
+    } else {
+        p.status = Status::Dismissed;
+        p.category = Some(Category::Dismissed);
+        p.message = format!("The user did not allow CI reads for {repo}.");
+    });
+    changed();
+    out.ok_or("proposal not found".into())
+}
+
 /// Close a finished card. The record stays, so the agent polling
 /// `git_push_status` still learns the outcome; only the card hides it.
 pub fn clear(id: &str) -> Result<Proposal, String> {
@@ -985,9 +1144,9 @@ fn run_release(id: String, requested: Option<String>) {
             Err(e) => { fail(&id, Failure::new(Category::NotCheckedOut, e)); return; }
         },
     };
-    let plan = match super::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins) {
+    let plan = match super::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins, &release_ci_gate(&p.project)) {
         Ok(plan) => plan,
-        Err(failure) => { update(&id, |p| p.tag = Some(tag.clone())); fail(&id, failure); return; }
+        Err(failure) => { update(&id, |p| p.tag = Some(tag.clone())); fail(&id, release_failure(&p, failure)); return; }
     };
     update(&id, |p| {
         p.tag = Some(plan.tag.clone());
@@ -1010,9 +1169,9 @@ fn run_release(id: String, requested: Option<String>) {
 fn decide_release(p: Proposal) -> Result<Proposal, String> {
     let (Some(tag), Some(head)) = (p.tag.clone(), p.head.clone()) else { return Err("incomplete proposal".into()) };
     let (token, origins) = creds(&p.project);
-    let plan = match super::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins) {
+    let plan = match super::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins, &release_ci_gate(&p.project)) {
         Ok(plan) => plan,
-        Err(failure) => return fail(&p.id, failure).ok_or("proposal not found".into()),
+        Err(failure) => return fail(&p.id, release_failure(&p, failure)).ok_or("proposal not found".into()),
     };
     if plan.head != head {
         return fail(&p.id, Failure::new(Category::StaleApproval, "The branch moved after the release was proposed; ask the agent to request it again.")).ok_or("proposal not found".into());
@@ -1077,15 +1236,15 @@ pub fn tools() -> Value {
             "tag":{"type":"string","maxLength":100,"description":"The tag, e.g. v1.2.3. Optional; defaults to v<version> from package.json / tauri.conf.json / Cargo.toml / pyproject.toml at the tip, else the latest v* tag counted up."},
             "note":{"type":"string","maxLength":NOTE_MAX,"description":"One line for the user's approval card. Optional."}
          }),json!([]))},
-        {"name":"ci_runs","description":"Recent GitHub Actions runs of this repository (CI, security scans, releases), newest first: workflow, title, event, status, conclusion, commit, run id and link. Read-only.",
+        {"name":"ci_runs","description":format!("Recent GitHub Actions runs of this repository (CI, security scans, releases), newest first: workflow, title, event, status, conclusion, commit, run id and link. Read-only. {CI_REPO_RULE}"),
          "inputSchema":object(json!({
             "ref":{"type":"string","maxLength":200,"description":"Branch or tag whose runs to list. Optional; defaults to the checked-out branch."},
             "limit":{"type":"integer","minimum":1,"maximum":30,"description":"How many runs (default 10)."},
             "failedOnly":{"type":"boolean","description":"Only runs that failed or timed out."}
          }),json!([])),"annotations":{"readOnlyHint":true}},
-        {"name":"ci_run","description":"One GitHub Actions run: its jobs and steps with their conclusions and, for up to three failed jobs, the check annotations and the log around the first error (timestamps and colours stripped, capped, credentials redacted). Read-only.",
+        {"name":"ci_run","description":format!("One GitHub Actions run: its jobs and steps with their conclusions and, for up to three failed jobs, the check annotations and the log around the first error (timestamps and colours stripped, capped, credentials redacted). Read-only. {CI_REPO_RULE}"),
          "inputSchema":object(json!({"id":{"type":"integer","minimum":1,"description":"The run id from ci_runs."}}),json!(["id"])),"annotations":{"readOnlyHint":true}},
-        {"name":"ci_security_alerts","description":"Open code-scanning alerts of this repository (CodeQL and other SARIF uploads): rule, severity, file and line, message and link. Read-only; needs code scanning set up and a token that may read it.",
+        {"name":"ci_security_alerts","description":format!("Open code-scanning alerts of this repository (CodeQL and other SARIF uploads): rule, severity, file and line, message and link. Read-only; needs code scanning set up and a token that may read it. {CI_REPO_RULE}"),
          "inputSchema":object(json!({
             "ref":{"type":"string","maxLength":200,"description":"Only alerts on this branch (or refs/… ref). Optional."},
             "limit":{"type":"integer","minimum":1,"maximum":100,"description":"How many alerts (default 30)."}
@@ -1126,7 +1285,7 @@ pub fn admit(session: &Session, message: &Value) -> Result<(), String> {
             sanitize_note(args.note)?;
             // Refused as `window_required` below; a refusal costs nothing.
             if keyring_free() { return Ok(()); }
-            let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| matches!(p.status, Status::Pending | Status::Running)).count();
+            let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| p.kind != Kind::CiRepo && matches!(p.status, Status::Pending | Status::Running)).count();
             if pending >= PENDING_LIMIT { return Err(format!("pending_limit: at most {PENDING_LIMIT} pending push requests per tab; cancel one or wait for the user")); }
             if !session.admit_push_rate() { return Err("rate_limited: six push requests per tab per hour".into()); }
             Ok(())
@@ -1136,7 +1295,7 @@ pub fn admit(session: &Session, message: &Value) -> Result<(), String> {
             if let Some(tag) = &args.tag { super::git_release::validate_tag(tag).map_err(|e| format!("invalid_arguments: {e}"))?; }
             sanitize_note(args.note)?;
             if keyring_free() { return Ok(()); }
-            let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| matches!(p.status, Status::Pending | Status::Running)).count();
+            let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| p.kind != Kind::CiRepo && matches!(p.status, Status::Pending | Status::Running)).count();
             if pending >= PENDING_LIMIT { return Err(format!("pending_limit: at most {PENDING_LIMIT} pending requests per tab; cancel one or wait for the user")); }
             if !session.admit_push_rate() { return Err("rate_limited: six push or release requests per tab per hour".into()); }
             Ok(())
@@ -1171,7 +1330,7 @@ fn admission_result(reason: &str) -> Value {
 
 fn proposal_view(p: &Proposal) -> Value {
     json!({
-        "id": p.id, "kind": p.kind, "tag": p.tag, "status": p.status, "category": p.category, "message": p.message, "output": p.output, "state": p.state,
+        "id": p.id, "kind": p.kind, "tag": p.tag, "repo": p.repo, "status": p.status, "category": p.category, "message": p.message, "output": p.output, "state": p.state,
         "branch": p.branch, "remote": p.remote, "url": p.url, "head": p.head, "remoteSha": p.remote_sha,
         "commits": p.commits, "diffstat": p.diffstat, "note": p.note, "needsUrlConfirm": p.needs_url_confirm,
         "createdAt": p.created_at, "preflightOutput": p.preflight_output,
@@ -1275,6 +1434,46 @@ fn call_status(session: &Session, dir: &Path, policy: &ProjectPolicy) -> Value {
     json!({"state":local_state(dir),"level":policy.level(),"protected":policy.protected,"allowedBranches":allowed_branches(dir, policy),"urlConfirmed":policy.confirmed_url,"proposals":rows})
 }
 
+/// One CI read against a repo [`ci_target`] let through.
+fn call_ci(name: &str, target: &super::git_ci::CiRepo, project: &str, args: Value) -> Result<Value, String> {
+    match name {
+        "ci_runs" => serde_json::from_value::<CiRunsArgs>(args).map_err(|e| e.to_string())
+            .map(|a| ci_result(super::git_ci::runs(target, project, a.reference.as_deref(), a.limit, a.failed_only.unwrap_or(false)))),
+        "ci_run" => serde_json::from_value::<CiRunArgs>(args).map_err(|e| e.to_string())
+            .map(|a| ci_result(super::git_ci::run(target, project, a.id))),
+        _ => serde_json::from_value::<CiAlertsArgs>(args).map_err(|e| e.to_string())
+            .map(|a| ci_result(super::git_ci::security_alerts(target, project, a.reference.as_deref(), a.limit))),
+    }
+}
+
+/// The `.git` entry git discovery finds from `dir` — the nearest
+/// `<ancestor>/.git`, folder, pointer file or link, never followed — as
+/// `(dev, ino)`. Read at spawn into [`PushBinding::git_at_spawn`](super::root_mcp::PushBinding)
+/// and again before every push, release and CI read (gap 19): `git_guard`
+/// pins only a `.git` that exists at spawn, so an agent can `git init` a
+/// repo where there was none, or nearer than the one there was. Bare-repo
+/// discovery needs no check: the lane's git runs with
+/// `safe.bareRepository=explicit`. Windows has no fence and no stable
+/// inode in std, so there it records presence only.
+pub(crate) fn git_entry_identity(dir: &Path) -> Option<(u64, u64)> {
+    let meta = dir.ancestors().find_map(|d| std::fs::symlink_metadata(d.join(".git")).ok())?;
+    #[cfg(unix)]
+    { use std::os::unix::fs::MetadataExt; Some((meta.dev(), meta.ino())) }
+    #[cfg(not(unix))]
+    { let _ = meta; Some((0, 0)) }
+}
+
+/// The `repo_changed` refusal when the tab's git dir is not the one it
+/// started with, or it started with none.
+fn repo_changed(binding: &super::root_mcp::PushBinding) -> Option<Value> {
+    let message = match (binding.git_at_spawn, git_entry_identity(&binding.dir)) {
+        (Some(at_spawn), Some(now)) if at_spawn == now => return None,
+        (None, _) => "This tab started in a folder with no git repository, and a repository made since is never pushed or read CI for. Ask the user to restart this tab.",
+        _ => "The git repository in this folder is not the one this tab started with, so it is not pushed or read CI for. Ask the user to restart this tab.",
+    };
+    Some(json!({"status":"refused","category":Category::RepoChanged,"message":message,"output":"","state":Value::Null}))
+}
+
 /// Returns an RPC reply and whether the proposal views must refresh.
 pub fn handle_message(session: &Session, message: &Value) -> (Option<Value>, bool) {
     let admission = admit(session, message);
@@ -1308,6 +1507,13 @@ pub fn handle_admitted(session: &Session, message: &Value, admission: Result<(),
                 let value = window_required(&binding.dir);
                 return (ok(json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})), false);
             }
+            // Gap 19: only the git dir that was there at spawn is pushed or
+            // read CI for — never one an agent made or swapped in since.
+            if admission.is_ok() && matches!(name, "git_push" | "git_release" | "ci_runs" | "ci_run" | "ci_security_alerts") {
+                if let Some(value) = repo_changed(binding) {
+                    return (ok(json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})), false);
+                }
+            }
             let policy = match policy(project) { Ok(p) => p, Err(e) => return (error(id, -32000, &e), false) };
             let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
             let result: Result<Value, String> = match admission {
@@ -1315,18 +1521,16 @@ pub fn handle_admitted(session: &Session, message: &Value, admission: Result<(),
                 Ok(()) => match name {
                     "git_push" => serde_json::from_value(args).map_err(|e| e.to_string()).and_then(|args| call_push(session, project, &binding.dir, policy.level(), args)),
                     "git_release" => serde_json::from_value(args).map_err(|e| e.to_string()).and_then(|args| call_release(session, project, &binding.dir, policy.level(), args)),
-                    "ci_runs" => serde_json::from_value::<CiRunsArgs>(args).map_err(|e| e.to_string())
-                        .map(|a| ci_result(super::git_ci::runs(&binding.dir, project, a.reference.as_deref(), a.limit, a.failed_only.unwrap_or(false)))),
-                    "ci_run" => serde_json::from_value::<CiRunArgs>(args).map_err(|e| e.to_string())
-                        .map(|a| ci_result(super::git_ci::run(&binding.dir, project, a.id))),
-                    "ci_security_alerts" => serde_json::from_value::<CiAlertsArgs>(args).map_err(|e| e.to_string())
-                        .map(|a| ci_result(super::git_ci::security_alerts(&binding.dir, project, a.reference.as_deref(), a.limit))),
+                    "ci_runs" | "ci_run" | "ci_security_alerts" => match ci_target(session, project, &binding.dir, &policy, &ci_repos(project)) {
+                        Err(refusal) => Ok(refusal),
+                        Ok(target) => call_ci(name, &target, project, args),
+                    },
                     "git_push_cancel" => serde_json::from_value::<Cancel>(args).map_err(|e| e.to_string()).and_then(|args| call_cancel(session, &args.id)),
                     "git_push_status" => serde_json::from_value::<Empty>(args).map_err(|e| e.to_string()).map(|_| call_status(session, &binding.dir, &policy)),
                     _ => Err("unknown tool".into()),
                 },
             };
-            let changed = result.is_ok() && matches!(name, "git_push" | "git_release" | "git_push_cancel");
+            let changed = result.as_ref().is_ok_and(|v| matches!(name, "git_push" | "git_release" | "git_push_cancel") || v["category"] == "ci_repo_unconfirmed");
             let value = match result {
                 Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false}),
                 Err(e) => json!({"content":[{"type":"text","text":e}],"isError":true}),
@@ -1340,6 +1544,7 @@ pub fn handle_admitted(session: &Session, message: &Value, admission: Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::root_mcp::PushBinding;
     use std::process::Command;
 
     fn have_git() -> bool { Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success()) }
@@ -1381,7 +1586,7 @@ mod tests {
     fn session(tab: &str, dir: &Path) -> Session {
         let (_, mut s) = super::super::root_mcp::test_session_for_tab(Caller::Pusher, tab, Path::new("/nonexistent"));
         s.identity.project = Some("p".into());
-        s.identity.push = Some(super::super::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: None });
+        s.identity.push = Some(super::super::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: None, git_at_spawn: git_entry_identity(dir) });
         s
     }
     fn test_proposal(session: &Session, dir: &Path) -> String {
@@ -1770,7 +1975,7 @@ mod tests {
     fn the_proposal_carries_the_fence_scope_its_binding_recorded() {
         let dir = Path::new("/nonexistent/gp-scope");
         let mut s = session("tab:recorded", dir);
-        s.identity.push = Some(super::super::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: Some("p".into()) });
+        s.identity.push = Some(super::super::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: Some("p".into()), git_at_spawn: git_entry_identity(dir) });
         let p = new_proposal(&s, "p", dir, String::new());
         assert_eq!(p.fence_scope.as_deref(), Some("p"));
         assert!(matches!(HookBoundary::of(p.fence_scope.as_deref()), HookBoundary::Fence("p")));
@@ -1929,5 +2134,164 @@ mod tests {
         let refused = json!({"jsonrpc":"2.0","id":1,"result":{"isError":false,"structuredContent":{"status":"refused","category":"branch_protected"}}});
         assert_eq!(refusal_reason(&refused), Some("branch_protected"));
         assert_eq!(refusal_reason(&json!({"jsonrpc":"2.0","id":1,"result":{"isError":false,"structuredContent":{"status":"pushed"}}})), None);
+    }
+
+    fn ci_cards(project: &str) -> Vec<Proposal> {
+        proposals_for(Some(project), None).into_iter().filter(|p| p.kind == Kind::CiRepo).collect()
+    }
+
+    /// Gap 19 (decision A2): CI is read only for the repo of the confirmed
+    /// push URL or one the user allowed on a card; anything else stages one
+    /// card per project and repo, outside the push budget, and is refused.
+    #[test]
+    fn ci_reads_go_only_to_a_confirmed_repo_and_stage_one_card() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, _remote, work) = pair();
+        sh(&work, &["remote", "set-url", "origin", "https://github.com/Octo-Org/Some-Repo.git"]);
+        let project = "p-ci-gate";
+        let s = session("tab:ci-gate", &work);
+        let other = session("tab:ci-gate-2", &work);
+        for s in [&s, &other] { proposals().lock().unwrap().retain(|p| p.tab != s.identity.tab); }
+        // The confirmed push URL's repo passes, compared in lowercase and
+        // across git's spellings.
+        let confirmed = ProjectPolicy { confirmed_url: Some("git@github.com:octo-org/some-repo".into()), ..propose_policy() };
+        let target = ci_target(&s, project, &work, &confirmed, &[]).unwrap();
+        assert_eq!((target.owner.as_str(), target.repo.as_str(), target.branch.as_deref()), ("Octo-Org", "Some-Repo", Some("develop")));
+        assert!(ci_cards(project).is_empty(), "nothing staged for a confirmed repo");
+        // Neither confirmed nor listed: refused, one card.
+        let refused = ci_target(&s, project, &work, &propose_policy(), &[]).unwrap_err();
+        assert_eq!((refused["status"].as_str(), refused["category"].as_str()), (Some("refused"), Some("ci_repo_unconfirmed")), "{refused}");
+        assert!(refused["message"].as_str().unwrap().contains("Allow CI for octo-org/some-repo"), "{refused}");
+        let card = refused["requestId"].as_str().unwrap().to_string();
+        let cards = ci_cards(project);
+        assert_eq!(cards.len(), 1);
+        assert_eq!((cards[0].status, cards[0].repo.as_deref(), cards[0].url.as_deref(), cards[0].branch.as_deref()),
+            (Status::Pending, Some("octo-org/some-repo"), Some("https://github.com/Octo-Org/Some-Repo.git"), None));
+        // Asked again, from this tab or another of the project: the same card.
+        assert_eq!(ci_target(&s, project, &work, &propose_policy(), &[]).unwrap_err()["requestId"], card.as_str());
+        assert_eq!(ci_target(&other, project, &work, &propose_policy(), &[]).unwrap_err()["requestId"], card.as_str());
+        assert_eq!(ci_cards(project).len(), 1, "deduped per project and repo");
+        // A confirmed push URL of another repo does not cover this one.
+        let elsewhere = ProjectPolicy { confirmed_url: Some("https://github.com/octo-org/other".into()), ..propose_policy() };
+        assert!(ci_target(&s, project, &work, &elsewhere, &[]).is_err());
+        // A second repo gets its own card; neither counts toward the pending
+        // limit of pushes.
+        sh(&work, &["remote", "set-url", "origin", "https://github.com/octo-org/second"]);
+        let second = ci_target(&s, project, &work, &propose_policy(), &[]).unwrap_err()["requestId"].as_str().unwrap().to_string();
+        assert_ne!(second, card);
+        for c in ci_cards(project) { update(&c.id, |p| p.session = format!("test-{}", p.session)); }
+        let push = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_push","arguments":{}}});
+        assert!(admit(&s, &push).is_ok(), "CI cards never fill the pending slots");
+        // Dismiss works as for pushes; Allow records the repo and the read goes.
+        assert_eq!(decide(&second, false).unwrap().status, Status::Dismissed);
+        let mut written = Vec::new();
+        let allowed = decide_ci_repo(&get(&card).unwrap(), true, |project, repo| { written.push((project.to_string(), repo.to_string())); Ok(()) }).unwrap();
+        assert_eq!((allowed.status, allowed.category), (Status::Allowed, None));
+        assert_eq!(written, vec![(project.to_string(), "octo-org/some-repo".to_string())]);
+        assert!(decide(&card, true).is_err(), "a decided card stays decided");
+        sh(&work, &["remote", "set-url", "origin", "https://github.com/OCTO-ORG/some-repo"]);
+        assert!(ci_target(&s, project, &work, &propose_policy(), &["octo-org/some-repo".into()]).is_ok());
+        let staged = ci_cards(project).len();
+        // Not GitHub: `not_github` as before, no card.
+        sh(&work, &["remote", "set-url", "origin", "https://gitlab.com/o/r.git"]);
+        let not_github = ci_target(&s, project, &work, &propose_policy(), &[]).unwrap_err();
+        assert_eq!(not_github["category"], "not_github", "{not_github}");
+        // The Mobile host cannot show a card: refused, nothing staged.
+        sh(&work, &["remote", "set-url", "origin", "https://github.com/o/third"]);
+        serve_without_keyring_on_this_thread(true);
+        let headless = ci_target(&s, project, &work, &propose_policy(), &[]).unwrap_err();
+        serve_without_keyring_on_this_thread(false);
+        assert_eq!(headless["category"], "ci_repo_unconfirmed");
+        assert!(headless.get("requestId").is_none() && headless["message"].as_str().unwrap().contains("restart this tab"), "{headless}");
+        assert_eq!(ci_cards(project).len(), staged, "nothing staged without a window");
+        assert_eq!(Category::from_str("ci_repo_unconfirmed"), Some(Category::CiRepoUnconfirmed));
+        assert_eq!(Category::from_str("repo_changed"), Some(Category::RepoChanged));
+        proposals().lock().unwrap().retain(|p| p.project != project);
+    }
+
+    /// A release whose CI gate meets an unconfirmed repo stages the same card.
+    #[test]
+    fn a_release_refused_for_an_unconfirmed_ci_repo_stages_the_card() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, _remote, work) = pair();
+        sh(&work, &["remote", "set-url", "origin", "https://github.com/o/released"]);
+        let s = session("tab:ci-release", &work);
+        let mut base = new_proposal(&s, "p-ci-release", &work, String::new());
+        base.session = format!("test-{}", base.session);
+        let failure = release_failure(&base, Failure::new(Category::CiRepoUnconfirmed, "x"));
+        assert_eq!(failure.category, Category::CiRepoUnconfirmed);
+        assert!(failure.message.contains("Allow CI for o/released"), "{}", failure.message);
+        assert_eq!(ci_cards("p-ci-release").len(), 1);
+        let other = release_failure(&base, Failure::new(Category::NotPushed, "y"));
+        assert_eq!((other.category, other.message.as_str()), (Category::NotPushed, "y"), "other refusals pass through");
+        proposals().lock().unwrap().retain(|p| p.project != "p-ci-release");
+    }
+
+    /// The confirmed-repo list sits beside the policy block, never in it: an
+    /// entry without it round-trips unchanged and an old build's strict
+    /// policy parse never sees it.
+    #[test]
+    fn the_ci_repo_list_is_optional_lowercase_and_outside_the_policy_block() {
+        let raw = r#"[{"id":"p","name":"P","status":"active","position":0,"local_file":"/x/project.json","git_push_mcp":{"level":"apply"},"directory":"/x"}]"#;
+        let mut list: crate::schema::projects::ProjectsList = serde_json::from_str(raw).unwrap();
+        assert!(ci_repos_of(&list[0]).is_empty());
+        assert_eq!(serde_json::to_value(&list).unwrap(), serde_json::from_str::<Value>(raw).unwrap(), "an entry without the list is written back unchanged");
+        add_ci_repo(&mut list[0], "octo-org/some-repo").unwrap();
+        add_ci_repo(&mut list[0], "octo-org/some-repo").unwrap();
+        assert_eq!(list[0].extra["git_ci_repos"], json!(["octo-org/some-repo"]), "listed once");
+        for bad in ["Octo-Org/Some-Repo", "o", "o/r/x", "../r", ""] { assert!(add_ci_repo(&mut list[0], bad).is_err(), "{bad}"); }
+        let policy: ProjectPolicy = serde_json::from_value(list[0].extra["git_push_mcp"].clone()).unwrap();
+        assert_eq!(policy.level, Some(Level::Apply), "the policy block is untouched and still parses strictly");
+        list[0].extra.insert("git_ci_repos".into(), json!(["ok/one", 7, "Upper/Case", "a/b/c"]));
+        assert_eq!(ci_repos_of(&list[0]), vec!["ok/one".to_string()], "malformed rows are ignored");
+        list[0].extra.insert("git_ci_repos".into(), json!("nonsense"));
+        assert!(ci_repos_of(&list[0]).is_empty());
+        let none = ProjectPolicy::default();
+        assert!(ci_repo_allowed(&none, &["octo-org/some-repo".into()], "ssh://git@github.com/Octo-Org/Some-Repo.git"));
+        assert!(!ci_repo_allowed(&none, &[], "https://github.com/octo-org/some-repo"));
+        assert!(!ci_repo_allowed(&none, &["octo-org/some-repo".into()], "https://github.com.evil.example/octo-org/some-repo"));
+        let confirmed = ProjectPolicy { confirmed_url: Some("https://github.com/Octo-Org/Some-Repo.git".into()), ..ProjectPolicy::default() };
+        assert!(ci_repo_allowed(&confirmed, &[], "git@github.com:octo-org/some-repo"));
+        assert!(!ci_repo_allowed(&confirmed, &[], "git@github.com:octo-org/some-repo-2"));
+    }
+
+    /// Gap 19 defence in depth: a git dir made (or a nearer one planted)
+    /// after the tab started is refused as `repo_changed` before any push,
+    /// release or CI read; the one there at spawn passes.
+    #[test]
+    fn a_repo_made_after_spawn_is_refused_for_push_release_and_ci() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let s = session("tab:repo-changed", &project);
+        let binding = s.identity.push.clone().unwrap();
+        sh(&project, &["init", "-q", "-b", "main"]);
+        sh(&project, &["remote", "add", "origin", "https://github.com/someone/private"]);
+        assert_ne!(binding.git_at_spawn, git_entry_identity(&project), "the new .git is another entry");
+        let call = |name: &str, args: Value| json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}});
+        for (name, args) in [("git_push", json!({})), ("git_release", json!({})), ("ci_runs", json!({})), ("ci_run", json!({"id":1})), ("ci_security_alerts", json!({}))] {
+            let (reply, changed) = handle_message(&s, &call(name, args));
+            let reply = reply.unwrap();
+            assert!(!changed);
+            assert_eq!(reply["result"]["structuredContent"]["category"], "repo_changed", "{name}: {reply}");
+            assert!(reply["result"]["structuredContent"]["message"].as_str().unwrap().contains("restart this tab"));
+            assert_eq!(refusal_reason(&reply), Some("repo_changed"));
+        }
+        assert!(proposals_for(None, Some("tab:repo-changed")).is_empty(), "nothing staged");
+        // A tab started with that repo: it passes, until a nearer one appears.
+        let started = session("tab:repo-same", &project);
+        assert!(repo_changed(started.identity.push.as_ref().unwrap()).is_none());
+        let sub = project.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let in_sub = session("tab:repo-sub", &sub);
+        let sub_binding = in_sub.identity.push.clone().unwrap();
+        assert_eq!(sub_binding.git_at_spawn, git_entry_identity(&project), "discovery walks up");
+        assert!(repo_changed(&sub_binding).is_none());
+        sh(&sub, &["init", "-q"]);
+        assert_eq!(repo_changed(&sub_binding).unwrap()["category"], "repo_changed", "a nearer .git planted after spawn");
+        // No git dir at spawn and none now: still refused.
+        let bare = PushBinding { dir: root.path().join("none"), fence_scope: None, git_at_spawn: None };
+        assert_eq!(repo_changed(&bare).unwrap()["category"], "repo_changed");
     }
 }

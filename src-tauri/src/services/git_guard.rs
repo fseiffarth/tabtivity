@@ -27,7 +27,9 @@
 //! steered by either (#862): every call pins `GIT_COMMON_DIR` to a main `.git`
 //! (`commands::git::pin_common_dir`), so a planted `commondir` is ignored, and
 //! runs with hooks off except the verbs `services::exec_trust` gates. A plain
-//! `git` in the user's terminal still follows a planted `commondir`.
+//! `git` in the user's terminal still follows a planted `commondir`. The
+//! agent push / CI lane refuses a `.git` that was not there at spawn
+//! (`git_push_mcp::git_entry_identity`, `repo_changed`; gap 19).
 
 use std::path::{Path, PathBuf};
 

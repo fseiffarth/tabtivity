@@ -120,6 +120,12 @@ pub struct PushBinding {
     /// runs the repo's `pre-push` hook inside this scope's fence, and refuses
     /// while it is `None` — never on the host (gap 18).
     pub fence_scope: Option<String>,
+    /// The `.git` entry git discovery found from `dir` at spawn
+    /// ([`git_push_mcp::git_entry_identity`](super::git_push_mcp::git_entry_identity)).
+    /// Pushes, releases and CI reads refuse (`repo_changed`) when there was
+    /// none, or it is another one now: a repo the agent made after spawn has
+    /// no guarded control files (gap 19).
+    pub git_at_spawn: Option<(u64, u64)>,
 }
 /// The lane a caller class occupies on its tab: a tab holds at most one
 /// session per lane, and a respawn replaces only the session of its own lane.
@@ -932,7 +938,7 @@ pub fn grant_git_push(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenSto
     let Some(token) = mint_token() else { return };
     apply_git_push_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(GIT_TOKEN_ENV) == Some(&token) {
-        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { dir, fence_scope: None }), endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { git_at_spawn: super::git_push_mcp::git_entry_identity(&dir), dir, fence_scope: None }), endpoint: None }, false);
     }
 }
 
@@ -3460,7 +3466,7 @@ mod tests {
         let store = TokenStore::default();
         let identity = |caller, push| Identity { tab: "stamp:a".into(), caller, project: Some("p".into()), schedule_target: None, push, endpoint: None };
         let pusher = mint_token().unwrap();
-        store.register(pusher.clone(), identity(Caller::Pusher, Some(PushBinding { dir: "/p".into(), fence_scope: None })), false);
+        store.register(pusher.clone(), identity(Caller::Pusher, Some(PushBinding { dir: "/p".into(), fence_scope: None, git_at_spawn: None })), false);
         let helper = mint_token().unwrap();
         store.register(helper.clone(), identity(Caller::Helper, None), false);
         assert!(!store.stamp_push_fence_scope(&helper, "p"));
@@ -3470,6 +3476,30 @@ mod tests {
         assert!(store.stamp_push_fence_scope(&pusher, "p"));
         let after = store.authenticate(Some(&format!("Bearer {pusher}"))).unwrap();
         assert_eq!(after.identity.push.unwrap().fence_scope.as_deref(), Some("p"));
+    }
+
+    /// Gap 19: the push binding records the `.git` entry git discovery
+    /// finds at spawn — none for a repo-less folder — so a repo made later is
+    /// told apart (`git_push_mcp::repo_changed`).
+    #[test]
+    fn a_push_grant_records_the_git_dir_found_at_spawn() {
+        let store = TokenStore::default();
+        let root = tempfile::tempdir().unwrap();
+        let (plain, repo) = (root.path().join("plain"), root.path().join("repo"));
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir(&plain).unwrap();
+        let before = super::super::git_push_mcp::git_entry_identity(&plain);
+        for (dir, want) in [(plain.clone(), before), (repo.clone(), super::super::git_push_mcp::git_entry_identity(&repo))] {
+            let mut spawn = opts("claude", &[], Some("p"));
+            spawn.id = format!("grant:{}", dir.display());
+            grant_git_push(&mut spawn, &rt(), &store, dir.clone(), &[]);
+            let token = spawn.env.get(GIT_TOKEN_ENV).cloned().expect("a claude tab gets the push token");
+            let binding = store.authenticate(Some(&format!("Bearer {token}"))).unwrap().identity.push.unwrap();
+            assert_eq!((binding.dir, binding.git_at_spawn), (dir, want));
+        }
+        assert!(super::super::git_push_mcp::git_entry_identity(&repo).is_some());
+        std::fs::create_dir(plain.join(".git")).unwrap();
+        assert_ne!(super::super::git_push_mcp::git_entry_identity(&plain), before, "a .git made later is another entry");
     }
 
     #[test]

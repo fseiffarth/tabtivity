@@ -1162,10 +1162,13 @@ export interface GitPushProposal {
   session: string;
   tab: string;
   project: string;
-  /** A branch push, or a release tag on a pushed tip (`services::git_release`). */
-  kind: "push" | "release";
+  /** A branch push, a release tag on a pushed tip (`services::git_release`),
+   *  or leave to read CI for a repo that is not the confirmed push repo. */
+  kind: "push" | "release" | "ci_repo";
   /** The release tag (`kind === "release"`). */
   tag: string | null;
+  /** Lowercase `owner/repo` an "Allow CI" card allows (`kind === "ci_repo"`). */
+  repo: string | null;
   branch: string | null;
   remote: string | null;
   url: string | null;
@@ -1176,7 +1179,8 @@ export interface GitPushProposal {
   note: string;
   needs_url_confirm: boolean;
   created_at: string;
-  status: "running" | "pending" | "pushed" | "failed" | "dismissed" | "expired";
+  /** `allowed`: an "Allow CI" card the user allowed. */
+  status: "running" | "pending" | "pushed" | "failed" | "dismissed" | "expired" | "allowed";
   category: string | null;
   message: string;
   output: string;

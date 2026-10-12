@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() =
 const { GitPushProposalCard, GitPushProposals } = await import("../../components/agents/GitPushMcp");
 
 const row: GitPushProposal = {
-  id: "push-a", session: "s", tab: "p:t", project: "p", kind: "push", tag: null, branch: "develop", remote: "origin",
+  id: "push-a", session: "s", tab: "p:t", project: "p", kind: "push", tag: null, repo: null, branch: "develop", remote: "origin",
   url: "https://github.com/o/r.git", head: "abcdef0123456789", remote_sha: "0123456789abcdef",
   commits: ["abc1234 Fix the thing", "def5678 chore: bump version to v0.1.2"], diffstat: "2 files changed",
   note: "the fix for #12", needs_url_confirm: true, created_at: "2026-09-25T12:00:00+02:00", status: "pending",
@@ -76,4 +76,31 @@ it("renders a release request with its tag and releases through the same decide 
   expect(screen.getByText("abcdef0 chore: bump version to v0.1.86")).toBeTruthy();
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Release" })); });
   expect(invoke).toHaveBeenCalledWith("git_push_mcp_decide", { id: "push-r", approve: true });
+});
+
+it("renders an Allow CI card and allows through the same decide command", async () => {
+  const ci: GitPushProposal = { ...row, id: "ci-a", kind: "ci_repo", repo: "octo-org/some-repo", url: "https://github.com/Octo-Org/Some-Repo.git", branch: null, remote: null, head: null, remote_sha: null, commits: [], diffstat: "", note: "", needs_url_confirm: false, preflight_output: "" };
+  invoke.mockResolvedValueOnce({ ...ci, status: "allowed", message: "The user allowed CI reads for octo-org/some-repo; ask again." });
+  const onDecided = vi.fn();
+  render(<GitPushProposalCard proposal={ci} onDecided={onDecided} />);
+  expect(screen.getByText("Agent CI read · waiting for you")).toBeTruthy();
+  expect(screen.getByText("Allow CI for octo-org/some-repo")).toBeTruthy();
+  expect(screen.getByText("https://github.com/Octo-Org/Some-Repo.git")).toBeTruthy();
+  expect(screen.getByText(/not the repository confirmed for this project's pushes/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Push" })).toBeNull();
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Allow" })); });
+  expect(invoke).toHaveBeenCalledWith("git_push_mcp_decide", { id: "ci-a", approve: true });
+  expect(onDecided).toHaveBeenCalledWith(expect.objectContaining({ status: "allowed" }));
+});
+
+it("shows an allowed CI card's outcome and dismisses a waiting one", async () => {
+  const ci: GitPushProposal = { ...row, id: "ci-b", kind: "ci_repo", repo: "o/r", branch: null, remote: null, head: null, remote_sha: null, commits: [], diffstat: "", note: "", needs_url_confirm: false, preflight_output: "" };
+  const { unmount } = render(<GitPushProposalCard proposal={{ ...ci, status: "allowed", message: "The user allowed CI reads for o/r; ask again." }} />);
+  expect(screen.getByText("Agent CI read · allowed")).toBeTruthy();
+  expect(screen.getByText("The user allowed CI reads for o/r; ask again.")).toBeTruthy();
+  unmount();
+  invoke.mockResolvedValueOnce({ ...ci, status: "dismissed" });
+  render(<GitPushProposalCard proposal={ci} />);
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Dismiss" })); });
+  expect(invoke).toHaveBeenCalledWith("git_push_mcp_decide", { id: "ci-b", approve: false });
 });

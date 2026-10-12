@@ -1783,7 +1783,7 @@ pub async fn git_release_tag(
         let dir = Path::new(&project_dir);
         let (token, origins) = release_creds(project_id.as_deref());
         let plan =
-            crate::services::git_release::plan(dir, tag.trim(), false, token.as_deref(), &origins)
+            crate::services::git_release::plan(dir, tag.trim(), false, token.as_deref(), &origins, &|_| true)
                 .map_err(|f| f.message)?;
         crate::services::git_release::release(dir, &plan, &plan.tag, token.as_deref(), &origins)
             .map(|_| {

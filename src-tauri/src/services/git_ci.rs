@@ -6,8 +6,9 @@
 //! AppHandle-free.
 //!
 //! GitHub only. The repository is the checked-out branch's upstream URL (else
-//! `origin`) — never an argument, so an agent reads only the repo it is
-//! working in. The stored token is offered to the API only when github.com is
+//! `origin`) — never an argument — and the lane reads it only once the user
+//! confirmed that repo: it is the confirmed push URL's, or one allowed on an
+//! "Allow CI" card (`git_push_mcp::ci_target`, gap 19). The stored token is offered to the API only when github.com is
 //! one of the project's token origins; without one, a public repo still
 //! answers its runs, and anything else says where to add a token. Nothing here
 //! writes: no re-run, no cancel, no dispatch. `tip_ci` is the same read for
@@ -50,8 +51,20 @@ pub fn github_repo(url: &str) -> Option<(String, String)> {
     (parts.next().is_none() && plain(owner) && plain(repo)).then(|| (owner.to_string(), repo.to_string()))
 }
 
+/// The GitHub repository a CI read goes to, resolved once per call from the
+/// checkout ([`resolve`]) and checked by the lane before any request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CiRepo {
+    pub owner: String,
+    pub repo: String,
+    /// The checked-out branch, the default `ref` of `ci_runs`.
+    pub branch: Option<String>,
+    /// The raw `remote.<r>.url` it came from.
+    pub url: String,
+}
+
 /// The repository this checkout pushes to, and the checked-out branch.
-fn repo_of(dir: &Path) -> Result<(String, String, Option<String>), Failure> {
+pub fn resolve(dir: &Path) -> Result<CiRepo, Failure> {
     let branch = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]).ok().filter(|b| !b.is_empty());
     let remote = branch.as_deref()
         .and_then(|b| git(dir, &["config", "--get", &format!("branch.{b}.remote")]).ok())
@@ -61,7 +74,7 @@ fn repo_of(dir: &Path) -> Result<(String, String, Option<String>), Failure> {
         .ok_or_else(|| Failure::new(Category::NoUpstream, format!("remote '{remote}' has no URL, so there is no CI to read.")))?;
     let (owner, repo) = github_repo(&url)
         .ok_or_else(|| Failure::new(Category::NotGithub, "CI can be read for GitHub repositories only, and this remote is not on github.com."))?;
-    Ok((owner, repo, branch))
+    Ok(CiRepo { owner, repo, branch, url })
 }
 
 /// The token for api.github.com: only when github.com is one of the
@@ -240,9 +253,9 @@ fn validate_ref(name: &str) -> Result<(), Failure> {
 
 /// Recent workflow runs of a ref (default: the checked-out branch), newest
 /// first; `failed_only` keeps the red ones.
-pub fn runs(dir: &Path, project: &str, reference: Option<&str>, limit: Option<u64>, failed_only: bool) -> Result<Value, Failure> {
-    let (owner, repo, branch) = repo_of(dir)?;
-    let reference = reference.map(str::to_string).or(branch);
+pub fn runs(target: &CiRepo, project: &str, reference: Option<&str>, limit: Option<u64>, failed_only: bool) -> Result<Value, Failure> {
+    let CiRepo { owner, repo, branch, .. } = target;
+    let reference = reference.map(str::to_string).or_else(|| branch.clone());
     if let Some(r) = &reference { validate_ref(r)?; }
     let limit = limit.unwrap_or(10).clamp(1, 30);
     let token = api_token(project);
@@ -259,8 +272,8 @@ pub fn runs(dir: &Path, project: &str, reference: Option<&str>, limit: Option<u6
 
 /// One run: its jobs and steps, and for up to three failed jobs their
 /// annotations and the log excerpt around the error.
-pub fn run(dir: &Path, project: &str, id: u64) -> Result<Value, Failure> {
-    let (owner, repo, _) = repo_of(dir)?;
+pub fn run(target: &CiRepo, project: &str, id: u64) -> Result<Value, Failure> {
+    let (owner, repo) = (&target.owner, &target.repo);
     let token = api_token(project);
     let tok = token.as_deref();
     block_on(async {
@@ -284,7 +297,7 @@ pub fn run(dir: &Path, project: &str, id: u64) -> Result<Value, Failure> {
                         })).collect()),
                         Err(f) => json!({"unavailable": f.message}),
                     };
-                    row["log"] = match job_log(&client, &owner, &repo, job_id, tok).await {
+                    row["log"] = match job_log(&client, owner, repo, job_id, tok).await {
                         Ok(raw) => Value::String(log_excerpt(&raw, tok)),
                         Err(f) => json!({"unavailable": f.message}),
                     };
@@ -348,8 +361,8 @@ pub fn tip_ci(url: &str, branch: &str, sha: &str, token: Option<&str>) -> TipCi 
 
 /// Open code-scanning alerts (CodeQL and other SARIF uploads), optionally for
 /// one ref, most severe first as GitHub sorts them.
-pub fn security_alerts(dir: &Path, project: &str, reference: Option<&str>, limit: Option<u64>) -> Result<Value, Failure> {
-    let (owner, repo, _) = repo_of(dir)?;
+pub fn security_alerts(target: &CiRepo, project: &str, reference: Option<&str>, limit: Option<u64>) -> Result<Value, Failure> {
+    let (owner, repo) = (&target.owner, &target.repo);
     if let Some(r) = reference { validate_ref(r)?; }
     let limit = limit.unwrap_or(30).clamp(1, 100);
     let token = api_token(project);
