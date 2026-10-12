@@ -481,3 +481,97 @@ Checked and fine:
 `npm run build`, vitest `--changed` (4 files / 33 tests, `InboxIndicator`
 9, +2) — all PASS; both new tests fail against `73070ede`'s component.
 Rust gates skipped (no Rust change). Not run live.
+
+## Step D
+
+Commit: `2171df68` (`feat(mobile): Upload here in the phone's project files
+drawer`) on `phone-upload`; this section in the `docs(mobile)` commit after it.
+
+### What landed
+
+- `mobile-web/src/api.ts`: `ProjectFileListing.uploads?`;
+  `uploadProjectFile(projectId, dir | undefined, file, name)` (`postFile`,
+  `malformed_response` without `file.token`); `undoProjectUpload(projectId,
+  token)` (`api` DELETE, reads `{ undone }`). `postFile` now turns a
+  code-less 413 (axum's body limit) into `file_too_large` for every drop-box
+  route, not only this one.
+- `mobile-web/src/components/phonePicks.tsx` (new): `usePhonePicks` — the
+  pick-and-rows part `SendToDesktop` and `useProjectInbox` had twice (hidden
+  `ANY_FILE_ACCEPT` `multiple` input, `pickPhoneFiles`, a row per pick, the
+  `MAX_INBOX_FILE` pre-check, `oneByOne` queue, `open(extra)` stamping each
+  row with what stood at the tap). Both siblings now use it; their markup and
+  behaviour (parallel sends) are unchanged.
+- `ProjectFiles.tsx`: **Upload here** under the trail when `!searching &&
+  listing?.uploads`, as `.new-tab-file` with its upload glyph (the CSS rule's
+  selectors gained `.project-files .new-tab-file`; no new treatment). Picks
+  go one after another into the folder they were picked in; rows are
+  `.inbox-upload` (sending / `.error` / `.landed`, the existing unused-until-
+  now green variant), naming the desktop's name (`main-2.rs`) and "Added to
+  {folder}". Each landing or undo re-lists the folder without blanking it.
+  Undo shows while the drawer is on the same *visit* to that folder (a
+  counter bumped on every `here.token` change — leaving and coming back ends
+  it). The note reads `mobile.files.addOnly` while `listing.uploads`; the
+  head's untested condition includes `mobile.files.upload`.
+- Tests (`MobileProjectFiles.test.tsx`, +4): button only where the listing
+  allows (note Read-only vs Add-only); two picks posted one after another
+  with `&dir=tok-src`, the clash name listed, Undo sends the DELETE with the
+  landed token and the row says removed, Undo gone after leaving the folder;
+  codes → sentences (`uploads_full`, `upload_refused`, a plain 413,
+  `write_failed`); a 24 MB+ pick refused with no POST.
+
+### Error mapping
+
+Upload: `uploads_off`/`files_off` → `mobile.files.upload.off`;
+`upload_refused` → `.refused`; `uploads_full` → `.full`;
+`file_not_found`/`files_unavailable` → `.gone`; `write_failed` and anything
+else → `.failed`; reused siblings: `file_too_large` (and a code-less 413)
+`mobile.sendToDesktop.tooLarge`, `empty_file` `…empty`, `timeout`/`offline`
+`mobile.sendToDesktop.*`, `project_unavailable` /
+`project_not_found` `mobile.projectInbox.unavailable`/`.notShared`.
+`uploads_off`, `files_off`, `upload_refused`, `file_not_found`,
+`files_unavailable` also re-list the folder (the button or folder may be gone).
+Undo: `file_not_found` → `.undoGone` ("Kept — changed or moved since"),
+`uploads_off`/`files_off` → `.undoOff`, `timeout`/`offline` → `.undoRetry`
+(Undo stays offered), else `.undoFailed`; all but the retry remove the Undo
+button.
+
+### i18n keys added (en + de/fr/es/it)
+
+`mobile.files.addOnly` (after `mobile.files.readOnly`);
+`mobile.files.upload.{button, hint, sending, landed, undo, undoLabel, undone,
+off, refused, full, gone, failed, undoGone, undoOff, undoRetry, undoFailed}`
+(after `mobile.files.openFile`). The button uses step C's labels: Upload
+here / Hier hochladen / Téléverser ici / Subir aquí / Carica qui; Undo uses
+the desktop's `inbox.uploads.undo` words.
+
+### Bundle
+
+`npm run build` (in the gates) runs `mobile:build` → `mobile:bundle`;
+`mobile-dist/` is git-ignored, so nothing to commit. Not run in the main
+checkout and `backend:stale` not run (worktree; no running window of this
+branch).
+
+### Gates (Linux, after `2171df68`)
+
+`scripts/gates.sh` (frontend only): brand, whitespace, lint-fe (touched
+files lint clean, no new warnings), `npm run build`, vitest `--changed`
+(591 files / 5390 tests passed) — all PASS. `MobileProjectFiles.test.tsx`
+17 (+4), `MobileSendToDesktop.test.tsx` unchanged and green. Rust gates
+skipped (no Rust change). Not run live.
+
+### For agent E
+
+- New file `mobile-web/src/components/phonePicks.tsx` needs a
+  `docs/filemap_frontend.md` row; `ProjectFiles.tsx`'s row may say
+  read-only.
+
+### Flagged for user
+
+- Undo on the phone is one tap (no arm-then-confirm like the desktop's):
+  it is the row's own just-landed file and the desktop refuses a changed one.
+- Queued picks keep going into the folder they were picked in even when the
+  drawer moves on or closes (the rows then live only while the drawer is
+  mounted; closing it loses the rows, not the uploads).
+- No "marked" row in the listing itself: the landed file is named in its
+  green upload row (the desktop's name), not highlighted among the files —
+  that would have needed a new visual treatment.
