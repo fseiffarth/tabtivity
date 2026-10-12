@@ -151,17 +151,19 @@ fn log_path(state_dir: &Path) -> PathBuf {
 }
 
 /// The log's records in file order (oldest first), and whether a line was
-/// unparseable. A missing log is empty.
+/// unparseable. A missing log is empty. Read as bytes, line by line: a line
+/// torn mid-character (a short append on a full disk) is one garbage line,
+/// not a log that no longer reads as text at all.
 fn read_log(state_dir: &Path) -> (Vec<Record>, bool) {
-    let Ok(text) = fs::read_to_string(log_path(state_dir)) else {
+    let Ok(bytes) = fs::read(log_path(state_dir)) else {
         return (Vec::new(), false);
     };
     let mut garbage = false;
-    let records = text
-        .lines()
-        .filter(|line| !line.trim().is_empty())
+    let records = bytes
+        .split(|&byte| byte == b'\n')
+        .filter(|line| !line.trim_ascii().is_empty())
         .filter_map(|line| {
-            let record = serde_json::from_str::<Record>(line).ok();
+            let record = serde_json::from_slice::<Record>(line).ok();
             garbage |= record.is_none();
             record
         })
@@ -368,8 +370,11 @@ fn recent_at(
     let previous = seen.take().unwrap_or_default();
     let mut next = HashMap::new();
     let mut out = Vec::new();
+    // One row per file: the same bytes uploaded again under a name an undo
+    // freed leave two records for it, and the newest speaks for both.
+    let mut listed = std::collections::HashSet::new();
     for record in read_log(state_dir).0.into_iter().rev() {
-        if record.at < since {
+        if record.at < since || listed.contains(&(record.project.clone(), record.rel.clone())) {
             continue;
         }
         let root = roots
@@ -387,6 +392,7 @@ fn recent_at(
         };
         next.insert(key, (stamp.0, stamp.1, ok));
         if ok {
+            listed.insert((record.project.clone(), record.rel.clone()));
             out.push(record);
         }
     }
@@ -657,6 +663,44 @@ mod tests {
         let lines = log_lines(&f);
         assert_eq!(lines.len(), 3);
         assert!(lines.iter().all(|l| serde_json::from_str::<Record>(l).is_ok()));
+    }
+
+    /// A short append on a full disk can cut a line inside a multi-byte
+    /// character. That line alone is garbage: the rest of the log still counts
+    /// against the cap, lists and undoes, and the next write drops the line.
+    #[test]
+    fn a_line_torn_mid_character_does_not_blind_the_log() {
+        let f = fixture();
+        write_log(&f, &[record("p1", "docs/big.bin", MAX_UPLOADS_PER_DAY - 1, NOW - HOUR)]);
+        let landed = put(&f, "docs", "a.txt", b"a").unwrap();
+        let mut bytes = fs::read(log_path(&f.state)).unwrap();
+        let torn = serde_json::to_vec(&Record { phone: Some("Bärbel".into()), ..record("p1", "docs/t.txt", 1, NOW) }).unwrap();
+        let cut = torn.iter().position(|&b| b == 0xC3).unwrap() + 1;
+        bytes.extend_from_slice(&torn[..cut]);
+        fs::write(log_path(&f.state), &bytes).unwrap();
+
+        assert_eq!(find(&f.state, &landed.id).map(|r| r.rel), Some(landed.rel.clone()));
+        assert_eq!(rels(&recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW)), [landed.rel.as_str()]);
+        assert_eq!(put(&f, "docs", "b.txt", b"b"), Err(UploadError::Full), "the cap still sees the log");
+        undo(&f.state, &f.root, "p1", &landed.rel).unwrap();
+        put(&f, "", "c.txt", b"c").unwrap_err();
+        // The next landed write rewrites the log without the torn line.
+        store_at(&f.state, &f.root, "p2", "", "d.txt", b"d", None, NOW).unwrap();
+        let text = String::from_utf8(fs::read(log_path(&f.state)).unwrap()).unwrap();
+        assert!(text.lines().all(|l| serde_json::from_str::<Record>(l).is_ok()), "{text}");
+    }
+
+    /// The same bytes uploaded again under the name an undo freed leave two
+    /// records for one file: it is listed once, by the newer record.
+    #[test]
+    fn recent_lists_one_row_per_file() {
+        let f = fixture();
+        let first = put(&f, "docs", "a.txt", b"same").unwrap();
+        undo(&f.state, &f.root, "p1", &first.rel).unwrap();
+        let again = put(&f, "docs", "a.txt", b"same").unwrap();
+        assert_eq!(again.rel, first.rel);
+        let listed = recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW);
+        assert_eq!(listed.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), [again.id.as_str()]);
     }
 
     #[test]
