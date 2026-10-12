@@ -2863,3 +2863,139 @@ at landing); the daemon crate was not touched beyond the library's
    the link notice, nothing written into `../other`.
 8. Windows + OneDrive (online-only file): edit and save in the viewer; the
    save works and the file hydrates.
+
+## Agent step 4 — reviewer — 2026-10-12
+
+**Commits:** `cc5af5de` fix(open): dropped files ask too; queue open
+questions (gap 21 review) · this handoff commit. Reviewed
+`47d08646..fade72f8` plus `96c8e183`.
+
+**Checked:**
+- Main window in `setup` (tauri 2.11.3 source read): Tauri's own `setup()`
+  builds each `create: true` config window with exactly
+  `WebviewWindowBuilder::from_config(app.handle(), cfg)?.build()?`, then
+  `assets.setup` (a no-op for embedded assets), then the user `setup`;
+  `create_main_window` is that same call plus `.on_new_window`, as the first
+  line of the user `setup`, so every property (size, min size, maximized,
+  `visible: false`, decorations, transparent, title, macOS `titleBarStyle`/
+  `hiddenTitle`, `dragDropEnabled`, url `index.html` → `devUrl` in dev) comes
+  from the same merged config entry. `tauri.macos.conf.json`'s `windows`
+  array replaces the base one (merge patch), and both carry `create: false`;
+  there is no Windows/Linux/dev override file, and no build script or CI step
+  passes `--config` (`package-dev.sh`'s `cargo build --features
+  custom-protocol` embeds the same merged config). Nothing before the user
+  `setup` needs the window: the only plugins are dialog/drag/notification (no
+  window-state, single-instance, deep link or tray); the crash-reporter
+  install, X11/HWND/NSWindow id binds and `restore_main_window` (the reveal)
+  all run later in `setup`; macOS's crash hook and Quit menu are app-wide
+  and look the window up at event time. Built once (no other config window
+  creation anywhere). The daemon build has none of it (`desktop`-gated).
+- Nav gate: wry hands `on_navigation` every frame's navigation on WebKitGTK
+  (`decide-policy` NavigationAction) and WKWebView, top level only on
+  WebView2 (`NavigationStarting`). App frames are `srcdoc`/blank only (mail,
+  reader, HTML preview, print preview), the app registers no URI scheme and
+  never uses the asset protocol, downloads go through the backend, no code
+  sets `location` or calls `window.open` in a desktop window, renderer reloads
+  and the crash reporter's `reload()` stay on the origin. `about:srcdoc#x`
+  keeps path `srcdoc`. Origin compare: case-folded host, `port_or_known_default`
+  (`:80`/`:443` equal, any other port refused), userinfo cannot change the
+  host; `javascript:` never reaches the policy (and the CSP has no
+  `unsafe-inline`). No OAuth flow uses an app webview.
+- New-window handler: on all five builders; wry's deny path (`SetHandled`,
+  `None`/nil) cannot loop; Tauri's wrapper denies an unparsable URL itself;
+  `open_external_url` re-checks `http(s)`. The Settings/intro `<a
+  target="_blank">` links (Node, agent docs, Ollama) were dead before (Tauri's
+  default denies) and now open in the system browser.
+- C2: in-app-viewable files reach the OS only on explicit or pre-existing OS
+  paths (Shift+double-click, "Open externally", a viewer the user disabled,
+  Downloads previews, the blob pane, the phone inbox) — none of them opened
+  in-app before, so no in-app open became a prompt. Launcher check:
+  case-folded, Windows trailing dots/spaces, last extension only (a double
+  extension opens as its last one), given and canonical name both (links,
+  8.3 aliases; `.lnk`/`.url` themselves refused), exec bit on the resolved
+  file, folders pass except macOS bundles. `open_file`'s new return type:
+  every desktop caller only `.catch`es; the browser and Connect transports
+  answer `checkOnly` with `null`; the phone never calls it.
+- 0b: `x-no-folder-link` only makes a save stricter (plus a one-level
+  `mkdirat` under a held handle, then the no-follow lookup; a racing link
+  fails the lookup, a racing folder fails with EEXIST); the web client
+  forwards it; all three deck figure paths send it. `compile_tex`'s check
+  refuses a linked leaf or folder (Windows junctions read as symlinks) and
+  compares canonical parents.
+- 0c: both second opens are identity-compared against the attribute-only
+  probe (`FileIdInfo` needs only `FILE_READ_ATTRIBUTES`, which both hold); a
+  plain file's re-open on the name itself opens a swapped-in link as itself.
+  Compiles in the msvc clippy/check gates.
+
+**Bugs found and fixed (`cc5af5de`):**
+- Dropped files skipped C2 entirely. A no-viewer file dropped on a tab bar
+  (embed tab) or dragged out of the window was opened with
+  `embed_capability`'s `resolved_exec` — usually the OS's own default for the
+  type (xdg-mime, `AssocQueryString`, LaunchServices) — passed as an explicit
+  handler, so the store did not ask and the backend did not judge: a dropped
+  `evil.js` ran in `WScript.exe`, a `.py` in `py.exe`, a `.command` in
+  Terminal, an `.exe` in Wine. The plan listed `EmbedPane.tsx` and
+  `commitFileDrop.ts` as hand-offs to cover. `EmbedPane` now opens with no
+  handler (`exec` stays on the tab for the later embedding phase) and the
+  drag-out passes only the explicit `fileExec` hint (no caller sets one), so
+  both go through the question and `os_open::check`; a default app the user
+  configured is still found by `open_file`. Threat model row 21 says so.
+  Tests (fail without the fix): `OpenExternalConfirm.test.tsx` "a dropped
+  file's embed tab" (an EmbedPane with a WScript `exec` makes only the
+  `checkOnly` call, handler `null`, and shows the refusal);
+  `EmbedCapabilityGate.test.ts` drag-out of `evil.js` with a WScript
+  `resolved_exec` passes no handler (and the existing drag-out case now
+  expects none).
+- Several opens at once lost all but the last. `stores/openExternal.ts` let
+  a new question supersede (decline unseen) the pending one, so of a
+  multi-file drop or drag-out of no-viewer files only the last file could
+  open (the others' embed tabs said "opened externally"). Questions now
+  queue; the dialog is keyed per question so the next one starts on Cancel,
+  not on the Open just pressed. Test: "asks for each of several files opened
+  at once, in turn" (fails on the old store; the focus assertion fails
+  without the key).
+
+**Gates:** `npm run build` ok. `npm test`: 802 files / 8055 tests passed
+(8052 + 3). `cargo test --workspace`: 4264 passed, 0 failed, 4 ignored.
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`:
+3766 + 1 passed, 4 ignored (no flake this time). `npm run lint` (via `rtk
+proxy`): 0 errors, 28 warnings (unchanged). The three clippy gates clean.
+Windows cross-check (`clippy --target x86_64-pc-windows-msvc --all-targets
+-D warnings`, `cargo check --workspace --all-targets`) clean.
+`aarch64-apple-darwin` `cargo check --workspace --all-targets` with the
+check-only CC/AR stand-ins clean (the 5 vendored `tauri-runtime-wry`
+warnings). `scripts/brand-check.sh` ok, `scripts/privacy-check.sh` clean,
+`git diff --check` clean. Rust untouched by this review; nothing run live,
+`npm run backend:stale` not run.
+
+**Flagged for user:**
+- Exec-bit refusal on mounts without Unix modes: vfat/exFAT USB sticks,
+  ntfs-3g, CIFS shares and WSL's `/mnt/c` usually show every file as
+  `0755`/`0777`, so every no-viewer file there is refused ("not opened").
+  That is what C2 says; say if such mounts should be judged by name only.
+- Launcher lists, candidates not added (none runs code silently by default,
+  or it depends on what is installed): Windows `.ws`, `.wsc`, `.sct`,
+  `.xll` (Excel add-in), `.msu`, `.mde`/`.accde`/`.ade`/`.adp`, `.jnlp`,
+  `.appx`/`.msix`, `.theme`/`.themepack` and `.search-ms` (can make
+  Windows contact a host), `.iso`/`.vhd(x)` (mount; mark-of-the-web
+  bypass); macOS `.afploc`/`.inetloc`/`.webloc` (open a share or URL),
+  `.jnlp`, a folder with the bundle bit but no `.app` name; Linux `.jnlp`,
+  `.flatpakref`/`.deb`/`.rpm` (installer UIs), `.chm` via Wine.
+- The blob pane (`ProjectBlobPane`) hands every clicked file to the OS, PDFs
+  and images included, and so now asks every time; it could open in-app
+  viewers via `openFileEntry` instead (pre-existing routing, a design call).
+- Deck "Edit" of a figure `.tex` opens it in the ordinary editor, whose
+  saves use plain `Confined::Write` (the folder resolved), so with a linked
+  figure folder the edit is saved into the link's target. The editor shows
+  that file's content, so the user sees what they edit; not changed.
+- Nav gate residuals: `about:blank`/`about:srcdoc` are allowed at top level
+  too (the handler cannot tell frames apart), so a top-level navigation
+  there would blank the app (no surface found that can trigger one);
+  WebView2 frames are not gated (the CSP's `default-src 'self'` bounds
+  them).
+- Minor, not fixed: the Connect window's `open_file` answers a path string,
+  which the store tracks as if it were a window row (pre-existing); on macOS
+  revealing an `X.app` folder in the file browser or disk usage shows the
+  raw `open_refused_launcher` code in their error line.
+- The `ExecTrustHost` store has the same supersede pattern; two gated
+  actions at once decline the first unseen (not this step's code).
