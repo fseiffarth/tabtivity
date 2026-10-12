@@ -10111,6 +10111,37 @@ mod tests {
         assert_eq!(refused(host.send(undo(token)).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
     }
 
+    /// The route's own body limit outranks the router's control-message one:
+    /// a file past `MAX_CONTROL_MESSAGE` lands, one past `MAX_INBOX_FILE` is
+    /// refused before the handler runs.
+    #[tokio::test]
+    async fn upload_here_takes_a_whole_file_up_to_the_inbox_limit() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(39)).await.0;
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_uploads": true } }).to_string(),
+        )
+        .unwrap();
+        let upload = |name: &str, bytes: Vec<u8>| {
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/projects/{project_id}/files/upload?name={name}"))
+                .header(header::ORIGIN, ORIGIN)
+                .header(header::COOKIE, cookie_pair(&cookie))
+                .body(Body::from(bytes))
+                .expect("request")
+        };
+        let (status, _, body) = host.send(upload("big.bin", vec![7; MAX_CONTROL_MESSAGE + 1])).await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        assert_eq!(std::fs::metadata(host.root.join("big.bin")).unwrap().len(), (MAX_CONTROL_MESSAGE + 1) as u64);
+        let (status, ..) = host.send(upload("huge.bin", vec![7; inbox::MAX_INBOX_FILE + 1])).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(!host.root.join("huge.bin").exists());
+    }
+
     #[tokio::test]
     async fn only_the_pdf_frame_may_be_framed_and_only_by_the_pwa() {
         let host = Fixture::bare();
