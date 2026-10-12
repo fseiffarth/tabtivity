@@ -603,6 +603,16 @@ the user"):
   click. A committed edit still reaches the user through the queued build
   (accepted under C3). Agent step 8 builds it.
 
+- **Follow-up decisions (answered 2026-10-12, after the step 4 review):**
+  (a) On filesystems without real Unix permissions (FAT/exFAT, ntfs-3g,
+  CIFS/SMB, WSL `/mnt/*`, …) the C2 launcher check ignores the execute bit
+  and judges by name only; a real executable there still gets the confirm.
+  (b) The project blob pane opens files that have an in-app viewer in a tab
+  like everywhere else; only files without one go to the OS and ask.
+  Built in follow-up agent step 9, with the step 4 reviewer's minor items
+  (the `ExecTrust` store's replace-the-pending-question pattern; the raw
+  `open_refused_launcher` code shown when revealing a macOS `.app`).
+
 | Agent step | Plan step | Gaps | Main files |
 |---|---|---|---|
 | 1 | 4 | 19 | `services/git_ci.rs`, `services/git_push_mcp.rs`, `services/root_mcp.rs` (`PushBinding`, `grant_git_push`), `services/git_release.rs` (`tip_ci`), `GitPushMcp.tsx` + `types/index.ts` (card) |
