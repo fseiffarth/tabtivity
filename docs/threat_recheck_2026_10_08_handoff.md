@@ -2647,3 +2647,219 @@ diff --check` clean. Nothing run live; `npm run backend:stale` not run.
   `evil.pngx`) passes `figureTarget` and overwrites that non-PNG sibling in
   the same folder. Only a file already in the deck's figure folder, so it
   is noted, not fixed.
+
+## Agent step 4 — implementer (gaps 21, 38, C2, D6; review items) — 2026-10-12
+
+**Commits:** `fade72f8` fix(open,nav): ask before OS hand-offs, refuse
+launchers; app navigation gate (gaps 21, 38; C2, D6) · this handoff commit.
+
+**Files:**
+- Gap 21 / C2 backend: new `services/os_open.rs` (`check`, `is_launcher_name`
+  per `Os`, `is_launcher_on_any_os`, `REFUSED_LAUNCHER`);
+  `commands/apps.rs` (`open_file` takes `check_only`, returns
+  `Option<TrackedWindow>`; `effective_handler` + `open_goes_ahead` split out
+  of `open_file_blocking`); `commands/mobile_control.rs`
+  (`global_inbox_open` check + `check_only`); `commands/projects.rs`
+  (`open_in_file_manager` refuses a macOS bundle); `services/connect.rs`
+  (`opens_as_program` also takes every OS list).
+- Gap 21 frontend: new `stores/openExternal.ts`, `lib/openExternal.ts`
+  (`confirmOsOpen`, `isLauncherRefusal`, `showLauncherRefusal`),
+  `components/common/OpenExternalHost.tsx` (mounted in `AppShell`,
+  `DetachedApp`); `stores/windows.ts` (`openFile` asks when no handler,
+  resolves `null` when nothing opened); `header/InboxIndicator.tsx`;
+  `monitoring/DiskUsagePane.tsx` (was a bare `open_file` invoke: files via
+  the store, folders via `open_in_file_manager`); `files/FileBrowser.tsx`
+  ("reveal" a folder via `open_in_file_manager`, no question);
+  `transport/clientAdapters.ts` + `wsInternals.ts` (`checkOnly` answers
+  `null` in the browser and the Connect window); i18n `openExternal.*` (7
+  keys) in all five dictionaries; `untested.ts` row `openExternalConfirm`.
+- D6 / gap 38: new `services/nav_gate.rs` (`gate_for`, `AppOrigins`,
+  `may_navigate`, `new_window`); `lib.rs` (`app_origins`, `nav_gate_plugin`
+  registered with `.plugin(…)`, `app_new_window`, `create_main_window`
+  called first in `setup`); `tauri.conf.json` + `tauri.macos.conf.json`
+  (`label: main`, `create: false`); `commands/subwindow.rs`,
+  `presenter.rs`, `connect.rs` (`.on_new_window(crate::app_new_window(…))`);
+  `lib/viewers/markdownLinks.ts` (doc comment).
+- 0b: `commands/fs.rs` (`Confined::WriteOwnFolder`,
+  `NO_FOLDER_LINK_HEADER`, `write_file_bytes{,_local,_routed,_for}` carry
+  it); `services/mobile_control/web_client.rs` (reads the header);
+  `commands/tex.rs` (`compile_tex` `own_folder_unlinked`,
+  `own_folder_unlinked_check`); `embed/fileAccess.ts` (`writeFileBytes`
+  `opts.ownFolderUnlinked`, `describeFileErrorKey` also maps the folder
+  refusals to `fileError.link`); `deck/DeckView.tsx` (every figure write and
+  figure compile asks for it); `deck/deckAssets.ts` (`figureFile` refuses
+  `~`).
+- 0c: `services/mobile_control/files_windows.rs`
+  (`open_existing_for_write` probes with `FILE_READ_ATTRIBUTES|SYNCHRONIZE`;
+  new `reopened`).
+- Docs: `docs/threat_model.md` rows 21 (**Fixed, not live-verified.**), 22
+  (0c), 23 (0b), 38 (**Fixed, not live-verified.** with residuals);
+  `docs/filemap_backend.md` (`apps.rs` row; `nav_gate.rs`, `os_open.rs`
+  rows); `docs/filemap_frontend.md` (`OpenExternalHost` row).
+
+**How it works:**
+- `openFile(path)` without a handler: `open_file {…, checkOnly: true}` →
+  backend resolves the program (`effective_handler`); only when the OS picks
+  it, `os_open::check` runs (canonicalize; refuse when the given or the
+  resolved leaf is a launcher for this OS, or a regular file has any `x`
+  bit; folders pass except macOS bundles) → `Ok(None)`, nothing opened →
+  the dialog ("Open <name> with the system's default app?", Cancel focused)
+  → the real `open_file`, which runs the same check again. A refusal shows
+  the "<name> was not opened" note (OK only) and resolves `null`; so does a
+  refusal on the real call (file changed in between). A handler passed by
+  the caller (Open with…, EmbedPane's exec, a drop's resolved handler) is
+  not asked about. The confirm still shows when the user has a default app
+  configured for the type (the store cannot tell); the backend does not
+  judge that case.
+- Nav gate: plugin `on_navigation` for every webview; labels `browser-*` /
+  `print-*` → their own gate; everything else → app origin
+  (`tauri://localhost`; `http(s)://tauri.localhost` on Windows; the `devUrl`
+  origin only when `tauri::is_dev()`), `about:blank`, `about:srcdoc`,
+  `blob:` whose inner URL is an app origin. A refusal logs scheme and host
+  to stderr. New windows: Tauri's default (no handler) already denies on all
+  three platforms (wry: WebKitGTK `create` unconnected, WebView2
+  `SetHandled(true)`, WKWebView delegate returns nil), so a middle click on
+  an external Markdown link used to do nothing; now `app_new_window` hands
+  an off-origin `http(s)` URL to `open_external_url` on a thread and returns
+  `Deny` for everything.
+- 0b: `WriteOwnFolder` canonicalizes the **grandparent** (the deck's
+  folder) and walks `<deck>.tex-figures` by name through the held-handle
+  walk, so that folder being a link or junction — even one to a box-sibling
+  root — fails the walk ("… is in a folder that is a link; viewers do not
+  save through links"); a missing figure folder is made (`mkdirat`, then the
+  no-follow lookup).
+
+**Tests added:**
+- Rust: `os_open.rs` (6: per-OS launcher tables incl. case, documents and
+  per-OS separation, Windows `PATHEXT` and trailing dot/space, check by
+  either name, Unix link name/target, exec bits `744/654/645` vs a folder,
+  folder only as a macOS bundle); `nav_gate.rs` (5: label table; Linux/macOS
+  and Windows/dev origin tables; new-window table; the wiring test that
+  every app-window builder has `.on_new_window(crate::app_new_window(`,
+  `lib.rs` registers the plugin and builds `main`, and every config window
+  has `create: false`); `apps.rs`
+  `an_os_default_open_refuses_launchers_and_a_check_opens_nothing`;
+  `fs.rs` `a_figure_save_makes_its_own_folder_and_refuses_an_8_3_alias`,
+  `a_figure_save_refuses_a_figure_folder_that_is_a_link_even_to_a_root`
+  (Unix; also shows the plain mode writing into the sibling, and a dangling
+  folder link not "made"); `tex.rs`
+  `a_deck_figure_compiles_only_from_its_own_unlinked_folder`; Windows-only
+  `files.rs`
+  `a_save_probes_with_attribute_access_and_writes_through_the_second_open`
+  (compiles in the msvc cross-check, runs on Windows CI).
+- Frontend: new `src/__tests__/files/OpenExternalConfirm.test.tsx` (check →
+  question naming the file → open; Cancel opens nothing; launcher note, no
+  real call; refusal after the check; explicit handler not asked; a backend
+  without `checkOnly` not opened twice; other errors surface; browser
+  `checkOnly` opens no download; folder-link refusals map to
+  `fileError.link`); `InboxIndicator.test.tsx` (check, question, open; a new
+  case for decline and launcher refusal); `DeckFigurePoll.test.tsx` (every
+  figure write carries `x-no-folder-link: 1`); `DeckView.test.ts` (8.3 alias
+  refused).
+
+**Gates (at `fade72f8`):** `npm run build` ok. `npm test`: 802 files / 8052
+tests passed. `cargo test --workspace`: 4264 passed, 0 failed, 4 ignored
+(lib 3865). `cargo test -p tabtivity --no-default-features --lib --test
+server_secrets`: 3766 + 1 passed, 4 ignored. `npm run lint` (via `rtk
+proxy`): 0 errors, 28 warnings (unchanged). The three clippy gates clean.
+Windows cross-check (`clippy --target x86_64-pc-windows-msvc --all-targets
+-D warnings`, `cargo check --workspace --all-targets`) clean.
+`aarch64-apple-darwin` `cargo check --workspace --all-targets` with the
+check-only CC/AR stand-ins clean (the 5 vendored `tauri-runtime-wry`
+warnings as before). `scripts/brand-check.sh` ok. `scripts/privacy-check.sh`
+clean. `git diff --check` clean. No Tauri command added (`open_file`,
+`global_inbox_open`, `compile_tex` gained arguments), so `command_class` /
+`commandClasses.ts` unchanged. `npm run backend:stale` not run (main agent
+at landing); the daemon crate was not touched beyond the library's
+`web_client.rs`, so no `ldd` run. Nothing run live.
+
+**Choices:**
+- The launcher refusal is per OS (a `.js` or `.py` is refused only on
+  Windows, `.desktop` only on Linux), with Wine's `.exe`/`.msi`/`.bat`/…
+  added on Linux; `connect::opens_as_program` (files that may open on
+  another machine) takes the union.
+- The name as given and the resolved name are both checked: file managers
+  judge by the name they are given, so `run.desktop -> notes.txt` is
+  refused as well as `notes.txt -> run.desktop`. The OS still gets the
+  original path (no verbatim `\\?\` surprises on Windows).
+- `main` is built in `setup` from its config entry: the only way to give a
+  config window a new-window handler. Everything else about it (size,
+  `maximized`, `visible: false`, decorations, macOS overlay title bar) still
+  comes from the config entry via `WebviewWindowBuilder::from_config`.
+- 0b: "no link below the root" is implemented as "canonicalize only the
+  deck's own folder, walk the figure folder by name": the deck's folder is
+  where the user opened the deck, and a lexical-root search cannot tell a
+  legitimately symlinked project parent from an attack. The compile check
+  is path-based (see residuals).
+- 0c: only the save path changed. Reads keep one `FILE_READ_DATA` open with
+  `FILE_OPEN_REPARSE_POINT` (a placeholder is reopened through the filter
+  as before); a cloud filter refusing *read-data* opens of raw placeholders
+  is not known.
+
+**Sibling fixes (same hazard, in touched code):**
+- `DiskUsagePane`'s "Open externally" called `open_file` directly, past the
+  store; now through it (folders to `open_in_file_manager`).
+- `open_in_file_manager` (and the file browser's reveal, moved onto it) ran
+  a macOS `X.app` folder instead of showing it; now refused.
+- "Add TeX figure" on a deck with no figure folder yet failed: no write
+  ever made `<deck>.tex-figures` (`fs::write` never did either). The
+  own-folder mode now makes it.
+
+**Gotchas:**
+- Tauri's plugin builder has `on_navigation` but no new-window hook; the
+  handler must be on each `WebviewWindowBuilder`.
+- A hot-reloaded frontend against an older backend: `open_file` ignores
+  `checkOnly` and opens on the check — the store sees the returned window
+  and does not open again; `global_inbox_open` returns nothing either way,
+  so on such a backend the inbox file opens on the check and again after
+  Open. Gone once the backend is rebuilt.
+- The deck poll's `writes` fake reads headers, so a test asserting the
+  strict header must look at the third `invoke` argument.
+
+**Flagged for user:**
+- Behaviour change (C2): every open of a file without a viewer (and
+  Shift+double-click, Downloads previews, terminal path links to such files,
+  Reader change cards, phone inbox files, disk usage) now asks first, even
+  for a PDF or image the OS would just show, and even when you set a default
+  app for the type. Scripts, launchers, installers and any file with an
+  execute bit are no longer opened at all (note: "run it from a terminal").
+  On Linux that includes executables you build yourself.
+- Behaviour change (D6): `target=_blank` / middle-click on an external link
+  now opens in the **system browser**, ignoring the in-app-browser link
+  setting (the click handlers that route through it are unchanged).
+  `mailto:` and other non-web `_blank` links open nothing.
+- **Startup change, unverified:** the main window is now created by our
+  `setup` code instead of by Tauri from `tauri.conf.json`. Code-reviewed
+  only; if the window misbehaves at start (size, maximize, macOS title bar,
+  the first-paint reveal), this is the first suspect.
+- A refused navigation is silent in the UI (stderr only).
+- Residuals: the launcher check and the open are by path (a racing swap in
+  between is not caught); a configured default app or explicit handler is
+  not judged; `compile_tex`'s own-folder check is path-based, so a folder
+  swapped in the moment after it compiles in the swapped-in folder (the PNG
+  write afterwards is still refused); remote (SFTP) figure writes follow
+  remote links as before; reads on Windows still ask `FILE_READ_DATA` on
+  the raw placeholder first.
+
+**Live click-through (user only):**
+1. Start a build with this backend: the main window opens maximized as
+   before (Linux; on macOS the overlay title bar), popouts and the deck
+   presenter open, the Connect window opens.
+2. Double-click a `.xyz` file in the tree: "Open data.xyz with the system's
+   default app?"; Cancel opens nothing; Open opens it. Same from Downloads,
+   a terminal path link, a Reader change card and the header's phone inbox.
+3. `printf '[Desktop Entry]\nType=Application\nExec=xterm\n' > run.desktop`
+   in a project; double-click it (and Shift+double-click it): "run.desktop
+   was not opened", nothing starts. `ln -s run.desktop notes.txt`, open
+   `notes.txt`: same. `chmod +x` a plain `.txt`-less file and open it: same.
+4. Open a file with "Open with…" a chosen app: no question.
+5. Markdown preview: middle-click `[c](https://example.com)` → system
+   browser; middle-click `[a](docs/x.md)` → nothing (left click still opens
+   the tab). A page reload (Ctrl+R / Vite reload in a dev run) still works.
+6. Mail HTML, the PDF viewer, the presenter, a popout and the in-app
+   browser's live page: links behave as before.
+7. Deck: on a deck with no figure folder, "Add TeX figure" now works. Then
+   `rm -r talk.tex-figures && ln -s ../other talk.tex-figures`, Recompile:
+   the link notice, nothing written into `../other`.
+8. Windows + OneDrive (online-only file): edit and save in the viewer; the
+   save works and the file hydrates.
