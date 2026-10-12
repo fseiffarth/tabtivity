@@ -26,10 +26,13 @@
  *
  * Only a URL that carries an OAuth or device-login marker counts — a link in
  * an answer is not a sign-in — and only near the bottom of the screen, where
- * the CLI is waiting. Nothing here sends keystrokes.
+ * the CLI is waiting. The marker rule is the desktop's (`isSignInUrl` in
+ * `src/lib/terminal/terminalUrls.ts`), so a link the desktop's sign-in card
+ * offers is one the phone offers too. Nothing here sends keystrokes.
  */
 
 import { signInLaunch } from "../../../src/lib/agents/signInLaunch";
+import { isSignInUrl } from "../../../src/lib/terminal/terminalUrls";
 
 export type SignInFlow = "device" | "code" | "callback" | "wait";
 
@@ -54,10 +57,6 @@ const URL_CHARS = /[A-Za-z0-9\-._~:/?#[\]@!$&'*+,;=%]/u;
 const URL_START = /https:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'*+,;=%]+/u;
 /** A row that is nothing but more of the URL. */
 const URL_ROW = /^[A-Za-z0-9\-._~:/?#[\]@!$&'*+,;=%]+$/u;
-/** Query keys only an OAuth or device-login request carries. */
-const AUTH_KEYS = ["client_id", "code_challenge", "response_type", "user_code", "challenge"];
-/** Device-login pages, which take their code on the page. */
-const DEVICE_PATH = /\/(?:login\/device|device|activate)(?:\/|$)/iu;
 /** A device code as the CLIs print them: `ABCD-1234`, `WDJB-MJHT`. */
 const USER_CODE = /\b([A-Z0-9]{4,5}-[A-Z0-9]{4,5})\b/u;
 /** The CLI saying the sign-in went through. A CLI that prints this under the
@@ -90,10 +89,6 @@ function redirectsHome(url: URL): boolean {
   } catch {
     return false;
   }
-}
-
-function isSignInUrl(url: URL): boolean {
-  return AUTH_KEYS.some((key) => url.searchParams.has(key)) || DEVICE_PATH.test(url.pathname);
 }
 
 /** The URL starting on `rows[index]`, with the rows the session wrapped it

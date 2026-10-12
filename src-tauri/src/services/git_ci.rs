@@ -75,10 +75,20 @@ fn api_token(project: &str) -> Option<String> {
 pub fn admit_rate(tab: &str) -> bool {
     static CALLS: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
     let mut map = CALLS.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner());
+    admit_in(&mut map, tab, Instant::now())
+}
+
+/// [`CI_RATE`] calls per tab in the rolling hour before `now`; a refused call
+/// takes nothing. Tabs whose window has emptied are dropped, so a closed tab's
+/// entry does not stay in the map for the life of the process.
+fn admit_in(map: &mut HashMap<String, VecDeque<Instant>>, tab: &str, now: Instant) -> bool {
+    map.retain(|_, calls| {
+        calls.retain(|at| now.saturating_duration_since(*at) < Duration::from_secs(3600));
+        !calls.is_empty()
+    });
     let calls = map.entry(tab.to_string()).or_default();
-    calls.retain(|at| at.elapsed() < Duration::from_secs(3600));
     if calls.len() >= CI_RATE { return false; }
-    calls.push_back(Instant::now());
+    calls.push_back(now);
     true
 }
 
@@ -465,5 +475,17 @@ mod tests {
         for _ in 0..CI_RATE { assert!(admit_rate("test-ci-tab")); }
         assert!(!admit_rate("test-ci-tab"));
         assert!(admit_rate("test-ci-other"));
+    }
+
+    #[test]
+    fn a_tab_whose_hour_has_passed_leaves_the_budget_map() {
+        let mut map = HashMap::new();
+        let start = Instant::now();
+        assert!(admit_in(&mut map, "closed-tab", start));
+        assert!(map.contains_key("closed-tab"));
+        let later = start + Duration::from_secs(3601);
+        assert!(admit_in(&mut map, "other-tab", later));
+        assert!(!map.contains_key("closed-tab"), "an emptied window is pruned");
+        assert_eq!(map.len(), 1);
     }
 }

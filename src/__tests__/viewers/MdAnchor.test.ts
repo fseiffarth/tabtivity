@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { matchAnchorId, slugify } from "../../lib/viewers/markdown";
+import { matchAnchorId, renderMarkdown, slugify } from "../../lib/viewers/markdown";
+import { generateToc, slugify as editSlugify } from "../../lib/viewers/markdownEdit";
 import { useMdAnchorStore } from "../../stores/viewers/mdAnchor";
 
 describe("matchAnchorId", () => {
@@ -26,6 +27,66 @@ describe("matchAnchorId", () => {
   it("returns null when nothing matches, and survives bad escapes", () => {
     expect(matchAnchorId(ids, "nope")).toBeNull();
     expect(matchAnchorId(ids, "%E0%A4%A")).toBeNull(); // malformed escape
+  });
+});
+
+/** The ids the preview gives its headings, in document order. */
+function renderedHeadingIds(md: string): string[] {
+  return Array.from(renderMarkdown(md).matchAll(/<h[1-6] id="([^"]*)">/g), (m) => m[1]);
+}
+
+/** The `#anchor` of every TOC entry. */
+function tocAnchors(md: string): string[] {
+  return Array.from(generateToc(md).matchAll(/\]\(#([^)]*)\)$/gm), (m) => m[1]);
+}
+
+describe("TOC anchors round-trip to rendered heading ids", () => {
+  it("uses one slug for the TOC and the preview (punctuation, edge spaces)", () => {
+    expect(editSlugify).toBe(slugify);
+    // Trimming after the punctuation is gone: "Q&A ?" is `qa`, not `qa-`.
+    expect(slugify("Q&A ?")).toBe("qa");
+    expect(tocAnchors("# Q&A ?\n")).toEqual(["qa"]);
+    expect(renderedHeadingIds("# Q&A ?\n")).toEqual(["qa"]);
+  });
+
+  it("numbers repeated headings the same way on both sides", () => {
+    const md = "# Usage\n## Setup\n# Usage\n## Setup\n### Usage!\n";
+    expect(renderedHeadingIds(md)).toEqual(["usage", "setup", "usage-1", "setup-1", "usage-2"]);
+    expect(tocAnchors(md)).toEqual(renderedHeadingIds(md));
+  });
+
+  it("agrees on every heading of a mixed document", () => {
+    const md = [
+      "# Intro: what & why?",
+      "Text.",
+      "",
+      "Intro: what & why",
+      "===",
+      "",
+      "```",
+      "# not a heading",
+      "```",
+      "## C# notes ##",
+      "## `code` and **bold**",
+      "## Intro – what & why",
+      "- a list",
+      "",
+      "## Ünïcode Größe",
+    ].join("\n");
+    const ids = renderedHeadingIds(md);
+    expect(ids).toEqual([
+      "intro-what-why",
+      "intro-what-why-1", // the setext heading counts as a repeat too
+      "c-notes",
+      "code-and-bold",
+      "intro-what-why-2",
+      "ncode-gre",
+    ]);
+    const anchors = tocAnchors(md);
+    expect(anchors).toEqual(ids);
+    for (const a of anchors) expect(ids).toContain(a);
+    // A closing `#` run needs a space before it, so "C#" keeps its hash.
+    expect(generateToc(md)).toContain("- [C# notes](#c-notes)");
   });
 });
 

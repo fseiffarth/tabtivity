@@ -516,6 +516,10 @@ pub async fn admin_call(_: &Path, _: &AdminRequest) -> Result<AdminResponse, Str
 /// listening, or no answer inside the deadline.
 const DESKTOP_UNAVAILABLE: &str = "desktop_unavailable";
 
+/// The error code [`desktop_call`] answers a request with no id with.
+#[cfg(any(unix, windows))]
+const NO_REQUEST_ID: &str = "no_request_id";
+
 /// Ask the desktop window over its control socket.
 ///
 /// **Version skew.** `DesktopRequest` denies unknown fields, so a window
@@ -535,6 +539,16 @@ pub async fn desktop_call(
     socket: &Path,
     request: &DesktopRequest,
 ) -> Result<DesktopResponse, String> {
+    // An empty id is one the RNG could not mint (`host::new_request_id`). Sent,
+    // it would share the window's pending slot with any other such request, so
+    // it is answered here as an error — not as `desktop_unavailable`, which
+    // would send the caller down the headless path behind a live window.
+    if request.request_id().is_empty() {
+        return Ok(DesktopResponse::Error {
+            code: NO_REQUEST_ID.into(),
+            message: "No request id could be drawn from the system's randomness".into(),
+        });
+    }
     let first = desktop_call_once(socket, request).await;
     match &first {
         Err(why) if why != DESKTOP_UNAVAILABLE => match without_device_id(request) {
@@ -655,6 +669,21 @@ pub fn io_other(message: String) -> io::Error {
 #[cfg(all(test, unix))]
 mod tests {
     use super::desktop_reachable;
+
+    #[tokio::test]
+    async fn a_request_without_an_id_is_refused_before_it_is_sent() {
+        use super::{desktop_call, DesktopRequest, DesktopResponse, NO_REQUEST_ID};
+        let dir = tempfile::tempdir().expect("control dir");
+        // Nothing listens: a sent request would come back `desktop_unavailable`.
+        let socket = dir.path().join("desktop-control.sock");
+        let empty = DesktopRequest::Activity { request_id: String::new() };
+        match desktop_call(&socket, &empty).await {
+            Ok(DesktopResponse::Error { code, .. }) => assert_eq!(code, NO_REQUEST_ID),
+            other => panic!("expected the no-id refusal, got {other:?}"),
+        }
+        let minted = DesktopRequest::Activity { request_id: "abc".into() };
+        assert!(desktop_call(&socket, &minted).await.is_err(), "an id is sent and finds no desktop");
+    }
 
     #[tokio::test]
     async fn a_desktop_is_reachable_only_while_something_listens_on_its_socket() {

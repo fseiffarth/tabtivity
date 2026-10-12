@@ -175,7 +175,7 @@ pub fn reseal_side_files(dir: &Path, keys: &MailKeys) -> Result<(), String> {
             Err(e) => return Err(e.to_string()),
         };
         if let Ok((plain, false)) = keys.open_any(|k| &k.field, &aad, &raw) {
-            mail_crypt::write_bytes_durable(&path, &mail_crypt::seal(&keys.field, &aad, &plain))?;
+            mail_crypt::write_bytes_atomic(&path, &mail_crypt::seal(&keys.field, &aad, &plain))?;
         }
     }
     crate::services::mail_pgp::reseal_keyring(dir, keys)?;

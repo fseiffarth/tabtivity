@@ -179,15 +179,7 @@ fn member_projects(member_ids: &[String]) -> Vec<(String, PathBuf)> {
 
 /// Mirror of the frontend `resolveProjectDirectory` for a single project entry.
 fn project_directory(p: &crate::schema::projects::ProjectEntry) -> Option<PathBuf> {
-    if let Some(Value::String(dir)) = p.extra.get("directory") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir));
-        }
-    }
-    p.local_file
-        .strip_suffix("/project.json")
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+    p.directory().map(PathBuf::from)
 }
 
 // ── Box tab scope (`box:<id>`) ──────────────────────────────────────────────

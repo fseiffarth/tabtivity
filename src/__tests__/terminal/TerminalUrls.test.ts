@@ -118,7 +118,23 @@ describe("isSignInUrl", () => {
     expect(isSignInUrl("https://github.com/login/device")).toBe(true);
   });
 
+  it("knows every link the phone's sign-in sheet knows (one shared rule)", () => {
+    // Qwen's device page carries its code; Cursor's polling page a challenge.
+    expect(isSignInUrl("https://chat.qwen.ai/authorize?user_code=K7QX-P2MD&client=qwen-code")).toBe(true);
+    expect(isSignInUrl("https://cursor.com/loginDeepControl?challenge=abc&uuid=u1&mode=login")).toBe(true);
+    expect(isSignInUrl("https://example.com/start?code_challenge=x&code_challenge_method=S256")).toBe(true);
+    expect(isSignInUrl("https://example.com/device")).toBe(true);
+    expect(isSignInUrl("https://example.com/activate/")).toBe(true);
+    expect(isSignInUrl("https://microsoft.com/devicelogin")).toBe(true);
+    expect(isSignInUrl(new URL("https://github.com/login/device"))).toBe(true);
+  });
+
   it("ignores ordinary links", () => {
+    // A `client_id` alone is the CLI's own callback, not a page to sign in on.
+    expect(isSignInUrl("http://localhost:1455/auth/callback?client_id=x")).toBe(false);
+    expect(isSignInUrl("https://example.com/devices")).toBe(false);
+    expect(isSignInUrl("https://example.com/activated")).toBe(false);
+    expect(isSignInUrl("ftp://example.com/login/device")).toBe(false);
     expect(isSignInUrl("https://antigravity.google/docs/cli/install/")).toBe(false);
     expect(isSignInUrl("https://example.com/?client=1")).toBe(false);
     expect(isSignInUrl("not a url")).toBe(false);

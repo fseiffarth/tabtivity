@@ -231,13 +231,7 @@ fn trusted_project(entry: &crate::schema::ProjectEntry) -> Project {
     };
     project.id = entry.id.clone();
     project.name = entry.name.clone();
-    project.directory = text("directory")
-        .or_else(|| {
-            Path::new(&entry.local_file)
-                .parent()
-                .map(|p| p.to_string_lossy().into_owned())
-        })
-        .unwrap_or_default();
+    project.directory = entry.directory().unwrap_or_default().to_string();
     project.remote = entry
         .extra
         .get("remote")

@@ -352,36 +352,29 @@ fn random_token() -> Result<String, String> {
 /// so whichever runs first writes the file the other reads.
 pub fn login_token(control_dir: &Path) -> Result<String, String> {
     let path = control_dir.join(TOKEN_FILE);
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        let existing = existing.trim();
-        if existing.len() >= 32 {
-            return Ok(existing.to_string());
-        }
+    if let Some(existing) = read_token(&path) {
+        return Ok(existing);
     }
     std::fs::create_dir_all(control_dir).map_err(|e| format!("create {}: {e}", control_dir.display()))?;
     let token = random_token()?;
-    write_private(&path, token.as_bytes())?;
+    // The desktop window and the sidecar can both get here at once: the
+    // first mint to land wins and the other adopts it, so neither hands out
+    // a token the file no longer holds. A file that is there but unusable
+    // (the short read above) is replaced.
+    if !crate::storage::create_private_atomic(&path, token.as_bytes())? {
+        if let Some(existing) = read_token(&path) {
+            return Ok(existing);
+        }
+        crate::storage::write_private_atomic(&path, token.as_bytes())?;
+    }
     Ok(token)
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(|e| format!("write {}: {e}", path.display()))?;
-        file.write_all(bytes).map_err(|e| format!("write {}: {e}", path.display()))
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, bytes).map_err(|e| format!("write {}: {e}", path.display()))
-    }
+/// The stored login token, when the file holds a usable one.
+fn read_token(path: &Path) -> Option<String> {
+    let existing = std::fs::read_to_string(path).ok()?;
+    let existing = existing.trim();
+    (existing.len() >= 32).then(|| existing.to_string())
 }
 
 /// Replace the login token: every sign-in link minted from the old one stops
@@ -390,7 +383,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
 pub fn rotate_login_token(control_dir: &Path) -> Result<String, String> {
     std::fs::create_dir_all(control_dir).map_err(|e| format!("create {}: {e}", control_dir.display()))?;
     let token = random_token()?;
-    write_private(&control_dir.join(TOKEN_FILE), token.as_bytes())?;
+    crate::storage::write_private_atomic(&control_dir.join(TOKEN_FILE), token.as_bytes())?;
     Ok(token)
 }
 
@@ -1647,6 +1640,21 @@ mod tests {
         let rotated = rotate_login_token(&control).unwrap();
         assert_ne!(rotated, first);
         assert_eq!(login_token(&control).unwrap(), rotated, "the rotated token is what the file holds now");
+    }
+
+    /// A file too short to be a token (a torn or hand-made one) is replaced
+    /// whole; the replacement is what every later read returns.
+    #[test]
+    fn a_short_token_file_is_replaced_and_then_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        std::fs::create_dir_all(&control).unwrap();
+        std::fs::write(control.join(TOKEN_FILE), b"short").unwrap();
+        let minted = login_token(&control).unwrap();
+        assert!(minted.len() >= 43);
+        assert_eq!(std::fs::read_to_string(control.join(TOKEN_FILE)).unwrap(), minted);
+        assert_eq!(login_token(&control).unwrap(), minted);
+        assert_eq!(std::fs::read_dir(&control).unwrap().count(), 1, "no staging file left");
     }
 
     #[test]

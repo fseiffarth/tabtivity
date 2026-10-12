@@ -122,6 +122,32 @@ describe("detached host (#42)", () => {
     expect(handlers.has(DETACHED_HIDE)).toBe(true);
   });
 
+  it("its cleanup removes every listener it registered", async () => {
+    const off = await listenDetachedHost();
+    expect(handlers.size).toBeGreaterThan(10);
+    off();
+    expect(handlers.size).toBe(0);
+  });
+
+  it("a listen that fails half-way takes the earlier listeners down with it", async () => {
+    let calls = 0;
+    listen.mockImplementation((event: string, handler: Handler) => {
+      if (++calls === 4) return Promise.reject(new Error("ipc gone"));
+      handlers.set(event, handler);
+      return Promise.resolve(() => handlers.delete(event));
+    });
+    try {
+      await expect(listenDetachedHost()).rejects.toThrow("ipc gone");
+      // The three registered before the failure did not outlive it.
+      expect(handlers.size).toBe(0);
+    } finally {
+      listen.mockImplementation((event: string, handler: Handler) => {
+        handlers.set(event, handler);
+        return Promise.resolve(() => handlers.delete(event));
+      });
+    }
+  });
+
   it("does not answer a seed until every protocol listener is registered", async () => {
     const { groupId, label } = detachSecond();
     let releaseEdit!: (unlisten: () => boolean) => void;
@@ -138,7 +164,10 @@ describe("detached host (#42)", () => {
       });
 
     const hosting = listenDetachedHost();
-    await vi.waitFor(() => expect(handlers.has(DETACHED_REQUEST_SEED)).toBe(true));
+    // The seed listener is live and the edit listener's registration is still
+    // in flight (its handler is recorded the moment `listen` is called).
+    await vi.waitFor(() => expect(handlers.has(DETACHED_EDIT)).toBe(true));
+    expect(handlers.has(DETACHED_REQUEST_SEED)).toBe(true);
     handlers.get(DETACHED_REQUEST_SEED)!({
       payload: { label, scope: "p", groupId },
     });

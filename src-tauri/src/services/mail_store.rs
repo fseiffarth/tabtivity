@@ -77,7 +77,7 @@ use crate::schema::mail::{
     MailHeaderPage, MailPriority, MailPriorityCounts, MailPrioritySource, MailSort,
     NewStagedFile, StagedAttachment,
 };
-use crate::services::mail_crypt::{self, MailKeys};
+use crate::services::mail_crypt::{self, harden, MailKeys};
 
 /// One staged file of a send: its row and the decrypted outbox copy.
 pub type OutgoingFile = (StagedAttachment, Vec<u8>);
@@ -633,33 +633,18 @@ impl MailStore {
         .map_err(|e| e.to_string())?;
         // Additive column for a store created before it existed. `CREATE TABLE
         // IF NOT EXISTS` is a no-op on an existing table, so a dev database from
-        // an earlier run would otherwise keep the old shape forever; a duplicate
-        // -column error here just means the column is already there.
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN rfc_message_id TEXT NOT NULL DEFAULT ''",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN authres_json TEXT NOT NULL DEFAULT ''",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN priority TEXT NOT NULL DEFAULT ''",
-            [],
-        );
+        // an earlier run would otherwise keep the old shape forever. A column
+        // already there is skipped ([`add_column_if_missing`]); any other
+        // failure stops the open rather than leaving the store half-migrated.
+        add_column_if_missing(&conn, "messages", "rfc_message_id", "TEXT NOT NULL DEFAULT ''")?;
+        add_column_if_missing(&conn, "messages", "authres_json", "TEXT NOT NULL DEFAULT ''")?;
+        add_column_if_missing(&conn, "messages", "priority", "TEXT NOT NULL DEFAULT ''")?;
         // #205 provenance. Sealable (a model's reason quotes the message), so
         // they are read through `open_text` like every other value column — but
         // additive, for the reason the `priority` ALTER above documents: a dev
-        // database from before they existed keeps its old shape otherwise, and a
-        // duplicate-column error here just means they are already there.
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN priority_source TEXT NOT NULL DEFAULT ''",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN priority_reason TEXT NOT NULL DEFAULT ''",
-            [],
-        );
+        // database from before they existed keeps its old shape otherwise.
+        add_column_if_missing(&conn, "messages", "priority_source", "TEXT NOT NULL DEFAULT ''")?;
+        add_column_if_missing(&conn, "messages", "priority_reason", "TEXT NOT NULL DEFAULT ''")?;
         // The Important/Urgent lists span every account and folder, so their only
         // WHERE is this column; unindexed, that is a full scan of the whole
         // mailbox on every page and every badge refresh.
@@ -676,10 +661,7 @@ impl MailStore {
         .map_err(|e| e.to_string())?;
         // "Your replies to this message" looks a message's answers up by this
         // key. Additive and indexed after its ALTER, for the reasons above.
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN reply_key TEXT NOT NULL DEFAULT ''",
-            [],
-        );
+        add_column_if_missing(&conn, "messages", "reply_key", "TEXT NOT NULL DEFAULT ''")?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS messages_by_reply_key ON messages (reply_key)
              WHERE reply_key != ''",
@@ -690,8 +672,8 @@ impl MailStore {
         // (`<project name>/<relative path>`, sealable). Additive for the reason
         // the `priority` ALTER documents; `''` reads as unset, so every row
         // staged before these existed is the user's own pick.
-        let _ = conn.execute("ALTER TABLE staged ADD COLUMN origin TEXT NOT NULL DEFAULT ''", []);
-        let _ = conn.execute("ALTER TABLE staged ADD COLUMN source TEXT NOT NULL DEFAULT ''", []);
+        add_column_if_missing(&conn, "staged", "origin", "TEXT NOT NULL DEFAULT ''")?;
+        add_column_if_missing(&conn, "staged", "source", "TEXT NOT NULL DEFAULT ''")?;
         // v1 → v2. Both of these moved a `UNIQUE`/`PRIMARY KEY` off a column that
         // became sealable and onto a keyed digest beside it, which SQLite cannot
         // express as an `ALTER` — a constraint change is a table rebuild. The
@@ -704,10 +686,7 @@ impl MailStore {
         // database can be in any half-state, and "does the column exist" is a
         // question with one true answer where "what does `meta` claim" is a
         // question about a row that may have been written before a crash.
-        if conn
-            .prepare("SELECT path_key FROM folders LIMIT 0")
-            .is_err()
-        {
+        if !column_exists(&conn, "folders", "path_key")? {
             let old: Vec<(String, String, String, String, String, i64, i64)> = {
                 let mut stmt = conn
                     .prepare("SELECT id, account_id, path, name, kind, unread, total FROM folders")
@@ -770,10 +749,7 @@ impl MailStore {
             conn.execute_batch("DROP TABLE folders_v1;")
                 .map_err(|e| e.to_string())?;
         }
-        if conn
-            .prepare("SELECT addr_key FROM mail_remote_allow LIMIT 0")
-            .is_err()
-        {
+        if !column_exists(&conn, "mail_remote_allow", "addr_key")? {
             let old: Vec<String> = {
                 let mut stmt = conn
                     .prepare("SELECT address FROM mail_remote_allow")
@@ -805,15 +781,9 @@ impl MailStore {
                 .map_err(|e| e.to_string())?;
         }
         // Additive, and after the v1 → v2 folders rebuild above, whose new table
-        // does not carry them: a duplicate-column error just means they are there.
-        let _ = conn.execute(
-            "ALTER TABLE folders ADD COLUMN unread_unindexed INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE folders ADD COLUMN total_unindexed INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
+        // does not carry them.
+        add_column_if_missing(&conn, "folders", "unread_unindexed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&conn, "folders", "total_unindexed", "INTEGER NOT NULL DEFAULT 0")?;
         // Rows written before `upsert_header` normalized `date` to UTC still
         // carry the sender's offset and sort out of order (see there). Only mail
         // a sync fetches again would be rewritten, so they are converted here.
@@ -3641,7 +3611,7 @@ impl MailStore {
                     let Ok(raw) = std::fs::read(&path) else { continue };
                     let aad = Self::staged_aad(&draft_id, &staged_id);
                     if let Ok((plain, false)) = keys.open_any(|k| &k.blob, &aad, &raw) {
-                        mail_crypt::write_bytes_durable(&path, &mail_crypt::seal(&keys.blob, &aad, &plain))?;
+                        mail_crypt::write_bytes_atomic(&path, &mail_crypt::seal(&keys.blob, &aad, &plain))?;
                         moved += 1;
                     }
                 }
@@ -3694,7 +3664,7 @@ impl MailStore {
                     // Opened for writing: `FlushFileBuffers` on Windows needs it.
                     std::fs::OpenOptions::new().read(true).write(true).open(&new_path).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
                 } else {
-                    mail_crypt::write_bytes_durable(&new_path, &mail_crypt::seal(&keys.blob, &new_aad, &plain))?;
+                    mail_crypt::write_bytes_atomic(&new_path, &mail_crypt::seal(&keys.blob, &new_aad, &plain))?;
                 }
                 moves.push((name.clone(), new_id));
                 plains.push(plain);
@@ -3707,7 +3677,7 @@ impl MailStore {
             return Err(REKEY_CRASHED.into());
         }
         if !moves.is_empty() {
-            // The adopted files' names, too (`write_bytes_durable` synced its own).
+            // The adopted files' names, too (`write_bytes_atomic` synced its own).
             if let Ok(handle) = std::fs::File::open(&dir) {
                 let _ = handle.sync_all();
             }
@@ -3743,7 +3713,7 @@ impl MailStore {
             };
             for ((old, _), plain) in moves.iter().zip(&plains) {
                 if !referenced.contains(old) {
-                    mail_crypt::write_bytes_durable(&dir.join(old), &mail_crypt::seal(&keys.blob, &mail_crypt::blob_aad(old), plain))?;
+                    mail_crypt::write_bytes_atomic(&dir.join(old), &mail_crypt::seal(&keys.blob, &mail_crypt::blob_aad(old), plain))?;
                 }
             }
             moves.retain(|(old, _)| referenced.contains(old));
@@ -4037,18 +4007,31 @@ fn hex_digest(bytes: &[u8]) -> String {
     hex
 }
 
-/// `0700` on a directory, `0600` on a file (Unix). On Windows the per-user
-/// profile ACL already scopes `%APPDATA%`, so this is a no-op there.
-fn harden(path: &Path, mode: u32) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+/// Whether `table` has a column named `column`. A table that does not exist
+/// has none.
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+        params![table, column],
+        |r| r.get::<_, bool>(0),
+    )
+    .map_err(|e| format!("inspect {table}.{column}: {e}"))
+}
+
+/// Add `column` (declared `decl`) to `table` unless it is already there — the
+/// additive half of [`MailStore::migrate`]. Only "already there" is skipped:
+/// a missing table, a read-only or locked database, a bad declaration come
+/// back as errors instead of a store that silently keeps its old shape.
+///
+/// `table`, `column` and `decl` are literals from `migrate`, never input: an
+/// identifier cannot be a bound parameter.
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), String> {
+    if column_exists(conn, table, column)? {
+        return Ok(());
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, mode);
-    }
+    conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])
+        .map(|_| ())
+        .map_err(|e| format!("add column {table}.{column}: {e}"))
 }
 
 #[cfg(test)]
@@ -6696,5 +6679,53 @@ mod tests {
                 "the scratch directory goes with the store"
             );
         }
+    }
+
+    /// The additive migration: a missing column is added once, a present one
+    /// is a no-op, and a real failure is an error rather than a silent skip.
+    #[test]
+    fn add_column_if_missing_adds_once_and_reports_real_errors() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (a TEXT NOT NULL); INSERT INTO t (a) VALUES ('x');").unwrap();
+        assert!(!column_exists(&conn, "t", "b").unwrap());
+
+        add_column_if_missing(&conn, "t", "b", "TEXT NOT NULL DEFAULT ''").unwrap();
+        assert!(column_exists(&conn, "t", "b").unwrap());
+        let b: String = conn.query_row("SELECT b FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(b, "", "existing rows take the default");
+
+        add_column_if_missing(&conn, "t", "b", "TEXT NOT NULL DEFAULT ''").expect("second call is a no-op");
+        let columns: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('t')", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(columns, 2);
+
+        assert!(!column_exists(&conn, "nope", "b").unwrap(), "an unknown table has no columns");
+        let err = add_column_if_missing(&conn, "nope", "b", "TEXT").unwrap_err();
+        assert!(err.contains("nope.b"), "{err}");
+        // NOT NULL without a default cannot be added to a table with rows.
+        assert!(add_column_if_missing(&conn, "t", "c", "TEXT NOT NULL").is_err());
+    }
+
+    /// `migrate` on a store that already has every column changes nothing and
+    /// does not fail (every existing install takes this path at each open).
+    #[test]
+    fn migrate_twice_is_a_no_op() {
+        let (_dir, store) = store();
+        let shape = |store: &MailStore| -> Vec<(String, String)> {
+            let conn = store.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT m.name, p.name FROM sqlite_master m, pragma_table_info(m.name) p
+                     WHERE m.type = 'table' ORDER BY m.name, p.cid",
+                )
+                .unwrap();
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+            rows.collect::<Result<Vec<_>, _>>().unwrap()
+        };
+        let before = shape(&store);
+        assert!(before.iter().any(|(t, c)| t == "folders" && c == "total_unindexed"));
+        store.migrate().unwrap();
+        assert_eq!(shape(&store), before);
     }
 }

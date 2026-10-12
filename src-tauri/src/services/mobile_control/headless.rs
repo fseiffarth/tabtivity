@@ -1252,7 +1252,7 @@ fn queue_prompt(
                 .iter()
                 .any(|rule| rule.id == *id && !matches!(rule.rule, AgentScheduleRule::Once { .. }))
         })
-        .map_or_else(random_rule_id, str::to_string);
+        .map_or_else(random_rule_id, |id| Ok(id.to_string()))?;
     let rule = ScheduledAgentPrompt {
         id: id.clone(),
         enabled: true,
@@ -1269,13 +1269,12 @@ fn queue_prompt(
 
 /// A rule id the way the window mints one (`crypto.randomUUID`): a random
 /// v4 UUID, which the phone's held-prompt route accepts back.
-fn random_rule_id() -> String {
-    let mut b = [0u8; 16];
-    let _ = getrandom::fill(&mut b);
+fn random_rule_id() -> Result<String, String> {
+    let mut b = super::auth::random_bytes::<16>()?;
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let hex: String = b.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..])
+    Ok(format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]))
 }
 
 /// The words of a held prompt, or `invalid_prompt`: a command is the CLI's

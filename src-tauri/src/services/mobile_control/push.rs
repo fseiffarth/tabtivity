@@ -30,6 +30,7 @@ use p256::{
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
+use super::auth::random_bytes;
 use super::store;
 
 const PUSH_SCHEMA: u32 = 1;
@@ -62,12 +63,6 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
-    let mut bytes = [0u8; N];
-    getrandom::fill(&mut bytes).map_err(|e| format!("no system randomness: {e}"))?;
-    Ok(bytes)
 }
 
 fn random_secret_key() -> Result<SecretKey, String> {

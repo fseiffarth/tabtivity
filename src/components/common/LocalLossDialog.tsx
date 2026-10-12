@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { useProjectsStore } from "../../stores/projects";
 import {
   LOCAL_LOSS_EVENTS,
@@ -89,18 +90,14 @@ export function LocalLossDialog() {
   useEffect(() => {
     if (!activeId) return;
     void refresh(activeId);
-    const uns: Array<() => void> = [];
-    let cancelled = false;
-    const on = (event: string) => {
-      void listen(event, (e) => {
-        if (localLossEventConcerns(event, e.payload, activeId)) void refresh(activeId);
-      }).then((u) => (cancelled ? u() : uns.push(u)));
-    };
-    LOCAL_LOSS_EVENTS.forEach(on);
-    return () => {
-      cancelled = true;
-      uns.forEach((u) => u());
-    };
+    const uns = LOCAL_LOSS_EVENTS.map((event) =>
+      subscribeTauri(() =>
+        listen(event, (e) => {
+          if (localLossEventConcerns(event, e.payload, activeId)) void refresh(activeId);
+        }),
+      ),
+    );
+    return () => uns.forEach((u) => u());
   }, [activeId, refresh]);
 
   // Only ever speak for the project on screen: a log fetched for a project the user has

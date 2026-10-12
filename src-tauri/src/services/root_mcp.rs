@@ -1602,7 +1602,7 @@ fn projects_list(stores: &Stores) -> Result<Value, String> {
                 "id": p.id,
                 "name": p.name,
                 "status": p.status,
-                "directory": p.extra.get("directory").and_then(Value::as_str).unwrap_or(""),
+                "directory": p.directory().unwrap_or(""),
                 "remote": p.extra.get("remote").is_some_and(|r| !r.is_null()),
             })
         })
@@ -3042,7 +3042,7 @@ fn local_checkout(entry: &crate::schema::projects::ProjectEntry) -> Result<(Stri
             .ok_or("remote project with no local mirror; its files live on the host")?;
         (mirror, "mirror")
     } else {
-        (field("directory").ok_or("no folder recorded")?, "project")
+        (entry.directory().ok_or("no folder recorded")?, "project")
     };
     if !Path::new(dir).is_dir() {
         return Err(format!("folder is missing: {dir}"));

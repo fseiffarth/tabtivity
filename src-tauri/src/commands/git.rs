@@ -3602,22 +3602,16 @@ fn detect_git_providers_blocking() -> Result<HashMap<String, DetectedOrigin>, St
         }
         // The project's working directory. Legacy entries (created before
         // `directory` was persisted — e.g. the self-hosting checkout's own
-        // entry) omit the key; fall back to `local_file`'s parent, which is
-        // always `<directory>/project.json`, so they still get sniffed/badged.
-        let dir: String = match entry.extra.get("directory") {
-            Some(Value::String(d)) => d.clone(),
-            _ => match Path::new(&entry.local_file).parent() {
-                Some(p) => p.to_string_lossy().into_owned(),
-                None => continue,
-            },
-        };
-        if !Path::new(&dir).join(".git").exists() {
+        // entry) omit the key; `directory()` falls back to `local_file`'s
+        // folder, so they still get sniffed/badged.
+        let Some(dir) = entry.directory() else { continue };
+        if !Path::new(dir).join(".git").exists() {
             continue;
         }
         // Bounded (#2349), in the folder rather than `-C` so the FIFO pre-check
         // sees it: one hung `config` read must not hold the whole sweep.
         let mut cmd = crate::paths::command_no_window("git");
-        cmd.args(["remote", "get-url", "origin"]).current_dir(&dir);
+        cmd.args(["remote", "get-url", "origin"]).current_dir(dir);
         let output = crate::services::git_bounded::output_within(cmd, std::time::Duration::from_secs(15));
         let Ok(output) = output else { continue };
         if !output.status.success() {

@@ -2098,14 +2098,7 @@ fn compute_allowed_roots(
 /// A project entry's working directory: the canonical `directory` field when
 /// present, otherwise the parent of its `local_file` (which is `<dir>/project.json`).
 fn project_dir(entry: &ProjectEntry) -> Option<PathBuf> {
-    if let Some(Value::String(d)) = entry.extra.get("directory") {
-        if !d.is_empty() {
-            return Some(PathBuf::from(d));
-        }
-    }
-    Path::new(&entry.local_file)
-        .parent()
-        .map(|p| p.to_path_buf())
+    entry.directory().map(PathBuf::from)
 }
 
 /// A remote project's explicit local-mirror override (`extra["mirror"]`), or

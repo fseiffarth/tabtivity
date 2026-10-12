@@ -48,6 +48,64 @@ interface TimerStore {
   getProjectSecs: () => number;
 }
 
+const DAY_MS = 86_400_000;
+
+/** Start of the UTC day `now` falls on — the backend's `time_log.json` day. */
+function todayStartMs(now: number): number {
+  return Math.floor(now / DAY_MS) * DAY_MS;
+}
+
+/**
+ * Seconds of a run that started at `startedAt` and is still going at `now`
+ * which fall on today (UTC). A run started before midnight books only the
+ * part since midnight: the rest belonged to a day that is already closed, and
+ * booking it now would bloat today's total (an overnight gap, or a pause or
+ * project switch in the morning after a run left going overnight).
+ */
+export function elapsedToday(startedAt: number | null, now: number): number {
+  if (startedAt == null) return 0;
+  return Math.max(0, (now - Math.max(startedAt, todayStartMs(now))) / 1000);
+}
+
+/**
+ * Today's total for a counter: `committedSecs` (today's as of `startedAt`)
+ * plus the run since. A run that began before midnight means the committed
+ * figure is yesterday's, so today's total is just the part since midnight.
+ */
+function totalToday(committedSecs: number, startedAt: number | null, now: number): number {
+  const elapsed = elapsedToday(startedAt, now);
+  return startedAt != null && startedAt < todayStartMs(now) ? elapsed : committedSecs + elapsed;
+}
+
+type TimerState = Pick<
+  TimerStore,
+  "paused" | "appStartedAt" | "projectStartedAt" | "activeProjectId"
+>;
+
+/**
+ * Book the running counters' time since their start (today's part only) on the
+ * backend. `app: false` leaves the app counter
+ * running — a project switch only closes the project's run. A paused store
+ * has nothing running and books nothing.
+ */
+async function flushRunning(
+  s: TimerState,
+  now: number,
+  { app }: { app: boolean },
+): Promise<void> {
+  const appElapsed = app && !s.paused ? elapsedToday(s.appStartedAt, now) : 0;
+  const projectId = s.activeProjectId;
+  const projElapsed = !s.paused && projectId ? elapsedToday(s.projectStartedAt, now) : 0;
+  await Promise.all([
+    appElapsed > 0
+      ? invoke("timer_flush_app", { secs: appElapsed }).catch(() => {})
+      : Promise.resolve(),
+    projectId && projElapsed > 0
+      ? invoke("timer_flush_project", { projectId, secs: projElapsed }).catch(() => {})
+      : Promise.resolve(),
+  ]);
+}
+
 export const useTimerStore = create<TimerStore>((set, get) => ({
   paused: false,
   appStartedAt: null,
@@ -77,26 +135,15 @@ export const useTimerStore = create<TimerStore>((set, get) => ({
     const s = get();
     const now = Date.now();
     if (!s.paused) {
-      const appElapsed = s.appStartedAt != null ? (now - s.appStartedAt) / 1000 : 0;
-      const projElapsed =
-        s.projectStartedAt != null && s.activeProjectId
-          ? (now - s.projectStartedAt) / 1000
-          : 0;
-      await Promise.all([
-        invoke("timer_flush_app", { secs: appElapsed }).catch(() => {}),
-        s.activeProjectId && projElapsed > 0
-          ? invoke("timer_flush_project", {
-              projectId: s.activeProjectId,
-              secs: projElapsed,
-            }).catch(() => {})
-          : Promise.resolve(),
-      ]);
+      await flushRunning(s, now, { app: true });
       set({
         paused: true,
         appStartedAt: null,
-        appCommittedSecs: s.appCommittedSecs + appElapsed,
+        appCommittedSecs: totalToday(s.appCommittedSecs, s.appStartedAt, now),
         projectStartedAt: null,
-        projectCommittedSecs: s.projectCommittedSecs + projElapsed,
+        projectCommittedSecs: s.activeProjectId
+          ? totalToday(s.projectCommittedSecs, s.projectStartedAt, now)
+          : s.projectCommittedSecs,
       });
     } else {
       set({ paused: false, appStartedAt: Date.now(), projectStartedAt: Date.now() });
@@ -106,15 +153,7 @@ export const useTimerStore = create<TimerStore>((set, get) => ({
   setProject: async (newId) => {
     const s = get();
     const now = Date.now();
-    if (s.activeProjectId && !s.paused && s.projectStartedAt != null) {
-      const elapsed = (now - s.projectStartedAt) / 1000;
-      if (elapsed > 0) {
-        await invoke("timer_flush_project", {
-          projectId: s.activeProjectId,
-          secs: elapsed,
-        }).catch(() => {});
-      }
-    }
+    await flushRunning(s, now, { app: false });
     const scopeId = newId ?? ROOT_TIMER_ID;
     const newCommitted = await invoke<number>("get_time_today", {
       projectId: scopeId,
@@ -129,35 +168,20 @@ export const useTimerStore = create<TimerStore>((set, get) => ({
   flush: async () => {
     const s = get();
     const now = Date.now();
-    // Never attribute more seconds to today than have actually elapsed since
-    // UTC midnight. This prevents overnight gaps (app started yesterday, first
-    // flush fires today) from bloating today's total.
-    const todayStartMs = Math.floor(now / 86400000) * 86400000;
-    const appElapsed = !s.paused && s.appStartedAt != null
-      ? Math.min((now - s.appStartedAt) / 1000, (now - todayStartMs) / 1000) : 0;
-    const projElapsed = !s.paused && s.projectStartedAt != null && s.activeProjectId
-      ? Math.min((now - s.projectStartedAt) / 1000, (now - todayStartMs) / 1000) : 0;
-    await Promise.all([
-      appElapsed > 0
-        ? invoke("timer_flush_app", { secs: appElapsed }).catch(() => {})
-        : Promise.resolve(),
-      projElapsed > 0 && s.activeProjectId
-        ? invoke("timer_flush_project", { projectId: s.activeProjectId, secs: projElapsed }).catch(() => {})
-        : Promise.resolve(),
-    ]);
+    await flushRunning(s, now, { app: true });
     // Reload committed secs from the backend so day-boundary crossings are
     // handled correctly (in-memory accumulation would carry yesterday's total
     // into today once Tabtivity runs past midnight).
     if (!s.paused) {
       const [newAppSecs, newProjSecs] = await Promise.all([
         invoke<number>("get_time_today", { projectId: APP_TIMER_ID }).catch(
-          () => s.appCommittedSecs + appElapsed,
+          () => totalToday(s.appCommittedSecs, s.appStartedAt, now),
         ),
         s.activeProjectId
           ? invoke<number>("get_time_today", { projectId: s.activeProjectId }).catch(
-              () => s.projectCommittedSecs + projElapsed,
+              () => totalToday(s.projectCommittedSecs, s.projectStartedAt, now),
             )
-          : Promise.resolve(s.projectCommittedSecs + projElapsed),
+          : Promise.resolve(s.projectCommittedSecs),
       ]);
       set({
         appStartedAt: now,
@@ -170,17 +194,13 @@ export const useTimerStore = create<TimerStore>((set, get) => ({
 
   getAppSecs: () => {
     const s = get();
-    const elapsed =
-      !s.paused && s.appStartedAt != null ? (Date.now() - s.appStartedAt) / 1000 : 0;
-    return s.appCommittedSecs + elapsed;
+    return s.paused ? s.appCommittedSecs : totalToday(s.appCommittedSecs, s.appStartedAt, Date.now());
   },
 
   getProjectSecs: () => {
     const s = get();
-    const elapsed =
-      !s.paused && s.projectStartedAt != null
-        ? (Date.now() - s.projectStartedAt) / 1000
-        : 0;
-    return s.projectCommittedSecs + elapsed;
+    return s.paused
+      ? s.projectCommittedSecs
+      : totalToday(s.projectCommittedSecs, s.projectStartedAt, Date.now());
   },
 }));

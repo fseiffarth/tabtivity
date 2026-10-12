@@ -249,17 +249,10 @@ pub fn decide(
     FenceDecision::Fenced { roots }
 }
 
+/// The project's folder ([`ProjectEntry::directory`]); `None` leaves the
+/// project without a fence root, so the callers fail closed.
 pub(crate) fn entry_directory(entry: &ProjectEntry) -> Option<PathBuf> {
-    if let Some(dir) = entry.extra.get("directory").and_then(|v| v.as_str()) {
-        if !dir.trim().is_empty() {
-            return Some(PathBuf::from(dir.trim()));
-        }
-    }
-    entry
-        .local_file
-        .strip_suffix("/project.json")
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+    entry.directory().map(PathBuf::from)
 }
 
 pub(crate) fn entry_mirror(entry: &ProjectEntry) -> Option<PathBuf> {

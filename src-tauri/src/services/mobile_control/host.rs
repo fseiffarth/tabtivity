@@ -581,7 +581,7 @@ fn poke_window(state: &HostState, raw_id: Option<&str>, slices: &[&str]) {
 fn poke_desktop(control_dir: &std::path::Path, raw_id: Option<&str>, slices: &[&str]) {
     let socket = control_dir.join("desktop-control.sock");
     let request = DesktopRequest::Refresh {
-        request_id: Base64UrlUnpadded::encode_string(&random_16()),
+        request_id: new_request_id(),
         project_id: raw_id.map(str::to_string),
         slices: slices.iter().map(|s| s.to_string()).collect(),
     };
@@ -907,7 +907,7 @@ async fn projects(
     // project is listed; a closed or older desktop leaves every row without one.
     let git = if listed.iter().any(|p| p.public.kind == ScopeKind::Project) {
         let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        let request_id = new_request_id();
         match admin::desktop_call(&desktop_socket, &DesktopRequest::GitStates { request_id }).await {
             Ok(DesktopResponse::GitStates { states }) => states
                 .into_iter()
@@ -987,7 +987,7 @@ async fn activity_readings(
     catalog_snapshot: &Catalog,
 ) -> (bool, Vec<super::protocol::AgentTabStatus>, Vec<super::protocol::AgentTabPrompts>) {
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     match admin::desktop_call(&desktop_socket, &DesktopRequest::Activity { request_id }).await {
         Ok(DesktopResponse::Activity { statuses, prompts }) => (true, statuses, prompts),
         response if desktop_down(&response) => {
@@ -1089,7 +1089,7 @@ async fn project(
     // phone was told the desktop was there for as long as it stayed closed —
     // and on Windows the nominal path is never a file, so it was never told.
     // A closed desktop refuses the connect at once, on both.
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let (desktop_available, agents, statuses, schedules, prompts, timings, closed, git) = match admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Catalog {
@@ -1271,10 +1271,15 @@ fn prompt_rows(rows: Vec<super::protocol::AgentTabPrompts>) -> HashMap<String, V
         .collect()
 }
 
-fn random_16() -> [u8; 16] {
-    let mut bytes = [0; 16];
-    let _ = getrandom::fill(&mut bytes);
-    bytes
+/// A fresh id for one desktop round trip — the key the window files the
+/// pending answer under, so two requests must never share one. When the OS RNG
+/// fails it is empty, and [`admin::desktop_call`] refuses an empty id with an
+/// error answer instead of sending it: the request fails, and never takes
+/// another request's reply (as the all-zero id it used to fall back to did).
+fn new_request_id() -> String {
+    super::auth::random_bytes::<16>()
+        .map(|bytes| Base64UrlUnpadded::encode_string(&bytes))
+        .unwrap_or_default()
 }
 
 async fn create_tab(
@@ -1318,7 +1323,7 @@ async fn create_tab(
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     request.project_id = project.raw_id.clone();
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(&desktop_socket, &DesktopRequest::Create { request_id, request: request.clone() }).await;
     if desktop_down(&response) {
@@ -1406,7 +1411,7 @@ async fn create_through_desktop(
     project_id: &str,
     request: CreateTabRequest,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     created_through_desktop(state, phone, project_id, &DesktopRequest::Create { request_id, request }).await
 }
 
@@ -1499,7 +1504,7 @@ async fn reopen_tab(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -1696,7 +1701,7 @@ async fn launch_options(
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::LaunchOptions {
@@ -1756,7 +1761,7 @@ async fn activate_project(
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Activate {
@@ -1806,7 +1811,7 @@ async fn todo(State(state): State<HostState>, headers: HeaderMap) -> impl IntoRe
         return error;
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(&desktop_socket, &DesktopRequest::Todo { request_id }).await;
     if desktop_down(&response) {
         let key = host_key(&state);
@@ -1841,7 +1846,7 @@ async fn alerts(State(state): State<HostState>, headers: HeaderMap) -> impl Into
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     match admin::desktop_call(&desktop_socket, &DesktopRequest::Alerts { request_id }).await {
         Ok(DesktopResponse::Alerts { alerts }) => {
             let alerts = open_alerts(&hidden_sections(&state, &phone), alerts);
@@ -1888,7 +1893,7 @@ async fn alerts_resolve(
     // kind looked up first: a ✓ on a row it was never shown is refused.
     let hidden = hidden_sections(&state, &phone);
     if !hidden.is_empty() {
-        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        let request_id = new_request_id();
         match admin::desktop_call(&desktop_socket, &DesktopRequest::Alerts { request_id }).await {
             Ok(DesktopResponse::Alerts { alerts }) => {
                 if !open_alerts(&hidden, alerts)
@@ -1902,7 +1907,7 @@ async fn alerts_resolve(
             _ => return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
         }
     }
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     match admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::AlertResolve {
@@ -2339,7 +2344,7 @@ async fn calendar(
         return api_error(StatusCode::BAD_REQUEST, "invalid_month");
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Calendar { request_id, month: month.clone() },
@@ -2433,7 +2438,7 @@ async fn calendar_mutate(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::CalendarMutate {
@@ -2523,7 +2528,7 @@ async fn todo_mutate(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::TodoMutate { request_id, action: action.clone() },
@@ -2675,7 +2680,7 @@ async fn local_models_list(State(state): State<HostState>, headers: HeaderMap) -
     if local_models_closed(&state, &headers) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     local_models_response(local_models_call(&state, DesktopRequest::LocalModels { request_id }).await, StatusCode::OK)
 }
 
@@ -2706,7 +2711,7 @@ async fn local_models_mutate(
         LocalModelAction::Unload { .. } => StatusCode::OK,
         LocalModelAction::Load { .. } | LocalModelAction::Start => StatusCode::ACCEPTED,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     local_models_response(local_models_call(&state, DesktopRequest::LocalModelMutate { request_id, action }).await, ok)
 }
 
@@ -2718,7 +2723,7 @@ async fn mail_overview(State(state): State<HostState>, headers: HeaderMap) -> im
         return error;
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2742,7 +2747,7 @@ async fn mail_folder(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2770,7 +2775,7 @@ async fn mail_message(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2809,7 +2814,7 @@ async fn mail_mark(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2850,7 +2855,7 @@ async fn mail_reply(
         return api_error(StatusCode::PAYLOAD_TOO_LARGE, "reply_too_long");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2933,7 +2938,7 @@ async fn rename_tab(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::RenameTab {
@@ -3016,7 +3021,7 @@ async fn color_tab(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::ColorTab {
@@ -3094,7 +3099,7 @@ async fn sent_prompt(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::TabPrompt {
@@ -3232,7 +3237,7 @@ async fn hold_prompt(
         Ok(target) => target,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let state_dir = state.config.state_dir.clone();
     let (status, body) = held_call(
         &state,
@@ -3276,7 +3281,7 @@ async fn edit_held_prompt(
         Ok(target) => target,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let state_dir = state.config.state_dir.clone();
     held_call(
         &state,
@@ -3435,7 +3440,7 @@ async fn order_tab(
         return api_error(StatusCode::BAD_REQUEST, "tab_scope_mismatch");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let after = matches!(request.place, TabPlace::After);
     let response = admin::desktop_call(
         &desktop_socket,
@@ -3518,7 +3523,7 @@ async fn close_tab(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::CloseTab {
@@ -3665,7 +3670,7 @@ async fn schedules(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Schedules {
@@ -3731,7 +3736,7 @@ async fn agent_status(
     };
     let refresh = matches!(query.refresh.as_deref(), Some("1" | "true"));
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::AgentStatus {
@@ -3810,7 +3815,7 @@ async fn agent_transcript(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::AgentTranscript {
@@ -3909,7 +3914,7 @@ async fn schedule_mutation(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::ScheduleMutate {
@@ -4074,7 +4079,7 @@ async fn prompts(
         Ok(raw) => raw,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -4123,7 +4128,7 @@ async fn prompt_mutation(
         Ok(raw) => raw,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -4314,7 +4319,7 @@ async fn undo_clear(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::UndoClear {
@@ -4397,7 +4402,7 @@ fn mark_tab_seen(state: &HostState, project_id: Option<String>, tmux_session: St
         // No `exists()` pre-check: a closed desktop refuses the connect at
         // once, and on Windows the nominal socket path is never a file, so the
         // check silently dropped every report there.
-        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        let request_id = new_request_id();
         let _ = admin::desktop_call(
             &socket,
             &DesktopRequest::TabSeen {
@@ -4420,7 +4425,7 @@ fn mark_tab_input(socket: &std::path::Path, project_id: Option<String>, tmux_ses
     };
     let socket = socket.to_path_buf();
     tokio::spawn(async move {
-        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        let request_id = new_request_id();
         let _ = admin::desktop_call(
             &socket,
             &DesktopRequest::TabInput {
@@ -4701,7 +4706,7 @@ async fn desktop_images(
         Ok(raw) => raw,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -4755,7 +4760,7 @@ async fn attach_desktop_image(
         Ok(raw) => raw,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -5634,7 +5639,7 @@ async fn markup_questions(
         Err(error) => return error,
     };
     let banner = path.is_none();
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let request = DesktopRequest::MarkupQuestions { request_id, project_id: project_id.clone(), tmux_session: tab.tmux_name.clone(), path };
     match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::MarkupQuestions { asks, ticks }) => {
@@ -5763,7 +5768,7 @@ async fn markup_answer(
         Ok(target) => target,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let request = DesktopRequest::MarkupAnswer {
         request_id,
         project_id,
@@ -5809,7 +5814,7 @@ async fn markup_dismiss(
         Ok(target) => target,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let request = DesktopRequest::MarkupDismiss { request_id, project_id, tmux_session: tab.tmux_name.clone(), ask_id: request.ask_id };
     match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "dismissed": true }))),

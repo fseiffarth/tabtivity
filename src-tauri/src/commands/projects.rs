@@ -744,12 +744,9 @@ pub(crate) fn validate_project_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The project's folder — [`ProjectEntry::directory`], owned.
 pub(crate) fn entry_directory(entry: &ProjectEntry) -> Option<String> {
-    entry
-        .extra
-        .get("directory")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    entry.directory().map(str::to_string)
 }
 
 pub(crate) fn entry_mirror(entry: &ProjectEntry) -> Option<String> {
@@ -1800,12 +1797,7 @@ pub fn set_project_sandbox(
     spec.enabled = enabled;
 
     if enabled {
-        if let Some(dir) = entry
-            .extra
-            .get("directory")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(dir) = entry.directory() {
             if let Some(detected) = crate::services::sandbox::detect_spec_source(Path::new(dir)) {
                 if source_needs_decision(&spec, &detected) {
                     match source_decision {
@@ -2566,9 +2558,7 @@ pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<St
         .find(|p| p.id == project_id)
         .ok_or_else(|| format!("project '{project_id}' not found"))?;
     let directory = entry
-        .extra
-        .get("directory")
-        .and_then(Value::as_str)
+        .directory()
         .map(PathBuf::from)
         .ok_or_else(|| "project has no directory".to_string())?;
     if !directory.is_dir() {
@@ -4630,11 +4620,7 @@ pub async fn extend_project_to_remote(
     }
 
     // The current local tree becomes the mirror (working copy), unchanged.
-    let old_dir = list[idx]
-        .extra
-        .get("directory")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let old_dir = entry_directory(&list[idx])
         .ok_or_else(|| "Project has no local directory".to_string())?;
 
     // Whether this project carries git — only then is lockstep meaningful. `none`

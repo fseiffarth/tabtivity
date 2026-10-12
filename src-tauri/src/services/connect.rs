@@ -129,25 +129,10 @@ pub async fn pair_in(state_dir: &Path, origin: &str, code: &str, device_name: &s
     let dir = dir_in(state_dir);
     crate::services::agent_home::create_private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let der = key.to_pkcs8_der().map_err(|e| e.to_string())?;
-    write_private(&dir.join(KEY_FILE), der.as_bytes())?;
+    crate::storage::write_private_atomic(&dir.join(KEY_FILE), der.as_bytes())?;
     let paired = Paired { origin, device_id, device_name: name.chars().take(64).collect() };
     crate::services::mobile_control::store::write_json_atomic(&dir.join(CONFIG_FILE), &paired, 0o600)?;
     Ok(paired)
-}
-
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    use std::io::Write;
-    let tmp = path.with_extension("tmp");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    file.write_all(bytes).and_then(|()| file.sync_all()).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn signing_key(state_dir: &Path) -> Result<p256::ecdsa::SigningKey, String> {

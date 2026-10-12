@@ -188,7 +188,7 @@ pub fn reseal_keyring(dir: &Path, keys: &MailKeys) -> Result<bool, String> {
     };
     match keys.open_any(|k| &k.wrap, KEYRING_AAD, &raw) {
         Ok((plain, false)) => {
-            mail_crypt::write_bytes_durable(&path, &mail_crypt::seal(&keys.wrap, KEYRING_AAD, &plain))?;
+            mail_crypt::write_bytes_atomic(&path, &mail_crypt::seal(&keys.wrap, KEYRING_AAD, &plain))?;
             Ok(true)
         }
         // Under the current master already, or under none (damaged: left as

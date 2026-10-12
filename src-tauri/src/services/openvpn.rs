@@ -38,10 +38,6 @@ use std::collections::HashMap;
 use std::io::Write;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::io::{BufRead, BufReader};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::process::Command;
@@ -357,9 +353,11 @@ pub fn store_config(src: &str) -> Result<String, String> {
         .and_then(|n| n.to_str())
         .unwrap_or("config.ovpn");
     let dest = dir.join(format!("{}__{file_name}", safe_stem(src)));
-    std::fs::copy(src_path, &dest).map_err(|e| format!("copy config: {e}"))?;
-    #[cfg(unix)]
-    let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600));
+    // Read and written whole rather than `fs::copy`, which keeps the source's
+    // (often world-readable) mode on a file that may inline a private key: the
+    // stored copy is owner-only from the moment it exists.
+    let bytes = std::fs::read(src_path).map_err(|e| format!("copy config: {e}"))?;
+    crate::storage::write_private_atomic(&dest, &bytes).map_err(|e| format!("copy config: {e}"))?;
     Ok(dest.to_string_lossy().into_owned())
 }
 
@@ -967,22 +965,17 @@ fn safe_stem(config: &str) -> String {
     format!("{tail}_{h:016x}")
 }
 
-/// Write `password` to an owner-only (0600) askpass file and return its path.
-/// On Windows the 0600 mode is skipped (no `mode()`); the file lives under the
-/// per-user `%APPDATA%\tabtivity\openvpn` dir, which is already user-scoped, and is
-/// deleted as soon as OpenVPN has read it.
+/// Write `password` to an owner-only askpass file (`0600`; on Windows
+/// restricted to its owner) and return its path. Written whole through
+/// `storage::write_private_atomic`, so a file left from an earlier run never
+/// lends it a wider mode. It is deleted as soon as OpenVPN has read it.
 fn write_askpass(stem: &str, password: &str) -> Result<PathBuf, String> {
     let dir = runtime_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create openvpn dir: {e}"))?;
     let path = dir.join(format!("{stem}.pass"));
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    opts.mode(0o600);
-    let mut f = opts
-        .open(&path)
-        .map_err(|e| format!("create askpass file: {e}"))?;
-    writeln!(f, "{password}").map_err(|e| format!("write askpass file: {e}"))?;
+    let body = zeroize::Zeroizing::new(format!("{password}\n"));
+    crate::storage::write_private_atomic(&path, body.as_bytes())
+        .map_err(|e| format!("write askpass file: {e}"))?;
     Ok(path)
 }
 
@@ -999,14 +992,9 @@ fn write_userpass(stem: &str, username: &str, password: &str) -> Result<PathBuf,
     let dir = runtime_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create openvpn dir: {e}"))?;
     let path = dir.join(format!("{stem}.auth"));
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    opts.mode(0o600);
-    let mut f = opts
-        .open(&path)
-        .map_err(|e| format!("create auth-user-pass file: {e}"))?;
-    writeln!(f, "{username}\n{password}").map_err(|e| format!("write auth-user-pass file: {e}"))?;
+    let body = zeroize::Zeroizing::new(format!("{username}\n{password}\n"));
+    crate::storage::write_private_atomic(&path, body.as_bytes())
+        .map_err(|e| format!("write auth-user-pass file: {e}"))?;
     Ok(path)
 }
 
@@ -1134,12 +1122,7 @@ fn arm_management(config: &str) -> Option<Vec<String>> {
         .port();
     let password = random_hex(32)?;
     let pwfile = management_pwfile(config);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    opts.mode(0o600);
-    let mut f = opts.open(&pwfile).ok()?;
-    writeln!(f, "{password}").ok()?;
-    drop(f);
+    crate::storage::write_private_atomic(&pwfile, format!("{password}\n").as_bytes()).ok()?;
     std::fs::write(management_portfile(config), format!("{port}\n")).ok()?;
     Some(management_args(port, &pwfile))
 }
@@ -3072,11 +3055,39 @@ mod tests {
         );
     }
 
+    /// The credential files OpenVPN reads keep their exact line layout and are
+    /// owner-only even over a leftover, wider-moded file of the same name.
+    #[test]
+    fn credential_files_are_written_whole_and_owner_only() {
+        let stem = format!("cred-files-{}", std::process::id());
+        let auth = runtime_dir().join(format!("{stem}.auth"));
+        std::fs::create_dir_all(runtime_dir()).unwrap();
+        std::fs::write(&auth, b"leftover from an earlier run, much longer than the new one").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&auth, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        assert_eq!(write_userpass(&stem, "alice", "pw").unwrap(), auth);
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "alice\npw\n");
+        let pass = write_askpass(&stem, "secret").unwrap();
+        assert_eq!(std::fs::read_to_string(&pass).unwrap(), "secret\n");
+        #[cfg(unix)]
+        for path in [&auth, &pass] {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{}", path.display());
+        }
+        let _ = std::fs::remove_file(&auth);
+        let _ = std::fs::remove_file(&pass);
+    }
+
     /// An armed endpoint round-trips, and its password file is owner-only — it is the
     /// only thing standing between a local process and control of the tunnel.
     #[cfg(unix)]
     #[test]
     fn arm_management_records_an_owner_only_endpoint() {
+        use std::os::unix::fs::PermissionsExt;
         // Skipped while the A/B kill switch is on (no endpoint is armed by design).
         if MANAGEMENT_SOCKET_DISABLED {
             return;

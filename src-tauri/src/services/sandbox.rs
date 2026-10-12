@@ -1549,28 +1549,18 @@ pub fn sandbox_spec_for(project_id: &str) -> Option<SandboxSpec> {
 /// mount, and a value read from it would let the contained process choose what
 /// the next container mounts.
 pub fn project_dir_for(project_id: &str) -> Option<String> {
-    if let Some(v) = project_entry_value(project_id, "directory") {
-        if let Some(s) = v.as_str() {
-            if !s.is_empty() {
-                return Some(s.to_string());
-            }
-        }
-    }
     let list_path = storage::state_dir().join("projects.json");
     let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
     let entry = list.iter().find(|e| e.id == project_id)?;
-    Path::new(&entry.local_file)
-        .parent()
-        .map(|p| p.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
+    entry.directory().map(str::to_string)
 }
 
 /// The project id whose tabs at `project_dir` would run **inside a container** —
 /// i.e. the id to run an in-container probe against, or `None` when a tab opened
 /// there runs on the host.
 ///
-/// The reverse lookup is `remote_target_for_dir`'s (an entry's stored
-/// `extra["directory"]`, matched verbatim), because the callers that need this
+/// The reverse lookup is `remote_target_for_dir`'s (an entry's
+/// `ProjectEntry::directory`, matched against the trimmed `project_dir`), because the callers that need this
 /// are the same ones: they hold a `project_dir`, not an id.
 ///
 /// Three conditions, and the third is the point: the toggle is on, the project is
@@ -1583,12 +1573,7 @@ pub fn project_dir_for(project_id: &str) -> Option<String> {
 pub fn containerized_project_for_dir(project_dir: &str) -> Option<String> {
     let list_path = storage::state_dir().join("projects.json");
     let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
-    let entry = list.iter().find(|e| {
-        e.extra
-            .get("directory")
-            .and_then(|v| v.as_str())
-            .is_some_and(|d| d == project_dir)
-    })?;
+    let entry = list.iter().find(|e| e.directory() == Some(project_dir.trim()))?;
     if crate::services::remote::remote_target_for(&entry.id).is_some() {
         return None;
     }
