@@ -493,7 +493,7 @@ pub fn call(
     // first mail read. Either way every write stages, additive ones included,
     // and `off` cannot lower that.
     let reader = stores.caller == root_mcp::Caller::Reader
-        || stores.session.is_some_and(|s| s.has_read_mail());
+        || stores.session.is_some_and(|s| s.tainted(stores.state));
     let scoped = !stores.access.calendars.all || !stores.access.projects.all;
     let level = if reader || scoped { "all".to_string() } else { stores.policy.review.clone() };
     if level == "off" && name != "proposals_list" {
@@ -1391,6 +1391,34 @@ mod tests {
         assert!(!other.has_read_mail());
         root_mcp::revoke_tab(tab);
         root_mcp::revoke_tab("root:other");
+    }
+
+    /// Gap 33, two tabs at once: tabs of one model share its Vibe home and
+    /// the conversation logs in it, so a tab already open when another tab of
+    /// that model reads mail stages from that read on — not only tabs spawned
+    /// after it. A tab of another model is untouched.
+    #[test]
+    fn an_open_tab_of_a_model_that_read_mail_elsewhere_stages_from_then_on() {
+        let f = Fixture::new();
+        f.mode("off");
+        let (_, reader) = root_mcp::test_session_for_tab(root_mcp::Caller::LocalModel, "root:twin-a", f.dir.path());
+        let (_, twin) = root_mcp::test_session_for_tab(root_mcp::Caller::LocalModel, "root:twin-b", f.dir.path());
+        let (_, other) = root_mcp::test_session_model(
+            root_mcp::Caller::LocalModel, "root:twin-c", f.dir.path(), Some("127.0.0.1:11434".into()), Some("qwen3:8b".into()),
+        );
+        let add = |session: &root_mcp::Session, title: &str| {
+            let stores = Stores { caller: root_mcp::Caller::LocalModel, session: Some(session), ..f.stores() };
+            call(&stores, &session.identity.tab, "todo_add", &json!({ "title": title })).unwrap().0.get("staged").cloned()
+        };
+        assert_eq!(add(&twin, "Before"), None, "both open, nothing read yet");
+        // Tab A's first mail read, as `root_mcp_mail::call` records it.
+        reader.mark_read_mail();
+        root_mcp::record_read_mail(f.dir.path(), "root:twin-a", reader.identity.model.as_deref()).unwrap();
+        assert_eq!(add(&twin, "After"), Some(json!(true)), "the open twin stages now");
+        assert!(twin.has_read_mail(), "and stays latched");
+        assert_eq!(add(&other, "Other model"), None);
+        assert!(f.proposals().iter().any(|p| p.tab == "root:twin-b" && p.tainted && p.status == "pending"));
+        for tab in ["root:twin-a", "root:twin-b", "root:twin-c"] { root_mcp::revoke_tab(tab); }
     }
 
     /// The first move on a board that has never been dragged on seeds the

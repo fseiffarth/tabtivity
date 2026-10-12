@@ -639,8 +639,11 @@ starts tainted if any earlier spawn of it read mail (the marker under
 `root_mcp/read_mail/`). A local-model tab also starts tainted if any tab of
 its model read mail (`root_mcp/read_mail_model/`, keyed by the hash of the
 model's alias, which also names its `VIBE_HOME`), because a new tab can
-continue a Vibe conversation another tab of the model had (gap 33). The
-trade-off: once one tab of a model reads mail, every later tab of that
+continue a Vibe conversation another tab of the model had (gap 33). A tab
+of the model that is already open looks at that marker live on every write
+and draft (`Session::tainted`): it shares the Vibe home, logs included, so it
+is tainted from the other tab's read on, not only from its next spawn. The
+trade-off: once one tab of a model reads mail, every other tab of that
 model stages all its writes and marks its drafts as reader drafts, until the
 marker is deleted by hand — the app has no "clear conversations" action for
 a model to clear it from. The markers are written before the read, and a

@@ -485,6 +485,23 @@ impl Session {
     }
     pub fn mark_read_mail(&self) { self.read_mail.store(true, Ordering::Release); }
     pub fn has_read_mail(&self) -> bool { self.read_mail.load(Ordering::Acquire) }
+    /// The taint every write and draft of this spawn is judged by: its own
+    /// latch, or — for a local-model tab — its model's marker, looked at
+    /// live. Tabs of one model share its Vibe home (and the conversation logs
+    /// in it), so a tab already open when another tab of the model reads mail
+    /// is tainted from that read on, not only tabs spawned after it (gap 33).
+    /// A marker seen latches in memory; one that cannot be looked at counts as
+    /// there ([`model_read_mail`]).
+    pub fn tainted(&self, state: &Path) -> bool {
+        if self.has_read_mail() {
+            return true;
+        }
+        let hit = self.identity.model.as_deref().is_some_and(|m| model_read_mail(state, m));
+        if hit {
+            self.mark_read_mail();
+        }
+        hit
+    }
     /// [`Self::projects_grant`] as recorded at spawn.
     pub fn projects_grant(&self) -> ProjectsGrant { self.projects_grant.lock().unwrap_or_else(|p| p.into_inner()).clone() }
     /// The stable per-tab id ownership is keyed by (`root_mcp_mail` drafts):
@@ -693,10 +710,6 @@ fn is_local_model(opts: &PtyOptions) -> bool {
         && (opts.env.contains_key(crate::app_env!("LOCAL_MODEL")) || opts.env.contains_key("VIBE_ACTIVE_MODEL"))
 }
 
-/// Whether a Vibe tab's local model wears the "MCP" chip. The tab names its
-/// model twice (`NewTabMenu`): `TABTIVITY_LOCAL_MODEL` raw, `VIBE_ACTIVE_MODEL`
-/// as the alias `prepare_local_agent` wrote — and a restored tab may carry
-/// only the alias (`CenterPanel` re-hydrates just that pair).
 /// The Ollama model a local-model spawn runs, from the same env pair
 /// [`local_model_has_tools`] reads: `TABTIVITY_LOCAL_MODEL` raw, else the
 /// `VIBE_ACTIVE_MODEL` alias mapped back through the "MCP"-chipped models (a
@@ -720,6 +733,10 @@ fn local_model_of(opts: &PtyOptions, tool_models: &[String]) -> Option<String> {
     }
 }
 
+/// Whether a Vibe tab's local model wears the "MCP" chip. The tab names its
+/// model twice (`NewTabMenu`): `TABTIVITY_LOCAL_MODEL` raw, `VIBE_ACTIVE_MODEL`
+/// as the alias `prepare_local_agent` wrote — and a restored tab may carry
+/// only the alias (`CenterPanel` re-hydrates just that pair).
 fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
     let raw = opts.env.get(crate::app_env!("LOCAL_MODEL"));
     let alias = opts.env.get("VIBE_ACTIVE_MODEL");

@@ -240,7 +240,7 @@ impl ScopedMail<'_> {
         self.stores.policy.reads_mail(self.stores.caller)
     }
     fn read_mail(&self) -> bool {
-        self.stores.session.is_some_and(|s| s.has_read_mail())
+        self.stores.session.is_some_and(|s| s.tainted(self.stores.state))
     }
     /// Ownership is the *tab*: a draft carries the tab's key
     /// (`Session::tab_key`), so a resumed tab keeps its drafts across a
@@ -1991,6 +1991,31 @@ mod tests {
         assert_eq!(call(&c, "mail_drafts_list", &json!({})).unwrap().0["drafts"], json!([]));
         super::super::root_mcp::revoke_tab(tab);
         super::super::root_mcp::revoke_tab("root:other");
+    }
+
+    /// Gap 33, two tabs at once: a tab of the same model, already open when
+    /// the other one reads mail, writes reader drafts from that read on (the
+    /// two share the model's Vibe home); a tab of another model does not.
+    #[test]
+    fn an_open_twin_of_a_model_that_read_mail_writes_reader_drafts() {
+        use super::super::root_mcp::{revoke_tab, test_session_for_tab, test_session_model};
+        let mut f = fx();
+        f.marks = vec!["m1".into()];
+        let dir = tempfile::tempdir().unwrap();
+        let settings = local_settings(dir.path(), "127.0.0.1:11434");
+        let (_, reader) = test_session_for_tab(Caller::LocalModel, "root:twin-read", dir.path());
+        let (_, twin) = test_session_for_tab(Caller::LocalModel, "root:twin-open", dir.path());
+        let (_, other) = test_session_model(Caller::LocalModel, "root:twin-other", dir.path(), Some("127.0.0.1:11434".into()), Some("qwen3:8b".into()));
+        let origin_of_new = |session: &super::super::root_mcp::Session| {
+            let s = local_reader(&f, &settings, session);
+            let id = call(&s, "mail_draft_create", &json!({ "account_id": "open" })).unwrap().0["draft_id"].as_str().unwrap().to_string();
+            f.drafts.lock().unwrap().iter().find(|d| d.id == id).unwrap().origin.clone()
+        };
+        assert_eq!(origin_of_new(&twin).as_deref(), Some("agent"));
+        call(&local_reader(&f, &settings, &reader), "mail_read", &json!({ "message_id": "m1" })).unwrap();
+        assert_eq!(origin_of_new(&twin).as_deref(), Some("reader"), "the open twin");
+        assert_eq!(origin_of_new(&other).as_deref(), Some("agent"), "another model");
+        for tab in ["root:twin-read", "root:twin-open", "root:twin-other"] { revoke_tab(tab); }
     }
 
     /// A draft begun before the tab's first read and edited after it carries
