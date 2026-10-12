@@ -937,13 +937,21 @@ fn mobile_keys() -> Vec<String> {
 }
 
 /// The registry entry as a bundle carries it: phone access stays on this
-/// machine ([`mobile_keys`]).
+/// machine ([`mobile_keys`]), and so do the agent push / CI confirmations
+/// (`git_push_mcp::drop_confirmations`).
 fn exported_entry(entry: &ProjectEntry) -> ProjectEntry {
     let mut entry = entry.clone();
     for key in mobile_keys() {
         entry.extra.remove(&key);
     }
+    crate::services::git_push_mcp::drop_confirmations(&mut entry.extra);
     entry
+}
+
+/// Nor does an imported entry keep what the user confirmed for agent pushes
+/// and CI on the exporting machine (gap 19): the bundle may name any repo.
+fn drop_imported_confirmations(entry: &mut ProjectEntry) {
+    crate::services::git_push_mcp::drop_confirmations(&mut entry.extra);
 }
 
 /// Drop [`mobile_keys`] from an entry (or `project.json`) body.
@@ -1392,6 +1400,7 @@ pub fn import_project_export_blocking(
         }
     }
     entry.extra.remove("vm");
+    drop_imported_confirmations(&mut entry);
 
     let project_file = directory.join("project.json");
     entry.local_file = project_file.to_string_lossy().to_string();
@@ -1749,6 +1758,35 @@ mod tests {
         let exported = exported_entry(&entry);
         assert_eq!(exported.extra.keys().collect::<Vec<_>>(), ["directory"]);
         assert_eq!(entry.extra.len(), 3, "the registry's own entry is untouched");
+    }
+
+    /// Reviewer, gap 19: the agent push / CI confirmations stay on the
+    /// machine that gave them, either way; the push level and protected
+    /// branches travel.
+    #[test]
+    fn bundles_carry_no_push_or_ci_confirmations() {
+        let entry = entry_with(
+            "p",
+            &[
+                ("directory", Value::String("/d".into())),
+                ("git_ci_repos", serde_json::json!(["victim/private"])),
+                (
+                    "git_push_mcp",
+                    serde_json::json!({ "level": "apply", "protected": ["release"], "confirmed_url": "https://github.com/victim/private" }),
+                ),
+            ],
+        );
+        let exported = exported_entry(&entry);
+        assert!(!exported.extra.contains_key("git_ci_repos"));
+        assert_eq!(exported.extra["git_push_mcp"], serde_json::json!({ "level": "apply", "protected": ["release"] }));
+        assert_eq!(entry.extra.len(), 3, "the registry's own entry is untouched");
+        // What an import does with a bundle another build wrote.
+        let mut imported = entry.clone();
+        drop_imported_confirmations(&mut imported);
+        assert_eq!(imported.extra, exported.extra);
+        let mut plain = entry_with("p", &[("directory", Value::String("/d".into()))]);
+        drop_imported_confirmations(&mut plain);
+        assert_eq!(plain.extra.keys().collect::<Vec<_>>(), ["directory"], "nothing added to an entry without them");
     }
 
     fn entry_with(id: &str, extra: &[(&str, Value)]) -> ProjectEntry {

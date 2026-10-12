@@ -225,7 +225,9 @@ field there as an invalid policy). Anything else answers
 card per project and repo, deduped against a waiting one, outside the push
 budget and the pending limit of two. Allow (`git_push_mcp_decide`) appends
 the repo to `git_ci_repos` and ends the card `allowed`; Dismiss works as for
-pushes. A tab of the Mobile host (no window, no card) gets
+pushes. Neither `git_ci_repos` nor the policy's `confirmed_url` travels in
+a project bundle, either way (`git_push_mcp::drop_confirmations`, as phone
+access): a bundle may name any repo. A tab of the Mobile host (no window, no card) gets
 `ci_repo_unconfirmed` with "restart this tab from the window". The release
 gate runs the same check before `tip_ci` on the agent path (its pending or
 failed workflow names reach the agent in the refusal), refusing before any
@@ -234,7 +236,10 @@ gated.
 
 **A git dir that appeared after spawn is refused** (defence in depth).
 `grant_git_push` records the `.git` entry git discovery finds from the bound
-directory (nearest `<ancestor>/.git`, `symlink_metadata`, as `(dev, ino)`) in
+directory (nearest `<ancestor>/.git` that git would stop at: a pointer file,
+or a folder holding `HEAD`, `objects` and `refs` — an empty `.git` that a
+later `git init` fills in place is passed over; a link counts as its target)
+as `(dev, ino)` in
 `PushBinding::git_at_spawn`; before every `git_push`, `git_release` and
 `ci_*` the walk is redone, and no entry at spawn, or another one now (a
 `git init` in a repo-less project, or a nearer `.git` planted under a parent

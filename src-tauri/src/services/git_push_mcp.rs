@@ -164,6 +164,20 @@ fn allow_ci_repo(project: &str, repo: &str) -> Result<(), String> {
     crate::commands::projects::patch_project_entry(project, |entry| add_ci_repo(entry, repo))
 }
 
+/// Strip what the user confirmed on this machine from a `projects.json`
+/// entry's extras: the confirmed push URL and the repos allowed for CI. A
+/// project bundle carries the entry and is untrusted input
+/// (`commands::project_transfer`), so a bundle naming the user's private repo
+/// must neither open its CI to the project's agents nor skip the first push's
+/// URL check without a click here (gap 19). The level and the protected
+/// branches travel.
+pub(crate) fn drop_confirmations(extra: &mut HashMap<String, Value>) {
+    extra.remove(CI_REPOS_KEY);
+    if let Some(block) = extra.get_mut("git_push_mcp").and_then(Value::as_object_mut) {
+        block.remove("confirmed_url");
+    }
+}
+
 // ── Categories and results ──────────────────────────────────────────────────
 
 /// The fixed enum the agent branches on. Also the only thing about a failure
@@ -1447,20 +1461,34 @@ fn call_ci(name: &str, target: &super::git_ci::CiRepo, project: &str, args: Valu
 }
 
 /// The `.git` entry git discovery finds from `dir` — the nearest
-/// `<ancestor>/.git`, folder, pointer file or link, never followed — as
-/// `(dev, ino)`. Read at spawn into [`PushBinding::git_at_spawn`](super::root_mcp::PushBinding)
-/// and again before every push, release and CI read (gap 19): `git_guard`
-/// pins only a `.git` that exists at spawn, so an agent can `git init` a
-/// repo where there was none, or nearer than the one there was. Bare-repo
-/// discovery needs no check: the lane's git runs with
-/// `safe.bareRepository=explicit`. Windows has no fence and no stable
-/// inode in std, so there it records presence only.
+/// `<ancestor>/.git` git would stop at — as `(dev, ino)`. Read at spawn into
+/// [`PushBinding::git_at_spawn`](super::root_mcp::PushBinding) and again
+/// before every push, release and CI read (gap 19): `git_guard` pins only a
+/// `.git` that exists at spawn, so an agent can `git init` a repo where there
+/// was none, or nearer than the one there was. Bare-repo discovery needs no
+/// check: the lane's git runs with `safe.bareRepository=explicit`. Windows
+/// has no fence and no stable inode in std, so there it records presence
+/// only.
 pub(crate) fn git_entry_identity(dir: &Path) -> Option<(u64, u64)> {
-    let meta = dir.ancestors().find_map(|d| std::fs::symlink_metadata(d.join(".git")).ok())?;
+    let meta = dir.ancestors().find_map(|d| git_entry_at(&d.join(".git")))?;
     #[cfg(unix)]
     { use std::os::unix::fs::MetadataExt; Some((meta.dev(), meta.ino())) }
     #[cfg(not(unix))]
     { let _ = meta; Some((0, 0)) }
+}
+
+/// `dot_git` as git discovery counts it. A pointer file always stops git
+/// (an invalid one is an error, not a walk upwards). A folder stops it only
+/// once it holds `HEAD`, `objects` and `refs`: an empty or half-made `.git`
+/// is passed over, as git passes it over, so a `git init` that fills one in
+/// after spawn reads as a new repo instead of the same inode. A link counts
+/// as what it points at, and its identity is the target's, so re-pointing the
+/// link or swapping its target reads as another repo too.
+fn git_entry_at(dot_git: &Path) -> Option<std::fs::Metadata> {
+    let entry = std::fs::symlink_metadata(dot_git).ok()?;
+    let meta = if entry.file_type().is_symlink() { std::fs::metadata(dot_git).ok()? } else { entry };
+    if meta.is_dir() && !["HEAD", "objects", "refs"].iter().all(|name| dot_git.join(name).exists()) { return None; }
+    Some(meta)
 }
 
 /// The `repo_changed` refusal when the tab's git dir is not the one it
@@ -2293,5 +2321,45 @@ mod tests {
         // No git dir at spawn and none now: still refused.
         let bare = PushBinding { dir: root.path().join("none"), fence_scope: None, git_at_spawn: None };
         assert_eq!(repo_changed(&bare).unwrap()["category"], "repo_changed");
+    }
+
+    /// Reviewer, gap 19: an empty `.git` folder at spawn is not a repo to git,
+    /// and `git init` fills it in place (same inode). Discovery passes over it
+    /// at spawn, so the repo made in it afterwards is refused. A `.git` link
+    /// counts as its target: swapping what it names is another repo.
+    #[test]
+    fn a_git_init_into_an_empty_dot_git_after_spawn_is_refused() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        let s = session("tab:empty-dot-git", &project);
+        let binding = s.identity.push.clone().unwrap();
+        assert_eq!(binding.git_at_spawn, git_entry_identity(root.path()), "an empty .git is passed over, as git does");
+        sh(&project, &["init", "-q", "-b", "main"]);
+        assert!(git_entry_identity(&project).is_some());
+        assert_eq!(repo_changed(&binding).unwrap()["category"], "repo_changed", "the repo filled into the empty .git is new");
+        let started = session("tab:filled-dot-git", &project);
+        assert!(repo_changed(started.identity.push.as_ref().unwrap()).is_none(), "a tab started with it keeps it");
+
+        #[cfg(unix)]
+        {
+            let linked = root.path().join("linked");
+            std::fs::create_dir(&linked).unwrap();
+            let (one, two) = (root.path().join("one"), root.path().join("two"));
+            for target in [&one, &two] {
+                std::fs::create_dir(target).unwrap();
+                sh(target, &["init", "-q", "-b", "main"]);
+            }
+            std::os::unix::fs::symlink(one.join(".git"), linked.join(".git")).unwrap();
+            let s = session("tab:linked-dot-git", &linked);
+            let binding = s.identity.push.clone().unwrap();
+            assert_eq!(binding.git_at_spawn, git_entry_identity(&one), "a link counts as its target");
+            assert!(repo_changed(&binding).is_none());
+            // The link stays; the folder it names is swapped for another repo.
+            std::fs::rename(one.join(".git"), one.join(".git-old")).unwrap();
+            std::fs::rename(two.join(".git"), one.join(".git")).unwrap();
+            assert_eq!(repo_changed(&binding).unwrap()["category"], "repo_changed", "a swapped link target is another repo");
+        }
     }
 }

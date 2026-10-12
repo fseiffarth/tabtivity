@@ -3486,7 +3486,12 @@ mod tests {
         let store = TokenStore::default();
         let root = tempfile::tempdir().unwrap();
         let (plain, repo) = (root.path().join("plain"), root.path().join("repo"));
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        // What git discovery counts as a repo: `HEAD`, `objects`, `refs`.
+        let make_git_dir = |dir: &std::path::Path| {
+            for sub in ["objects", "refs"] { std::fs::create_dir_all(dir.join(".git").join(sub)).unwrap(); }
+            std::fs::write(dir.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        };
+        make_git_dir(&repo);
         std::fs::create_dir(&plain).unwrap();
         let before = super::super::git_push_mcp::git_entry_identity(&plain);
         for (dir, want) in [(plain.clone(), before), (repo.clone(), super::super::git_push_mcp::git_entry_identity(&repo))] {
@@ -3498,7 +3503,7 @@ mod tests {
             assert_eq!((binding.dir, binding.git_at_spawn), (dir, want));
         }
         assert!(super::super::git_push_mcp::git_entry_identity(&repo).is_some());
-        std::fs::create_dir(plain.join(".git")).unwrap();
+        make_git_dir(&plain);
         assert_ne!(super::super::git_push_mcp::git_entry_identity(&plain), before, "a .git made later is another entry");
     }
 
