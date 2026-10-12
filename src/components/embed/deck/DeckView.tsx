@@ -104,9 +104,12 @@ import { getTexCapability, type TexCompileResult } from "../../../lib/viewers/te
 import { loadBase, renderPage, renderPdfPageToPng } from "./deckBase";
 import {
   dirOf,
+  figureSource,
+  figureTarget,
   gifKey,
   interstitialsOf,
   resolveRel,
+  texFigureDir,
   useDeckGifs,
   useDeckImages,
 } from "./deckAssets";
@@ -143,13 +146,6 @@ export function clampRailWidth(w: number): number {
  *  PDF viewer's own external-change poll (`PdfViewer.RELOAD_POLL_MS`); there is
  *  no reason for a deck's figures to notice a recompile any slower. */
 const TEX_FIGURE_POLL_MS = 1500;
-
-/** The per-deck folder a TeX-figure object's source/PDF/PNG live in, beside the
- *  sidecar — kept out of the main `.tex`'s own directory so a figure's build
- *  artifacts (`.aux`/`.log`) never clutter the deck's own folder listing. */
-function texFigureDir(deckPath: string): string {
-  return `${deckPath.replace(/\.eldeck\.json$/i, "")}.tex-figures`;
-}
 
 /**
  * An asset path relative to the deck's own directory — **including** `..` for a
@@ -993,9 +989,12 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
     setError(null);
     try {
       const texPath = texPathForDeck(path);
+      // "Is there a `.tex` yet?" by its mtime, never by reading it: a read
+      // also fails for a non-UTF-8 or over-cap source, which would then be
+      // overwritten with the starter.
       let hasTex = true;
       try {
-        await readFileText(texPath, scope);
+        await fileMtime(texPath, scope);
       } catch {
         hasTex = false;
       }
@@ -1114,12 +1113,29 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
     });
   }, []);
 
-  /** Read `pdfAbs`, rasterize its first page, and write the PNG to `pngAbs`.
+  /** A TeX figure whose `src`/`texSrc` lies outside the deck's own figure
+   *  folder (decision D3): never compiled or re-rastered. The poll says so
+   *  once per object; a click says so every time. */
+  const refusedFiguresRef = useRef<Set<string>>(new Set());
+  const refuseFigure = useCallback(
+    (id: string, always: boolean) => {
+      if (!always && refusedFiguresRef.current.has(id)) return;
+      refusedFiguresRef.current.add(id);
+      setNotice(t("deckView.figureOutside"));
+    },
+    [t],
+  );
+
+  /** Read `pdfAbs`, rasterize its first page, and write the PNG to the
+   *  deck-relative `src` — only ever a `.png` directly in the deck's own figure
+   *  folder (`figureTarget`; callers check first, this is the backstop).
    *  Records the PDF's new mtime so the poll never re-processes a write this
    *  view just made itself. Returns the raster's pixel size, or null on
    *  failure (reported by the caller, which knows the right wording). */
   const rasterizeInto = useCallback(
-    async (pdfAbs: string, pngAbs: string) => {
+    async (pdfAbs: string, src: string) => {
+      const pngAbs = figureTarget(path, src);
+      if (!pngAbs) throw new Error(`${src} is outside this deck's figure folder`);
       const pdfBytes = new Uint8Array(await readFileBytes(pdfAbs, scope));
       const rendered = await renderPdfPageToPng(pdfBytes);
       if (!rendered) return null;
@@ -1128,7 +1144,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       if (mt != null) mtimesRef.current.set(pdfAbs, mt);
       return rendered;
     },
-    [scope],
+    [path, scope],
   );
 
   const addTexFigure = useCallback(async () => {
@@ -1136,7 +1152,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
     const dir = texFigureDir(path);
     const id = newObjectId();
     const texAbs = `${dir}/${id}.tex`;
-    const pngAbs = `${dir}/${id}.png`;
+    const src = toDeckRelative(`${dir}/${id}.png`);
     markTexBusy(id, true);
     setError(null);
     try {
@@ -1148,7 +1164,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
         );
         return;
       }
-      const rendered = await rasterizeInto(res.pdf_path, pngAbs);
+      const rendered = await rasterizeInto(res.pdf_path, src);
       if (!rendered) {
         setNotice(t("deckView.texFigureRasterFailed"));
         return;
@@ -1162,7 +1178,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
         {
           id,
           kind: "image",
-          src: toDeckRelative(pngAbs),
+          src,
           texSrc: toDeckRelative(texAbs),
           fit: "contain",
           x: 0.35,
@@ -1187,22 +1203,28 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
   const editTexObject = useCallback(
     (obj: ImageObject) => {
       if (!obj.texSrc) return;
-      const dir = dirOf(path);
-      openLinkedFile(tabKey, dir, {
-        path: resolveRel(dir, obj.texSrc),
+      const texAbs = figureSource(path, obj.texSrc);
+      if (!texAbs) {
+        refuseFigure(obj.id, true);
+        return;
+      }
+      openLinkedFile(tabKey, dirOf(path), {
+        path: texAbs,
         viewer: "tex",
         label: basename(obj.texSrc) || obj.texSrc,
       });
     },
-    [path, tabKey],
+    [path, tabKey, refuseFigure],
   );
 
   const recompileTexObject = useCallback(
     async (obj: ImageObject) => {
       if (!obj.texSrc) return;
-      const dir = dirOf(path);
-      const texAbs = resolveRel(dir, obj.texSrc);
-      const pngAbs = resolveRel(dir, obj.src);
+      const texAbs = figureSource(path, obj.texSrc);
+      if (!texAbs || !figureTarget(path, obj.src)) {
+        refuseFigure(obj.id, true);
+        return;
+      }
       markTexBusy(obj.id, true);
       setError(null);
       try {
@@ -1211,7 +1233,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
           setNotice(t("deckView.recompileFailed", { log: res.log.trim().split("\n").slice(-3).join(" ") }));
           return;
         }
-        const rendered = await rasterizeInto(res.pdf_path, pngAbs);
+        const rendered = await rasterizeInto(res.pdf_path, obj.src);
         if (!rendered) {
           setNotice(t("deckView.recompiledRasterFailed"));
           return;
@@ -1223,7 +1245,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
         markTexBusy(obj.id, false);
       }
     },
-    [path, rasterizeInto, refreshImage, markTexBusy, t],
+    [path, rasterizeInto, refreshImage, markTexBusy, refuseFigure, t],
   );
 
   /** Jump to a TeX figure from the deck-wide list (`DeckTexPanel`): select its
@@ -1251,7 +1273,6 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       ),
     );
     if (figures.length === 0) return;
-    const dir = dirOf(path);
     let cancelled = false;
     const id = setInterval(() => {
       // Stand down during a talk. A figure that recompiled mid-presentation
@@ -1264,7 +1285,13 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       void (async () => {
         for (const obj of figures) {
           if (cancelled || texBusyIds.has(obj.id)) continue;
-          const texAbs = resolveRel(dir, obj.texSrc);
+          // Decision D3: only a figure whose source and PNG both sit directly
+          // in the deck's own figure folder is ever re-rastered by itself.
+          const texAbs = figureSource(path, obj.texSrc);
+          if (!texAbs || !figureTarget(path, obj.src)) {
+            refuseFigure(obj.id, false);
+            continue;
+          }
           const pdfAbs = texAbs.replace(/\.tex$/i, ".pdf");
           let mt: number;
           try {
@@ -1283,10 +1310,9 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
             mtimesRef.current.set(pdfAbs, mt);
             continue;
           }
-          const pngAbs = resolveRel(dir, obj.src);
           markTexBusy(obj.id, true);
           try {
-            const rendered = await rasterizeInto(pdfAbs, pngAbs);
+            const rendered = await rasterizeInto(pdfAbs, obj.src);
             if (rendered && !cancelled) refreshImage(obj.src);
           } catch (e) {
             // A transient read failure (mid-write) — the next tick retries. A
@@ -1307,7 +1333,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       cancelled = true;
       clearInterval(id);
     };
-  }, [deck, path, scope, paneVisible, texBusyIds, rasterizeInto, refreshImage, markTexBusy, t]);
+  }, [deck, path, scope, paneVisible, texBusyIds, rasterizeInto, refreshImage, markTexBusy, refuseFigure, t]);
 
   // --- keyboard ----------------------------------------------------------
   const onKeyDown = useCallback(

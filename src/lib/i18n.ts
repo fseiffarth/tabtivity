@@ -8537,6 +8537,7 @@ export const enSource = {
   "deckView.outsideProjectNotice": "\"{name}\" is outside this project, so the deck would not be able to read it again (and it would be missing from every export). Copy it into the project first — the deck's own folder is the natural home.",
   "deckView.texFigureFailed": "The TeX figure did not compile. {log}",
   "deckView.texFigureRasterFailed": "The TeX figure compiled, but {app} could not rasterize the result.",
+  "deckView.figureOutside": "This TeX figure's files are outside the deck's own figure folder, so {app} does not compile or redraw it. Re-add the figure from this deck to make it editable here.",
   "deckView.recompileFailed": "Recompile failed. {log}",
   "deckView.recompiledRasterFailed": "Recompiled, but {app} could not rasterize the result.",
   "deckView.openingPresentation": "Opening presentation…",

@@ -10,6 +10,7 @@ import {
   type EditResult,
 } from "../../lib/viewers/markdownEdit";
 import { renderMarkdown } from "../../lib/viewers/markdown";
+import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
 import { useT } from "../../lib/i18n";
 import { LinkIcon } from "./icons/Icon";
 
@@ -189,6 +190,9 @@ export function MarkdownPromptField({
           <div
             className="markdown-body md-prompt-preview"
             data-testid="md-prompt-preview"
+            // A draft has no file to resolve links against: a click on one
+            // never navigates the app window away (threat recheck gap 38).
+            onClick={(e) => onMarkdownLinkClick(e)}
             // `renderMarkdown` is this repo's escape-first renderer (no raw HTML
             // passes through it) — the same call the notebook viewer makes.
             dangerouslySetInnerHTML={{ __html: renderMarkdown(value) }}

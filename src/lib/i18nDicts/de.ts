@@ -8212,6 +8212,7 @@ export const dict: Dict = {
   "deckView.outsideProjectNotice": "\"{name}\" liegt außerhalb dieses Projekts, sodass die Präsentation es nicht erneut lesen könnte (und es würde in jedem Export fehlen). Kopieren Sie es zuerst in das Projekt — der eigene Ordner der Präsentation ist der natürliche Ort dafür.",
   "deckView.texFigureFailed": "Die TeX-Abbildung wurde nicht kompiliert. {log}",
   "deckView.texFigureRasterFailed": "Die TeX-Abbildung wurde kompiliert, aber {app} konnte das Ergebnis nicht rastern.",
+  "deckView.figureOutside": "Die Dateien dieser TeX-Abbildung liegen außerhalb des eigenen Abbildungsordners der Präsentation, daher kompiliert oder zeichnet {app} sie nicht neu. Füge die Abbildung aus dieser Präsentation neu hinzu, um sie hier bearbeiten zu können.",
   "deckView.recompileFailed": "Neu kompilieren fehlgeschlagen. {log}",
   "deckView.recompiledRasterFailed": "Neu kompiliert, aber {app} konnte das Ergebnis nicht rastern.",
   "deckView.openingPresentation": "Präsentation wird geöffnet…",

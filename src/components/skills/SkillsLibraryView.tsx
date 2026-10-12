@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { renderMarkdown } from "../../lib/viewers/markdown";
+import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
 import {
   PERSONAL_SKILLS,
   addSkillSource,
@@ -513,8 +514,11 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
                   </ul>
                 </div>
               )}
+              {/* A skill body has no file here to resolve links against:
+                  anchors scroll, nothing navigates the app window away. */}
               <div
                 className="skills-preview-body markdown-body"
+                onClick={(e) => onMarkdownLinkClick(e)}
                 dangerouslySetInnerHTML={{ __html: detailHtml }}
               />
             </>

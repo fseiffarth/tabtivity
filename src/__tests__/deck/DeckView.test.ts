@@ -14,7 +14,12 @@ import {
   deckRelative,
   withinProject,
 } from "../../components/embed/deck/DeckView";
-import { resolveRel } from "../../components/embed/deck/deckAssets";
+import {
+  figureSource,
+  figureTarget,
+  resolveRel,
+  texFigureDir,
+} from "../../components/embed/deck/deckAssets";
 
 describe("clampRailWidth", () => {
   it("clamps to the documented bounds", () => {
@@ -95,5 +100,53 @@ describe("withinProject (V #108)", () => {
 
   it("defers to the backend in the root scope", () => {
     expect(withinProject(null, "/anywhere/fig.png")).toBe(true);
+  });
+});
+
+// Decision D3 (threat recheck gap 23): the deck writes a figure's PNG, and
+// compiles its `.tex`, only directly in its own `<deck>.tex-figures` folder.
+describe("figureTarget / figureSource", () => {
+  const deck = "/p/talks/talk.eldeck.json";
+
+  it("accepts a plain .png / .tex directly in the deck's own figure folder", () => {
+    expect(texFigureDir(deck)).toBe("/p/talks/talk.tex-figures");
+    expect(figureTarget(deck, "talk.tex-figures/f1.png")).toBe("/p/talks/talk.tex-figures/f1.png");
+    expect(figureTarget(deck, "talk.tex-figures/F1.PNG")).toBe("/p/talks/talk.tex-figures/F1.PNG");
+    expect(figureSource(deck, "talk.tex-figures/f1.tex")).toBe("/p/talks/talk.tex-figures/f1.tex");
+    // What "Add TeX figure" stores round-trips through the guard.
+    const png = `${texFigureDir(deck)}/abc.png`;
+    expect(figureTarget(deck, deckRelative("/p/talks", png))).toBe(png);
+    // Windows paths: the deck's own folder is still the only one.
+    const win = "C:\\p\\talk.eldeck.json";
+    expect(figureTarget(win, "talk.tex-figures/f1.png")).toBe("C:\\p\\talk.tex-figures/f1.png");
+    expect(figureTarget(win, "talk.tex-figures\\f1.png")).toBe("C:\\p\\talk.tex-figures/f1.png");
+  });
+
+  it.each([
+    ["absolute", "/home/u/.bashrc"],
+    ["absolute png", "/p/talks/talk.tex-figures/f1.png"],
+    ["windows absolute", "C:\\Users\\u\\x.png"],
+    ["drive-relative", "C:x.png"],
+    ["dot-dot out", "../other/talk.tex-figures/f1.png"],
+    ["dot-dot inside", "talk.tex-figures/../f1.png"],
+    ["dot-dot leaf", "talk.tex-figures/.."],
+    ["other folder", "figures/f1.png"],
+    ["another deck's folder", "other.tex-figures/f1.png"],
+    ["beside the deck", "f1.png"],
+    ["nested", "talk.tex-figures/sub/f1.png"],
+    ["empty component", "talk.tex-figures//f1.png"],
+    ["svg", "talk.tex-figures/f1.svg"],
+    ["bare extension", "talk.tex-figures/.png"],
+    ["stream", "talk.tex-figures/f1.png:evil.png"],
+    ["control char", "talk.tex-figures/f\n1.png"],
+    ["empty", ""],
+  ])("refuses %s", (_label, src) => {
+    expect(figureTarget(deck, src)).toBeNull();
+    expect(figureSource(deck, src.replace(/\.png$/, ".tex"))).toBeNull();
+  });
+
+  it("does not take a .tex for a PNG or a PNG for a .tex", () => {
+    expect(figureTarget(deck, "talk.tex-figures/f1.tex")).toBeNull();
+    expect(figureSource(deck, "talk.tex-figures/f1.png")).toBeNull();
   });
 });

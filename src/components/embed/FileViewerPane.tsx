@@ -53,6 +53,7 @@ import { CompareView } from "./CompareView";
 import { PresentationOverlay } from "./PresentationOverlay";
 import { usePresentationStore } from "../../stores/viewers/presentation";
 import { matchAnchorId, renderMarkdown, splitLineHint, toggleTaskCheckbox } from "../../lib/viewers/markdown";
+import { onMarkdownLinkClick, resolveLocalHref } from "../../lib/viewers/markdownLinks";
 import { useMdAnchorStore } from "../../stores/viewers/mdAnchor";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import {
@@ -141,9 +142,7 @@ import { FileSourceSwitch } from "../files/ProjectFilesPane";
 import {
   basename,
   dirname,
-  fromFileUri,
   isPathWithin,
-  normalizePath,
   resolvePath,
   relativePathFrom,
   relativePathWithin,
@@ -982,20 +981,33 @@ export function openLinkedFile(
   store.setActive(entry.key);
 }
 
-/** Resolve a markdown local-file href (relative/absolute/`file:`) to an absolute
- *  path against the directory of the markdown file `mdPath`. Drops any
- *  `?query`/`#fragment`, percent-decodes, and normalises `.`/`..` segments. The
- *  result keeps `mdPath`'s separator style, so it is correct on Windows (native
- *  backslashes + drive letter) as well as Unix. Returns null for an empty target. */
-function resolveLocalHref(mdPath: string, href: string): string | null {
-  let h = splitLineHint(href.trim()).href.replace(/[?#].*$/, "");
-  if (!h) return null;
-  if (/^file:\/\//i.test(h)) {
-    const decoded = fromFileUri(h);
-    return decoded ? normalizePath(decoded) : null;
-  }
-  try { h = decodeURIComponent(h); } catch { /* keep the raw href */ }
-  return resolvePath(dirname(mdPath), h);
+/** What a click on a local file link in rendered Markdown does
+ *  (`onMarkdownLinkClick`'s `open`): open `target` in a tab beside the linking
+ *  one (`openLinkedFile`), jump to a `:line` hint, and hand a cross-file
+ *  `#fragment` to the target markdown view. `mdPath` is the markdown file the
+ *  link sits in. */
+export function openMarkdownTarget(
+  tabKey: string | undefined,
+  mdPath: string,
+): (target: string, href: string) => void {
+  return (target, href) => {
+    const hinted = splitLineHint(href);
+    openLinkedFile(tabKey, dirname(mdPath), {
+      path: target,
+      viewer: viewerForPath(target),
+      label: basename(target),
+    });
+    if (hinted.line != null) {
+      useEditorJumpStore.getState().requestJump(target, hinted.line);
+    }
+    // A fragment on a cross-file markdown link (`docs/guide.md#setup`) rides
+    // the anchor channel: the target view — freshly mounted or re-activated —
+    // consumes it once its preview is rendered.
+    const fragment = href.split("#").slice(1).join("#");
+    if (fragment && viewerForPath(target) === "markdown") {
+      useMdAnchorStore.getState().requestAnchor(target, fragment);
+    }
+  };
 }
 
 /** MIME type for inlining a local image into the markdown preview as a Blob URL.
@@ -8320,40 +8332,13 @@ function MarkdownView({
         if (nextSrc != null) setDraft(nextSrc);
         return;
       }
-      const a = (e.target as HTMLElement).closest?.("a") as HTMLAnchorElement | null;
-      if (!a) return;
-      const href = a.getAttribute("href") ?? "";
-      if (href.startsWith("#")) {
-        e.preventDefault();
-        const els = Array.from(
-          previewRef.current?.querySelectorAll<HTMLElement>("[id]") ?? [],
-        );
-        const id = matchAnchorId(els.map((element) => element.id), href.slice(1));
-        if (id) els.find((element) => element.id === id)?.scrollIntoView({ block: "start" });
-        return;
-      }
-      if (!a.classList.contains("file-link")) return;
-      // Keep local paths inside Tabtivity rather than allowing the webview to
-      // navigate away from the native preview.
-      e.preventDefault();
-      const hinted = splitLineHint(href);
-      const target = resolveLocalHref(path, href);
-      if (!target) return;
-      openLinkedFile(tabKey, dirname(path), {
-        path: target,
-        viewer: viewerForPath(target),
-        label: basename(target),
+      // Links: `#anchor`s scroll here, local files open in a tab, and nothing
+      // navigates the app window away (shared with every Markdown host).
+      onMarkdownLinkClick(e, {
+        root: previewRef.current,
+        basePath: path,
+        open: openMarkdownTarget(tabKey, path),
       });
-      if (hinted.line != null) {
-        useEditorJumpStore.getState().requestJump(target, hinted.line);
-      }
-      // A fragment on a cross-file markdown link (`docs/guide.md#setup`) rides
-      // the anchor channel: the target view — freshly mounted or re-activated —
-      // consumes it once its preview is rendered.
-      const fragment = href.split("#").slice(1).join("#");
-      if (fragment && viewerForPath(target) === "markdown") {
-        useMdAnchorStore.getState().requestAnchor(target, fragment);
-      }
     },
     [path, tabKey, draft, setDraft],
   );

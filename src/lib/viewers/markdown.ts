@@ -18,9 +18,33 @@
 
 import { escapeHtml, highlight, type Lang } from "./highlight";
 
-function safeHref(url: string): string | null {
-  const trimmed = url.trim();
-  if (!trimmed || /^\/\//.test(trimmed)) return null;
+/** An href as the URL parser will read it: leading and trailing C0 controls
+ *  and spaces dropped, ASCII tab, LF and CR removed anywhere (WHATWG URL). A
+ *  check made on the raw string would miss `/\t/host` or `java\tscript:`. */
+function urlForm(url: string): string {
+  const t = url.trim();
+  let start = 0;
+  let end = t.length;
+  while (start < end && t.charCodeAt(start) <= 0x20) start++;
+  while (end > start && t.charCodeAt(end - 1) <= 0x20) end--;
+  return t.slice(start, end).replace(/[\t\n\r]/g, "");
+}
+
+/** True for an href that names another machine: a network-path reference
+ *  (`//host`, `\\host`, `/\host`, `\/host` — the URL parser reads `\` as
+ *  `/` on every platform, and Windows opens `\\host\x` over SMB), or a
+ *  `file:` URL with a host other than `localhost`. A click on one would load
+ *  a remote page into the app window (threat recheck gap 38); a local image or
+ *  link resolved to one would make Windows contact that host. */
+function namesAnotherHost(href: string): boolean {
+  if (/^[\\/]{2}/.test(href)) return true;
+  const file = /^file:[\\/]{2}([^\\/]*)/i.exec(href);
+  return !!file && file[1] !== "" && file[1].toLowerCase() !== "localhost";
+}
+
+export function safeHref(url: string): string | null {
+  const trimmed = urlForm(url);
+  if (!trimmed || namesAnotherHost(trimmed)) return null;
   // Explicit schemes are opt-in. Everything else is a relative filesystem
   // target: Markdown commonly writes `[guide](docs/guide.md)`, without a `./`.
   // Keep Windows drive paths in that local category rather than mistaking `C:`
@@ -42,10 +66,13 @@ function safeHref(url: string): string | null {
  *  inline from disk. Anything carrying another scheme (e.g. `javascript:`) is
  *  rejected. */
 function imgSrc(url: string): { kind: "inline" | "remote" | "local"; url: string } | null {
-  const u = url.trim();
+  const u = urlForm(url);
   if (!u) return null;
   if (/^data:image\//i.test(u)) return { kind: "inline", url: u };
   if (/^https?:\/\//i.test(u)) return { kind: "remote", url: u };
+  // `//host/x.png`, `\\host\x.png`, `file://host/x.png`: not local, and
+  // resolving one on Windows would fetch it over SMB on render.
+  if (namesAnotherHost(u)) return null;
   if (/^file:/i.test(u)) return { kind: "local", url: u };
   if (/^[a-z][a-z0-9+.-]*:/i.test(u)) return null; // other explicit scheme → reject
   return { kind: "local", url: u }; // no scheme → relative/absolute local path
@@ -68,8 +95,8 @@ function remoteHost(url: string): string {
  *  way the renderer does — two copies of this rule would eventually show a graph
  *  node the preview never made clickable, or vice versa. */
 export function isLocalHref(href: string): boolean {
-  const trimmed = href.trim();
-  if (!trimmed || trimmed.startsWith("#") || /^\/\//.test(trimmed)) return false;
+  const trimmed = urlForm(href);
+  if (!trimmed || trimmed.startsWith("#") || namesAnotherHost(trimmed)) return false;
   if (/^(https?:|mailto:|tel:)/i.test(trimmed)) return false;
   return /^file:/i.test(trimmed)
     || /^[a-z]:[\\/]/i.test(trimmed)

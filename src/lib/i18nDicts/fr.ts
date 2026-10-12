@@ -8210,6 +8210,7 @@ export const dict: Dict = {
   "deckView.outsideProjectNotice": "« {name} » est en dehors de ce projet, la présentation ne pourrait donc pas le relire (et il manquerait à chaque export). Copiez-le d'abord dans le projet — le propre dossier de la présentation est l'endroit naturel.",
   "deckView.texFigureFailed": "La figure TeX n'a pas compilé. {log}",
   "deckView.texFigureRasterFailed": "La figure TeX a compilé, mais {app} n'a pas pu rastériser le résultat.",
+  "deckView.figureOutside": "Les fichiers de cette figure TeX se trouvent hors du dossier de figures de la présentation, donc {app} ne la compile ni ne la redessine. Ajoutez de nouveau la figure depuis cette présentation pour pouvoir la modifier ici.",
   "deckView.recompileFailed": "La recompilation a échoué. {log}",
   "deckView.recompiledRasterFailed": "Recompilé, mais {app} n'a pas pu rastériser le résultat.",
   "deckView.openingPresentation": "Ouverture de la présentation…",
