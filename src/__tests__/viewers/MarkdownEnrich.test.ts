@@ -22,6 +22,8 @@ vi.mock("mermaid", () => ({ default: { render: mermaidRender, initialize: mermai
 
 import { enrichMarkdownDom } from "../../lib/viewers/markdownEnrich";
 import { renderMarkdown } from "../../lib/viewers/markdown";
+import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
+import type React from "react";
 
 function container(markdown: string): HTMLElement {
   const el = document.createElement("div");
@@ -137,6 +139,41 @@ describe("mermaid", () => {
     // The failed node was flagged and replaced — a re-run has nothing to retry.
     await enrichMarkdownDom(el);
     expect(mermaidRender).toHaveBeenCalledOnce();
+  });
+
+  // Review fix (threat recheck gap 38): mermaid's strict mode keeps HTML in a
+  // node label, `target` included (`A["<a href=… target=_self>x</a>"]`
+  // renders exactly that) and forms with an `action`. Either would navigate
+  // the app window on a click; the shared link handler must stop every one.
+  it("defuses label HTML that could navigate the app window", async () => {
+    mermaidRender.mockImplementation(async () => ({
+      svg:
+        '<svg xmlns="http://www.w3.org/2000/svg"><g>' +
+        '<a href="https://evil.example/node"><rect></rect></a>' +
+        '<foreignObject><div xmlns="http://www.w3.org/1999/xhtml">' +
+        '<a href="https://evil.example/self" target="_self"><b>self</b></a>' +
+        '<a href="https://evil.example/top" target="_top">top</a>' +
+        '<form action="https://evil.example/form" method="get"><button>go</button><input type="submit"></form>' +
+        '<button form="app-form" formaction="https://evil.example/fa">far</button>' +
+        "</div></foreignObject></g></svg>",
+    }));
+    const el = container("```mermaid\nflowchart LR\n```");
+    await enrichMarkdownDom(el);
+    const diagram = el.querySelector(".md-mermaid")!;
+    expect(diagram.querySelector("[target]")).toBeNull();
+    expect(diagram.querySelector("form")).toBeNull();
+    expect(diagram.querySelector("[form], [formaction]")).toBeNull();
+    // The form's controls stay visible, just inert.
+    expect(diagram.querySelector("button")?.textContent).toBe("go");
+    // And a click on any diagram link is stopped by the shared handler.
+    el.addEventListener("click", (e) => onMarkdownLinkClick(e as unknown as React.MouseEvent<HTMLElement>));
+    const anchors = Array.from(diagram.querySelectorAll("a"));
+    expect(anchors).toHaveLength(3);
+    for (const a of anchors) {
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      (a.firstElementChild ?? a).dispatchEvent(click);
+      expect(click.defaultPrevented, a.outerHTML).toBe(true);
+    }
   });
 
   it("a non-Error rejection is stringified into the note rather than thrown", async () => {

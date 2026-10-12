@@ -3,15 +3,16 @@
  * shows it: the markdown viewer, notebook cells, the Skills preview, the prompt
  * field's preview and the dev to-do board.
  *
- * A plain click on an `<a href>` without a `target` navigates the whole app
- * window away — on Linux that reloads the app and loses drafts; on Windows a
- * `\\host\x` href could put a remote page in the app window (threat recheck
- * gap 38). So every such click is caught here:
+ * A plain click on an `<a href>` (or `<area>`) not targeting `_blank`
+ * navigates the whole app window away — on Linux that reloads the app and
+ * loses drafts; on Windows a `\\host\x` href could put a remote page in the
+ * app window (threat recheck gap 38). So every such click is caught here:
  *  - `#anchor` links scroll inside the preview `root`;
  *  - local file links (`file-link`) open in a Tabtivity tab through `open`
  *    when the host has a file to resolve them against (`basePath`), and do
  *    nothing otherwise;
- *  - any other anchor without a `target` is stopped.
+ *  - any other anchor or image-map area not targeting `_blank` is stopped
+ *    (`_self`/`_top`/`_parent` name this window too).
  * External links carry `target="_blank"` from the renderer and keep their own
  * browsing context.
  */
@@ -68,7 +69,8 @@ export function onMarkdownLinkClick(
   e: React.MouseEvent<HTMLElement>,
   { root, basePath, open }: MarkdownLinkOptions = {},
 ): boolean {
-  const a = (e.target as Element | null)?.closest?.("a") as HTMLAnchorElement | null;
+  // `area` too: an image map navigates exactly like an anchor.
+  const a = (e.target as Element | null)?.closest?.("a, area") as HTMLAnchorElement | HTMLAreaElement | null;
   if (!a) return false;
   const href = a.getAttribute("href") ?? "";
   if (href.startsWith("#")) {
@@ -80,7 +82,9 @@ export function onMarkdownLinkClick(
     return true;
   }
   // An external link opens in its own browsing context, never this window.
-  if (a.getAttribute("target")) return true;
+  // Only `_blank` is one: `_self`, `_top`, `_parent` (which a mermaid label's
+  // HTML can carry) name this very window.
+  if (a.getAttribute("target")?.trim().toLowerCase() === "_blank") return true;
   e.preventDefault();
   if (!a.classList.contains("file-link") || !basePath || !open) return true;
   const target = resolveLocalHref(basePath, href);

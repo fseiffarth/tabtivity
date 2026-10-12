@@ -34,7 +34,8 @@ import { escapeHtml } from "./highlight";
 
 // Initialize mermaid once at module load. `startOnLoad:false` keeps mermaid from
 // scanning the DOM on its own — we drive rendering explicitly per <pre> node.
-// `securityLevel:"strict"` sanitizes the generated SVG (no inline scripts/HTML).
+// `securityLevel:"strict"` sanitizes the generated SVG (no inline scripts); the
+// label HTML it keeps is defused by `neutralizeDiagram`.
 mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default" });
 
 // Module-scoped counter for unique mermaid render ids (mermaid needs a DOM-safe,
@@ -57,12 +58,33 @@ async function renderMermaid(container: HTMLElement): Promise<void> {
     try {
       const { svg } = await mermaid.render(`md-mermaid-${mermaidSeq++}`, source);
       div.innerHTML = svg;
+      neutralizeDiagram(div);
     } catch (err) {
       // Leave a small, escaped error note in place of the diagram.
       const msg = err instanceof Error ? err.message : String(err);
       div.innerHTML = `<span class="md-mermaid-error">Mermaid error: ${escapeHtml(msg)}</span>`;
     }
     pre.replaceWith(div);
+  }
+}
+
+/**
+ * Strict mode still keeps HTML in a node label (DOMPurify's defaults, and
+ * mermaid restores an `<a>`'s `target`): an `<a target="_self">` or a
+ * `<form action>` there would navigate the app window on a click (threat
+ * recheck gap 38). Drop every `target` and unwrap every form (no control in it
+ * can submit anything then), so the preview's link handler
+ * (`onMarkdownLinkClick`) stops each diagram link like any other.
+ */
+export function neutralizeDiagram(root: ParentNode): void {
+  for (const el of Array.from(root.querySelectorAll("[target]"))) el.removeAttribute("target");
+  // A control's `form`/`formaction` could still submit a form outside it.
+  for (const el of Array.from(root.querySelectorAll("[form], [formaction]"))) {
+    el.removeAttribute("form");
+    el.removeAttribute("formaction");
+  }
+  for (const form of Array.from(root.querySelectorAll("form"))) {
+    form.replaceWith(...Array.from(form.childNodes));
   }
 }
 

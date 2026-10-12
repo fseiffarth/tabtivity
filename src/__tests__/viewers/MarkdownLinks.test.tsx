@@ -104,6 +104,36 @@ describe("onMarkdownLinkClick", () => {
     expect(fireEvent.click(screen.getByText("bare"))).toBe(false);
   });
 
+  // Review fix: `_self`/`_top`/`_parent` name this very window (a mermaid
+  // label's HTML keeps them), and an image map's `<area>` navigates like an
+  // anchor. Only `_blank` is left to its own browsing context.
+  it.each(["_self", "_top", "_parent", "_SELF", "", "frame"])(
+    "stops an anchor whose target is %j",
+    (target) => {
+      render(
+        <div onClick={(e) => onMarkdownLinkClick(e)}>
+          <a href="https://evil.example/" target={target}>
+            <b>inner</b>
+          </a>
+        </div>,
+      );
+      expect(fireEvent.click(screen.getByText("inner"))).toBe(false);
+    },
+  );
+
+  it("stops an image-map area, with or without a target", () => {
+    render(
+      <div onClick={(e) => onMarkdownLinkClick(e)}>
+        <map name="m">
+          <area data-testid="plain" href="https://evil.example/" alt="plain" />
+          <area data-testid="self" href="https://evil.example/" target="_self" alt="self" />
+        </map>
+      </div>,
+    );
+    expect(fireEvent.click(screen.getByTestId("plain"))).toBe(false);
+    expect(fireEvent.click(screen.getByTestId("self"))).toBe(false);
+  });
+
   it("lets a click elsewhere through for the host's own handling", () => {
     const seen: boolean[] = [];
     render(
