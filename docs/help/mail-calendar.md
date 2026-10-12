@@ -53,6 +53,13 @@ by resource instead of replacing what is already there. Open it from the
 header's calendar indicator or `+` → Calendar. Drag in the grid to create an
 event.
 
+A CalDAV server address must start with `https://`. Plain `http://` is refused,
+because your password and calendar would cross the network unencrypted; for a
+server on your own machine, put a TLS proxy in front of it. An edit that cannot
+be sent right away (offline, a server error) stays on this computer and goes out
+with the next sync. If the server changed or deleted the same entry meanwhile,
+you are asked which version to keep.
+
 ## To-do board
 
 A board of cards in columns over the same to-dos the calendar keeps — steps,

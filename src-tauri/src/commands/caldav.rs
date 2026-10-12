@@ -36,10 +36,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::commands::projects::uuid_v4;
 use crate::schema::caldav::{
-    CalDavAccount, CalDavAccountSaved, CalDavAccounts, CalDavChanges, CalDavCollection,
-    CalDavParsed, CalDavPasswordState, CalDavWrite, ACCOUNTS_VERSION,
+    CalDavAccount, CalDavAccountSaved, CalDavAccounts, CalDavApplied, CalDavChanges,
+    CalDavCollection, CalDavParsed, CalDavPasswordState, CalDavWrite, ACCOUNTS_VERSION,
 };
-use crate::schema::calendar::CalendarData;
 use crate::services::caldav::{self, Credentials};
 use crate::services::openvpn;
 use crate::services::remote_credentials::{self, KeyringState};
@@ -163,15 +162,54 @@ fn credentials(rt: &CalDavState, account: &CalDavAccount) -> Result<Credentials,
     // password is even looked up means a gated account never reaches the
     // keyring, let alone a socket, while the tunnel is down.
     openvpn::account_gate(account.require_vpn)?;
+    // The credential origin, checked before the keyring is asked: an `http://`
+    // account (E2b) stops syncing here and says why, without its password
+    // ever being looked up.
+    caldav::normalize_base_url(&account.base_url)?;
     let password = resolve_password(rt, account).ok_or_else(|| {
         "no password available for this CalDAV account — open its settings and type one, or \
          unlock the OS keyring"
             .to_string()
     })?;
-    Ok(Credentials {
-        user: account.user.clone(),
-        password,
-    })
+    Credentials::new(account.user.clone(), password, &account.base_url)
+}
+
+/// What `caldav_account_upsert` refuses (gap 26, E2b), against the stored
+/// account it replaces (`None` for a new one).
+///
+/// - An `http://` server URL, when the account is new, its URL changed, or a
+///   calendar is being added to it. An existing http account can still be
+///   saved unchanged (an unsubscribe, a toggle) — nothing deletes it; it just
+///   never syncs ([`credentials`] refuses it).
+/// - A newly picked calendar outside the account's credential origin. Refs the
+///   account already had are left alone: a sync of one fails visibly in
+///   `services::caldav::dav_reply`, and refusing here would block unsubscribing from it.
+fn check_account_origin(prev: Option<&CalDavAccount>, account: &CalDavAccount) -> Result<(), String> {
+    let known = |href: &str| prev.is_some_and(|p| p.calendars.iter().any(|c| c.href == href));
+    let added: Vec<&str> = account
+        .calendars
+        .iter()
+        .map(|c| c.href.as_str())
+        .filter(|h| !known(h))
+        .collect();
+    let origin = match caldav::normalize_base_url(&account.base_url) {
+        Ok(origin) => origin,
+        Err(e) => {
+            let unchanged = prev.is_some_and(|p| p.base_url == account.base_url);
+            if e.starts_with(caldav::HTTP_REFUSED) && unchanged && added.is_empty() {
+                return Ok(());
+            }
+            return Err(e);
+        }
+    };
+    match added.iter().find(|h| !caldav::href_in_origin(&origin, h)) {
+        Some(href) => Err(format!(
+            "the calendar at {href} is outside this account's server address ({}) — its \
+             password is only sent there (or to a subdomain of it over HTTPS)",
+            origin.as_str()
+        )),
+        None => Ok(()),
+    }
 }
 
 /// `Some(false)` is coerced to `None`.
@@ -233,6 +271,11 @@ pub async fn caldav_account_upsert(
     let rt = state.clone();
     let remember = remember_arg(remember);
     tokio::task::spawn_blocking(move || {
+        let prev = read_accounts(&accounts_path())?
+            .accounts
+            .into_iter()
+            .find(|a| !account.id.is_empty() && a.id == account.id);
+        check_account_origin(prev.as_ref(), &account)?;
         let mut account = upsert_account_at(&accounts_path(), account)?;
 
         // An empty password field means "use whatever is already there", never
@@ -371,6 +414,10 @@ pub async fn caldav_discover(
     password: Option<String>,
     account_id: Option<String>,
 ) -> Result<Vec<CalDavCollection>, String> {
+    // The typed URL is the credential origin for the whole discovery chain
+    // (gap 26), and an `http://` one is refused before a password is looked
+    // up (E2b).
+    caldav::normalize_base_url(&base_url)?;
     let state = ctx.get::<CalDavState>();
     let rt = state.clone();
     let typed = password.filter(|p| !p.is_empty());
@@ -395,7 +442,8 @@ pub async fn caldav_discover(
                 .to_string(),
         );
     };
-    caldav::discover(&base_url, &Credentials { user, password }).await
+    let cred = Credentials::new(user, password, &base_url)?;
+    caldav::discover(&base_url, &cred).await
 }
 
 // ── Commands: sync ──────────────────────────────────────────────────────────
@@ -407,13 +455,19 @@ pub async fn caldav_discover(
 /// timer cost one small request rather than a whole calendar. `force` skips it,
 /// for the "Sync now" button — a user clicking Sync after fixing something on
 /// the server should not be told "nothing changed" by a token.
+///
+/// `full` also skips the incremental report: "Use the server's" on a conflict
+/// needs the server's copy of a resource whose change an earlier sync already
+/// moved the sync token past (the merge kept the local edit then; gap 32).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_fetch(
     ctx: Ctx,
     account_id: String,
     href: String,
     force: bool,
+    full: Option<bool>,
 ) -> Result<CalDavChanges, String> {
+    let full = full.unwrap_or(false);
     let state = ctx.get::<CalDavState>();
     let rt = state.clone();
     let (account, cred) = {
@@ -436,7 +490,7 @@ pub async fn caldav_fetch(
         .ok_or_else(|| format!("this account is not subscribed to '{href}'"))?;
 
     // 1. The cheap "is it worth doing the expensive read" check.
-    if !force && !stored.ctag.is_empty() {
+    if !force && !full && !stored.ctag.is_empty() {
         if let Ok((ctag, _)) = caldav::change_tokens(&href, &cred).await {
             if !ctag.is_empty() && ctag == stored.ctag {
                 return Ok(CalDavChanges {
@@ -451,7 +505,7 @@ pub async fn caldav_fetch(
     // 2. Incremental when the server offered a token last time; a full read
     //    otherwise, or when the token turned out to be stale/unsupported — the
     //    fallback every pre-RFC-6578 server has always been on.
-    if let Some(token) = stored.sync_token.as_deref().filter(|t| !t.is_empty()) {
+    if let Some(token) = stored.sync_token.as_deref().filter(|t| !t.is_empty() && !full) {
         match caldav::fetch_changes(&href, &cred, token).await {
             Ok(changes) => return Ok(changes),
             Err(_) => { /* fall through to the full read */ }
@@ -467,7 +521,12 @@ pub async fn caldav_fetch(
 /// saved over a write that failed would make the next sync skip the very change
 /// it just dropped, and the calendar would sit quietly wrong until something
 /// else happened to move the ctag.
+///
+/// Rows holding an unpushed local edit are kept, not overwritten, and come
+/// back in `caldav_kept` (gap 32). `discard` names rows whose local edit the
+/// user gave up on ("Use the server's"); their mark goes in the same write.
 #[cfg_attr(feature = "desktop", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn caldav_apply(
     account_id: String,
     href: String,
@@ -477,7 +536,8 @@ pub async fn caldav_apply(
     ctag: String,
     sync_token: Option<String>,
     last_sync: String,
-) -> Result<CalendarData, String> {
+    discard: Option<Vec<String>>,
+) -> Result<CalDavApplied, String> {
     tokio::task::spawn_blocking(move || {
         let mut account = account_by_id(&accounts_path(), &account_id)?;
         let calendar_id = account
@@ -487,7 +547,7 @@ pub async fn caldav_apply(
             .map(|c| c.calendar_id.clone())
             .ok_or_else(|| format!("this account is not subscribed to '{href}'"))?;
 
-        let data = crate::commands::calendar::merge_caldav_calendar_at(
+        let (data, caldav_kept) = crate::commands::calendar::merge_caldav_calendar_kept_at(
             &crate::commands::calendar::calendar_path(),
             &calendar_id,
             parsed,
@@ -495,6 +555,7 @@ pub async fn caldav_apply(
             // A full listing is authoritative about what still exists; an
             // incremental one says nothing at all about what it omits.
             !incremental,
+            &discard.unwrap_or_default(),
         )?;
 
         if let Some(slot) = account.calendars.iter_mut().find(|c| c.href == href) {
@@ -509,7 +570,7 @@ pub async fn caldav_apply(
             slot.last_sync = last_sync;
         }
         upsert_account_at(&accounts_path(), account)?;
-        Ok(data)
+        Ok(CalDavApplied { data, caldav_kept })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -571,7 +632,14 @@ fn writable(account: &CalDavAccount, href: &str) -> Result<(), String> {
 /// in that order, after the server accepted, never before. A row stamped
 /// optimistically and then refused would claim to be synced while the server had
 /// never heard of it, and the next sync would create a *second* copy.
+///
+/// **The row is marked dirty before anything is sent** (gap 32), whoever wrote
+/// it, so a push that fails or conflicts leaves the edit marked: the merge
+/// keeps it, and the next sync pushes it again. `rev` is the row revision the
+/// caller serialized `ics` from; the mark is cleared only when the server took
+/// that revision and nothing edited the row meanwhile.
 #[cfg_attr(feature = "desktop", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn caldav_push(
     ctx: Ctx,
     account_id: String,
@@ -582,21 +650,30 @@ pub async fn caldav_push(
     ics: String,
     resource_href: Option<String>,
     etag: Option<String>,
+    rev: Option<u64>,
 ) -> Result<CalDavWrite, String> {
     let state = ctx.get::<CalDavState>();
     let rt = state.clone();
-    let (account, cred) = {
+    let (cred, pushed_rev) = {
         let rt2 = rt.clone();
         let account_id = account_id.clone();
+        let (href, kind, row_id) = (href.clone(), kind.clone(), row_id.clone());
         tokio::task::spawn_blocking(move || {
             let account = account_by_id(&accounts_path(), &account_id)?;
+            // The local gate first: a push it refuses is no unpushed edit.
+            writable(&account, &href)?;
+            let (before, after) = crate::commands::calendar::mark_caldav_dirty_at(
+                &crate::commands::calendar::calendar_path(),
+                &kind,
+                &row_id,
+            )?;
             let cred = credentials(&rt2, &account)?;
-            Ok::<_, String>((account, cred))
+            let current = rev.is_none_or(|r| r == before);
+            Ok::<_, String>((cred, current.then_some(after)))
         })
         .await
         .map_err(|e| e.to_string())??
     };
-    writable(&account, &href)?;
 
     let existing = resource_href.unwrap_or_default();
     let existing = existing.trim();
@@ -612,8 +689,9 @@ pub async fn caldav_push(
         )
     };
 
-    let outcome = caldav::put_resource(&target, &cred, &ics, condition).await?;
+    let mut outcome = caldav::put_resource(&target, &cred, &ics, condition).await?;
     if outcome.conflict {
+        outcome.dirty = true;
         return Ok(outcome);
     }
 
@@ -623,13 +701,14 @@ pub async fn caldav_push(
         outcome.href.clone(),
         outcome.etag.clone(),
     );
-    tokio::task::spawn_blocking(move || {
+    outcome.dirty = tokio::task::spawn_blocking(move || {
         crate::commands::calendar::set_caldav_identity_at(
             &crate::commands::calendar::calendar_path(),
             &kind,
             &row_id,
             &stamp_href,
             &stamp_etag,
+            pushed_rev,
         )
     })
     .await
@@ -911,5 +990,64 @@ mod tests {
         assert_eq!(read.calendars[0].ctag, "ctag-1");
         assert_eq!(read.calendars[0].sync_token.as_deref(), Some("tok-1"));
         assert!(read.calendars[0].read_only);
+    }
+
+    fn with_ref(mut a: CalDavAccount, href: &str) -> CalDavAccount {
+        a.calendars.push(crate::schema::caldav::CalDavCalendarRef {
+            href: href.into(),
+            calendar_id: format!("cal-{}", a.calendars.len()),
+            ..Default::default()
+        });
+        a
+    }
+
+    #[test]
+    fn an_account_added_as_http_is_refused_with_the_fixed_code() {
+        let mut a = account("me");
+        a.base_url = "http://dav.example.org/dav/".into();
+        let err = check_account_origin(None, &a).unwrap_err();
+        assert!(err.starts_with(caldav::HTTP_REFUSED), "{err}");
+        // Turning an https account into an http one is refused too.
+        let prev = account("me");
+        assert!(check_account_origin(Some(&prev), &a).unwrap_err().starts_with(caldav::HTTP_REFUSED));
+        // And an http account gets no credentials, before any keyring read.
+        let rt: CalDavState = Arc::default();
+        let err = credentials(&rt, &a).unwrap_err();
+        assert!(err.starts_with(caldav::HTTP_REFUSED), "{err}");
+    }
+
+    #[test]
+    fn an_existing_http_account_can_still_be_saved_unchanged_but_gains_no_calendar() {
+        // Nothing deletes an old http account (E2b): an unsubscribe or a toggle
+        // still saves, it just never syncs.
+        let mut prev = with_ref(account("me"), "http://dav.example.org/dav/me/a/");
+        prev.base_url = "http://dav.example.org/dav/".into();
+        let mut unsubscribed = prev.clone();
+        unsubscribed.calendars.clear();
+        unsubscribed.allow_write = true;
+        assert!(check_account_origin(Some(&prev), &unsubscribed).is_ok());
+        assert!(check_account_origin(Some(&prev), &prev).is_ok());
+        let grown = with_ref(prev.clone(), "http://dav.example.org/dav/me/b/");
+        assert!(check_account_origin(Some(&prev), &grown).unwrap_err().starts_with(caldav::HTTP_REFUSED));
+    }
+
+    #[test]
+    fn a_picked_calendar_outside_the_origin_is_refused() {
+        let base = account("me"); // https://dav.example.org/dav/
+        assert!(check_account_origin(None, &with_ref(base.clone(), "https://dav.example.org/dav/me/a/")).is_ok());
+        assert!(check_account_origin(None, &with_ref(base.clone(), "https://cal.dav.example.org/a/")).is_ok());
+        for off in [
+            "https://evil.example.net/a/",
+            "http://dav.example.org/dav/me/a/",
+            "https://dav.example.org:8443/a/",
+            "https://example.org/a/",
+        ] {
+            let err = check_account_origin(None, &with_ref(base.clone(), off)).unwrap_err();
+            assert!(err.contains("outside"), "{off}: {err}");
+        }
+        // A ref the account already had is left for the sync to refuse, so an
+        // unsubscribe from it is never blocked.
+        let prev = with_ref(base.clone(), "https://evil.example.net/a/");
+        assert!(check_account_origin(Some(&prev), &prev).is_ok());
     }
 }

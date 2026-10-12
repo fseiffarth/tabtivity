@@ -67,3 +67,27 @@ export function setCalendarWriteHandler(next: CalendarWriteHandler | null): () =
 export function notifyCalendarWrite(event: CalendarWriteEvent): Promise<void> {
   return handler ? handler(event) : Promise.resolve();
 }
+
+/**
+ * Whether a write into this calendar is one CalDAV will push — a calendar a
+ * writable account syncs. Registered beside the handler by the CalDAV side, so
+ * the calendar store can mark the row `caldav_dirty` **in the same local write**
+ * (gap 32) without importing the CalDAV store. With nothing registered, no
+ * calendar is.
+ */
+export type CalendarDirtyPredicate = (calendarId: string) => boolean;
+
+let dirtyPredicate: CalendarDirtyPredicate | null = null;
+
+/** Install the predicate. Returns the uninstaller. */
+export function setCalendarDirtyPredicate(next: CalendarDirtyPredicate | null): () => void {
+  dirtyPredicate = next;
+  return () => {
+    if (dirtyPredicate === next) dirtyPredicate = null;
+  };
+}
+
+/** `row`, marked `caldav_dirty` when its calendar is one CalDAV pushes. */
+export function markForPush<T extends { calendar_id: string; caldav_dirty?: boolean }>(row: T): T {
+  return dirtyPredicate?.(row.calendar_id) ? { ...row, caldav_dirty: true } : row;
+}

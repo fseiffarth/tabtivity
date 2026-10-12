@@ -75,6 +75,21 @@ export interface CalDavWrite {
   conflict: boolean;
   /** A delete found nothing there. The intended end state is the actual one. */
   gone: boolean;
+  /** After a push: the row still carries `caldav_dirty` (edited again while the
+   *  write was in flight, or the write conflicted). */
+  dirty?: boolean;
+}
+
+/** A row with an unpushed local edit that a merge kept rather than overwrote. */
+export interface CalDavKept {
+  row_id: string;
+  kind: "event" | "task";
+  /** The resource the row was synced from. */
+  href: string;
+  title: string;
+  /** `changed`: the server changed it too. `deleted`: the server deleted it,
+   *  and the row is now local-only. */
+  reason: "changed" | "deleted";
 }
 
 /** What the keychain actually did — never collapsed to a bare account. */

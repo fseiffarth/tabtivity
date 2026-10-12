@@ -1232,6 +1232,7 @@ mod tests {
             a["id"].as_str().unwrap(),
             "/new.ics",
             "new-etag",
+            None,
         )
         .unwrap();
         let effects = f.approve(&p);
@@ -1366,6 +1367,7 @@ mod tests {
             a["id"].as_str().unwrap(),
             "/original.ics",
             "etag",
+            None,
         )
         .unwrap();
         // A resource address on the source row is enough to exercise the same
@@ -1396,7 +1398,7 @@ mod tests {
         f.mode("off");
         let target = f.call("root:a", "calendar_create", json!({"name":"Target"}));
         let a = f.call("root:a", "todo_add", json!({"title":"A"}));
-        calendar::set_caldav_identity_at(&f.calendar, "task", a["id"].as_str().unwrap(), "/t.ics", "etag")
+        calendar::set_caldav_identity_at(&f.calendar, "task", a["id"].as_str().unwrap(), "/t.ics", "etag", None)
             .unwrap();
         f.mode("all");
         f.call("root:a", "todo_update", json!({"id":a["id"], "calendar":target["id"]}));
@@ -1535,7 +1537,7 @@ mod tests {
             let f = Fixture::new();
             f.mode("off");
             let synced = f.call("root:a", "todo_add", json!({"title":"Synced"}));
-            calendar::set_caldav_identity_at(&f.calendar, "task", synced["id"].as_str().unwrap(), "/t.ics", "etag").unwrap();
+            calendar::set_caldav_identity_at(&f.calendar, "task", synced["id"].as_str().unwrap(), "/t.ics", "etag", None).unwrap();
             let shared = f.call("root:a", "calendar_create", json!({"name":"Shared"}));
             sync_calendar(&f, &shared["id"]);
             f.mode(mode);

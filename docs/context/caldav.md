@@ -7,7 +7,8 @@ answered is the "Push" section below.
 
 Nothing here has run against a real CalDAV server. The parsers, the merge, the
 push gate and the resource serializer are fixture- and unit-tested; the
-transport has never spoken to anything.
+transport's hop and origin rules are tested against an in-process fake
+(`services::caldav::tests::fake`), but it has never spoken to a real server.
 
 ## The one distinction the whole design rests on
 
@@ -122,17 +123,63 @@ module re-attached `basic_auth` on every hop instead. A server at the URL the
 user typed — or anyone who can answer for it — could therefore bounce the
 client anywhere and be handed the calendar password in a readable header.
 
-`credentials_may_follow` is the fix, applied per hop against the URL the
-*caller* named rather than the previous hop (a chain of small steps must not be
-able to walk the password anywhere):
+`credentials_may_follow` is the fix, applied per hop against a **fixed
+credential origin** (gap 26, threat recheck 2026-10-08) rather than the previous
+hop (a chain of small steps must not be able to walk the password anywhere) or
+the URL being requested:
 
 - **same origin** — every hop inside one server's URL space;
 - **a subdomain of the credential's host, over TLS** — RFC 6764's own shape,
   where the user types `example.org` and `/.well-known/caldav` redirects to
   `caldav.example.org`;
-- **nothing else**, and an `https → http` hop is refused outright rather than
-  merely stripped, because everything after it (the calendar's contents
-  included) would cross the network in the clear.
+- **nothing else**, and an `http:` hop is refused outright rather than merely
+  stripped, because everything after it (the calendar's contents included)
+  would cross the network in the clear.
+
+The origin is `Credentials.origin`: the account's normalized `base_url`, and
+during discovery the URL the user typed. It used to be the URL each request
+named, which is a string the *server* chose for every stored collection and
+resource href and for the principal and home set — so a redirect target that
+was refused the password could name itself as the principal and get it on the
+next request. Now:
+
+- the **first hop** of any request (a principal, home-set, stored collection or
+  resource href) outside the origin is refused before anything is sent — an
+  error, not an unauthenticated retry;
+- a **redirect hop** outside it goes out without credentials for a read (its
+  `401` gets the sentence below) and is refused for a write, whose body is the
+  user's own event;
+- collections and resources a server lists outside the origin are **dropped**,
+  never stored (a stored `caldav_href` is what every later push aims at); a
+  listing whose calendars all sit elsewhere says so instead of "no calendars";
+- `caldav_account_upsert` refuses a newly picked calendar outside the origin.
+  A ref an older account already holds is left alone (refusing would block
+  unsubscribing from it); its sync fails visibly instead.
+
+The test seam for all of this is `Dav::send`: under `cfg(test)` a thread-local
+fake answers requests in-process (`services::caldav::tests::fake`), because with
+`https_only` a plain-HTTP mock server cannot be reached and the crate has no
+TLS fixtures.
+
+## Plain `http://` is refused (decision E2b)
+
+Every CalDAV request carries the password, and every reply carries the
+calendar. So `http://` is refused everywhere: as a typed base URL
+(`normalize_base_url`, `localhost` included — a self-hosted Radicale gets a TLS
+proxy in front of it), in discovery, as a stored href, and as a redirect target.
+The reqwest client is built `https_only` as a backstop. Every refusal starts
+with the fixed code `caldav_http_refused`, which the window maps to one
+translated sentence saying why (`caldav.httpRefused`, also an `errors.ts` rule
+so any `ErrorNote` shows it).
+
+An account added as http before this rule is **not deleted** — nothing here
+deletes a user's account. It stops syncing: `credentials()` refuses it before
+the keyring is asked, the store's `syncCalendar` fails it without a request and
+shows the sentence on the sidebar's sync mark, and its calendars turn read-only
+(`notWritable` counts the scheme). The account dialog opened on it shows the
+sentence and keeps Find and Save off until the URL is `https://`; the backend
+still lets such an account be saved *unchanged* (an unsubscribe, a toggle) but
+never gains a calendar.
 
 Sibling hosts (`caldav.example.org` → `dav.example.org`) are refused too, which
 is stricter than "same organization" and deliberately so: telling those apart
@@ -212,6 +259,49 @@ simpler implementation loses somebody's data:
   store can announce writes without importing the CalDAV store back (two
   module-scope `create()` calls in a cycle is the shape that resolves to
   `undefined` depending on which file the bundler reaches first).
+
+### A failed push keeps the edit (gap 32)
+
+An upsert is pushed after the local write, so the server can fail it — offline,
+a locked keyring, a 5xx, a `412` — and before this the next sync's merge
+overwrote the matched row with the server's copy: the edit was gone. Now:
+
+- **The mark.** A row of a writable CalDAV calendar carries `caldav_dirty: true`
+  in its `extra` (older builds carry it through untouched). The window sets it
+  in the same local write (`calendarWriteHook::markForPush`, a predicate the
+  CalDAV store registers beside the push handler), and `caldav_push` sets it
+  again before it sends, so whoever wrote the row — the window, an approved
+  root-agent row — a failed push leaves it marked. `update_event_at` /
+  `update_task_at` keep a stored mark within the same calendar (a copy that
+  never saw it cannot clear it); a move drops it, and the window's write in the
+  new calendar marks it again.
+- **Clearing.** Only a push the server accepted clears it, and only for the
+  row revision it sent: `caldav_push` takes the `rev` the window serialized,
+  and `set_caldav_identity_at` clears the mark only if the row still has the
+  revision the mark gave it. An edit that lands while the write is in flight
+  keeps it, so that edit is pushed too. The other way out is the user's "Use
+  the server's".
+- **The sync pushes first.** `syncCalendar` pushes a collection's dirty rows
+  (one per resource, conditional on each row's stored ETag) before it fetches.
+  A `412` is a conflict as always.
+- **The merge never overwrites a dirty row.** A matched dirty row's whole
+  resource group is left as it is; when the server's ETag differs, the row comes
+  back in `caldav_apply`'s `caldav_kept` (`reason: "changed"`). A dirty row the
+  server deleted (explicit `404`, or an event absent from a full listing) is kept
+  as a local-only row — href and ETag cleared, the old href under
+  `caldav_server_deleted` — and reported (`reason: "deleted"`).
+- **The question.** Kept rows land in `CalDavConflictDialog`. For a deleted one
+  the lede says so; "keep mine" puts it back (a create), "use the server's"
+  deletes it here too. "Use the server's" is a forced **full** read with the row
+  named in `caldav_apply`'s `discard`, which drops the mark in the same write —
+  full because an earlier sync may already have moved the sync token past the
+  server's change. "Decide later" defers the row for the session: no sync pushes
+  it or re-asks, its next edit does, and the next run asks again (a 412, or the
+  `caldav_server_deleted` mark re-raising its question).
+
+`services::local_loss` was considered and dropped (plan review): it is
+per-project and file-shaped, and a calendar row has no project. With the mark,
+nothing overwrites an unpushed edit automatically; only the user's answer does.
 
 **A root agent's write to a synced calendar always waits for the user**
 (decision E3, gap 27). An agent's applied row reaches the server the same way

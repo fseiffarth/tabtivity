@@ -9,15 +9,25 @@ import {
   caldavPush,
   caldavRefreshAccess,
   caldavResourceEtag,
+  CALDAV_HTTP_REFUSED,
+  isHttpBaseUrl,
   parseChanges,
   syncStamp,
 } from "../../lib/calendar/caldav";
 import { resourceIcs, resourceRows, resourceUid } from "../../lib/calendar/caldavPush";
-import { setCalendarWriteHandler } from "../../lib/calendar/calendarWriteHook";
+import {
+  setCalendarDirtyPredicate,
+  setCalendarWriteHandler,
+} from "../../lib/calendar/calendarWriteHook";
 import type { CalendarWriteEvent } from "../../lib/calendar/calendarWriteHook";
 import { useCalendarStore } from "./calendar";
 import type { CalendarEvent, CalendarTask } from "../../types";
-import type { CalDavAccount, CalDavAccountSaved, CalDavCollection } from "../../types/caldav";
+import type {
+  CalDavAccount,
+  CalDavAccountSaved,
+  CalDavCollection,
+  CalDavKept,
+} from "../../types/caldav";
 
 /**
  * CalDAV accounts, and the sync that keeps their calendars current.
@@ -78,6 +88,9 @@ export interface CalDavConflict {
   title: string;
   /** The write that hit the conflict: an edit, or a deletion. */
   op: "upsert" | "delete";
+  /** The server deleted the resource while this row held an unpushed edit
+   *  (gap 32): the row is local-only now, and "keep mine" puts it back. */
+  serverDeleted?: boolean;
   /** Local stamp, so a conflict from this morning does not read as fresh. */
   at: string;
 }
@@ -109,6 +122,9 @@ interface CalDavStore {
   status: Record<string, CalDavSyncStatus>;
   /** Unanswered conflicts, newest last. Empty is the normal state. */
   conflicts: CalDavConflict[];
+  /** Rows whose conflict the user put off ("Decide later") this session: a
+   *  sync neither pushes them again nor re-asks; their next edit does. */
+  deferred: string[];
   /** The last push failure that was **not** a conflict (a 403 on a read-only
    *  collection, an unreachable server). Kept for the same reason `status` keeps
    *  sync errors: the surface that would show it inline is not open. */
@@ -140,8 +156,17 @@ interface CalDavStore {
   /** Stop syncing a collection. The local calendar and its events stay. */
   unsubscribe: (accountId: string, href: string) => Promise<void>;
 
-  /** Sync one collection. `force` skips the cheap ctag check. */
-  syncCalendar: (accountId: string, href: string, force: boolean) => Promise<CalDavSyncStatus>;
+  /**
+   * Sync one collection. `force` skips the cheap ctag check. Rows holding an
+   * unpushed edit are pushed first (gap 32). `discard` names rows whose local
+   * edit is given up ("Use the server's"); `full` skips the incremental report.
+   */
+  syncCalendar: (
+    accountId: string,
+    href: string,
+    force: boolean,
+    options?: { discard?: string[]; full?: boolean },
+  ) => Promise<CalDavSyncStatus>;
   /** Sync every subscription of every account — the timer's tick. */
   syncAll: (force: boolean) => Promise<void>;
 
@@ -158,13 +183,25 @@ interface CalDavStore {
    * back as an outcome and lands in `conflicts`.
    */
   pushRow: (event: CalendarWriteEvent) => Promise<CalDavPushOutcome>;
+  /**
+   * Push every row of one collection that holds an unpushed edit
+   * (`caldav_dirty`, gap 32) — the start of each sync. Conditional on each
+   * row's stored ETag like any push, so a server change meanwhile is a `412`
+   * and lands in `conflicts`. Rows named in `skip`, deferred rows and rows with
+   * an open question are left alone; a row the server deleted re-raises its
+   * question instead.
+   */
+  pushDirty: (account: CalDavAccount, href: string, skip: string[]) => Promise<void>;
   /** Answer a conflict by overwriting the server's copy with this machine's. */
   resolveKeepMine: (conflict: CalDavConflict) => Promise<void>;
   /** Answer it by taking the server's copy — a forced sync of that collection,
    *  which is what puts the server's version into `calendar.json`. */
   resolveTakeServer: (conflict: CalDavConflict) => Promise<void>;
-  /** Drop the question without answering it. The row keeps its local edit. */
+  /** Drop the question (it was answered, or its row is gone). */
   dismissConflict: (rowId: string) => void;
+  /** "Decide later": drop the question and keep the local edit. The row stays
+   *  marked; this session's syncs leave it alone, and its next edit asks again. */
+  deferConflict: (rowId: string) => void;
   /** Re-ask the server what this login may do with a collection. */
   refreshAccess: (accountId: string, href: string) => Promise<void>;
 }
@@ -196,7 +233,36 @@ function rowTitle(row: CalendarEvent | CalendarTask): string {
  * quietly keep to itself.
  */
 function notWritable(account: CalDavAccount, collectionReadOnly: boolean): boolean {
-  return collectionReadOnly || !account.allow_write;
+  // An `http://` account never syncs (decision E2b), so it takes no edits either.
+  return collectionReadOnly || !account.allow_write || isHttpBaseUrl(account.base_url);
+}
+
+/** The account and collection whose sync takes this calendar's writes, if any. */
+function pushTarget(
+  accounts: CalDavAccount[],
+  calendarId: string,
+): { account: CalDavAccount; href: string } | null {
+  for (const account of accounts) {
+    const ref = account.calendars.find((c) => c.calendar_id === calendarId);
+    if (!ref) continue;
+    return notWritable(account, ref.read_only) ? null : { account, href: ref.href };
+  }
+  return null;
+}
+
+/** A merge's kept row, as the question the conflict dialog asks. */
+function keptConflict(accountId: string, href: string, kept: CalDavKept): CalDavConflict {
+  return {
+    rowId: kept.row_id,
+    kind: kept.kind,
+    accountId,
+    href,
+    resourceHref: kept.href,
+    title: (kept.title ?? "").trim() || "(untitled)",
+    op: "upsert",
+    serverDeleted: kept.reason === "deleted",
+    at: syncStamp(),
+  };
 }
 
 /**
@@ -217,11 +283,21 @@ async function applyWritability(account: CalDavAccount): Promise<void> {
   }
 }
 
+/** Mirror a backend `caldav_dirty` mark into the in-memory row. */
+function markDirty(kind: "event" | "task", rowId: string): void {
+  useCalendarStore.setState((s) =>
+    kind === "event"
+      ? { events: s.events.map((e) => (e.id === rowId ? { ...e, caldav_dirty: true } : e)) }
+      : { tasks: s.tasks.map((t) => (t.id === rowId ? { ...t, caldav_dirty: true } : t)) },
+  );
+}
+
 export const useCalDavStore = create<CalDavStore>((set, get) => ({
   accounts: [],
   loaded: false,
   status: {},
   conflicts: [],
+  deferred: [],
   pushError: "",
 
   load: async () => {
@@ -314,7 +390,7 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
     });
   },
 
-  syncCalendar: async (accountId, href, force) => {
+  syncCalendar: async (accountId, href, force, options) => {
     set((s) => ({
       status: { ...s.status, [href]: { ...(s.status[href] ?? IDLE), phase: "syncing", error: "" } },
     }));
@@ -326,8 +402,22 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
       return next;
     };
 
+    const account = get().accounts.find((a) => a.id === accountId);
+    // An `http://` account is never synced (E2b) — nothing is sent, and the row
+    // says why. Nothing deletes it; its calendars turn read-only here.
+    if (account && isHttpBaseUrl(account.base_url)) {
+      await applyWritability(account).catch(() => {});
+      return fail(CALDAV_HTTP_REFUSED);
+    }
+    const discard = options?.discard ?? [];
+
     try {
-      const changes = await caldavFetch(accountId, href, force);
+      // Unpushed edits first (gap 32): a push that lands now is what the fetch
+      // below then reads back, and one that conflicts becomes a question
+      // instead of being merged over.
+      if (account) await get().pushDirty(account, href, discard);
+
+      const changes = await caldavFetch(accountId, href, force, options?.full ?? false);
       if (changes.unchanged) {
         const at = get().status[href]?.at ?? "";
         const next: CalDavSyncStatus = { phase: "ok", error: "", at, unchanged: true };
@@ -345,6 +435,7 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
         ctag: changes.ctag,
         syncToken: changes.sync_token ?? null,
         lastSync: syncStamp(),
+        discard,
       });
       // The whole store comes back from one atomic write, so the calendar
       // surfaces see the merge as a single consistent state rather than a
@@ -359,6 +450,15 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
       // The cursors moved on disk; keep the in-memory account in step so the
       // next tick compares against what was actually stored.
       await get().reload();
+      // Rows the merge kept because they hold an unpushed edit the server
+      // changed or deleted: each is a question, never a silent overwrite.
+      for (const kept of data.caldav_kept ?? []) {
+        if (get().deferred.includes(kept.row_id)) continue;
+        const conflict = keptConflict(accountId, href, kept);
+        set((s) => ({
+          conflicts: [...s.conflicts.filter((c) => c.rowId !== conflict.rowId), conflict],
+        }));
+      }
 
       const next: CalDavSyncStatus = {
         phase: "ok",
@@ -470,13 +570,23 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
         ics,
         resourceHref: resourceHref || null,
         etag: etag || null,
+        rev: row.rev ?? null,
       });
-      if (outcome.conflict) return noteConflict();
+      if (outcome.conflict) {
+        markDirty(kind, row.id);
+        return noteConflict();
+      }
 
       // The backend stamped the row on disk; mirror it into the store so the
       // *next* edit is conditional on the ETag this write just earned rather
-      // than on the one it replaced.
-      const patch = { caldav_href: outcome.href, caldav_etag: outcome.etag };
+      // than on the one it replaced. The unpushed-edit mark goes too, unless
+      // the row was edited again while this write was in flight.
+      const patch = {
+        caldav_href: outcome.href,
+        caldav_etag: outcome.etag,
+        caldav_dirty: outcome.dirty ? true : undefined,
+        caldav_server_deleted: undefined,
+      };
       useCalendarStore.setState((s) =>
         kind === "event"
           ? { events: s.events.map((e) => (e.id === row.id ? { ...e, ...patch } : e)) }
@@ -489,9 +599,51 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
       // A **delete** rethrows: the calendar store is waiting on this to decide
       // whether to remove the local row, and swallowing it here would delete a
       // row the server still has. An upsert does not — it is already written
-      // locally, and the next sync will carry it.
+      // locally, and it stays marked `caldav_dirty` (the backend marked it
+      // before sending), so the next sync pushes it again before it fetches and
+      // no merge overwrites it in between (gap 32).
       if (op === "delete") throw new Error(message);
+      markDirty(kind, row.id);
       return "error";
+    }
+  },
+
+  pushDirty: async (account, href, skip) => {
+    const ref = account.calendars.find((c) => c.href === href);
+    if (!ref || notWritable(account, ref.read_only)) return;
+    const { events, tasks } = useCalendarStore.getState();
+    const rows: { kind: "event" | "task"; row: CalendarEvent | CalendarTask }[] = [
+      ...events
+        .filter((e) => e.calendar_id === ref.calendar_id && e.caldav_dirty)
+        .map((row) => ({ kind: "event" as const, row })),
+      ...tasks
+        .filter((t) => t.calendar_id === ref.calendar_id && t.caldav_dirty)
+        .map((row) => ({ kind: "task" as const, row })),
+    ];
+    // One push per resource: a series' rows go to the server as one object.
+    const sent = new Set<string>();
+    for (const { kind, row } of rows) {
+      const now = get();
+      if (skip.includes(row.id) || now.deferred.includes(row.id)) continue;
+      if (now.conflicts.some((c) => c.rowId === row.id)) continue;
+      const gone = (row.caldav_server_deleted ?? "").trim();
+      if (gone) {
+        // Still an open question from an earlier sync (or an earlier run):
+        // asked again, never answered by pushing.
+        const conflict = keptConflict(account.id, href, {
+          row_id: row.id,
+          kind,
+          href: gone,
+          title: row.title,
+          reason: "deleted",
+        });
+        set((s) => ({ conflicts: [...s.conflicts, conflict] }));
+        continue;
+      }
+      const resource = (row.caldav_href ?? "").trim() || `row:${row.id}`;
+      if (sent.has(resource)) continue;
+      sent.add(resource);
+      await get().pushRow({ op: "upsert", kind, row });
     }
   },
 
@@ -519,7 +671,11 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
       // Re-read the validator and write against *that*. Still conditional: an
       // edit that lands between the question and the answer conflicts again
       // rather than being destroyed by the resolution of an older conflict.
-      const current = await caldavResourceEtag(conflict.accountId, conflict.resourceHref);
+      // A resource the server deleted has no validator to read: the row is
+      // local-only, and keeping it is a create.
+      const current = conflict.serverDeleted
+        ? ""
+        : await caldavResourceEtag(conflict.accountId, conflict.resourceHref);
       const staged =
         conflict.kind === "event"
           ? { ...(row as CalendarEvent), caldav_etag: current }
@@ -562,13 +718,30 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
   resolveTakeServer: async (conflict) => {
     // A forced sync of the collection is what *is* "take the server's version":
     // the merge overwrites the row's server-owned fields from the fetched
-    // resource, and does it through the one code path that knows how.
-    await get().syncCalendar(conflict.accountId, conflict.href, true);
+    // resource, and does it through the one code path that knows how. The
+    // row's unpushed-edit mark is dropped in that same write (`discard`) — or
+    // the merge would keep the edit again — and the read is a full one: an
+    // earlier sync may already have moved the token past the server's change.
+    // A row the server deleted is deleted here too.
+    await get().syncCalendar(conflict.accountId, conflict.href, true, {
+      discard: [conflict.rowId],
+      full: true,
+    });
     get().dismissConflict(conflict.rowId);
   },
 
   dismissConflict: (rowId) => {
-    set((s) => ({ conflicts: s.conflicts.filter((c) => c.rowId !== rowId) }));
+    set((s) => ({
+      conflicts: s.conflicts.filter((c) => c.rowId !== rowId),
+      deferred: s.deferred.filter((id) => id !== rowId),
+    }));
+  },
+
+  deferConflict: (rowId) => {
+    set((s) => ({
+      conflicts: s.conflicts.filter((c) => c.rowId !== rowId),
+      deferred: s.deferred.includes(rowId) ? s.deferred : [...s.deferred, rowId],
+    }));
   },
 
   refreshAccess: async (accountId, href) => {
@@ -598,9 +771,18 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
  * store with no side effects until something asks for them.
  */
 export function installCalDavPush(): () => void {
-  return setCalendarWriteHandler(async (event) => {
+  const dropHandler = setCalendarWriteHandler(async (event) => {
     await useCalDavStore.getState().pushRow(event);
   });
+  // Which writes the calendar store marks `caldav_dirty` in the same local
+  // write (gap 32): exactly the ones `pushRow` would send.
+  const dropPredicate = setCalendarDirtyPredicate(
+    (calendarId) => pushTarget(useCalDavStore.getState().accounts, calendarId) !== null,
+  );
+  return () => {
+    dropHandler();
+    dropPredicate();
+  };
 }
 
 /** The status of whichever collection feeds a local calendar, for the sidebar. */

@@ -844,8 +844,10 @@ enforced by the type.
 **CalDAV** is hand-rolled on `reqwest` + `roxmltree` rather than a crate (the
 Rust landscape is unmaintained or WebDAV-generic, and a `PROPFIND` body is a
 five-line template). A sync **merges by resource URL** instead of replacing, so a
-local edit is never silently dropped; an HTML login page fails loudly rather than
-importing zero events.
+local edit is never silently dropped (an unpushed edit is marked `caldav_dirty`,
+pushed before the next fetch and never merged over); an HTML login page fails
+loudly rather than importing zero events. Credentials go only to the account's
+own server address (or a subdomain over TLS), and plain `http://` is refused.
 
 ### Native Viewers
 

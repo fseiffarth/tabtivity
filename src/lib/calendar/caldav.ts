@@ -17,12 +17,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { parseIcs } from "./ics";
 import { toStamp } from "./calendarTime";
+import type { TranslationKey } from "../i18n";
 import type { CalendarData, CalendarEvent, CalendarTask } from "../../types";
 import type {
   CalDavAccount,
   CalDavAccountSaved,
   CalDavChanges,
   CalDavCollection,
+  CalDavKept,
   CalDavParsed,
   CalDavPasswordState,
   CalDavWrite,
@@ -38,6 +40,34 @@ import type {
  * stored 0 is a choice and only an absent value is unset.
  */
 export const DEFAULT_CALDAV_SYNC_MIN = 15;
+
+/**
+ * The fixed code every backend refusal of plain `http://` CalDAV starts with
+ * (`services::caldav::HTTP_REFUSED`, decision E2b). The UI shows
+ * `caldav.httpRefused` for it — the one sentence saying why.
+ */
+export const CALDAV_HTTP_REFUSED = "caldav_http_refused";
+
+/** Whether an error is the http refusal. */
+export function isHttpRefused(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  return message.includes(CALDAV_HTTP_REFUSED);
+}
+
+/** A sync or push error as the UI says it: the http refusal becomes its one
+ *  translated sentence; anything else stays verbatim from the backend. */
+export function caldavErrorText(error: string, t: (key: TranslationKey) => string): string {
+  return isHttpRefused(error) ? t("caldav.httpRefused") : error;
+}
+
+/**
+ * Whether a server URL is plain `http://` — refused for a new account, and an
+ * existing one stops syncing (it is never deleted). Mirrors the backend's
+ * `normalize_base_url`: only an explicit `http://` is; a bare host gets https.
+ */
+export function isHttpBaseUrl(url: string): boolean {
+  return /^\s*http:\/\//i.test(url ?? "");
+}
 
 // ── Accounts + credentials ──────────────────────────────────────────────────
 
@@ -100,8 +130,9 @@ export function caldavFetch(
   accountId: string,
   href: string,
   force: boolean,
+  full = false,
 ): Promise<CalDavChanges> {
-  return invoke<CalDavChanges>("caldav_fetch", { accountId, href, force });
+  return invoke<CalDavChanges>("caldav_fetch", { accountId, href, force, full });
 }
 
 /** Reconcile a parsed collection into `calendar.json`, in one atomic write. */
@@ -114,8 +145,13 @@ export function caldavApply(args: {
   ctag: string;
   syncToken: string | null;
   lastSync: string;
-}): Promise<CalendarData> {
-  return invoke<CalendarData>("caldav_apply", args);
+  /** Rows whose local edit the user gave up on ("Use the server's"). */
+  discard?: string[];
+}): Promise<CalendarData & { caldav_kept?: CalDavKept[] }> {
+  return invoke<CalendarData & { caldav_kept?: CalDavKept[] }>("caldav_apply", {
+    ...args,
+    discard: args.discard ?? [],
+  });
 }
 
 // ── Push (Phase 3) ──────────────────────────────────────────────────────────
@@ -140,8 +176,11 @@ export function caldavPush(args: {
   ics: string;
   resourceHref: string | null;
   etag: string | null;
+  /** The row revision `ics` was serialized from: the backend clears the row's
+   *  `caldav_dirty` only when the server took that revision. */
+  rev?: number | null;
 }): Promise<CalDavWrite> {
-  return invoke<CalDavWrite>("caldav_push", args);
+  return invoke<CalDavWrite>("caldav_push", { ...args, rev: args.rev ?? null });
 }
 
 /**

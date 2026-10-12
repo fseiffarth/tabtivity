@@ -1617,6 +1617,17 @@ export interface CalendarEvent {
    *  so nothing else may write them. */
   caldav_href?: string;
   caldav_etag?: string;
+  /** A local edit of a row in a writable CalDAV calendar that the server has not
+   *  accepted yet (gap 32). A sync pushes it before it fetches and never merges
+   *  over it; only a push the server accepted, or "Use the server's", clears it.
+   *  Kept by the backend through every edit within the calendar. */
+  caldav_dirty?: boolean;
+  /** The resource URL this dirty row had when the server deleted it: the row was
+   *  kept as local-only, and the conflict dialog asks whether to put it back. */
+  caldav_server_deleted?: string;
+  /** The store's revision of this row; `caldav_push` clears `caldav_dirty` only
+   *  for the revision it sent. */
+  rev?: number;
   /** The iCalendar `UID` this row arrived with — the calendar object's identity
    *  everywhere outside this app. Empty for a row written here, which serializes
    *  under a stable synthetic uid instead (`lib/calendar/ics.ts`'s `icsUid`). Never
@@ -1753,6 +1764,11 @@ export interface CalendarTask {
    *  sync — that is the whole point of matching on the href. */
   caldav_href?: string;
   caldav_etag?: string;
+  /** See `CalendarEvent.caldav_dirty`. */
+  caldav_dirty?: boolean;
+  /** See `CalendarEvent.caldav_server_deleted`. */
+  caldav_server_deleted?: string;
+  rev?: number;
   /** The iCalendar `UID` this card arrived with. See `CalendarEvent.uid`: a
    *  push writes the object back under the identity it came with, never a fresh
    *  one, or the server keeps the old VTODO and files ours beside it. */

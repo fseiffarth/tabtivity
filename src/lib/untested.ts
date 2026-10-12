@@ -76,6 +76,8 @@ export const UNTESTED = {
   "caldav.dialogNew": { area: "calendar", what: "CalDavAccountDialog · Add a CalDAV account" },
   "calDavAccountDialog.1": { area: "calendar", what: "CalDavAccountDialog · Send my changes to this server" },
   "caldavConflict.title": { area: "calendar", what: "CalDavConflictDialog · Changed somewhere else too" },
+  "caldavConflict.serverDeleted": { area: "calendar", what: "CalDavConflictDialog · a synced event/card edited here but deleted on the server: kept local-only, Keep mine puts it back, Use the server's deletes it; a failed push stays marked and is pushed again before the next sync (gap 32)" },
+  "caldav.httpRefused": { area: "calendar", what: "CalDavAccountDialog · an http:// server URL is refused with the reason (https required); an existing http account stops syncing and says so in the sidebar (E2b)" },
   "calendar.overlayTitle": { area: "calendar", what: "CalendarOverlay · Calendar" },
   "calendarSidebar.alerts": { area: "calendar", what: "CalendarSidebar · Alerts on/off per calendar (reminders + header badge)" },
   "calendarContextMenu.1": { area: "calendar", what: "CalendarContextMenu · Edit" },
