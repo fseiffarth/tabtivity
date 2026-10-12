@@ -11,7 +11,7 @@ vi.mock("../../../mobile-web/src/localLock", () => ({
 
 import { oidcProvider, pair, startOidc } from "../../../mobile-web/src/auth";
 import { configureLocalUnlock } from "../../../mobile-web/src/localLock";
-import { Pair, noteOidcOutcome } from "../../../mobile-web/src/screens/Pair";
+import { Pair, cleanPairingCode, noteOidcOutcome, pairingCodeComplete } from "../../../mobile-web/src/screens/Pair";
 
 const paired = vi.mocked(pair);
 const configured = vi.mocked(configureLocalUnlock);
@@ -61,6 +61,26 @@ describe("phone connection", () => {
     await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
     expect(paired).toHaveBeenCalledTimes(1);
     expect(configured).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("pairing codes", () => {
+  it("keeps a server's name:code as typed and the desktop's digits as before", () => {
+    expect(cleanPairingCode("Flo:1234 5678")).toBe("flo:12345678");
+    expect(cleanPairingCode("1234-5678")).toBe("12345678");
+    expect(cleanPairingCode("flo:12a:34")).toBe("flo:1234");
+    expect(pairingCodeComplete("12345678")).toBe(true);
+    expect(pairingCodeComplete("bob_2:12345678")).toBe(true);
+    expect(pairingCodeComplete("1234567")).toBe(false);
+    expect(pairingCodeComplete("flo:")).toBe(false);
+    expect(pairingCodeComplete(":12345678")).toBe(false);
+  });
+
+  it("pairs with a server's routed code", async () => {
+    render(<Pair setupLock={false} onDone={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Pairing code"), { target: { value: "flo:12345678" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect phone" }));
+    await waitFor(() => expect(pair).toHaveBeenCalledWith("flo:12345678", "Mobile device"));
   });
 });
 
