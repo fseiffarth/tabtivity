@@ -203,12 +203,23 @@ are told it is off when they ask).
 ## Marks the agent has done
 
 The same tabs can tick off the marks they have handled (their `markup_done`
-tool), after making the change a mark asks for. Each ticked mark you sent gets
-a green **✓** at its top-right corner, on the desktop (while **Mark up** is on)
-and on the phone, and a line under the round's status says **n done ·
-Approve all**. Tap (or click) a **✓** to approve that mark: it leaves your
+tool), after making the change a mark asks for. Ticked marks that sit
+together — one remark, however many pen strokes it took — share one green
+**✓** at their top-right corner, on the desktop (while **Mark up** is on) and
+on the phone, and a line under the round's status says **n done · Approve
+all**. Tap (or click) a **✓** to approve that remark: its marks leave your
 marks. **Approve all** approves every ticked one. Nothing is removed without
-that tap — a tick only offers it — and **Undo** brings an approved mark back.
+that tap — a tick only offers it — and **Undo** brings approved marks back.
+
+While you write, the marks that sit together form one remark, and each remark
+gets its own small **Submit** just outside it — never over anything you wrote.
+It sends that remark alone; your other marks stay unsent. A remark you are
+still writing ignores the button for a moment, so the pen cannot send it by
+accident.
+
+To run the next round on another model, tap the model chip (**Opus ▾**) beside
+the agent: in the desktop's markup strip, or in the phone's header while
+marking. It opens that tab's own model list.
 
 - The badges show only while **Show sent marks** is on.
 - On the phone a **✓** that just appeared ignores taps for a moment, so a pen

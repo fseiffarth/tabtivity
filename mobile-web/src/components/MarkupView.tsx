@@ -3,15 +3,21 @@ import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ApiError, holdPrompt, markupUndoConflict, MAX_INBOX_FILE, previewMarkupUndo, runMarkupUndo, sentName, settleMarkupUndo, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type MarkupUndoChanges, type OutboxFile, type TabRow, type ViewerScope } from "../api";
 import { acceptFrameMessage, MAX_FRAME_PAGES, MAX_RENDER_WIDTH, type FrameFailure, type FromFrame, type ToFrame } from "../markup/frameProtocol";
-import { anchorsFor, type Anchor } from "../markup/anchors";
+import { anchorsFor, textMarks, wordsIn, type Anchor } from "../markup/anchors";
 import type { TextRun } from "../markup/findText";
 import { readFlag, writeFlag } from "../prefs";
 import {
-  addMark, approveMark, approveMarks, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, finishStroke, forgetRound, stylusErases, hasSent, inkWidth, isEmpty, MARK_COLORS, markAnchors, markBox, markedPages,
-  markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickBadgeSpot, tickedMarks, undo,
-  type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type TextMark,
+  addMark, approveMarks, approveShown, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, eraseRect, finishStroke, forgetRound, stylusErases, hasSent, inkWidth, isEmpty, markAnchors, markBox, markedPages,
+  markGroups, markSent, markSentSome, mintRound, moveNote, onlyMarks, submitSpot, noteAt, redo, replaceMark, round, startHistory, tickBadgeSpot, tickedMarks, tickGroups, undo,
+  addMarks, canAddAll, markAt, marksIn, MAX_COMMENT, moveMarks, removeMarks, restyleMarks, setComment, snapStroke, stampSize, STAMP_SYMBOLS,
+  type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type MarkGroup, type PageLayer, type StampMark, type TextMark,
 } from "../markup/layer";
 import { composedPng, drawMark, drawPage, INK, LAYER_WIDTH, layerPng, pagePng, type Paint } from "../markup/rasterize";
+import {
+  COLOR_MEANING, colorOf, colorsFor, ERASER_MODES, eraserPx, PEN_SIZES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
+  applyPreset, PALM_MODES, palmRejects, PRESSURE_CURVES, resetPresets, savePreset, SNAP_HOLD_MS, SNAP_SLOP_PX, TEXT_MARK_MODES,
+  type PenPreset, type PenPrefs, type PenTool,
+} from "../markup/pen";
 import { openMarkupTab, useOpenedTabAgent } from "../markup/newTab";
 import { layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } from "../markup/store";
 import { canApply, canUndo, followRound, holdsUndo, nextCheck, startRound, stepRound, undoneRound, undoSummary, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
@@ -28,7 +34,21 @@ import { EraserIcon } from "../markup/EraserIcon";
 import { OptionSheet } from "./OptionSheet";
 import { bitmapDataUrl, canPrint, MAX_PRINT_PAGES, PRINT_WIDTH, printContent } from "../print";
 
-type Tool = "ink" | "box" | "text" | "eraser";
+type Tool = PenTool;
+
+/** The pen styles' glyphs, as the desktop strip shows them. */
+const PEN_STYLE_GLYPHS: Record<(typeof PEN_STYLES)[number], string> = { pen: "✎", marker: "▬", dashed: "┄", arrow: "↗" };
+/** The proofreading stamps' glyphs, for the symbol picker and the tool. */
+const STAMP_GLYPHS: Record<(typeof STAMP_SYMBOLS)[number], string> = { insert: "⁁", delete: "✕", paragraph: "¶", swap: "⇄" };
+/** The toolbar's tools, in order. */
+const TOOLBAR: readonly PenTool[] = ["ink", "box", "text", "textmark", "stamp", "select", "eraser"];
+/** How near a tap of the select tool must come to a mark, CSS pixels. */
+const SELECT_PX = 12;
+/** A preset chip's glyph: its pen's style, or its tool's. */
+function presetGlyph(preset: PenPreset): string {
+  if (preset.tool === "ink") return PEN_STYLE_GLYPHS[preset.style];
+  return preset.tool === "box" ? "▭" : preset.tool === "text" ? "T" : preset.tool === "stamp" ? "⁁" : "ab";
+}
 type Size = [number, number];
 type Picture = { bitmap: ImageBitmap; width: number };
 type Failure = FrameFailure | "tooLarge" | "fetch" | "timeout" | "picture";
@@ -62,6 +82,8 @@ const SENT_ALPHA = 0.35;
 const JUMP_SLACK = 4;
 /** A ✓ badge's size, CSS pixels. */
 const TICK_BADGE = 26;
+/** A group's own Submit (CSS px) — placed whole, never over a mark. */
+const GROUP_SUBMIT: [number, number] = [66, 24];
 /** How soon after one approve a second tap is taken: a double tap must not
  * take whichever badge lies under the finger next. */
 const TICK_REPEAT_MS = 350;
@@ -204,8 +226,9 @@ function LayerCanvas({ size, page, sent, preview, pixelWidth, register, n, handl
   page: PageLayer | undefined;
   /** The page's marks from earlier rounds, drawn dimmed under `page`. */
   sent: PageLayer | undefined;
-  /** A box being dragged out, drawn on top until it is let go. */
-  preview: Mark | null;
+  /** Marks being made — a box dragged out, a styled or snapped stroke, the
+   * text marks of a drag, a stamp — drawn on top until let go. */
+  preview: readonly Mark[] | null;
   pixelWidth: number;
   register: (n: number, canvas: HTMLCanvasElement | null) => void;
   n: number;
@@ -233,7 +256,7 @@ function LayerCanvas({ size, page, sent, preview, pixelWidth, register, n, handl
     if (preview) {
       ctx.save();
       ctx.scale(scale, scale);
-      drawMark(ctx, preview);
+      for (const mark of preview) drawMark(ctx, mark);
       ctx.restore();
     }
   }, [page, sent, preview, pixelWidth, size]);
@@ -249,9 +272,21 @@ function LayerCanvas({ size, page, sent, preview, pixelWidth, register, n, handl
 
 /** What a pointer is doing on a page between down and up. */
 type Gesture =
-  | { kind: "ink"; n: number; pointerId: number; mark: InkMark; last: [number, number] }
+  /** `whole`: previewed as one path (a styled stroke, or a plain one once it
+   * snapped), not painted piece by piece. `hold`: where the pointer came to
+   * rest (CSS px) — held there `SNAP_HOLD_MS`, the stroke snaps to `snapped`. */
+  | { kind: "ink"; n: number; pointerId: number; mark: InkMark; last: [number, number]; whole: boolean; hold: [number, number]; snapped: InkMark | null }
+  /** The text-mark tool's drag across words. */
+  | { kind: "textmark"; n: number; pointerId: number; start: [number, number]; end: [number, number] }
+  /** A stamp follows the pointer and lands where it lifts. */
+  | { kind: "stamp"; n: number; pointerId: number; mark: StampMark }
+  /** The select tool: a drag from a selected mark moves the selection
+   * (`move`); from elsewhere it draws the selecting rectangle. */
+  | { kind: "select"; n: number; pointerId: number; start: [number, number]; end: [number, number]; clientX: number; clientY: number; move: number[] | null; moved: boolean }
   | { kind: "box"; n: number; pointerId: number; start: [number, number]; end: [number, number] }
   | { kind: "erase"; n: number; pointerId: number; last: [number, number] }
+  /** The area eraser's rectangle, from where it was pressed. */
+  | { kind: "area"; n: number; pointerId: number; start: [number, number]; end: [number, number] }
   /** A tap places or edits a note; a drag from a note (`index`) moves it,
    * held where it was grabbed (`grab`, page units from its corner). */
   | { kind: "text"; n: number; pointerId: number; start: [number, number]; clientX: number; clientY: number; index: number; grab: [number, number]; moved: boolean };
@@ -295,7 +330,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * the new marks. Once the agent has finished, **Reload PDF** draws the file
  * as it is now (or its newer copy, `refresh`) under the same layer.
  */
-export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, dialog, refresh, onClose, reader, adoptFrom, toChat }: {
+export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, adoptFrom, toChat }: {
   tabId?: string;
   /** The project the file belongs to — the phone-side layer's key. */
   projectId?: string;
@@ -319,6 +354,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   agent?: AgentSignal;
   /** The model the host's tab runs, by its first word, for "Opus is working…". */
   model?: string;
+  /** Opens the host tab's model sheet: the head's model chip while marking. */
+  pickModel?: () => void;
   /** The question line of a dialog the host tab's CLI waits on, for the pill
    * while the round is at a question: shown here, answered in the chat. */
   dialog?: string;
@@ -384,12 +421,32 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const [pageFailures, setPageFailures] = useState<Set<number>>(() => new Set());
   const [history, setHistory] = useState<History>(() => startHistory());
   const [scratch, setScratch] = useState<Layer | null>(null);
-  const [preview, setPreview] = useState<{ n: number; mark: Mark } | null>(null);
+  const [preview, setPreview] = useState<{ n: number; marks: readonly Mark[] } | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [storage, setStorage] = useState<"saved" | "unsaved">("saved");
   const [changed, setChanged] = useState(false);
-  const [tool, setTool] = useState<Tool>("ink");
-  const [color, setColor] = useState<MarkColor>("red");
+  /** The pen bar's choices, kept on this phone (`markup/pen.ts`). */
+  const [pen, setPen] = useState<PenPrefs>(readPenPrefs);
+  useEffect(() => writePenPrefs(pen), [pen]);
+  const tool = pen.tool;
+  const color = colorOf(pen);
+  const setColor = (next: MarkColor) => setPen((was) => withColor(was, next));
+  /** The area eraser's rectangle while it is dragged, page units — or the
+   * select tool's (`select`). */
+  const [area, setArea] = useState<{ n: number; rect: [number, number, number, number]; select?: boolean } | null>(null);
+  /** The select tool's marks: indices into `layer.pages[n].marks` of the
+   * layer they were picked in — a selection holds only while that layer is
+   * the present one (an undo, an erase or a Submit renumbers the marks). */
+  const [selection, setSelection] = useState<{ n: number; indices: number[]; layer: Layer } | null>(null);
+  /** Each page's text runs from the sealed frame (`text`), asked for while
+   * the text-mark tool is armed or a ✓ group's words are compared; a page
+   * with no text answers `[]`. Cleared when a Reload remounts the frame. */
+  const [pageRuns, setPageRuns] = useState<Record<number, TextRun[]>>({});
+  const runsAsked = useRef(new Set<number>());
+  /** When the pen last lifted, for strict palm rejection. */
+  const penUpAt = useRef(-Infinity);
+  const snapTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(snapTimer.current), []);
   /** The reader opens marking where this phone asks for it: always, or —
    * Automatic — once only the pen draws, where fingers scroll all the same. */
   const [marking, setMarking] = useState(() => {
@@ -403,6 +460,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const opensOnMarks = useRef(reading && canMark && readMarkupOpen() === "auto");
   const [penMode, setPenMode] = useState(readPenMode);
   const [popover, setPopover] = useState<"colors" | "more" | null>(null);
+  /** Where a press on the colour well began, and whether it turned into a
+   * swipe — whose click then opens nothing. */
+  const wellSwipe = useRef<number | null>(null);
+  const wellSwiped = useRef(false);
   const [note, setNote] = useState<NoteDraft | null>(null);
   const [limitHit, setLimitHit] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
@@ -616,7 +677,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         // Not saved straight back: that would stamp the file's new
         // fingerprint on marks drawn against its old one.
         skipSave.current = true;
-        setHistory(startHistory(stored.layer));
+        // The undo steps the record kept come back with it (redo does not).
+        setHistory(startHistory(stored.layer, stored.past));
         setChanged(stale(stored, fingerprintRef.current));
         if (opensOnMarks.current && !isEmpty(stored.layer)) setMarking(true);
         if (!isEmpty(stored.layer) || hasSent(stored.layer)) keepCardRef.current();
@@ -632,11 +694,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (!loaded || !canMark) return;
     if (skipSave.current) { skipSave.current = false; return; }
     const layer = history.present;
-    void saveLayer(key, layer, fingerprint).then((ok) => {
+    void saveLayer(key, layer, fingerprint, undefined, history.past).then((ok) => {
       setStorage(ok ? "saved" : "unsaved");
       if (ok && (!isEmpty(layer) || hasSent(layer))) keepCardRef.current();
     });
-  }, [loaded, canMark, key, history.present, fingerprint]);
+  }, [loaded, canMark, key, history.present, history.past, fingerprint]);
 
   useLayoutEffect(() => {
     const element = scroller.current;
@@ -825,8 +887,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (!element) return;
     const isStylus = (event: TouchEvent) => [...event.changedTouches].some((touch) => (touch as Touch & { touchType?: string }).touchType === "stylus");
     // A finger that came down on a note to move it (its pointerdown fires
-    // first) must not scroll the page instead.
-    const holdsNote = () => { const g = gesture.current; return g?.kind === "text" && g.index >= 0; };
+    // first) must not scroll the page instead — nor one moving a selection.
+    const holdsNote = () => { const g = gesture.current; return (g?.kind === "text" && g.index >= 0) || (g?.kind === "select" && g.move !== null); };
     const onTouchStart = (event: TouchEvent) => {
       // The Pencil would scroll the page and start a text selection. With the
       // markup off it scrolls like a finger — except on a page it can mark,
@@ -911,6 +973,59 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     setLimitHit(false);
     setHistory((now) => commit(now, addMark(now.present, n, size, mark)));
   };
+  /** Marks made together — one drag's text marks — as one undo step. */
+  const addAll = (n: number, marks: readonly Mark[]) => {
+    const size = pageSize(n);
+    if (!size || !marks.length) return;
+    if (!canAddAll(history.present, n, marks)) { setLimitHit(true); return; }
+    setLimitHit(false);
+    setHistory((now) => commit(now, addMarks(now.present, n, size, marks)));
+  };
+  /** The selection while it holds (`selection`) and the select tool is armed. */
+  const selected = tool === "select" && selection && selection.layer === history.present ? selection : null;
+  /** A change to the selected marks, one undo step; the selection follows
+   * its marks into the layer the change leaves. */
+  const changeSelected = (next: Layer) => {
+    if (!selected || next === history.present) return;
+    setHistory((now) => commit(now, next));
+    setSelection({ ...selected, layer: next });
+  };
+  /** A sample's pressure: a stylus's reading through the pen's curve, a
+   * finger's or a mouse's the even 0.5 — never bent (`strokePressure`). */
+  const pressureOf = (style: InkMark["style"], sample: { pointerType: string; pressure: number }) =>
+    sample.pointerType === "pen" && sample.pressure > 0 ? strokePressure(style ?? "pen", sample.pressure, pen.pressure) : strokePressure(style ?? "pen", 0.5);
+  /** Waits for the stroke to rest `SNAP_HOLD_MS` where it is now; then its
+   * shape (`snapStroke`) is previewed, and taken if it lifts there. */
+  const armSnap = (g: Extract<Gesture, { kind: "ink" }>) => {
+    window.clearTimeout(snapTimer.current);
+    if (!pen.snap) return;
+    snapTimer.current = window.setTimeout(() => {
+      const size = pageSize(g.n);
+      if (gesture.current !== g || !size) return;
+      const snapped = snapStroke(finishStroke(g.mark, size));
+      if (!snapped) return;
+      g.snapped = snapped;
+      // From here the stroke is previewed whole: the shape, or — moved on —
+      // the stroke as drawn.
+      g.whole = true;
+      setPreview({ n: g.n, marks: [snapped] });
+    }, SNAP_HOLD_MS);
+  };
+  /** What a text-mark drag makes over the page's words — none on a page
+   * whose text is not known (yet) or that has none. */
+  const textMarksOf = (g: Extract<Gesture, { kind: "textmark" }>, size: Size) =>
+    textMarks(pageRuns[g.n] ?? [], g.start, g.end, pen.textMark, color, strokeWidth(size[0], { size: pen.size, style: "pen" }));
+  /** The selected marks' boxes together, page units — `null` for none. */
+  const selectionBox = (page: PageLayer | undefined, indices: readonly number[]): [number, number, number, number] | null => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const i of indices) {
+      const mark = page?.marks[i];
+      if (!mark) continue;
+      const [x, y, w, h] = markBox(mark);
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
+    }
+    return x0 <= x1 ? [x0, y0, x1 - x0, y1 - y0] : null;
+  };
 
   const onPointerDown = (n: number, event: ReactPointerEvent<HTMLCanvasElement>) => {
     const size = pageSize(n);
@@ -927,6 +1042,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       penDown.current = true;
       if (penMode === "none") { setPenMode("pen"); rememberPenMode("pen"); }
     } else if (event.pointerType === "touch") {
+      // A touch wider than a fingertip — or, strict, one just after the pen
+      // lifted — is a resting palm (`palmRejects`): ignored whole.
+      if (palmRejects(pen.palm, { width: event.width || 0, height: event.height || 0 }, Date.now() - penUpAt.current)) return;
       touches.current.add(event.pointerId);
       // A resting palm while the pen writes; a second finger is a pinch.
       if (penDown.current) return;
@@ -940,23 +1058,50 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         if (abandoned) overlayRedraw(abandoned.n);
         return;
       }
-      // Where only the pen draws, a finger still taps and drags notes; one
-      // that turns out to scroll is cancelled by the browser.
-      if (!fingerDrawsRef.current && tool !== "text") return;
+      // Where only the pen draws, a finger still taps and drags notes, and
+      // selects and moves marks; one that turns out to scroll is cancelled
+      // by the browser.
+      if (!fingerDrawsRef.current && tool !== "text" && tool !== "select") return;
     }
     const canvas = event.currentTarget;
     canvas.setPointerCapture?.(event.pointerId);
     const at = toPage(n, canvas, event.clientX, event.clientY);
-    if (tool === "eraser" || stylusErases(event)) {
+    if (tool === "eraser" && pen.eraser === "area" && !stylusErases(event)) {
+      gesture.current = { kind: "area", n, pointerId: event.pointerId, start: at, end: at };
+      setArea({ n, rect: [at[0], at[1], at[0], at[1]] });
+    } else if (tool === "eraser" || stylusErases(event)) {
       gesture.current = { kind: "erase", n, pointerId: event.pointerId, last: at };
-      scratchRef.current = eraseAt(history.present, n, at[0], at[1], ERASE_PX * unitsPerPixel(n, canvas), showSent);
+      scratchRef.current = eraseAt(history.present, n, at[0], at[1], eraserPx(ERASE_PX, pen.eraser) * unitsPerPixel(n, canvas), showSent);
       setScratch(scratchRef.current);
     } else if (tool === "ink") {
-      const pressure = event.pointerType === "pen" && event.pressure > 0 ? event.pressure : 0.5;
-      gesture.current = { kind: "ink", n, pointerId: event.pointerId, last: at, mark: { kind: "ink", color, width: round(Math.min(100, Math.max(0.1, size[0] / 350))), points: [[at[0], at[1], pressure]] } };
-      paintPiece(n, at, at, pressure);
+      const pressure = pressureOf(pen.style, event);
+      const mark: InkMark = { kind: "ink", color, width: strokeWidth(size[0], pen), points: [[at[0], at[1], pressure]] };
+      if (pen.style !== "pen") mark.style = pen.style;
+      const g: Gesture = { kind: "ink", n, pointerId: event.pointerId, last: at, mark, whole: pen.style !== "pen", hold: [event.clientX, event.clientY], snapped: null };
+      gesture.current = g;
+      armSnap(g);
+      // Only the plain pen paints piece by piece; a styled stroke is one path
+      // (see-through, dashed, headed), previewed whole as it grows.
+      if (pen.style === "pen") paintPiece(n, at, at, pressure);
+      else setPreview({ n, marks: [{ ...mark, points: mark.points.slice() }] });
     } else if (tool === "box") {
       gesture.current = { kind: "box", n, pointerId: event.pointerId, start: at, end: at };
+    } else if (tool === "textmark") {
+      gesture.current = { kind: "textmark", n, pointerId: event.pointerId, start: at, end: at };
+    } else if (tool === "stamp") {
+      const mark: StampMark = { kind: "stamp", color, at: [round(at[0]), round(at[1])], size: stampSize(size[0]), symbol: pen.stamp };
+      gesture.current = { kind: "stamp", n, pointerId: event.pointerId, mark };
+      setPreview({ n, marks: [mark] });
+    } else if (tool === "select") {
+      // A press on a selected mark, or inside the selection, moves it; on
+      // another mark, picks that one to move; elsewhere, draws a rectangle.
+      const page = history.present.pages[n];
+      const hit = markAt(page, at[0], at[1], SELECT_PX * unitsPerPixel(n, canvas));
+      const box = selected?.n === n ? selectionBox(page, selected.indices) : null;
+      const inside = box !== null && at[0] >= box[0] && at[0] <= box[0] + box[2] && at[1] >= box[1] && at[1] <= box[1] + box[3];
+      const move = selected?.n === n && (inside || selected.indices.includes(hit)) ? selected.indices : hit >= 0 ? [hit] : null;
+      if (move && move !== selected?.indices) setSelection({ n, indices: move, layer: history.present });
+      gesture.current = { kind: "select", n, pointerId: event.pointerId, start: at, end: at, clientX: event.clientX, clientY: event.clientY, move, moved: false };
     } else {
       const index = noteAt(history.present.pages[n], at[0], at[1]);
       const grabbed = index >= 0 ? (history.present.pages[n].marks[index] as TextMark) : null;
@@ -1005,17 +1150,45 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       const samples = native.getCoalescedEvents?.() ?? [];
       for (const sample of samples.length ? samples : [native]) {
         const at = toPage(g.n, canvas, sample.clientX, sample.clientY);
-        const pressure = sample.pointerType === "pen" && sample.pressure > 0 ? sample.pressure : 0.5;
-        paintPiece(g.n, g.last, at, pressure);
+        const pressure = pressureOf(g.mark.style, sample);
+        if (!g.whole) paintPiece(g.n, g.last, at, pressure);
         g.mark.points.push([at[0], at[1], pressure]);
         g.last = at;
       }
+      // Moved on from where it rested: no shape, and the wait starts afresh.
+      if (Math.hypot(event.clientX - g.hold[0], event.clientY - g.hold[1]) > SNAP_SLOP_PX) {
+        g.hold = [event.clientX, event.clientY];
+        g.snapped = null;
+        armSnap(g);
+      }
+      if (g.whole) setPreview({ n: g.n, marks: [g.snapped ?? { ...g.mark, points: g.mark.points.slice() }] });
+    } else if (g.kind === "area") {
+      g.end = toPage(g.n, canvas, event.clientX, event.clientY);
+      setArea({ n: g.n, rect: [Math.min(g.start[0], g.end[0]), Math.min(g.start[1], g.end[1]), Math.max(g.start[0], g.end[0]), Math.max(g.start[1], g.end[1])] });
     } else if (g.kind === "box") {
       g.end = toPage(g.n, canvas, event.clientX, event.clientY);
-      setPreview({ n: g.n, mark: boxOf(g.start, g.end, color) });
+      setPreview({ n: g.n, marks: [boxOf(g.start, g.end, color)] });
+    } else if (g.kind === "textmark") {
+      const size = pageSize(g.n);
+      g.end = toPage(g.n, canvas, event.clientX, event.clientY);
+      if (size) setPreview({ n: g.n, marks: textMarksOf(g, size) });
+    } else if (g.kind === "stamp") {
+      const at = toPage(g.n, canvas, event.clientX, event.clientY);
+      g.mark = { ...g.mark, at: [round(at[0]), round(at[1])] };
+      setPreview({ n: g.n, marks: [g.mark] });
+    } else if (g.kind === "select") {
+      if (!g.moved && Math.hypot(event.clientX - g.clientX, event.clientY - g.clientY) < DRAG_SLOP) return;
+      g.moved = true;
+      g.end = toPage(g.n, canvas, event.clientX, event.clientY);
+      if (g.move) {
+        scratchRef.current = moveMarks(history.present, g.n, g.move, g.end[0] - g.start[0], g.end[1] - g.start[1]);
+        setScratch(scratchRef.current);
+      } else {
+        setArea({ n: g.n, rect: [Math.min(g.start[0], g.end[0]), Math.min(g.start[1], g.end[1]), Math.max(g.start[0], g.end[0]), Math.max(g.start[1], g.end[1])], select: true });
+      }
     } else if (g.kind === "erase") {
       const at = toPage(g.n, canvas, event.clientX, event.clientY);
-      scratchRef.current = eraseAlong(scratchRef.current ?? history.present, g.n, g.last, at, ERASE_PX * unitsPerPixel(g.n, canvas), showSent);
+      scratchRef.current = eraseAlong(scratchRef.current ?? history.present, g.n, g.last, at, eraserPx(ERASE_PX, pen.eraser) * unitsPerPixel(g.n, canvas), showSent);
       g.last = at;
       setScratch(scratchRef.current);
     } else if (g.kind === "text" && g.index >= 0) {
@@ -1031,22 +1204,53 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (event.pointerType === "pen") penDown.current = false;
+    if (event.pointerType === "pen") { penDown.current = false; penUpAt.current = Date.now(); }
     if (event.pointerType === "touch") touches.current.delete(event.pointerId);
     const g = gesture.current;
     if (!g || g.pointerId !== event.pointerId) return;
     gesture.current = null;
+    window.clearTimeout(snapTimer.current);
     const size = pageSize(g.n);
     if (!size) return;
     if (event.type === "pointercancel" && g.kind !== "erase") {
       // A gesture the browser took over (a scroll) is not a mark, nor a move.
       setPreview(null);
-      if (g.kind === "text") { scratchRef.current = null; setScratch(null); }
+      setArea(null);
+      if (g.kind === "text" || g.kind === "select") { scratchRef.current = null; setScratch(null); }
       overlayRedraw(g.n);
       return;
     }
     if (g.kind === "ink") {
-      add(g.n, finishStroke(g.mark, size));
+      if (g.whole) setPreview(null);
+      // Lifted where it rested: the shape it snapped to.
+      add(g.n, g.snapped ?? finishStroke(g.mark, size));
+    } else if (g.kind === "textmark") {
+      setPreview(null);
+      addAll(g.n, textMarksOf(g, size));
+    } else if (g.kind === "stamp") {
+      setPreview(null);
+      add(g.n, g.mark);
+    } else if (g.kind === "select") {
+      if (g.move && g.moved) {
+        const moved = scratchRef.current;
+        scratchRef.current = null;
+        setScratch(null);
+        if (moved && moved !== history.present) {
+          setHistory((now) => commit(now, moved));
+          setSelection({ n: g.n, indices: g.move, layer: moved });
+        }
+      } else if (!g.move && g.moved) {
+        setArea(null);
+        const picked = marksIn(history.present.pages[g.n], [g.start[0], g.start[1], g.end[0], g.end[1]]);
+        setSelection(picked.length ? { n: g.n, indices: picked, layer: history.present } : null);
+      } else if (!g.move) {
+        // A tap on no mark lets the selection go.
+        setSelection(null);
+      }
+    } else if (g.kind === "area") {
+      setArea(null);
+      const next = eraseRect(history.present, g.n, g.start, g.end, showSent);
+      if (next !== history.present) setHistory((now) => commit(now, next));
     } else if (g.kind === "box") {
       setPreview(null);
       const box = boxOf(g.start, g.end, color);
@@ -1103,7 +1307,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const next = note ? saveNote(note.text) : history.present;
     if (reading) { setMarking(false); return; }
     // The view goes away before the save effect would run.
-    if (note && loaded) void saveLayer(key, next, fingerprint).finally(onClose);
+    if (note && loaded) void saveLayer(key, next, fingerprint, undefined, next === history.present ? history.past : [...history.past, history.present]).finally(onClose);
     else onClose();
   };
 
@@ -1144,8 +1348,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const code = error instanceof ApiError ? error.code : "";
     return REASON_KEYS[code] ? t(REASON_KEYS[code]) : t("mobile.markup.reason.other", { code: code || "error" });
   };
-  const submit = async () => {
-    const marked = sendable;
+  /** Sends every marked page, or with `only` one group of unsent marks
+   * (`markGroups`: its own Submit button) — the rest stays unsent. */
+  const submit = async (only?: { page: number; marks: readonly Mark[] }) => {
+    const present = only ? onlyMarks(history.present, only.page, only.marks) : history.present;
+    const marked = only ? markedPages(present).filter((n) => sendable.includes(n)) : sendable;
     if (!marked.length || sending) return;
     setSendFailure(null);
     let tabId = givenTabId;
@@ -1167,12 +1374,15 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const refs = new Map<number, string>();
     const composed = new Set<number>();
     const anchors = new Map<number, Anchor[]>();
+    /** Each sent mark's words on its page now, by page and index, for the
+     * ✓ groups' before and after (`SentRound.words`). */
+    const words: Record<number, (string | null)[]> = {};
     // The frame draws each page and reads its words while it holds the
     // document; past a failure, the marks go alone.
     let frameUp = isPdf && frameReady.current && opened.current && sizes !== null && !failure && !reopening;
     for (const n of marked) {
       setSending(t("mobile.markup.sendingPage", { n }));
-      const page = history.present.pages[n];
+      const page = present.pages[n];
       try {
         let png: Blob | null = null;
         if (frameUp) {
@@ -1184,6 +1394,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
           const runs: TextRun[] = text?.type === "text" ? text.runs : [];
           const found = anchorsFor(page, runs);
           if (found.length) anchors.set(n, found);
+          if (runs.length) words[n] = page.marks.map((mark) => wordsIn(runs, markBox(mark)) || null);
           // A frame that stopped answering is not waited on page after page.
           if (!shot || !text) frameUp = false;
         }
@@ -1201,7 +1412,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       try {
         const image = pictureImage.current;
         if (!image) throw new Error("picture");
-        picture = (await uploadToInbox(tabId, await composedPng(image, history.present.pages[1]), `${stem}-marked.png`)).reference;
+        picture = (await uploadToInbox(tabId, await composedPng(image, present.pages[1]), `${stem}-marked.png`)).reference;
       } catch (error) {
         setSending(null);
         setSendFailure(t("mobile.markup.sendFailed.picture", { reason: reason(error) }));
@@ -1217,12 +1428,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     // This Submit's id: the prompt names its marks under it, and the agent's
     // ticks (`markup_done`) come back with it.
     const roundId = mintRound();
-    const present = history.present;
     try {
       answer = await submitMarkup(tabId, {
         source,
         pages: marked.map((n) => ({
-          n, size: history.present.pages[n].size, marks: history.present.pages[n].marks, layer: refs.get(n)!,
+          n, size: present.pages[n].size, marks: present.pages[n].marks, layer: refs.get(n)!,
           ...(composed.has(n) ? { composed: true } : {}),
           ...(anchors.has(n) ? { anchors: anchors.get(n) } : {}),
         })),
@@ -1268,8 +1478,14 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     // listed them, which the agent's ticks index — unless a page changed
     // meanwhile (then its ticks would point at the wrong marks: none kept).
     setHistory((now) => {
+      if (only) {
+        // The group's marks, as long as every one is still on its page.
+        const still = new Set(now.present.pages[only.page]?.marks ?? []);
+        const moving = present.pages[only.page].marks;
+        return startHistory(markSentSome(now.present, only.page, moving, moving.every((mark) => still.has(mark)) ? roundId : undefined, words[only.page]));
+      }
       const asSent = marked.every((n) => now.present.pages[n]?.marks === present.pages[n].marks);
-      return startHistory(markSent(now.present, marked, asSent ? roundId : undefined));
+      return startHistory(markSent(now.present, marked, asSent ? roundId : undefined, words));
     });
     setShowSent(true);
     setCheck(null);
@@ -1670,25 +1886,78 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   };
   // --- The agent's ticks: a ✓ on each sent mark it says it handled ----------
   /** The ticked sent marks (`markup_done`, `docs/markup_tick_approve_plan.md`
-   * §4), while the sent marks show. A tap on a badge approves its mark — it
-   * leaves the layer, undoably — and nothing else ever removes one: ticks
-   * that vanish (the agent's session ended, a day passed) take the badge
-   * only. */
+   * §4), while the sent marks show, one badge per group of them that sit
+   * together (`tickGroups`: one remark, however many strokes it took). A tap
+   * on a badge approves its group — its marks leave the layer, undoably — and
+   * nothing else ever removes one: ticks that vanish (the agent's session
+   * ended, a day passed) take the badge only. */
   const ticked = useMemo(
     () => (canMark && showSent ? tickedMarks(history.present, ticks) : []),
     [canMark, showSent, history.present, ticks],
   );
+  const tickedGroups = useMemo(() => tickGroups(history.present, ticked), [history.present, ticked]);
   const tickBadges = useMemo(() => {
-    const byPage = new Map<number, { index: number; mark: Mark; box: [number, number, number, number] }[]>();
-    for (const { page, index } of ticked) {
-      const mark = history.present.sent?.pages[page]?.marks[index];
-      if (!mark) continue;
+    const byPage = new Map<number, { marks: Mark[]; box: [number, number, number, number] }[]>();
+    for (const { page, marks, box } of tickedGroups) {
+      const shown = marks.map(({ index }) => history.present.sent?.pages[page]?.marks[index]).filter((mark): mark is Mark => !!mark);
+      if (!shown.length) continue;
       const list = byPage.get(page) ?? [];
-      list.push({ index, mark, box: markBox(mark) });
+      list.push({ marks: shown, box });
       byPage.set(page, list);
     }
     return byPage;
-  }, [ticked, history.present]);
+  }, [tickedGroups, history.present]);
+  /** The words each sent mark was on at its Submit (`SentRound.words`), by
+   * the mark object the log and the sent side share. */
+  const loggedWords = useMemo(() => {
+    const byMark = new Map<Mark, string>();
+    for (const entry of history.present.sent?.log ?? []) {
+      for (const [page, said] of Object.entries(entry.words ?? {})) {
+        const marks = entry.pages[Number(page)] ?? [];
+        said.forEach((words, i) => { if (words && marks[i]) byMark.set(marks[i], words); });
+      }
+    }
+    return byMark;
+  }, [history.present]);
+  /** The near pages whose text the sealed frame is asked for: every one
+   * while the text-mark tool is armed, else those with a ✓ group whose words
+   * were logged. */
+  const runsWanted = useMemo(() => {
+    if (!isPdf || !sizes || failure || reopening) return [];
+    return alive.filter((n) => (marking && tool === "textmark")
+      || tickBadges.get(n)?.some(({ marks }) => marks.some((mark) => loggedWords.has(mark))));
+  }, [isPdf, sizes, failure, reopening, alive, marking, tool, tickBadges, loggedWords]);
+  useEffect(() => {
+    for (const n of runsWanted) {
+      if (runsAsked.current.has(n)) continue;
+      runsAsked.current.add(n);
+      void askFrame({ type: "text", id: ++frameCallId.current, page: n }).then((answer) => {
+        if (answer?.type === "text" && answer.page === n) setPageRuns((known) => ({ ...known, [n]: answer.runs }));
+      });
+    }
+  }, [runsWanted, askFrame]);
+  // A Reload's document has its own text.
+  useEffect(() => {
+    runsAsked.current.clear();
+    setPageRuns({});
+  }, [generation]);
+  /** A ✓ group's words at Submit and under it now, once the page's text is
+   * known — `null` unless both are and they differ (the agent changed them). */
+  const tickDiff = (n: number, marks: readonly Mark[]): { before: string; after: string } | null => {
+    const runs = pageRuns[n];
+    if (!runs) return null;
+    const before: string[] = [];
+    const after: string[] = [];
+    for (const mark of marks) {
+      const was = loggedWords.get(mark);
+      if (!was) return null;
+      before.push(was);
+      after.push(wordsIn(runs, markBox(mark)));
+    }
+    const was = [...new Set(before)].join(" … ");
+    const now = [...new Set(after.filter(Boolean))].join(" … ");
+    return now && now !== was ? { before: was, after: now } : null;
+  };
   // Each badge's arrival, before paint: a pen or finger already on its way
   // down where one appears must not approve it. A badge that went and comes
   // back arrives anew.
@@ -1696,34 +1965,38 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const now = Date.now();
     const next = new Map<Mark, number>();
     for (const badges of tickBadges.values()) {
-      for (const { mark } of badges) {
-        const seen = tickSeen.current.get(mark);
-        next.set(mark, seen ?? now);
-        if (seen === undefined) tickArrived.current = now;
+      for (const { marks } of badges) {
+        for (const mark of marks) {
+          const seen = tickSeen.current.get(mark);
+          next.set(mark, seen ?? now);
+          if (seen === undefined) tickArrived.current = now;
+        }
       }
     }
     tickSeen.current = next;
   }, [tickBadges]);
   /** Whether a tap may approve now: not while a Submit goes out or a stroke
-   * is under way, not in the moment after `mark` (or, for Approve all, any
-   * badge) appeared, and not as the second tap of a double one. */
-  const approvable = (mark: Mark | null): boolean => {
+   * is under way, not in the moment after any of `marks` (or, for Approve
+   * all, any badge) appeared — a group that just grew arrives anew — and not
+   * as the second tap of a double one. */
+  const approvable = (marks: readonly Mark[] | null): boolean => {
     if (sending !== null || gesture.current) return false;
     const now = Date.now();
-    const arrived = mark ? tickSeen.current.get(mark) : tickArrived.current;
+    const arrived = marks
+      ? marks.reduce<number | undefined>((last, mark) => {
+        const seen = tickSeen.current.get(mark);
+        return seen === undefined || last === undefined ? undefined : Math.max(last, seen);
+      }, 0)
+      : tickArrived.current;
     if (arrived === undefined || now - arrived < ARRIVAL_GUARD_MS || now - lastApprove.current < TICK_REPEAT_MS) return false;
     lastApprove.current = now;
     return true;
   };
-  /** Approves the mark the badge was drawn for — only while it is still that
-   * mark and still ticked in the layer the change lands on. */
-  const approveTicked = (page: number, index: number, mark: Mark) => {
-    if (!approvable(mark)) return;
-    setHistory((now) => {
-      if (now.present.sent?.pages[page]?.marks[index] !== mark) return now;
-      const still = tickedMarks(now.present, ticksRef.current).some((entry) => entry.page === page && entry.index === index);
-      return still ? commit(now, approveMark(now.present, page, index)) : now;
-    });
+  /** Approves the marks the badge was drawn for — those still on the page
+   * and still ticked in the layer the change lands on. */
+  const approveTicked = (page: number, marks: readonly Mark[]) => {
+    if (!approvable(marks)) return;
+    setHistory((now) => commit(now, approveShown(now.present, ticksRef.current, page, marks)));
   };
   const approveAllTicked = () => {
     if (!approvable(null)) return;
@@ -1732,18 +2005,68 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       return marks.length ? commit(now, approveMarks(now.present, marks)) : now;
     });
   };
-  /** One page's ✓ badges, just outside each ticked mark's top-right corner
+  /** One page's ✓ badges, just outside each ticked group's top-right corner
    * (`tickBadgeSpot`: never over the words it was on) and kept on the page. */
   const tickLayer = (n: number, size: Size) => {
     const badges = tickBadges.get(n);
     if (!badges?.length) return null;
     const scale = cssWidth / size[0];
     const page: [number, number] = [cssWidth, size[1] * scale];
-    return badges.map(({ index, mark, box }) => {
+    return badges.map(({ marks, box }) => {
       const [left, top] = tickBadgeSpot(box, scale, page, TICK_BADGE);
-      return <button key={`${tickKey(mark)}:${index}`} className="markup-pin is-tick" style={{ left, top }} disabled={sending !== null}
-        aria-label={t("mobile.markup.ticks.approveTitle")} title={t("mobile.markup.ticks.approveTitle")}
-        onClick={(event) => { if (event.detail <= 1) approveTicked(n, index, mark); }}>✓</button>;
+      const diff = tickDiff(n, marks);
+      // Beside the badge where the page has room, else under it, flush right.
+      const roomy = cssWidth - (left + TICK_BADGE + 4) >= 120;
+      return <Fragment key={`${tickKey(marks[0])}:${marks.length}`}>
+        <button className="markup-pin is-tick" style={{ left, top }} disabled={sending !== null}
+          aria-label={t("mobile.markup.ticks.approveTitle")} title={t("mobile.markup.ticks.approveTitle")}
+          onClick={(event) => { if (event.detail <= 1) approveTicked(n, marks); }}>✓</button>
+        {diff && <span className="markup-tick-diff" role="note"
+          style={roomy ? { left: left + TICK_BADGE + 4, top, maxWidth: Math.min(240, cssWidth - (left + TICK_BADGE + 4)) } : { right: Math.max(0, cssWidth - left - TICK_BADGE), top: top + TICK_BADGE + 2 }}>
+          {t("mobile.markup.tickDiff", diff)}
+        </span>}
+      </Fragment>;
+    });
+  };
+  // --- Each remark's own Submit, while marking ---------------------------
+  /** The unsent marks by remark (`markGroups`), regrouped after each stroke;
+   * a button just outside each group, clear of every unsent mark
+   * (`submitSpot`), sends that group alone. None while a stroke or a note is
+   * under way; a group that just changed takes no tap for a moment, so a pen
+   * still writing there cannot send it. */
+  const sendableKey = sendable.join(",");
+  const groups = useMemo(
+    () => (canMark && marking ? markGroups(history.present, sendableKey ? sendableKey.split(",").map(Number) : []) : []),
+    [canMark, marking, history.present, sendableKey],
+  );
+  const groupSeen = useRef(new WeakMap<Mark, number>());
+  const groupArrived = (group: MarkGroup): number => {
+    const now = Date.now();
+    let last = 0;
+    for (const mark of group.marks) {
+      let at = groupSeen.current.get(mark);
+      if (at === undefined) groupSeen.current.set(mark, at = now);
+      last = Math.max(last, at);
+    }
+    return last;
+  };
+  const groupLayer = (n: number, size: Size) => {
+    if (!(onSend || newTab) || preview !== null || note !== null) return null;
+    const mine = groups.filter((group) => group.page === n);
+    if (!mine.length) return null;
+    const scale = cssWidth / size[0];
+    const page: [number, number] = [cssWidth, size[1] * scale];
+    const boxes = (history.present.pages[n]?.marks ?? []).map(markBox);
+    return mine.map((group, i) => {
+      const arrived = groupArrived(group);
+      const [left, top] = submitSpot(group.box, scale, page, GROUP_SUBMIT, boxes);
+      return <button key={`${group.marks.length}:${i}`} className="markup-pin is-submit" style={{ left, top, width: GROUP_SUBMIT[0], height: GROUP_SUBMIT[1] }}
+        disabled={sending !== null || reloading || !online}
+        aria-label={t("mobile.markup.groupSubmitTitle", { count: group.marks.length })} title={t("mobile.markup.groupSubmitTitle", { count: group.marks.length })}
+        onClick={(event) => {
+          if (event.detail > 1 || gesture.current || Date.now() - arrived < ARRIVAL_GUARD_MS) return;
+          void submit({ page: n, marks: group.marks });
+        }}>{t("mobile.markup.submit")}</button>;
     });
   };
   const register = useCallback((n: number, canvas: HTMLCanvasElement | null) => {
@@ -1751,22 +2074,79 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     else overlays.current.delete(n);
   }, []);
   const pickTool = (name: Tool) => {
-    setTool(name);
+    // Each tool draws in its own remembered colour (`colorOf`).
+    setPen((was) => ({ ...was, tool: name }));
     setPopover(null);
-    if (name === "box" && color !== "yellow") setColor("yellow");
-    if (name === "ink" && color === "yellow") setColor("red");
+    setSelection(null);
   };
+  /** A colour tapped: the selection's marks wear it while the select tool
+   * holds some (`restyleMarks` keeps yellow to highlights), else the armed
+   * tool remembers it. */
+  const pickColor = (name: MarkColor) => {
+    if (tool !== "select") setColor(name);
+    else if (selected) changeSelected(restyleMarks(history.present, selected.n, selected.indices, { color: name }));
+  };
+  const selectedMarks = selected ? selected.indices.map((i) => history.present.pages[selected.n]?.marks[i]).filter((mark): mark is Mark => !!mark) : [];
+  /** The colours the armed tool offers — for the selection, what its marks
+   * may wear: yellow only when one of them highlights. */
+  const offeredColors = tool === "select"
+    ? colorsFor(selectedMarks.some((mark) => mark.kind === "box" || (mark.kind === "ink" && mark.style === "marker")) ? "box" : "ink", "pen")
+    : colorsFor(tool, pen.style, pen.textMark);
+  /** The colour ringed: the armed tool's, or the selection's when its marks
+   * share one. */
+  const shownColor: MarkColor | null = tool !== "select" ? color
+    : selectedMarks.length && selectedMarks.every((mark) => mark.color === selectedMarks[0].color) ? selectedMarks[0].color : null;
+  /** The one selected mark a comment can go on: a stroke, a box or a stamp. */
+  const commentable = selectedMarks.length === 1 && selectedMarks[0].kind !== "text" ? selectedMarks[0] : null;
+  const saveComment = (text: string | null) => {
+    if (!selected || !commentable) return;
+    changeSelected(setComment(history.present, selected.n, selected.indices[0], text));
+  };
+  const deleteSelected = () => {
+    if (!selected) return;
+    const next = removeMarks(history.present, selected.n, selected.indices);
+    if (next !== history.present) setHistory((now) => commit(now, next));
+    setSelection(null);
+    setPopover(null);
+  };
+  /** The selected strokes' style, when they share one. */
+  const selectedStyle = (() => {
+    const styles = new Set(selectedMarks.flatMap((mark) => (mark.kind === "ink" ? [mark.style ?? "pen"] : [])));
+    return styles.size === 1 ? [...styles][0] : null;
+  })();
+  /** Whether the armed pen is `preset` — its chip is ringed. */
+  const isPreset = (preset: PenPreset) => preset.tool === tool && preset.color === color && preset.size === pen.size && (preset.tool !== "ink" || preset.style === pen.style);
+  /** The next of `options` after `now`, round — a ⋯ row's tap. */
+  const cycle = <T,>(options: readonly T[], now: T): T => options[(options.indexOf(now) + 1) % options.length];
   const togglePenOnly = () => {
     const next = penMode === "pen" ? "fingers" : "pen";
     setPenMode(next);
     rememberPenMode(next);
   };
   const editNote = (text: string) => setNote((draft) => draft && { ...draft, text });
-  const layerCanvas = (n: number, size: Size) => canMark
-    && <LayerCanvas n={n} size={size} page={layer.pages[n]} sent={showSent ? layer.sent?.pages[n] : undefined} preview={preview?.n === n ? preview.mark : null}
-      pixelWidth={pixelWidth} register={register} handlers={handlers} />;
+  const layerCanvas = (n: number, size: Size) => canMark && <>
+    <LayerCanvas n={n} size={size} page={layer.pages[n]} sent={showSent ? layer.sent?.pages[n] : undefined} preview={preview?.n === n ? preview.marks : null}
+      pixelWidth={pixelWidth} register={register} handlers={handlers} />
+    {/* What the area eraser will take, or the select tool pick, while it is dragged. */}
+    {area?.n === n && <span className={`markup-area${area.select ? " is-select" : ""}`} aria-hidden="true" style={{
+      left: area.rect[0] * cssWidth / size[0], top: area.rect[1] * cssWidth / size[0],
+      width: (area.rect[2] - area.rect[0]) * cssWidth / size[0], height: (area.rect[3] - area.rect[1]) * cssWidth / size[0],
+    }} />}
+    {selectionOutline(n, size)}
+  </>;
+  /** A dashed outline around the selection, following it as it is dragged. */
+  const selectionOutline = (n: number, size: Size) => {
+    if (selected?.n !== n) return null;
+    const box = selectionBox(layer.pages[n], selected.indices);
+    if (!box) return null;
+    const scale = cssWidth / size[0];
+    return <span className="markup-selection" aria-hidden="true" style={{
+      left: box[0] * scale - 4, top: box[1] * scale - 4, width: box[2] * scale + 8, height: box[3] * scale + 8,
+    }} />;
+  };
   const noteEditor = (n: number, size: Size) => note?.n === n
-    && <NoteEditor note={note} size={size} width={cssWidth} onChange={editNote} onSave={saveNote} onCancel={() => setNote(null)} />;
+    && <NoteEditor note={note} size={size} width={cssWidth} onChange={editNote} onColor={(next) => setNote((draft) => draft && { ...draft, color: next })}
+      onSave={saveNote} onCancel={() => setNote(null)} />;
 
   return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}${cardShown ? " has-questions" : ""}`} role="dialog" aria-modal="true"
     aria-label={marking ? t("mobile.markup.title", { name: sentName(file) }) : sentName(file)}>
@@ -1782,9 +2162,14 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         </small>
       </div>
       {marking ? <>
+        {onSend && pickModel && <button className="outbox-action markup-model" onClick={pickModel} disabled={agent === "working" || sending !== null || !online}
+          aria-haspopup="dialog" title={t("mobile.markup.modelTitle")} aria-label={t("mobile.markup.modelTitle")}>
+          {agentModel ?? t("terminal.reader.model")} ▾{isUntested("mobile.markup.model") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </button>}
         <button className="markup-submit" disabled={!sendable.length || sending !== null || reloading || !online} onClick={() => void submit()} title={t("mobile.markup.submitTitle")}>
           {t("mobile.markup.submit")}
         </button>
+        {groups.length > 0 && isUntested("mobile.markup.groupSubmit") && <span className="untested">{t("mobile.outbox.untested")}</span>}
         <button className="outbox-action markup-done" onClick={done} disabled={sending !== null}>{t("mobile.markup.done")}</button>
       </> : <>
         {canMark && <button className={`outbox-action markup-toggle${empty ? "" : " has-marks"}`} onClick={() => setMarking(true)}
@@ -1815,7 +2200,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       </div>}
       {ticked.length > 0 && <div className="markup-round markup-ticks" role="status">
         <span className="agent-status done" aria-hidden="true"><span className="agent-status-glyph">{AGENT_STATUS_GLYPH.done}</span></span>
-        <span className="markup-round-words">{t("mobile.markup.ticks.done", { count: ticked.length })}</span>
+        <span className="markup-round-words">{t("mobile.markup.ticks.done", { count: tickedGroups.length })}</span>
         {isUntested("mobile.markup.ticks") && <span className="untested">{t("mobile.outbox.untested")}</span>}
         <button className="outbox-action markup-approve-all" disabled={sending !== null} onClick={approveAllTicked}
           title={t("mobile.markup.ticks.approveAllTitle")}>{t("mobile.markup.ticks.approveAll")}</button>
@@ -1859,6 +2244,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
                 {!pictures[n] && <span className="markup-page-note">{t(pageFailures.has(n) ? "mobile.markup.pageFailed" : "mobile.markup.pageLoading", { n })}</span>}
                 {layerCanvas(n, size)}
               </>}
+              {groupLayer(n, size)}
               {tickLayer(n, size)}
               {pinLayer(n, size)}
               {noteEditor(n, size)}
@@ -1876,6 +2262,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
             }}
             onError={() => setFailure("picture")} />
           {sizes && layerCanvas(1, sizes[0])}
+          {sizes && groupLayer(1, sizes[0])}
           {sizes && tickLayer(1, sizes[0])}
           {sizes && noteEditor(1, sizes[0])}
         </div>
@@ -1893,9 +2280,89 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       {cardShown && <MarkupQuestionsCard tabId={askTab} asks={asks} online={online} focus={questionFocus}
         onShowPin={isPdf ? showPin : undefined} onAnswered={questionsAnswered} onClosed={dropAsk} onRefresh={refreshAsks} onBusy={setQuestionBusy} />}
       {marking && <>
-      {popover === "colors" && <div className="markup-popover markup-colors" role="group" aria-label={t("mobile.markup.color")}>
-        {MARK_COLORS.map((name) => <button key={name} className={`markup-color${color === name ? " selected" : ""}`} aria-pressed={color === name}
-          style={{ background: INK[name] }} onClick={() => { setColor(name); setPopover(null); }} aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
+      {popover === "colors" && tool === "eraser" && <div className="markup-popover markup-pen" role="group" aria-label={t("mobile.markup.tool.eraser")}>
+        <div className="markup-pen-row">
+          {ERASER_MODES.map((mode, i) => <button key={mode} className={`markup-pen-size${pen.eraser === mode ? " selected" : ""}`} aria-pressed={pen.eraser === mode}
+            onClick={() => { setPen((was) => ({ ...was, eraser: mode })); setPopover(null); }}
+            aria-label={t(`mobile.markup.eraser.${mode}` as TranslationKey)} title={t(`mobile.markup.eraser.${mode}` as TranslationKey)}>
+            {mode === "area" ? <span className="markup-pen-area" aria-hidden="true" /> : <span className="markup-pen-ring" style={{ width: 8 + 5 * i, height: 8 + 5 * i }} aria-hidden="true" />}
+          </button>)}
+        </div>
+        {isUntested("mobile.markup.areaEraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+      </div>}
+      {popover === "colors" && tool === "select" && <div className="markup-popover markup-pen" role="group" aria-label={t("mobile.markup.tool.select")}>
+        {selected ? <>
+          <p className="markup-pen-meaning">{t("mobile.markup.selected", { count: selectedMarks.length })}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>
+          {selectedMarks.some((mark) => mark.kind === "ink") && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.style")}>
+            {PEN_STYLES.map((style) => <button key={style} className={`markup-pen-style${selectedStyle === style ? " selected" : ""}`} aria-pressed={selectedStyle === style}
+              onClick={() => changeSelected(restyleMarks(history.present, selected.n, selected.indices, { style }))}
+              aria-label={t(`mobile.markup.style.${style}` as TranslationKey)} title={t(`mobile.markup.style.${style}` as TranslationKey)}>
+              <span aria-hidden="true">{PEN_STYLE_GLYPHS[style]}</span>
+            </button>)}
+          </div>}
+          <div className="markup-pen-row markup-colors" role="group" aria-label={t("mobile.markup.color")}>
+            {offeredColors.map((name) => <button key={name} className={`markup-color${shownColor === name ? " selected" : ""}`} aria-pressed={shownColor === name}
+              style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => pickColor(name)}
+              aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
+          </div>
+          {/* A comment on the one selected stroke, box or stamp; keyed by the
+              mark, so a saved comment (a new mark object) starts afresh. */}
+          {commentable && <CommentBox key={tickKey(commentable)} comment={commentable.comment ?? ""} onSave={saveComment} />}
+          <div className="markup-pen-row markup-pen-actions">
+            <button onClick={deleteSelected}>{t("mobile.markup.deleteSelected")}</button>
+          </div>
+        </> : <p className="markup-pen-meaning">{t("mobile.markup.selectHint")}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
+      </div>}
+      {popover === "colors" && tool !== "eraser" && tool !== "select" && <div className="markup-popover markup-pen" role="group" aria-label={t("mobile.markup.penOptions")}>
+        {/* Saved pens: one tap arms one. */}
+        <div className="markup-pen-row markup-presets" role="group" aria-label={t("mobile.markup.presets")}>
+          {pen.presets.map((preset, i) => <button key={i} className={`markup-preset${isPreset(preset) ? " selected" : ""}`} aria-pressed={isPreset(preset)}
+            onClick={() => { setPen((was) => applyPreset(was, preset)); setPopover(null); }}
+            aria-label={t("mobile.markup.preset", { n: i + 1 })} title={t("mobile.markup.preset", { n: i + 1 })}>
+            <span aria-hidden="true">{presetGlyph(preset)}</span>
+            <span className="markup-preset-dot" style={{ background: INK[preset.color] }} aria-hidden="true" />
+          </button>)}
+          {isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </div>
+        {tool === "textmark" && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.tool.textmark")}>
+          {TEXT_MARK_MODES.map((mode) => <button key={mode} className={`markup-pen-style${pen.textMark === mode ? " selected" : ""}`} aria-pressed={pen.textMark === mode}
+            onClick={() => setPen((was) => ({ ...was, textMark: mode }))}
+            aria-label={t(`mobile.markup.textMark.${mode}` as TranslationKey)} title={t(`mobile.markup.textMark.${mode}` as TranslationKey)}>
+            <span className={`markup-textmark-glyph is-${mode}`} aria-hidden="true">ab</span>
+          </button>)}
+        </div>}
+        {tool === "stamp" && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.tool.stamp")}>
+          {STAMP_SYMBOLS.map((symbol) => <button key={symbol} className={`markup-pen-style${pen.stamp === symbol ? " selected" : ""}`} aria-pressed={pen.stamp === symbol}
+            onClick={() => setPen((was) => ({ ...was, stamp: symbol }))}
+            aria-label={t(`mobile.markup.stamp.${symbol}` as TranslationKey)} title={t(`mobile.markup.stamp.${symbol}` as TranslationKey)}>
+            <span aria-hidden="true">{STAMP_GLYPHS[symbol]}</span>
+          </button>)}
+        </div>}
+        {tool === "ink" && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.style")}>
+          {PEN_STYLES.map((style) => <button key={style} className={`markup-pen-style${pen.style === style ? " selected" : ""}`} aria-pressed={pen.style === style}
+            onClick={() => setPen((was) => ({ ...was, style }))} aria-label={t(`mobile.markup.style.${style}` as TranslationKey)} title={t(`mobile.markup.style.${style}` as TranslationKey)}>
+            <span aria-hidden="true">{PEN_STYLE_GLYPHS[style]}</span>
+          </button>)}
+        </div>}
+        {(tool === "ink" || (tool === "textmark" && pen.textMark !== "highlight")) && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.size")}>
+          {PEN_SIZES.map((size) => <button key={size} className={`markup-pen-size${pen.size === size ? " selected" : ""}`} aria-pressed={pen.size === size}
+            onClick={() => setPen((was) => ({ ...was, size }))} aria-label={t(`mobile.markup.size.${size}` as TranslationKey)} title={t(`mobile.markup.size.${size}` as TranslationKey)}>
+            <span className="markup-pen-dot" style={{ width: 5 + 4 * size, height: 5 + 4 * size, background: INK[color] }} aria-hidden="true" />
+          </button>)}
+        </div>}
+        <div className="markup-pen-row markup-colors" role="group" aria-label={t("mobile.markup.color")}>
+          {offeredColors.map((name) => <button key={name} className={`markup-color${color === name ? " selected" : ""}`} aria-pressed={color === name}
+            style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => { setColor(name); setPopover(null); }}
+            aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
+        </div>
+        <p className="markup-pen-meaning">{t("mobile.markup.colorMeaning", {
+          color: t(`mobile.markup.color.${color}` as TranslationKey),
+          meaning: t(`mobile.markup.meaning.${COLOR_MEANING[color]}` as TranslationKey),
+        })}{isUntested("mobile.markup.pen") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>
+        <div className="markup-pen-row markup-pen-actions">
+          <button onClick={() => setPen(savePreset)}>{t("mobile.markup.savePreset")}</button>
+          <button onClick={() => setPen(resetPresets)}>{t("mobile.markup.resetPresets")}</button>
+        </div>
       </div>}
       {popover === "more" && <div className="markup-popover markup-more">
         <button onClick={() => { setHistory((now) => commit(now, clearPage(now.present, current, showSent))); setPopover(null); }}
@@ -1911,6 +2378,19 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         {penMode !== "none" && <button role="switch" aria-checked={penMode === "pen"} onClick={togglePenOnly}>
           <span aria-hidden="true">✎</span>{t("mobile.markup.penOnly")}<span className="markup-switch" aria-hidden="true" />
         </button>}
+        <button role="switch" aria-checked={pen.snap} onClick={() => setPen((was) => ({ ...was, snap: !was.snap }))}>
+          <span aria-hidden="true">⌒</span>{t("mobile.markup.snap")}<span className="markup-switch" aria-hidden="true" />
+          {isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </button>
+        {/* Each tap moves on to the next choice. */}
+        <button onClick={() => setPen((was) => ({ ...was, pressure: cycle(PRESSURE_CURVES, was.pressure) }))}>
+          <span aria-hidden="true">◍</span>{t("mobile.markup.pressure")}
+          <span className="markup-more-value">{t(`mobile.markup.pressure.${pen.pressure}` as TranslationKey)}</span>
+        </button>
+        <button onClick={() => setPen((was) => ({ ...was, palm: cycle(PALM_MODES, was.palm) }))}>
+          <span aria-hidden="true">✋</span>{t("mobile.markup.palm")}
+          <span className="markup-more-value">{t(`mobile.markup.palm.${pen.palm}` as TranslationKey)}</span>
+        </button>
         {canReload && <button onClick={() => { setPopover(null); void reload(); }} disabled={reloading || sending !== null}>
           <span aria-hidden="true">⟳</span>{t("mobile.markup.reload")}{roundUntested && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </button>}
@@ -1930,15 +2410,50 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         </button>}
       </div>}
       {!popover && tool === "text" && !note && <p className="markup-hint">{t("mobile.markup.textHint")}</p>}
-      {!popover && tool === "eraser" && <p className="markup-hint">{t("mobile.markup.eraserHint")}{isUntested("mobile.markup.eraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
+      {!popover && tool === "textmark" && <p className="markup-hint">
+        {t(!isPdf || pageRuns[current]?.length === 0 ? "mobile.markup.noText" : "mobile.markup.textMarkHint")}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+      </p>}
+      {!popover && tool === "stamp" && <p className="markup-hint">{t("mobile.markup.stampHint")}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
+      {!popover && tool === "select" && <p className="markup-hint">
+        {selected ? t("mobile.markup.selected", { count: selectedMarks.length }) : t("mobile.markup.selectHint")}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+      </p>}
+      {!popover && tool === "eraser" && <p className="markup-hint">{t(pen.eraser === "area" ? "mobile.markup.eraserAreaHint" : "mobile.markup.eraserHint")}{isUntested("mobile.markup.eraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
       <div className="markup-toolbar" role="toolbar" aria-label={t("mobile.markup.tools")}>
-        {(["ink", "box", "text", "eraser"] as Tool[]).map((name) => <button key={name} aria-pressed={tool === name} className={tool === name ? "selected" : ""}
+        {TOOLBAR.map((name) => <button key={name} aria-pressed={tool === name} className={tool === name ? "selected" : ""}
           onClick={() => pickTool(name)} aria-label={t(`mobile.markup.tool.${name}` as TranslationKey)} title={t(`mobile.markup.tool.${name}` as TranslationKey)}>
-          {name === "eraser" ? <EraserIcon /> : <span aria-hidden="true">{name === "ink" ? "✎" : name === "box" ? "▭" : "T"}</span>}
+          {name === "eraser" ? <EraserIcon />
+            : name === "textmark" ? <span className={`markup-textmark-glyph is-${pen.textMark}`} aria-hidden="true">ab</span>
+            : <span aria-hidden="true">{name === "ink" ? "✎" : name === "box" ? "▭" : name === "text" ? "T" : name === "stamp" ? STAMP_GLYPHS[pen.stamp] : "↖"}</span>}
         </button>)}
-        <button className="markup-color-well" aria-expanded={popover === "colors"} onClick={() => setPopover((open) => (open === "colors" ? null : "colors"))}
-          aria-label={t("mobile.markup.colorOf", { color: t(`mobile.markup.color.${color}` as TranslationKey) })}>
-          <span style={{ background: INK[color] }} />
+        {/* On a wide screen the armed tool's colours sit in the toolbar too —
+            the selection's, while the select tool holds some. */}
+        {tool !== "eraser" && (tool !== "select" || selected) && <span className="markup-toolbar-colors" role="group" aria-label={t("mobile.markup.color")}>
+          {offeredColors.map((name) => <button key={name} className={`markup-color${shownColor === name ? " selected" : ""}`} aria-pressed={shownColor === name}
+            style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => pickColor(name)}
+            aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
+        </span>}
+        {/* The well opens the pen's options; a sideways swipe on it steps the colour. */}
+        <button className={`markup-color-well${tool === "eraser" ? " is-eraser" : ""}`} aria-expanded={popover === "colors"}
+          onPointerDown={(event) => { wellSwipe.current = event.clientX; }}
+          onPointerUp={(event) => {
+            const from = wellSwipe.current;
+            wellSwipe.current = null;
+            if (from === null || tool === "eraser" || Math.abs(event.clientX - from) < 24) return;
+            const offered = offeredColors;
+            const at = offered.indexOf(shownColor ?? color);
+            pickColor(offered[(at + (event.clientX > from ? 1 : offered.length - 1)) % offered.length]);
+            wellSwiped.current = true;
+          }}
+          onClick={() => {
+            if (wellSwiped.current) { wellSwiped.current = false; return; }
+            setPopover((open) => (open === "colors" ? null : "colors"));
+          }}
+          aria-label={tool === "eraser"
+            ? t(`mobile.markup.eraser.${pen.eraser}` as TranslationKey)
+            : t("mobile.markup.colorOf", { color: t(`mobile.markup.color.${shownColor ?? color}` as TranslationKey) })}>
+          {tool === "eraser"
+            ? (pen.eraser === "area" ? <span className="markup-pen-area" aria-hidden="true" /> : <span className="markup-pen-ring" style={{ width: 8 + 5 * ERASER_MODES.indexOf(pen.eraser), height: 8 + 5 * ERASER_MODES.indexOf(pen.eraser) }} aria-hidden="true" />)
+            : <span style={{ background: INK[shownColor ?? color] }} className={pen.style !== "pen" && tool === "ink" ? `is-${pen.style}` : undefined} />}
         </button>
         <span className="markup-toolbar-rule" aria-hidden="true" />
         <button onClick={() => setHistory(undo)} disabled={!history.past.length} aria-label={t("mobile.markup.undo")} title={t("mobile.markup.undo")}><span aria-hidden="true">↶</span></button>
@@ -1967,8 +2482,8 @@ function boxOf(a: [number, number], b: [number, number], color: MarkColor): BoxM
 }
 
 /** The typed note, edited where it sits on the page. */
-function NoteEditor({ note, size, width, onChange, onSave, onCancel }: {
-  note: NoteDraft; size: Size; width: number; onChange: (text: string) => void; onSave: (text: string | null) => void; onCancel: () => void;
+function NoteEditor({ note, size, width, onChange, onColor, onSave, onCancel }: {
+  note: NoteDraft; size: Size; width: number; onChange: (text: string) => void; onColor: (color: MarkColor) => void; onSave: (text: string | null) => void; onCancel: () => void;
 }) {
   const t = useT();
   const text = note.text;
@@ -1976,10 +2491,31 @@ function NoteEditor({ note, size, width, onChange, onSave, onCancel }: {
   return <div className="markup-note-editor" style={{ left: Math.min(note.at[0] * scale, Math.max(0, width - 220)), top: note.at[1] * scale }}>
     <textarea autoFocus value={text} maxLength={2000} placeholder={t("mobile.markup.notePlaceholder")} onChange={(event) => onChange(event.target.value)}
       style={{ color: INK[note.color] }} aria-label={t("mobile.markup.notePlaceholder")} />
+    {/* The note's colour: the prompt names it unless black. */}
+    <div className="markup-note-colors" role="group" aria-label={t("mobile.markup.noteColor")}>
+      {colorsFor("text", "pen").map((name) => <button key={name} className={`markup-color${note.color === name ? " selected" : ""}`} aria-pressed={note.color === name}
+        style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => onColor(name)}
+        aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
+    </div>
     <div>
       {note.index !== null && <button onClick={() => onSave(null)}>{t("mobile.markup.noteDelete")}</button>}
       <button onClick={onCancel}>{t("mobile.markup.noteCancel")}</button>
       <button onClick={() => onSave(text)} disabled={!text.trim()}>{t("mobile.markup.noteDone")}</button>
+    </div>
+  </div>;
+}
+
+/** The selected mark's comment (`setComment`): Save keeps it, Remove comment
+ * takes it off. */
+function CommentBox({ comment, onSave }: { comment: string; onSave: (text: string | null) => void }) {
+  const t = useT();
+  const [text, setText] = useState(comment);
+  return <div className="markup-comment">
+    <textarea value={text} maxLength={MAX_COMMENT} placeholder={t("mobile.markup.commentPlaceholder")} onChange={(event) => setText(event.target.value)}
+      aria-label={t("mobile.markup.comment")} />
+    <div className="markup-pen-actions">
+      {comment && <button onClick={() => onSave(null)}>{t("mobile.markup.commentRemove")}</button>}
+      <button onClick={() => onSave(text)} disabled={!text.trim() || text.trim() === comment}>{t("mobile.markup.commentSave")}</button>
     </div>
   </div>;
 }

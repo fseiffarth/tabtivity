@@ -3790,15 +3790,21 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   );
   /** Mark up's target with that model, for the round pill's "Opus is
    * working…" — `markupTarget` is built before the model is read. */
+  const selectModelNow = useRef(selectModel);
+  selectModelNow.current = selectModel;
+  /** The markup view's model chip: the chat's own model sheet, over the view.
+   * Not on a local-model tab, which keeps the model it was launched on. */
+  const markupPickModel = useCallback(() => selectModelNow.current(), []);
   const markupFor = useMemo(
     () => markupTarget && {
       ...markupTarget,
       model: workingModel,
+      pickModel: tab.local_model ? undefined : markupPickModel,
       // The gallery the viewer may have opened from would cover the chat.
       toChat: (name: string) => { setGallery(false); setMarkupAway(name); },
       dialog: markupDialog,
     },
-    [markupTarget, workingModel, markupDialog],
+    [markupTarget, workingModel, markupDialog, tab.local_model, markupPickModel],
   );
   /** The screen's lines as the reading view shows them: the revealed history,
    * the open chunk, then the live tail. */
@@ -4420,7 +4426,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => window.confirm(t("mobile.keys.interruptConfirm")) && type("\u0003")}>{t("mobile.keys.interrupt")}</button>
       </div>}
     </div>
-    {modelSheet && (effortStep
+    {/* Lifted over a markup view, whose model chip opens it too. */}
+    {modelSheet && <div className="sheet-lift">{effortStep
       ? <OptionSheet
         title={t("mobile.model.effortTitle", { model: effortStep })}
         note={{ text: isUntested("mobile.model.effort")
@@ -4525,7 +4532,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     </div>}
     {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}>
       <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles}
-        markup={markupFor && { tabId: markupFor.tabId, onSend: markupFor.onSend, agent: markupFor.agent, model: markupFor.model, toChat: markupFor.toChat, dialog: markupFor.dialog }} showTab={markupNewTab?.show} />
+        markup={markupFor && { tabId: markupFor.tabId, onSend: markupFor.onSend, agent: markupFor.agent, model: markupFor.model, pickModel: markupFor.pickModel, toChat: markupFor.toChat, dialog: markupFor.dialog }} showTab={markupNewTab?.show} />
     </div>}
 
   </main>;

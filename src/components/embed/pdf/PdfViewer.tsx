@@ -117,10 +117,13 @@ import { readViewerSelection, type ViewerSelection } from "./selection";
 import { scrollIntoPdfBox } from "./scrollBox";
 import { PdfLinkConfirmDialog } from "./PdfLinkDialog";
 import { PdfMarkupLayer } from "./PdfMarkupLayer";
-import { PdfMarkupBar } from "./PdfMarkupBar";
+import { PdfMarkupBar, selectionColors } from "./PdfMarkupBar";
 import { PdfMarkupQuestions, PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
 import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
-import { usePdfMarkup, type MarkupEdit, type QuestionFocus } from "./usePdfMarkup";
+import { PdfGroupSubmits } from "./PdfMarkupGroups";
+import type { Mark, MarkGroup, PageLayer } from "../../../../mobile-web/src/markup/layer";
+import { usePdfMarkup, type MarkupEdit, type MarkupTool, type QuestionFocus } from "./usePdfMarkup";
+import { colorsFor } from "../../../../mobile-web/src/markup/pen";
 import type { QuestionPin } from "../../../lib/viewers/markupQuestions";
 import {
   claimMarkup,
@@ -620,6 +623,7 @@ function PdfPageCanvas({
   markup,
   questionPins,
   tickBadges,
+  groupSubmits,
   onSize,
 }: {
   doc: PDFDocumentProxy;
@@ -753,7 +757,15 @@ function PdfPageCanvas({
   tickBadges?: {
     badges: readonly TickBadge[];
     disabled: boolean;
-    onApprove: (index: number, mark: TickBadge["mark"]) => void;
+    onApprove: (marks: TickBadge["marks"]) => void;
+  } | null;
+  /** The unsent remarks' own Submits (`PdfMarkupGroups`), over the markup
+   *  layer: a click sends that group alone. */
+  groupSubmits?: {
+    groups: readonly MarkGroup[];
+    page: PageLayer | undefined;
+    disabled: boolean;
+    onSubmit: (marks: readonly Mark[]) => void;
   } | null;
 }) {
   const t = useT();
@@ -1589,6 +1601,16 @@ function PdfPageCanvas({
           remarks included, which it leaves visible but out of reach. */}
       {markup && cssSize && (
         <PdfMarkupLayer n={pageNumber} size={[cssSize.w, cssSize.h]} scale={scale} edit={markup} />
+      )}
+      {groupSubmits && groupSubmits.groups.length > 0 && cssSize && (
+        <PdfGroupSubmits
+          groups={groupSubmits.groups}
+          page={groupSubmits.page}
+          size={[cssSize.w, cssSize.h]}
+          scale={scale}
+          disabled={groupSubmits.disabled}
+          onSubmit={groupSubmits.onSubmit}
+        />
       )}
       {tickBadges && tickBadges.badges.length > 0 && cssSize && (
         <PdfTickBadges
@@ -2731,12 +2753,21 @@ function PdfCanvas({
     [questionPins],
   );
   const showQuestion = markup.questions.show;
-  // The agent's ticks (`markup_done`): a ✓ on each ticked sent mark.
+  // The agent's ticks (`markup_done`): a ✓ on each group of ticked sent marks.
   const tickBadges = useMemo(
-    () => tickBadgesByPage(markup.edit.base, markup.ticks.marks),
-    [markup.edit.base, markup.ticks.marks],
+    () => tickBadgesByPage(markup.edit.base, markup.ticks.groups, markup.ticks.captions),
+    [markup.edit.base, markup.ticks.groups, markup.ticks.captions],
   );
   const approveTick = markup.ticks.approve;
+  // Each unsent remark's own Submit, by page — none while a stroke is drawn.
+  const groupsByPage = useMemo(() => {
+    const out = new Map<number, MarkGroup[]>();
+    for (const group of markup.groups) out.set(group.page, [...(out.get(group.page) ?? []), group]);
+    return out;
+  }, [markup.groups]);
+  const drawing = markup.edit.layer !== markup.edit.base;
+  const groupSubmitOff = markup.sending || markup.target === null || markup.edit.note !== null;
+  const submitGroup = markup.submit;
   const pickQuestionPin = useCallback((pin: QuestionPin) => showQuestion(pin.askId, pin.index, "card"), [showQuestion]);
   const holder = markup.key ? markupHolder(markup.key) : undefined;
   const gate = markupGate({ ...gateInput, claimedElsewhere: holder !== undefined && holder !== markupOwner });
@@ -3799,6 +3830,45 @@ function PdfCanvas({
     [settings, browserEnabled, mailEnabled, t],
   );
 
+  /** The markup strip's bare keys, while marking: P / B / T / M / K / S / E
+   *  arm the pen, box, note, text marks, stamp, select tool and eraser (P
+   *  again steps the pen's style, M the text marks' mode, K the stamp's
+   *  symbol, E switches to the area eraser and back), 1–4 pick the armed
+   *  tool's colours in strip order (a selection's, with marks selected),
+   *  Shift+1–4 a preset, [ and ] step the size, Delete or Backspace delete
+   *  the selected marks. Whether it took the key. */
+  const markupKey = useCallback((e: { key: string; code: string; shiftKey: boolean }): boolean => {
+    const m = markupRef.current;
+    const { key } = e;
+    // By the key's place: Shift turns the digit into a layout's own symbol.
+    const preset = e.shiftKey ? /^Digit([1-4])$/.exec(e.code) : null;
+    if (preset) {
+      m.applyPreset(Number(preset[1]) - 1);
+      return true;
+    }
+    if ((key === "Delete" || key === "Backspace") && m.edit.selection) {
+      m.deleteSelection();
+      return true;
+    }
+    const tools: Record<string, MarkupTool> = { p: "ink", b: "box", t: "text", m: "textmark", k: "stamp", s: "select", e: "eraser" };
+    const lower = key.toLowerCase();
+    if (tools[lower] && !e.shiftKey) {
+      m.pressTool(tools[lower]);
+      return true;
+    }
+    if (key === "[" || key === "]") {
+      m.stepSize(key === "[" ? -1 : 1);
+      return true;
+    }
+    const offered = m.tool === "select" ? selectionColors(m.edit.base, m.edit.selection) : colorsFor(m.tool, m.pen.style, m.pen.textMark);
+    const color = /^[1-4]$/.test(key) ? offered[Number(key) - 1] : undefined;
+    if (color && m.tool !== "eraser") {
+      m.setColor(color);
+      return true;
+    }
+    return false;
+  }, []);
+
   // Ctrl/Cmd+F opens the find bar, Ctrl/Cmd+G opens go-to-page, Ctrl/Cmd+P opens
   // the print preview; Esc closes whichever is open. Bound on the host so it
   // fires wherever focus sits within the PDF pane (the scroll area is focusable).
@@ -3834,6 +3904,8 @@ function PdfCanvas({
         e.preventDefault();
         if (marking) markupRef.current.redo();
         else redo();
+      } else if (marking && !mod && !e.altKey && !isTextEntry(e.target) && markupKey(e)) {
+        e.preventDefault();
       } else if (e.altKey && e.key === "ArrowLeft") {
         // The browser's own "back" gesture, for the same thing it means here:
         // return from the link you just followed.
@@ -3866,6 +3938,10 @@ function PdfCanvas({
       } else if (e.key === "Escape" && copySelecting) {
         e.preventDefault();
         setCopySelecting(false);
+      } else if (e.key === "Escape" && marking && markupRef.current.edit.selection && !isTextEntry(e.target)) {
+        // Selected marks let go first; the next Escape leaves the mode.
+        e.preventDefault();
+        markupRef.current.edit.clearSelection();
       } else if (e.key === "Escape" && marking && !isTextEntry(e.target)) {
         e.preventDefault();
         leaveMarkup();
@@ -3873,6 +3949,7 @@ function PdfCanvas({
     },
     [
       marking,
+      markupKey,
       leaveMarkup,
       openFind,
       closeFind,
@@ -5423,9 +5500,14 @@ function PdfCanvas({
                         ? { pins: questionPins.get(i + 1)!, focus: markup.questions.focus, onPick: pickQuestionPin }
                         : null
                     }
+                    groupSubmits={
+                      marking && ref.src === SELF && !drawing && groupsByPage.has(i + 1)
+                        ? { groups: groupsByPage.get(i + 1)!, page: markup.edit.base.pages[i + 1], disabled: groupSubmitOff, onSubmit: (marks) => void submitGroup({ page: i + 1, marks }) }
+                        : null
+                    }
                     tickBadges={
                       marking && ref.src === SELF && tickBadges.has(i + 1)
-                        ? { badges: tickBadges.get(i + 1)!, disabled: markup.sending, onApprove: (index, mark) => approveTick(i + 1, index, mark) }
+                        ? { badges: tickBadges.get(i + 1)!, disabled: markup.sending, onApprove: (marks) => approveTick(i + 1, marks) }
                         : null
                     }
                   />

@@ -228,7 +228,7 @@ pub async fn pdf_markup_undo(project_id: String, undo_id: String) -> Result<mark
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::mobile_control::markup::{Color, MAX_PROMPT_BYTES};
+    use crate::services::mobile_control::markup::{Color, PenStyle, MAX_PROMPT_BYTES};
     use crate::services::mobile_control::{inbox, markup_pdf, outbox};
     use std::fs;
 
@@ -246,7 +246,7 @@ mod tests {
     }
 
     fn ink() -> Mark {
-        Mark::Ink { color: Color::Red, width: 2.0, points: vec![[10.0, 10.0, 0.5], [20.0, 20.0, 0.6]] }
+        Mark::Ink { color: Color::Red, width: 2.0, points: vec![[10.0, 10.0, 0.5], [20.0, 20.0, 0.6]], style: PenStyle::Pen, comment: None }
     }
 
     fn page(n: u32) -> PdfMarkupPage {
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(fs::read(root.join("docs/draft.pdf")).unwrap(), pdf);
         assert_eq!(fs::metadata(root.join("docs/draft.pdf")).unwrap().modified().unwrap(), before);
         assert!(done.prompt.starts_with("I marked these changes by hand on `docs/draft.pdf`."));
-        assert!(done.prompt.contains("- p3: \"use the 2024 numbers\""));
+        assert!(done.prompt.contains("- p3: blue note \"use the 2024 numbers\""));
         assert!(done.prompt.ends_with(&format!("{}\n{}", markup::DEFAULT_INSTRUCTION, markup::ask_line(None, markup::Origin::Viewer))), "desktop: default instruction and its viewer asking line, no send-back line");
         assert!(done.prompt.contains(markup::VIEWER_ASK_ONLY) && !done.prompt.contains("if you have it"), "the desktop viewer is never the chat");
         assert!(!done.prompt.contains(&root.to_string_lossy().to_string()), "no absolute path in the prompt");
@@ -441,7 +441,7 @@ mod tests {
             assert_eq!(submit_in(&root, &path, vec![bad]), Err("invalid_layer".into()));
         }
         let mut off_page = page(1);
-        off_page.marks = vec![Mark::Ink { color: Color::Red, width: 2.0, points: vec![[700.0, 10.0, 0.5]] }];
+        off_page.marks = vec![Mark::Ink { color: Color::Red, width: 2.0, points: vec![[700.0, 10.0, 0.5]], style: PenStyle::Pen, comment: None }];
         assert_eq!(submit_in(&root, &path, vec![off_page]), Err("invalid_markup".into()));
         assert_eq!(submit_in(&root, &path, vec![]), Err("invalid_markup".into()));
         assert!(inbox_names(&root).is_empty());
@@ -475,7 +475,7 @@ mod tests {
         assert!(text.len() <= MAX_PROMPT_BYTES, "{} bytes", text.len());
         assert!(text.contains(concat!("Page 1: @.", crate::app_slug!(), "/inbox/")));
         assert!(text.contains(concat!("more layers, beside these in `.", crate::app_slug!(), "/inbox/`, named `…-p<page>-layer.png`")));
-        assert!(text.contains("- p1: \"note on page 1:"));
+        assert!(text.contains("- p1: blue note \"note on page 1:"));
         assert!(text.contains("more notes — read them in the marked copy."));
         assert!(text.ends_with(concat!("send it to me with `", crate::app_slug!(), "-send <file>`.")));
     }

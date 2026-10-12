@@ -19,7 +19,15 @@ import { adoptLegacyDatabase, databaseHost, databasePort } from "../../../src/li
 /** What a layer was drawn against: the file's size and modified time. A
  * different file under the same name is told apart by them. */
 export type Fingerprint = { size: number; modified: number };
-export type StoredLayer = { layer: Layer; fingerprint: Fingerprint; saved: number };
+/** `past`: the undo steps before `layer`, oldest first, so reopening the file
+ * can still undo (`MAX_STORED_UNDO`; redo is never kept). Absent from records
+ * written before it. */
+export type StoredLayer = { layer: Layer; fingerprint: Fingerprint; saved: number; past?: Layer[] };
+
+/** How many undo steps a record keeps. The steps share their marks with the
+ * layer and each other, which IndexedDB's structured clone stores once, so
+ * they cost little more than the marks a step changed. */
+export const MAX_STORED_UNDO = 20;
 
 /** The record store behind the functions below — IndexedDB in the app, a
  * map or a broken one in tests. */
@@ -125,7 +133,8 @@ function readLayer(value: unknown): Layer | null {
 }
 
 /** The saved layer, `null` when there is none, or `"unavailable"` when the
- * storage could not be read at all. */
+ * storage could not be read at all. Its undo steps come back as far as they
+ * read (`readLayer` each); an unreadable one is dropped, never the layer. */
 export async function loadLayer(key: string, backend: LayerBackend = indexedDbBackend): Promise<StoredLayer | null | "unavailable"> {
   let value: unknown;
   try {
@@ -137,18 +146,35 @@ export async function loadLayer(key: string, backend: LayerBackend = indexedDbBa
   const { fingerprint, saved } = value as Partial<StoredLayer>;
   const layer = readLayer((value as { layer?: unknown }).layer);
   if (!layer || !fingerprint || typeof fingerprint.size !== "number" || typeof fingerprint.modified !== "number") return null;
-  return { layer, fingerprint: { size: fingerprint.size, modified: fingerprint.modified }, saved: typeof saved === "number" ? saved : 0 };
+  const stored: StoredLayer = { layer, fingerprint: { size: fingerprint.size, modified: fingerprint.modified }, saved: typeof saved === "number" ? saved : 0 };
+  const kept = (value as { past?: unknown }).past;
+  if (Array.isArray(kept)) {
+    const past = kept.slice(-MAX_STORED_UNDO).map(readLayer).filter((step): step is Layer => step !== null);
+    if (past.length) stored.past = past;
+  }
+  return stored;
 }
 
-/** Saves the layer; `false` when it could not be. A layer with no mark on
- * either side is a removal, so a cleared file leaves nothing behind — but one
- * holding only sent marks (just after a Submit) is kept. */
-export async function saveLayer(key: string, layer: Layer, fingerprint: Fingerprint, backend: LayerBackend = indexedDbBackend): Promise<boolean> {
+/** Saves the layer, with the last `MAX_STORED_UNDO` of `past` (the
+ * history's undo steps, oldest first — a step the desktop would refuse is
+ * left out); `false` when it could not be. A layer with no mark on either
+ * side is a removal, so a cleared file leaves nothing behind — its undo steps
+ * with it — but one holding only sent marks (just after a Submit) is kept. */
+export async function saveLayer(
+  key: string,
+  layer: Layer,
+  fingerprint: Fingerprint,
+  backend: LayerBackend = indexedDbBackend,
+  past?: readonly Layer[],
+): Promise<boolean> {
   if (!withinLimits(layer)) return false;
   try {
     const empty = (pages: Record<number, PageLayer>) => Object.values(pages).every((page) => page.marks.length === 0);
+    const steps = (past ?? []).slice(-MAX_STORED_UNDO).filter(withinLimits);
+    const record: StoredLayer = { layer, fingerprint, saved: Date.now() };
+    if (steps.length) record.past = steps;
     if (empty(layer.pages) && empty(layer.sent?.pages ?? {})) await backend.delete(key);
-    else await backend.put(key, { layer, fingerprint, saved: Date.now() } satisfies StoredLayer);
+    else await backend.put(key, record);
     return true;
   } catch {
     return false;
@@ -172,7 +198,7 @@ export async function moveLayer(from: string, to: string, fingerprint: Fingerpri
   const stored = await loadLayer(from, backend);
   if (stored === "unavailable") return false;
   if (!stored) return true;
-  if (!(await saveLayer(to, stored.layer, fingerprint, backend))) return false;
+  if (!(await saveLayer(to, stored.layer, fingerprint, backend, stored.past))) return false;
   return clearLayer(from, backend);
 }
 

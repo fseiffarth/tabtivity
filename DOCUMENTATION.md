@@ -518,10 +518,16 @@ instead** closes it unanswered. The phone's chat shows a one-line banner while
 a question is open; on the desktop, with marking off, the **Mark up** button is
 underlined and opens on the asking tab. The same tabs tick off the marks they handled
 with `markup_done` (each Submit carries a round id the prompt names its marks
-under): every ticked sent mark gets a green ✓ at its top-right corner, phone
-and desktop alike, while sent marks show, and the status line says **n done ·
-Approve all**. A tap or click on a ✓ approves that mark — it leaves the layer,
-undoably; nothing removes a mark without it. On the phone a fresh ✓ ignores
+under; a run of strokes that is one remark is listed as one range, `p2 m4–m9`):
+ticked sent marks that sit together share one green ✓ at their top-right
+corner, phone and desktop alike, while sent marks show, and the status line
+says **n done · Approve all** (one per ✓). A tap or click on a ✓ approves that
+group — its marks leave the layer, undoably; nothing removes a mark without it.
+While marking, each remark (marks that sit together, regrouped stroke by stroke)
+has its own Submit pin just outside it, over no mark, which sends it alone.
+The agent tab a Submit goes to has a model chip beside it (desktop strip;
+phone head while marking): it opens that tab's own model list, so the next
+round can run on another model. On the phone a fresh ✓ ignores
 taps for a moment, so a pen mid-stroke cannot approve. Ticks die with the
 agent's session (at most a day) and with an undone apply round; the marks stay.
 
