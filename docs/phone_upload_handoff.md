@@ -417,3 +417,67 @@ the rerun). Not run live; `npm run backend:stale` not run (worktree).
   backend keeps it but the next whole write from this build replaces the
   object). Spreading `...stored` would close it but also carry
   `browser_client` into lockdown; left as the plan specified.
+
+### Review C
+
+Reviewed `73070ede` + `01255275`.
+
+#### Fixed (`6e879479`, `fix(mobile): inbox Undo is not undone by a read in flight; Keep merges storage`)
+
+- **A read in flight paints an undone row back.** A poll (or focus catch-up)
+  that read `phone_uploads_list` before a confirmed Undo answered after the
+  optimistic drop and put the row back; if it also landed after the
+  post-undo re-read, the dead row stayed until the next poll (10 s). Same
+  for the global-file delete (sibling). `InboxIndicator` now bumps a write
+  counter when a delete/undo starts and ends and drops any answer from a
+  read begun before. Test: *a read in flight when Undo is confirmed does not
+  paint the row back*.
+- **Keep lost across viewers of one storage.** `keep` and the prune wrote
+  the kept ids from this mount's state alone, so a second browser tab of
+  the web client (same origin, `AppShell` → `HeaderBar` → the indicator)
+  erased the other tab's Keep on its next Keep/prune. Both now merge what
+  `localStorage` holds first (still try/catch, `storageKey`). Test: *Keep
+  never drops a Keep another viewer of the same storage made meanwhile*.
+
+Checked and fine:
+
+- `#[serde(flatten)] extra`: named fields are consumed first, so `extra`
+  only ever holds unknown keys — no collision, no double write; `None`s still
+  skip. `Option<u16>`/`null` values deserialize through the flatten buffer as
+  before; the legacy-key test and the `{}` default test still pass. Schema is
+  plain lib code (no Tauri), daemon gates were green in step C.
+- `merge_settings_patch` is a top-level shallow replace, so the frontend
+  writers decide the block: `setMailGate` and `MobileIndicator` spread
+  `stored`; `apply`/`detectServeSettings` carry both new keys; lockdown
+  carries `project_uploads` and leaves `browser_client` out as documented.
+- Poll is `usePoll` (stops blurred/hidden, catch-up on return); the menu is
+  inline (not portaled) under the header, so it inherits `color`. Armed key
+  is per id, so a refresh that reorders rows can only re-arm, never confirm
+  another row. Indicator renders only while files or un-kept uploads list.
+- i18n: all 13 new keys in en/de/fr/es/it with placeholders; both untested
+  rows present; no new `any`, no new lint warnings.
+
+#### Verdicts on step C's flagged items
+
+- *Badge label counts uploads*: as the plan says (one count); note the
+  menu's `aria-label` also stays "Sent from your phone" when it lists only
+  uploads. Left for the user.
+- *Keep per viewer / phone can still undo*: confirmed, review B's open item.
+- *Whole-object writers drop a newer build's keys*: confirmed pre-existing,
+  narrow (only the three Serve/lockdown writers); left as planned.
+
+#### Flagged for user (not changed)
+
+- The Keep prune runs on any successful list. `phone_uploads_list` answers
+  an empty list when `projects.json` is unreadable (`unwrap_or_default`), so
+  such a read un-keeps every row and they show again on the next good read.
+- Turning *Project files* off keeps `project_uploads` stored on (the switch
+  greys out checked); turning files back on re-opens uploads without a
+  second confirmation. Matches decision 2, noted for awareness.
+
+#### Gates (Linux, after `6e879479`)
+
+`scripts/gates.sh` (frontend change only): brand, whitespace, lint-fe,
+`npm run build`, vitest `--changed` (4 files / 33 tests, `InboxIndicator`
+9, +2) — all PASS; both new tests fail against `73070ede`'s component.
+Rust gates skipped (no Rust change). Not run live.
