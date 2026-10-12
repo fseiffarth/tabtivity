@@ -210,6 +210,10 @@ export function describeFileErrorKey(e: unknown): TranslationKey {
   if (/permission|denied|eacces/i.test(raw)) {
     return "fileError.permission";
   }
+  // A viewer save refused because the file is a link (D1, `open_confined`).
+  if (/is a link; viewers do not save through links/.test(raw)) {
+    return "fileError.link";
+  }
   // A remote stat/metadata failure means the host doesn't have this path — on a
   // remote project that's overwhelmingly a local-only file (never synced), which
   // is the actionable thing to say. An explicit "no such file" says the same.

@@ -9470,6 +9470,7 @@ export const enSource = {
   "fileError.missing": "This file no longer exists.",
   "fileError.remoteRead": "Couldn't read this file from the remote host. Check the connection and try again.",
   "fileError.open": "Couldn't open this file.",
+  "fileError.link": "This file is a link, so it was not saved. Viewers never save through links; open the file the link points to instead.",
   "startup.opening": "Opening your workspace…",
   "startup.ready": "Workspace ready",
   "setDefaultApp.errNoProjectFile": "This project has no project file.",

@@ -225,9 +225,13 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
 /// The phone's drop boxes (`outbox.rs`, `inbox.rs`) walk, list, read, create
 /// and delete through the same handles ([`ProjectDir::open_root`],
 /// [`ProjectDir::lookup_dir`], [`ProjectDir::create_dir`],
-/// [`ProjectDir::create_file`], [`ProjectDir::remove_file`]).
+/// [`ProjectDir::create_file`], [`ProjectDir::remove_file`]). So do the
+/// desktop viewers' absolute-path reads and saves
+/// (`commands::fs::open_confined`, [`ProjectDir::lookup_file`],
+/// [`ProjectDir::open_existing_for_write`]) and mail's "Save to project"
+/// (`commands::mail`), hence the crate-wide visibility.
 #[cfg(unix)]
-pub(super) struct ProjectDir(fs::File);
+pub(crate) struct ProjectDir(fs::File);
 
 #[cfg(unix)]
 impl ProjectDir {
@@ -245,7 +249,7 @@ impl ProjectDir {
     }
 
     /// The project root itself, held open — the one folder opened by path.
-    pub(super) fn open_root(root: &Path) -> Result<Self, FilesError> {
+    pub(crate) fn open_root(root: &Path) -> Result<Self, FilesError> {
         let root = canonical_root(root)?;
         fs::File::open(&root)
             .ok()
@@ -284,7 +288,7 @@ impl ProjectDir {
     /// The folder `name` in this one: `Ok(None)` when nothing has that name,
     /// `Err(())` when something does but is not a plain folder (a link, a
     /// file) — never followed either way.
-    pub(super) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
+    pub(crate) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
         let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_NONBLOCK | libc::O_CLOEXEC;
         match self.openat(name, flags, 0) {
             Ok(dir) => Ok(Some(Self(dir))),
@@ -296,7 +300,7 @@ impl ProjectDir {
     /// Creates the folder `name` here unless something already has that name
     /// (`mkdirat` never follows a link at it). Open it with [`Self::lookup_dir`],
     /// which refuses a link standing there.
-    pub(super) fn create_dir(&self, name: &str) -> std::io::Result<()> {
+    pub(crate) fn create_dir(&self, name: &str) -> std::io::Result<()> {
         use std::os::fd::AsRawFd;
         let c_name = segment_cstr(name)?;
         // SAFETY: a live directory descriptor and a NUL-terminated name.
@@ -311,9 +315,59 @@ impl ProjectDir {
 
     /// A new regular file `name` here, for writing: never an existing name
     /// (`AlreadyExists`), never through a link (`O_EXCL` does not follow one).
-    pub(super) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
+    pub(crate) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
         let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
         self.openat(name, flags, 0o666)
+    }
+
+    /// The held folder's own handle, for its metadata.
+    pub(crate) fn into_file(self) -> fs::File {
+        self.0
+    }
+
+    /// The regular file `name` in this one, opened for reading, with its
+    /// metadata: `Ok(None)` when nothing has that name, `Err(())` when
+    /// something does but is not a plain file (a link, a folder, a FIFO) —
+    /// never followed either way. The Windows twin has the same contract.
+    pub(crate) fn lookup_file(&self, name: &str) -> Result<Option<(fs::File, fs::Metadata)>, ()> {
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        match self.openat(name, flags, 0) {
+            Ok(file) => match file.metadata() {
+                Ok(meta) if meta.is_file() => Ok(Some((file, meta))),
+                _ => Err(()),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// The existing regular file `name` here, opened for writing and emptied
+    /// — an in-place save that keeps its inode, owner and mode. `Ok(None)`
+    /// when nothing has that name. A link at the name (dangling or not) is
+    /// refused, never followed, and so is anything but a regular file; the
+    /// file is truncated only after its own descriptor proved it regular.
+    pub(crate) fn open_existing_for_write(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
+        // Non-blocking, so a FIFO swapped in is refused below, not waited on.
+        let flags = libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        let file = match self.openat(name, flags, 0) {
+            Ok(file) => file,
+            Err(error) => {
+                return match error.raw_os_error() {
+                    Some(libc::ENOENT) => Ok(None),
+                    // `O_NOFOLLOW` on a link: ELOOP (EMLINK on the BSD lineage).
+                    Some(libc::ELOOP) | Some(libc::EMLINK) => Err(WriteRefusal::Link),
+                    // A folder, or a FIFO nobody reads.
+                    Some(libc::EISDIR) | Some(libc::ENXIO) => Err(WriteRefusal::NotFile),
+                    _ => Err(WriteRefusal::Io(error)),
+                }
+            }
+        };
+        let meta = file.metadata().map_err(WriteRefusal::Io)?;
+        if !meta.is_file() {
+            return Err(WriteRefusal::NotFile);
+        }
+        file.set_len(0).map_err(WriteRefusal::Io)?;
+        Ok(Some(file))
     }
 
     /// Unlinks `name` in this folder — a link itself, never what it points at.
@@ -406,6 +460,17 @@ impl ProjectDir {
             _ => None,
         }
     }
+}
+
+/// Why a held folder would not hand out a name for an in-place write
+/// ([`ProjectDir::open_existing_for_write`]).
+#[derive(Debug)]
+pub(crate) enum WriteRefusal {
+    /// A symbolic link (dangling or not), a junction or another reparse point.
+    Link,
+    /// A folder, FIFO, socket or device — anything but a regular file.
+    NotFile,
+    Io(std::io::Error),
 }
 
 /// One [`plain_segment`] as the C string `openat` and friends take; anything

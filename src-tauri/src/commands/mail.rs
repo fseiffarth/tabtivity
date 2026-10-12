@@ -4916,8 +4916,8 @@ pub async fn mail_attachment_save_to_project(
         // folder existed would otherwise stage somebody's mail on the next
         // `git add -A`. Best-effort: a project with no git and no writable
         // `.gitignore` still gets its attachment.
-        let _ = crate::commands::projects::ensure_generated_dir_ignored(&root, &emails_dir_name(&root));
-        let emails = emails_dir_in(&root)?;
+        let name = emails_dir_name(&root);
+        let _ = crate::commands::projects::ensure_generated_dir_ignored(&root, &name);
 
         // The filename is the message's, so it is sanitized (no path component,
         // no traversal, no control/bidi trickery) before being joined under the
@@ -4926,9 +4926,12 @@ pub async fn mail_attachment_save_to_project(
         let safe = defuse_agent_instruction_name(
             mail_sanitize::sanitize_attachment_name(&meta.filename).value,
         );
-        let target = write_unique_in_dir(&emails, &safe, &bytes)?;
+        let target = save_into_emails_dir(&root, &name, &safe, &bytes)?;
+        // By path, after the handle is closed: a link swapped in for the new
+        // file can at most get the download mark (macOS quarantine, Windows
+        // Zone.Identifier) onto its target; the bytes never follow it.
         crate::services::web_safety::mark_downloaded(&target);
-        Ok(target.to_string_lossy().into_owned())
+        Ok(crate::commands::fs::display_path(&target))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -4940,39 +4943,85 @@ fn emails_dir_name(root: &Path) -> String {
     crate::commands::projects::generated_dir_name(root, crate::brand::Name::EMAILS_DIR)
 }
 
-/// `<root>/tabtivity-emails`, created if missing, and **refused unless it is a real
-/// directory directly inside the project**.
+/// Save `bytes` as `name` (or `name (2)`, `name (3)`, …) in the folder
+/// `folder` directly inside the project at `root`, creating that folder if it
+/// is missing, and return the path written — **for display only**.
 ///
 /// The project tree is attacker-controlled — a cloned repo, or an agent working
 /// in it — and the write happens in Tabtivity's own, unfenced process. A committed
 /// `tabtivity-emails -> ~/.config/autostart` would otherwise turn "save this
 /// attachment" into a file dropped wherever the link points, and for a fenced
-/// agent that is a way out of its fence.
-fn emails_dir_in(root: &Path) -> Result<PathBuf, String> {
-    let name = emails_dir_name(root);
-    let emails = root.join(&name);
-    match std::fs::symlink_metadata(&emails) {
-        Ok(meta) if meta.file_type().is_dir() => {}
-        Ok(_) => {
-            return Err(format!(
-                "{name} in this project is not a plain folder, so nothing was saved into it"
-            ))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // `create_dir`, not `create_dir_all`: the project root must already
-            // exist, and nothing above it is ours to create.
-            std::fs::create_dir(&emails).map_err(|e| e.to_string())?;
-        }
-        Err(e) => return Err(e.to_string()),
-    }
-    // Belt and braces for a root that is itself reached through links: the
-    // folder's real parent must be the project's real root.
+/// agent that is a way out of its fence. So nothing is resolved by path after a
+/// check (threat recheck gap 31): the root is opened once, the folder is made
+/// with `mkdirat` and opened relative to it without following a link
+/// (`files::ProjectDir`, `openat(O_NOFOLLOW)` / `NtCreateFile` with
+/// `FILE_OPEN_REPARSE_POINT`), and the file is created relative to that held
+/// folder. A folder swapped for a link after it was opened changes nothing:
+/// the save lands in the real folder the handle holds.
+///
+/// Each candidate is created `O_CREAT|O_EXCL|O_NOFOLLOW` (`FILE_CREATE` on
+/// Windows), so "is it free?" and "write it" are one atomic step and an
+/// existing file *or a link* at the name is never written through: two mails
+/// can carry an `invoice.pdf`, and a save never clobbers a file already there.
+fn save_into_emails_dir(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    let emails = open_emails_dir(root, folder)?;
+    let saved = save_unique_in(&emails, name, bytes)?;
     let real_root = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
-    let real_emails = std::fs::canonicalize(&emails).map_err(|e| e.to_string())?;
-    if real_emails.parent() != Some(real_root.as_path()) {
-        return Err("the attachment folder resolves outside the project".into());
+    Ok(real_root.join(folder).join(saved))
+}
+
+/// The folder `folder` directly inside the project at `root`, made if missing
+/// and held open; refused when something other than a plain folder (a link,
+/// a file) has its name.
+fn open_emails_dir(
+    root: &Path,
+    folder: &str,
+) -> Result<crate::services::mobile_control::files::ProjectDir, String> {
+    use crate::services::mobile_control::files::ProjectDir;
+    let not_plain = || format!("{folder} in this project is not a plain folder, so nothing was saved into it");
+    let project = ProjectDir::open_root(root).map_err(|_| "the project folder is not available".to_string())?;
+    // `mkdirat`, never `create_dir_all`: the project root must already exist,
+    // nothing above it is ours to create, and a link at the name is left alone
+    // (the lookup below refuses it).
+    project.create_dir(folder).map_err(|e| e.to_string())?;
+    let emails = match project.lookup_dir(folder) {
+        Ok(Some(dir)) => dir,
+        Ok(None) => return Err(format!("{folder} vanished from this project, so nothing was saved")),
+        Err(()) => return Err(not_plain()),
+    };
+    Ok(emails)
+}
+
+/// Create `name`, or `name (2)`, `name (3)`, … with the extension kept, in the
+/// held folder `emails` and write `bytes` to it; the name used is returned.
+fn save_unique_in(
+    emails: &crate::services::mobile_control::files::ProjectDir,
+    name: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
+    use std::io::Write;
+    let path = Path::new(name);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+    let ext = path.extension().and_then(|s| s.to_str());
+    for n in 1..10_000 {
+        let candidate = match (n, ext) {
+            (1, _) => name.to_string(),
+            (_, Some(ext)) => format!("{stem} ({n}).{ext}"),
+            (_, None) => format!("{stem} ({n})"),
+        };
+        match emails.create_file(&candidate) {
+            Ok(mut file) => {
+                file.write_all(bytes).map_err(|e| e.to_string())?;
+                return Ok(candidate);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            // ELOOP: an `O_NOFOLLOW` open of a link that appeared since.
+            #[cfg(unix)]
+            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => continue,
+            Err(e) => return Err(e.to_string()),
+        }
     }
-    Ok(real_emails)
+    Err("too many files with this name in the attachment folder".into())
 }
 
 /// File names an agent CLI reads as instructions when it works in (or below)
@@ -4994,38 +5043,6 @@ fn defuse_agent_instruction_name(name: String) -> String {
     } else {
         name
     }
-}
-
-/// Write `bytes` into `dir` under `name`, or `name (2)`, `name (3)`, … with the
-/// extension preserved — never clobbering. A save into a project tree must never
-/// silently overwrite a file already sitting there: two mails can carry an
-/// `invoice.pdf`.
-///
-/// Each candidate is opened `create_new` (plus `O_NOFOLLOW`), so "is it free?"
-/// and "write it" are one atomic step: an existing file *or a dangling symlink*
-/// is simply taken, and a link planted between a check and the write cannot be
-/// followed because there is no separate check.
-fn write_unique_in_dir(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
-    let path = Path::new(name);
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
-    let ext = path.extension().and_then(|s| s.to_str());
-    for n in 1..10_000 {
-        let candidate = match (n, ext) {
-            (1, _) => name.to_string(),
-            (_, Some(ext)) => format!("{stem} ({n}).{ext}"),
-            (_, None) => format!("{stem} ({n})"),
-        };
-        let p = dir.join(candidate);
-        match crate::commands::projects::write_no_follow(&p, bytes, true) {
-            Ok(()) => return Ok(p),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            // ELOOP: an `O_NOFOLLOW` open of a link that appeared since.
-            #[cfg(unix)]
-            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => continue,
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    Err("too many files with this name in the attachment folder".into())
 }
 
 /// Bounded bytes for in-pane preview. Nothing is written to disk; the pane
@@ -5151,34 +5168,98 @@ mod tests {
 
     // ── Saving into a project ───────────────────────────────────────────────
 
+    const EMAILS: &str = concat!(crate::app_slug!(), "-emails");
+
     #[cfg(unix)]
     #[test]
     fn the_emails_folder_must_be_a_real_folder_inside_the_project() {
         let project = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(outside.path(), project.path().join(concat!(crate::app_slug!(), "-emails"))).unwrap();
-        assert!(emails_dir_in(project.path()).is_err(), "a linked folder is refused");
+        std::os::unix::fs::symlink(outside.path(), project.path().join(EMAILS)).unwrap();
+        let refused = save_into_emails_dir(project.path(), EMAILS, "a.pdf", b"x").unwrap_err();
+        assert!(refused.contains("not a plain folder"), "{refused}");
+        assert!(!outside.path().join("a.pdf").exists(), "nothing went through the link");
+
+        // A file standing at the name is refused the same way.
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join(EMAILS), "x").unwrap();
+        assert!(save_into_emails_dir(project.path(), EMAILS, "a.pdf", b"x").is_err());
 
         let project = tempfile::tempdir().unwrap();
-        let made = emails_dir_in(project.path()).unwrap();
-        assert!(made.is_dir());
-        assert_eq!(made, std::fs::canonicalize(project.path()).unwrap().join(concat!(crate::app_slug!(), "-emails")));
+        let made = save_into_emails_dir(project.path(), EMAILS, "a.pdf", b"payload").unwrap();
+        assert_eq!(made, std::fs::canonicalize(project.path()).unwrap().join(EMAILS).join("a.pdf"));
+        assert_eq!(std::fs::read(&made).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn a_save_makes_the_folder_and_never_clobbers_a_file_already_there() {
+        let project = tempfile::tempdir().unwrap();
+        let first = save_into_emails_dir(project.path(), EMAILS, "invoice.pdf", b"one").unwrap();
+        let second = save_into_emails_dir(project.path(), EMAILS, "invoice.pdf", b"two").unwrap();
+        let folder = project.path().join(EMAILS);
+        assert!(folder.is_dir());
+        assert_eq!(first.file_name().unwrap(), "invoice.pdf");
+        assert_eq!(second.file_name().unwrap(), "invoice (2).pdf");
+        assert_eq!(std::fs::read(folder.join("invoice.pdf")).unwrap(), b"one");
+        assert_eq!(std::fs::read(folder.join("invoice (2).pdf")).unwrap(), b"two");
     }
 
     #[cfg(unix)]
     #[test]
     fn a_save_never_follows_or_clobbers_what_is_already_there() {
-        let dir = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
+        let folder = project.path().join(EMAILS);
+        std::fs::create_dir(&folder).unwrap();
         let victim = elsewhere.path().join("x.desktop");
         // A dangling link under the attachment's own name.
-        std::os::unix::fs::symlink(&victim, dir.path().join("x.desktop")).unwrap();
-        std::fs::write(dir.path().join("x (2).desktop"), "mine").unwrap();
+        std::os::unix::fs::symlink(&victim, folder.join("x.desktop")).unwrap();
+        std::fs::write(folder.join("x (2).desktop"), "mine").unwrap();
 
-        let written = write_unique_in_dir(dir.path(), "x.desktop", b"payload").unwrap();
-        assert_eq!(written, dir.path().join("x (3).desktop"));
+        let written = save_into_emails_dir(project.path(), EMAILS, "x.desktop", b"payload").unwrap();
+        assert_eq!(written.file_name().unwrap(), "x (3).desktop");
         assert!(!victim.exists(), "the link was not written through");
-        assert_eq!(std::fs::read_to_string(dir.path().join("x (2).desktop")).unwrap(), "mine");
+        assert_eq!(std::fs::read_to_string(folder.join("x (2).desktop")).unwrap(), "mine");
+        assert_eq!(std::fs::read(folder.join("x (3).desktop")).unwrap(), b"payload");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_emails_folder_swapped_for_a_link_after_it_was_opened_gets_nothing_through_it() {
+        // Gap 31: the folder is checked, then swapped for a link to somewhere
+        // the agent wants a file. The save goes into the folder the handle
+        // holds (now renamed), never into the link's target.
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let emails = open_emails_dir(project.path(), EMAILS).unwrap();
+        let moved = project.path().join("moved");
+        std::fs::rename(project.path().join(EMAILS), &moved).unwrap();
+        std::os::unix::fs::symlink(outside.path(), project.path().join(EMAILS)).unwrap();
+
+        let name = save_unique_in(&emails, "a.pdf", b"payload").unwrap();
+        assert_eq!(name, "a.pdf");
+        assert_eq!(std::fs::read(moved.join("a.pdf")).unwrap(), b"payload");
+        assert!(!outside.path().join("a.pdf").exists(), "nothing landed through the link");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_project_root_swapped_for_a_link_after_it_was_opened_gets_nothing_through_it() {
+        // The same race one level up: the project root itself is opened once,
+        // so a root renamed away and replaced by a link is not walked again.
+        let base = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = base.path().join("p");
+        std::fs::create_dir(&root).unwrap();
+        let held = crate::services::mobile_control::files::ProjectDir::open_root(&root).unwrap();
+        let moved = base.path().join("moved");
+        std::fs::rename(&root, &moved).unwrap();
+        std::os::unix::fs::symlink(outside.path(), &root).unwrap();
+        held.create_dir(EMAILS).unwrap();
+        let emails = held.lookup_dir(EMAILS).unwrap().unwrap();
+        save_unique_in(&emails, "a.pdf", b"payload").unwrap();
+        assert!(moved.join(EMAILS).join("a.pdf").is_file());
+        assert!(!outside.path().join(EMAILS).exists());
     }
 
     #[test]

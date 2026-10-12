@@ -1288,8 +1288,15 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
           try {
             const rendered = await rasterizeInto(pdfAbs, pngAbs);
             if (rendered && !cancelled) refreshImage(obj.src);
-          } catch {
-            // A transient read failure (mid-write) — the next tick retries.
+          } catch (e) {
+            // A transient read failure (mid-write) — the next tick retries. A
+            // PNG that is a link is refused for good (viewers never save
+            // through one): say so once and leave this PDF version alone
+            // until it is recompiled, instead of re-rastering every tick.
+            if (describeFileErrorKey(e) === "fileError.link") {
+              mtimesRef.current.set(pdfAbs, mt);
+              if (!cancelled) setNotice(t("fileError.link"));
+            }
           } finally {
             if (!cancelled) markTexBusy(obj.id, false);
           }
@@ -1300,7 +1307,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       cancelled = true;
       clearInterval(id);
     };
-  }, [deck, path, scope, paneVisible, texBusyIds, rasterizeInto, refreshImage, markTexBusy]);
+  }, [deck, path, scope, paneVisible, texBusyIds, rasterizeInto, refreshImage, markTexBusy, t]);
 
   // --- keyboard ----------------------------------------------------------
   const onKeyDown = useCallback(

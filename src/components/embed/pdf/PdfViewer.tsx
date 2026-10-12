@@ -23,7 +23,6 @@ import {
   useFileSource,
   usePaneVisible,
   readFileBytes,
-  readFileText,
   writeFileBytes,
   fileMtime,
   fileSize,
@@ -1941,12 +1940,13 @@ function PdfCanvas({
     setMakingDeck(true);
     try {
       const deckPath = deckPathForPdf(path);
-      let exists = true;
-      try {
-        await readFileText(deckPath, scope);
-      } catch {
-        exists = false;
-      }
+      // "Is there a deck?" by stat, not by reading it: a read also fails for a
+      // deck that is not UTF-8 text or is over the text cap, and that deck must
+      // be opened (and shown broken), never written over with an empty one.
+      const exists = await fileMtime(deckPath, scope).then(
+        () => true,
+        () => false,
+      );
       if (!exists) {
         const deck = emptyDeck(basename(path));
         await writeFileBytes(

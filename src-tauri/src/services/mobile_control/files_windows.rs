@@ -11,7 +11,10 @@
 //!
 //! A root agent's mail `attach` (`services::mail_attach`) reads through the
 //! same walk ([`ProjectDir::open_root`], [`ProjectDir::lookup_dir`],
-//! [`ProjectDir::lookup_file`]), hence the crate-wide visibility.
+//! [`ProjectDir::lookup_file`]), and the viewers' absolute-path reads and
+//! saves (`commands::fs::open_confined`) and mail's "Save to project"
+//! (`commands::mail`) read, write and create through it, hence the
+//! crate-wide visibility.
 
 use std::{
     fs,
@@ -35,8 +38,9 @@ use ::windows::{
     },
     Win32::{
         Foundation::{
-            ERROR_NO_MORE_FILES, HANDLE, NTSTATUS, OBJ_CASE_INSENSITIVE, STATUS_OBJECT_NAME_COLLISION,
-            STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, UNICODE_STRING,
+            ERROR_NO_MORE_FILES, HANDLE, NTSTATUS, OBJ_CASE_INSENSITIVE, STATUS_FILE_IS_A_DIRECTORY,
+            STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
+            UNICODE_STRING,
         },
         Storage::FileSystem::{
             FileDispositionInfo, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
@@ -51,7 +55,7 @@ use ::windows::{
     },
 };
 
-use super::{canonical_root, plain_segment, valid_rel, FilesError};
+use super::{canonical_root, plain_segment, valid_rel, FilesError, WriteRefusal};
 
 pub(crate) struct ProjectDir(fs::File);
 
@@ -171,6 +175,11 @@ impl ProjectDir {
         }
     }
 
+    /// The held folder's own handle, for its metadata.
+    pub(crate) fn into_file(self) -> fs::File {
+        self.0
+    }
+
     /// The regular file `name` in this one, opened for reading, with its
     /// metadata: `Ok(None)` when nothing has that name, `Err(())` when
     /// something does but is not a plain file (a reparse point, a folder) —
@@ -194,7 +203,7 @@ impl ProjectDir {
 
     /// Creates the folder `name` here unless something already has that name.
     /// Open it with [`Self::lookup_dir`], which refuses a reparse point there.
-    pub(in crate::services::mobile_control) fn create_dir(&self, name: &str) -> std::io::Result<()> {
+    pub(crate) fn create_dir(&self, name: &str) -> std::io::Result<()> {
         match self.nt_create(
             name,
             FILE_LIST_DIRECTORY | SYNCHRONIZE,
@@ -210,8 +219,41 @@ impl ProjectDir {
 
     /// A new regular file `name` here, for writing: never an existing name
     /// (`AlreadyExists`), never through a reparse point.
-    pub(in crate::services::mobile_control) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
+    pub(crate) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
         self.nt_create(name, FILE_GENERIC_WRITE, FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_ATTRIBUTE_NORMAL)
+    }
+
+    /// The existing regular file `name` here, opened for writing and emptied
+    /// — an in-place save that keeps the file's identity and ACL. `Ok(None)`
+    /// when nothing has that name. `FILE_OPEN_REPARSE_POINT` opens a symbolic
+    /// link or junction itself, which the handle's attributes then refuse;
+    /// the file is truncated only after its own handle proved it regular.
+    pub(crate) fn open_existing_for_write(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
+        let file = match self.nt_create(
+            name,
+            FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES,
+            FILE_OPEN,
+            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
+            Default::default(),
+        ) {
+            Ok(file) => file,
+            Err(error) => {
+                return match error.kind() {
+                    std::io::ErrorKind::NotFound => Ok(None),
+                    std::io::ErrorKind::IsADirectory => Err(WriteRefusal::NotFile),
+                    _ => Err(WriteRefusal::Io(error)),
+                }
+            }
+        };
+        let meta = file.metadata().map_err(WriteRefusal::Io)?;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+            return Err(WriteRefusal::Link);
+        }
+        if !meta.is_file() {
+            return Err(WriteRefusal::NotFile);
+        }
+        file.set_len(0).map_err(WriteRefusal::Io)?;
+        Ok(Some(file))
     }
 
     /// Deletes the non-folder `name` here — a reparse point itself, never
@@ -352,6 +394,8 @@ fn nt_error(status: NTSTATUS) -> std::io::Error {
         std::io::ErrorKind::NotFound.into()
     } else if status == STATUS_OBJECT_NAME_COLLISION {
         std::io::ErrorKind::AlreadyExists.into()
+    } else if status == STATUS_FILE_IS_A_DIRECTORY {
+        std::io::ErrorKind::IsADirectory.into()
     } else {
         std::io::Error::other(format!("NTSTATUS {:#010x}", status.0))
     }

@@ -9234,6 +9234,7 @@ export const dict: Dict = {
   "fileError.missing": "Questo file non esiste più.",
   "fileError.remoteRead": "Impossibile leggere questo file dall’host remoto. Controlla la connessione e riprova.",
   "fileError.open": "Impossibile aprire questo file.",
+  "fileError.link": "Questo file è un collegamento, quindi non è stato salvato. I visualizzatori non salvano mai attraverso un collegamento; apri invece il file a cui punta.",
   "startup.opening": "Apertura dello spazio di lavoro…",
   "startup.ready": "Spazio di lavoro pronto",
   "setDefaultApp.errNoProjectFile": "Questo progetto non ha un file di progetto.",
