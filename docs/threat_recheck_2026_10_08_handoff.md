@@ -3397,3 +3397,110 @@ file is in this step.
    since they were shown"); after the panel refreshes, ✓ files it.
 6. Settings → MCP security → audit: a refused call (e.g. a tool you narrowed
    in session access) shows `access_narrowed` as its reason.
+
+## Agent step 6 — reviewer — 2026-10-12
+
+**Range:** `90c7dd04..58f8f450` plus handoff `bf4b4582`. **Fix commit:**
+`5993975a` fix(root_mcp): proposal log sized as written; scoped card of a
+hidden mail event stays external · this handoff commit.
+
+**Checked:**
+- `off` writes on the capture path: sandbox rebuild, capture, `MAX_ROWS`,
+  grant check, `apply_change_at` pre-checks (a concurrent user edit
+  conflicts and nothing is lost), Undo (`same` against the post row, so a
+  later user edit conflicts and is never overwritten), the pending cap
+  (counts only pending rows, so it bites only with 100 staged CalDAV writes),
+  failed applies (transactional, nothing lands). `Fixture::mode` deleting the
+  log is test-only; nothing in production deletes it.
+- CalDAV staging: `touches_caldav` against the window's push decision
+  (`caldav.ts::pushRow` keys only on `row.calendar_id` → account ref, which
+  is what the backend reads). Moves both ways (the delete row's `post` keeps
+  its `caldav_href`; approval hands back delete + upsert), deletes,
+  recurrence edits, VTODO cards, a calendar row by its own id,
+  missing/unreadable `accounts.json`, `caldav_href` without an account.
+  `accounts_path_in(state)` is the same path as `caldav_dir()`. Mail tools and
+  `calendar_import_ics` skip the review layer and write no calendar row. The
+  schedule MCP lane writes no calendar row. Phone agents use the same `/mcp`
+  lane.
+- `from_mail` persistence: `update_event_at` (window, phone
+  `headless_board`, web client), CalDAV merge, `move_events_at` /
+  `relocate_event` (keep `extra`), `calendar_save` / `restore_calendar`
+  (frontend objects keep unknown keys), clipboard copy, ICS/CalDAV
+  serializers (known fields only, so the stamp never reaches a server), old
+  JSON (test). Cards: the `mail` link comes from `taskFromMail` (AI to-do as
+  well), and the merge and the card dialog keep it.
+- Row views: every root tool that echoes a row (`calendar_list`, `todo_list`,
+  all write receipts, `todo_move`). `calendar_free_busy`, `proposals_list`
+  and the sweeps carry no titles. The overlay dock injects no row text.
+  `redact_value` is the mail lane's `redact_urls`, already tested there.
+- Gap 34: the panel passes back the `mail_agent_drafts` objects unchanged
+  (`origin` round-trips), so `agent_rows` compares table to table, and Send
+  reads the same table.
+- `refusal_reason`: only `&'static str` reaches the audit. Prefixes match the
+  constants and formatted texts (`unknown tool '…'`, `Change touches …; split
+  it`). i18n: `rootReview.settingHelp` changed in all five dictionaries.
+
+**Bugs found and fixed (`5993975a`):**
+1. **The proposal log was size-checked compact but written pretty.** `save`
+   compared `serde_json::to_vec` with `MAX_LOG_BYTES`, while
+   `write_json_atomic` writes pretty JSON and `load` refuses a *file* over
+   the cap. So a save could succeed and the next `load` would fail. From
+   then on every review call failed (under `off` every write, at the other
+   levels reads too), and so did `list`, so the panel showed nothing. Sibling
+   hazard: with `off` writes now logged, 200 decided entries with big rows (a
+   column reindex) can fill 8 MiB. The refused save came *after* the
+   automatic write had landed, so the agent was told it failed and retried
+   (a duplicate), and every later write landed the same way, unreported to
+   the window. Fix: `save` sizes entries as written and evicts the oldest
+   decided entries until the log fits. Test
+   `root_mcp_review::a_full_history_makes_room_instead_of_failing_a_landed_write`.
+2. **E3 bypass in scoped sessions.** A scoped tab reads a sandbox filtered
+   by `Access::filter_calendar`. A card in a visible calendar, linked to a
+   `from_mail` event in a hidden calendar, found no event, so `task_external`
+   was false: the card was served unmarked with its URLs. Now a link whose
+   event is not in view reads as external when `access.calendars.all` is
+   false. A scoped session cannot tell hidden from deleted, so it fails
+   closed. Test
+   `root_mcp_review::a_card_from_a_hidden_mail_event_stays_external_in_a_scoped_view`.
+3. Cosmetic: `refusal_reason` had been inserted between `handle_message`
+   and its doc comment. The comment is moved back.
+
+Both tests were checked to fail with their fix disabled. Docs:
+`context/root_console.md` (the log's size eviction; the scoped-card rule).
+
+**Gates (at `5993975a`):** `npm run build` ok; `npm test` 803 files / 8062
+tests passed; `cargo test --workspace` 4285 passed, 0 failed, 4 ignored;
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`
+3787 + 1 passed, 4 ignored (no flake); `npm run lint` (via `rtk proxy`) 0
+errors, 28 warnings (unchanged); the three clippy gates are clean;
+`scripts/brand-check.sh` ok; `scripts/privacy-check.sh` clean (staged);
+`git diff --check` clean. No path, spawn or `cfg` code was touched, so the
+Windows and `aarch64-apple-darwin` cross-checks were not run.
+`npm run backend:stale` was not run.
+
+**Flagged for user:**
+1. **`off` reads miss the tab's own staged CalDAV writes**
+   (implementer's residual). The agent adds an event to a synced calendar
+   (staged), lists, doesn't see it, and adds it again. Two pending
+   proposals, and approving both duplicates the event. The reply does say
+   `staged: true`. Option: under `off`, serve reads from the sandbox when
+   the tab has pending proposals (one log read per read).
+2. **Over-staging on board moves.** `touches_caldav` counts every captured
+   row with a `caldav_href`, including `local: true` neighbours that only
+   get a new rank. So under `off`/`destructive`, moving a local card in a
+   column holding a synced card stages the whole move. This is safe, and
+   whether the window pushes rank-only `local` rows decides if it is
+   needless.
+3. **A save failure after a landed automatic write still reports an
+   error.** After fix 1 this happens only on an IO error or when the
+   *pending* rows alone exceed 8 MiB. The write stays landed, but the
+   window isn't told and the agent may retry it.
+4. **An unreadable or corrupt `proposals.json` now blocks writes under
+   `off` too.** Before step 6, `off` never read the log. This fails closed.
+5. Pre-existing, the same laundering hazard outside E3's mail scope:
+   copy/paste of an event from a read-only or imported calendar into a
+   writable one makes it the user's own (unmarked, URLs intact). No feed
+   stamp exists to carry over.
+6. After fix 2, a scoped session reads a card as external when its linked
+   event was deleted (it can't be told apart from hidden). URLs in such a
+   card's text show as `[link]` to that session.
