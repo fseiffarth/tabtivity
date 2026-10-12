@@ -1347,6 +1347,20 @@ svg.alerts-toggle-icon {
   font-variant-numeric: tabular-nums;
   font-size: 11px;
 }
+/* A file the phone added to a project: nothing opens it from here, so a plain
+   two-line row (where · size, age, phone) in a menu item's padding instead of
+   a button. */
+.inbox-menu-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.inbox-menu-upload .inbox-menu-name {
+  flex: 0 0 auto;
+}
 .inbox-menu-delete {
   flex: 0 0 auto;
   padding: 2px 6px;

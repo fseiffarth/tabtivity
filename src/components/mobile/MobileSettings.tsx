@@ -277,7 +277,7 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
@@ -321,7 +321,9 @@ export function MobileSettings() {
           mail_reply: stored?.mail_reply,
           root_access: stored?.root_access,
           project_files: stored?.project_files,
+          project_uploads: stored?.project_uploads,
           stay_after_quit: stored?.stay_after_quit,
+          browser_client: stored?.browser_client,
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
         },
@@ -431,7 +433,9 @@ export function MobileSettings() {
           mail_reply: stored?.mail_reply,
           root_access: stored?.root_access,
           project_files: stored?.project_files,
+          project_uploads: stored?.project_uploads,
           stay_after_quit: stored?.stay_after_quit,
+          browser_client: stored?.browser_client,
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
         },
@@ -483,7 +487,10 @@ export function MobileSettings() {
           mail_reply: stored?.mail_reply,
           root_access: stored?.root_access,
           project_files: stored?.project_files,
+          project_uploads: stored?.project_uploads,
           stay_after_quit: stored?.stay_after_quit,
+          // `browser_client` is left out on purpose: lockdown closes browser
+          // access too.
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
         },
@@ -791,6 +798,13 @@ export function MobileSettings() {
         onChange={(event) => void setMailGate("project_files", event.target.checked)}
       />
       <p className="settings-help">{t("mobile.projectFilesHelp")}</p>
+      <ToggleRow
+        label={<>{t("mobile.projectUploads")} <UntestedTag id="mobile.files.upload" /></>}
+        checked={stored?.project_uploads ?? false}
+        disabled={busy || !stored?.project_files}
+        onChange={(event) => void setMailGate("project_uploads", event.target.checked)}
+      />
+      <p className="settings-help">{t("mobile.projectUploadsHelp")}</p>
       <ToggleRow
         label={<>{t("mobile.noShells")} <UntestedTag id="mobile.noShells" /></>}
         checked={stored?.shell_tabs !== true}

@@ -432,4 +432,38 @@ mod tests {
         save_settings_at(&legacy, loaded).unwrap();
         assert_eq!(storage::read_json::<Settings>(&legacy).unwrap().rev, 1);
     }
+
+    /// The Mobile host block round-trips every key through a patch: the phone
+    /// upload switch, the browser-access switch, and a key only a newer build
+    /// knows. Before these were named (or caught by `extra`), the patch that
+    /// set one erased it again.
+    #[test]
+    fn mobile_host_switches_and_unknown_keys_survive_a_patch() {
+        let key = crate::brand::MOBILE_HOST_KEY;
+        let host = serde_json::json!({
+            "enabled": true,
+            "project_files": true,
+            "project_uploads": true,
+            "browser_client": true,
+            "some_future_switch": {"a": [1, 2]}
+        });
+        let mut settings = Settings::default();
+        let patch = |json: Value| serde_json::from_value::<Map<String, Value>>(json).unwrap();
+        merge_settings_patch(&mut settings, patch(serde_json::json!({ key: host.clone() }))).unwrap();
+        let typed = settings.app_mobile_host.as_ref().unwrap();
+        assert_eq!(typed.project_uploads, Some(true));
+        assert_eq!(typed.browser_client, Some(true));
+
+        // An unrelated patch, then a write → read through the file shape.
+        merge_settings_patch(&mut settings, patch(serde_json::json!({"language": "de"}))).unwrap();
+        let written = serde_json::to_value(&settings).unwrap();
+        assert_eq!(written[key], host, "the whole block survives");
+        let back: Settings = serde_json::from_value(written).unwrap();
+        assert_eq!(serde_json::to_value(&back).unwrap()[key], host);
+
+        // Unset stays unset (the switch is off by default).
+        merge_settings_patch(&mut settings, patch(serde_json::json!({ key: {"enabled": true} }))).unwrap();
+        let written = serde_json::to_value(&settings).unwrap();
+        assert_eq!(written[key], serde_json::json!({"enabled": true}));
+    }
 }

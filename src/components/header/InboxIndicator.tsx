@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+import { storageKey } from "../../lib/brand";
 import { useT } from "../../lib/i18n";
 import { formatBytes } from "../../lib/formatBytes";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
@@ -16,6 +17,41 @@ const POLL_MS = 10_000;
 
 /** One file waiting in `<state_dir>/inbox/` (`inbox::GlobalInboxFile`). */
 export type GlobalInboxFile = { name: string; size: number; modified: number };
+
+/** A file a paired phone added to a project with **Upload here**, still
+ *  unchanged on disk (`commands::mobile_control::phone_uploads_list`: the last
+ *  24 h, newest first, one row per file). */
+export type PhoneUpload = {
+  id: string;
+  projectName: string;
+  /** `/`-separated, relative to the project folder. */
+  rel: string;
+  size: number;
+  /** Unix seconds. */
+  at: number;
+  phone?: string;
+};
+
+/** Ids of upload rows this viewer pressed **Keep** on (a JSON string array). */
+const KEPT_KEY = storageKey("inbox.keptUploads");
+
+function readKept(): string[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(KEPT_KEY) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeKept(ids: string[]) {
+  try {
+    if (ids.length === 0) localStorage.removeItem(KEPT_KEY);
+    else localStorage.setItem(KEPT_KEY, JSON.stringify(ids));
+  } catch {
+    // No storage (private window, blocked site data): Keep lasts this session.
+  }
+}
 
 /** The stored name without the `YYYYMMDD-HHMMSS-` stamp the inbox prefixes. */
 export function displayName(name: string): string {
@@ -34,10 +70,18 @@ export function displayName(name: string): string {
  * the folder and never acknowledged — it falls as files are deleted. A row
  * opens its file with the OS default app; the button itself shows the folder,
  * which is where a file is dragged on into a project.
+ *
+ * It also lists what the phone **added to projects** (Upload here) in the last
+ * 24 h while the file is unchanged: **Undo** deletes it again (armed, then
+ * confirmed, like the delete), **Keep** hides the row in this viewer only.
+ * With no global files waiting, the button opens the list instead of the
+ * folder.
  */
 export function InboxIndicator() {
   const t = useT();
   const [files, setFiles] = useState<GlobalInboxFile[]>([]);
+  const [uploads, setUploads] = useState<PhoneUpload[]>([]);
+  const [kept, setKept] = useState<string[]>(readKept);
   const [armed, setArmed] = useState<string | null>(null);
   const menuOpen = useHeaderHoverMenuStore((s) => s.openId === MENU_ID);
   const openMenu = useHeaderHoverMenuStore((s) => s.open);
@@ -49,11 +93,31 @@ export function InboxIndicator() {
   const closeTimer = useRef<number | undefined>(undefined);
 
   const load = useCallback(async () => {
-    try {
-      setFiles(await invoke<GlobalInboxFile[]>("global_inbox_list"));
-    } catch {
-      // A failed read keeps the last list rather than hiding the button.
-    }
+    // A failed read keeps the last list rather than hiding the button.
+    const loadFiles = async () => {
+      try {
+        setFiles(await invoke<GlobalInboxFile[]>("global_inbox_list"));
+      } catch {
+        // kept as is
+      }
+    };
+    const loadUploads = async () => {
+      try {
+        const listed = await invoke<PhoneUpload[]>("phone_uploads_list");
+        setUploads(listed);
+        // Keep marks only what is still listed, so the stored set stays small.
+        const ids = new Set(listed.map((u) => u.id));
+        setKept((current) => {
+          const next = current.filter((id) => ids.has(id));
+          if (next.length === current.length) return current;
+          writeKept(next);
+          return next;
+        });
+      } catch {
+        // kept as is
+      }
+    };
+    await Promise.all([loadFiles(), loadUploads()]);
   }, []);
 
   // Read now and every POLL_MS while the window is in front (`usePoll` stops
@@ -73,20 +137,22 @@ export function InboxIndicator() {
 
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 
-  // The last file deleted with the list open would otherwise leave it painted
+  const shown = uploads.filter((u) => !kept.includes(u.id));
+  const count = files.length + shown.length;
+
+  // The last row removed with the list open would otherwise leave it painted
   // over a button that is gone.
   useEffect(() => {
-    if (files.length === 0) setMenuOpen(false);
-  }, [files.length, setMenuOpen]);
+    if (count === 0) setMenuOpen(false);
+  }, [count, setMenuOpen]);
 
   // A disarmed delete: leaving the list forgets the half-made choice.
   useEffect(() => {
     if (!menuOpen) setArmed(null);
   }, [menuOpen]);
 
-  if (files.length === 0) return null;
+  if (count === 0) return null;
 
-  const count = files.length;
   const label = t("inbox.indicatorCount", { count });
 
   const reveal = () => {
@@ -115,6 +181,36 @@ export function InboxIndicator() {
     }
   };
 
+  const undo = async (id: string) => {
+    setArmed(null);
+    setUploads((current) => current.filter((u) => u.id !== id));
+    try {
+      await invoke("phone_upload_undo", { id });
+    } catch {
+      // `file_not_found`: edited, moved or gone — the re-read drops the row
+      // (only unchanged files are listed); anything else brings it back.
+    } finally {
+      void load();
+    }
+  };
+
+  const keep = (id: string) => {
+    setArmed(null);
+    setKept((current) => {
+      if (current.includes(id)) return current;
+      const next = [...current, id];
+      writeKept(next);
+      return next;
+    });
+  };
+
+  const age = (at: number) => {
+    const seconds = Math.max(0, Date.now() / 1000 - at);
+    if (seconds < 60) return t("inbox.uploads.justNow");
+    if (seconds < 3_600) return t("inbox.uploads.minutesAgo", { count: Math.floor(seconds / 60) });
+    return t("inbox.uploads.hoursAgo", { count: Math.floor(seconds / 3_600) });
+  };
+
   return (
     <div
       className="global-apps-menu inbox-indicator no-drag"
@@ -129,8 +225,13 @@ export function InboxIndicator() {
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         onClick={() => {
-          setMenuOpen(false);
           window.clearTimeout(closeTimer.current);
+          // Only uploads listed: there is no folder of theirs to show.
+          if (files.length === 0) {
+            setMenuOpen(true);
+            return;
+          }
+          setMenuOpen(false);
           void invoke("global_inbox_reveal").catch(() => undefined);
         }}
         onFocus={reveal}
@@ -146,47 +247,94 @@ export function InboxIndicator() {
           role="menu"
           aria-label={t("inbox.menuTitle")}
         >
-          <div className="tab-new-menu-group-label">
-            {t("inbox.menuTitle")} <UntestedTag id="inbox.menuTitle" />
-          </div>
-          <div className="menu-scroll-region">
-            {files.map((file) => (
-              <div key={file.name} className="inbox-menu-row">
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="tab-new-menu-item inbox-menu-open"
-                  title={t("inbox.open", { name: displayName(file.name) })}
-                  onClick={() => open(file.name)}
-                >
-                  <span className="inbox-menu-name">{displayName(file.name)}</span>
-                  <span className="inbox-menu-size">{formatBytes(file.size)}</span>
-                </button>
-                <button
-                  type="button"
-                  className={"inbox-menu-delete" + (armed === file.name ? " armed" : "")}
-                  title={t("inbox.deleteHint")}
-                  aria-label={`${t("inbox.delete")} ${displayName(file.name)}`}
-                  onClick={() =>
-                    armed === file.name ? void remove(file.name) : setArmed(file.name)
-                  }
-                >
-                  {armed === file.name ? t("inbox.deleteConfirm") : "✕"}
-                </button>
+          {files.length > 0 && (
+            <>
+              <div className="tab-new-menu-group-label">
+                {t("inbox.menuTitle")} <UntestedTag id="inbox.menuTitle" />
               </div>
-            ))}
-          </div>
-          <button
-            type="button"
-            role="menuitem"
-            className="tab-new-menu-item"
-            onClick={() => {
-              setMenuOpen(false);
-              void invoke("global_inbox_reveal").catch(() => undefined);
-            }}
-          >
-            {t("inbox.showFolder")}
-          </button>
+              <div className="menu-scroll-region">
+                {files.map((file) => (
+                  <div key={file.name} className="inbox-menu-row">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="tab-new-menu-item inbox-menu-open"
+                      title={t("inbox.open", { name: displayName(file.name) })}
+                      onClick={() => open(file.name)}
+                    >
+                      <span className="inbox-menu-name">{displayName(file.name)}</span>
+                      <span className="inbox-menu-size">{formatBytes(file.size)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={"inbox-menu-delete" + (armed === file.name ? " armed" : "")}
+                      title={t("inbox.deleteHint")}
+                      aria-label={`${t("inbox.delete")} ${displayName(file.name)}`}
+                      onClick={() =>
+                        armed === file.name ? void remove(file.name) : setArmed(file.name)
+                      }
+                    >
+                      {armed === file.name ? t("inbox.deleteConfirm") : "✕"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {shown.length > 0 && (
+            <>
+              <div className="tab-new-menu-group-label">
+                {t("inbox.uploads.title")} <UntestedTag id="desktop.inbox.phoneUploads" />
+              </div>
+              <div className="menu-scroll-region">
+                {shown.map((upload) => {
+                  const key = `upload:${upload.id}`;
+                  const where = `${upload.projectName} · ${upload.rel}`;
+                  return (
+                    <div key={upload.id} className="inbox-menu-row">
+                      <div className="inbox-menu-open inbox-menu-upload" title={where}>
+                        <span className="inbox-menu-name">{where}</span>
+                        <span className="inbox-menu-size">
+                          {[formatBytes(upload.size), age(upload.at), upload.phone].filter(Boolean).join(" · ")}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="inbox-menu-delete"
+                        title={t("inbox.uploads.keepHint")}
+                        aria-label={t("inbox.uploads.keepLabel", { name: upload.rel })}
+                        onClick={() => keep(upload.id)}
+                      >
+                        {t("inbox.uploads.keep")}
+                      </button>
+                      <button
+                        type="button"
+                        className={"inbox-menu-delete" + (armed === key ? " armed" : "")}
+                        title={t("inbox.uploads.undoHint")}
+                        aria-label={t("inbox.uploads.undoLabel", { name: upload.rel })}
+                        onClick={() => (armed === key ? void undo(upload.id) : setArmed(key))}
+                      >
+                        {armed === key ? t("inbox.uploads.undoConfirm") : t("inbox.uploads.undo")}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+          {files.length > 0 && (
+            <button
+              type="button"
+              role="menuitem"
+              className="tab-new-menu-item"
+              onClick={() => {
+                setMenuOpen(false);
+                void invoke("global_inbox_reveal").catch(() => undefined);
+              }}
+            >
+              {t("inbox.showFolder")}
+            </button>
+          )}
         </div>
       )}
     </div>

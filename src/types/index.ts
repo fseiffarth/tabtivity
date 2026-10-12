@@ -159,6 +159,11 @@ export interface Settings {
     /** A paired phone may browse and read (never change) its Mobile projects'
      * files. Unset is off; read by the sidecar per request. */
     project_files?: boolean;
+    /** A paired phone may add new files to a plain folder of its Mobile
+     * projects ("Upload here"; never overwrites, no dot folders). Unset is off;
+     * only in effect while `project_files` is on too. Read by the sidecar per
+     * request. */
+    project_uploads?: boolean;
     /** Quitting Tabtivity leaves the Mobile host running (headless owner). Unset
      * is off; read by the quit path. */
     stay_after_quit?: boolean;
