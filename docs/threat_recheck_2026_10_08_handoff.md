@@ -2533,3 +2533,117 @@ Nothing run live.
    Markdown file in the viewer, edit and save; "Save to project" a mail
    attachment; browse the project from the phone. All work, the file
    hydrates. A junction or symlink in the project is still refused.
+
+## Agent step 3 — reviewer — 2026-10-12
+
+**Commits:** `bd31612d` fix(markdown): no mermaid label or `_self` link
+navigates the app (gap 38 review) · this handoff commit. Reviewed
+`529b20ca..0be5b884` plus `1425194e`.
+
+**Checked:**
+- Windows reparse (`files_windows.rs`): `is_name_surrogate` is
+  `IsReparseTagNameSurrogate` (bit `0x20000000`); the tag table matches the
+  SDK values (symlink `0xA000000C`, mount point `0xA0000003`, LX symlink
+  `0xA000001D` are surrogates; cloud, dedup, WOF, AppExecLink, AF_UNIX/LX
+  FIFO are not, and none of the non-surrogates is followed by a name
+  lookup). The first handle stays open across the re-open, which is
+  relative to the same held folder handle (the root by its canonical path),
+  so a link swapped in reaches another file id and is refused by the
+  `FileIdInfo` (volume serial + 128-bit id) compare; a link that leads back
+  to the same file id is that same file. All `nt_create` opens share
+  read/write/delete, so the second open never hits a sharing violation from
+  the first. Both handles are owned `File`s (no leak). `EaSize` holds the tag
+  only when `FILE_ATTRIBUTE_REPARSE_POINT` is set (MS-FSCC 2.4.17), which is
+  how `entries` reads it. FAT/exFAT have no reparse points, so `identity`
+  is never asked there. The msvc clippy and check gates compile the two new
+  Windows tests.
+- Deck: every write path (`rasterizeInto`, poll, Recompile, Add, Edit,
+  autosave of the sidecar, export, `generateBase`) — only the figure paths
+  come from the JSON, and all three of their callers plus the backstop go
+  through `figureTarget`/`figureSource`. `figureFile` splits on both
+  separators, compares the folder exactly (case, Unicode and drive tricks
+  only refuse more), refuses `:`, controls, `.`/`..`, nesting and absolute
+  forms; percent escapes are never decoded on the write path. Deck in a
+  subfolder, at a project root and on a Windows path (`deckRelative` round
+  trip `talk.tex-figures/abc.png`) all work. Existing decks: Add has always
+  stored `<deck>.tex-figures/<id>.png`. Presenter/audience windows and the
+  sidecar parser do not write.
+- Markdown: all `renderMarkdown` hosts (viewer, notebook, Skills, prompt
+  preview, dev to-do) use the helper; the renderer emits only `target`-less
+  file/`#` links and `_blank` external ones, KaTeX runs `trust: false`, the
+  notebook drops `text/html` outputs. Keyboard Enter on a link is a click.
+  `safeHref`/`isLocalHref`/`imgSrc`/`resolveLocalHref` probed with
+  `file:///\\host`, `file:/\host`, `\\?\UNC\…`, `%2F%5Chost`, `%2F%2Fhost`,
+  `file:///%5C%5Chost`: none resolves to a network path (the slashes are
+  collapsed or the share rule refuses them); `docs/a.md`, `C:\x`, `#x`,
+  `mailto:` are kept. Tests do test what they claim (the generateBase test
+  fails on the old read-based check; the hostile-poll deck covers absolute,
+  `..`, absolute `texSrc`, `.svg` and nested). `deckView.figureOutside` is in
+  all five dictionaries.
+
+**Bug found and fixed (`bd31612d`):**
+- Mermaid's `securityLevel: "strict"` still keeps HTML in a node label, and
+  its DOMPurify hook restores an HTML `<a>`'s `target`. Verified with the
+  real mermaid 11.17.2: `A["<a href=https://evil.example target=_self>x</a>"]`
+  renders `<a href="https://evil.example" target="_self">`, and
+  `<form action=https://evil.example><button>` survives as is. The helper
+  left every anchor with *any* `target` alone, so a click on that label in a
+  README's diagram navigated the main window (to an attacker page on every
+  platform), and the form's button submitted it. Fix:
+  `onMarkdownLinkClick` leaves only `target="_blank"` alone and also stops
+  image-map `<area>`s; `markdownEnrich.ts::neutralizeDiagram` drops every
+  `target`, `form` and `formaction` in a rendered diagram and unwraps its
+  forms. Threat model row 38 updated. Tests (fail without the fix):
+  `MarkdownLinks.test.tsx` — anchors with `_self`, `_top`, `_parent`,
+  `_SELF`, empty and a named target are stopped; an `<area>` with and
+  without a target is stopped. `MarkdownEnrich.test.ts` — "defuses label HTML
+  that could navigate the app window" (mermaid mocked with the shape the
+  real one renders: no `target`/`form`/`formaction` left, and a click on
+  each of the three diagram links is default-prevented).
+
+**Gates (at `bd31612d`; Rust unchanged since `5edc4353`):** `npm run build`
+ok. `npm test`: 801 files / 8041 tests passed (8033 + 8 new). `cargo test
+--workspace`: 4248 passed, 0 failed, 4 ignored. `cargo test -p tabtivity
+--no-default-features --lib --test server_secrets`: 3750 + 1 passed, 4
+ignored (the first run, alongside the npm gates, failed
+`codex_bind::a_watched_tree_is_walked_only_after_a_change` at its third
+assert, a late inotify event under load; code untouched here, the rerun
+passed). `npm run lint` (via `rtk proxy`): 0 errors, 28 warnings
+(unchanged). The three clippy gates clean. Windows cross-check (`clippy
+--target x86_64-pc-windows-msvc --all-targets -D warnings`, `cargo check
+--workspace --all-targets`) clean. `aarch64-apple-darwin` `cargo check
+--workspace --all-targets` with the check-only CC/AR stand-ins clean (the
+vendored `tauri-runtime-wry` warnings as before). `scripts/brand-check.sh`
+ok. `scripts/privacy-check.sh` clean (staged and `529b20ca..HEAD`). `git
+diff --check` clean. Nothing run live; `npm run backend:stale` not run.
+
+**Flagged for user:**
+- D3 residual, folder link: `figureTarget` is a lexical check. If
+  `<deck>.tex-figures` itself is a symlink (a fenced agent can create one
+  pointing at a box-sibling project it cannot see), `open_confined`
+  canonicalizes the folder (D1 refuses only a linked *leaf*), so the poll
+  writes `<name>.png` into the sibling whenever its `<name>.pdf` changes
+  (e.g. the sibling's own `paper.pdf` → `paper.png` created or clobbered),
+  and Recompile compiles the sibling's `<name>.tex`. Narrow (needs a
+  matching PDF there; PNGs only), but it is outside "the deck's own figure
+  folder". A fix needs a backend write mode that refuses a link at any
+  component below the project root (D1 extended to folders) or a
+  no-follow check of the figure folder; a design call, not made here.
+- Middle click / `auxclick` on a Markdown link is not handled by the helper
+  (React `onClick` does not fire for it); what the webview does with it (a
+  new-window request for a file link's app-origin URL, or for an external
+  one) is the D6 gate's job in agent step 4. Make sure that gate also covers
+  new-window requests, not only navigations.
+- Windows, unverified at runtime: the first open of a placeholder in
+  `open_existing_for_write` asks for `GENERIC_WRITE` on the reparse point
+  itself (`FILE_OPEN_REPARSE_POINT`). If the cloud filter refuses a write
+  open of the raw placeholder, OneDrive saves still fail; the first open
+  could then ask only `FILE_READ_ATTRIBUTES` when it turns out to be a
+  reparse point. Also, a link swapped in during the window between the two
+  opens is followed once by the re-open before the identity check refuses
+  it, so a symlink to a UNC path could make Windows contact that host (a
+  racing writer in the project is needed; no fence on Windows).
+- Within the own figure folder an NTFS 8.3 alias (`EVIL~1.PNG` for
+  `evil.pngx`) passes `figureTarget` and overwrites that non-PNG sibling in
+  the same folder. Only a file already in the deck's figure folder, so it
+  is noted, not fixed.
