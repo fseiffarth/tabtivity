@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import { InboxIndicator, displayName } from "../../components/header/InboxIndicator";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { storageKey } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -159,5 +160,68 @@ describe("InboxIndicator", () => {
     act(() => useHeaderHoverMenuStore.getState().open("inbox"));
     expect(screen.queryByText("Paper · docs/report.pdf")).toBeNull();
     expect(screen.getByText("Paper · scan.jpg")).toBeTruthy();
+  });
+
+  it("a read in flight when Undo is confirmed does not paint the row back", async () => {
+    let listed = uploads;
+    let hold = false;
+    let release: (() => void) | null = null;
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === "global_inbox_list") return [];
+      if (command === "phone_uploads_list") {
+        if (!hold) return listed;
+        hold = false;
+        // A poll that read the log before the undo: it still lists u1.
+        const snapshot = listed;
+        return new Promise((resolve) => {
+          release = () => resolve(snapshot);
+        });
+      }
+      if (command === "phone_upload_undo") {
+        const { id } = args as { id: string };
+        listed = listed.filter((u) => u.id !== id);
+        return undefined;
+      }
+      return undefined;
+    });
+    render(<InboxIndicator />);
+    await screen.findByRole("button", { name: "Sent from your phone — 2 waiting" });
+    act(() => useHeaderHoverMenuStore.getState().open("inbox"));
+
+    hold = true;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(release).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo docs/report.pdf" }));
+    fireEvent.click(screen.getByRole("button", { name: "Undo docs/report.pdf" }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("phone_upload_undo", { id: "u1" }));
+    expect(await screen.findByRole("button", { name: "Sent from your phone — 1 waiting" })).toBeTruthy();
+
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Sent from your phone — 1 waiting" })).toBeTruthy();
+    expect(screen.queryByText("Paper · docs/report.pdf")).toBeNull();
+  });
+
+  it("Keep never drops a Keep another viewer of the same storage made meanwhile", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "global_inbox_list") return [];
+      if (command === "phone_uploads_list") return uploads;
+      return undefined;
+    });
+    render(<InboxIndicator />);
+    await screen.findByRole("button", { name: "Sent from your phone — 2 waiting" });
+    // A second browser tab of the web client keeps u1 after this one mounted.
+    localStorage.setItem(storageKey("inbox.keptUploads"), JSON.stringify(["u1"]));
+    act(() => useHeaderHoverMenuStore.getState().open("inbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Keep scan.jpg" }));
+    const stored: unknown = JSON.parse(localStorage.getItem(storageKey("inbox.keptUploads")) ?? "[]");
+    expect(stored).toEqual(expect.arrayContaining(["u1", "u2"]));
+    // Both are hidden here now, so nothing is left to show.
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Sent from your phone/ })).toBeNull());
   });
 });

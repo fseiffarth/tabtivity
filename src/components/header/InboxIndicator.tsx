@@ -44,6 +44,19 @@ function readKept(): string[] {
   }
 }
 
+/** `current` plus whatever another viewer of the same storage (a second
+ *  browser tab of the web client) kept meanwhile, so a write from here never
+ *  drops their Keep. */
+function withStored(current: string[]): string[] {
+  const merged = [...current];
+  for (const id of readKept()) if (!merged.includes(id)) merged.push(id);
+  return merged;
+}
+
+function sameIds(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
 function writeKept(ids: string[]) {
   try {
     if (ids.length === 0) localStorage.removeItem(KEPT_KEY);
@@ -91,12 +104,19 @@ export function InboxIndicator() {
     [openMenu, closeMenu],
   );
   const closeTimer = useRef<number | undefined>(undefined);
+  /** Bumped when a delete or undo starts and again when it ends. A read that
+   *  began before the bump answers for the folder as it was, so its answer is
+   *  dropped instead of painting the removed row back (a poll in flight while
+   *  Undo is confirmed); the re-read after the write decides. */
+  const writes = useRef(0);
 
   const load = useCallback(async () => {
+    const seen = writes.current;
     // A failed read keeps the last list rather than hiding the button.
     const loadFiles = async () => {
       try {
-        setFiles(await invoke<GlobalInboxFile[]>("global_inbox_list"));
+        const listed = await invoke<GlobalInboxFile[]>("global_inbox_list");
+        if (writes.current === seen) setFiles(listed);
       } catch {
         // kept as is
       }
@@ -104,14 +124,14 @@ export function InboxIndicator() {
     const loadUploads = async () => {
       try {
         const listed = await invoke<PhoneUpload[]>("phone_uploads_list");
+        if (writes.current !== seen) return;
         setUploads(listed);
         // Keep marks only what is still listed, so the stored set stays small.
         const ids = new Set(listed.map((u) => u.id));
         setKept((current) => {
-          const next = current.filter((id) => ids.has(id));
-          if (next.length === current.length) return current;
-          writeKept(next);
-          return next;
+          const next = withStored(current).filter((id) => ids.has(id));
+          if (!sameIds(next, readKept())) writeKept(next);
+          return sameIds(next, current) ? current : next;
         });
       } catch {
         // kept as is
@@ -172,17 +192,20 @@ export function InboxIndicator() {
 
   const remove = async (name: string) => {
     setArmed(null);
+    writes.current += 1;
     // Drop the row first; the re-read confirms (or restores) it.
     setFiles((current) => current.filter((f) => f.name !== name));
     try {
       await invoke("global_inbox_delete", { name });
     } finally {
+      writes.current += 1;
       void load();
     }
   };
 
   const undo = async (id: string) => {
     setArmed(null);
+    writes.current += 1;
     setUploads((current) => current.filter((u) => u.id !== id));
     try {
       await invoke("phone_upload_undo", { id });
@@ -190,6 +213,7 @@ export function InboxIndicator() {
       // `file_not_found`: edited, moved or gone — the re-read drops the row
       // (only unchanged files are listed); anything else brings it back.
     } finally {
+      writes.current += 1;
       void load();
     }
   };
@@ -197,8 +221,8 @@ export function InboxIndicator() {
   const keep = (id: string) => {
     setArmed(null);
     setKept((current) => {
-      if (current.includes(id)) return current;
-      const next = [...current, id];
+      const next = withStored(current);
+      if (!next.includes(id)) next.push(id);
       writeKept(next);
       return next;
     });
