@@ -357,8 +357,8 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
             return (refusal.status(), refusal.text()).into_response();
         }
     };
-    let failed = reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
-    security::audit(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed());
+    let reason = reply.as_ref().and_then(root_mcp::refusal_reason);
+    security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
     // One event per row: a board move can reindex a whole column.
     for change in effects.changes {
         ctx.emit(CHANGED_EVENT, change);

@@ -5839,7 +5839,7 @@ export const enSource = {
   "rootReview.levelAll": "All writes (default)",
   "rootReview.levelDestructive": "Destructive writes; other writes apply with Undo",
   "rootReview.levelOff": "Off — writes apply immediately",
-  "rootReview.settingHelp": "Review calendar and board proposals in the root console. Applies immediately to subsequent tool calls. Existing proposals still require a decision. This protects writes; agents can still disclose data they have read.",
+  "rootReview.settingHelp": "Review calendar and board proposals in the root console. Applies immediately to subsequent tool calls. Existing proposals still require a decision. This protects writes; agents can still disclose data they have read. Changes to a calendar synced with a CalDAV server always wait for your review, whatever this says.",
   "settings.rootMcp": "{app}'s tools (MCP) for root-console agents",
   "scheduleMcp.title": "Let project agents propose scheduled prompts (MCP)",
   "scheduleMcp.help": "Off by default. New local Claude, Codex and MCP-enabled Vibe tabs can schedule prompts for themselves. Proposals need approval; recurring prompts always need approval. Requires the updated backend. Remote, VM and container tabs are not supported.",

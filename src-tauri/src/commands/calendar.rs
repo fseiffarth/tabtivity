@@ -270,7 +270,8 @@ pub(crate) fn create_event_at(path: &Path, mut event: CalendarEvent) -> Result<C
     stored_event(&data, &id)
 }
 
-/// Replace the event with `event.id` wholesale.
+/// Replace the event with `event.id` wholesale — but for its
+/// [`FROM_MAIL_KEY`] stamp, which no edit takes away.
 pub(crate) fn update_event_at(path: &Path, event: CalendarEvent) -> Result<CalendarEvent, String> {
     let (_, data) = transact(path, |data| {
         let slot = data
@@ -278,7 +279,9 @@ pub(crate) fn update_event_at(path: &Path, event: CalendarEvent) -> Result<Calen
             .iter_mut()
             .find(|e| e.id == event.id)
             .ok_or_else(|| format!("event '{}' not found", event.id))?;
-        *slot = event.clone();
+        let mut event = event.clone();
+        keep_from_mail(&mut event.extra, &slot.extra);
+        *slot = event;
         data.normalize();
         Ok(())
     })?;
@@ -872,6 +875,24 @@ fn replace_calendar_events_at(
 pub const CALDAV_HREF_KEY: &str = "caldav_href";
 /// The `extra` key holding its last-seen ETag, for `If-Match` when push lands.
 pub const CALDAV_ETAG_KEY: &str = "caldav_etag";
+/// The `extra` key an event made from a mail carries (`{message_id,
+/// account_id}`, stamped by the mail pane's AI extract): its text is a
+/// sender's, and the root agent's tools serve it as `external`
+/// (`services::root_mcp::event_view`). Sticky: an edit in the window, a CalDAV
+/// merge or a server that sends the key itself never takes it away
+/// ([`keep_from_mail`]).
+pub const FROM_MAIL_KEY: &str = "from_mail";
+
+/// Keep the stored row's [`FROM_MAIL_KEY`] on the row replacing it, over
+/// whatever the new one says (absent, `null`, or a server's own value).
+fn keep_from_mail(
+    incoming: &mut std::collections::HashMap<String, serde_json::Value>,
+    stored: &std::collections::HashMap<String, serde_json::Value>,
+) {
+    if let Some(v) = stored.get(FROM_MAIL_KEY).filter(|v| !v.is_null()) {
+        incoming.insert(FROM_MAIL_KEY.to_string(), v.clone());
+    }
+}
 
 fn extra_str(extra: &std::collections::HashMap<String, serde_json::Value>, key: &str) -> String {
     extra
@@ -980,6 +1001,7 @@ fn merge_caldav_calendar_in(
                     // other surface already references.
                     event.id = local.id.clone();
                     carry_extra(&mut event.extra, &local.extra);
+                    keep_from_mail(&mut event.extra, &local.extra);
                     data.events[slot] = event;
                 }
                 None => fresh_events.push(event),
@@ -2694,5 +2716,67 @@ mod tests {
                 "a todo command must not take a path: {line}"
             );
         }
+    }
+
+    /// E3: an event made from a mail keeps its `from_mail` stamp through an
+    /// edit that leaves it out (or sends `null`) and through a CalDAV merge,
+    /// even one whose server copy names the key itself.
+    #[test]
+    fn a_mail_stamp_survives_edits_and_merges() {
+        let (_dir, path) = tmp_path();
+        let stamp = serde_json::json!({ "message_id": "INBOX-7", "account_id": "a1" });
+        let mut event = CalendarEvent {
+            title: "Kick-off".into(),
+            start: "2026-10-05T10:00".into(),
+            end: "2026-10-05T11:00".into(),
+            ..Default::default()
+        };
+        event.extra.insert(FROM_MAIL_KEY.into(), stamp.clone());
+        let created = create_event_at(&path, event).unwrap();
+        assert_eq!(created.extra.get(FROM_MAIL_KEY), Some(&stamp));
+
+        let mut edit = created.clone();
+        edit.title = "Kick-off (moved)".into();
+        edit.extra.remove(FROM_MAIL_KEY);
+        let updated = update_event_at(&path, edit.clone()).unwrap();
+        assert_eq!(updated.title, "Kick-off (moved)");
+        assert_eq!(updated.extra.get(FROM_MAIL_KEY), Some(&stamp), "an edit that leaves it out");
+        edit.extra.insert(FROM_MAIL_KEY.into(), serde_json::Value::Null);
+        assert_eq!(update_event_at(&path, edit).unwrap().extra.get(FROM_MAIL_KEY), Some(&stamp), "or nulls it");
+
+        // The synced copy: a merge carries the stamp, over the server's own key.
+        let cal = caldav_calendar(&path);
+        let mut stored = read_data(&path).unwrap();
+        let row = stored.events.iter_mut().find(|e| e.id == created.id).unwrap();
+        row.calendar_id = cal.clone();
+        row.extra.insert(CALDAV_HREF_KEY.into(), serde_json::json!("https://d/e/k.ics"));
+        storage::write_json_atomic(&path, &stored).unwrap();
+        let mut incoming = parsed_event("https://d/e/k.ics", "\"2\"", "Kick-off (server)", "2026-10-05T10:00");
+        incoming.events[0].extra.insert(FROM_MAIL_KEY.into(), serde_json::Value::Null);
+        let merged = merge_caldav_calendar_at(&path, &cal, vec![incoming], &[], true).unwrap();
+        let row = merged.events.iter().find(|e| e.id == created.id).unwrap();
+        assert_eq!(row.title, "Kick-off (server)");
+        assert_eq!(row.extra.get(FROM_MAIL_KEY), Some(&stamp));
+    }
+
+    /// An existing `calendar.json` — events and cards written before the stamp
+    /// existed — reads and writes back without gaining one; a stamped row
+    /// round-trips it unchanged.
+    #[test]
+    fn calendar_json_without_the_mail_stamp_round_trips() {
+        let (_dir, path) = tmp_path();
+        let old = r##"{"version":2,"calendars":[{"id":"default","name":"Personal","color":"#4aa3df","visible":true}],
+            "events":[{"id":"e1","calendar_id":"default","start":"2026-10-05T10:00","end":"2026-10-05T11:00","title":"Old"},
+                      {"id":"e2","calendar_id":"default","start":"2026-10-06T10:00","end":"2026-10-06T11:00","title":"Mail",
+                       "from_mail":{"message_id":"INBOX-7","account_id":"a1"}}],
+            "tasks":[{"id":"t1","calendar_id":"default","title":"Card","mail":{"message_id":"INBOX-7","subject":"Hi"}}]}"##;
+        std::fs::write(&path, old).unwrap();
+        let data = read_data(&path).unwrap();
+        storage::write_json_atomic(&path, &data).unwrap();
+        let back: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(back["events"][0].get("from_mail").is_none(), "{}", back["events"][0]);
+        assert_eq!(back["events"][1]["from_mail"], serde_json::json!({"message_id":"INBOX-7","account_id":"a1"}));
+        assert_eq!(back["tasks"][0]["mail"]["message_id"], "INBOX-7");
+        assert!(back["tasks"][0].get("from_mail").is_none());
     }
 }

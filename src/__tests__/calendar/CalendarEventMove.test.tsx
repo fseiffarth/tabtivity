@@ -140,3 +140,37 @@ describe("EventDialog", () => {
     expect(saved.title).toBe("Standup");
   });
 });
+
+describe("a mail-made event's provenance", () => {
+  const calendars: Calendar[] = [
+    { id: "cal-a", name: "Work", color: "#36c", visible: true, readonly: false },
+    { id: "cal-b", name: "Home", color: "#c63", visible: true, readonly: false },
+  ];
+  const STAMPED: CalendarEvent = { ...SYNCED, from_mail: { message_id: "m1", account_id: "a1" } };
+
+  it("survives an edit in the dialog and the store's write, a move included", async () => {
+    useCalendarStore.setState({ events: [STAMPED] });
+    const onSave = vi.fn();
+    render(
+      <EventDialog
+        target={{ event: STAMPED, occurrence: null }}
+        calendars={calendars}
+        defaultCalendarId="cal-a"
+        defaultReminderMinutes={0}
+        onClose={vi.fn()}
+        onSave={onSave}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByDisplayValue("Standup"), { target: { value: "Standup (moved)" } });
+    fireEvent.click(screen.getByText("Save"));
+    const saved = onSave.mock.calls[0][0] as CalendarEvent;
+    expect(saved.title).toBe("Standup (moved)");
+    expect(saved.from_mail).toEqual({ message_id: "m1", account_id: "a1" });
+
+    await useCalendarStore.getState().updateEvent({ ...saved, calendar_id: "cal-b" });
+    const [, { event: written }] = invoke.mock.calls[0] as [string, { event: CalendarEvent }];
+    expect(written.from_mail).toEqual({ message_id: "m1", account_id: "a1" });
+    expect(useCalendarStore.getState().events[0].from_mail).toEqual({ message_id: "m1", account_id: "a1" });
+  });
+});

@@ -1416,7 +1416,7 @@ export const dict: Dict = {
   "rootReview.levelAll": "Todas las escrituras (predeterminado)",
   "rootReview.levelDestructive": "Escrituras destructivas; las demás se aplican con Deshacer",
   "rootReview.levelOff": "Desactivado — aplicar cambios inmediatamente",
-  "rootReview.settingHelp": "Revisa las propuestas del calendario y del tablero en la consola raíz. Se aplica de inmediato a las siguientes llamadas de herramientas. Las propuestas existentes aún requieren una decisión. Esto protege las escrituras; los agentes aún pueden divulgar los datos que hayan leído.",
+  "rootReview.settingHelp": "Revisa las propuestas del calendario y del tablero en la consola raíz. Se aplica de inmediato a las siguientes llamadas de herramientas. Las propuestas existentes aún requieren una decisión. Esto protege las escrituras; los agentes aún pueden divulgar los datos que hayan leído. Los cambios en un calendario sincronizado con un servidor CalDAV siempre esperan tu revisión, sea cual sea este ajuste.",
   "settings.rootMcp": "Herramientas de {app} (MCP) para los agentes de la consola raíz",
   "settings.rootMcpHelp": "Los agentes de la consola raíz ({modifier}+Mayús+R) con el chip MCP del menú Modelos y agentes reciben las herramientas propias de {app}: proyectos, calendario y tablero de tareas. Desactivado: los agentes nuevos no reciben nada y los que ya están en marcha son rechazados, sin reiniciar. Los agentes de un proyecto nunca las reciben.",
   "settings.rootMcpLocalOnly": "Solo los modelos locales reciben estas herramientas",

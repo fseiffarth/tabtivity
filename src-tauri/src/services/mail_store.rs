@@ -2760,20 +2760,45 @@ impl MailStore {
     /// ✓ Approvals' approve on agent drafts: each goes into the "Drafted by
     /// agents" folder (`filed`). Bound to what the panel showed — a draft an
     /// agent changed since, or the user took over in the composer, is left
-    /// for the panel's next look. Files the user picked into it are not part
-    /// of that comparison: they are the user's own. Returns how many were
+    /// for the panel's next look. The files an agent staged are part of that
+    /// comparison, read from the table Send reads (gap 34); files the user
+    /// picked into it are not: they are the user's own. Returns how many were
     /// filed; an error names how many changed under the panel.
+    ///
+    /// The draft JSON's own `staged` is left out of the text comparison: the
+    /// panel's copy carries the table's rows (`mail_agent_drafts`), the JSON a
+    /// mirror that a user's pick does not rewrite, so the two differ whenever
+    /// the user added a file.
     pub fn file_agent_drafts(&self, shown: &[MailDraft]) -> Result<usize, String> {
         fn seen(d: &MailDraft) -> Result<serde_json::Value, String> {
             let mut d = d.clone();
             d.staged.clear();
             serde_json::to_value(d).map_err(|e| e.to_string())
         }
+        /// An agent's rows, in a stable order, as the comparison sees them.
+        fn agent_rows(rows: &[StagedAttachment]) -> Vec<(&str, &str, &str, u64, Option<&str>)> {
+            let mut out: Vec<_> = rows
+                .iter()
+                .filter(|r| r.origin.as_deref() == Some("agent"))
+                .map(|r| (r.staged_id.as_str(), r.filename.as_str(), r.mime.as_str(), r.size, r.source.as_deref()))
+                .collect();
+            out.sort_unstable();
+            out
+        }
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
         let (mut filed, mut changed) = (0, 0);
         for draft in shown {
-            match self.draft_in(&conn, &draft.id)? {
-                Some(mut current) if current.origin.is_some() && seen(&current)? == seen(draft)? => {
+            let current = self.draft_in(&conn, &draft.id)?;
+            let rows = match &current {
+                Some(_) => self.staged_rows(&conn, &draft.id)?,
+                None => Vec::new(),
+            };
+            match current {
+                Some(mut current)
+                    if current.origin.is_some()
+                        && seen(&current)? == seen(draft)?
+                        && agent_rows(&rows) == agent_rows(&draft.staged) =>
+                {
                     if !current.filed {
                         current.filed = true;
                         self.put_draft(&conn, &current)?;
@@ -4183,6 +4208,41 @@ mod tests {
         assert!(!store.draft("c").unwrap().unwrap().filed);
         assert_eq!(store.file_agent_drafts(&[b2]).unwrap(), 1);
         assert!(store.draft("b").unwrap().unwrap().filed);
+    }
+
+    /// Gap 34: the agent's staged files are part of what approving binds to.
+    /// A draft whose agent attachment was replaced, added or dropped since the
+    /// panel showed it is not filed; the same files as shown (with a user's
+    /// own pick beside them) still are.
+    #[test]
+    fn approving_refuses_a_draft_whose_agent_files_changed() {
+        let (_dir, store) = store();
+        for id in ["swap", "add", "drop", "same"] {
+            store.change_draft_files(None, &agent_draft(id), vec![agent_file(&format!("{id}1"), b"one")], &[]).unwrap();
+        }
+        // What the panel holds: the draft as listed, its rows from the table.
+        let shown = |id: &str| {
+            let mut d = store.draft(id).unwrap().unwrap();
+            d.staged = store.staged(id).unwrap();
+            d
+        };
+        let (swap, add, drop, same) = (shown("swap"), shown("add"), shown("drop"), shown("same"));
+        store.change_draft_files(Some(&swap), &swap, vec![agent_file("swap2", b"other")], &["swap1".into()]).unwrap();
+        store.change_draft_files(Some(&add), &add, vec![agent_file("add2", b"more")], &[]).unwrap();
+        store.change_draft_files(Some(&drop), &drop, vec![], &["drop1".into()]).unwrap();
+        let err = store.file_agent_drafts(&[swap.clone(), add.clone(), drop.clone(), same.clone()]).unwrap_err();
+        assert!(err.starts_with("3 draft(s) changed"), "{err}");
+        for id in ["swap", "add", "drop"] {
+            assert!(!store.draft(id).unwrap().unwrap().filed, "{id}");
+        }
+        assert!(store.draft("same").unwrap().unwrap().filed);
+
+        // A row whose shown copy differs in what the chip says is a change too.
+        let mut renamed = shown("swap");
+        renamed.staged[0].filename = "other.pdf".into();
+        assert!(store.file_agent_drafts(&[renamed]).is_err());
+        // Shown afresh, the swapped draft files.
+        assert_eq!(store.file_agent_drafts(&[shown("swap")]).unwrap(), 1);
     }
 
     /// A file the user picked into an agent draft takes the draft out of the

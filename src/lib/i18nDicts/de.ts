@@ -1417,7 +1417,7 @@ export const dict: Dict = {
   "rootReview.levelAll": "Alle Schreibzugriffe (Standard)",
   "rootReview.levelDestructive": "Destruktive Zugriffe; andere Änderungen mit Rückgängig-Funktion",
   "rootReview.levelOff": "Aus — Änderungen sofort anwenden",
-  "rootReview.settingHelp": "Kalender- und Board-Vorschläge in der Root-Konsole prüfen. Gilt sofort für nachfolgende Werkzeugaufrufe. Bestehende Vorschläge benötigen weiterhin eine Entscheidung. Dies schützt Schreibzugriffe; Agenten können gelesene Daten weiterhin weitergeben.",
+  "rootReview.settingHelp": "Kalender- und Board-Vorschläge in der Root-Konsole prüfen. Gilt sofort für nachfolgende Werkzeugaufrufe. Bestehende Vorschläge benötigen weiterhin eine Entscheidung. Dies schützt Schreibzugriffe; Agenten können gelesene Daten weiterhin weitergeben. Änderungen an einem per CalDAV synchronisierten Kalender warten immer auf deine Prüfung, egal was hier eingestellt ist.",
   "settings.rootMcp": "{app}s Werkzeuge (MCP) für Agenten der Root-Konsole",
   "settings.rootMcpHelp": "Agenten der Root-Konsole ({modifier}+Umschalt+R) mit dem MCP-Chip im Menü „Modelle & Agenten“ erhalten {app}s eigene Werkzeuge: Projekte, Kalender und Aufgabenboard. Aus: Neue Agenten erhalten nichts, bereits laufende werden abgewiesen – ohne Neustart. Projekt-Agenten erhalten sie nie.",
   "settings.rootMcpLocalOnly": "Nur lokale Modelle erhalten diese Werkzeuge",

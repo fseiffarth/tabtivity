@@ -213,6 +213,19 @@ simpler implementation loses somebody's data:
   module-scope `create()` calls in a cycle is the shape that resolves to
   `undefined` depending on which file the bundler reaches first).
 
+**A root agent's write to a synced calendar always waits for the user**
+(decision E3, gap 27). An agent's applied row reaches the server the same way
+a window edit does: `commands::root_mcp` emits `root-mcp-changed` per row
+(also after a ✓ approval), `RootOverlay`'s listener hands every non-`local` row
+to `notifyCalendarWrite`, and the push hook above sends it. So an automatic
+write (review level `destructive` or `off`) would have pushed to a calendar
+other people read with nobody looking. `root_mcp_review::touches_caldav`
+stages any write whose rows carry a `caldav_href` or sit in a calendar an
+account in `accounts.json` syncs, whatever the level; an unreadable accounts
+file counts as synced. The `from_mail` stamp an event made from a mail
+carries is local metadata: the ICS serializer never sends it, and the merge
+keeps the stored one over anything a server returns (`keep_from_mail`).
+
 ### What push forced the ICS layer to learn
 
 A resource is not a row. CalDAV has no separate occurrence object, so a repeating

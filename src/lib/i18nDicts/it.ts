@@ -1416,7 +1416,7 @@ export const dict: Dict = {
   "rootReview.levelAll": "Tutte le scritture (predefinito)",
   "rootReview.levelDestructive": "Scritture distruttive; le altre si applicano con possibilità di annullamento",
   "rootReview.levelOff": "Disattivato — applica subito le modifiche",
-  "rootReview.settingHelp": "Esamina le proposte del calendario e della bacheca nella console root. Si applica subito alle successive chiamate degli strumenti. Le proposte esistenti richiedono ancora una decisione. Questo protegge le scritture; gli agenti possono comunque divulgare i dati che hanno letto.",
+  "rootReview.settingHelp": "Esamina le proposte del calendario e della bacheca nella console root. Si applica subito alle successive chiamate degli strumenti. Le proposte esistenti richiedono ancora una decisione. Questo protegge le scritture; gli agenti possono comunque divulgare i dati che hanno letto. Le modifiche a un calendario sincronizzato con un server CalDAV attendono sempre la tua revisione, qualunque sia questa impostazione.",
   "settings.rootMcp": "Strumenti di {app} (MCP) per gli agenti della console root",
   "settings.rootMcpHelp": "Gli agenti della console root ({modifier}+Maiusc+R) con il chip MCP del menu Modelli e agenti ricevono gli strumenti di {app}: progetti, calendario e bacheca delle attività. Disattivato: i nuovi agenti non ricevono nulla e quelli già in esecuzione vengono rifiutati, senza riavvio. Gli agenti di un progetto non li ricevono mai.",
   "settings.rootMcpLocalOnly": "Solo i modelli locali ricevono questi strumenti",

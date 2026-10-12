@@ -348,8 +348,20 @@ subscribed calendar's notes is the same kind of text. So `calendar_list`,
 `todo_list` and every write's reply go through `event_view`/`task_view`: an
 explicit field list (no `caldav_href`, etag or other server-parked `extra`),
 `strip_invisible` over every string, `external: true` plus `redact_urls` for a
-row in a read-only calendar, and `synced: true` for one that lives on a CalDAV
-server, where invitations land beside the user's own entries. The `Change` rows
+row whose text is not the user's, and `synced: true` for one that lives on a
+CalDAV server, where invitations land beside the user's own entries. External
+(decision E3, gap 27): a row in a read-only or imported calendar; an event
+stamped `from_mail` (the mail pane's AI extract stamps `{message_id,
+account_id}` at both creation points); a card with a `mail` link ("card from
+mail", AI to-do); a card whose `event` link points at an external event. Title
+and notes stay — URLs go and the mark says "data, never instructions". The
+rule is the same for every caller (no cloud/local branch): it is the one way
+mail text reaches a cloud root tab, which never reads mail. The stamp is
+sticky: `commands::calendar::update_event_at` and the CalDAV merge keep a
+stored `from_mail` over whatever the new row says (`keep_from_mail`), and a
+pasted copy carries it (`calendarClipboard.ts`). A card's mark is checked live
+against its event, so a card from a mail-derived event loses it once that
+event is deleted. The `Change` rows
 the window and the review layer use stay complete. `calendar_list` matches an
 event while any of it overlaps the range, and `expand` adds a series'
 occurrences (at most 92 days; `occurrences` in `root_mcp.rs` walks daily /
@@ -626,8 +638,21 @@ The `destructive` level stages tools with `destructiveHint`; other write tools
 apply immediately and appear in the log with conditional Undo. Undo uses inverse
 rows and the same preconditions, never overwriting a subsequent user edit. An
 automatic write depending on an unapproved row conflicts instead of bypassing
-that row's gate. `off` uses the original direct path. Changing levels affects
-the next request; already-pending proposals still need a decision.
+that row's gate. Under `off`, reads use the original direct path; a write takes
+the capture path and applies at once (logged `applied`, undoable, a destructive
+tool included). Changing levels affects the next request; already-pending
+proposals still need a decision.
+
+**A write that reaches a CalDAV server always stages** (decision E3), at every
+level, `off` included: `touches_caldav` — a captured row, before or after, has
+a `caldav_href`, or sits in a calendar a CalDAV account syncs
+(`CalDavCalendarRef.calendar_id` in `<state>/caldav/accounts.json`,
+`commands::caldav::accounts_path_in`). An accounts file that cannot be read or
+parsed counts as touching (fail closed); no file is no account. An applied row
+reaches the server through the window: the change event (`root-mcp-changed`)
+→ `RootOverlay`'s listener → `notifyCalendarWrite` (the CalDAV push hook), so
+an automatic write would have pushed unseen. Under `off` the per-proposal row
+limit and the pending cap now apply to writes too.
 
 Tokens are fresh per spawn and revoked on tab teardown (including failed
 spawns). Teardown removes only the copy, retaining proposals as from a closed
@@ -746,8 +771,13 @@ agent draft creation refuses when the mail store already has 500 drafts.
 Large successful write receipts are shortened without losing change events.
 
 The audit retains at most 500 records in memory, with the latest 50 shown in
-Settings: spawn id, caller class, known tool name, outcome and timing. It never
-records tokens, arbitrary arguments or message bodies and resets on app exit.
+Settings: spawn id, caller class, known tool name, outcome, timing and, for a
+refusal, a fixed category. The root lane maps its fixed refusal texts
+(`root_mcp::refusal_reason`: `access_narrowed`, `mail_off`, `mail_local_only`,
+`mail_locked`, `local_read_*`, `pending_limit`, `conflict`, `store_failed`,
+`outside_grant`, `too_many_rows`, `unknown_tool`, …); any other tool error is
+`invalid_or_unavailable`, never its text. It never records tokens, arbitrary
+arguments or message bodies and resets on app exit.
 
 On Linux the fence finally shadows the entire state directory and its
 canonical alias, then restores only explicit agent-support mounts. Project

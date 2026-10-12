@@ -1417,7 +1417,7 @@ export const dict: Dict = {
   "rootReview.levelAll": "Toutes les écritures (par défaut)",
   "rootReview.levelDestructive": "Écritures destructives ; les autres sont appliquées avec annulation possible",
   "rootReview.levelOff": "Désactivé — appliquer les modifications immédiatement",
-  "rootReview.settingHelp": "Examinez les propositions de calendrier et de tableau dans la console racine. S’applique immédiatement aux prochains appels d’outils. Les propositions existantes nécessitent toujours une décision. Cela protège les écritures ; les agents peuvent toujours divulguer les données qu’ils ont lues.",
+  "rootReview.settingHelp": "Examinez les propositions de calendrier et de tableau dans la console racine. S’applique immédiatement aux prochains appels d’outils. Les propositions existantes nécessitent toujours une décision. Cela protège les écritures ; les agents peuvent toujours divulguer les données qu’ils ont lues. Les modifications d’un agenda synchronisé avec un serveur CalDAV attendent toujours votre examen, quel que soit ce réglage.",
   "settings.rootMcp": "Outils de {app} (MCP) pour les agents de la console racine",
   "settings.rootMcpHelp": "Les agents de la console racine ({modifier}+Maj+R) portant la puce MCP du menu Modèles et agents reçoivent les outils de {app} : projets, calendrier et tableau des tâches. Désactivé : les nouveaux agents ne reçoivent rien et ceux déjà lancés sont refusés, sans redémarrage. Les agents d'un projet ne les reçoivent jamais.",
   "settings.rootMcpLocalOnly": "Seuls les modèles locaux reçoivent ces outils",

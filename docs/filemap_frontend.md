@@ -430,7 +430,7 @@ stores stay at the top. No `index.ts` barrels.
 | `lib/calendar/conference.ts` | The video-call link verdict every Join button reads: explicit field exact; derived only from a recognized meeting host or a URL-only location. |
 | `lib/calendar/caldavPush.ts` | What bytes a CalDAV resource holds (pure): a resource groups a master + overrides by `caldav_href` (`resourceRows`, master first via `orderComponents`, `resourceIcs`). |
 | `lib/calendar/calendarWriteHook.ts` | One-slot seam between calendar edits and CalDAV push (avoids a store import cycle). Upsert announced after the local write; delete before it, and a rejection stops the delete. |
-| `lib/calendar/calendarClipboard.ts` | Copy/paste of an entry (pure): the copy keeps everything typed, drops identity (`id`/`uid`/`caldav_*`/`recurrence_id`) and the repeat rule; the paste rewrites only start/end. |
+| `lib/calendar/calendarClipboard.ts` | Copy/paste of an entry (pure): the copy keeps everything typed, drops identity (`id`/`uid`/`caldav_*`/`recurrence_id`) and the repeat rule, keeps `from_mail`; the paste rewrites only start/end. |
 | `lib/calendar/icsSafety.ts` | Lists what's in an `.ics` before import (alarms with actions, `ATTACH`, app-scheme links, …) — pure. Not a scanner. |
 | `lib/calendar/calendarTime.ts` | Calendar date math (local stamps, exclusive ends, overlap layout). `formatTime`/`formatStampTime` are the two clock renderers (via `lib/timeFormat`). |
 | `lib/timeFormat.ts` | The one 12h/24h answer (`Settings.time_format_24h`, else the OS clock, else the language), read by every surface that prints a wall clock. |

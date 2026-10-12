@@ -67,7 +67,13 @@ pub fn caldav_dir() -> PathBuf {
 }
 
 fn accounts_path() -> PathBuf {
-    caldav_dir().join("accounts.json")
+    accounts_path_in(&storage::state_dir())
+}
+
+/// `accounts.json` under a given state directory — for the root agent's review
+/// path, which is handed its state directory rather than reading the global.
+pub fn accounts_path_in(state: &Path) -> PathBuf {
+    state.join("caldav").join("accounts.json")
 }
 
 fn read_accounts(path: &Path) -> Result<CalDavAccounts, String> {

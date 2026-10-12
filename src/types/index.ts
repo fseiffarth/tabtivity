@@ -1630,6 +1630,18 @@ export interface CalendarEvent {
    *  authored here keeps its occurrence edits in `overrides` instead; the
    *  serializer writes both shapes the same way. */
   recurrence_id?: string;
+  /** The mail this event was made from (the mail pane's AI extract). Its title
+   *  is the sender's words, so a root agent's tools serve it as `external`
+   *  (`services::root_mcp::event_view`). Sticky: the backend keeps it through
+   *  every edit and CalDAV merge, and a pasted copy carries it on. Never sent
+   *  to a CalDAV server. */
+  from_mail?: EventMailLink;
+}
+
+/** Identifiers only — no subject or sender: `CalendarEvent.from_mail`. */
+export interface EventMailLink {
+  message_id: string;
+  account_id?: string;
 }
 
 /** One checklist item inside a task. */
