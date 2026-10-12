@@ -55,7 +55,7 @@ nav button,.keys button { flex:1; }
 .project-header > .terminal-title { align-content:center; }
 /* The order stays under the name on a phone, where a tab's caption goes. */
 .project-header .terminal-title small { display:block; color:#98a0b4; font-size:.72rem; }
-.project-header-tools .new-tab { display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border-radius:10px; font-size:1.1rem; }
+.project-header-tools .new-tab, .projects-row .new-tab { display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border-radius:10px; font-size:1.1rem; }
 /* The name is the order's dropdown: it reads as the title, with the Focus
    switch's caret; the menu is Focus's own, pinned under the name instead. */
 .project-header .project-title { display:inline-flex; align-items:center; max-width:100%; min-width:0; padding:0; border:0; background:transparent; font:inherit; color:inherit; text-align:left; }

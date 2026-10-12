@@ -20,6 +20,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::commands::projects::PhoneProjectRefusal;
 use crate::services::desktop_images;
 use crate::services::markup_rounds;
 use crate::terminal::PtyOptions;
@@ -110,12 +111,17 @@ struct HostState {
 /// `tmux_local::spawn_detached_with` on the default tmux server — the same
 /// launch assembly and the same server the window uses, so the window later
 /// attaches to what the sidecar started — and the registry's install probe.
-/// A test swaps in a recorder.
+/// `new_project` makes a phone's new project
+/// (`projects::create_project_for_phone`) from its name and the asking
+/// phone's device id. A test swaps in a recorder.
 #[derive(Clone)]
 struct HeadlessSpawner {
     launch: headless::HeadlessLaunch,
     installed: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    new_project: NewProject,
 }
+
+type NewProject = Arc<dyn Fn(&str, &str) -> Result<String, PhoneProjectRefusal> + Send + Sync>;
 
 impl Default for HeadlessSpawner {
     fn default() -> Self {
@@ -137,6 +143,7 @@ impl Default for HeadlessSpawner {
                 })
             }),
             installed: Arc::new(crate::commands::agents::binary_is_installed),
+            new_project: Arc::new(crate::commands::projects::create_project_for_phone),
         }
     }
 }
@@ -1042,6 +1049,56 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
         StatusCode::OK,
         Json(json!({ "tabs": rows, "desktop_available": desktop_available })),
     )
+}
+
+/// What a phone sends to make a new project: its name, nothing else.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewProjectBody {
+    name: String,
+}
+
+/// `POST /api/v1/projects` — a new, empty project from the phone, always a
+/// folder in the projects folder and open to this phone alone
+/// (`projects::create_project_for_phone`). No import, and no path crosses:
+/// the phone sends a name and gets the new row back. It works with the window
+/// closed (the registry is a file the owner writes); an open window is told
+/// to re-read it.
+async fn new_project(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(request) = serde_json::from_slice::<NewProjectBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let create = state.spawner.new_project.clone();
+    let device = phone.device_id().to_string();
+    let raw_id = match off_worker(move || create(&request.name, &device)) {
+        Ok(raw_id) => raw_id,
+        Err(refusal) => {
+            if let PhoneProjectRefusal::Failed(why) | PhoneProjectRefusal::Unavailable(why) = &refusal {
+                eprintln!("mobile: a phone's new project was not created ({}): {why}", refusal.code());
+            }
+            let status = match refusal {
+                PhoneProjectRefusal::InvalidName => StatusCode::BAD_REQUEST,
+                PhoneProjectRefusal::Exists => StatusCode::CONFLICT,
+                PhoneProjectRefusal::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+                PhoneProjectRefusal::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            return api_error(status, refusal.code());
+        }
+    };
+    poke_window(&state, None, &["projects"]);
+    for _ in 0..8 {
+        if let Ok(next) = catalog_fresh(&state, &phone) {
+            if let Some(project) = next.projects.iter().find(|p| p.raw_id == raw_id) {
+                return (StatusCode::CREATED, Json(json!({ "project": project.public })));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(125)).await;
+    }
+    api_error(StatusCode::GATEWAY_TIMEOUT, "project_pending")
 }
 
 async fn project(
@@ -6088,7 +6145,7 @@ fn router(state: HostState) -> Router {
             post(mail_reply),
         )
         .route("/api/v1/activity", get(activity))
-        .route("/api/v1/projects", get(projects))
+        .route("/api/v1/projects", get(projects).post(new_project))
         .route("/api/v1/projects/{project_id}", get(project))
         .route(
             "/api/v1/projects/{project_id}/activate",
@@ -7330,7 +7387,7 @@ mod tests {
             serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
         )
         .expect("write settings");
-        host.state.spawner = HeadlessSpawner { launch, installed: Arc::new(|_| true) };
+        host.state.spawner = HeadlessSpawner { launch, installed: Arc::new(|_| true), ..HeadlessSpawner::default() };
         host
     }
 
@@ -7353,6 +7410,75 @@ mod tests {
         let (_, _, project_body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), cookie)).await;
         let tab_id = json(&project_body)["tabs"][0]["id"].as_str().expect("tab id").to_string();
         (project_id, tab_id)
+    }
+
+    /// A phone's new project: the route hands only the name and the asking
+    /// phone's device id to the create seam, answers with the new row as this
+    /// phone's catalog lists it (no raw id, no path), and maps each refusal
+    /// to its own code. Cross-origin and unknown fields are refused before
+    /// anything is created.
+    #[tokio::test]
+    async fn a_phone_creates_a_project_by_name_only() {
+        let mut host = Fixture::bare();
+        let asked: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = asked.clone();
+        let state_dir = host.state.config.state_dir.clone();
+        let folder = host.root.join("my-paper");
+        host.state.spawner.new_project = Arc::new(move |name: &str, device: &str| {
+            sink.lock().unwrap().push((name.to_string(), device.to_string()));
+            match name {
+                "taken" => return Err(PhoneProjectRefusal::Exists),
+                "" => return Err(PhoneProjectRefusal::InvalidName),
+                _ => {}
+            }
+            std::fs::create_dir_all(&folder).expect("project folder");
+            std::fs::write(
+                state_dir.join("projects.json"),
+                serde_json::to_vec(&json!([{
+                    "id": "raw-new-project",
+                    "name": name,
+                    "status": "active",
+                    "directory": folder.to_string_lossy(),
+                    concat!(crate::app_slug!(), "_mobile_access"): true,
+                    concat!(crate::app_slug!(), "_mobile_devices"): [device],
+                }]))
+                .expect("projects"),
+            )
+            .expect("write projects");
+            Ok("raw-new-project".to_string())
+        });
+        let (cookie, device) = host.pair_device(&signing_key(61)).await;
+
+        let mut cross = request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "My Paper" })));
+        cross.headers_mut().insert(header::ORIGIN, "https://elsewhere.example".parse().unwrap());
+        let (status, _, _) = host.send(cross).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _, _) = host
+            .send(request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "x", "directory": "/tmp" }))))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "a folder is never the phone's to choose");
+        assert!(asked.lock().unwrap().is_empty(), "nothing reached the create seam");
+
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "My Paper" }))))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        assert_eq!(json(&body)["project"]["label"], "My Paper");
+        assert!(json(&body)["project"]["id"].as_str().is_some_and(|id| !id.is_empty()));
+        assert!(!body.contains("raw-new-project"), "raw project id leaked: {body}");
+        assert!(!body.contains(&host.root.to_string_lossy().to_string()), "path leaked: {body}");
+        assert_eq!(asked.lock().unwrap()[0], ("My Paper".to_string(), device));
+
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "taken" }))))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(json(&body)["error"], "project_exists");
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "" }))))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json(&body)["error"], "invalid_name");
     }
 
     /// H3 (headless owner plan §3): with no window open, the phone's tab
@@ -8008,6 +8134,7 @@ mod tests {
                 Box::pin(async { Ok(()) })
             }),
             installed: Arc::new(|_| true),
+            ..HeadlessSpawner::default()
         };
         // The switches the gates read: scheduled prompts on (off by default),
         // and what would give a root or reader spawn its tools.
@@ -9951,7 +10078,7 @@ mod tests {
         let marked = answer["marked"].as_str().unwrap();
         assert!(prompt.starts_with("I marked these changes by hand on `docs/draft.pdf`."), "{prompt}");
         assert!(prompt.contains(&format!("Page 2: @{layer}")), "{prompt}");
-        assert!(prompt.contains("- p2: \"smaller\""), "{prompt}");
+        assert!(prompt.contains("- p2: blue note \"smaller\""), "{prompt}");
         assert!(marked.starts_with(concat!(".", crate::app_slug!(), "/inbox/")) && marked.ends_with("-draft-marked.pdf"), "{marked}");
         assert!(!body.contains(&host.root.to_string_lossy().to_string()), "a filesystem path leaked: {body}");
         let copy = std::fs::read(host.root.join(marked)).unwrap();

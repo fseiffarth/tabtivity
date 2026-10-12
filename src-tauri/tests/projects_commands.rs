@@ -1629,3 +1629,63 @@ fn set_project_auto_connect_rejects_local_and_unknown_projects() {
         assert!(set_project_auto_connect("no-such-id".to_string(), true).is_err());
     });
 }
+
+/// A phone's new project (`create_project_for_phone`): always
+/// `<projects root>/<folder>`, scaffolded as the desktop's New project does by
+/// default, and open to the asking phone alone. A blank or unusable name, a
+/// taken folder and a phone that is no longer paired are refused.
+#[test]
+fn a_phone_creates_a_project_only_in_the_projects_folder() {
+    use app_lib::commands::projects::{create_project_for_phone, PhoneProjectRefusal};
+    with_isolated_home("phone-project-home", |_| {
+        let device = "a".repeat(27);
+        let control = app_lib::storage::state_dir().join("mobile-control");
+        fs::create_dir_all(&control).expect("control dir");
+        let devices = control.join("devices.json");
+        let paired = serde_json::json!({
+            "schema": 1,
+            "devices": [{ "id": device, "name": "Phone", "public_key": "k", "created_at": 0 }],
+        });
+        fs::write(&devices, paired.to_string()).expect("devices.json");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&devices, fs::Permissions::from_mode(0o600)).expect("private devices.json");
+        }
+
+        assert_eq!(create_project_for_phone("   ", &device), Err(PhoneProjectRefusal::InvalidName));
+        assert_eq!(create_project_for_phone("!!!", &device), Err(PhoneProjectRefusal::InvalidName));
+        assert_eq!(
+            create_project_for_phone(&"x".repeat(81), &device),
+            Err(PhoneProjectRefusal::InvalidName)
+        );
+        if !app_lib::services::tmux_local::tmux_available() {
+            assert!(matches!(
+                create_project_for_phone("My Paper", &device),
+                Err(PhoneProjectRefusal::Unavailable(_))
+            ));
+            return;
+        }
+        assert!(matches!(
+            create_project_for_phone("My Paper", &"b".repeat(27)),
+            Err(PhoneProjectRefusal::Unavailable(_))
+        ));
+
+        let id = create_project_for_phone("  My Paper ", &device).expect("created");
+        let folder = app_lib::paths::projects_root().join("my-paper");
+        let entry = get_projects()
+            .expect("projects")
+            .into_iter()
+            .find(|p| p.id == id)
+            .expect("registered");
+        assert_eq!(entry.name, "My Paper");
+        assert_eq!(entry.status, "active");
+        assert_eq!(entry.local_file, folder.join("project.json").to_string_lossy());
+        assert!(folder.join("AGENTS.md").is_file());
+        assert_eq!(entry.extra[app_lib::brand::MOBILE_ACCESS_KEY], serde_json::json!(true));
+        assert_eq!(entry.extra[app_lib::brand::MOBILE_DEVICES_KEY], serde_json::json!([device]));
+
+        assert_eq!(create_project_for_phone("my paper", &device), Err(PhoneProjectRefusal::Exists));
+        assert_eq!(get_projects().expect("projects").len(), 1);
+    });
+}

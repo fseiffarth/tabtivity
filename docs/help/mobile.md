@@ -83,6 +83,16 @@ member folders too; a member's list is about the member's own tabs.
 At least one phone stays ticked; to reach no phone, turn the project's access
 off.
 
+### A new project from the phone
+
+Tap **＋** beside **Projects** on the start page and give the project a name.
+Tabtivity creates it on your computer as a new, empty folder in its projects
+folder (the folder is named after the project, as **Folder:** shows), set up
+the way the desktop's New project sets one up. It is shared with this phone
+only, starts active, and opens on the phone right away. Nothing is imported,
+and the phone cannot pick another folder; a name whose folder already exists
+is refused. Works with the desktop window closed.
+
 ## Using it
 
 - Attaching to a running tab keeps working while the desktop Tabtivity is closed

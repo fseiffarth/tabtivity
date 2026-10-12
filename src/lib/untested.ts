@@ -395,6 +395,7 @@ export const UNTESTED = {
   // --- mobile — The phone PWA ---------------------------------------
   "mobile.sheet.color": { area: "mobile", what: "Color sheet · tab colour picker" },
   "mobile.sheet.rename": { area: "mobile", what: "Rename sheet · tab label change" },
+  "mobile.home.newProject": { area: "mobile", what: "Projects ＋ · New project by name, in the projects folder, open to this phone only" },
   "mobile.sheet.schedules": { area: "mobile", what: "Schedule sheet · scheduled prompts" },
   "mobile.sheet.scheduleIn": { area: "mobile", what: "Schedule sheet · Recurrence In … : hours + minutes boxes send the prompt once that long after Save (an ordinary one-time rule at the desktop-local time it comes to)" },
   "mobile.sheet.prompts": { area: "mobile", what: "Prompts sheet · collected prompts" },

@@ -79,6 +79,15 @@ rule records it as `phone_device` (see *What a phone leaves behind*).
 - Project export and import drop both keys (`project_transfer.md`): a bundle
   never opens a project to the importing machine's phones, nor carries foreign
   device ids.
+- A project made **on a phone** (`POST /api/v1/projects` →
+  `projects::create_project_for_phone`) is written with the switch on and a
+  list of just that phone, status `active`. The phone sends a name and nothing
+  else: the folder is always `<projects root>/<sanitize_name(name)>`, local,
+  scaffolded, git `local` — no import, path, remote, container or VM, and a
+  folder that exists is refused (`project_exists`). It is the one place the
+  sidecar adds a `projects.json` entry (under the file's lock, as
+  `headless::activate` patches one); an open window is poked to re-read the
+  registry (`projects` slice).
 
 ## What a phone leaves behind (#2348)
 
