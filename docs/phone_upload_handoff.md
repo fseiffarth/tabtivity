@@ -268,3 +268,69 @@ not re-checked (no cfg'd code). Not run live; `npm run backend:stale` not run
   handler runs: a 413 with a plain-text body, not `{ "error":
   "file_too_large" }`. The phone pre-checks `MAX_INBOX_FILE`, as the inbox
   does, so only a stale build sees it.
+
+### Review B
+
+Reviewed `d94036ef..0fc1db81` (`host.rs` routes + listing flag,
+`commands/mobile_control.rs`, `command_class.rs`, `lib.rs`,
+`commandClasses.ts`). **No confirmed bug**; no code changed. One coverage
+test added in `8e3d1c85`:
+`upload_here_takes_a_whole_file_up_to_the_inbox_limit` (a body of
+`MAX_CONTROL_MESSAGE + 1` lands, `MAX_INBOX_FILE + 1` is 413 with nothing
+written) — the route's inner `DefaultBodyLimit` does outrank the router's
+64 KiB one on the merged `delete(..).merge(post(..).layer(..))` router.
+
+Checked and fine:
+
+- Guards: both routes `authenticate` (cookie only — an open ticket, which
+  only `authenticate_or_ticket` honours, cannot reach them) → `exact_origin`
+  → `files_scope` (per-phone `catalog(state, phone)`, boxes/root console
+  refused) → `uploads_open`, read per request. Scope is checked before the
+  switch, so an out-of-scope phone reads `project_not_found` either way (the
+  scoping test covers both routes).
+- Cross-project undo: the `f` token is sealed with the project's raw id and
+  `uploads::undo` matches records by that raw id, so a phone cannot undo
+  another project's upload — also not through two projects sharing or
+  nesting one folder (records carry the uploading project's id and its rel).
+- `uploads` flag: `accepts(rel) && uploads_open(state_dir)`; false with
+  either switch off and in any dot segment; a link/file token never lists.
+- Status mapping matches the plan (undo's `200 { undone }` instead of 204 is
+  the documented step-B choice). Blocking work (`store`, `entry`, `undo`,
+  `recent`, project list reads) is in `spawn_blocking`; the settings reads
+  on the executor mirror `files_scope`'s existing `files_open`.
+- Desktop commands: `cfg_attr(feature = "desktop", tauri::command)`, no
+  `AppHandle`/`use tauri::`, `Core` rows, `commandClasses.ts` current, both
+  in `generate_handler!`; daemon build gated green. `read_projects_list`
+  (`commands::projects`) is a plain read (no rewrite, unlike `get_projects`);
+  a corrupt `projects.json` lists nothing rather than failing. Sidecar
+  `config.state_dir` and the desktop's `storage::state_dir()` name the same
+  log. Host tests are cross-OS (`Path::join`, no absolute literals).
+
+#### Verdicts on step B's flagged items
+
+- *Hash → unlink race in `undo`*: unchanged, still open for the user (review A).
+- *Axum's own 413 past 24 MiB has no JSON code*: correct as documented; the
+  phone pre-checks, agent D maps a code-less 413 to `file_too_large`.
+
+#### Flagged for user (not changed)
+
+- **The phone's Undo is bound to neither time nor device.** The route deletes
+  any logged, unchanged upload of the project, for any phone in the project's
+  scope, given the file's listing token. Records are dropped only when the log
+  is rewritten (the next upload after 7 days), so with no later upload a file
+  stays phone-deletable indefinitely — also one the user pressed **Keep** on at
+  the desktop (Keep only hides the row in that viewer's `localStorage`). The
+  plan says the phone offers Undo "while it is on screen"; a server-side bound
+  (records within 24 h, like the desktop list, and/or the uploading device id
+  in the record) would match that. Design call, so left as is.
+- **Body read before auth** (pre-existing pattern of every inbox route): axum
+  buffers up to 24 MiB of the body before the handler authenticates, so an
+  unauthenticated client can make the sidecar read 24 MiB per request.
+
+#### Gates (after `8e3d1c85`, Linux)
+
+`scripts/gates.sh`: brand, whitespace, clippy (tabtivity + app-serverd, all
+targets), clippy daemon lib, clippy app-serverd, `cargo test -p tabtivity -p
+app-serverd`, daemon test — all PASS (frontend gates skipped, no frontend
+change). Desktop lib tests 3880 passed / 4 ignored (+1). Windows cross-check
+not rerun (test-only change, no cfg'd code). Not run live.
