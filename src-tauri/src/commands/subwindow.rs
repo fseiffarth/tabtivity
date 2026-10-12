@@ -306,7 +306,9 @@ pub async fn detach_subwindow(
         WebviewUrl::App(detached_query(&project_id, &group_id).into()),
     )
     .title(&title)
-    .decorations(detached_decorations(crate::paths::OsKind::current()));
+    .decorations(detached_decorations(crate::paths::OsKind::current()))
+    // Decision D6: a new-window request never opens an app webview.
+    .on_new_window(crate::app_new_window(app.clone()));
     // Windows: a freshly runtime-created WebView2 window commonly presents a blank
     // WHITE surface until it is shown/focused or genuinely resized — and the rapid
     // +1/-1px resize nudge that fixes the analogous BLACK WebKitGTK surface tends

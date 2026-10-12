@@ -250,22 +250,38 @@ impl ProjectDir {
 
     /// The existing regular file `name` here, opened for writing and emptied
     /// — an in-place save that keeps the file's identity and ACL. `Ok(None)`
-    /// when nothing has that name. `FILE_OPEN_REPARSE_POINT` opens a symbolic
-    /// link or junction itself, which its reparse tag then refuses (a
-    /// OneDrive placeholder is opened again through its filter, see
-    /// [`unlinked`]); the file is truncated only after its own handle proved
-    /// it regular.
+    /// when nothing has that name. The name is first opened on the reparse
+    /// point itself (`FILE_OPEN_REPARSE_POINT`) for its **attributes only**:
+    /// a cloud filter may refuse a write open of a raw OneDrive placeholder,
+    /// but the tag and file id are always readable. A link's tag is refused;
+    /// write access is asked only by the second open (see [`reopened`]),
+    /// which goes through the filter for a placeholder. The file is truncated
+    /// only after its own handle proved it regular.
     pub(crate) fn open_existing_for_write(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
-        let file = match self.open_unlinked(name, FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES, FILE_NON_DIRECTORY_FILE) {
+        let options = FILE_NON_DIRECTORY_FILE;
+        let io = |error: std::io::Error| match error.kind() {
+            std::io::ErrorKind::NotFound => Ok(None),
+            std::io::ErrorKind::IsADirectory => Err(WriteRefusal::NotFile),
+            _ => Err(WriteRefusal::Io(error)),
+        };
+        let probe = match self.nt_create(
+            name,
+            FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_OPEN,
+            options | FILE_OPEN_REPARSE_POINT,
+            Default::default(),
+        ) {
+            Ok(probe) => probe,
+            Err(error) => return io(error),
+        };
+        let access = FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES;
+        let file = match reopened(probe, |plain| {
+            let options = if plain { options | FILE_OPEN_REPARSE_POINT } else { options };
+            self.nt_create(name, access, FILE_OPEN, options, Default::default())
+        }) {
             Ok(file) => file,
             Err(Unlinked::Link) => return Err(WriteRefusal::Link),
-            Err(Unlinked::Io(error)) => {
-                return match error.kind() {
-                    std::io::ErrorKind::NotFound => Ok(None),
-                    std::io::ErrorKind::IsADirectory => Err(WriteRefusal::NotFile),
-                    _ => Err(WriteRefusal::Io(error)),
-                }
-            }
+            Err(Unlinked::Io(error)) => return io(error),
         };
         let meta = file.metadata().map_err(WriteRefusal::Io)?;
         if !meta.is_file() {
@@ -462,6 +478,29 @@ fn by_handle<T: Default>(file: &fs::File, class: FILE_INFO_BY_HANDLE_CLASS) -> s
 pub(super) fn identity(file: &fs::File) -> std::io::Result<(u64, [u8; 16])> {
     let info: FILE_ID_INFO = by_handle(file, FileIdInfo)?;
     Ok((info.VolumeSerialNumber, info.FileId.Identifier))
+}
+
+/// Like [`unlinked`], for a `first` handle opened on the name itself with
+/// attribute access only: the handle kept is always a second open,
+/// `reopen(plain)`. `plain` (no reparse point): opened on the name itself
+/// again, so a link swapped in meanwhile is opened as the link, never
+/// followed; any other non-link reparse point: through its filter. Either
+/// way the second handle is kept only when it is the same file as `first`.
+pub(super) fn reopened(
+    first: fs::File,
+    reopen: impl FnOnce(bool) -> std::io::Result<fs::File>,
+) -> Result<fs::File, Unlinked> {
+    let tag: FILE_ATTRIBUTE_TAG_INFO = by_handle(&first, FileAttributeTagInfo).map_err(Unlinked::Io)?;
+    let plain = tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0;
+    if !plain && is_name_surrogate(tag.ReparseTag) {
+        return Err(Unlinked::Link);
+    }
+    let again = reopen(plain).map_err(Unlinked::Io)?;
+    if identity(&first).map_err(Unlinked::Io)? == identity(&again).map_err(Unlinked::Io)? {
+        Ok(again)
+    } else {
+        Err(Unlinked::Link)
+    }
 }
 
 /// `first` was opened on the name itself (`FILE_OPEN_REPARSE_POINT`). A

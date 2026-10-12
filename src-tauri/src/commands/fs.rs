@@ -1672,7 +1672,9 @@ pub async fn write_file_bytes(
             &decoded
         }
     };
-    write_file_bytes_routed(path, content, project_id, pool).await
+    // The deck's figure writes (`NO_FOLDER_LINK_HEADER`): the folder too.
+    let own_folder_unlinked = request_header(&request, NO_FOLDER_LINK_HEADER).as_deref() == Some("1");
+    write_file_bytes_routed(path, content, project_id, own_folder_unlinked, pool).await
 }
 
 /// A JSON array of byte-sized integers as bytes; `None` for anything else.
@@ -1718,6 +1720,7 @@ async fn write_file_bytes_routed(
     path: String,
     content: &[u8],
     project_id: Option<String>,
+    own_folder_unlinked: bool,
     pool: &RemotePoolState,
 ) -> Result<(), String> {
     if let Some(pid) = project_id.as_deref() {
@@ -1736,7 +1739,7 @@ async fn write_file_bytes_routed(
             }
         }
     }
-    write_file_bytes_local(&path, content, project_id.as_deref())
+    write_file_bytes_local(&path, content, project_id.as_deref(), own_folder_unlinked)
 }
 
 /// Local-fs byte write through [`open_confined`]: an existing regular file is
@@ -1746,6 +1749,7 @@ pub fn write_file_bytes_local(
     path: &str,
     content: &[u8],
     scope_id: Option<&str>,
+    own_folder_unlinked: bool,
 ) -> Result<(), String> {
     let p = PathBuf::from(path);
     if content.len() as u64 > MAX_BINARY_VIEW_BYTES {
@@ -1755,7 +1759,8 @@ pub fn write_file_bytes_local(
             MAX_BINARY_VIEW_BYTES
         ));
     }
-    let file = open_confined(&p, &allowed_roots(scope_id), Confined::Write)?;
+    let mode = if own_folder_unlinked { Confined::WriteOwnFolder } else { Confined::Write };
+    let file = open_confined(&p, &allowed_roots(scope_id), mode)?;
     write_opened(file, content)
 }
 
@@ -1803,8 +1808,9 @@ pub async fn write_file_bytes_for(
     path: String,
     content: &[u8],
     project_id: Option<String>,
+    own_folder_unlinked: bool,
 ) -> Result<(), String> {
-    write_file_bytes_routed(path, content, project_id, ctx.get::<RemotePoolState>()).await
+    write_file_bytes_routed(path, content, project_id, own_folder_unlinked, ctx.get::<RemotePoolState>()).await
 }
 
 /// The read itself, kept separate from the IPC shape so the routing stays testable
@@ -2151,7 +2157,17 @@ enum Confined {
     /// An existing regular file emptied for an in-place save, or a new one
     /// created `O_EXCL`.
     Write,
+    /// [`Confined::Write`], and the file's own folder is walked by name from
+    /// its canonical parent, so a folder that is a link is refused too: the
+    /// deck's TeX figures, whose folder an agent could otherwise point at a
+    /// box sibling (threat recheck gap 23, D3). A leaf with `~` (a Windows
+    /// 8.3 alias such as `EVIL~1.PNG`, which names another file) is refused.
+    WriteOwnFolder,
 }
+
+/// `write_file_bytes` request header: `1` asks for
+/// [`Confined::WriteOwnFolder`] (the deck's figure writes).
+pub const NO_FOLDER_LINK_HEADER: &str = "x-no-folder-link";
 
 /// Open the absolute path `p` inside one of `roots` without following a link
 /// that was not there when the path was checked — the viewers' one way to the
@@ -2182,16 +2198,29 @@ fn open_confined(p: &Path, roots: &[PathBuf], mode: Confined) -> Result<fs::File
     }
     let missing = || format!("{}: No such file or directory", p.display());
     let not_a_file = || "not a file".to_string();
-    let saving = matches!(mode, Confined::Overwrite | Confined::Write);
+    let saving = matches!(mode, Confined::Overwrite | Confined::Write | Confined::WriteOwnFolder);
     // The real path to walk: the canonical folder plus the leaf as named for
-    // a save, the canonical whole path for a read.
+    // a save (the canonical grandparent plus folder and leaf as named for
+    // `WriteOwnFolder`), the canonical whole path for a read.
     let target = if saving {
         let leaf = match p.components().next_back() {
             Some(Component::Normal(leaf)) => leaf,
             _ => return Err(not_a_file()),
         };
         let parent = p.parent().ok_or_else(not_a_file)?;
-        parent.canonicalize().map_err(|_| missing())?.join(leaf)
+        if mode == Confined::WriteOwnFolder {
+            if leaf.to_string_lossy().contains('~') {
+                return Err(format!("'{}' has a `~` in its name; it was not saved", p.display()));
+            }
+            let folder = match parent.components().next_back() {
+                Some(Component::Normal(folder)) => folder,
+                _ => return Err(not_a_file()),
+            };
+            let grand = parent.parent().ok_or_else(not_a_file)?;
+            grand.canonicalize().map_err(|_| missing())?.join(folder).join(leaf)
+        } else {
+            parent.canonicalize().map_err(|_| missing())?.join(leaf)
+        }
     } else {
         p.canonicalize().map_err(|_| missing())?
     };
@@ -2222,14 +2251,28 @@ fn open_confined(p: &Path, roots: &[PathBuf], mode: Confined) -> Result<fs::File
         // The root itself: a folder, so only its metadata is served.
         return if mode == Confined::Stat { Ok(dir.into_file()) } else { Err(not_a_file()) };
     };
-    for name in folders {
+    let link = || format!("'{}' is a link; viewers do not save through links", p.display());
+    for (i, name) in folders.iter().enumerate() {
+        let own_folder = mode == Confined::WriteOwnFolder && i + 1 == folders.len();
+        // The deck makes its figure folder on the first figure (`mkdirat`,
+        // then opened no-follow like any other folder).
+        if own_folder && matches!(dir.lookup_dir(name), Ok(None)) {
+            dir.create_dir(name).map_err(|e| e.to_string())?;
+        }
         dir = match dir.lookup_dir(name) {
             Ok(Some(next)) => next,
             Ok(None) => return Err(missing()),
+            // The own folder of a `WriteOwnFolder` save was never resolved:
+            // something other than a plain folder there is that folder.
+            Err(()) if own_folder => {
+                return Err(format!(
+                    "'{}' is in a folder that is a link; viewers do not save through links",
+                    p.display()
+                ))
+            }
             Err(()) => return Err(changed()),
         };
     }
-    let link = || format!("'{}' is a link; viewers do not save through links", p.display());
     let refused = |refusal: WriteRefusal| match refusal {
         WriteRefusal::Link => link(),
         WriteRefusal::NotFile => not_a_file(),
@@ -2251,7 +2294,7 @@ fn open_confined(p: &Path, roots: &[PathBuf], mode: Confined) -> Result<fs::File
             },
         },
         Confined::Overwrite => dir.open_existing_for_write(leaf).map_err(refused)?.ok_or_else(missing),
-        Confined::Write => {
+        Confined::Write | Confined::WriteOwnFolder => {
             if let Some(file) = dir.open_existing_for_write(leaf).map_err(refused)? {
                 return Ok(file);
             }
@@ -3933,6 +3976,50 @@ mod tests {
         std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
         save(&root.join("alias").join("a.png"), std::slice::from_ref(&root), Confined::Write, b"png").unwrap();
         assert_eq!(fs::read(root.join("real").join("a.png")).unwrap(), b"png");
+    }
+
+    #[test]
+    fn a_figure_save_makes_its_own_folder_and_refuses_an_8_3_alias() {
+        let (_p, root, _outside) = confined_fixture();
+        let roots = vec![root.clone()];
+        let figures = root.join("talk.tex-figures");
+        save(&figures.join("f1.png"), &roots, Confined::WriteOwnFolder, b"png").unwrap();
+        assert_eq!(fs::read(figures.join("f1.png")).unwrap(), b"png");
+        save(&figures.join("f1.png"), &roots, Confined::WriteOwnFolder, b"png2").unwrap();
+        assert_eq!(fs::read(figures.join("f1.png")).unwrap(), b"png2");
+        assert!(save(&figures.join("EVIL~1.PNG"), &roots, Confined::WriteOwnFolder, b"x").unwrap_err().contains('~'));
+        assert!(!figures.join("EVIL~1.PNG").exists());
+        // Only the own folder is made, never one above it.
+        assert!(save(&root.join("gone").join("x.tex-figures").join("f.png"), &roots, Confined::WriteOwnFolder, b"x").is_err());
+        assert!(!root.join("gone").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_figure_save_refuses_a_figure_folder_that_is_a_link_even_to_a_root() {
+        // Threat recheck gap 23 review (0b): a fenced agent points the deck's
+        // figure folder at a box sibling it cannot see. An ordinary save
+        // resolves the folder (and lands in the sibling); a figure save walks
+        // it by name and refuses it.
+        let (_p, root, outside) = confined_fixture();
+        let sibling = outside.path().canonicalize().unwrap();
+        fs::write(sibling.join("paper.png"), b"theirs").unwrap();
+        std::os::unix::fs::symlink(&sibling, root.join("talk.tex-figures")).unwrap();
+        let roots = vec![root.clone(), sibling.clone()];
+        let target = root.join("talk.tex-figures").join("paper.png");
+        let err = save(&target, &roots, Confined::WriteOwnFolder, b"mine").unwrap_err();
+        assert!(err.contains("folder that is a link"), "{err}");
+        assert!(save(&root.join("talk.tex-figures").join("new.png"), &roots, Confined::WriteOwnFolder, b"x").is_err());
+        assert_eq!(fs::read(sibling.join("paper.png")).unwrap(), b"theirs");
+        assert!(!sibling.join("new.png").exists());
+        // What the plain mode does with the same path (why the deck asks for
+        // the strict one).
+        save(&target, &roots, Confined::Write, b"mine").unwrap();
+        assert_eq!(fs::read(sibling.join("paper.png")).unwrap(), b"mine");
+        // A dangling folder link is not "missing, so make it" either.
+        std::os::unix::fs::symlink(root.join("nowhere"), root.join("b.tex-figures")).unwrap();
+        assert!(save(&root.join("b.tex-figures").join("f.png"), &roots, Confined::WriteOwnFolder, b"x").is_err());
+        assert!(!root.join("nowhere").exists());
     }
 
     #[test]

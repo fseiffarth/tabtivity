@@ -11,6 +11,8 @@
   "app": {
     "windows": [
       {
+        "label": "main",
+        "create": false,
         "title": "Tabtivity",
         "width": 1400,
         "height": 900,

@@ -13,8 +13,10 @@
  *    nothing otherwise;
  *  - any other anchor or image-map area not targeting `_blank` is stopped
  *    (`_self`/`_top`/`_parent` name this window too).
- * External links carry `target="_blank"` from the renderer and keep their own
- * browsing context.
+ * External links carry `target="_blank"` from the renderer: the webview's
+ * new-window request goes to the app's navigation gate (decision D6,
+ * `services::nav_gate`), which hands a web URL to the system browser and opens
+ * nothing else — a middle click included.
  */
 
 import type React from "react";

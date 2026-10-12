@@ -10,6 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import { InboxIndicator, displayName } from "../../components/header/InboxIndicator";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { useOpenExternalStore } from "../../stores/openExternal";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -23,6 +24,7 @@ describe("InboxIndicator", () => {
   afterEach(() => {
     cleanup();
     invokeMock.mockReset();
+    useOpenExternalStore.setState({ pending: null });
     useHeaderHoverMenuStore.setState({ openId: null });
   });
 
@@ -63,7 +65,36 @@ describe("InboxIndicator", () => {
     );
     expect(await screen.findByRole("button", { name: "Sent from your phone — 1 waiting" })).toBeTruthy();
 
+    // Gap 21 (C2): a check first, then the question, then the open.
     fireEvent.click(screen.getByRole("menuitem", { name: /photo\.jpg/ }));
-    expect(invokeMock).toHaveBeenCalledWith("global_inbox_open", { name: "20260921-110000-photo.jpg" });
+    const name = "20260921-110000-photo.jpg";
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("global_inbox_open", { name, checkOnly: true }));
+    await waitFor(() => expect(useOpenExternalStore.getState().pending?.request.name).toBe(name));
+    expect(invokeMock).not.toHaveBeenCalledWith("global_inbox_open", { name });
+    act(() => useOpenExternalStore.getState().answer(true));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("global_inbox_open", { name }));
+  });
+
+  it("opens nothing when the user declines or the backend refuses a launcher", async () => {
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === "global_inbox_list") return files;
+      if (command === "global_inbox_open" && (args as { name: string }).name.endsWith(".pdf")) {
+        throw "open_refused_launcher";
+      }
+      return undefined;
+    });
+    render(<InboxIndicator />);
+    await screen.findByRole("button", { name: "Sent from your phone — 2 waiting" });
+    act(() => useHeaderHoverMenuStore.getState().open("inbox"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /photo\.jpg/ }));
+    await waitFor(() => expect(useOpenExternalStore.getState().pending?.request.kind).toBe("confirm"));
+    act(() => useOpenExternalStore.getState().answer(false));
+    act(() => useHeaderHoverMenuStore.getState().open("inbox"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /ticket\.pdf/ }));
+    await waitFor(() => expect(useOpenExternalStore.getState().pending?.request.kind).toBe("refused"));
+    act(() => useOpenExternalStore.getState().answer(false));
+    await new Promise((r) => setTimeout(r, 0));
+    const opens = invokeMock.mock.calls.filter(([c, a]) => c === "global_inbox_open" && !(a as { checkOnly?: boolean }).checkOnly);
+    expect(opens).toEqual([]);
   });
 });

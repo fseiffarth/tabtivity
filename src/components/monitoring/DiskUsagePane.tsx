@@ -20,6 +20,7 @@ import {
   type DuScan,
 } from "../../lib/projects/diskUsage";
 import { FILES_TAB_CMD, useTabsStore } from "../../stores/tabs";
+import { useWindowsStore } from "../../stores/windows";
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { OrbitSpinner } from "../common/OrbitSpinner";
@@ -235,7 +236,12 @@ export function DiskUsagePane({ projectId, projectCwd, tabKey, visible }: Props)
 
   function openExternally(node: DuNode) {
     setMenu(null);
-    void invoke("open_file", { path: node.path, projectId }).catch((e) => setError(String(e)));
+    // A folder goes to the file manager; a file through the store, which asks
+    // first and refuses launchers (threat recheck gap 21, C2).
+    const opened = node.is_dir
+      ? invoke("open_in_file_manager", { path: node.path })
+      : useWindowsStore.getState().openFile(node.path, undefined, projectId, "disk_usage");
+    void opened.catch((e) => setError(String(e)));
   }
 
   function revealInFiles(node: DuNode) {

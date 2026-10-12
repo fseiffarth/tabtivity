@@ -50,8 +50,9 @@ function figureFile(deckPath: string, rel: string, ext: string): string | null {
   const own = dir.slice(Math.max(dir.lastIndexOf("/"), dir.lastIndexOf("\\")) + 1);
   if (folder !== own) return null;
   // A plain name: not empty, not `.`/`..`, no drive or stream colon, no
-  // control character, and more than the bare extension.
-  if (name === "." || name === ".." || [...name].some((c) => c === ":" || c.charCodeAt(0) < 0x20)) {
+  // control character, no `~` (a Windows 8.3 alias such as `EVIL~1.PNG`
+  // names another file in the folder), and more than the bare extension.
+  if (name === "." || name === ".." || [...name].some((c) => c === ":" || c === "~" || c.charCodeAt(0) < 0x20)) {
     return null;
   }
   if (name.length <= ext.length || !name.toLowerCase().endsWith(ext)) return null;

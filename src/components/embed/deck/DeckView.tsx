@@ -1139,7 +1139,8 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       const pdfBytes = new Uint8Array(await readFileBytes(pdfAbs, scope));
       const rendered = await renderPdfPageToPng(pdfBytes);
       if (!rendered) return null;
-      await writeFileBytes(pngAbs, rendered.png, scope);
+      // The figure folder must be no link either (gap 23 review, 0b).
+      await writeFileBytes(pngAbs, rendered.png, scope, { ownFolderUnlinked: true });
       const mt = await fileMtime(pdfAbs, scope).catch(() => null);
       if (mt != null) mtimesRef.current.set(pdfAbs, mt);
       return rendered;
@@ -1156,8 +1157,10 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
     markTexBusy(id, true);
     setError(null);
     try {
-      await writeFileBytes(texAbs, new TextEncoder().encode(starterTexFigure()), scope);
-      const res = await invokeTrusted<TexCompileResult>("compile_tex", { path: texAbs });
+      await writeFileBytes(texAbs, new TextEncoder().encode(starterTexFigure()), scope, {
+        ownFolderUnlinked: true,
+      });
+      const res = await invokeTrusted<TexCompileResult>("compile_tex", { path: texAbs, ownFolderUnlinked: true });
       if (!res.success || !res.pdf_path) {
         setNotice(
           t("deckView.texFigureFailed", { log: res.log.trim().split("\n").slice(-3).join(" ") }),
@@ -1228,7 +1231,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       markTexBusy(obj.id, true);
       setError(null);
       try {
-        const res = await invokeTrusted<TexCompileResult>("compile_tex", { path: texAbs });
+        const res = await invokeTrusted<TexCompileResult>("compile_tex", { path: texAbs, ownFolderUnlinked: true });
         if (!res.success || !res.pdf_path) {
           setNotice(t("deckView.recompileFailed", { log: res.log.trim().split("\n").slice(-3).join(" ") }));
           return;

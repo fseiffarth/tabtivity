@@ -242,3 +242,8 @@ pub mod worker_sync;
 pub use app_core::services::text_completion;
 // One FIFO worker thread: the state-file commands' way off the GTK thread.
 pub mod ordered_lane;
+// Handing a file to the OS default app: launcher types and executables are
+// refused (threat recheck gap 21, decision C2).
+pub mod os_open;
+// The app windows' navigation and new-window gate (decision D6).
+pub mod nav_gate;

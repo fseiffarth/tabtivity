@@ -565,6 +565,86 @@ pub fn format_crash_line(code: u32, addr: usize, buf: &mut [u8]) -> usize {
     pos
 }
 
+/// The app origins this build's own pages load from (`services::nav_gate`):
+/// the dev server's too, but only in a build that serves from it.
+#[cfg(feature = "desktop")]
+fn app_origins<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> services::nav_gate::AppOrigins {
+    let dev = if tauri::is_dev() { app.config().build.dev_url.clone() } else { None };
+    services::nav_gate::AppOrigins::for_build(cfg!(windows), dev.as_ref())
+}
+
+/// Decision D6: one gate on every webview's navigations, the config-created
+/// `main` window included. App windows (`main`, `detached-*`, `present-*`,
+/// `connect`, and any label nobody decided on) stay on the app origin;
+/// live browser pages and print windows keep their own gates.
+#[cfg(feature = "desktop")]
+fn nav_gate_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    use services::nav_gate::{gate_for, may_navigate, Gate};
+    use tauri::Manager;
+    tauri::plugin::Builder::new("nav-gate")
+        .on_navigation(|webview, url| match gate_for(webview.label()) {
+            Gate::Own => true,
+            Gate::AppOrigin => {
+                let allowed = may_navigate(url, &app_origins(webview.app_handle()));
+                if !allowed {
+                    eprintln!(
+                        "nav-gate: refused a navigation of {} to {}://{}",
+                        webview.label(),
+                        url.scheme(),
+                        url.host_str().unwrap_or("")
+                    );
+                }
+                allowed
+            }
+        })
+        .build()
+}
+
+/// The new-window handler every app window is built with (decision D6,
+/// gap 38): a middle click, `target=_blank` or `window.open` never opens a
+/// webview of the app's. A web page off the app origin goes to the system
+/// browser the way `open_external_url` sends every external link; anything
+/// else opens nowhere.
+#[cfg(feature = "desktop")]
+pub(crate) fn app_new_window<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> impl Fn(tauri::Url, tauri::webview::NewWindowFeatures) -> tauri::webview::NewWindowResponse<R> + Send + 'static
+{
+    move |url, _features| {
+        if let services::nav_gate::NewWindow::External(target) =
+            services::nav_gate::new_window(&url, &app_origins(&app))
+        {
+            // Off the UI thread: `opener` may wait on the desktop's handler.
+            std::thread::spawn(move || {
+                if let Err(e) = commands::ssh::open_external_url(target) {
+                    eprintln!("nav-gate: {e}");
+                }
+            });
+        }
+        tauri::webview::NewWindowResponse::Deny
+    }
+}
+
+/// Build the `main` window from its `tauri.conf.json` entry (which says
+/// `create: false`), so it carries [`app_new_window`]: a window Tauri creates
+/// from the config gets no new-window handler.
+#[cfg(feature = "desktop")]
+fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+    let label = services::window_service::MAIN_WINDOW_LABEL;
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == label)
+        .cloned()
+        .unwrap_or_else(|| tauri::utils::config::WindowConfig { label: label.to_string(), ..Default::default() });
+    tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+        .on_new_window(app_new_window(app.handle().clone()))
+        .build()?;
+    Ok(())
+}
+
 /// Webview renderer crashes (e.g. WebKitWebProcess SIGBUS) happen in a child
 /// process, so the signal handlers above never fire and the window keeps
 /// showing its last frame — an apparent freeze. Hook WebKit's
@@ -1293,6 +1373,10 @@ pub fn run() {
         .manage(mobile_desktop.clone())
         .manage(pick_grants)
         .setup(move |_app| {
+            // The main window is built here, not by Tauri from the config,
+            // so it gets the new-window gate (`create_main_window`). Before
+            // anything below looks it up.
+            create_main_window(_app)?;
             // First: converted commands and services read their `CoreCtx`
             // from here, and `rt::spawn` needs Tauri's runtime installed.
             let core = tauri_host::install(_app.handle(), core_state);
@@ -2370,6 +2454,8 @@ pub fn run() {
             commands::spell::spell_install_language,
             commands::spell::spell_remove_language,
         ])))
+        // Decision D6: app windows never navigate off the app origin.
+        .plugin(nav_gate_plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_notification::init())

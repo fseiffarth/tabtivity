@@ -538,22 +538,67 @@ pub async fn open_file(
     // absent on double-click / manual launch, leaving WM placement untouched.
     x: Option<i32>,
     y: Option<i32>,
-) -> Result<TrackedWindow, String> {
+    // Threat recheck gap 21 (C2): answer only whether this open would be
+    // refused, opening and spawning nothing (`Ok(None)` = it would go
+    // ahead). The window asks the user between the two calls.
+    check_only: Option<bool>,
+) -> Result<Option<TrackedWindow>, String> {
     let registry = registry.inner().clone();
     let workspace = workspace.inner().clone();
     // Worst case (X11) chains `find_window_for_pid` AND `find_new_window` → ~4 s;
     // under Wayland both answer at once (`platform::x11::session_is_wayland`).
     run_off_thread(move || {
-        open_file_blocking(&registry, &workspace, path, handler, project_id, origin, (x, y))
+        let effective = effective_handler(handler, &path, project_id.as_deref());
+        if !open_goes_ahead(effective.as_deref(), &path, check_only.unwrap_or(false))? {
+            return Ok(None);
+        }
+        open_file_blocking(&registry, &workspace, path, effective, project_id, origin, (x, y)).map(Some)
     })
     .await
+}
+
+/// Gap 21 (C2): may an `open_file` go on to open? An OS-default open
+/// (`effective` is `None`) of a launcher or executable is refused; a check
+/// (`check_only`) answers `false` once it passed, so nothing is opened.
+fn open_goes_ahead(effective: Option<&str>, path: &str, check_only: bool) -> Result<bool, String> {
+    if effective.is_none() {
+        crate::services::os_open::check(Path::new(path))?;
+    }
+    Ok(!check_only)
+}
+
+/// The program a file opens with: an explicit handler always wins; otherwise
+/// the project-then-global default-app map (keyed by extension). `None`
+/// leaves it to the OS default, which `services::os_open::check` judges
+/// first (gap 21, C2): a handler or a configured default app is the user's
+/// own choice.
+fn effective_handler(handler: Option<String>, path: &str, project_id: Option<&str>) -> Option<String> {
+    match handler {
+        Some(h) => Some(h),
+        None => {
+            let global_apps = crate::commands::default_apps::get_default_apps()
+                .map(|d| d.0)
+                .unwrap_or_default();
+            let project_apps = project_apps_for_id(project_id);
+            Path::new(path)
+                .extension()
+                .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
+                .and_then(|ext| {
+                    project_apps
+                        .get(&ext)
+                        .or_else(|| global_apps.get(&ext))
+                        .cloned()
+                })
+                .filter(|s| !s.trim().is_empty())
+        }
+    }
 }
 
 fn open_file_blocking(
     registry: &WindowRegistryState,
     workspace: &crate::commands::workspace::WorkspaceStateArc,
     path: String,
-    handler: Option<String>,
+    effective: Option<String>,
     project_id: Option<String>,
     origin: Option<String>,
     (x, y): (Option<i32>, Option<i32>),
@@ -575,29 +620,8 @@ fn open_file_blocking(
         }
     };
     let before = list_window_ids();
-    // Resolve the executable to launch: an explicit handler always wins;
-    // otherwise consult the project-then-global default-app map (keyed by
-    // extension). When neither has an entry we leave it to the OS default below,
-    // preserving the prior plain-open behaviour.
-    let effective = match handler {
-        Some(h) => Some(h),
-        None => {
-            let global_apps = crate::commands::default_apps::get_default_apps()
-                .map(|d| d.0)
-                .unwrap_or_default();
-            let project_apps = project_apps_for_id(project_id.as_deref());
-            Path::new(&path)
-                .extension()
-                .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
-                .and_then(|ext| {
-                    project_apps
-                        .get(&ext)
-                        .or_else(|| global_apps.get(&ext))
-                        .cloned()
-                })
-                .filter(|s| !s.trim().is_empty())
-        }
-    };
+    // `effective` is [`effective_handler`]'s answer; `None` is the OS
+    // default below, which the caller has already judged.
     if let Some(exec) = effective {
         let launch_exec = resolve_launch_exec(&exec);
         let mut cmd = launch_command(&launch_exec, &[], Some(&path));
@@ -2950,6 +2974,31 @@ mod tests {
             serde_json::json!({"default_apps": {".pdf": "okular"}}),
         );
         assert_eq!(project_apps_from_entry(&entry)[".pdf"], "okular");
+    }
+
+    #[test]
+    fn an_os_default_open_refuses_launchers_and_a_check_opens_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("paper.pdf");
+        std::fs::write(&doc, b"%PDF").unwrap();
+        let doc = doc.to_string_lossy().into_owned();
+        // A check passes and says "do not open now"; the real call goes on.
+        assert_eq!(open_goes_ahead(None, &doc, true), Ok(false));
+        assert_eq!(open_goes_ahead(None, &doc, false), Ok(true));
+        let launcher = dir.path().join(if cfg!(windows) { "run.lnk" } else if cfg!(target_os = "macos") { "go.command" } else { "run.desktop" });
+        std::fs::write(&launcher, b"x").unwrap();
+        let launcher = launcher.to_string_lossy().into_owned();
+        for check_only in [true, false] {
+            assert_eq!(
+                open_goes_ahead(None, &launcher, check_only).unwrap_err(),
+                crate::services::os_open::REFUSED_LAUNCHER
+            );
+        }
+        // A handler the user picked (explicit or a configured default app)
+        // is their choice: not judged.
+        assert_eq!(open_goes_ahead(Some("gedit"), &launcher, false), Ok(true));
+        // The check wrote nothing beside the files.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 
     #[test]

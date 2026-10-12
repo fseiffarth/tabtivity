@@ -208,10 +208,17 @@ pub async fn global_inbox_list() -> Vec<inbox::GlobalInboxFile> {
         .unwrap_or_default()
 }
 
-/// Open one inbox file with the OS default application.
+/// Open one inbox file with the OS default application. The phone chose the
+/// file and its name, so a launcher type or an executable is refused
+/// (`services::os_open`, gap 21 / C2); `check_only` answers only that, and
+/// the window asks the user before the real call.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn global_inbox_open(name: String) -> Result<(), String> {
+pub fn global_inbox_open(name: String, check_only: Option<bool>) -> Result<(), String> {
     let path = inbox::global_file(&storage::state_dir(), &name).ok_or("file_not_found")?;
+    crate::services::os_open::check(&path)?;
+    if check_only.unwrap_or(false) {
+        return Ok(());
+    }
     opener::open(&path).map_err(|e| e.to_string())
 }
 

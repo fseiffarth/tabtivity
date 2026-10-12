@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { useT } from "../../lib/i18n";
+import { confirmOsOpen } from "../../lib/openExternal";
 import { formatBytes } from "../../lib/formatBytes";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { UntestedTag } from "../common/UntestedTag";
@@ -101,7 +102,11 @@ export function InboxIndicator() {
   const open = (name: string) => {
     setMenuOpen(false);
     window.clearTimeout(closeTimer.current);
-    invoke("global_inbox_open", { name }).catch(() => void load());
+    // The phone chose this file: ask first, and the backend refuses a
+    // launcher or executable (threat recheck gap 21, C2).
+    void confirmOsOpen(name, () => invoke("global_inbox_open", { name, checkOnly: true }))
+      .then((asked) => (asked === "open" ? invoke("global_inbox_open", { name }) : undefined))
+      .catch(() => void load());
   };
 
   const remove = async (name: string) => {

@@ -92,6 +92,7 @@ export const UNTESTED = {
   // --- common — Shared dialogs and hosts ----------------------------
   "execTrustHost.1": { area: "common", what: "ExecTrustHost · {t(TITLES[request.kind] ?? \"execTrust.title.gitHooks\")}" },
   "hostKey.title": { area: "common", what: "HostKeyConfirmDialog · Is this the right machine?" },
+  "openExternalConfirm": { area: "common", what: "OpenExternalHost · \"Open <file> with the system's default app?\" before any file goes to the OS (no-viewer files, Shift+double-click, Downloads, terminal path links, Reader change cards, the phone inbox, disk usage); launchers and executables refused with a note instead (gap 21, C2)" },
   "hpcGuardDialog.1": { area: "common", what: "HpcGuardDialog · {t(copy.title)}" },
   "unfencedPlatformDialog.1": { area: "common", what: "UnfencedPlatformDialog · Windows: accept once that agents run with full rights, then the tab starts" },
   "projectSwitcher.stopTitle": { area: "common", what: "StopProjectDialog · Stop this project's terminals?" },

@@ -172,6 +172,8 @@ export class WsInternals {
         if (this.native) {
           if (CONNECT_NATIVE.has(cmd)) return this.native.invoke(cmd, record);
           if (cmd === "open_file") {
+            // `connect_open_download` judges the file itself (gap 21).
+            if (record.checkOnly) return Promise.resolve(null);
             const native = this.native;
             return this.client
               .call("desktop_file_ticket", { path: String(record.path ?? ""), download: true })

@@ -12,9 +12,12 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { emptyDeck, blankSlide } from "../../lib/viewers/deck/model";
 import { NAMES } from "../../lib/brand";
 import { translate } from "../../lib/i18n";
+import { NO_FOLDER_LINK_HEADER } from "../../components/embed/fileAccess";
 
 const files = new Map<string, string>();
 const writes: string[] = [];
+/** The writes that asked for the own-folder rule (`x-no-folder-link`). */
+const strictWrites: string[] = [];
 /** Paths `file_mtime` answers "missing" for. */
 const absent = new Set<string>();
 /** Paths that exist but do not read as text (non-UTF-8, over the cap). */
@@ -41,6 +44,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       }
       case "write_file_bytes":
         writes.push(decodeURIComponent(options?.headers?.[NAMES.filePathHeader] ?? ""));
+        if (options?.headers?.[NO_FOLDER_LINK_HEADER] === "1") strictWrites.push(writes[writes.length - 1]);
         return null;
       case "read_file_bytes":
         if (String(arg("path")).endsWith(".pdf")) return new Uint8Array([37, 80, 68, 70]).buffer;
@@ -108,6 +112,7 @@ async function mountAndRecompile() {
 beforeEach(() => {
   files.clear();
   writes.length = 0;
+  strictWrites.length = 0;
   absent.clear();
   unreadable.clear();
   texAvailable = false;
@@ -127,6 +132,9 @@ describe("the deck's TeX-figure poll (gap 23, D3)", () => {
     await mountAndRecompile();
     expect(writes).toContain("/p/talks/talk.tex-figures/f1.png");
     expect(writes.every((w) => w === "/p/talks/talk.tex-figures/f1.png")).toBe(true);
+    // Every figure write asks the backend to refuse a linked figure folder
+    // (gap 23 review, 0b).
+    expect(strictWrites).toEqual(writes);
   });
 
   it("writes nothing for a deck whose figures point anywhere else, and says so once", async () => {

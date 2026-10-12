@@ -1182,12 +1182,54 @@ pub async fn compile_tex(
     engine: Option<String>,
     out_dir: Option<String>,
     extra_flags: Option<Vec<String>>,
+    // The deck's TeX figures (threat recheck gap 23, D3): the source's own
+    // folder must not be a link (`own_folder_unlinked`).
+    own_folder_unlinked: Option<bool>,
 ) -> Result<TexCompileResult, String> {
     app_core::rt::spawn_blocking(move || {
+        if own_folder_unlinked.unwrap_or(false) {
+            own_folder_unlinked_check(Path::new(&path))?;
+        }
         compile_tex_blocking(path, engine, out_dir, extra_flags)
     })
     .await
     .map_err(|e| format!("compile task failed: {e}"))?
+}
+
+/// A deck figure's `.tex` may be compiled only when neither it nor its own
+/// folder is a link (and its name has no `~`, a Windows 8.3 alias): a
+/// figure folder pointed at a box sibling would compile, and write the PDF,
+/// aux and log files, there. The compile itself then runs by path, so a
+/// swap in the moment between this check and the engine's first open is a
+/// residual; the PNG the deck writes afterwards goes through
+/// `fs::Confined::WriteOwnFolder`, which holds handles.
+fn own_folder_unlinked_check(path: &Path) -> Result<(), String> {
+    let link = || format!("'{}' or its folder is a link; the figure was not compiled", path.display());
+    if path.file_name().is_some_and(|n| n.to_string_lossy().contains('~')) {
+        return Err(format!("'{}' has a `~` in its name; the figure was not compiled", path.display()));
+    }
+    let folder = path.parent().ok_or_else(link)?;
+    let plain = |p: &Path, dir: bool| {
+        fs::symlink_metadata(p).is_ok_and(|m| !m.file_type().is_symlink() && if dir { m.is_dir() } else { m.is_file() })
+    };
+    if !plain(path, false) || !plain(folder, true) {
+        return Err(link());
+    }
+    // A Windows link-type reparse point (junction) reads as a folder above.
+    let grand = folder.parent().ok_or_else(link)?;
+    let (Ok(real), Ok(real_grand)) = (folder.canonicalize(), grand.canonicalize()) else {
+        return Err(link());
+    };
+    let same_name = match (folder.file_name(), real.file_name()) {
+        (Some(a), Some(b)) if cfg!(windows) => a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()),
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
+    if same_name && real.parent() == Some(real_grand.as_path()) {
+        Ok(())
+    } else {
+        Err(link())
+    }
 }
 
 fn compile_tex_blocking(
@@ -3656,6 +3698,32 @@ Count:2
         assert!(out.starts_with("…\n"));
         // The truncated remainder must itself be valid UTF-8 (no split char).
         assert!(out.is_char_boundary(out.len()));
+    }
+
+    #[test]
+    fn a_deck_figure_compiles_only_from_its_own_unlinked_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let figures = dir.path().join("talk.tex-figures");
+        std::fs::create_dir(&figures).unwrap();
+        let tex = figures.join("f1.tex");
+        std::fs::write(&tex, "x").unwrap();
+        assert_eq!(own_folder_unlinked_check(&tex), Ok(()));
+        assert!(own_folder_unlinked_check(&figures.join("EVIL~1.TEX")).unwrap_err().contains('~'));
+        assert!(own_folder_unlinked_check(&figures.join("missing.tex")).is_err());
+        #[cfg(unix)]
+        {
+            // The figure folder pointed at a sibling project: refused, even
+            // though the sibling holds a `.tex` of that name.
+            let sibling = dir.path().join("sibling");
+            std::fs::create_dir(&sibling).unwrap();
+            std::fs::write(sibling.join("paper.tex"), "x").unwrap();
+            let linked = dir.path().join("other.tex-figures");
+            std::os::unix::fs::symlink(&sibling, &linked).unwrap();
+            assert!(own_folder_unlinked_check(&linked.join("paper.tex")).unwrap_err().contains("is a link"));
+            // A linked leaf in a real folder: refused too.
+            std::os::unix::fs::symlink(sibling.join("paper.tex"), figures.join("paper.tex")).unwrap();
+            assert!(own_folder_unlinked_check(&figures.join("paper.tex")).is_err());
+        }
     }
 
     #[test]

@@ -48,6 +48,7 @@ import { BigFolderDialogHost } from "../projects/BigFolderExcludeDialog";
 import { BoxEditorHost } from "../projects/BoxEditorDialog";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
+import { OpenExternalHost } from "../common/OpenExternalHost";
 import { CalendarOverlayHost } from "../calendar/CalendarOverlay";
 import { CalDavSyncHost } from "../calendar/CalDavSyncHost";
 import { PrinterNetworkDefaultsHost } from "../printing/PrinterNetworkDefaultsHost";
@@ -1465,6 +1466,7 @@ export function AppShell() {
       {/* The ask-once "run this project's hooks / latexmkrc / prettier?" prompt
           (services::exec_trust), raised by a gated commit/push/build/format. */}
       <ExecTrustHost />
+      <OpenExternalHost />
       {/* Mail as a global app: the header's ✉ button opens the ordinary MailPane
           as an overlay over whatever is on screen. At the shell rather than in
           the header because it covers the window, not the header — and because

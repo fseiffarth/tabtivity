@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useTabScope } from "../tabs/tabScopeContext";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
-import { useWindowsStore } from "../../stores/windows";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { Dropdown } from "../common/Dropdown";
@@ -58,7 +57,6 @@ interface Props {
 
 export function FileBrowser({ projectDir, projectId, active }: Props) {
   const t = useT();
-  const { openFile } = useWindowsStore();
   const projects = useProjectsStore((s) => s.projects);
   const viewerPrefs = useSettingsStore((s) => s.settings?.viewer_prefs);
   const disabledViewerSet = useMemo(() => disabledViewers(viewerPrefs), [viewerPrefs]);
@@ -364,9 +362,8 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
     const target = firstSelectedEntry();
     if (!target) return;
     const path = target.is_dir ? target.path : dirname(target.path);
-    openFile(path, undefined, projectId, "middle_file_browser").catch((e) =>
-      setError(String(e)),
-    );
+    // A folder: the file manager, no "open this file?" question.
+    invoke("open_in_file_manager", { path }).catch((e) => setError(String(e)));
   }
 
   function showProperties() {

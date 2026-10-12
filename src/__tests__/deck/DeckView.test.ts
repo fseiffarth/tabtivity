@@ -139,6 +139,7 @@ describe("figureTarget / figureSource", () => {
     ["bare extension", "talk.tex-figures/.png"],
     ["stream", "talk.tex-figures/f1.png:evil.png"],
     ["control char", "talk.tex-figures/f\n1.png"],
+    ["8.3 alias", "talk.tex-figures/EVIL~1.PNG"],
     ["empty", ""],
   ])("refuses %s", (_label, src) => {
     expect(figureTarget(deck, src)).toBeNull();

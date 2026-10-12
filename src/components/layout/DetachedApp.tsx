@@ -80,6 +80,7 @@ import { chordMatches, resolveChord, zoomFor, type ShortcutMap } from "../../lib
 import { DetachedCenterPanel } from "./DetachedCenterPanel";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
+import { OpenExternalHost } from "../common/OpenExternalHost";
 import { SyncConfirmDialog } from "../common/SyncConfirmDialog";
 import { HpcGuardDialog } from "../common/HpcGuardDialog";
 import { UnfencedPlatformDialog } from "../common/UnfencedPlatformDialog";
@@ -871,6 +872,7 @@ export function DetachedApp({ param }: Props) {
       {/* A popout's viewer can Build or Format, so its exec-trust question
           renders here, in this window's own store. */}
       <ExecTrustHost />
+      <OpenExternalHost />
       {/* Same reason: a popout hosts the per-subwindow file viewer, so a pull or
           push can be started in this window and its confirmation has to render
           here — this store instance is this window's. */}

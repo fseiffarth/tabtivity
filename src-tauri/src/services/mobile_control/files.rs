@@ -1178,6 +1178,52 @@ mod tests {
         assert!(matches!(held.open_existing_for_write("away"), Err(WriteRefusal::NotFile | WriteRefusal::Link)));
     }
 
+    /// Step 3 review (0c): a save asks write access only on the second open.
+    /// The first opens the name for its attributes only, so a cloud filter
+    /// that refuses a write open of a raw placeholder cannot fail the save;
+    /// a plain file is opened again on the name itself (a link swapped in
+    /// is opened as itself and fails the identity check), a link is refused
+    /// before any second open, and a different file on the second open is
+    /// refused.
+    #[cfg(windows)]
+    #[test]
+    fn a_save_probes_with_attribute_access_and_writes_through_the_second_open() {
+        use super::windows::{reopened, Unlinked};
+        use std::os::windows::fs::OpenOptionsExt;
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const READ_ATTRIBUTES: u32 = 0x80;
+        let dir = tree();
+        let outside = tempfile::tempdir().unwrap();
+        junction(outside.path(), &dir.path().join("away"));
+        let probe = |path: &Path| {
+            fs::OpenOptions::new()
+                .access_mode(READ_ATTRIBUTES)
+                .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
+                .open(path)
+                .unwrap()
+        };
+        let main = dir.path().join("src").join("main.rs");
+        let mut asked = None;
+        let kept = reopened(probe(&main), |plain| {
+            asked = Some(plain);
+            fs::OpenOptions::new().write(true).custom_flags(OPEN_REPARSE_POINT).open(&main)
+        });
+        assert!(kept.is_ok());
+        assert_eq!(asked, Some(true), "a plain file is reopened on the name itself");
+        let never = |_: bool| -> std::io::Result<fs::File> { panic!("a link needs no second open") };
+        assert!(matches!(reopened(probe(&dir.path().join("away")), never), Err(Unlinked::Link)));
+        let other = dir.path().join("README.md");
+        let swapped = reopened(probe(&main), |_| fs::OpenOptions::new().write(true).open(&other));
+        assert!(matches!(swapped, Err(Unlinked::Link)));
+        // And the save built on it still writes a plain file in place.
+        let held = ProjectDir::open_root(dir.path()).unwrap().lookup_dir("src").unwrap().unwrap();
+        let mut file = held.open_existing_for_write("main.rs").unwrap().unwrap();
+        std::io::Write::write_all(&mut file, b"saved").unwrap();
+        drop(file);
+        assert_eq!(fs::read(&main).unwrap(), b"saved");
+    }
+
     fn hit_paths(found: &Found) -> Vec<String> {
         found.hits.iter().map(|hit| rel_of(&hit.entry, "p1")).collect()
     }

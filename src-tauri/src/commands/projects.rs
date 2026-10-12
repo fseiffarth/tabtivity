@@ -2784,6 +2784,8 @@ pub fn open_in_file_manager(path: String) -> Result<(), String> {
     if !dir.is_dir() {
         return Err(format!("Not a directory: {path}"));
     }
+    // macOS `open` runs a bundle folder (`X.app`) instead of showing it (gap 21).
+    crate::services::os_open::check(&dir)?;
     opener::open(&dir).map_err(|e| e.to_string())
 }
 

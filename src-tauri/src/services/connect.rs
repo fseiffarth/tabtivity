@@ -294,6 +294,7 @@ pub fn opens_as_program(name: &str) -> bool {
         "application", "appref-ms", "gadget", "appimage", "desktop", "sh", "bash", "zsh", "csh", "run", "bin", "command", "app", "pkg", "dmg", "mpkg", "deb", "rpm", "flatpakref", "py", "pyw", "pl", "rb",
     ];
     name.rsplit_once('.').is_some_and(|(_, ext)| PROGRAMS.contains(&ext.to_ascii_lowercase().as_str()))
+        || crate::services::os_open::is_launcher_on_any_os(name)
 }
 
 /// May a downloaded server file be opened with the system's default app?
