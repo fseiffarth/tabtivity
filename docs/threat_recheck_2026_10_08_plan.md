@@ -595,6 +595,13 @@ the user"):
   residual in `docs/threat_model.md` and `docs/context/dev_builds.md`. The
   launcher adopts `target/release/<bin>` only when its hash matches one the
   unfenced build wrote into the state dir (no fence can write there).
+- **C3 follow-up (answered 2026-10-12, after the plan review's blocking
+  question):** when `package-dev.sh` runs outside a fence, it also installs a
+  copy of the dev launcher and every helper it sources into
+  `<app_dir>/dev-launcher/` and points the desktop entry there, so an
+  uncommitted edit to the checkout's launcher scripts never runs on the next
+  click. A committed edit still reaches the user through the queued build
+  (accepted under C3). Agent step 8 builds it.
 
 | Agent step | Plan step | Gaps | Main files |
 |---|---|---|---|
