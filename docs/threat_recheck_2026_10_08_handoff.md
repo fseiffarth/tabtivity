@@ -2002,3 +2002,95 @@ vendored `tauri-runtime-wry`); `scripts/brand-check.sh` ok;
    the card, step 2).
 5. Ask for `git_release` with an unconfirmed repo: refused
    `ci_repo_unconfirmed`, the same card shows.
+
+## Agent step 1 — reviewer — 2026-10-12
+
+**Reviewed:** `git diff 3df3ff27..04a0b8b2` and the implementer section above.
+**Fix commit:** `c723c06b` fix(git-mcp): review fixes for gap 19 (empty .git,
+bundle consent).
+
+**Checked, no change needed:**
+- The CI gate resolves the repo once (`git_ci::resolve`) and hands that
+  `CiRepo` to the request, so nothing re-reads `.git/config` between the
+  check and the call. The release gate uses the same `url` that `tip_ci` and
+  `ls-remote` then use, and runs before both. The user's Release button is
+  ungated, as planned. No other caller of `git_ci` reads with the token.
+- Card dedupe (per project and repo while pending), CI cards left out of
+  both pending-limit counts, `git_push_cancel`/Dismiss/`clear` on a CI card,
+  prune and session revocation, and the keyring-free host path (no card
+  staged). A card flood is bounded by the 60-reads/hour CI budget, which
+  `admit` charges before the gate.
+- `projects.json`: `git_ci_repos` sits outside the strict `ProjectPolicy`.
+  `save_projects` copies only status and position, so the frontend's
+  whole-list save cannot drop the key. Folder imports build the entry from
+  scratch (`project_extra`) and adopt no extras.
+- The frontend: the only consumer of push cards is `GitPushMcp.tsx` (git
+  bar and Agents view). Nothing else matches on statuses or kinds, and the
+  phone shows no push cards. All 7 new i18n keys are in all five
+  dictionaries. The `gitPushMcp.ciAllow` UntestedTag row is there.
+- No new commands, so no `command_class` rows. Services stay
+  AppHandle-free. `PushBinding` is not persisted, so the new field needs no
+  serde shape.
+
+**Bugs found and fixed (`c723c06b`):**
+1. **An empty `.git` at spawn passed `repo_changed`.** `git_entry_identity`
+   took any `<ancestor>/.git`. Git passes over an empty or half-made `.git`
+   folder, and `git init` fills one in place, so the inode stays the same.
+   An agent in such a folder could make a repo whose `.git/config` was
+   never guarded, and the check passed. Now a folder counts only when it
+   holds `HEAD`, `objects` and `refs`, as git requires (`git_entry_at`).
+   Pointer files always count. Sibling bug: a `.git` link was identified by
+   the link's own inode, so swapping the folder it names went unnoticed. A
+   link now counts as its target. Test:
+   `git_push_mcp::a_git_init_into_an_empty_dot_git_after_spawn_is_refused`
+   (empty `.git` plus `git init` gives `repo_changed`; the link target
+   swapped gives `repo_changed`). It fails against the old walk.
+   `root_mcp::a_push_grant_records_the_git_dir_found_at_spawn` now builds
+   real git dirs.
+2. **Project bundles carried CI and push consent.** `exported_entry` and
+   the import kept `git_ci_repos` and `git_push_mcp.confirmed_url`. A
+   `.tabtivityproj` naming the user's private repo therefore opened that
+   repo's CI to the project's agents with no card, and skipped the first
+   push's URL check. Both are now dropped on export and on import
+   (`git_push_mcp::drop_confirmations`, `drop_imported_confirmations`, the
+   same treatment as phone access). The level and protected branches still
+   travel. Test:
+   `project_transfer::bundles_carry_no_push_or_ci_confirmations`.
+   `docs/context/git_push_mcp.md` is updated for both fixes.
+
+**Gates (at `c723c06b`):** `npm run build` ok. `npm test`: 798 files / 7980
+tests passed. `cargo test --workspace`: 4235 passed, 4 ignored, 0 failed.
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`:
+3737 + 1 passed, 4 ignored. `npm run lint` (via `rtk proxy`): 0 errors, 28
+warnings (unchanged). All three clippy gates clean. Windows cross-check
+(`clippy --target x86_64-pc-windows-msvc --all-targets -D warnings` and
+`cargo check --workspace --all-targets`) clean. `aarch64-apple-darwin`
+`cargo check --workspace --all-targets` with the check-only stand-ins clean
+(the 5 vendored `tauri-runtime-wry` warnings were already there).
+`scripts/brand-check.sh` ok. `scripts/privacy-check.sh` clean.
+`git diff --check` clean. `npm run backend:stale` was not run (main agent,
+at landing).
+
+**Flagged for user:**
+- Behaviour change from fix 2: a project moved by bundle asks again before
+  its first agent push, and again for CI ("Allow CI" card), on the new
+  machine. A bundle still carries the push *level*, so a bundle can arrive
+  set to Apply. The URL check still stops the first push, but you may want
+  the level dropped on import too (left as it was: it isn't consent for a
+  repo).
+- A residual race in the defence in depth: `repo_changed` is checked before
+  the lane's git reads the repo, not pinned to it. If the tab had no `.git`
+  of its own at spawn (only a parent repo), an agent looping
+  `git init`/`rm -rf .git` can sometimes win the window between the check
+  and the read. The A2 confirmed-repo gate still holds then: an unconfirmed
+  repo only gets a card. Closing the race fully would mean passing the
+  spawn-time git dir to every lane git call (`GIT_DIR`). That is a design
+  change, so it is not made here.
+- A `.git` pointer *file* is identified by its inode. Its contents are
+  protected only by git_guard's read-only bind, which covers the start dir's
+  pointer. A folder whose `HEAD` holds garbage but which has `objects` and
+  `refs` still counts as a repo here, while git rejects it. Both are edge
+  cases behind the A2 gate.
+- The implementer's residuals stand: there is no UI to list or remove
+  `git_ci_repos`; Dismiss followed by another read stages a new card;
+  Windows records presence only.
