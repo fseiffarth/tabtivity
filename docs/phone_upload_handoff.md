@@ -575,3 +575,74 @@ skipped (no Rust change). Not run live.
 - No "marked" row in the listing itself: the landed file is named in its
   green upload row (the desktop's name), not highlighted among the files —
   that would have needed a new visual treatment.
+
+### Review D
+
+Reviewed `2171df68` + `03269a2a`.
+
+#### Fixed (`128501cd`, `fix(mobile): a failed re-list of the files drawer neither sticks nor keeps Upload here`)
+
+- **A failed re-list stuck, and kept Upload here beside it.** The listing
+  effect now skips blanking on a same-folder re-list (after a landing or
+  undo), but its success path never cleared `failure`: one re-list that met
+  a refusal (network blip, `files_off`, `files_unavailable`) left the error
+  on screen in place of the list even after the next good answer, until the
+  drawer moved folders. The stale listing also kept `uploads: true`, so the
+  button stood beside the refusal (a dead button after files were switched
+  off). A good answer now clears the refusal; a refusal drops the listing,
+  as a first listing's failure always did. Test: *a re-list that fails
+  hides Upload here, and the next good one clears the refusal* (fails
+  against `2171df68`).
+
+Checked and fine:
+
+- `usePhonePicks` vs the old `SendToDesktop` / `useProjectInbox`: same row
+  shape (`extra` is `{}` for both), same name fallback, same pre-check row,
+  same parallel sends in pick order, same `t` captured at the tap, the input
+  still reset in `onChange` (the same file can be picked twice), still
+  `ANY_FILE_ACCEPT` + `multiple`, `pickPhoneFiles` unchanged. No object URLs
+  in either; the composer (`Terminal.tsx`, held Send) and `MarkupView` do not
+  use the hook.
+- The code-less 413 → `file_too_large` reaches only `postFile`'s four callers
+  (`uploadToInbox` — composer, markup layers —, project inbox, Send to
+  desktop, Upload here); each maps `file_too_large` to its own too-large
+  text, and none special-cased `request_failed` on a 413. `api()` untouched.
+- Queued picks carry their folder token stamped at the tap; Undo deletes by
+  the landed file's own token, never the folder's; a landing after the
+  drawer moved re-lists the folder now shown (harmless). setState after
+  unmount is a no-op in React 18. The undo route answers `200 {undone}`, so
+  `api()`'s empty-body check holds.
+- i18n: all 17 keys in en/de/fr/es/it with placeholders (`i18n.test.ts`
+  green); `mobile.files.upload` register row present; no new `any`.
+
+#### Verdicts on step D's flagged items
+
+- *One-tap Undo on the phone*: agreed — own just-landed file, desktop
+  re-checks unchanged. Left for the user.
+- *Queued picks outlive the drawer*: confirmed (uploads go on, rows lost on
+  close). Left for the user.
+- *No marked row in the listing*: confirmed, matches "no new treatment".
+
+#### Flagged for user (not changed)
+
+- An Undo whose DELETE timed out or dropped (`undoRetry`) may still have
+  landed; the retry then answers `file_not_found` and the row says "Kept —
+  it was changed or moved since" although the file is gone. Same for an
+  upload POST that times out after landing (row says timeout, file is
+  there) — the inbox siblings share that.
+- `usePhonePicks` reads the folder stamp from a ref at answer time, not a
+  closure per tap; only a second Upload here tapped while
+  `showOpenFilePicker`'s `getFile()`s are still resolving could re-stamp
+  them. Not reachable through the modal picker in practice.
+- Handoff step D said `MobileProjectFiles.test.tsx` had 17 tests; it had 16
+  (now 17).
+
+#### Gates (Linux, after `128501cd`)
+
+`scripts/gates.sh` (frontend only): brand, whitespace, lint-fe,
+`npm run build` (incl. mobile bundle), vitest `--changed` — all PASS.
+Related files run explicitly: `MobileProjectFiles` 17 (+1),
+`MobileSendToDesktop`, `MobileNewTabSheet`, `MobileTerminalInbox`,
+`MobileFocusInboxPreviews`, `MobileInboxRefs`, `MobileMarkupNewTab`,
+`i18n.test.ts` — 8 files / 62 tests PASS. Rust gates skipped (no Rust
+change). Not run live.
