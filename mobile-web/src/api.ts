@@ -1,5 +1,6 @@
 import { translate, useI18nStore } from "../../src/lib/i18n";
 import type { Mark, MarkTick } from "./markup/layer";
+import { appleTouchDevice } from "./platform";
 
 /** One row of the phone's list. `kind` says whether it is a project or a box
  * (#31aa) — a box is a scope of its own on the desktop, always "active" here,
@@ -777,6 +778,9 @@ export interface SessionTranscript {
    * agent is running now — Claude's `Bash` calls still without a result, and
    * background ones still running. */
   shells?: RunningShell[];
+  /** Desktop Reader only: the read named a watch id and the backend armed
+   * it, so a change will be announced (`lib/agents/transcriptWatch`). */
+  watched?: boolean;
 }
 
 /** A shell command the agent started and is waiting on. */
@@ -829,8 +833,14 @@ export interface InboxAttachment { name: string; reference: string; size: number
 export const MAX_INBOX_FILE = 24 * 1024 * 1024;
 /** The `accept` of the fallback `<input>` behind every "a file from this
  * phone" picker (see `pickPhoneFiles`). The wildcards cover every type between
- * them — an unknown file is `application/octet-stream`. */
-export const ANY_FILE_ACCEPT = "application/*,text/*,image/*,video/*,audio/*";
+ * them — an unknown file is `application/octet-stream`. An iPhone or iPad
+ * gets none: iOS turns `accept` into file types and knows no type for
+ * `application/*` or `text/*`, so its Files picker would grey out everything
+ * but media, while a bare input there already offers every file. */
+export function phoneFileAccept(device = appleTouchDevice()): string | undefined {
+  return device ? undefined : "application/*,text/*,image/*,video/*,audio/*";
+}
+export const ANY_FILE_ACCEPT = phoneFileAccept();
 
 type OpenFilePicker = (options: { multiple: boolean }) => Promise<Array<{ getFile(): Promise<File> }>>;
 

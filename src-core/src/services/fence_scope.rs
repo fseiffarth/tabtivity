@@ -113,10 +113,11 @@ fn helper_path(exe: Option<PathBuf>, pid: u32) -> String {
 }
 
 /// `tabtivity --fence-scope <prog> [args…]`: enter the domain, then exec `prog`
-/// with the environment `agent_exec` would give it (its carriers mapped), so
-/// a spawn needs one step in front of bwrap, not two.
+/// with the environment `prepare` gives it (the desktop passes
+/// `agent_exec::apply`, which maps the secret carriers to the CLI's own
+/// variables), so a spawn needs one step in front of bwrap, not two.
 /// Returns only on failure, with the exit code.
-pub fn run(args: &[std::ffi::OsString]) -> i32 {
+pub fn run(args: &[std::ffi::OsString], prepare: impl FnOnce(&mut std::process::Command)) -> i32 {
     use std::os::unix::process::CommandExt;
     let Some((prog, rest)) = args.split_first() else {
         eprintln!(concat!("Agent sandbox: usage: ", crate::app_slug!(), " --fence-scope <program> [args…]"));
@@ -128,7 +129,7 @@ pub fn run(args: &[std::ffi::OsString]) -> i32 {
     }
     let mut cmd = std::process::Command::new(prog);
     cmd.args(rest);
-    crate::services::agent_exec::apply(&mut cmd);
+    prepare(&mut cmd);
     let e = cmd.exec();
     eprintln!("Agent sandbox: {}: {e}", Path::new(prog).display());
     127

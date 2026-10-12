@@ -15,6 +15,7 @@
  * share, so asserting it is snapped guards the whole alignment.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor } from "@testing-library/react";
 import { snapToDevicePx } from "../../components/embed/FileViewerPane";
 
@@ -77,6 +78,8 @@ async function renderTextViewAt(fontSize: number, dpr: number) {
 
 const lineHeightPx = (code: HTMLElement) =>
   parseFloat(code.style.getPropertyValue("--code-line-height"));
+
+warmFileViewer();
 
 describe("editor line-height is snapped to the device-pixel grid", () => {
   beforeEach(() => {

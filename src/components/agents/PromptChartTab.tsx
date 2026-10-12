@@ -4,6 +4,7 @@ import { useActivityStore } from "../../stores/activity";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { PromptChart } from "./PromptChart";
+import { isPromptTargetTab } from "./promptTarget";
 
 interface Props {
   /** The tab's scope: a project id, or `"root"`. The chart's columns are this
@@ -15,11 +16,6 @@ interface Props {
 
 const EMPTY_TABS: TabEntry[] = [];
 
-/** The agent tabs a prompt can be aimed at — the same predicate the Agents view
- *  lists by, kept here so the two surfaces agree on which tabs are columns. */
-export function isPromptTargetTab(tab: TabEntry): boolean {
-  return (tab.kind === "agent" || tab.kind === "local_agent") && !!tab.scheduleTargetId;
-}
 
 /**
  * The Prompt chart tab (`PROMPTCHART_TAB_CMD`): `PromptChart` given a whole

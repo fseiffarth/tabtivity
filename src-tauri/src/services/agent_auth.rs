@@ -317,7 +317,7 @@ fn adopt(cli: &str, store_dir: &Path, store: &Path, home: &Path, bytes: &[u8]) -
 /// Which half of a reconciliation runs. A pass over every home adopts from
 /// all of them first and places into all of them after, so a login made in
 /// any home reaches every other in the same pass whatever the order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Step {
     Adopt,
     Place,
@@ -349,7 +349,22 @@ impl Step {
 /// per scope since 2026-10-08), never a login to hand every other scope. It is not adopted, and the store is not placed over a copy the home
 /// changed since the store last placed it, which would pull the wiring from
 /// under a running tab.
-fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &Path, copy: &HomeFile, step: Step) {
+///
+/// Answers whether the pair is *settled*: the home holds the store's bytes
+/// (or neither exists) and this call wrote nothing. Only a settled pair may be
+/// skipped by [`reconcile_file`]'s stat gate — a pending or refused adoption
+/// also depends on the home's account file, so it is looked at again each pass.
+fn reconcile_file_now(
+    cli: &str,
+    store_dir: &Path,
+    store: &Path,
+    leaf: &str,
+    home: &Path,
+    copy: &HomeFile,
+    step: Step,
+) -> bool {
+    #[cfg(test)]
+    FULL_PASSES.with(|n| n.set(n.get() + 1));
     let home_bytes = content(copy.read());
     let store_bytes = content(std::fs::read(store).ok());
     let receive_only = crate::services::agent_home::is_local_model_home(home);
@@ -359,7 +374,8 @@ fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &
                 && read_placed(store_dir, home, leaf).as_deref() != Some(digest(b).as_str())
         })
     {
-        return;
+        // Held back, not settled: looked at again each pass.
+        return false;
     }
     if let (Some(bytes), true, false) = (&home_bytes, step.adopts(), receive_only) {
         let hash = digest(bytes);
@@ -367,13 +383,13 @@ fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &
         let changed = placed.as_deref() != Some(hash.as_str()) && store_bytes.as_deref() != Some(bytes.as_slice());
         if changed && adopt(cli, store_dir, store, home, bytes) {
             write_placed(store_dir, home, leaf, &hash);
-            return;
+            return false;
         }
     }
     if !step.places() {
-        return;
+        return home_bytes == store_bytes;
     }
-    let Some(bytes) = store_bytes else { return };
+    let Some(bytes) = store_bytes else { return home_bytes.is_none() };
     let hash = digest(&bytes);
     let linked = copy.metadata().and_then(|m| m.ino).is_some_and(|ino| {
         #[cfg(unix)]
@@ -392,8 +408,104 @@ fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &
             Ok(()) => write_placed(store_dir, home, leaf, &hash),
             Err(e) => eprintln!("agent_auth: {cli}: place {}: {e}", copy.path().display()),
         }
+        false
     } else if read_placed(store_dir, home, leaf).as_deref() != Some(hash.as_str()) {
         write_placed(store_dir, home, leaf, &hash);
+        false
+    } else {
+        true
+    }
+}
+
+/// What a `stat` says about one of the three files a pair is made of. Any
+/// write, truncate, replace-by-rename or removal moves at least one field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    /// `(device, inode, ctime)` on unix: a rename onto the path moves the
+    /// inode, and ctime moves even when a writer restores mtime.
+    identity: Option<(u64, u64, i64, i64)>,
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()))
+    };
+    #[cfg(not(unix))]
+    let identity = None;
+    Some(FileStamp { len: meta.len(), modified: meta.modified().ok(), identity })
+}
+
+/// The stamps of a pair: the home's copy, the store's file, the placed sidecar.
+type PairStamp = [Option<FileStamp>; 3];
+
+fn pair_stamp(store_dir: &Path, store: &Path, leaf: &str, home: &Path, copy: &HomeFile) -> PairStamp {
+    [file_stamp(&copy.path()), file_stamp(store), file_stamp(&placed_file(store_dir, home, leaf))]
+}
+
+/// A file touched this recently may be rewritten again inside the same
+/// timestamp tick on a coarse filesystem, with the same length (a refreshed
+/// token usually is): such a stamp proves nothing yet, so it is not trusted.
+const STAMP_SETTLE: Duration = Duration::from_secs(3);
+
+fn stamp_is_trustworthy(stamp: &PairStamp, now: std::time::SystemTime) -> bool {
+    stamp.iter().flatten().all(|file| {
+        file.modified
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= STAMP_SETTLE)
+    })
+}
+
+/// The pairs last seen settled, by home copy, store file and step.
+type SettledPairs = std::collections::HashMap<(PathBuf, PathBuf, Step), PairStamp>;
+
+fn settled_pairs() -> &'static Mutex<SettledPairs> {
+    static SETTLED: OnceLock<Mutex<SettledPairs>> = OnceLock::new();
+    SETTLED.get_or_init(Default::default)
+}
+
+/// Homes come and go; past this many remembered pairs the gate starts over
+/// (one full pass re-learns it).
+const SETTLED_CAP: usize = 4096;
+
+#[cfg(test)]
+thread_local! {
+    /// Full (read + hash) reconciles run on this thread, for the gate's tests.
+    static FULL_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// [`reconcile_file_now`] behind a stat gate. The keeper visits every home ×
+/// CLI × path every [`POLL`], forever; reading and SHA-256ing both sides each
+/// time was its whole cost. A pair that was settled and whose three files
+/// still `stat` exactly as they did then cannot need anything, so it is
+/// skipped without a read. Everything else — a changed size, mtime, ctime or
+/// inode on either side, a missing or new file, a pair never seen settled, a
+/// file touched within [`STAMP_SETTLE`] — takes the full path as before.
+fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &Path, copy: &HomeFile, step: Step) {
+    let key = (copy.path(), store.to_path_buf(), step);
+    let before = pair_stamp(store_dir, store, leaf, home, copy);
+    {
+        let settled = settled_pairs().lock().unwrap_or_else(|p| p.into_inner());
+        if settled.get(&key) == Some(&before) {
+            return;
+        }
+    }
+    let settled_now = reconcile_file_now(cli, store_dir, store, leaf, home, copy, step);
+    let after = pair_stamp(store_dir, store, leaf, home, copy);
+    let mut settled = settled_pairs().lock().unwrap_or_else(|p| p.into_inner());
+    // `after == before`: nothing was written under the full pass, by it or by
+    // a tab, so `after` is the stamp of exactly the bytes it compared.
+    if settled_now && after == before && stamp_is_trustworthy(&after, std::time::SystemTime::now()) {
+        if settled.len() >= SETTLED_CAP {
+            settled.clear();
+        }
+        settled.insert(key, after);
+    } else {
+        settled.remove(&key);
     }
 }
 
@@ -442,8 +554,27 @@ pub fn reconcile_home_in(state_dir: &Path, home: &Path) {
 }
 
 fn reconcile_home_step(state_dir: &Path, home: &Path, step: Step) {
+    // The store and the homes are shared by every process on this state dir
+    // (the window, its desktop sidecar, a server's daemon and its shell
+    // shims): one adopt/place at a time, or two could each adopt a different
+    // refresh and place the older one, or leave a login half-removed beside
+    // the administrator's key (final review B4).
+    let _one_at_a_time = storage::FileLock::exclusive(&store_root_in(state_dir));
+    reconcile_home_with(state_dir, home, step, &crate::services::server::agent_keys::holds_admin_key);
+}
+
+/// Whether a login file holds the administrator's current key for a CLI
+/// (`services::server::agent_keys::holds_admin_key`); `None`: unknown.
+type HoldsAdminKey = dyn Fn(&str, &[u8]) -> Option<bool>;
+
+fn reconcile_home_with(state_dir: &Path, home: &Path, step: Step, holds_key: &HoldsAdminKey) {
+    let on_admin_key = crate::services::server::agent_keys::chosen_in(state_dir);
     for (cli, paths) in registry() {
         let store_dir = store_dir_in(state_dir, cli);
+        if on_admin_key.contains(cli) {
+            beside_admin_key(cli, state_dir, &store_dir, paths, home, step, holds_key);
+            continue;
+        }
         for path in paths {
             let store = store_path_in(state_dir, cli, path);
             match path.kind {
@@ -464,6 +595,55 @@ fn reconcile_home_step(state_dir: &Path, home: &Path, step: Step) {
         }
         if cli == "claude" && step.places() {
             link_claude_identity(&store_dir, home);
+        }
+    }
+}
+
+/// A CLI this user runs on the administrator's API key (hosted plan §5.2,
+/// "never both"): the home keeps none of the user's own login for it, so the
+/// CLI never picks between the environment key and a login file. The store
+/// keeps the login; switching back places it again.
+///
+/// A login a tab wrote all the same — a tab from before the switch
+/// refreshing its token, a `/login` in the tab — is still adopted first, so
+/// a rotated refresh token is not lost; but never a file holding the
+/// administrator's key (a CLI that saved the key it was handed): the
+/// administrator's key never becomes the user's own login. When that cannot
+/// be told (the keeper unreachable, the key withdrawn), the written file is
+/// neither adopted nor removed — it stays in the home until it can be told:
+/// removing it would lose the only copy of a rotated refresh token, and no
+/// new agent runs beside it meanwhile, since the same keeper answer fails
+/// the next spawn (`agent_keys::inject_env`). Only single-file logins are
+/// adopted here (every CLI that can take a key keeps one).
+fn beside_admin_key(cli: &str, state_dir: &Path, store_dir: &Path, paths: &[AuthPath], home: &Path, step: Step, holds_key: &HoldsAdminKey) {
+    // The bytes of a login file a tab wrote since the store last placed one.
+    let written = |path: &AuthPath| -> Option<Vec<u8>> {
+        let bytes = content(HomeFile::open_existing(home, path.rel)?.read())?;
+        let unchanged = read_placed(store_dir, home, &leaf_of(path.rel)).as_deref() == Some(digest(&bytes).as_str())
+            || content(std::fs::read(store_path_in(state_dir, cli, path)).ok()).as_deref() == Some(bytes.as_slice());
+        (!unchanged).then_some(bytes)
+    };
+    let files = || paths.iter().filter(|p| p.kind == AuthKind::File);
+    if step.adopts() {
+        for path in files() {
+            let Some(bytes) = written(path) else { continue };
+            let store = store_path_in(state_dir, cli, path);
+            if holds_key(cli, &bytes) == Some(false) && adopt(cli, store_dir, &store, home, &bytes) {
+                write_placed(store_dir, home, &leaf_of(path.rel), &digest(&bytes));
+            }
+        }
+    }
+    if step.places() {
+        let undecided: Vec<&str> = files()
+            .filter(|path| written(path).is_some_and(|bytes| holds_key(cli, &bytes).is_none()))
+            .map(|path| path.rel)
+            .collect();
+        let leave: Vec<AuthPath> = paths.iter().filter(|p| !undecided.contains(&p.rel)).copied().collect();
+        remove_copies(home, &leave);
+        if cli == "claude" {
+            if let Some(file) = HomeFile::open_existing(home, ".claude.json") {
+                strip_claude_identity(&file);
+            }
         }
     }
 }
@@ -569,6 +749,15 @@ pub struct LoginStatus {
     /// This CLI keeps its login somewhere Tabtivity cannot share (a keyring, a
     /// database mixed with other state): one login per scope.
     pub shared: bool,
+    /// The CLI can run on an API key at all — the API proxy serves it
+    /// (`agent_api_keys::proxies`): what a server's administrator can offer
+    /// a key for.
+    pub admin_key_capable: bool,
+    /// A hosted server's administrator offers an API key for this CLI.
+    pub admin_key_offered: bool,
+    /// This user's agents run on the administrator's key for this CLI, not
+    /// on their own login (hosted plan §5.2).
+    pub uses_admin_key: bool,
     /// The CLI is switched on for a stored provider API key and one of its
     /// providers has one (`services::agent_api_keys`). Filled by the
     /// `agent_logins` command, never here: this module stays keyring-free.
@@ -580,6 +769,13 @@ pub struct LoginStatus {
 }
 
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
+    status_with(state_dir, user_home, &BTreeSet::new())
+}
+
+/// [`status_in`] with the CLIs a hosted server's administrator offers a key
+/// for (`services::server::agent_keys::offered`).
+pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String>) -> Vec<LoginStatus> {
+    let on_admin_key = crate::services::server::agent_keys::chosen_in(state_dir);
     registry()
         .into_iter()
         .map(|(cli, paths)| {
@@ -609,6 +805,9 @@ pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
                 importable,
                 blocked,
                 shared: !paths.is_empty(),
+                admin_key_capable: crate::services::agent_api_keys::proxies(cli),
+                admin_key_offered: offered.contains(cli),
+                uses_admin_key: on_admin_key.contains(cli),
                 api_key: false,
                 api_budget_reached: false,
             }
@@ -616,8 +815,11 @@ pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
         .collect()
 }
 
+/// The login rows. A key broker's month for a CLI on the administrator's
+/// key is in the API-key status (`agent_api_keys::status`), beside the one
+/// credential choice per CLI (#2389).
 pub fn status() -> Vec<LoginStatus> {
-    status_in(&storage::state_dir(), &crate::paths::home_dir())
+    status_with(&storage::state_dir(), &crate::paths::home_dir(), &crate::services::server::agent_keys::offered())
 }
 
 /// Remove a home's copies of `cli`'s login paths.
@@ -981,6 +1183,99 @@ mod tests {
         f.write_all(bytes.as_bytes()).unwrap();
     }
 
+    /// Push a file's mtime far enough back that the gate trusts its stamp.
+    fn age(path: &Path, secs: u64) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(secs)).unwrap();
+    }
+
+    fn full_passes() -> usize {
+        FULL_PASSES.with(|n| n.get())
+    }
+
+    /// A home and store holding the same Codex login, reconciled until settled.
+    fn settled_codex_pair(state: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let home = crate::services::agent_home::scope_home_in(state, "a");
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        let copy = home.join(".codex/auth.json");
+        std::fs::write(&copy, r#"{"tokens":{"account_id":"one"}}"#).unwrap();
+        reconcile_home_in(state, &home);
+        let store = store_of(state, "codex", ".codex/auth.json");
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap(), "login adopted");
+        let placed = placed_file(&store_dir_in(state, "codex"), &home, &leaf_of(".codex/auth.json"));
+        for path in [&copy, &store, &placed] {
+            age(path, 60);
+        }
+        // The pass that learns the (now old enough) stamps.
+        reconcile_home_in(state, &home);
+        (home, copy, store)
+    }
+
+    #[test]
+    fn an_unchanged_login_is_not_read_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let (home, copy, store) = settled_codex_pair(&state);
+        let before = full_passes();
+        for _ in 0..5 {
+            reconcile_home_in(&state, &home);
+        }
+        assert_eq!(full_passes(), before, "an unchanged pair took the read + hash path");
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap());
+    }
+
+    #[test]
+    fn a_changed_size_or_mtime_reconciles_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let (home, copy, store) = settled_codex_pair(&state);
+
+        // A refresh in place, new length: adopted into the store.
+        write_in_place(&copy, r#"{"tokens":{"account_id":"one","access_token":"longer"}}"#);
+        let before = full_passes();
+        reconcile_home_in(&state, &home);
+        assert!(full_passes() > before, "a changed size must reconcile");
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap());
+
+        // Settle again, then a refresh of the SAME length with only mtime moved.
+        let placed = placed_file(&store_dir_in(&state, "codex"), &home, &leaf_of(".codex/auth.json"));
+        for path in [&copy, &store, &placed] {
+            age(path, 60);
+        }
+        reconcile_home_in(&state, &home);
+        let quiet = full_passes();
+        reconcile_home_in(&state, &home);
+        assert_eq!(full_passes(), quiet, "settled again");
+        write_in_place(&copy, r#"{"tokens":{"account_id":"one","access_token":"LONGER"}}"#);
+        age(&copy, 30);
+        reconcile_home_in(&state, &home);
+        assert!(full_passes() > quiet, "a changed mtime must reconcile");
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap(), "same-size refresh adopted");
+
+        // The other direction: the store moves, the home is caught up.
+        for path in [&copy, &store, &placed] {
+            age(path, 60);
+        }
+        reconcile_home_in(&state, &home);
+        std::fs::write(&store, r#"{"tokens":{"account_id":"one","access_token":"from-store"}}"#).unwrap();
+        let other = crate::services::agent_home::scope_home_in(&state, "b");
+        std::fs::create_dir_all(&other).unwrap();
+        reconcile_all_in(&state);
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap());
+    }
+
+    #[test]
+    fn a_freshly_written_login_is_not_trusted_by_its_stamp() {
+        let now = std::time::SystemTime::now();
+        let stamp = |age: u64| {
+            Some(FileStamp { len: 1, modified: Some(now - Duration::from_secs(age)), identity: None })
+        };
+        assert!(stamp_is_trustworthy(&[stamp(10), stamp(10), None], now));
+        assert!(!stamp_is_trustworthy(&[stamp(10), stamp(1), stamp(10)], now), "touched this second");
+        let ahead = Some(FileStamp { len: 1, modified: Some(now + Duration::from_secs(5)), identity: None });
+        assert!(!stamp_is_trustworthy(&[ahead, None, None], now), "a clock ahead of ours");
+    }
+
     #[test]
     #[cfg(unix)]
     fn a_home_symlink_cannot_publish_a_host_file_as_a_shared_login() {
@@ -1040,6 +1335,77 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}");
         assert!(std::fs::symlink_metadata(home.join(".claude.json")).unwrap().is_file());
         assert_eq!(claude_account_in_home(&home).as_deref(), Some("fixture@example.com"));
+    }
+
+    /// Hosted plan §5.2, "never both": a CLI on the administrator's key has
+    /// none of the user's own login in any home; a refresh a tab wrote is
+    /// still adopted, a file holding the key never; switching back puts the
+    /// login in again. Another CLI and another user are untouched.
+    #[test]
+    fn a_cli_on_the_admin_key_keeps_no_own_login_in_the_homes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = crate::services::agent_home::scope_home_in(&state, "a");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let creds = ".claude/.credentials.json";
+        write_store(&store_of(&state, "claude", creds), b"{\"own\":1}").unwrap();
+        write_store(&store_of(&state, "gemini", ".gemini/oauth_creds.json"), b"{\"g\":1}").unwrap();
+        std::fs::write(home.join(".claude.json"), r#"{"oauthAccount":{"emailAddress":"own@example.com"},"theme":"dark"}"#).unwrap();
+        reconcile_home_in(&state, &home);
+        assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":1}");
+        // Bob's state dir is another user's: his choice is his alone.
+        let bob = tmp.path().join("bob");
+        let bob_home = crate::services::agent_home::scope_home_in(&bob, "a");
+        std::fs::create_dir_all(&bob_home).unwrap();
+        write_store(&store_of(&bob, "claude", creds), b"{\"bob\":1}").unwrap();
+
+        crate::services::server::agent_keys::set_choice_in(&state, "claude", true).unwrap();
+        let never = |_: &str, _: &[u8]| Some(false);
+        reconcile_home_with(&state, &home, Step::Both, &never);
+        assert!(!home.join(creds).exists(), "the own login left the home");
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":1}", "the store keeps it");
+        let identity = std::fs::read_to_string(home.join(".claude.json")).unwrap();
+        assert!(!identity.contains("oauthAccount") && identity.contains("theme"), "{identity}");
+        assert!(home.join(".gemini/oauth_creds.json").is_file(), "another CLI keeps its login");
+        reconcile_home_in(&bob, &bob_home);
+        assert_eq!(std::fs::read(bob_home.join(creds)).unwrap(), b"{\"bob\":1}", "Bob stays on his own login");
+
+        // A tab from before the switch refreshes: adopted, then taken out.
+        std::fs::write(home.join(creds), b"{\"own\":2}").unwrap();
+        reconcile_home_with(&state, &home, Step::Both, &never);
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}");
+        assert!(!home.join(creds).exists());
+        // A file holding the administrator's key is never adopted, and
+        // leaves the home.
+        std::fs::write(home.join(creds), b"{\"admin\":1}").unwrap();
+        reconcile_home_with(&state, &home, Step::Both, &|_: &str, _: &[u8]| Some(true));
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}");
+        assert!(!home.join(creds).exists());
+        // One that cannot be checked (keeper down, key withdrawn) is neither
+        // adopted nor removed — it may be the only copy of a rotated refresh
+        // token (P3b review) — through the keeper's adopt-then-place passes
+        // too; once it can be told, it is adopted and leaves.
+        std::fs::write(home.join(creds), b"{\"own\":3}").unwrap();
+        let unknown = |_: &str, _: &[u8]| None;
+        reconcile_home_with(&state, &home, Step::Both, &unknown);
+        reconcile_home_with(&state, &home, Step::Adopt, &unknown);
+        reconcile_home_with(&state, &home, Step::Place, &unknown);
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}");
+        assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":3}", "kept until it can be told");
+        reconcile_home_with(&state, &home, Step::Both, &never);
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":3}");
+        assert!(!home.join(creds).exists());
+
+        crate::services::server::agent_keys::set_choice_in(&state, "claude", false).unwrap();
+        reconcile_home_in(&state, &home);
+        assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":3}", "switching back places the login again");
+        let rows = status_with(&state, tmp.path(), &["claude".to_string()].into_iter().collect());
+        let claude = rows.iter().find(|r| r.id == "claude").unwrap();
+        assert_eq!((claude.admin_key_capable, claude.admin_key_offered, claude.uses_admin_key), (true, true, false));
+        let codex = rows.iter().find(|r| r.id == "codex").unwrap();
+        assert_eq!((codex.admin_key_capable, codex.admin_key_offered), (false, false));
+        let vibe = rows.iter().find(|r| r.id == "vibe").unwrap();
+        assert!(!vibe.admin_key_capable, "no base-URL variable: no API key through the proxy (#2389)");
     }
 
     #[test]

@@ -12,7 +12,7 @@ const MAX_STACK: usize = 8_000;
 
 /// Append a frontend error to crash.log. Fields are clipped so a runaway
 /// error source cannot bloat the log.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn report_frontend_error(kind: String, message: String, stack: Option<String>) {
     let mut entry = format!(
         "=== FRONTEND {} {} ===\n{}",

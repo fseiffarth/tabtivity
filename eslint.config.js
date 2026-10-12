@@ -28,6 +28,7 @@ export default tseslint.config(
     ignores: [
       'dist/**',
       'mobile-dist/**',
+      'web-dist/**',
       'node_modules/**',
       'src-tauri/**',
       'target/**',

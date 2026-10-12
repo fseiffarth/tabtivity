@@ -187,7 +187,7 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
             version: Some(env!("CARGO_PKG_VERSION").into()),
         },
         Ok(AdminRequest::PairingCode) => match auth.lock().unwrap_or_else(PoisonError::into_inner).create_pairing_code() {
-            Ok((code, expires_at)) => AdminResponse::PairingCode { code, expires_at },
+            Ok((code, expires_at)) => AdminResponse::PairingCode { code: crate::services::server::routed_pairing_code(&code), expires_at },
             Err(message) => AdminResponse::Error { message },
         },
         Ok(AdminRequest::Devices) => AdminResponse::Devices {

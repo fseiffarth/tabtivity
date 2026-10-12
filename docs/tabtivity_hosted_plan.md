@@ -1,6 +1,9 @@
 # Tabtivity Hosted — one server, several users, desktop and phone as thin clients
 
-*Plan only. Nothing here is implemented. The desktop-side groundwork (the
+*Status, the user's decisions and open points: [`server.md`](server.md).
+All phases are built on branch `hosted` (2026-10-06, unmerged, never run
+live); the build log is [`hosted_handoff.md`](hosted_handoff.md). The text
+below is the design as planned. The desktop-side groundwork (the
 headless owner, P1) is split out into
 [`headless_owner_plan.md`](headless_owner_plan.md). Written 2026-09-29 against the tree at
 `1441eb0e`, and revised the same day, against `923e0202`, after three
@@ -243,10 +246,18 @@ These are **system** template units, so no `enable-linger` is needed.
     and any copy runs as the owning uid.
   - Every walk uses `openat` and `O_NOFOLLOW`.
   - It links only accounts with uid ≥ 1000 in the `tabtivity-users` group, and
-    refuses root, system accounts and sudoers.
-- **Per-user daemons** are started through the helper on the user's first
-  login. A daemon with no client is stopped after an idle timeout. The agents
-  are unaffected, because they live in `tabtivity-tmux@`, not in the daemon.
+    refuses root, system accounts and every **root-equivalent** account:
+    members of `sudo`, `wheel`, `admin`, `root`, `docker`, `lxd`,
+    `incus-admin`, `libvirt` or `disk`, and any account a sudoers rule names
+    (per user, group, uid, alias or `ALL`, whatever it grants; sudoers and
+    its includes are parsed read-only, and an unreadable sudoers or a
+    non-`files` sudoers source refuses). Admin-role accounts too: an admin
+    uses a separate, unlinked account for Docker and VMs. *(User decision
+    2026-10-03, P3 review finding 11; built in P3 part 2.)*
+- **Per-user daemons** start by socket activation on the user's first
+  request. *Decided 2026-10-03 (#2351): a daemon with no client keeps
+  running* — it also runs the user's timers (scheduled prompts, alarms,
+  push). The agents live in `tabtivity-tmux@`, not in the daemon.
 - **tmux runs on a dedicated socket, `tmux -L tabtivity`, in its own unit.**
   With the default socket, a user who also SSHes in and runs tmux could end up
   hosting Tabtivity's sessions in their SSH-started server, outside every limit.
@@ -345,15 +356,39 @@ network (P0).**
 
 | Class | Runs where | Examples | On the server |
 |---|---|---|---|
-| `core` | the user's daemon | projects, fs, git, terminal (incl. `pty_set_visible`), agents, search, tex, viewers' backends, skills, schedules, copilot, ollama completion, the root console **Host** session (under the user's own uid, no sudo, **Q6**) | exposed |
-| `client` | the machine the user sits at | clipboard, native print, screenshot, subwindows/popouts, os clock, power, sysstat/gpustat of *this* machine, IDE launch, open-outside | not exposed; browser adapter or hidden |
-| `admin` | the server as a whole | OpenVPN (machine-wide), global machines, VMs, Docker, app update, dev build, admin-provided agent credentials and server-wide CLI installs | admin role only, or disabled (§9) |
+| `core` | the user's daemon | projects, fs, git, terminal (incl. `pty_set_visible`), agents, search, tex, viewers' backends, skills, schedules, copilot, ollama completion and local-model tabs (admin-allowed models only, see below), the root console **Host** session (under the user's own uid, no sudo, **Q6**) | exposed |
+| `client` | the machine the user sits at | clipboard, native print, screenshot, subwindows/popouts, os clock, power, sysstat/gpustat of *this* machine, IDE launch, open-outside, Recent Downloads (`list_recent_downloads`: the device's own folder, never the server's) | not exposed; browser adapter or hidden |
+| `admin` | the server as a whole | OpenVPN (machine-wide), global machines, VMs, Docker, app update, dev build, admin-provided agent credentials, **every** agent CLI install/update/remove (`install_agent*`, `update_agent`, `uninstall_agent`, `install_vibe`), and the shared Ollama's model management (`pull_ollama_model`, `pause_ollama_pull`, `delete_ollama_pull`, `delete_ollama_model`, `delete_partial_blob`, `load_ollama_model`, `stop_ollama_model`, `ensure_ollama_running`) | admin role only, or disabled (§9) |
 | `off` | nowhere in server mode | keychain unlock, anything D-Bus-session-bound, the whole-document saves that §3.4 replaces | refused with a named reason |
 
 The class also drives the UI. The frontend asks once (`server_capabilities`,
 following the `browser_capabilities` precedent) and hides a control whose
 command is unavailable, naming why, instead of letting it fail. The same call
 carries `HOST_OS`.
+
+**Decided (user, 2026-10-03), applied in the P1 review** — the table in
+`services/command_class.rs` stands at 683 commands: 521 `core`, 85 `client`,
+68 `admin`, 9 `off`.
+
+- **One shared Ollama per server; only the admin changes or starts models.**
+  There is no per-user `ollama serve`: one `ollama.service` on the host's
+  loopback (§4.4) serves every user's daemon. Pull, pause, delete, load, stop
+  and starting the service are `admin`. Because Ollama auto-loads whatever
+  model a request names, the `core` requests that reach it — `complete_text`,
+  mail AI, the local-model tabs (`prepare_local_agent`, `prepare_local_launch`,
+  `ensure_vibe_ollama_model`), embeddings — are limited to an **admin-allowed
+  model list**, checked server-side in the dispatcher before the request
+  leaves the daemon (not a UI filter; the user's model picker shows that list).
+  Not built in P1: P2 adds the list and the check with the dispatcher, P3 the
+  admin UI for it.
+- **Only the admin installs, updates or removes agent CLIs**, local and
+  remote: users run what is in the server-wide install root (§5.1). A CLI's
+  own self-updater (Claude's native updater, `npm -g` updates, …) must not
+  install per user on a server; the server homes get the CLI's "no auto-update"
+  switch where one exists and a read-only install root otherwise (§5.1, P3).
+- **Recent Downloads are the client device's** (`list_recent_downloads` →
+  `client`): a browser cannot list its own downloads folder, so the browser
+  client hides the section.
 
 ### 3.4 Live state: from the window to one headless owner
 
@@ -392,7 +427,11 @@ HTTPS session. Frame kinds:
 - **Terminal size is per client.** Today `pty_resize(id, cols, rows)`
   (`terminal.rs:980`) sets one size per terminal, so two clients of
   different sizes would fight. Each web client gets its own tmux attach,
-  because tmux already sizes per client. The phone's `pty_bridge` keeps its
+  because tmux already sizes per client. *(Built, #2347: a second client of a
+  local tmux tab gets an attach PTY `<tab>@<client>` (`terminal::join_tab`),
+  the `pty_*` commands resolve to it, and its events reach that client only;
+  the window follows the client in use, `window-size latest`. A remote,
+  container or Windows tab keeps one shared PTY.)* The phone's `pty_bridge` keeps its
   one-viewer rule, so "continue from the phone in the same tab" means the
   phone takes that tab over, and the other client sees that it was taken.
 - **Reconnect resumes by byte offset.** The daemon's terminals never drop,
@@ -457,12 +496,13 @@ checklist row in `docs/third_party_update_checklist.md`.
 
 ```
 /home/<user>/                                0700 — other users see nothing
-  .local/share/tabtivity/                        state_dir: projects.json, sessions/, agent-homes/,
+  .local/share/tabtivity-server/                 state_dir (`-server`: apart from a desktop app's, P3 part 2):
+                                              projects.json, sessions/, agent-homes/,
                                               agent-auth/ (the user's own logins), agent-global/,
                                               exec_trust.json, calendar.json (events + tasks),
                                               mail/ + secrets/ (sealed, §6.8), devices/ (device
                                               signing keys, ECDH keys and key wraps, §3.1, §6.8) …
-  tabtivity/projects/<slug>/                     own projects and clones of shared ones
+  tabtivity-server/projects/<slug>/              own projects and clones of shared ones
 /srv/tabtivity/shared/<id>.git                   bare hub, owned by tabtivity-hub; config/hooks/info
                                               root-owned read-only; members get named-user ACLs
 /opt/tabtivity/agents/                           server-wide CLI installs, owned by tabtivity-cli,
@@ -497,7 +537,7 @@ prerequisite (#172, H0 of [`headless_owner_plan.md`](headless_owner_plan.md)).
 
 - **A gateway user is one Unix account.** `tabtivity-gateway user add <name>`
   (admin CLI) goes through the helper. It creates or links the Unix user
-  (uid ≥ 1000, in `tabtivity-users`, not a sudoer), makes the home `0700`,
+  (uid ≥ 1000, in `tabtivity-users`, not root-equivalent — §3.1), makes the home `0700`,
   installs the user's slice and units, and prints a **single-use invite
   code**.
 - **Login method v1: device keys, reusing mobile pairing.** The invite code
@@ -511,6 +551,14 @@ prerequisite (#172, H0 of [`headless_owner_plan.md`](headless_owner_plan.md)).
   off the user's hardware. For an institutional server, the institution's
   identity *is* the right trust root. OIDC still only **binds a device key**;
   the session model does not change.
+  *As built (P5, `docs/context/server_gateway.md` § OIDC sign-in):* the
+  admin helper's `oidc-set` (secret on stdin) and `user-oidc NAME --sub` (by `sub` only, user decision at the final review)
+  link an account to a provider person; the pairing page's **Sign in with …**
+  runs the code flow at the gateway (PKCE, a browser-bound binder cookie, a
+  nonce bound to the key being paired); the account's own daemon verifies
+  the ID token (RS256/ES256 against the issuer's keys, issuer, audience,
+  age, nonce, its own copy of the link) and pairs the key once. Invites are
+  unchanged. Not run against a real provider.
 - **Passwords:** none for the web login. The standing "passwords are never
   persisted by default" rule concerns credentials Tabtivity *uses* (SSH, VPN,
   mail), and is §9's business.
@@ -565,7 +613,7 @@ The consequences:
 | Adversary | Can | Denied by | Residual |
 |---|---|---|---|
 | **Another user** (B, about A) | Anything their uid can, including an unfenced shell | Separate uid, `0700` homes, `0660` daemon sockets with a peer-uid check, gateway routing | Anything world-readable on the host; shared-project content by design (§6) |
-| **Another user, through host-shared channels** | Loopback TCP ports, abstract unix sockets, other users' `/proc/*/cmdline`, `/tmp`, `/dev/shm` | An inventory of every loopback listener: each needs a token or moves to a unix socket (root MCP `commands/root_mcp.rs:385` has a token; `vm_proxy.rs:178`, CLI OAuth callbacks, per-user ollama on `127.0.0.1:11434` must be checked). Also `/proc` mounted `hidepid=invisible`, `PrivateTmp=` on the units, and the sign-in relay (`sign_in.rs:57-60`, which today fetches any loopback port ≥ 1024) restricted to a listener owned by the caller's uid (§5.1) | Abstract sockets have no permissions (the fence's Landlock helper covers agents, not shells); kernel privilege escalation, since every user has a shell |
+| **Another user, through host-shared channels** | Loopback TCP ports, abstract unix sockets, other users' `/proc/*/cmdline`, `/tmp`, `/dev/shm` | An inventory of every loopback listener: each needs a token or moves to a unix socket (root MCP `commands/root_mcp.rs:385` has a token; `vm_proxy.rs:178` and CLI OAuth callbacks must be checked). **Ollama is one shared listener on `127.0.0.1:11434`** (decided 2026-10-03, §3.3) that every user's daemon — and every user's shell — reaches without a token: model changes are `admin` commands and the daemon only forwards requests for admin-allowed models, but a shell can still `curl` the port directly, so what it protects is the model store and the GPU budget, not any user's data (Ollama persists nothing per user). Also `/proc` mounted `hidepid=invisible`, `PrivateTmp=` on the units, and the sign-in relay (`sign_in.rs:57-60`, which today fetches any loopback port ≥ 1024) restricted to a listener owned by the caller's uid (§5.1) | Abstract sockets have no permissions (the fence's Landlock helper covers agents, not shells); a shell can drive the shared Ollama past the allowlist (load any pulled model, burn GPU time); kernel privilege escalation, since every user has a shell |
 | **A co-member of a shared project** | Push commits to their own branch in the hub | Their writes land only in the hub, through `tabtivity-hub`'s ref rules; nobody else's tree or `.git` is writable to them; `exec_trust` is per user | Content you merge. Instruction-level steering of your agent through `CLAUDE.md` etc. once merged (§6.5, gate 2) |
 | **A co-member, via a file served to the browser** | Author HTML/SVG in the project | Separate user-content origin with `CSP: sandbox`, active types as attachment (§3.5) | None known |
 | **A web page the user visits** | Make the browser send requests with the user's cookie | `SameSite=Strict`, Origin check on WS and on every state-changing POST, CSP | A browser 0-day |
@@ -573,7 +621,7 @@ The consequences:
 | **A prompt-injected agent** | Everything its fence allows, as its user | The fence (scope), the uid (user); the fence hides `/srv/tabtivity/shared` except its own project's hub (§6.3) | The user's own data in that scope, as today |
 | **Another user, about your agent logins, mail, private calendars and tasks** | Nothing beyond "another user" above | They live only in your `0700` `state_dir`; presence, audit and admin status never carry them (§6.7) | None beyond the host-channel row |
 | **A user you opened a calendar or todo list to** | Read it (viewer), or add, edit and delete its events and tasks (editor) | `tabtivity-calendar`'s per-uid ACL; mail and file links stripped; their text rendered as plain text with size limits; agents read-only (§6.7) | What they copied before a revoke; an editor can vandalise the shared calendar |
-| **Any user, about an admin-provided credential** (only if the admin offers one, §5.4) | Read the key or login replica their own agents are given | Nothing: the CLI must read it. Broker tokens (P5) or access-only replicas bound it | Per-use cost on the admin's key; a shared consumer login's terms (§5.4) |
+| **Any user, about an admin-provided credential** (only if the admin offers one, §5.4) | Read the key or login replica their own agents are given | Since #2389 no agent holds the key or a broker token, only its tab's proxy token (the user's daemon adds the key); a listed user's own unfenced processes can still ask the keeper for it. Broker tokens (P5) bound what that buys | Per-use cost on the admin's key; a shared consumer login's terms (§5.4) |
 | **A compromised gateway** | Intercept and act inside live sessions; see every device's traffic | Daemons verify device signatures themselves (§3.1); the gateway links no core services and runs no root verbs directly | Live-session interception while connected |
 | **Server admin** | Everything | Nothing technical, except for mail and saved passwords: they are sealed with a key the user's devices release (§6.8), so the admin reads them only while the user's daemon holds the key unlocked | The admin can read everything else, and enrolment says so in one sentence |
 | **The public internet** | Whatever the gateway port exposes | TLS, pairing-only enrolment, rate limits (`limits.rs`) | Gateway bugs. Keep it small, in a memory-safe language, with no core services linked in. |
@@ -612,16 +660,23 @@ still *offer* a credential per CLI (§5.4), but a user never depends on it.
 - **Account guard, refresh write-back, sign-out:** unchanged from the desktop,
   because each user's `agent_auth` is exactly the single-user case it was
   built for.
-- **Installing CLIs.** A user can install a CLI for themselves, as today, into
-  `<state_dir>/agents/install/` (`agent_install.rs:1-13`). The admin can also
-  install a CLI once for everyone into the **server-wide install root**,
+- **Installing CLIs (decided 2026-10-03: admin only).** On a server a user
+  never installs, updates or removes a CLI — `install_agent`, `update_agent`,
+  `uninstall_agent`, `install_agent_remote*` and `install_vibe` are `admin`
+  (§3.3); the desktop's per-user `<state_dir>/agents/install/`
+  (`agent_install.rs:1-13`) is not offered in server mode. The admin installs
+  a CLI once for everyone into the **server-wide install root**,
   `/opt/tabtivity/agents/`, owned by `tabtivity-cli`:
   - the install runs as `tabtivity-cli` through a helper verb, never as root,
     because vendor install scripts are code;
   - the root is readable by every user and bound read-only into every fence;
-  - its version pins (`services::agent_versions`) are server-wide.
-
-  When both exist, a user's own install wins, as a per-user override.
+  - its version pins (`services::agent_versions`) are server-wide;
+  - **no CLI self-updates per user**: a CLI's own updater (Claude's native
+    updater, `npm -g` updates, Codex's) is switched off in every server agent home where the CLI offers a switch
+    (`DISABLE_AUTOUPDATER`-style environment or config), and the read-only
+    install root stops the rest. Users see "ask your admin" where the
+    desktop shows Update. Remote-machine installs (`install_agent_remote*`)
+    are the admin's too, since the machines are the server's (§4.3).
 - **Rate limits and terms** are each user's own. The provider sees each user
   as themselves, and one heavy user no longer uses up anyone else's quota.
 
@@ -661,6 +716,45 @@ credentials** panel. Users opt in per CLI (§5.2).
     `agent_bin` shim sets it the same way for a CLI typed into a shell tab.
   - **Exposure:** every agent of an opted-in user can read the key, and
     direct mode has no per-user budget.
+  - *As built (P3b, `docs/context/server_gateway.md` § Admin-provided API
+    keys):* the key keeper is a subcommand of the gateway binary, socket
+    `/run/tabtivity/auth.sock` made by systemd (`0666` in the root-owned run
+    dir) and answered by caller uid alone — the gateway's account offers,
+    withdraws and lists (never reads back), a server user fetches; fenced
+    agents never see the socket (`/run` is a tmpfs in the fence). The
+    choice is the user's own file; while a CLI is on the admin's key the
+    user's own login copies leave the agent homes. A withdraw fails the
+    next spawn; running agents keep the key. Audit rows in the keeper's and
+    the gateway's logs, never the key.
+  - *Decided (user, 2026-10-03; built, § P3b decisions of the handoff):*
+    - **Per-key user list.** The admin picks, per offered key, which server
+      users may use it (none for a new key); the keeper refuses everyone
+      else's fetch by caller uid and lists the key only to them. Edited from
+      the Agent credentials panel, audited per user added or removed.
+    - **Withdrawn, or taken off the list:** the user's next spawn fails with
+      a message naming both and the way back (unchanged).
+    - **Claude through `apiKeyHelper`**, not its environment: the agent
+      home's settings name `<slug>-serverd --key-helper <socket>`, the
+      user's daemon answers that socket (`<state>/key-helper/claude.sock`)
+      by asking the keeper at every call, and only a chosen Claude's fence
+      gets that one directory bound in read-only. No "use this API key?"
+      prompt, nothing of the key in `.claude.json`; switching back removes
+      the setting. A withdraw or removal reaches a running Claude at its
+      next helper call.
+    - **Project-container agents** get the key in their `docker exec`
+      environment (named on the argv only); **remote agents and Codex do
+      not** (#2359, #2361).
+    - The keeper caps connections per caller uid (4) and each exchange at
+      2 s; it remembers earlier keys as fingerprints only, so a rotated key
+      in a login file is never adopted as the user's own.
+  - *Superseded (user, 2026-10-10, #2389 — `docs/agent_key_path_plan.md`):*
+    the administrator's key reaches agents only through each user's
+    daemon's **API proxy**, the desktop's own-key path: a proxy token + base
+    URL in the agent, the key (or the broker token) added by the proxy. The
+    `apiKeyHelper` socket, the env-carrier delivery and container delivery
+    are gone; a keyed container spawn fails; only proxy-served CLIs (Claude,
+    Gemini) can be offered a key — Mistral Vibe is dropped. A user may also
+    run a CLI on their own key (kept in the vault); one credential per CLI.
 - **API key through a broker (P5).** `tabtivity-keybroker`, running as
   `tabtivity-auth`, holds the key. Agents get a base URL pointing at the broker
   plus a **per-user broker token** (for Claude Code, `ANTHROPIC_BASE_URL`).
@@ -674,6 +768,18 @@ credentials** panel. Users opt in per CLI (§5.2).
   (`project_fence_abstract_sockets`), so a loopback port reaches the broker.
   That is also why the token is needed: any local process can reach a
   loopback port.
+  - *As built (P5, § P5 of the handoff, `docs/context/server_gateway.md` §
+    The key broker):* `<slug>-gateway broker` as `<slug>-auth` on
+    `127.0.0.1:8739`, the port held by `<slug>-keybroker.socket` from boot
+    (no squatting). Per key, the administrator picks direct or broker
+    delivery (broker only for a CLI with a documented base-URL override:
+    Claude). The keeper mints a token per listed user and hands it to the
+    user's daemon, whose API proxy forwards to the broker with it (#2389;
+    first built through Claude's `apiKeyHelper`). Budgets are monthly billed tokens per user or a
+    key default; usage is metered from the provider's answers into per-user
+    month files the user's daemon reads back. Only the messages, token
+    counting and model paths are forwarded. Containers cannot reach it
+    (refused). Not run against the provider.
 - **A shared consumer login (P5, at the admin's own risk).** Anthropic's
   Consumer Terms (§2) forbid sharing a login or making an account available
   to anyone else, and OpenAI's terms are similar. One suspension stops every
@@ -768,6 +874,16 @@ assume one human, as the sync plan's §6.1-6.2 already required.
 - **Later options (P5):** pair mode (one shared tree, for people who accept
   the hazards) and worktrees inside a shared tree. Both need the in-tree
   session files moved into `state_dir` first. Neither is ever the default.
+  *As built (P5, `docs/context/sharing.md` § In-tree worktrees, § Pair
+  mode):* in-tree worktrees of a member's own clone are built — the review
+  gate reads every checkout of the repository (one uid writes them all, so
+  the in-tree session question does not arise there). **Pair mode is
+  designed, not built**: two uids writing one tree turns P4 review finding
+  11 (git's other program-naming config keys) into a cross-user hole unless
+  the tree has no `.git` of its own, and needs a content gate for agent
+  files written live; the choice is the user's (#2382). *Decided (user,
+  2026-10-04): pair mode is dropped for now* — the design stays documented
+  as an option (#2382); members edit together through their own clones.
 
 ### 6.4 Presence and visibility
 
@@ -984,17 +1100,56 @@ availability**.
   until any of the user's devices connects. The UI and one push notification
   say "mail locked since reboot; open Tabtivity on any device". Calendar and
   todo hold no secrets and keep working.
-- **Revoking a device** deletes its wrap.
-- **Recovery.** At mail setup the user gets a one-time **recovery code**, a
-  random key under which one more wrap of K is kept. It is shown once and
-  never stored by Tabtivity. If every device and the code are lost, the sealed
-  store is lost. Mail itself is refetched from IMAP, so what is lost is the
-  saved passwords and local-only data (filters, drafts), and the setup
-  dialog says so.
+- **Revoking a device deletes its wrap and rotates K** (decided
+  2026-10-03). A new K is minted; everything sealed under the old one (the
+  credential store, a device-mode mail `key.json`, the recovery
+  wrap) is re-sealed beside the original and a wrap made for every
+  remaining device; one atomic rename of `wraps.json` commits, and a
+  journal lets the next start finish or undo a rotation a crash
+  interrupted, so no crash leaves data that no remaining key opens. While
+  locked, the wrap goes at once and the rotation runs at the next release.
+  A revoked device with an old copy of `wraps.json` then opens nothing new.
+- **Revoking a device also re-keys the mailbox** (decided 2026-10-03). The
+  rotation's mail `key.json` holds a fresh mail master key; the old ones
+  stay in it, wrapped under the new K, for reading only. New mail is sealed
+  under the fresh key from the switch on, and the daemon re-seals the whole
+  store in the background — batch by batch, each batch one transaction
+  with its progress marker, so mail stays usable and a crash at any point
+  leaves everything readable by the keys on disk and resumes. The old key
+  leaves `key.json` only once a full pass found nothing left under it (and
+  only while K is unlocked). The Server settings show the progress. The
+  desktop's mail encryption is unchanged.
+- **After a revoke, a new recovery code is recommended** (decided
+  2026-10-03). The code's auth key `A` outlives rotations, so a revoked
+  device with an old `wraps.json` and the gateway's position could fake a
+  re-pin prompt the old code confirms. Every revoke sets a flag in
+  `wraps.json`; the Server settings (browser) and the phone (a sheet after
+  sign-in) ask for a new code until one is made (signed, as below), which
+  clears it.
+- **Recovery.** At setup the user gets a one-time **recovery code**. It is
+  shown once and never stored by Tabtivity. From it come a P-256 key `R`
+  that K is wrapped to (so a rotation re-wraps the new K for the same code
+  without knowing it) and an auth key `A` kept sealed under K. If every
+  device and the code are lost, the sealed store is lost. Mail itself is
+  refetched from IMAP, so what is lost is the saved passwords and
+  local-only data (filters, drafts), and the setup dialog says so.
+  Set-up and a new code need the device's pairing-key signature, like
+  enrolment; a session cookie alone is refused (decided 2026-10-03).
+- **A lost identity key is re-pinned with the recovery code** (decided
+  2026-10-03). A device's pin is first-use only: a changed identity is
+  never adopted silently. The daemon offers the new identity with a
+  binding derived from the sealed `A` in its `wraps.json`; the device
+  recomputes it from the recovery code (→ K and `A`) and the recovery
+  wrap's public fields and re-pins only on a match. The code never leaves
+  the device; a gateway in the middle, having neither the code nor the
+  daemon's files, cannot make a binding for a key of its own.
 - **Residual, stated at enrolment.** Root can read a live daemon's memory and
   the kernel keyring while K is unlocked. The admin is trusted for live data
   (§4.4); what this protects is data at rest, backups, and the user's own
-  agents.
+  agents. **Same-uid processes outside the fence can read K from the
+  keyring** (accepted 2026-10-03): the user's own shell tabs, SSH logins
+  and project scripts run on the host can; fenced agents can't; a copy of
+  the home or a backup can't open it.
 
 ---
 
@@ -1027,6 +1182,14 @@ native clipboard, print, notifications, popouts, all shortcuts, and
 open-outside after a download. Every `core` command goes to the server. It is
 the same Tauri app with a second transport, not a new product.
 
+*As built (P5, `docs/context/web_client.md` § The desktop's Connect mode):*
+one deviation — the Connect window runs **this binary's** frontend, not the
+bundle the gateway serves, so no server-supplied code ever holds the
+window's IPC; the socket is opened in Rust (device-key sign-in, the server's
+cookies and `Origin`) and bridged to the window. Clipboard, notifications,
+window controls and open-after-download are native; popouts, print and a
+macOS profile of its own are not built (#2379). Not run live.
+
 ### 7.3 Phone
 
 The PWA does not change. The gateway takes over the sidecar's
@@ -1036,6 +1199,21 @@ routes. Each `DesktopRequest` is answered by the daemon's `workspace` service
 view:** the phone and the desktop render the same daemon state, so a tab
 renamed on one is renamed on the other within one patch event. Opening a
 terminal on the phone takes that tab over from any other viewer (§3.5).
+
+*As built (2026-10-11, after the `develop` merge of that day):* the phone
+requests a window answers that `develop` added after this plan — the markup
+questions (`markup_ask`, its answer and dismiss) and the Local models
+sheet — are answered on a server as follows. Markup: the daemon serves the
+markup MCP lane on its own listener and answers the phone from the same
+asks (`host.rs` `markup_here`; `context/markup_mcp.md`). Local models
+(#2392): the administrator's phone only — the shared Ollama is theirs
+(§3.3) — answered by the daemon itself (`local_models::answer_here`, the
+window bridge ported: list, load an installed model, unload, start); any
+other account's phone gets `local_models_disabled` and leaves the section
+out. The role is the gateway's header. Agent MCP tools (#2391): the daemon's own
+listener serves every lane the window's does — root, local-model, reader,
+markup, schedule, push, help — and the browser client holds their controls
+(review, sessions, imports, push cards; all `core`).
 
 ---
 
@@ -1049,7 +1227,29 @@ terminal on the phone takes that tab over from any other viewer (§3.5).
   - Unprivileged user namespaces must work for bubblewrap. Ubuntu's AppArmor
     restriction, or unit hardening such as `RestrictNamespaces=` and
     `ProtectSystem=`, would make every agent fail closed.
-  - `/proc` is mounted `hidepid=invisible`.
+  - `/proc` is mounted `hidepid=invisible`. **The server may run on a
+    machine that is someone's desktop** (user decision 2026-10-03): then
+    `/proc` also needs `gid=<the tabtivity-proc group>`, the exception group
+    of the system services that must see every process — polkit, by a
+    `SupplementaryGroups=` drop-in, since it reads the subject's `/proc/<pid>`
+    for every authorization of a desktop session. Never a server user. The
+    helper's `install` makes the group and the drop-in and *prints* the
+    fstab line (remounting `/proc` on a live desktop is the admin's step);
+    `check` fails on a machine with a display manager unless the gid and
+    the drop-in are there, and when a server user is in the group. *(Built
+    in P3 part 2.)*
+  - **Standalone and server side by side** (Q12) on one machine, for the
+    same account: the daemon keeps its own `state_dir` and app home
+    (`~/.local/share/tabtivity-server`, `~/tabtivity-server`), its own tmux
+    server (`-L tabtivity` under `/run/tabtivity/tmux/<user>`), and listens
+    on a unix socket only, so it shares no `projects.json`, session state,
+    mobile control dir, agent home, login or mail store with the desktop
+    app, and no port with its `--mobile-host` sidecar (8742/8743 against
+    the gateway's 8740/8741). Tailscale Serve: the gateway takes HTTPS 443
+    and 8443, so the desktop's Mobile on the same machine uses the third
+    Serve port, `--https=10000` (origin `https://HOST:10000`). The kernel
+    persistent keyring is per uid and shared, under distinct descriptions;
+    the fence keeps both apps' agents out of it. *(P3 part 2; not run.)*
   - `kernel.yama.ptrace_scope` ≥ 1, and the kernel persistent keyring is
     available (`CONFIG_PERSISTENT_KEYRINGS`) (§6.8).
   - Units run with `PrivateTmp=`.
@@ -1088,7 +1288,8 @@ terminal on the phone takes that tab over from any other viewer (§3.5).
 
 ### 8.1 Install and packaging
 
-- **Build targets:** `tabtivity-gateway`, `tabtivity-serverd`, `tabtivity-admin-helper`,
+- **Build targets:** `tabtivity-gateway`, `tabtivity-serverd` (its own crate, `src-serverd/`,
+  built alone so it links no GTK/WebKit/X11/libdbus — P3 part 2), `tabtivity-admin-helper`,
   `tabtivity-hub`, `tabtivity-calendar` and `tabtivity-auth-keeper`, all Linux x86_64 and aarch64, plus
   the web bundle. Until P3 the single-user server is the existing `tabtivity`
   binary in `--mobile-host` mode.
@@ -1122,7 +1323,7 @@ terminal on the phone takes that tab over from any other viewer (§3.5).
 | `mobile_control`: raw ids/paths never cross the browser API | Holds for the phone API. **Relaxed** for the web desktop client toward its own user, on a separate route prefix (§4.3). Never crosses users. |
 | Terminal kill reaps the whole subtree | Holds. Stopping the user's slice reaps everything, and a daemon restart does not touch agents (§3.1). |
 | Remoteness explicit; `services::remote` source of truth | Holds; "remote" now means remote *from the server*. Remote projects can't be shared in v1 (§6.2). |
-| Containers: one per local project via `services::sandbox` | `admin`/off in v1: the Docker socket is root on the host. Rootless Podman per user is **P5**. |
+| Containers: one per local project via `services::sandbox` | `admin`/off in v1: the Docker socket is root on the host. Rootless Podman per user is **P5**. *Built (P5):* `sandbox::Engine` runs rootless Podman as the user on a server (`--userns=keep-id`, cgroupfs), the commands are `core` behind the admin's `containers` switch (default off); not run live (#2380). |
 | `hpc_hosts`, `careful_hosts` | Hold, per user. |
 | Permission mode is the CLI's own; Tabtivity injects none | Holds. Neither a user's login nor an admin-provided credential carries a mode. |
 | Gate remote probes on connected; gate hidden panes | Hold, plus the global server-link gate and poller pause (§3.5). |
@@ -1140,8 +1341,13 @@ comes.
 **P0: decisions and the command table.**
 - ~~Answer §12 Q1, Q3 and Q4.~~ Answered 2026-09-29; all three confirm the
   shape this plan already assumes (§14).
-- Write the command class table and its completeness test (§3.3). This is
-  cheap, and it forces the per-command conversation early.
+- ~~Write the command class table and its completeness test (§3.3).~~ Done
+  2026-10-03, `161b41a0` on branch `hosted`:
+  `src-tauri/src/services/command_class.rs` classifies all 683 registered
+  commands (536 `core`, 84 `client`, 54 `admin`, 9 `off` after the P0
+  review, `e4ce7f26`); its tests parse
+  `generate_handler!` out of `lib.rs`, so a command added without a row
+  fails `cargo test`. Handoff: [`hosted_handoff.md`](hosted_handoff.md).
 - The desktop prerequisites that used to sit here (#171, #172, the sidecar
   serving persisted-state kinds with the window closed) are H0 of
   [`headless_owner_plan.md`](headless_owner_plan.md).
@@ -1151,80 +1357,236 @@ comes.
   Its exit is this phase's exit.
 - In parallel: start the crate extraction (§3.2). Fix the seven services and
   `terminal/mod.rs` first, then convert one `commands/*.rs` file at a time,
-  keeping all five gates green after each.
+  keeping all five gates green after each. *Started 2026-10-03 on branch
+  `hosted` (`8c4e689a`…): the Tauri-free crate is `src-core/` (package
+  `app-core` — the brand may not appear in code), with `CoreCtx`,
+  `CoreState`, `EventSink`, `rt`; the seven services and the terminal core
+  take `CoreCtx`; `tauri_host::CONVERTED_COMMAND_FILES` lists the converted
+  command files and a test holds them Tauri-free. Handoff:
+  [`hosted_handoff.md`](hosted_handoff.md) § P1. P3 finishes the physical
+  move.*
 
-**P2: single-user server, "my box, thin clients".**
-- The sidecar grows a `core` dispatcher and serves the web bundle. There is
+**P2: single-user server, "my box, thin clients".** *Built 2026-10-03 on
+branch `hosted` (`5cd3dfe3`…`ddfdea27` + the docs commit); nothing run live.
+Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P2.*
+- ~~The sidecar grows a `core` dispatcher and serves the web bundle. There is
   no gateway/daemon split, no admin helper and no unix RPC yet. Commands not
-  yet dispatchable are hidden through `server_capabilities`.
-- The web entry and the `__TAURI_INTERNALS__` shim, the `HOST_OS`/
+  yet dispatchable are hidden through `server_capabilities`.~~ `5cd3dfe3`
+  (`build.rs` generates one wrapper per Tauri-free `#[tauri::command]`;
+  `services::core_dispatch` checks the class first, then the model allowlist,
+  then calls; `capabilities` is the answer), `1f7d32fb` (`fs.rs` → `Ctx`),
+  `a084b436` (`mobile_control::web_client`: the bundle from disk at
+  `/desktop/`, the token login, the socket). Still hidden: the five
+  Rust-dialog mail commands (their `*_grant` siblings serve the browser,
+  `fd348bd0`), `read_file_bytes`/`write_file_bytes` (binary frames instead),
+  `pdf_clip_*`, `run_script_detached` (`apps.rs`, P3's split).
+- ~~The web entry and the `__TAURI_INTERNALS__` shim, the `HOST_OS`/
   `CLIENT_OS` split and the 25-file audit, the server-side file picker, and
   the transport of §3.5: binary frames, per-client size, offset resume,
-  bounded queues and the poller pause.
-- The user-content origin for ticketed files.
-- **Localhost first.** Nothing is reachable beyond localhost until the CSP
-  review and the §11 security review are done.
-- *Exit, live:*
+  bounded queues and the poller pause.~~ `8b6f9d1e` (`src/main-web.tsx`,
+  `lib/transport/*`, `ServerFilePicker`, `vite.web.config.ts`), `bbddfbba`
+  (the audit: 31 files use the flags; the host-side uses moved to
+  `IS_HOST_*`/`HOST_OS`), `ddfdea27` (offset catch-up after a reconnect).
+  Per-client size was NOT done in P2 (P2 review: a PTY id was the tab id,
+  so a second page's `pty_spawn` of an open tab replaced the first page's
+  attach client); done by #2347 (`a4061281`, `804bc196`, `a4501d22`): one
+  attach PTY per client on a local tmux tab, events routed per client
+  (#2345). Popout windows (`?popout=`) are NOT done: the
+  browser is one window; `plugin:window|*` is answered for that one page.
+- ~~The user-content origin for ticketed files.~~ `a084b436`: a second
+  loopback listener on the next port, `desktop_file_ticket` → `/content/{t}`,
+  `CSP: sandbox`, active types as attachments.
+- ~~The admin-allowed Ollama model list and its server-side check in the
+  dispatcher (§3.3): a `core` request naming another model is refused before
+  it reaches the shared Ollama.~~ `5cd3dfe3`: `services::model_allowlist`,
+  `Settings.ollama_allowed_models` (unset = what the admin pulled), checked in
+  `core_dispatch::dispatch` for `complete_text`, `prepare_local_agent`,
+  `prepare_local_launch`, `ensure_vibe_ollama_model`. No admin UI (P3).
+  *Final review (2026-10-04, `36c3726a`):* server-only and at the request —
+  the policy's list, else the shared Ollama's installed models (2 s, cached
+  5 s, off the async workers) — for the dispatcher and `mail_ai` (classify on
+  sync included); a user's `ollama_host` is ignored on a server; the root
+  MCP's local-model lane (#2339) must call it once served from the daemon.
+  *2026-10-11 (#2391):* the daemon serves that lane; it forwards no model to
+  Ollama (`ollama_mcp_models` only picks which Vibe configs name the MCP
+  servers), so there is nothing to check there.
+- **Localhost first.** Done as built: every `/desktop/*` route and the content
+  origin refuse a non-loopback `Host`, the socket an inexact `Origin`; a
+  request through Tailscale Serve is a 404. **Open:** the CSP review (the web
+  pages get the desktop's CSP plus the socket and the shell's inline-script
+  hashes, `web_client::page_csp`) and the §11 security review, both before
+  anything is reachable beyond localhost.
+- *Exit, live — not run; the automated equivalents are `web_client::tests`
+  (sign-in, socket, calls, subscriptions, binary frames, tickets) and
+  `WebTransport.test.ts` (the shim against a fake server). The click-through
+  is in the handoff:*
   - open a project in a browser, start an agent, close the laptop, continue
     from the phone, reopen the laptop and find both views identical;
   - two browsers open at once lose no tab;
   - keystroke latency is inside the §3.5 budget.
 - *This alone answers "operations run on the server" for one person.*
 
-**P3: multi-user.**
-- Finish the crate split. Split `host.rs` into the gateway (auth, router,
+**P3: multi-user.** *Built 2026-10-03 on branch `hosted` (part 1:
+`cf02b197`, `3e01a6f7`, `53d70ef5`…`2ba65cd2` + review; part 2:
+`2e2e70b5`…`45d1920d` + the docs commit); nothing run on a server.
+Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P3, § P3 review, § P3 part 2;
+rationale: [`context/server_gateway.md`](context/server_gateway.md).*
+- Finish the crate split. ~~Split `host.rs` into the gateway (auth, router,
   push) and the daemon (data paths), and build `tabtivity-serverd` on
-  `CoreCtx`.
-- The admin helper and its hard rules, the per-user slices and units, the
+  `CoreCtx`.~~ `3e01a6f7` (the daemon: the sidecar's host on a peer-gated
+  unix socket, `CoreCtx` over `standalone_core_state`), `53d70ef5` (the
+  gateway crate `src-gateway/`: routing by code prefix / device owner /
+  HMAC routing cookie, revocation closes live sockets, PWA statics, audit,
+  policy; links no core service), `fa351c32` (socket activation, content
+  tickets per user). ~~The crate split itself~~ `3c090785`: the library's
+  window toolkit sits behind a default `desktop` feature and the daemon is
+  its own crate (`src-serverd/`, `app-serverd`) that builds the library
+  without it — `ldd` names libc, libm and libgcc_s only; CI lints that build
+  and fails on a desktop library. Deviation from §3.2: the command bodies
+  did not move into `app-core` (the services→commands closure stays one
+  crate); a feature split gives the same binary for a fraction of the
+  churn. **Open:** Web Push delivery is still the daemon's (#2352).
+- ~~The admin helper and its hard rules, the per-user slices and units, the
   tmux unit, `0700` homes, the invite flow, per-user device keys verified by
-  the daemon, and the audit log.
-- The deployment prerequisite checks (§8), the server-wide CLI install root,
-  and the host-channel inventory (§4.4).
-- Per-user sign-in (§5.1): sign-in tabs from browser and phone, and the
-  callback relay restricted to the caller's own listeners.
-- Per-user mail, calendar and todo (§6.7), with the admin's and users'
-  opt-out switches. The device-released secrets key (§6.8): the per-device
-  ECDH key at pairing, wraps, the kernel persistent keyring,
-  `PR_SET_DUMPABLE`, the recovery code, and sealed opt-in passwords.
+  the daemon, and the audit log.~~ `53d70ef5` (`tabtivity-admin-helper`:
+  plans + `--dry-run`, socket-activated `serverd@`, nested
+  `<slug>-users-<user>.slice`, `tmux@` with `-D` sharing the daemon's
+  `/tmp`, invites written by the user's own uid), `cf02b197`/`3e01a6f7`
+  (device keys checked by the daemon, roles from the gateway). Deviation: no
+  polkit rule — socket activation starts daemons, the admin runs the helper
+  with `sudo`. Account admin from the browser: #2356 (stays sudo-only, user
+  decision 2026-10-03). ~~Root-equivalent accounts refused~~ `8f41c8b8`:
+  sudoers parsed read-only (any rule naming the account, fail closed) and
+  `docker`/`lxd`/`incus-admin`/`libvirt`/`disk` beside the sudo groups,
+  admin role included. ~~Per-device/per-account rate limits~~ `2e2e70b5`
+  (strangers cannot spend a known user's budget; a pair never wakes an idle
+  daemon). Idle daemons keep running (#2351, decided). ~~The server on
+  someone's desktop~~ `a1802cd8`: the `/proc` exception group for polkit,
+  the daemon's own state dir beside the desktop app (§8).
+- ~~The deployment prerequisite checks (§8), the server-wide CLI install root
+  with its admin-only installs and the per-home self-updater switches (§5.1),
+  the admin UI for the Ollama model list, and the host-channel inventory
+  (§4.4).~~ `53d70ef5` (`admin-helper check`), `fa351c32`/`e6592754` (the
+  install root follows `SERVER_CLI_ROOT`; `cli-install` runs as
+  `<slug>-cli`; every daemon refuses installs; the per-spawn updater switch
+  already applied), `3b88c63d` (Server settings: the admin's policy editor),
+  [`context/server_gateway.md`](context/server_gateway.md) (the inventory;
+  ~~the VM egress proxy's open listener~~ `45d1920d`: per-VM credentials).
+  ~~"Ask your admin" in Manage CLIs~~ `44a1db52`.
+- Per-user sign-in (§5.1): sign-in tabs from browser and phone, and ~~the
+  callback relay restricted to the caller's own listeners~~ `56a64754`. The
+  sign-in tabs themselves are unchanged (the phone's QA 31bk flow and the
+  desktop UI in the browser); not run live.
+- ~~Per-user mail, calendar and todo (§6.7), with the admin's and users'
+  opt-out switches.~~ `fa351c32` (policy + `disabled_features`; refused as
+  `feature-off`, phone routes 403, alarms pause), `3b88c63d` (the switches in
+  Settings). The device-released secrets key (§6.8): ~~the primitives —
+  wraps, the kernel persistent keyring, the recovery code~~ `1d9cec4e`,
+  `PR_SET_DUMPABLE` `3e01a6f7`; ~~the per-device ECDH key, the unlock
+  exchange, `mail_crypt`'s device-released mode, sealed opt-in passwords,
+  the recovery-code dialog~~ `c23b3a57`, `fbf124c9` (`services::server::vault`;
+  the ECDH key is enrolled after pairing with a signature of the pairing
+  key rather than at pairing itself, so devices paired earlier enrol too).
+  **Open:** the "mail locked since reboot" push (#2350).
 - *Exit:* two users on one server. Each user's attempt at the other's paths,
   sockets, tmux, loopback listeners and `/proc` fails, and a test runs that
-  attempt, including each other's calendar, tasks and mail. Each user signs
-  in to a CLI from the phone and runs an agent on their own login. A daemon
-  restart leaves both users' agents running, and mail stays unlocked across
-  it. A fenced tab can't read the keyring entry, and a backup of the home
-  can't open the mail store.
+  attempt, including each other's calendar, tasks and mail
+  (`scripts/server-isolation-test.sh`, `2ba65cd2` — not yet run on a server,
+  #2357). Each user signs in to a CLI from the phone and runs an agent on
+  their own login. A daemon restart leaves both users' agents running, and
+  mail stays unlocked across it (built: K in the persistent keyring,
+  `tests/server_secrets.rs`; not run on a server). A fenced tab can't read the
+  keyring entry (observed: `keyctl` is EPERM in a fenced tab), and a backup
+  of the home can't open the mail store (`vault::tests`).
 
 **P3b: admin-provided API keys (optional).**
-- The admin-only Agent credentials panel, direct API-key delivery, and the
-  per-user, per-CLI choice between one's own login and the admin's key
-  (§5.2, §5.4).
+- ~~The admin-only Agent credentials panel~~ `b7c5f4b0` (Server settings,
+  `role: admin`, through the gateway's `/gateway/v1/agent-keys`), ~~direct
+  API-key delivery~~ `ccadf849`, `acceb24a` (the key keeper
+  `<slug>-auth-keeper` as `<slug>-auth` on `/run/<slug>/auth.sock`, by
+  caller uid; the daemon fetches the key at each local agent spawn into the
+  registry's `api_key_env` — Claude, Gemini, Vibe; the shell tabs' shims
+  too), and ~~the per-user, per-CLI choice between one's own login and the
+  admin's key~~ `acceb24a`, `b7c5f4b0` (Manage CLIs → Agent logins; "never
+  both": the own login leaves the homes while the key is chosen) (§5.2,
+  §5.4). Isolation checks of the keeper `787b7c61`. User decisions
+  (2026-10-03, § P3b decisions): ~~a per-key user list~~, ~~Claude through
+  `apiKeyHelper`~~, ~~container agents~~, ~~a per-uid keeper cap~~,
+  ~~earlier keys recognised~~. **Decided no:** Codex (#2359), remote agents
+  (#2361). **Open:** the Gemini/Vibe first-use prompts (#2360), the live
+  run (#2363).
 - *Exit:* one user on their own login and one on the admin's key, for the
-  same CLI at once, with neither affecting the other.
+  same CLI at once, with neither affecting the other (built: per-user
+  choice in each user's own state dir, `agent_keys::tests::
+  one_user_on_the_admin_key_and_one_on_their_own_login_at_once`,
+  `agent_auth::tests::a_cli_on_the_admin_key_keeps_no_own_login_in_the_homes`;
+  not run on a server, #2363).
 
-**P4: sharing.**
-- *P4a, viewer shares:* hub creation, named-user ACLs, clone-to-add, "Shared
-  with me", presence, revocation, the fence tmpfs over `/srv/tabtivity/shared`,
-  the `safe.directory` pin, and session files kept out of commits. Remote,
-  VM and container projects are refused.
-- *P4b, editor shares, **gated on §6.5**:* `tabtivity-hub` with ref rules, the
-  agent-facing surface review at merge time, hooked verbs refused in
-  shared clones, sanitizing that fails closed, and trust re-asked on merge.
+**P4: sharing.** *Built 2026-10-03 on branch `hosted` (`9a210685`…`a98fce2f`
++ the docs commit); nothing run on a server. Handoff:
+[`hosted_handoff.md`](hosted_handoff.md) § P4; rationale:
+[`context/sharing.md`](context/sharing.md).*
+- *P4a, viewer shares:* ~~hub creation, named-user ACLs, clone-to-add,
+  "Shared with me", presence, revocation, the fence tmpfs over
+  `/srv/tabtivity/shared`, the `safe.directory` pin, and session files kept
+  out of commits. Remote, VM and container projects are refused.~~
+  `9a210685` (`<slug>-hub`: bare hubs, ACLs through the xattrs, bundle pushes
+  with ref rules, delete into a holding area, presence, root-only `forget`
+  for `user-remove`, the admin's new `project_sharing` switch), `696522af`
+  (the daemon's `share_*` commands, clone-to-add through the import path,
+  `.git/info/exclude`, the exact-hub pin — a test pins git's scope: opening
+  checks ownership, the transport does not —, the fence, the Sharing panel).
+  Deviations: the share table and ref rules live in the hub, not the gateway
+  database; hub files are the hub account's (members `r-X`), not root's.
+  **Open:** presence chip on the pill (#2367), greyed state on the pill
+  (#2373), an agent's push through a proxy (#2368).
+- *P4b, editor shares, **gated on §6.5**:* ~~`tabtivity-hub` with ref rules,
+  the agent-facing surface review at merge time, hooked verbs refused in
+  shared clones, sanitizing that fails closed, and trust re-asked on
+  merge.~~ `9a210685` (ref rules), `0692dc21` (hookless and fail-closed git
+  in every shared project; agent-facing changes from the hub stop every
+  agent start and push until reviewed — at a merge through the app (bound to
+  the review's digest), after a clone or a terminal merge; a test pins that a
+  merged trust-gated file asks again and trust never crosses users).
+  **Open:** per-author trust (#2371).
 - *P4c, calendar and todo sharing* (independent of P4a/b; needs only P3):
-  `tabtivity-calendar`, the move-on-first-share, viewer/editor roles, link
+  ~~`tabtivity-calendar`, the move-on-first-share, viewer/editor roles, link
   stripping, per-viewer alarms, read-only agent access, and the sharing
-  switch.
+  switch.~~ `b81cd608` (the service: a JSON file per calendar instead of
+  SQLite, per-part roles, per-record CAS, `wait`), `0ab3ab6d` (merged into
+  `calendar_load`, edits routed, the move and its undo, the owner's links
+  kept on her side, the panel and the long-poll watch). **Open:** headless
+  views and no-window reminders (#2369), a shared list's own columns and
+  ranks (#2370).
   - *Exit:* A opens a calendar's events to B as viewer and its todo list to
     C as editor. B can't write, C's edit reaches A within one patch, a task's
-    mail link never reaches C, and revoking stops B's next read.
+    mail link never reaches C, and revoking stops B's next read. *Built and
+    tested against the real service (`calendars::tests::
+    the_p4c_exit_holds_at_the_service`, `shared_calendar::tests::
+    the_p4c_exit_holds_through_the_daemons`); not run on a server (#2366).*
+- *Sharing tests (§11):* `hub::tests`, `share::tests`, `calendars::tests`,
+  `shared_calendar::tests`; `scripts/server-isolation-test.sh` gained the hub
+  and calendar sections (`a98fce2f`).
 
-**P5: options, each independent.**
-- The API-key broker with per-user budgets (§5.4).
+**P5: options, each independent.** *(Base `233b7330`; `docs/hosted_handoff.md`
+§ P5.)*
+- The API-key broker with per-user budgets (§5.4). *Built `3c38d6c4`,
+  `87d4e713`, `2371b0cd`; Claude only (the other CLIs' base-URL overrides
+  are unverified); not run against the provider (#2377).*
 - A shared consumer login, at the admin's own risk, with the §5.4 hardening,
-  enabled per CLI after Q2.
-- OIDC login.
-- The Tauri shell's Connect mode.
-- Rootless Podman per user.
-- Pair mode and in-tree worktrees for shared projects.
+  enabled per CLI after Q2. *Dropped (user, 2026-10-04): won't do (#2383).
+  Admin-provided credentials are API keys only (P3b) and the broker.*
+- OIDC login. *Built `a8301819`, `45ef8ed0`, `04bc7de7`; not run against a
+  real provider (#2378).*
+- The Tauri shell's Connect mode. *Built `7e86d0ed`, `d2a109d2`, with one
+  deviation (the window runs this binary's bundle, not the gateway's); not
+  run live (#2379).*
+- Rootless Podman per user. *Built `d063d126`, `362b6e7c`, `dac408da`;
+  behind the admin's `containers` switch (default off); not run live
+  (#2380).*
+- Pair mode and in-tree worktrees for shared projects. *Worktrees built
+  `e36839db` (#2381); pair mode dropped for now (user, 2026-10-04), its
+  design kept as a documented option (#2382).*
 
 i18n and `UntestedTag` rows land inside each phase, never after it.
 
@@ -1300,11 +1662,19 @@ both options stay: admin API keys (P3b) and the at-risk shared consumer login
 research, not a decision: each CLI's row below is verified before that
 option is enabled for it (§5.4):
 - *API keys (P3b):* which variable or file carries the key, and does the CLI
-  accept a base-URL override (needed for the broker)?
+  accept a base-URL override (needed for the broker)? *As of P3b (vendor
+  docs, not verified live — #2360):* Claude `ANTHROPIC_API_KEY` (delivered
+  through its `apiKeyHelper` setting since the P3b decisions), Gemini
+  `GEMINI_API_KEY`, Mistral Vibe `MISTRAL_API_KEY`; Codex only through its
+  login file (`codex login --with-api-key`), decided not to offer (#2359).
 - *A shared consumer login (P5):* does a refresh rotate the refresh token? Do
   two holders refreshing at once invalidate each other? Does the CLI run on a
   replica it can't write back, or on an access token alone? How is a leaked
-  token revoked?
+  token revoked? *P5 (2026-10-03): not built.* No CLI's row is verified (it
+  needs a real login), and this answer enables the option only per verified
+  CLI — so there is nothing to enable yet (#2383). *Dropped (user,
+  2026-10-04): the shared consumer login is not built at all (#2383 won't
+  do); admin credentials are API keys and the broker only.*
 
 **Q3. Editing together.** *Answered (user, 2026-09-29):* per-member clones
 through the `tabtivity-hub` bare repo (§6). A shared tree with worktrees stays a

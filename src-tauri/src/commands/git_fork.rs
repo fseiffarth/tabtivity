@@ -123,7 +123,7 @@ fn encode_project_id(path: &str) -> String {
 /// prompt rather than as a failed fork after the user filled the form in. Also
 /// used by the publish flow (`commands::git_publish`) for the same reason —
 /// publishing to a fresh GitHub/GitLab repo shells out to this same CLI.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn provider_cli_available(provider: String) -> Result<bool, String> {
     let provider = Provider::parse(&provider)?;
     Ok(crate::paths::command_no_window(provider.cli())
@@ -153,7 +153,7 @@ pub struct ForkResult {
 /// be told). Auth is the provider CLI's own (`gh auth login` / `glab auth
 /// login`), with the global access token from Settings → Git Hosting passed
 /// through its env var when one is stored.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_fork_clone(
     url: String,
     dest: String,

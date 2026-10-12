@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
@@ -8,6 +8,7 @@ import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { usePoll } from "../../lib/usePoll";
 
 /**
  * The pill's "VM settings…" dialog (`docs/vm_projects_plan.md`): the VM's
@@ -48,11 +49,7 @@ export function VmSettingsDialog({
 
   // Status (and the blocked-CONNECT tripwire) refresh while the dialog is
   // open — a local registry read, no SSH round trip.
-  useEffect(() => {
-    refreshStatus();
-    const timer = window.setInterval(refreshStatus, 4000);
-    return () => window.clearInterval(timer);
-  }, [refreshStatus]);
+  usePoll(refreshStatus, 4000);
 
   const bootOrShutdown = async () => {
     if (busy) return;

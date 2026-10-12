@@ -109,3 +109,13 @@ can hold runs no tab points at; the **Sessions view** (`☰` toggle in
 `remote_tmux_list`, each row host-tagged), click a row to attach, per-row **×**
 (kill) and **Rename** (`remote_tmux_rename`, updates the owning tab's persisted
 name). tmux-absent falls back to today's plain `exec` + a notice.
+
+**Several clients, one session.** A local session can have more than one
+client: the desktop window's, the phone's `pty_bridge` attach, and — in the
+browser client — one attach PTY per page (`terminal::join_tab`, hosted TODO
+#2347; rationale in `docs/context/web_client.md`). Each holds its own PTY and
+size; the pane's program sees one size per window, and the wrap sets
+`window-size latest` (tmux 3.2+, else `largest`;
+`tmux_local::window_size_policy`): the window follows whichever client last
+typed, resized or attached, and the others pan or pad until used. A single
+client gets its own size under any policy.

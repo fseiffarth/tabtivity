@@ -22,9 +22,7 @@ pub fn authorize_project(
     remote: bool,
 ) -> Result<PathBuf, PolicyError> {
     if settings.code_completion_provider.as_deref() != Some("copilot")
-        || !settings
-            .copilot_completion
-            .unwrap_or(settings.debug.unwrap_or(false))
+        || !settings.copilot_completion()
     {
         return Err(PolicyError::Disabled);
     }
@@ -147,6 +145,25 @@ mod tests {
             authorize_project(&config, "one", dir.path(), false),
             Err(PolicyError::Disabled)
         );
+    }
+
+    /// The entry point follows the experimental rule: on a profile marked
+    /// `experimental_explicit`, Debug mode no longer turns an unset flag on.
+    #[test]
+    fn marked_profile_needs_the_flag_ticked() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = settings(dir.path());
+        config.copilot_completion = None;
+        config.debug = Some(true);
+        // Unmarked: unset still follows Debug mode.
+        assert!(authorize_project(&config, "one", dir.path(), false).is_ok());
+        config.experimental_explicit = Some(true);
+        assert_eq!(
+            authorize_project(&config, "one", dir.path(), false),
+            Err(PolicyError::Disabled)
+        );
+        config.copilot_completion = Some(true);
+        assert!(authorize_project(&config, "one", dir.path(), false).is_ok());
     }
 
     #[test]

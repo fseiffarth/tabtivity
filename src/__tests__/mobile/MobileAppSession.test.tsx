@@ -18,6 +18,7 @@ vi.mock("../../../mobile-web/src/auth", () => ({
   resumeAuth: vi.fn(),
   logoutAuth: vi.fn(async () => undefined),
   pair: vi.fn(),
+  finishOidcReturn: vi.fn(async () => null),
 }));
 vi.mock("../../../mobile-web/src/localLock", () => ({ hasLocalUnlock: vi.fn(async () => true) }));
 vi.mock("../../../mobile-web/src/screens/LocalUnlock", () => ({
@@ -25,7 +26,7 @@ vi.mock("../../../mobile-web/src/screens/LocalUnlock", () => ({
     <button onClick={onUnlocked}>{setup ? "Set up the lock" : "Unlock now"}</button>,
 }));
 vi.mock("../../../mobile-web/src/screens/Terminal", () => ({ Terminal: () => <div>terminal</div> }));
-vi.mock("../../../mobile-web/src/screens/Pair", () => ({ Pair: ({ setupLock, onDone }: { setupLock: boolean; onDone: () => void }) => <button onClick={onDone}>{setupLock ? "Connect and secure" : "Pair this phone"}</button> }));
+vi.mock("../../../mobile-web/src/screens/Pair", () => ({ noteOidcOutcome: () => undefined, Pair: ({ setupLock, onDone }: { setupLock: boolean; onDone: () => void }) => <button onClick={onDone}>{setupLock ? "Connect and secure" : "Pair this phone"}</button> }));
 
 import { App } from "../../../mobile-web/src/App";
 import { BRAND, storageKey } from "../../lib/brand";

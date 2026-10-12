@@ -5,8 +5,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
+use app_core::CoreCtx;
+use crate::tauri_host::Ctx;
 
 use crate::{
     services::desktop_images::{self, DesktopImage, ImageFolder},
@@ -50,12 +51,13 @@ pub struct MobileDesktopState {
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<DesktopResponse>>>>,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn mobile_desktop_respond(
-    state: State<'_, MobileDesktopState>,
+    ctx: Ctx,
     request_id: String,
     response: DesktopResponse,
 ) -> Result<(), String> {
+    let state = ctx.get::<MobileDesktopState>();
     let sender = state
         .pending
         .lock()
@@ -67,7 +69,7 @@ pub fn mobile_desktop_respond(
         .map_err(|_| "mobile request receiver closed".into())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn mobile_opaque_id(domain: String, value: String) -> Result<String, String> {
     if value.is_empty() || value.len() > 256 {
         return Err("invalid opaque id input".into());
@@ -94,11 +96,7 @@ fn desktop_image_folders() -> Vec<ImageFolder> {
 /// selection transfer timeout when there is no image, and the sidecar's
 /// deadline for the whole list is a few seconds.
 async fn clipboard_image_entry() -> Option<DesktopImage> {
-    let probe = tauri::async_runtime::spawn_blocking(|| {
-        let mut clipboard = arboard::Clipboard::new().ok()?;
-        let image = clipboard.get_image().ok()?;
-        Some((image.width as u32, image.height as u32))
-    });
+    let probe = app_core::rt::spawn_blocking(clipboard_image_size);
     let (width, height) = tokio::time::timeout(Duration::from_secs(3), probe)
         .await
         .ok()?
@@ -114,12 +112,41 @@ async fn clipboard_image_entry() -> Option<DesktopImage> {
     })
 }
 
+/// The clipboard image's size, if it holds one. A server daemon has no
+/// clipboard (no display): always `None` there.
+fn clipboard_image_size() -> Option<(u32, u32)> {
+    #[cfg(feature = "desktop")]
+    {
+        let mut clipboard = arboard::Clipboard::new().ok()?;
+        let image = clipboard.get_image().ok()?;
+        Some((image.width as u32, image.height as u32))
+    }
+    #[cfg(not(feature = "desktop"))]
+    {
+        None
+    }
+}
+
+/// The clipboard image as PNG, or the wire code `no_clipboard_image`.
+fn clipboard_png() -> Result<Vec<u8>, String> {
+    #[cfg(feature = "desktop")]
+    {
+        let mut clipboard = arboard::Clipboard::new().map_err(|_| "no_clipboard_image".to_string())?;
+        let image = clipboard.get_image().map_err(|_| "no_clipboard_image".to_string())?;
+        crate::commands::clipboard::encode_png(image.width, image.height, &image.bytes).map_err(|_| "no_clipboard_image".to_string())
+    }
+    #[cfg(not(feature = "desktop"))]
+    {
+        Err("no_clipboard_image".into())
+    }
+}
+
 /// Everything the phone may attach from this desktop, clipboard first.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_desktop_images() -> Vec<DesktopImage> {
     let folders = desktop_image_folders();
     let (clipboard, files) = tokio::join!(clipboard_image_entry(), async {
-        tauri::async_runtime::spawn_blocking(move || {
+        app_core::rt::spawn_blocking(move || {
             desktop_images::list(&folders, SystemTime::now())
         })
         .await
@@ -133,7 +160,7 @@ pub async fn mobile_desktop_images() -> Vec<DesktopImage> {
 
 /// Copy one listed image into `project_dir`'s inbox. The `Err` is a wire code
 /// the phone maps to a sentence — never a path or an OS message.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_attach_desktop_image(
     project_dir: String,
     image_id: String,
@@ -142,17 +169,9 @@ pub async fn mobile_attach_desktop_image(
         return Err("image_not_found".into());
     }
     let root = PathBuf::from(project_dir);
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let (name, bytes) = if image_id == desktop_images::CLIPBOARD_ID {
-            let mut clipboard =
-                arboard::Clipboard::new().map_err(|_| "no_clipboard_image".to_string())?;
-            let image = clipboard
-                .get_image()
-                .map_err(|_| "no_clipboard_image".to_string())?;
-            let png =
-                crate::commands::clipboard::encode_png(image.width, image.height, &image.bytes)
-                    .map_err(|_| "no_clipboard_image".to_string())?;
-            ("clipboard.png".to_string(), png)
+            ("clipboard.png".to_string(), clipboard_png()?)
         } else {
             let path = desktop_images::resolve(&desktop_image_folders(), &image_id)
                 .ok_or_else(|| "image_not_found".to_string())?;
@@ -182,15 +201,15 @@ pub async fn mobile_attach_desktop_image(
 // webview can never reach outside that folder.
 
 /// The global inbox, newest first.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn global_inbox_list() -> Vec<inbox::GlobalInboxFile> {
-    tauri::async_runtime::spawn_blocking(|| inbox::list_global(&storage::state_dir()))
+    app_core::rt::spawn_blocking(|| inbox::list_global(&storage::state_dir()))
         .await
         .unwrap_or_default()
 }
 
 /// Open one inbox file with the OS default application.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_inbox_open(name: String) -> Result<(), String> {
     let path = inbox::global_file(&storage::state_dir(), &name).ok_or("file_not_found")?;
     opener::open(&path).map_err(|e| e.to_string())
@@ -198,7 +217,7 @@ pub fn global_inbox_open(name: String) -> Result<(), String> {
 
 /// Open the global inbox folder in the OS file manager, creating it first so
 /// the button works before the first file arrives.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_inbox_reveal() -> Result<(), String> {
     let dir = storage::state_dir().join(inbox::GLOBAL_INBOX_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -206,7 +225,7 @@ pub fn global_inbox_reveal() -> Result<(), String> {
 }
 
 /// Delete one inbox file. `false` when it was already gone.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_inbox_delete(name: String) -> Result<bool, String> {
     inbox::remove_global(&storage::state_dir(), &name).map_err(|e| e.code().to_string())
 }
@@ -217,7 +236,7 @@ pub fn global_inbox_delete(name: String) -> Result<bool, String> {
 /// from a packaged app, whose installation directory does not contain the
 /// source checkout. POSIX shell on Linux/macOS, PowerShell on Windows; the
 /// frontend picks the matching interpreter from the extension.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn mobile_prepare_phone_install_script() -> Result<String, String> {
     let path = storage::state_dir()
         .join("mobile-control")
@@ -240,23 +259,23 @@ pub fn mobile_prepare_phone_install_script() -> Result<String, String> {
 /// the host runs — what the per-phone Mobile access picker lists. Read-only;
 /// `online` is always false here (`mobile_admin` `devices` adds it while the
 /// host runs).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_paired_devices() -> Result<Vec<AdminDevice>, String> {
-    tauri::async_runtime::spawn_blocking(|| auth::read_paired_devices(&storage::state_dir().join("mobile-control")))
+    app_core::rt::spawn_blocking(|| auth::read_paired_devices(&storage::state_dir().join("mobile-control")))
         .await
         .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn mobile_admin(app: AppHandle, request: AdminRequest) -> Result<AdminResponse, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mobile_admin(ctx: Ctx, request: AdminRequest) -> Result<AdminResponse, String> {
     let revokes = matches!(request, AdminRequest::Revoke { .. } | AdminRequest::ForgetAll);
     let response = admin_call_here(&request).await?;
     if revokes && matches!(response, AdminResponse::Ok) {
         // The sidecar has already cancelled what the phone left behind (its
         // admin plane); this reloads the window's lists, and catches what a
         // sidecar older than #2348 left.
-        crate::commands::agent_tasks::cancel_lost_phone_rules(&app, "after a revoke or Lock down");
-        let _ = app.emit("agent-schedules-changed", ());
+        crate::commands::agent_tasks::cancel_lost_phone_rules(&ctx, "after a revoke or Lock down");
+        ctx.emit("agent-schedules-changed", ());
     }
     Ok(response)
 }
@@ -337,7 +356,7 @@ fn sidecar_behind_window(control_dir: &Path) -> bool {
     )
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_host_status() -> MobileHostRuntimeStatus {
     let config = HostConfig::load(&storage::state_dir()).ok();
     match admin_call_here(&AdminRequest::Status).await {
@@ -912,7 +931,7 @@ fn launch_host(answering: Option<Option<&str>>, copy: &Path, running: &Path, ver
 /// back to starting the installed copy: an old host is still a working phone,
 /// and Settings → Mobile keeps offering the update by hand.
 pub fn start_host_on_launch() {
-    tauri::async_runtime::spawn(async {
+    app_core::rt::spawn(async {
         let Ok(config) = HostConfig::load(&storage::state_dir()) else {
             return;
         };
@@ -1058,7 +1077,29 @@ async fn start_installed_host(_config: &HostConfig) -> Result<(), String> {
     Err("unsupported platform".into())
 }
 
-#[tauri::command]
+/// The sign-in link for a browser on this machine (hosted plan §10 P2,
+/// Settings → Mobile → Browser access): the sidecar's port and the token in
+/// `<control_dir>/web-client.token`, minted here when the sidecar has not yet.
+/// `admin`: it hands out the box's own access. Loopback only, by construction
+/// of the routes it opens (`mobile_control::web_client`).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn mobile_browser_client_link() -> Result<String, String> {
+    let config = HostConfig::load(&storage::state_dir())?;
+    let token = crate::services::mobile_control::web_client::login_token(&config.control_dir)?;
+    Ok(crate::services::mobile_control::web_client::login_url(config.host.port, &token))
+}
+
+/// Retire every outstanding sign-in link: a fresh token is written, and the
+/// link for it answered. Browsers already signed in stay signed in until
+/// they log out (`desktop_logout`) or their session ends.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn mobile_browser_client_rotate() -> Result<String, String> {
+    let config = HostConfig::load(&storage::state_dir())?;
+    let token = crate::services::mobile_control::web_client::rotate_login_token(&config.control_dir)?;
+    Ok(crate::services::mobile_control::web_client::login_url(config.host.port, &token))
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_host_apply(enabled: bool) -> Result<(), String> {
     if !enabled {
         return disable_host_service().await;
@@ -1089,12 +1130,12 @@ pub struct TailscaleServeStatus {
     pub detection_error: Option<String>,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_verify_tailscale_serve(origin: String, port: u16) -> Result<(), String> {
     verify_tailscale_serve(&origin, port)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_tailscale_serve_status() -> TailscaleServeStatus {
     match serve_status_json() {
         Ok(json) => {
@@ -1407,7 +1448,7 @@ fn trusted_peer(stream: &tokio::net::UnixStream) -> bool {
 
 /// One accepted, already-authenticated desktop-control connection: read the
 /// sidecar's request, relay it to the main window, and write the answer back.
-async fn handle_desktop_stream<S>(mut stream: S, app: AppHandle, state: MobileDesktopState)
+async fn handle_desktop_stream<S>(mut stream: S, ctx: CoreCtx, state: MobileDesktopState)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
@@ -1428,7 +1469,17 @@ where
     let mutation = request.is_mutation();
     let (tx, rx) = oneshot::channel();
     state.pending.lock().unwrap().insert(id.clone(), tx);
-    if app.emit_to("main", MOBILE_DESKTOP_EVENT, request).is_err() {
+    // Delivery is best-effort (`EventSink`); what can still fail is the
+    // serialization, so that is the one case answered as unavailable.
+    let delivered = match serde_json::to_string(&request) {
+        Ok(json) => {
+            ctx.events
+                .emit_json_to(&app_core::ClientId::main(), MOBILE_DESKTOP_EVENT, json);
+            true
+        }
+        Err(_) => false,
+    };
+    if !delivered {
         state.pending.lock().unwrap().remove(&id);
         let _ = write_frame(
             &mut stream,
@@ -1461,9 +1512,9 @@ where
 const DESKTOP_BRIDGE_BIND_TRIES: u32 = 5;
 
 #[cfg(unix)]
-pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
+pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
     let socket = storage::state_dir().join("mobile-control/desktop-control.sock");
-    tauri::async_runtime::spawn(async move {
+    app_core::rt::spawn(async move {
         use std::os::unix::fs::PermissionsExt;
         if let Some(parent) = socket.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -1507,9 +1558,9 @@ pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
             if !trusted_peer(&stream) {
                 continue;
             }
-            let app = app.clone();
+            let ctx = ctx.clone();
             let state = state.clone();
-            tauri::async_runtime::spawn(handle_desktop_stream(stream, app, state));
+            app_core::rt::spawn(handle_desktop_stream(stream, ctx, state));
         }
     });
 }
@@ -1518,10 +1569,10 @@ pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
 /// sidecar proving itself via the same-user token the listener writes beside
 /// the nominal socket path — see `services::mobile_control::admin::pipe`.
 #[cfg(windows)]
-pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
+pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
     use crate::services::mobile_control::admin::pipe;
     let socket = storage::state_dir().join("mobile-control/desktop-control.sock");
-    tauri::async_runtime::spawn(async move {
+    app_core::rt::spawn(async move {
         use tokio::net::windows::named_pipe::ServerOptions;
         let name = pipe::pipe_name(&socket);
         // Either failure leaves every phone request that needs the desktop
@@ -1550,10 +1601,10 @@ pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
                 continue;
             };
             let mut stream = std::mem::replace(&mut server, next);
-            let app = app.clone();
+            let ctx = ctx.clone();
             let state = state.clone();
             let token = token.clone();
-            tauri::async_runtime::spawn(async move {
+            app_core::rt::spawn(async move {
                 let presented = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
                     read_frame::<String>(&mut stream),
@@ -1564,14 +1615,14 @@ pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
                 if !authorized {
                     return;
                 }
-                handle_desktop_stream(stream, app, state).await;
+                handle_desktop_stream(stream, ctx, state).await;
             });
         }
     });
 }
 
 #[cfg(not(any(unix, windows)))]
-pub fn start_desktop_bridge(_: AppHandle, _: MobileDesktopState) {}
+pub fn start_desktop_bridge(_: CoreCtx, _: MobileDesktopState) {}
 
 #[cfg(test)]
 mod prune_tests {

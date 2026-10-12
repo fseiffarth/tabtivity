@@ -19,9 +19,14 @@
 // `IS_WINDOWS` name this widely-imported module has always exposed. Only
 // consulted when a path's own separators can't reveal its style (e.g. a bare
 // relative segment with no separator at all).
-import { IS_WINDOWS } from "./platform";
+// Paths are the BACKEND machine's (hosted plan §1.2: `HOST_OS`): in the
+// browser client the server's, in the Tauri window this one's.
+import { IS_HOST_WINDOWS } from "./platform";
 
-export { IS_WINDOWS };
+/** Path style of the machine the files live on. Kept under the name this
+ *  widely-imported module always exposed; for key and window behaviour import
+ *  `lib/platform` directly. */
+export const IS_WINDOWS = IS_HOST_WINDOWS;
 
 /** A Windows drive prefix like `C:` (anchored at the start). */
 const DRIVE_RE = /^[a-zA-Z]:(?=[/\\]|$)/;

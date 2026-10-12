@@ -460,7 +460,7 @@ pub struct GeminiUsage {
 }
 
 /// What one answer cost, by the table.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Charge {
     /// The model as reported (or asked for), not normalized.
     pub model: String,
@@ -472,6 +472,14 @@ pub struct Charge {
     pub cache_read: u64,
     pub web_searches: u64,
     pub usd: f64,
+}
+
+impl Charge {
+    /// The answer in billed tokens, the monthly limit's unit
+    /// (`keys_wire::billed_tokens`); the USD figure is an estimate beside it.
+    pub fn billed(&self) -> u64 {
+        crate::services::server::keys_wire::billed_tokens(self.input, self.cache_write, self.output, self.cache_read)
+    }
 }
 
 const PER_TOKEN: f64 = 1.0 / 1_000_000.0;

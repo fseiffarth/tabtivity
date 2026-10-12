@@ -274,14 +274,17 @@ describe("Mobile bridge — local models", () => {
     listError = "not_running";
     let reject!: (reason: unknown) => void;
     startPromise = () => new Promise<void>((_, no) => { reject = no; });
+    // `log` spans the file (for the forbidden-command check); count this test's.
+    const mark = log.length;
+    const starts = () => invokedSince(mark).filter((c) => c === "ensure_ollama_running_unattended");
 
     expect(await mutate({ type: "start" })).toMatchObject({ status: "local_models", server: "starting", can_start: false });
-    expect(log.filter((c) => c === "ensure_ollama_running_unattended")).toHaveLength(1);
+    expect(starts()).toHaveLength(1);
     expect(await list()).toMatchObject({ server: "starting" });
 
     // A second Start while the first runs adds nothing.
     expect(await mutate({ type: "start" })).toMatchObject({ server: "starting" });
-    expect(log.filter((c) => c === "ensure_ollama_running_unattended")).toHaveLength(1);
+    expect(starts()).toHaveLength(1);
 
     reject("Ollama did not become ready …");
     await vi.waitFor(async () => expect(await list()).toMatchObject({ server: "stopped", can_start: true, start_failed: true }));

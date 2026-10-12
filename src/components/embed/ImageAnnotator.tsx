@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useFileScope, writeFileBytes } from "./fileAccess";
 import { useT } from "../../lib/i18n";
+import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
 import "./ImageAnnotator.css";
 import { ArrowUpRightIcon, PencilIcon } from "../common/icons/Icon";
 
@@ -52,6 +53,10 @@ export function ImageAnnotator({
 }) {
   const t = useT();
   const scope = useFileScope();
+  // While open, the drawing lives only on this component's canvas: keep a
+  // sleepable pane awake (performance plan §5.3), or a hidden image tab left
+  // mid-annotation would unmount and lose it. Released on Save/Close (unmount).
+  usePaneSleepHold(true);
   const baseRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);

@@ -16,6 +16,7 @@ const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }));
 
 import { DEFAULT_INTERVAL_MS, resetOllamaStatusPoller, useOllamaStatus } from "../../lib/ollamaStatus";
+import { usePowerStore } from "../../stores/power";
 
 const flush = () => act(async () => {});
 const tick = (ms: number) => act(async () => void vi.advanceTimersByTime(ms));
@@ -25,6 +26,7 @@ beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockResolvedValue("idle");
   resetOllamaStatusPoller();
+  usePowerStore.setState({ blurred: false });
 });
 
 afterEach(() => {
@@ -124,6 +126,19 @@ describe("useOllamaStatus", () => {
     invokeMock.mockRejectedValue(new Error("no backend"));
     await tick(DEFAULT_INTERVAL_MS);
     expect(result.current).toBe("stopped");
+    unmount();
+  });
+
+  it("asks nothing while the window is blurred and catches up on return (perf plan §3.3)", async () => {
+    const { unmount } = renderHook(() => useOllamaStatus());
+    await flush();
+    invokeMock.mockClear();
+    act(() => usePowerStore.setState({ blurred: true }));
+    await tick(DEFAULT_INTERVAL_MS * 4);
+    expect(invokeMock).not.toHaveBeenCalled();
+    act(() => usePowerStore.setState({ blurred: false }));
+    await flush();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
     unmount();
   });
 });

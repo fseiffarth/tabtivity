@@ -16,6 +16,7 @@ import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWind
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   useTabsStore,
+  flushViewerState,
   orderedTabKeys,
   findGroupOfTab,
   mapGroup,
@@ -938,6 +939,9 @@ export function detachedNewTabCwd(
  * badges and turned its docked viewer into a plain local folder.
  */
 export function reseedDetached(scope: string, groupId: string, landedKey?: string): void {
+  // The seed is the popout's one-time copy of each payload: ship the latest
+  // staged viewer positions, not the ones of up to a flush interval ago (§3.1).
+  flushViewerState();
   const store = useTabsStore.getState();
   const entry = store.detachedGroupsByScope[scope]?.find((d) => d.id === groupId);
   if (!entry) return;
@@ -971,6 +975,15 @@ const unexpectedWindowDeaths = new Map<string, number[]>();
 const gaveUpWindows = new Set<string>();
 /** Per label: the first and the latest death of its current give-up streak. */
 const gaveUpStreaks = new Map<string, { since: number; last: number }>();
+
+/** Tests only: forget a quit in progress and every popout's death history, so
+ *  one test's shutdown or crash streak cannot leak into the next. */
+export function _resetDetachedHostForTest(): void {
+  shuttingDown = false;
+  unexpectedWindowDeaths.clear();
+  gaveUpWindows.clear();
+  gaveUpStreaks.clear();
+}
 
 /** How long a popout must keep giving up on its seed, every respawn, before it
  *  is docked. A display switch stalls the main window and kills popouts for
@@ -1046,6 +1059,7 @@ export async function listenDetachedHost(): Promise<() => void> {
   const queuedSeeds: DetachedSeedRequest[] = [];
   let publishStatus = (_force = false) => {};
   const answerSeed = ({ label, scope, groupId }: DetachedSeedRequest) => {
+    flushViewerState();
     const store = useTabsStore.getState();
     const entry = (store.detachedGroupsByScope[scope] ?? []).find(
       (d) => d.id === groupId,

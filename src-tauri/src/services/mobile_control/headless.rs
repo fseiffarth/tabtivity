@@ -576,8 +576,9 @@ pub fn activity(state_dir: &Path, catalog: &super::discovery::Catalog) -> TurnRe
 
 /// The project pill's git dot, probed here rather than read off the pills:
 /// `gitDirtyState`'s ladder (untracked or unstaged ▸ staged ▸ unpushed),
-/// none for a clean tree or no repo. Blocking — two hardened git spawns —
-/// so the host runs it off the async thread and caches it.
+/// none for a clean tree or no repo. Blocking — one hardened git spawn (a
+/// clean branch with no upstream pays the namesake lookup too) — so the host
+/// runs it off the async thread and caches it.
 pub fn git_dot_for(dir: &Path) -> Option<&'static str> {
     let dir = dir.to_string_lossy().into_owned();
     let status = crate::commands::git::git_status_probe(dir.clone(), false).ok()?;
@@ -590,8 +591,7 @@ pub fn git_dot_for(dir: &Path) -> Option<&'static str> {
     if status.staged > 0 {
         return Some("staged");
     }
-    let unpushed = crate::commands::git::git_unpushed_commits_blocking(dir).unwrap_or_default();
-    (!unpushed.is_empty()).then_some("unpushed")
+    (crate::commands::git::unpushed_count(&status, dir) > 0).then_some("unpushed")
 }
 
 /// How long a headless reading stands before it is taken again: the phone
@@ -724,7 +724,7 @@ fn epoch_ms_now() -> i64 {
 /// size, but the phone adopts the window's geometry, and at tmux's default
 /// 80×24 a long footer — Claude's status line, which carries the model — was
 /// cut off, so the phone showed "Agent is working…" with no model. A window
-/// that attaches later resizes it to its own (`window-size largest`).
+/// that attaches later resizes it to its own (`tmux_local::window_size_policy`).
 const HEADLESS_COLS: u16 = 200;
 const HEADLESS_ROWS: u16 = 50;
 

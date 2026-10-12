@@ -1068,3 +1068,1261 @@ screen is not.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+---
+
+*Performance run (`docs/performance_plan.md`, branch `perf`, 2026-10-07…09).
+One item per agent step; each 🖐️ box is one live click-through from that
+step's section of `docs/performance_handoff.md`. All of it needs a frozen
+dev build of the branch after landing (`npm run backend:stale` owed for the
+backend steps). Nothing here was run live.*
+
+2400. **Perf run S1: state writes off the GTK thread, the agent-auth keeper,
+    `/proc` quick wins.** ✅ Done on branch `perf` (S1 in
+    `docs/performance_handoff.md`), code-complete and **live-unverified**. §7.1,
+    §7.3, §7.2 quick wins. Backend changed.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S1.1) — Rename and reorder tabs while an agent
+      streams: no stall (§7.1).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S1.2) — `inotifywait -m <state_dir>/projects.json`
+      while switching projects: no MODIFY/MOVED_TO events for an unchanged list
+      (no-op skip).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S1.3) — Sign in to a CLI in one tab; a sibling tab of
+      another scope sees the login within ~5 s as before (§7.3 gate must not
+      delay it).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S1.4) — `pidstat -p $(pgrep -f tabtivity | head -1) 5`
+      at idle: backend CPU lower than before (§7.3 + §7.2).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S1.5) — Quit with unsaved layout changes made in the
+      last second: layout restored on next launch (lane drain at exit).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2401. **Perf run S2: PDF zoom without re-rasterising per wheel tick, no page
+    rebuild on each switch, one reload per TeX build.** ✅ Done on branch `perf`
+    (S2 in `docs/performance_handoff.md`), code-complete and
+    **live-unverified**. §4.1, §4.2, §4.4.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S2.1) — Open a dense PDF, Ctrl+wheel five notches
+      quickly: the page scales under the cursor at once (slightly soft),
+      sharpens ~120 ms after the last notch, the point under the cursor stays
+      put, the % label follows every notch. Text selection and link boxes line
+      up after it sharpens. `+`/`−`/Fit width behave as before.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S2.2) — Switch from the PDF tab to a terminal and back
+      within a few seconds: the pages are there instantly, no blank-then-paint.
+      Leave it hidden > 30 s and come back: pages repaint (as before).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S2.3) — In a TeX workspace, Compile a document whose
+      PDF is open: the PDF reloads once at the end of the build; during a
+      multi-pass latexmk run the page does not flicker through intermediate
+      builds. A build that fails leaves the old PDF; a later change outside
+      Tabtivity (e.g. `latexmk` in a shell) still reloads within ~2 s.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S2.4) — `strace -e trace=read -p <app pid>` is
+      overkill; cheaper: watch the renderer's RSS during a build of a large PDF
+      — it should not climb by a file size per retry.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2402. **Perf run S3: viewer scroll no longer rewrites the session; a PDF hidden
+    5 min releases its document.** ✅ Done on branch `perf` (S3 in
+    `docs/performance_handoff.md`), code-complete and **live-unverified**. §3.1,
+    §4.3.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S3.1) — Open a long PDF, scroll to the middle, wait 6
+      s, quit Tabtivity, relaunch: it reopens at that position (the 5 s fold +
+      quit save). Repeat with a quit within 2 s of the last scroll: still the
+      latest position (the quit save reads the stage).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S3.2) — Scroll a PDF for a while with `htop` on the
+      app: the renderer's CPU should no longer spike at each scroll pause; the
+      session file in `<state_dir>/sessions/<id>/` should change at most every
+      ~5 s.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S3.3) — Switch away from a PDF tab for > 5 min (a
+      terminal in front), then back: it shows "Loading…" briefly and lands at
+      the same page/zoom/scroll. Renderer RSS (`ps -o rss`) drops by roughly the
+      file size × 2 while it is asleep.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S3.4) — With marks drawn in markup mode (unsent) or a
+      page rotated and unsaved, leave the tab hidden > 5 min: it does not reload
+      on return, the marks/edits are still there.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S3.5) — Pop the PDF tab out into its own window and
+      leave the main window on another tab > 5 min: the popout keeps working
+      (the main copy stayed awake), and scrolling in the popout no longer makes
+      the main window's session file change on every pause.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2403. **Perf run S4: terminal activity without per-chunk work or standing
+    clocks; lazy xterm construction.** ✅ Done on branch `perf` (S4 in
+    `docs/performance_handoff.md`), code-complete and **live-unverified**. §3.2,
+    §5.2.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S4.1) — Open a project with a shell tab and an agent
+      tab; run a long `ls -R` in the shell: its ring turns green and goes out
+      within ~1 s of the output stopping (expiry timer, no interval). `top`
+      keeps it on while it redraws, as before.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S4.2) — Ask the agent something and switch to another
+      tab: the pill shows working, then finished (`done`) once it stops;
+      switching back clears it.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S4.3) — Open the Reader over a Codex tab, open Status:
+      the card fills and its timers tick; close it. Switch Reader on over a
+      Claude tab while it works: the busy row's seconds advance (write-driven,
+      no clock).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S4.4) — Restart into the dev build with many tabs:
+      hidden tabs show nothing until first shown, then their buffered output
+      appears at once; a tab first shown after its agent printed a sign-in link
+      still shows the card.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S4.5) — Drag a splitter across an agent pane: the TUI
+      repaints once at the end of the drag (one resize), not continuously.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2404. **Perf run S5: a hidden terminal's replay is trimmed with its modes kept;
+    activity digests are batched.** ✅ Done on branch `perf` (S5 in
+    `docs/performance_handoff.md`), code-complete and **live-unverified**.
+    §3.2b, §7.6. Backend changed.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S5.1) — Start an agent in a tab, let it work for a few
+      minutes **hidden** (switch to another tab); switch back: the pane appears
+      at once (no freeze) with the current frame drawn correctly.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S5.2) — In that tab right after showing it: the mouse
+      still scrolls/selects as the agent set it (wheel over Claude scrolls its
+      transcript, not xterm's scrollback; no `[<35;…M` garbage typed into the
+      input); paste a multi-line snippet: it arrives as one bracketed paste, not
+      line by line executed; Ctrl+click a URL still opens it; the cursor is
+      hidden/shown as before.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S5.3) — opencode (alt screen): hide it while it works,
+      show it: still on its full-screen UI, `q`/exit returns to the shell prompt
+      as before.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S5.4) — Open a shell tab, run `clear`, hide it, run
+      something long in it from the phone or let a script print, show it: the
+      output is there.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S5.5) — Pill check with many agents working while
+      hidden: pills stay "working" (green) without flicker; a decision prompt in
+      a hidden tab still turns the pill within ~1 s; nothing changes in the
+      visible tab's behaviour.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S5.6) — Pop out an agent tab while it is hidden in the
+      main window: the popout opens with the tab's current frame and keeps
+      streaming.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2405. **Perf run S6: the per-tab work is memoised (pane layer, tab bar, file
+    tree rows).** ✅ Done on branch `perf` (S6 in `docs/performance_handoff.md`),
+    code-complete and **live-unverified**. §5.1.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S6.1) — Open a project with many tabs (a dozen is
+      enough): drag a split divider — panes follow the divider with no visible
+      lag; every pane's content is live after the drag (nothing respawned,
+      terminal scrollback intact).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S6.2) — Click the already-active tab in the focused
+      subwindow: nothing changes (no flicker, no re-layout). Click the active
+      tab of the *other* subwindow: the focus frame moves to it.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S6.3) — Start an agent turn in one tab and watch
+      another tab's lamp — the busy ring appears/clears on the right tab only;
+      hover a tab: the hover card opens, no other tab repaints.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S6.4) — On an agent tab with a schedule, hover ◷: the
+      tooltip names the next occurrence (see Flagged if it is stale).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S6.5) — Files panel on a big folder: click "show more"
+      twice, then move the mouse across rows and rest on one — the tooltip opens
+      after the dwell and scrolling stays smooth; click a row (selected),
+      Ctrl-click another; drag a file onto a folder; right-click a row — all as
+      before. On a remote project the sync badges and the Run ▶ on a `.sh`/main
+      `.py` still act.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2406. **Perf run S7: header pollers, git dots and the launch chain cost less.**
+    ✅ Done on branch `perf` (S7 in `docs/performance_handoff.md`), code-complete
+    and **live-unverified**. §3.3 first three sites, §3.4, §3.5. Backend
+    changed.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S7.1) — Header idle: `pidstat -p $(pgrep -f tabtivity
+      | head -1) 5` — backend CPU lower than before; the CPU/RAM readout ticks
+      every ~5 s.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S7.2) — With Ollama not installed: no `ollama` PATH
+      probe every 5 s (e.g. `strace -f -e execve -p <pid>` quiet). Hover the
+      Models button: menu as before.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S7.3) — Mobile on: open the side panel and a Files tab
+      on a local project; the header phone lamp and the Files phone button
+      agree; Reconnect in the header menu still waits through the restart and
+      ends green.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S7.4) — Agent writing files in a local project, Files
+      view open: no tree flicker, the Git button's flag turns red within ~1 s
+      and the pill dot with it; `pgrep -c git` stays low (no spawn storm).
+      Switch to the Git view: counts are current; let the agent commit — "Add
+      (N)" goes away within ~1 s.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S7.5) — Two windows (popout) showing different
+      folders: each tree updates only for its own folder.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S7.6) — Quit in a project whose side panel was in a
+      subfolder; relaunch: the tree opens straight in that subfolder.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S7.7) — Theme `fancy_dark` / `light_lavender`: tab
+      bars and the docked file column look as before minus the frost; scrolling
+      a busy terminal beside them stays smooth.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2407. **Perf run S8: rarely used panes and overlays load on first use; thin
+    LTO.** ✅ Done on branch `perf` (S8 in `docs/performance_handoff.md`),
+    code-complete and **live-unverified**. §6. Backend build profile changed.
+    Setup: On a frozen dev build of this branch (after landing). Each item: it
+    opens as before; at most a blink of the loading box on the very first open,
+    never a blank or broken pane; devtools console free of chunk-load errors.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S8.1) — Launch: main window comes up as before
+      (header, file tree, terminal tabs).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S8.2) — Open one tab of each lazily loaded pane kind:
+      calendar, browser, print manager, network monitor, system monitor, disk
+      monitor, 3D projects view, skills library, prompt chart. Close and reopen
+      one: no loading box the second time.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S8.3) — Overlays: Machines, Remote machines, HPC
+      wizard, Models; the calendar overlay; the stats recap; How to start /
+      lessons pages. Turn the Machines feature off and on in Settings: the
+      header Machines member disappears and comes back.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S8.4) — Settings dialog from the project switcher,
+      plus a project dialog (new / edit project).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S8.5) — Viewers in a Files tab: a GIF, an `.odt`, an
+      audio/video file, a sync or git merge view, a YAML file in tree and grid
+      mode, a `.bib` in card view, the markdown graph, the image annotator.
+      Switching into each nested mode must not blank the editor.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S8.6) — Pop a tab out into its own window (and one
+      root subwindow): the popout opens and shows its tab; closing it returns
+      the tab.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S8.7) — Optional (LTO): compare startup time and idle
+      CPU of this build with the previous dev build.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2408. **Perf run S9: sleeping tabs — viewer kinds unload after a while hidden
+    (Settings → Performance).** ✅ Done on branch `perf` (S9 in
+    `docs/performance_handoff.md`), code-complete and **live-unverified**. §5.3
+    pane layer, §4.5 stub. Untested pill `settings.sleepTabs`. Setup: On a
+    frozen dev build of this branch (after landing). To see it quickly set
+    Settings → Performance → "Unload hidden tabs after" → 5 min.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S9.1) — Settings → Performance: the new row shows "10
+      min" on a profile that never set it, with the untested pill; pick 5 min,
+      reopen Settings: still 5 min.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S9.2) — Open a long PDF, zoom to 150 %, scroll to page
+      20; open a markdown file and scroll it; open a Files (Project) tab on a
+      subfolder. Switch each group to a terminal tab and wait > 5 min. Switch
+      back to each: the PDF is at page 20 / 150 % (brief reload), the markdown
+      at its scroll, the Files tab on its subfolder. A terminal/agent tab hidden
+      as long is untouched (scrollback, running process).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S9.3) — Type into a text file with autosave off, hide
+      it > 5 min, come back: the unsaved text is still there. Same for a PDF
+      with unsent markup.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S9.4) — Start an audio file, switch tabs, wait > 5
+      min: it keeps playing.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S9.5) — Pop a PDF tab out into its own window: it
+      opens there as before; dock it back: the main window shows it at the
+      popout's page.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S9.6) — Keyboard steering (Shift+Space) onto a tab
+      card of a long-hidden viewer and activate it: it opens and shows its
+      content.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S9.7) — Settings → "Never": nothing unloads any more.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2409. **Perf run S10: sleeping tabs — terminal and agent tabs unload their
+    xterm, the program keeps running.** ✅ Done on branch `perf` (S10 in
+    `docs/performance_handoff.md`), code-complete and **live-unverified**. §5.3
+    terminal kinds. Untested pill `settings.sleepTabs`. Backend changed. Setup:
+    On a frozen dev build of this branch (after landing), Settings → Performance
+    → "Unload hidden tabs after" → 5 min.
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S10.1) — Open a shell tab, run `seq 1 200`, then
+      `sleep 400; echo done-sleeping`; switch to another tab in that group for >
+      5 min. Switch back: the numbers and the prompt are there, then
+      `done-sleeping` appears (the process ran on).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S10.2) — In a hidden shell run `sleep 10; exit` and
+      leave it > 5 min: switching back shows its output and `[process exited]`.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S10.3) — Ask an agent a long task, switch away > 5
+      min: its tab pill still shows working/done; switching back shows the
+      current screen, no restart, the prompt not retyped.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S10.4) — Schedule a prompt (Agents view) into an agent
+      tab that has been hidden > 5 min: it is delivered without opening the tab.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S10.5) — Close a tab that has been hidden > 5 min:
+      `ps`/System monitor shows its program gone (subtree too, e.g. a `sleep`
+      under the shell).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S10.6) — Relaunch a hidden, unloaded agent tab from
+      its tab menu (or switch its container toggle): it restarts at once, not
+      when next shown.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S10.7) — Open the root console (or dock a root agent
+      in the mail overlay) for > 5 min: its tabs keep working and are not
+      unloaded; pop a terminal tab out: it keeps working in the popout.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S10.8) — Settings → "Never": nothing unloads.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2410. **Perf run S11: one shared process table; the Reader follows transcript
+    writes instead of polling; quieter remote standing load.** ✅ Done on branch
+    `perf` (S11 in `docs/performance_handoff.md`), code-complete and
+    **live-unverified**. §7.2, §7.5, §7.7. Backend changed. Setup: On a frozen
+    dev build of this branch (after landing):
+    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+      (vitest + cargo, all green but the known `MobileHeldPromptStore` date
+      pair)
+    - [ ] 🖐️ Manual test (S11.1) — Open a Claude tab in Reader view, send a
+      prompt: the answer appears about a second after Claude writes it; leave it
+      idle — `strace -f -e trace=openat -p <tabtivity pid> 2>&1 | grep jsonl`
+      shows no read of the transcript every 2 s, only one each ~15 s.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S11.2) — `/clear` in that tab: the Reader switches to
+      the empty chat within a second or two; Undo clear brings the old one back.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S11.3) — Ask for a subagent: it appears in the
+      Subagents list; open it — its conversation follows live. Open Diffs: an
+      edit shows as a New card.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S11.4) — Ask for `sleep 120` with run_in_background:
+      the shell row and the tab's job mark appear; after it ends both go. Kill
+      the CLI with one running: the row goes within 15 s.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S11.5) — OpenCode tab in Reader view: answers still
+      appear live.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S11.6) — Remote project, Sessions view open: start
+      `tmux new -d -s x` on the host from another terminal, click back into the
+      window: `x` is listed.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S11.7) — Network pane → SSH link: rates update every
+      second as before; close the pane, transfer a file over the project, reopen
+      after a few minutes: the hour total includes it.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S11.8) — Fence pill and UI priority unchanged: `ps -o
+      ni= -p $(pgrep -f WebKitWebProcess | head -1)` shows -10; an unfenced live
+      tab still counts on the project pill.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2411. **Perf run S12: UI polls stop while the window is unfocused or hidden.** ✅
+    Done on branch `perf` (S12 in `docs/performance_handoff.md`), code-complete
+    and **live-unverified**. `lib/usePoll` (`startPoll`/`usePoll`): a poll stops
+    while its window is blurred or hidden, its pane hidden or its gate off,
+    catches up once on return, never overlaps runs, and widens ×3 under Energy
+    Saver. Moved onto it: Mobile host status and devices, host sessions,
+    urgent-mail backstop, Ollama status, global inbox, Machines utilization,
+    root review, VM glyph/settings/install re-checks, debug renderer RSS, the
+    Git view's backstop, Slurm jobs, Reader usage limits, prompt-chart resets,
+    Network pane totals. Exempt by construction: schedulers, cron, alarms,
+    CalDAV sync, timer lease. The urgent-mail backstop keeps ticking unfocused
+    while the Mobile host's Alerts feed holds it (the phone reads those rows).
+    - [x] 🤖 Automated test — `UsePoll` (hidden → no calls, show → one catch-up,
+      unmount → none, no overlap, Energy Saver ×3), plus blur cases in
+      `MobileHostStatusShared`, `HostSessionsShared`, `OllamaStatusPoller`,
+      `GitBarRefresh`
+    - [ ] 🖐️ Manual test (S12.1) — Local git project, side panel on the Git
+      view. Click into another application and, from a terminal there, commit a
+      change in that project; wait half a minute. While the window is unfocused
+      no `git status` runs for it (`pgrep -fa 'git status'` in a loop, or
+      `execsnoop`, stays quiet). Click back into the window: the counts are
+      current within about a second.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S12.2) — Mobile host on, header phone menu open: the
+      paired devices list as before. With the window unfocused, stop the Mobile
+      host from a terminal (or unplug the network it binds); click back into the
+      window: the phone lamp turns red at once, not after up to 15 s.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S12.3) — Ollama installed and running: with the window
+      unfocused, load a model from a terminal (`ollama run <model> ''`); click
+      back: the Models lamp shows it loaded within a second. While unfocused
+      `ollama ps`-style polling stops (Ollama's log shows no `/api/ps` hit every
+      5 s).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S12.4) — Send a file from the phone to the desktop
+      inbox while the window is unfocused; click back into the window: the
+      header inbox lists it at once.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S12.5) — HPC/Slurm project, Files → Jobs view: the
+      queue refreshes every ~7 s while the window is focused; unfocused, no
+      `squeue` reaches the host (`strace -f -e execve -p <app pid>` shows no
+      `ssh … squeue`); returning shows the current queue at once.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S12.6) — Popped-out window: focus the popout — its own
+      polls (e.g. a Reader's usage limits, a Files view) keep running while the
+      main window's stop; focus the main window — the reverse.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S12.7) — Scheduled prompts, cron, calendar reminders,
+      CalDAV sync and the timer lease still fire while the window is unfocused
+      or minimised (these are exempt by design: schedule a prompt one minute
+      out, switch to another app, it is delivered).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S12.8) — Settings → Energy Saver “Always”: the polls
+      above still run while focused, about three times slower (the VM pill
+      glyph, the Machines utilization bars); “Off” restores the old cadence.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2412. **Earlier perf work (2026-10-01 cluster) — verify it live.** ✅ Done
+    2026-10-01 on `develop`, never given QA boxes (`docs/performance_plan.md`
+    §8): rtkit nice −10, the settled `/proc` walk, synchronous `/proc` commands
+    off the GTK thread, renderer release for long-hidden terminals, the PTY
+    output batcher, visible-only streaming, blur quiescence. No UI of their own,
+    so no untested pills.
+    - [x] 🤖 Automated test — `Quiesce`, the activity/settled-scan and terminal
+      batcher tests
+    - [ ] 🖐️ Manual test (earlier.1) — UI priority (rtkit,
+      `services/ui_priority.rs`): `ps -o ni= -p <renderer pid>` reads −10 while
+      `systemctl is-active rtkit-daemon` is active. Without rtkit (or polkit
+      consent) it is silently 0 — say which it was. Linux only.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (earlier.2) — Settled `/proc` walk (61652af5): with
+      every agent tab finished, `strace -f -e trace=openat -p <app pid> 2>&1 |
+      grep -c /proc/` over 30 s stays near zero (one walk per 30 s backstop, not
+      every 2 s); a new agent turn starts the scan again (the job mark still
+      appears for a background shell).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (earlier.3) — Synchronous `/proc` commands off the GTK
+      thread (bc53afbc): with the debug footer showing renderer RSS and a VM
+      project's pill visible, type quickly in a terminal: no stalls at the 2 s/6
+      s cadence.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (earlier.4) — Renderer release (614ce75b): a terminal
+      tab hidden for > 60 s drops its canvas renderer (renderer RSS falls by ~30
+      MB per large pane, `scripts/perf-numbers.sh --rss`); showing it again
+      draws at once with scrollback, selection and cursor intact.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (earlier.5) — PTY output batcher (`batch_output`,
+      `terminal/mod.rs`): `yes | head -n 2000000` in a visible tab finishes with
+      all lines (`| wc -l` in a second run), the UI stays responsive meanwhile,
+      other tabs keep typing normally.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (earlier.6) — Visible-only streaming: run a long build
+      in a hidden tab, switch to it: everything it printed is there, and its
+      pill tracked busy/finished while hidden.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (earlier.7) — Blur quiescence (`stores/power`
+      `startFocusTracking`): click into another app — animations stop
+      (`document.documentElement.dataset.blurred` is `on` in devtools), the
+      header clock ticks every 3 s; back in the window everything resumes at
+      once.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (earlier.8) — §1 numbers: from a host shell,
+      `scripts/perf-numbers.sh after-perf-run` on an idle frozen build of the
+      branch with the usual tab set; compare with the `before` section of
+      `docs/performance_numbers.md` (renderer % of one core, app main thread %,
+      renderer RSS) and fill the two stopwatch lines.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2413. **CPU-pressure auto-engage of quiescence.** Open half of the deleted
+    typing-latency plan (`git show 15a1774d^:docs/typing_latency_plan.md`, §§ on
+    `cpu.pressure`): engage the blur quiescence's throttles when the
+    system's `cpu.pressure` some avg is high even while the window is focused,
+    rather than inventing a new gate. Its “GPU-compositing setting” stays
+    dropped (2026-08 DMABUF retest: silent artifacts and a crash).
+    - [ ] Implement
+
+2414. **Perf run S13: follow-up fixes from the final review.** ✅ Done on
+    branch `perf` (S13 in `docs/performance_handoff.md`), code-complete and
+    **live-unverified**. A TeX workspace's other panes (a child `.tex`, a
+    graphic, a PDF in the centre) keep their position in the workspace tab
+    (`viewerState.texPanes`, at most 32 files); the deck presenter closes the
+    audience window it opened even after a rename; a terminal whose program
+    failed to start never sleeps; the glass themes' tab bars and docked file
+    column are near-opaque.
+    - [x] 🤖 Automated test — `ViewerStateTexPanes`, `DetachedTwoHeap` (sub-pane
+      dock-back), `PdfSleepHidden` (workspace PDF pane), `DeckAudienceUnmount`
+      (rename mid-talk), `TerminalSleepWake` (failed launch keeps its hold),
+      `TerminalSilentStart` (HPC retry), `GlassChromeBlur` (fill)
+    - [ ] 🖐️ Manual test (S13.1) — Open a multi-file thesis as a TeX workspace.
+      Centre a child chapter and scroll halfway down; centre the compiled PDF,
+      zoom to 150 % and scroll to page 5. Switch to another tab for longer than
+      the sleep delay (Settings → sleeping tabs), come back: both the chapter
+      and the PDF reopen where they were. Quit and relaunch: the same. Pop the
+      workspace out, scroll the chapter elsewhere, dock it back: it keeps the
+      new position.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S13.2) — Deck with a second display: start the
+      talk, open the audience window (⧉ or D), rename the deck file from the
+      Files view while presenting, then press D (and separately: the ⧉ toggle,
+      Exit): the audience window closes each time, nothing stays on the
+      projector.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S13.3) — A tab whose program cannot start (an agent
+      tab whose CLI was uninstalled, or an HPC-tagged remote tab where the
+      connect question is declined): the pane shows its error. Leave it hidden
+      for longer than the sleep delay and come back: the error is still there,
+      no second spawn or HPC question happened. Relaunching or closing the tab
+      still works. For the HPC case answered with Connect: the tab starts, and
+      if its program prints nothing for 10 s the "started but has shown
+      nothing" notice appears; hidden past the sleep delay it does sleep.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (S13.4) — Themes `fancy_dark` and `light_lavender`:
+      the subwindow tab bars and the docked file column are near-opaque
+      (terminal or code text behind or beneath them does not read through);
+      the header, dialogs and menus look as before; other themes unchanged.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2415. **Per-tab cost readout and the loaded-PDF notice.** ✅ Done on branch
+    `perf` (T1 in `docs/tab_cost_handoff.md`, plan `docs/tab_cost_plan.md`
+    step 1), code-complete and **live-unverified**. Untested pills
+    `tabCost.hover` and `settings.tabCosts` (its row also covers the toast).
+    Setup: a frozen dev build of this branch.
+    - [x] 🤖 Automated test — `TabCost`, `PdfCostRegistry`,
+      `TabHoverCardCost`, `TabCostList`, `PdfLoadWarningHost`
+    - [ ] 🖐️ Manual test (T1.1) — Hover a busy shell tab: the "memory" row
+      reads "≈ … · N of M lines" (M = the tab's scrollback cap: 2,000 for a
+      shell by default — the "Shell scrollback" setting — 5,000 for an agent).
+      Hover a PDF: its pages and file size. Hover a PDF hidden over 5 min:
+      "Unloaded — reloads when shown". Set "Unload hidden tabs after" to 5 min
+      and hover a terminal hidden that long: "the program keeps running", no
+      size. A calendar tab's card has no memory row.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (T1.2) — Settings → Power & performance → "What
+      open tabs hold": largest first; Show jumps to the tab and closes
+      Settings (only offered for the current project's tabs); Close closes it;
+      Refresh updates the list after opening another PDF.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (T1.3) — More than 2 min after start, open 8 PDFs
+      one after another: one toast at the 8th, gone after ~3 s; none at the
+      9th. Close down to 5, open three more: it shows once more. Then open
+      8 PDFs within 2 min of a start and leave them: one toast when the 2 min
+      are up, none after.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2416. **Shell scrollback setting.** ✅ Done on branch `perf` (T2 in
+    `docs/tab_cost_handoff.md`, plan `docs/tab_cost_plan.md` step 2),
+    code-complete and **live-unverified**. Untested pill
+    `settings.shellScrollback`. Setup: a frozen dev build of this branch.
+    - [x] 🤖 Automated test — `Scrollback`, `TerminalScrollback`, Rust
+      `shell_scrollback_rows_defaults_absent_and_round_trips`
+    - [ ] 🖐️ Manual test (T2.1) — Settings → Power & performance → "Shell
+      scrollback" reads 2,000 lines. A new shell keeps 2,000 lines: run
+      `seq 1 5000`, scroll to the top — it starts near 3000, less the
+      screen's height (the visible screen is kept on top of the 2,000). An agent tab still keeps
+      5,000. Set 1,000: the open shell drops its oldest lines at once, no
+      restart, its program still running; its tab hover card reads "of 1,000
+      lines". Reopen Settings: 1,000.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2417. **Experimental features no longer follow Debug mode.** ✅ Done on branch
+    `perf` (T3 in `docs/tab_cost_handoff.md`, plan `docs/tab_cost_plan.md`
+    step 3), code-complete and **live-unverified**. Untested pills
+    `settings.debugNoExperiments`, `settings.deckPresenter`. Setup: a frozen
+    dev build of this branch; for T3.1 a profile whose `settings.json` has
+    `"debug": true` and no `experimental_explicit` (any profile that ran Debug
+    mode before this build).
+    - [x] 🤖 Automated test — `ExperimentalExplicit`, `Experimental`,
+      `ExperimentalSweep`, `ExperimentalTabWithdraw`, `PythonViewer`,
+      `DeckPresenterSetting`; Rust `unmarked_experimental_flags_default_to_debug_mode`,
+      `marked_experimental_flags_are_off_unless_ticked`,
+      `experimental_explicit_defaults_absent_and_round_trips`, policy
+      `marked_profile_needs_the_flag_ticked`
+    - [ ] 🖐️ Manual test (T3.1) — On the Debug-mode profile, with a browser
+      tab open, start the new build: the browser tab is still there, the ✉
+      mail button is still in the header, and Settings → Experimental shows
+      every experiment that was on ticked (the WebGL renderer stays as it
+      was). Untick Mail: the ✉ button goes; toggle Debug mode off and on
+      again: it does not come back. Restart: nothing changes.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test (T3.2) — On a profile with Debug mode off, turn
+      Debug mode on: no experiment appears (no ✉ button, no browser entry in
+      the new-tab menu). Tick the new "Deck presenter" switch: an open PDF's
+      toolbar shows Present, and "New Presentation" appears in the file
+      tree's new-file menu; untick it: both go.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

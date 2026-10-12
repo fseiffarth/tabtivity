@@ -18,7 +18,7 @@ pub struct RemoteImage {
     pub data_base64: String,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn markdown_remote_image(url: String) -> Result<RemoteImage, String> {
     let image = crate::services::browser_engine::fetch_document_image(&url).await?;
     Ok(RemoteImage {

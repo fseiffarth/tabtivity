@@ -9,7 +9,7 @@ use crate::services::local_loss::{self, LocalLoss};
 
 /// Every recorded local loss for a project, newest first. Empty for a local project (it
 /// has no mirror to lose anything from) and for the overwhelming majority of remote ones.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_loss_list(project_id: String) -> Result<Vec<LocalLoss>, String> {
     Ok(local_loss::load(&project_id))
 }
@@ -19,7 +19,7 @@ pub async fn local_loss_list(project_id: String) -> Result<Vec<LocalLoss>, Strin
 /// `remote-projects/<id>/local_loss.json` to find out which files it took. (A UI to
 /// browse the history would live next to the backup-ref list in `GitHistory`; there
 /// isn't one yet, which is why there is no "clear" command either.)
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_loss_ack(project_id: String) -> Result<(), String> {
     local_loss::ack_all(&project_id);
     Ok(())

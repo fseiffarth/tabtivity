@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 
 use openssh_sftp_client::Sftp;
 use serde::Serialize;
-use tauri::State;
 
 use crate::schema::project::{VmEgress, VmSpec};
 use crate::schema::projects::ProjectsList;
@@ -21,6 +20,7 @@ use crate::services::remote::RemotePoolState;
 use crate::services::sftp;
 use crate::services::{vm, vm_proxy};
 use crate::storage;
+use crate::tauri_host::Ctx;
 
 /// `vm_status`'s answer: what the pill glyph + VM settings menu render from.
 #[derive(Debug, Clone, Serialize)]
@@ -36,9 +36,9 @@ pub struct VmStatus {
     pub blocked: vm_proxy::BlockedReport,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_doctor() -> Result<vm::VmDoctorReport, String> {
-    tauri::async_runtime::spawn_blocking(vm::doctor)
+    app_core::rt::spawn_blocking(vm::doctor)
         .await
         .map_err(|e| e.to_string())
 }
@@ -46,9 +46,9 @@ pub async fn vm_doctor() -> Result<vm::VmDoctorReport, String> {
 /// `async` + blocking pool rather than a plain synchronous command, which would
 /// run on the main (GTK) thread: it parses `projects.json` and reads the VM
 /// registry, and every VM project's pill polls it every few seconds.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_status(project_id: String) -> Result<VmStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || vm_status_blocking(&project_id))
+    app_core::rt::spawn_blocking(move || vm_status_blocking(&project_id))
         .await
         .map_err(|e| e.to_string())
 }
@@ -70,19 +70,19 @@ fn vm_status_blocking(project_id: &str) -> VmStatus {
 /// the caller can `remote_connect` immediately. (Activation goes through
 /// `remote_connect` directly, which boots on its own — this command is the
 /// explicit "boot it" action for the pill.)
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_boot(project_id: String) -> Result<vm::VmRuntime, String> {
     let name = project_name(&project_id).unwrap_or_else(|| "project".to_string());
-    tauri::async_runtime::spawn_blocking(move || vm::ensure_booted(&project_id, &name))
+    app_core::rt::spawn_blocking(move || vm::ensure_booted(&project_id, &name))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// Shut the project's VM down (disconnecting the pooled session first is the
 /// caller's job — `stores/projects` already disconnects on deactivate).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_shutdown(project_id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || vm::shutdown(&project_id))
+    app_core::rt::spawn_blocking(move || vm::shutdown(&project_id))
         .await
         .map_err(|e| e.to_string())
 }
@@ -90,15 +90,15 @@ pub async fn vm_shutdown(project_id: String) -> Result<(), String> {
 /// Recreate the overlay from the base image. Refused while running; the
 /// frontend owns the confirm ("in-VM uncommitted work dies; what was pushed —
 /// or pulled to an opted-in mirror — survives").
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_rebuild(project_id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || vm::rebuild(&project_id))
+    app_core::rt::spawn_blocking(move || vm::rebuild(&project_id))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// The blocked-connections log (Proxy egress) for the pill / settings dialog.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn vm_blocked(project_id: String) -> vm_proxy::BlockedReport {
     vm_proxy::blocked_report(&project_id)
 }
@@ -106,7 +106,7 @@ pub fn vm_blocked(project_id: String) -> vm_proxy::BlockedReport {
 /// Temporarily allow one host through the egress proxy (15 min) — the
 /// clone-at-creation channel: the git host is admitted for the initial clone
 /// without becoming a standing hole.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn vm_allow_temporarily(project_id: String, host: String) -> Result<(), String> {
     let host = host.trim();
     if host.is_empty() || host.contains('/') || host.contains(':') {
@@ -147,7 +147,7 @@ pub fn mail_reader_refusal(project_id: Option<&str>) -> Option<String> {
 /// `set_project_sandbox_spec`'s shape: written to both `projects.json` (the
 /// trusted copy) and `project.json` (display/export). Resource changes apply
 /// on the next boot; the proxy allowlist applies live.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn vm_set_spec(project_id: String, mut spec: VmSpec) -> Result<VmSpec, String> {
     spec.enabled = true; // the tier is chosen at creation; no in-place disable
     spec.memory_mb = spec.memory_mb.clamp(512, 262_144);
@@ -209,7 +209,7 @@ pub fn vm_set_spec(project_id: String, mut spec: VmSpec) -> Result<VmSpec, Strin
 /// is the only copy" surfacing for mirrorless projects. `None` when the VM is
 /// down, the tree isn't a repo yet, or the count could not be read (never 0
 /// for "couldn't tell").
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_unpushed_commits(project_id: String) -> Result<Option<u64>, String> {
     if !vm::is_running(&project_id) {
         return Ok(None);
@@ -217,7 +217,7 @@ pub async fn vm_unpushed_commits(project_id: String) -> Result<Option<u64>, Stri
     let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
         return Ok(None);
     };
-    let count = tauri::async_runtime::spawn_blocking(move || {
+    let count = app_core::rt::spawn_blocking(move || {
         crate::services::ssh_exec::run_remote_script(
             &target.spec,
             "git rev-list --count --branches --not --remotes 2>/dev/null || true",
@@ -301,16 +301,17 @@ async fn walk_remote_size(sftp: &Sftp, path: &str, depth: u32) -> Result<RemoteT
 
 /// Size a remote file/folder before downloading it (the confirm dialog's
 /// numbers). `rel_path` is project-root-relative; `""` sizes the whole tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_download_size(
-    pool: State<'_, RemotePoolState>,
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
 ) -> Result<RemoteTreeSize, String> {
+    let pool = ctx.get::<RemotePoolState>();
     let target = crate::services::remote::remote_target_for(&project_id)
         .ok_or_else(|| "not a remote project".to_string())?;
     let path = resolve_remote_rel(&target.spec.remote_path, &rel_path)?;
-    let sftp = crate::services::remote::pooled_sftp(pool.inner(), &project_id)
+    let sftp = crate::services::remote::pooled_sftp(pool, &project_id)
         .await
         .ok_or_else(|| "not connected".to_string())?;
     let (size, _) = sftp::metadata_on(&sftp, &path).await?;
@@ -349,13 +350,14 @@ async fn download_tree(sftp: &Sftp, remote: &str, dest: &Path, depth: u32) -> Re
 /// destination directory the user picked in a dialog. Every crossing is
 /// user-clicked; the agent can stage bytes but cannot trigger this. Returns
 /// the number of files copied.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_download_to(
-    pool: State<'_, RemotePoolState>,
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
     dest_dir: String,
 ) -> Result<u64, String> {
+    let pool = ctx.get::<RemotePoolState>();
     let target = crate::services::remote::remote_target_for(&project_id)
         .ok_or_else(|| "not a remote project".to_string())?;
     let remote = resolve_remote_rel(&target.spec.remote_path, &rel_path)?;
@@ -363,7 +365,7 @@ pub async fn remote_download_to(
     if !dest_dir.is_absolute() || !dest_dir.is_dir() {
         return Err("destination must be an existing local folder".to_string());
     }
-    let sftp = crate::services::remote::pooled_sftp(pool.inner(), &project_id)
+    let sftp = crate::services::remote::pooled_sftp(pool, &project_id)
         .await
         .ok_or_else(|| "not connected".to_string())?;
 

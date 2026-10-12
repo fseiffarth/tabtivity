@@ -8,6 +8,8 @@ pub mod brand_migration;
 pub mod browser;
 pub mod caldav;
 pub mod calendar;
+// Window/OS-only (`client`): not in the server daemon's build.
+#[cfg(feature = "desktop")]
 pub mod clipboard;
 pub mod copilot;
 pub mod crash;
@@ -27,6 +29,8 @@ pub mod git_publish;
 pub mod git_pull;
 pub mod global_machines;
 pub mod hpc_ws;
+// Window/OS-only (`client`): not in the server daemon's build.
+#[cfg(feature = "desktop")]
 pub mod ide;
 pub mod local_loss;
 pub mod mail;
@@ -39,11 +43,20 @@ pub mod network;
 pub mod ollama;
 pub mod openvpn;
 pub mod os_clock;
+// Window/OS-only (`client`): not in the server daemon's build.
+#[cfg(feature = "desktop")]
 pub mod pdf_clip;
 pub mod pdf_markup;
+pub mod persist_lane;
 pub mod power;
+// Window/OS-only (`client`): not in the server daemon's build.
+#[cfg(feature = "desktop")]
 pub mod presenter;
+// Window/OS-only (`client`): not in the server daemon's build.
+#[cfg(feature = "desktop")]
 pub mod print_native;
+// Window/OS-only (`client`): not in the server daemon's build.
+#[cfg(feature = "desktop")]
 pub mod printing;
 pub mod project_runtime;
 // Full project export/import — move a project to another computer
@@ -53,9 +66,13 @@ pub mod projects;
 pub mod python;
 pub mod remote;
 pub mod root_mcp;
+// Window/OS-only (`client`): not in the server daemon's build.
+#[cfg(feature = "desktop")]
 pub mod screenshot;
 pub mod search;
 pub mod settings;
+pub mod share;
+pub mod shared_calendar;
 pub mod sheets;
 pub mod skills;
 pub mod slurm;
@@ -63,7 +80,12 @@ pub mod slurm;
 pub mod spell;
 pub mod sqlite;
 pub mod ssh;
+// Window/OS-only (`client`): not in the server daemon's build.
+#[cfg(feature = "desktop")]
 pub mod subwindow;
+// Connect to a server (hosted plan §7.2, P5): a window and its socket bridge.
+#[cfg(feature = "desktop")]
+pub mod connect;
 pub mod sync;
 pub mod synctex;
 pub mod terminal;

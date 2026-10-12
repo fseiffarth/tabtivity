@@ -108,6 +108,21 @@ any directory is self-contained — it used to take the plaintext name from its
 argument and the sealed one from the global state dir, which meant a call against
 a temp directory quietly read the real mailbox's account list.
 
+**A server re-keys the whole store when a device is revoked** (hosted plan
+§6.8, decision 2026-10-03; the desktop never does). Re-wrapping the master key
+— the cheap trick the key file's indirection exists for — is not enough there:
+a revoked device with old copies of `key.json` and `wraps.json` would still
+open everything sealed later. So the rotation writes a *fresh* master and keeps
+the old ones in `key.json`'s `previous` list; reads try the current master,
+then each previous one (`MailKeys::open_any`); every write uses the current
+one, read under the store's connection lock, which a key switch takes too; and
+`MailStore::rekey_step` moves sealed values, keyed blob names and staged files
+batch by batch, one transaction each with its progress marker in `meta`. The
+old master leaves `key.json` only after a full pass found nothing left under
+it (`retire_previous`). Because every step re-checks each value under the
+current key, a crash anywhere costs time, never data; why and the lock order:
+[`server_gateway.md`](server_gateway.md) § Secrets.
+
 **What stays readable on disk**, by design: message counts, folder structure,
 arrival dates, sizes, read/starred/priority flags — they are what paging,
 ordering and unread counts run on. One item is sharper than "folder structure"

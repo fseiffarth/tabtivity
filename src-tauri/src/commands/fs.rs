@@ -14,6 +14,8 @@ use serde_json::Value;
 use crate::schema::boxes::BoxesList;
 use crate::schema::projects::{ProjectEntry, ProjectsList};
 use crate::storage;
+use crate::tauri_host::Ctx;
+use app_core::CoreCtx;
 
 // ── File tree ─────────────────────────────────────────────────────────────
 
@@ -84,16 +86,17 @@ fn file_entry_from(path: &Path, meta: &fs::Metadata, name: String) -> FileEntry 
 /// - **Local project** → `fs::read_dir`, validating the path stays inside the
 ///   project root. Byte-identical to the pre-Phase-2 behavior.
 ///
-/// `pool` is Tauri-injected managed state; the frontend does not pass it.
-#[tauri::command]
+/// The SFTP pool comes from the host context; the frontend does not pass it.
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_dir(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, crate::services::remote::RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<Vec<FileEntry>, String> {
+    let pool = ctx.get::<RemotePoolState>();
     // Detect remote BEFORE any local-fs access (`canonical` would touch the fs).
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
-        return list_dir_remote(&target, &rel_path, pool.inner()).await;
+        return list_dir_remote(&target, &rel_path, pool).await;
     }
     list_dir_local(&project_dir, &rel_path)
 }
@@ -149,7 +152,7 @@ const TEXT_PATH_BASES_MAX: usize = 4;
 /// answered either. The returned path is the lexical one (the base as given,
 /// joined), not the canonical one, so it prefix-matches the project directory
 /// the frontend holds. One answer per candidate, in order; `None` = no link.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn resolve_text_paths(bases: Vec<String>, candidates: Vec<String>) -> Vec<Option<FileEntry>> {
     let bases: Vec<(PathBuf, PathBuf)> = bases
         .iter()
@@ -230,7 +233,7 @@ fn normalize_lexical(path: &Path) -> PathBuf {
 /// `since_secs` (Unix seconds) keeps only entries modified at or after it; `None`
 /// returns everything. Results are sorted by `modified_secs` descending, then by
 /// name, so the most recent download is first.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_recent_downloads(
     paths: Vec<String>,
     since_secs: Option<u64>,
@@ -319,13 +322,14 @@ async fn list_dir_remote(
 ///
 /// A folder that can't be fully read yields the partial total rather than an
 /// error, since this is a best-effort display aid.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dir_size(
     project_dir: String,
     rel_path: String,
     excluded: Option<Vec<String>>,
-    pool: tauri::State<'_, crate::services::remote::RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<u64, String> {
+    let pool = ctx.get::<RemotePoolState>();
     let _ = &pool; // remote path uses SSH exec, not the SFTP pool; keep the arg for symmetry
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let remote_dir = join_remote_dir(&target.spec.remote_path, &rel_path);
@@ -438,7 +442,7 @@ pub struct DirSizeBreakdown {
 /// index without a dedicated round trip per lazily-shown folder — a remote
 /// folder (or one with no `.git`) just gets `ignored: 0`, same best-effort
 /// fallback as [`dir_size`] on failure.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dir_size_breakdown(
     project_dir: String,
     rel_path: String,
@@ -798,7 +802,7 @@ async fn run_off_thread<T: Send + 'static>(
         .map_err(|e| format!("fs task failed: {e}"))?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_project_endings(project_dir: String) -> Result<Vec<String>, String> {
     run_off_thread(move || list_project_endings_blocking(project_dir)).await
 }
@@ -810,7 +814,7 @@ pub fn list_project_endings_blocking(project_dir: String) -> Result<Vec<String>,
     Ok(endings.into_iter().collect())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_project_paths(project_dir: String) -> Result<Vec<ProjectPathEntry>, String> {
     run_off_thread(move || list_project_paths_blocking(project_dir)).await
 }
@@ -843,13 +847,14 @@ fn validate_bare_name(new_name: &str) -> Result<String, String> {
 /// `new_name` must be a bare file name; renames never move entries between
 /// directories. Remote projects (mount-free, Phase 3) rename over SFTP; local
 /// projects keep the byte-identical local behavior.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn rename_path(
     project_dir: String,
     old_rel: String,
     new_name: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     let name = validate_bare_name(&new_name)?;
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let from = remote_join_confined(&target.spec.remote_path, &old_rel)?;
@@ -858,7 +863,7 @@ pub async fn rename_path(
             Some(i) => format!("{}/{}", &from[..i], name),
             None => name.clone(),
         };
-        return remote_rename(pool.inner(), &target, &from, &to).await;
+        return remote_rename(pool, &target, &from, &to).await;
     }
     rename_path_local(&project_dir, &old_rel, &new_name)
 }
@@ -881,15 +886,16 @@ pub fn rename_path_local(project_dir: &str, old_rel: &str, new_name: &str) -> Re
 }
 
 /// Delete a file — never a directory (safety: use trash or explicit confirm for dirs).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_file(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_remove_file(pool.inner(), &target, &full).await;
+        return remote_remove_file(pool, &target, &full).await;
     }
     delete_file_local(&project_dir, &rel_path)
 }
@@ -907,19 +913,20 @@ pub fn delete_file_local(project_dir: &str, rel_path: &str) -> Result<(), String
 }
 
 /// Delete a directory tree inside the project root.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_dir(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let clean = normalize_project_rel_path(&rel_path)?;
         if clean.is_empty() {
             return Err("refusing to delete project root".to_string());
         }
         let full = join_remote_dir(&target.spec.remote_path, &clean);
-        return remote_remove_dir(pool.inner(), &target, &full).await;
+        return remote_remove_dir(pool, &target, &full).await;
     }
     delete_dir_local(&project_dir, &rel_path)
 }
@@ -940,15 +947,16 @@ pub fn delete_dir_local(project_dir: &str, rel_path: &str) -> Result<(), String>
 }
 
 /// Create a new empty file inside the project.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_file(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_create_file(pool.inner(), &target, &full).await;
+        return remote_create_file(pool, &target, &full).await;
     }
     create_file_local(&project_dir, &rel_path)
 }
@@ -963,16 +971,17 @@ pub fn create_file_local(project_dir: &str, rel_path: &str) -> Result<(), String
 }
 
 /// Write a text file inside the project.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_project_file(
     project_dir: String,
     rel_path: String,
     content: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_write(pool.inner(), &target, &full, content.as_bytes()).await;
+        return remote_write(pool, &target, &full, content.as_bytes()).await;
     }
     write_project_file_local(&project_dir, &rel_path, &content)
 }
@@ -991,16 +1000,17 @@ pub fn write_project_file_local(
 }
 
 /// Write raw bytes to a file inside the project (used for drag-and-drop uploads).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_project_file_bytes(
     project_dir: String,
     rel_path: String,
     content: Vec<u8>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_write(pool.inner(), &target, &full, &content).await;
+        return remote_write(pool, &target, &full, &content).await;
     }
     write_project_file_bytes_local(&project_dir, &rel_path, &content)
 }
@@ -1018,7 +1028,7 @@ pub fn write_project_file_bytes_local(
     write_confined(&target_c, content)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn update_gitignore_rule(
     project_dir: String,
     rel_path: String,
@@ -1061,15 +1071,16 @@ pub fn update_gitignore_rule(
 }
 
 /// Create a new directory inside the project.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_dir(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_mkdir(pool.inner(), &target, &full).await;
+        return remote_mkdir(pool, &target, &full).await;
     }
     create_dir_local(&project_dir, &rel_path)
 }
@@ -1087,7 +1098,7 @@ pub fn create_dir_local(project_dir: &str, rel_path: &str) -> Result<(), String>
 /// to their respective project roots (which may be the same project, enabling an
 /// in-project copy/paste, or two box-co-accessible projects). The destination
 /// must not already exist, and a directory may not be copied into itself.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copy_path(
     src_project_dir: String,
     src_rel: String,
@@ -1115,7 +1126,7 @@ pub fn copy_path_blocking(
 /// confinement and pre-conditions as [`copy_path`]. Falls back to copy+remove
 /// only when the rename failed because source and destination are on different
 /// filesystems/volumes; any other rename error is returned as it is.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn move_path(
     src_project_dir: String,
     src_rel: String,
@@ -1172,7 +1183,7 @@ pub fn move_path_blocking(
 /// it can redirect the copy within the dropped-on folder and nowhere else; and
 /// it still goes through `unique_dest` unless `replace`, so a chosen name that
 /// also collides is suffixed rather than overwriting something.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_external_file(
     project_dir: String,
     source_path: String,
@@ -1244,7 +1255,7 @@ pub fn import_external_file_blocking(
 
 /// Whether a project-relative path currently exists. The drag-drop importer
 /// calls this before copying so it can prompt rename-vs-replace on a collision.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool, String> {
     let root = canonical(&project_dir)?;
     let rel = normalize_project_rel_path(&rel_path)?;
@@ -1267,7 +1278,7 @@ pub fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool
 /// Security: guards against Zip-Slip. Every entry's path goes through
 /// `enclosed_name` (which rejects `..`/absolute components), and the resolved
 /// output is additionally confined to the destination folder before any write.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn extract_archive(project_dir: String, rel_path: String) -> Result<String, String> {
     run_off_thread(move || extract_archive_blocking(project_dir, rel_path)).await
 }
@@ -1421,12 +1432,13 @@ fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
 /// the extension); remote projects (mount-free, Phase 3) use the **extension**
 /// only — avoiding a network fetch just to classify — after confining the path to
 /// the remote project root.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detect_mime(
     path: String,
     project_id: Option<String>,
-    _pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<String, String> {
+    let _ = &ctx;
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a mirror-local path is classified on the LOCAL fs
@@ -1472,15 +1484,16 @@ pub fn detect_mime_local(path: &str, scope_id: Option<&str>) -> Result<String, S
 /// Classify where an in-app viewer's bytes come from, for the viewer's source
 /// notice. Returns exactly one of:
 ///   - `"remote"` — a remote (SSH) project path served straight from the host
-///                  over SFTP (remote-native, no local copy).
+///     over SFTP (remote-native, no local copy).
 ///   - `"local"`  — a remote project path under the local **mirror**, read on the
-///                  LOCAL fs (the paired working copy synced from the host).
+///     LOCAL fs (the paired working copy synced from the host).
 ///   - `"none"`   — a local project (or root scope): there is no remote/local
-///                  distinction, so the frontend shows no badge.
+///     distinction, so the frontend shows no badge.
+///
 /// This mirrors the *exact* routing `read_file_text`/`read_file_bytes` apply
 /// (`remote_target_for` gates remoteness, `is_under_mirror` picks the side), so
 /// the badge can never disagree with where the bytes were actually read from.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn file_source(path: String, project_id: Option<String>) -> String {
     match project_id.as_deref() {
         Some(pid) if crate::services::remote::remote_target_for(pid).is_some() => {
@@ -1526,12 +1539,13 @@ const MAX_BINARY_VIEW_BYTES: u64 = 256 * 1024 * 1024;
 /// a renderer cannot turn this into an arbitrary file read of e.g.
 /// `~/.ssh/id_rsa`. Refuses files over `MAX_TEXT_VIEW_BYTES` and non-UTF-8
 /// (binary) files.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn read_file_text(
     path: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<String, String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a path under the local mirror is read on the LOCAL fs
@@ -1539,13 +1553,13 @@ pub async fn read_file_text(
             // tabs see mirrored bytes instead of round-tripping SFTP.
             if !crate::services::remote_sync::is_under_mirror(pid, &path) {
                 confine_remote_abs(&target.spec.remote_path, &path)?;
-                let (size, _) = remote_metadata(pool.inner(), &target, &path).await?;
+                let (size, _) = remote_metadata(pool, &target, &path).await?;
                 if size > MAX_TEXT_VIEW_BYTES {
                     return Err(format!(
                         "file too large to view ({size} bytes; limit {MAX_TEXT_VIEW_BYTES})"
                     ));
                 }
-                let bytes = remote_read(pool.inner(), &target, &path).await?;
+                let bytes = remote_read(pool, &target, &path).await?;
                 return String::from_utf8(bytes)
                     .map_err(|_| "file is not valid UTF-8 text".to_string());
             }
@@ -1580,13 +1594,14 @@ pub fn read_file_text_local(path: &str, scope_id: Option<&str>) -> Result<String
 /// overwrite arbitrary user files), refuses to grow a file past
 /// `MAX_TEXT_VIEW_BYTES`, and only writes to an existing regular file (the
 /// editor edits files opened from the tree; it never creates new paths).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_file_text(
     path: String,
     content: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a mirror-local path saves to the LOCAL mirror (Phase 2
@@ -1600,7 +1615,7 @@ pub async fn write_file_text(
                         MAX_TEXT_VIEW_BYTES
                     ));
                 }
-                return remote_write(pool.inner(), &target, &path, content.as_bytes()).await;
+                return remote_write(pool, &target, &path, content.as_bytes()).await;
             }
         }
     }
@@ -1646,11 +1661,13 @@ pub fn write_file_text_local(
 /// a path is not: `~/tabtivity/projects/Übung/…` would otherwise be unsendable. Nothing
 /// about that is a trust boundary — the decoded path goes through exactly the same
 /// `confine_abs_write` as before.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_file_bytes(
     request: tauri::ipc::Request<'_>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     let path = request_header(&request, crate::brand::FILE_PATH_HEADER)
         .ok_or_else(|| "write_file_bytes: missing path".to_string())?;
     let project_id = request_header(&request, crate::brand::FILE_PROJECT_HEADER).filter(|s| !s.is_empty());
@@ -1681,6 +1698,7 @@ fn json_byte_array(value: &Value) -> Option<Vec<u8>> {
 }
 
 /// A percent-decoded request header, or `None` when it is absent or not valid UTF-8.
+#[cfg(feature = "desktop")]
 fn request_header(request: &tauri::ipc::Request<'_>, name: &str) -> Option<String> {
     let raw = request.headers().get(name)?.to_str().ok()?;
     percent_decode(raw)
@@ -1713,7 +1731,7 @@ async fn write_file_bytes_routed(
     path: String,
     content: &[u8],
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    pool: &RemotePoolState,
 ) -> Result<(), String> {
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
@@ -1727,7 +1745,7 @@ async fn write_file_bytes_routed(
                         MAX_BINARY_VIEW_BYTES
                     ));
                 }
-                return remote_write(pool.inner(), &target, &path, content).await;
+                return remote_write(pool, &target, &path, content).await;
             }
         }
     }
@@ -1765,15 +1783,39 @@ pub fn write_file_bytes_local(
 /// pdf.js was even handed anything. A raw body arrives as an `ArrayBuffer` — the
 /// bytes, once — which is also why the frontend wrapper hands one straight to pdf.js
 /// instead of re-wrapping it.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn read_file_bytes(
     path: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<tauri::ipc::Response, String> {
+    let pool = ctx.get::<RemotePoolState>();
     read_file_bytes_any(path, project_id, pool)
         .await
         .map(tauri::ipc::Response::new)
+}
+
+/// The bytes of `path`, for a host that is not Tauri: a browser's
+/// `read_file_bytes` arrives as a binary frame (hosted plan §3.5) and is
+/// answered by `mobile_control::web_client` through this, with the same
+/// confinement and remote routing as the IPC shape above.
+pub async fn read_file_bytes_for(
+    ctx: &CoreCtx,
+    path: String,
+    project_id: Option<String>,
+) -> Result<Vec<u8>, String> {
+    read_file_bytes_any(path, project_id, ctx.get::<RemotePoolState>()).await
+}
+
+/// `write_file_bytes` for a host that is not Tauri (see [`read_file_bytes_for`]).
+pub async fn write_file_bytes_for(
+    ctx: &CoreCtx,
+    path: String,
+    content: &[u8],
+    project_id: Option<String>,
+) -> Result<(), String> {
+    write_file_bytes_routed(path, content, project_id, ctx.get::<RemotePoolState>()).await
 }
 
 /// The read itself, kept separate from the IPC shape so the routing stays testable
@@ -1781,20 +1823,20 @@ pub async fn read_file_bytes(
 async fn read_file_bytes_any(
     path: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    pool: &RemotePoolState,
 ) -> Result<Vec<u8>, String> {
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a mirror-local path reads from the LOCAL mirror.
             if !crate::services::remote_sync::is_under_mirror(pid, &path) {
                 confine_remote_abs(&target.spec.remote_path, &path)?;
-                let (size, _) = remote_metadata(pool.inner(), &target, &path).await?;
+                let (size, _) = remote_metadata(pool, &target, &path).await?;
                 if size > MAX_BINARY_VIEW_BYTES {
                     return Err(format!(
                         "file too large to view ({size} bytes; limit {MAX_BINARY_VIEW_BYTES})"
                     ));
                 }
-                return remote_read(pool.inner(), &target, &path).await;
+                return remote_read(pool, &target, &path).await;
             }
         }
     }
@@ -1824,18 +1866,19 @@ pub fn read_file_bytes_local(path: &str, scope_id: Option<&str>) -> Result<Vec<u
 /// Used by the in-app text/markdown/TeX viewer to poll for external changes
 /// (#43 diff-aware auto-reload). Confined to Tabtivity's known roots (Security #1).
 /// Mirrors the `FileEntry.modified_secs` machinery in `list_dir`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn file_mtime(
     path: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<u64, String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a mirror-local path is stat'd on the LOCAL fs.
             if !crate::services::remote_sync::is_under_mirror(pid, &path) {
                 confine_remote_abs(&target.spec.remote_path, &path)?;
-                let (_, modified) = remote_metadata(pool.inner(), &target, &path).await?;
+                let (_, modified) = remote_metadata(pool, &target, &path).await?;
                 return Ok(modified.unwrap_or(0));
             }
         }
@@ -1855,6 +1898,39 @@ pub fn file_mtime_local(path: &str, scope_id: Option<&str>) -> Result<u64, Strin
         .map(|d| d.as_secs())
         .unwrap_or(0);
     Ok(secs)
+}
+
+/// Return a file's size in bytes.
+///
+/// The PDF viewer's companion to `file_mtime`: before re-reading a PDF a
+/// compiler is rewriting it stats the size twice, a few hundred ms apart, and
+/// reads only once the two agree — a stat instead of a whole-file IPC read per
+/// retry of a mid-write parse. Same confinement and remote routing as the mtime.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn file_size(
+    path: String,
+    project_id: Option<String>,
+    ctx: Ctx,
+) -> Result<u64, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    if let Some(pid) = project_id.as_deref() {
+        if let Some(target) = crate::services::remote::remote_target_for(pid) {
+            if !crate::services::remote_sync::is_under_mirror(pid, &path) {
+                confine_remote_abs(&target.spec.remote_path, &path)?;
+                let (size, _) = remote_metadata(pool, &target, &path).await?;
+                return Ok(size);
+            }
+        }
+    }
+    file_size_local(&path, project_id.as_deref())
+}
+
+/// Local-fs size, confined like `file_mtime_local`.
+pub fn file_size_local(path: &str, scope_id: Option<&str>) -> Result<u64, String> {
+    let p = PathBuf::from(path);
+    confine_abs_read(&p, scope_id)?;
+    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+    Ok(meta.len())
 }
 
 // ── Absolute-path confinement (Security #1) ────────────────────────────────
@@ -2093,6 +2169,14 @@ fn confine_abs_write(p: &Path, scope_id: Option<&str>) -> Result<(), String> {
 /// codebase, and a second copy elsewhere would drift from it.
 pub(crate) fn confine_project_path(p: &Path, scope_id: Option<&str>) -> Result<(), String> {
     confine_abs(p, scope_id)
+}
+
+/// Confine a path a server **user** (not the box's admin) names to a command
+/// that has no confinement of its own because it stands in for an OS file
+/// dialog on the desktop — `list_dir_all`, the browser's file tickets and
+/// grants (`services::core_dispatch::user_path`). The same roots as a read.
+pub(crate) fn confine_user_path(p: &Path) -> Result<(), String> {
+    confine_abs_read(p, None)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -2356,7 +2440,7 @@ pub struct DirListing {
 /// picker browses the whole local filesystem to choose a destination folder.
 /// Empty `path` starts at the user's home directory. Files are omitted (only
 /// folders); unreadable entries are skipped rather than failing the whole call.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_dirs(path: String) -> Result<DirListing, String> {
     let trimmed = path.trim();
     let base = if trimmed.is_empty() {
@@ -2386,12 +2470,83 @@ pub fn list_dirs(path: String) -> Result<DirListing, String> {
     })
 }
 
+/// One file in a [`FileListing`].
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRow {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+}
+
+/// A LOCAL directory's folders and files, for the browser client's
+/// server-side file picker (hosted plan §3.5): the desktop's OS dialog has
+/// no counterpart in a browser, and a browser `<input type=file>` would pick
+/// from the wrong machine. Same reach as [`list_dirs`] — the whole local
+/// filesystem the daemon's user can read, deliberately not project-confined,
+/// because what it replaces (the OS picker) was not either.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileListing {
+    pub path: String,
+    pub parent: Option<String>,
+    pub dirs: Vec<DirEntry>,
+    pub files: Vec<FileRow>,
+}
+
+/// Folders and files of a local directory (see [`FileListing`]). Empty `path`
+/// starts at the user's home; unreadable entries are skipped.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn list_dir_all(path: String) -> Result<FileListing, String> {
+    let trimmed = path.trim();
+    let base = if trimmed.is_empty() {
+        crate::paths::home_dir()
+    } else {
+        PathBuf::from(trimmed)
+    };
+    let base = fs::canonicalize(&base).unwrap_or(base);
+    let read = fs::read_dir(&base).map_err(|e| format!("cannot read '{}': {e}", base.display()))?;
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for entry in read.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = display_path(&entry.path());
+        if meta.is_dir() {
+            dirs.push(DirEntry { name, path });
+        } else if meta.is_file() {
+            files.push(FileRow { name, path, size: meta.len() });
+        }
+    }
+    dirs.sort_by_key(|d| d.name.to_lowercase());
+    files.sort_by_key(|f| f.name.to_lowercase());
+    Ok(FileListing {
+        path: display_path(&base),
+        parent: base.parent().map(display_path),
+        dirs,
+        files,
+    })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn list_dir_all_splits_folders_from_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("b.txt"), b"xy").unwrap();
+        std::fs::write(dir.path().join("A.md"), b"x").unwrap();
+        let listing = list_dir_all(dir.path().to_string_lossy().into_owned()).unwrap();
+        assert_eq!(listing.dirs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["sub"]);
+        assert_eq!(listing.files.iter().map(|f| (f.name.as_str(), f.size)).collect::<Vec<_>>(), [("A.md", 1), ("b.txt", 2)]);
+        assert!(listing.parent.is_some());
+        assert!(list_dir_all("/definitely/not/here".into()).is_err());
+    }
 
     // ── The raw-body write's two decoders ──────────────────────────────────
     // `write_file_bytes` takes its path from a header (a header is ASCII; a project

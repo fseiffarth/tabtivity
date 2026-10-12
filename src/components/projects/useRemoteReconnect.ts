@@ -9,7 +9,7 @@ import {
   type StoredVpnConfig,
   type VpnAuthNeeds,
 } from "../../types";
-import { IS_WINDOWS } from "../../lib/platform";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { forgetConnection, markConnectionOpened } from "../../lib/remote/remoteConnect";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
@@ -200,7 +200,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
   // Windows has no ssh ControlMaster socket, so an interactive login can't be
   // ridden for the pooled connection — fall back to the headline (key-auth)
   // Reconnect there rather than offering the SSH login terminal.
-  const winManual = IS_WINDOWS;
+  const winManual = IS_HOST_WINDOWS;
 
   // Headless-path error strings (surfaced under the password fields in the
   // Connect modal). The lamps carry the coarse state; these carry the reason.

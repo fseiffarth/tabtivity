@@ -6,6 +6,7 @@
  * covered by the mtime-advance case.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, act, waitFor, fireEvent, screen } from "@testing-library/react";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
@@ -51,6 +52,8 @@ async function renderGifView() {
     render(<FileViewerPane viewer="gif" path="/p/anim.gif" projectId="proj" />);
   });
 }
+
+warmFileViewer();
 
 describe("GifView", () => {
   beforeEach(() => {
@@ -107,7 +110,10 @@ describe("GifView", () => {
 
     // The real decoder ran over the mock bytes: 2 frames, frame 1 on screen.
     await waitFor(() => expect(screen.getByText(/1 \/ 2/)).toBeTruthy());
-    expect(putImageData).toHaveBeenCalled();
+    // The draw is a passive effect after the commit that shows the counter; the
+    // viewer is a lazily split chunk now (perf plan §6), so under a loaded test
+    // run that effect can land a beat after the text — wait for it too.
+    await waitFor(() => expect(putImageData).toHaveBeenCalled());
     const draws = putImageData.mock.calls.length;
 
     // Autoplay is on (matches the old <img> behavior), so the toggle says Pause.

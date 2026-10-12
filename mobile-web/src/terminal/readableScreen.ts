@@ -217,6 +217,16 @@ function pushSpan(spans: ReadableSpan[], span: ReadableSpan) {
 const SPARKLE = /[\u2801\u2802\u2804\u2808\u2810\u2820\u2840\u2880]/gu;
 const SPARKLE_CELL = /^[\u2801\u2802\u2804\u2808\u2810\u2820\u2840\u2880]$/u;
 
+/** How a screen is read. `plain` skips the per-cell style walk and reads each
+ * row as one unstyled span off `translateToString` — for a caller that only
+ * wants the words (the status line, a `/status` card, the mode marks), where
+ * walking every cell of every row several times a second was the cost. A
+ * reader that tells a highlighted row from a plain one (a select prompt's
+ * current option, a prompt echo's painted background) must keep the styles. */
+export interface ReadableOptions {
+  plain?: boolean;
+}
+
 /** One buffer row as styled spans, padding included.
  *
  * Trailing blanks are *not* dropped here: a row that continues on the next one
@@ -224,8 +234,8 @@ const SPARKLE_CELL = /^[\u2801\u2802\u2804\u2808\u2810\u2820\u2840\u2880]$/u;
  * of one row to the first of the next ("come from" + "the session" read as
  * "come fromthe session"). The trim happens once the logical line is complete.
  */
-function rowSpans(line: ReadableLineLike): ReadableSpan[] {
-  if (typeof line.getCell !== "function") {
+function rowSpans(line: ReadableLineLike, plain: boolean): ReadableSpan[] {
+  if (plain || typeof line.getCell !== "function") {
     const plain = line.translateToString().replace(SPARKLE, " ");
     return plain ? [{ text: plain }] : [];
   }
@@ -397,12 +407,14 @@ export function readableRange(
   first: number,
   end: number,
   afterText?: string,
+  options: ReadableOptions = {},
 ): ReadableLine[] {
+  const plain = options.plain === true;
   const joined: ReadableLine[] = [];
   const physical: { row: number; wrapped: boolean; spans: ReadableSpan[] }[] = [];
   for (let row = first; row < end; row += 1) {
     const bufferLine = buffer.getLine(row);
-    if (bufferLine) physical.push({ row, wrapped: bufferLine.isWrapped === true, spans: rowSpans(bufferLine) });
+    if (bufferLine) physical.push({ row, wrapped: bufferLine.isWrapped === true, spans: rowSpans(bufferLine, plain) });
   }
   cutSidePanel(physical.map((entry) => entry.spans));
 
@@ -455,10 +467,10 @@ export function readableRange(
  * capped to MAX_LINES logical lines. The fallback shape — the lazy history in
  * `readableHistory.ts` extends the same rendering backwards without the caps.
  */
-export function readableScreen(buffer: ReadableBufferLike, maxRows = MAX_ROWS): ReadableScreen {
+export function readableScreen(buffer: ReadableBufferLike, maxRows = MAX_ROWS, options: ReadableOptions = {}): ReadableScreen {
   const first = Math.max(0, buffer.length - maxRows);
   let clipped = first > 0;
-  const lines = readableRange(buffer, first, buffer.length);
+  const lines = readableRange(buffer, first, buffer.length, undefined, options);
   while (lines.length > 0 && lines[lines.length - 1].text === "") lines.pop();
 
   if (lines.length > MAX_LINES) clipped = true;

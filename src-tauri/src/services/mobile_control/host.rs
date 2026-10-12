@@ -48,7 +48,7 @@ use super::{
     scheduler,
     push::{AgentTabRef, PushPrefs},
     sign_in,
-    live_pwa, MOBILE_ASSETS,
+    live_pwa, web_client, MOBILE_ASSETS,
 };
 
 
@@ -92,6 +92,10 @@ struct HostState {
     /// The phone prompts the owner holds with no window, which the
     /// scheduler types into the CLI's queue at once (`scheduler::PhoneHolds`).
     holds: Arc<scheduler::PhoneHolds>,
+    /// The browser desktop client (hosted plan §10 P2): its sessions, its
+    /// connected clients as the core's event sink, and the `CoreCtx` its
+    /// calls are dispatched with.
+    web: web_client::WebClientState,
     /// The phone's git overviews, per project, for `git_overview::TTL`.
     git_overview: Arc<Mutex<git_overview::Cache>>,
     /// Each project's worktrees as its tab cards name them, for
@@ -139,9 +143,14 @@ impl Default for HeadlessSpawner {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PairBody {
+    #[serde(default)]
     code: String,
     device_name: String,
     public_key: String,
+    /// An identity provider's ID token in place of a code (a hosted server,
+    /// routed here by the gateway's OIDC callback; plan P5).
+    #[serde(default)]
+    oidc_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -235,6 +244,12 @@ fn exact_origin(headers: &HeaderMap, state: &HostState) -> bool {
 
 fn cookie_token(headers: &HeaderMap) -> Option<&str> {
     session_cookie_in(&crate::brand::PAIR, headers.get(header::COOKIE)?.to_str().ok()?)
+}
+
+/// The phone store's session token in a request, for the browser transport
+/// behind the gateway (`web_client::ServerLink`).
+pub fn device_session_cookie(headers: &HeaderMap) -> Option<&str> {
+    cookie_token(headers)
 }
 
 /// The session token in a `Cookie` header: the cookie under its current name,
@@ -612,9 +627,17 @@ fn catalog_stale(state: &HostState) {
         .invalidate();
 }
 
-async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> {
+async fn security_headers(State(secure): State<bool>, request: Request<Body>, next: Next) -> Response<Body> {
     let sensitive = request.uri().path().starts_with("/api/") || request.uri().path() == "/healthz";
     let frame = request.uri().path() == PDF_FRAME_PATH;
+    // The browser desktop client's pages get the desktop's CSP with its
+    // socket allowed (`web_client::page_csp`), not the phone's.
+    let desktop = request.uri().path() == "/desktop" || request.uri().path().starts_with("/desktop/");
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
     let mut response = next.run(request).await;
     // The sealed frame answers its own framing rules (`pdf_frame`); a miss
     // there falls back to everyone else's.
@@ -638,7 +661,16 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> 
         "permissions-policy",
         HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY),
     );
-    if !framed {
+    if desktop {
+        let hashes = headers
+            .remove(web_client::INLINE_SCRIPT_HASHES)
+            .and_then(|v| v.to_str().ok().map(str::to_string))
+            .unwrap_or_default();
+        let csp = web_client::page_csp(host.as_deref().unwrap_or("127.0.0.1"), &hashes, secure);
+        if let Ok(value) = HeaderValue::from_str(&csp) {
+            headers.insert(header::CONTENT_SECURITY_POLICY, value);
+        }
+    } else if !framed {
         headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
     }
     response
@@ -698,6 +730,20 @@ async fn pair(
 ) -> impl IntoResponse {
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    if let Some(token) = body.oidc_token.as_deref() {
+        // The provider's sign-in instead of a code: this daemon checks the
+        // token itself (signature, issuer, audience, its own binding, the
+        // nonce bound to this very key) before the store registers it.
+        let control_dir = state.auth.lock().unwrap_or_else(PoisonError::into_inner).control_dir().to_path_buf();
+        if let Err(reason) = crate::services::server::oidc::check(&control_dir, token, &body.public_key).await {
+            eprintln!("pair: identity provider sign-in refused: {reason}");
+            return api_error(StatusCode::BAD_REQUEST, "invalid_oidc");
+        }
+        return match state.auth.lock().unwrap_or_else(PoisonError::into_inner).pair_verified(&body.device_name, &body.public_key) {
+            Ok(device_id) => (StatusCode::CREATED, Json(json!({ "device_id": device_id }))),
+            Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
+        };
     }
     match state
         .auth
@@ -1945,6 +1991,285 @@ async fn push_put(
     push_state(&state, &device_id)
 }
 
+// ── The device-released secrets key (hosted plan §6.8) ──────────────────────
+//
+// A server daemon only (`vault::vault()`); the desktop's sidecar answers
+// `available: false` and the phone does nothing more. See `server::vault`.
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretsEnrolBody {
+    ecdh_public_key: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretsFinishBody {
+    id: String,
+    transport: String,
+    nonce: String,
+    sealed: String,
+}
+
+async fn secrets_state(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(phone) => phone.device_id().to_string(),
+        Err(error) => return error,
+    };
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return (StatusCode::OK, Json(json!({ "available": false })));
+    };
+    let enrolled = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys().iter().any(|k| k.id == device_id);
+    let status = vault.status();
+    // The identity a device compares with the one it pinned: a mismatch is
+    // the cue to re-pin with the recovery code, never to trust it silently.
+    let identity = if status.set_up { vault.identity_public().ok() } else { None };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "available": true,
+            "setUp": status.set_up,
+            "unlocked": status.unlocked,
+            "enrolled": enrolled,
+            "recoveryCode": status.recovery_code,
+            // A device was revoked since the code was made: make a new one.
+            "newCodeRecommended": status.new_code_recommended,
+            // The mailbox's re-key after a revoke, while one is under way.
+            "mailRekey": crate::services::mail_rekey::status(&vault.mail_dir()),
+            "identity": identity,
+        })),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretsChallengeBody {
+    action: String,
+}
+
+/// A nonce for a signed secrets action (set-up, a new recovery code).
+async fn secrets_challenge(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(phone) => phone.device_id().to_string(),
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    if crate::services::server::vault::vault().is_none() {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    }
+    let Ok(request) = serde_json::from_slice::<SecretsChallengeBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    match state.auth.lock().unwrap_or_else(PoisonError::into_inner).action_challenge(&device_id, &request.action) {
+        Ok((nonce, expires_at)) => (StatusCode::OK, Json(json!({ "nonce": nonce, "expiresAt": expires_at }))),
+        Err(code) if code == "rate_limited" => api_error(StatusCode::TOO_MANY_REQUESTS, &code),
+        Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct SignedActionBody {
+    #[serde(default)]
+    nonce: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+}
+
+/// The pairing key's signature over an action nonce (user decision
+/// 2026-10-03): a session cookie alone is refused with `signature_required`.
+fn check_signed_action(state: &HostState, device_id: &str, action: &str, body: &[u8]) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let request = serde_json::from_slice::<SignedActionBody>(body).map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
+    let (Some(nonce), Some(signature)) = (request.nonce, request.signature) else {
+        return Err(api_error(StatusCode::FORBIDDEN, "signature_required"));
+    };
+    state
+        .auth
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .verify_action(device_id, action, &nonce, &signature)
+        .map_err(|code| api_error(StatusCode::FORBIDDEN, &code))
+}
+
+/// What a device needs to re-pin a changed identity key with its recovery
+/// code (`Vault::repin_offer`); the code itself never comes here.
+async fn secrets_repin(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    match vault.repin_offer(&state.config.origin) {
+        Ok(offer) => (StatusCode::OK, Json(serde_json::to_value(offer).unwrap_or_default())),
+        Err(code) if code == "not_set_up" || code == "recovery_outdated" => api_error(StatusCode::CONFLICT, &code),
+        Err(error) => {
+            eprintln!("secrets: re-pin offer: {error}");
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "identity_unavailable")
+        }
+    }
+}
+
+async fn secrets_enrol(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(phone) => phone.device_id().to_string(),
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    let Ok(request) = serde_json::from_slice::<SecretsEnrolBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let keys = {
+        let mut auth = state.auth.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(code) = auth.enrol_secrets_key(&device_id, &request.ecdh_public_key, &request.signature) {
+            return api_error(StatusCode::BAD_REQUEST, &code);
+        }
+        auth.secrets_device_keys()
+    };
+    let identity = match vault.identity_public() {
+        Ok(identity) => identity,
+        Err(error) => {
+            eprintln!("secrets: identity key: {error}");
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "identity_unavailable");
+        }
+    };
+    // Enrolled while K is held: wrapped at once; otherwise at the next release.
+    vault.wrap_missing(&keys);
+    (StatusCode::OK, Json(json!({ "identity": identity })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretsRecoverBody {
+    code: String,
+}
+
+/// Mint K and answer its recovery code — the only time it is ever shown.
+/// Signed by the device's pairing key ([`check_signed_action`]).
+async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> Response<Body> {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(phone) => phone.device_id().to_string(),
+        Err(error) => return error.into_response(),
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server").into_response();
+    };
+    if let Err(error) = check_signed_action(&state, &device_id, "secrets-setup", &body) {
+        return error.into_response();
+    }
+    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    match vault.set_up(&keys) {
+        Ok(code) => {
+            eprintln!("secrets: key set up from device {device_id} ({} device wraps)", keys.len());
+            let mut response = Json(json!({ "code": code.as_str() })).into_response();
+            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
+        Err(error) => api_error(StatusCode::CONFLICT, &error).into_response(),
+    }
+}
+
+/// A fresh recovery code while unlocked; the old one stops working. Signed
+/// by the device's pairing key ([`check_signed_action`]).
+async fn secrets_new_recovery_code(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> Response<Body> {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(phone) => phone.device_id().to_string(),
+        Err(error) => return error.into_response(),
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server").into_response();
+    };
+    if let Err(error) = check_signed_action(&state, &device_id, "secrets-recovery-code", &body) {
+        return error.into_response();
+    }
+    match vault.new_recovery_code() {
+        Ok(code) => {
+            let mut response = Json(json!({ "code": code.as_str() })).into_response();
+            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
+        Err(error) => api_error(StatusCode::CONFLICT, &error).into_response(),
+    }
+}
+
+async fn secrets_recover(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    let Ok(request) = serde_json::from_slice::<SecretsRecoverBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let code = zeroize::Zeroizing::new(request.code);
+    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    match vault.recover(&code, &keys) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "state": "unlocked" }))),
+        Err(_) => api_error(StatusCode::BAD_REQUEST, "invalid_recovery_code"),
+    }
+}
+
+async fn secrets_unlock_start(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(phone) => phone.device_id().to_string(),
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    match vault.start_unlock(&state.config.origin, &device_id) {
+        Ok(start) => (StatusCode::OK, Json(serde_json::to_value(start).unwrap_or_default())),
+        Err(code) => api_error(StatusCode::TOO_MANY_REQUESTS, &code),
+    }
+}
+
+async fn secrets_unlock_finish(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(phone) => phone.device_id().to_string(),
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    let Ok(request) = serde_json::from_slice::<SecretsFinishBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    // The ECDH and the wrap are a few microseconds; the listeners (mail
+    // reopening) run on their own threads.
+    match vault.finish_unlock(&device_id, &request.id, &request.transport, &request.nonce, &request.sealed, &keys) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "state": "unlocked" }))),
+        Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
+    }
+}
+
 async fn push_delete(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
     let device_id = match authenticate(&headers, &state) {
         Ok(phone) => phone.0,
@@ -2315,6 +2640,31 @@ fn local_models_response(
     }
 }
 
+/// Whether the phone's Local models are closed to this request: the switch is
+/// off, or — on a server daemon — the phone's account is not the
+/// administrator's, whose shared Ollama it is (hosted plan §3.3; the role is
+/// the gateway's header, which only the gateway can send). Closed, the phone
+/// leaves the section out.
+fn local_models_closed(state: &HostState, headers: &HeaderMap) -> bool {
+    let not_admin = state.web.on_server()
+        && crate::services::server::gateway_role_in(headers) != crate::services::core_dispatch::Role::Admin;
+    not_admin || !local_models::local_models_open(&state.config.state_dir)
+}
+
+/// A Local models request answered: by the window on a desktop, by this
+/// process on a server daemon, which has none (`local_models::answer_here`).
+async fn local_models_call(state: &HostState, request: DesktopRequest) -> Result<DesktopResponse, String> {
+    if state.web.on_server() {
+        let action = match request {
+            DesktopRequest::LocalModelMutate { action, .. } => Some(action),
+            _ => None,
+        };
+        return Ok(local_models::answer_here(state.web.ctx.clone(), &state.config.state_dir, action).await);
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    admin::desktop_call(&desktop_socket, &request).await
+}
+
 /// `GET /api/v1/local-models` — the desktop's installed Ollama models, their
 /// residency and the server's state. Host-wide; the switch is read per
 /// request and, when off, answers before the desktop is asked.
@@ -2322,15 +2672,11 @@ async fn local_models_list(State(state): State<HostState>, headers: HeaderMap) -
     if let Err(error) = authenticate(&headers, &state) {
         return error;
     }
-    if !local_models::local_models_open(&state.config.state_dir) {
+    if local_models_closed(&state, &headers) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
-    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    local_models_response(
-        admin::desktop_call(&desktop_socket, &DesktopRequest::LocalModels { request_id }).await,
-        StatusCode::OK,
-    )
+    local_models_response(local_models_call(&state, DesktopRequest::LocalModels { request_id }).await, StatusCode::OK)
 }
 
 /// `POST /api/v1/local-models` `{ action: load | unload | start, model? }`.
@@ -2346,7 +2692,7 @@ async fn local_models_mutate(
     if let Err(error) = mutation_guard(&headers, &state) {
         return error;
     }
-    if !local_models::local_models_open(&state.config.state_dir) {
+    if local_models_closed(&state, &headers) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
     let Ok(body) = serde_json::from_slice::<serde_json::Value>(&body) else {
@@ -2360,12 +2706,8 @@ async fn local_models_mutate(
         LocalModelAction::Unload { .. } => StatusCode::OK,
         LocalModelAction::Load { .. } | LocalModelAction::Start => StatusCode::ACCEPTED,
     };
-    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    local_models_response(
-        admin::desktop_call(&desktop_socket, &DesktopRequest::LocalModelMutate { request_id, action }).await,
-        ok,
-    )
+    local_models_response(local_models_call(&state, DesktopRequest::LocalModelMutate { request_id, action }).await, ok)
 }
 
 /// Mail stays behind the live desktop for the same reason the board does: the
@@ -5168,10 +5510,16 @@ fn markup_desktop_error(code: &str) -> ApiRefusal {
 /// listener that took them; with no window there is no listener and so no
 /// ask, and the owner has nothing to answer from (headless owner plan) — a
 /// closed desktop is `desktop_unavailable`, which the phone reads as "no
-/// card". Never an error the phone would show.
-async fn markup_call(state: &HostState, request: DesktopRequest) -> Result<DesktopResponse, ApiRefusal> {
-    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let response = admin::desktop_call(&desktop_socket, &request).await;
+/// card". Never an error the phone would show. A server daemon has no window
+/// and serves the markup lane itself (`Runtime::serves_markup`), so it
+/// answers from its own asks ([`markup_here`]).
+async fn markup_call(state: &HostState, request: DesktopRequest, tab: &ResolvedTab) -> Result<DesktopResponse, ApiRefusal> {
+    let response = if state.web.on_server() {
+        Ok(markup_here(state, request, tab).await)
+    } else {
+        let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+        admin::desktop_call(&desktop_socket, &request).await
+    };
     if desktop_down(&response) {
         return Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"));
     }
@@ -5179,6 +5527,88 @@ async fn markup_call(state: &HostState, request: DesktopRequest) -> Result<Deskt
         Ok(DesktopResponse::Error { code, .. }) => Err(markup_desktop_error(&code)),
         Ok(answer) => Ok(answer),
         Err(_) => Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable")),
+    }
+}
+
+/// A markup request answered in this process — a server daemon's, which
+/// holds the asks its tabs made (`services::markup_mcp`). The window's bridge
+/// steps (`MobileBridgeHost.tsx`: `markupQuestionsFor`,
+/// `answerMarkupFromPhone`, `dismissMarkupFromPhone`) over the same
+/// `markup_mcp_*` commands, keyed by the tab's schedule target; an answer's
+/// prompt is held for the tab as a phone prompt is with no window
+/// (`headless::hold_prompt`), and a hold that fails reopens the ask.
+async fn markup_here(state: &HostState, request: DesktopRequest, tab: &ResolvedTab) -> DesktopResponse {
+    use crate::commands::markup_mcp as commands;
+    use crate::services::markup_mcp::Answer;
+    use super::protocol::{MobileMarkupAsk, MobileMarkupChoice, MobileMarkupQuestion};
+    let error = |code: &str, message: &str| DesktopResponse::Error { code: code.to_string(), message: message.to_string() };
+    let Some(target) = tab.schedule_target_id.clone().filter(|id| !id.is_empty()) else {
+        return error("tab_not_found", "Agent tab is unavailable");
+    };
+    let ask_codes = ["superseded", "answered", "gone", "invalid_answer"];
+    match request {
+        DesktopRequest::MarkupQuestions { project_id, path, .. } => {
+            let banner = path.is_none();
+            let asks = commands::markup_mcp_list(project_id.clone(), target.clone(), path.clone()).await;
+            let ticks = commands::markup_mcp_ticks(project_id, target, path).await.unwrap_or_default();
+            let Ok(asks) = asks else { return error("markup_failed", "The markup questions could not be read") };
+            DesktopResponse::MarkupQuestions {
+                ticks: ticks.into_iter().map(|t| MobileMarkupTick { round: t.round, page: t.page, mark: t.mark }).collect(),
+                asks: asks
+                    .into_iter()
+                    .map(|ask| MobileMarkupAsk {
+                        id: ask.id,
+                        file_name: ask.file_name,
+                        path: if banner { ask.file } else { None },
+                        file_row: None,
+                        questions: ask
+                            .questions
+                            .into_iter()
+                            .map(|q| MobileMarkupQuestion {
+                                question: q.question,
+                                header: q.header,
+                                options: q.options.into_iter().map(|o| MobileMarkupChoice { label: o.label, description: o.description }).collect(),
+                                multi_select: q.multi_select,
+                                page: q.page,
+                                quote: q.quote,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }
+        }
+        DesktopRequest::MarkupAnswer { project_id, ask_id, answers, device_id, .. } => {
+            let answers: Vec<Answer> = answers
+                .into_iter()
+                .map(|a| Answer { options: a.options.into_iter().map(|i| i as usize).collect(), other: a.other })
+                .collect();
+            let taken = match commands::markup_mcp_answer(project_id.clone(), target.clone(), ask_id.clone(), answers) {
+                Ok(taken) => taken,
+                Err(code) if ask_codes.contains(&code.as_str()) => return error(&code, "The agent's questions did not take this answer"),
+                Err(code) => return error(&code, "The answer could not be taken"),
+            };
+            let state_dir = state.config.state_dir.clone();
+            let held = headless::hold_prompt(&state_dir, &project_id, tab, &taken.prompt, device_id.as_deref(), chrono::Local::now());
+            match held {
+                Ok(held_id) => {
+                    state.holds.hold(&held_id);
+                    DesktopResponse::Seen
+                }
+                Err(why) => {
+                    eprintln!("mobile: holding a markup answer failed: {why}");
+                    match commands::markup_mcp_reopen(project_id, target, ask_id, taken.receipt) {
+                        Ok(()) => error("delivery_failed", "The answer could not be queued; the questions are open again"),
+                        Err(_) => error("not_delivered", "The answer could not be queued, and the questions have closed"),
+                    }
+                }
+            }
+        }
+        DesktopRequest::MarkupDismiss { project_id, ask_id, .. } => match commands::markup_mcp_dismiss(project_id, target, ask_id) {
+            Ok(()) => DesktopResponse::Seen,
+            Err(code) if ask_codes.contains(&code.as_str()) => error(&code, "The agent's questions are no longer open"),
+            Err(code) => error(&code, "The questions could not be closed"),
+        },
+        _ => error("unknown_request", "Not a markup request"),
     }
 }
 
@@ -5206,7 +5636,7 @@ async fn markup_questions(
     let banner = path.is_none();
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     let request = DesktopRequest::MarkupQuestions { request_id, project_id: project_id.clone(), tmux_session: tab.tmux_name.clone(), path };
-    match markup_call(&state, request).await {
+    match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::MarkupQuestions { asks, ticks }) => {
             let ticks: Vec<_> = ticks.into_iter().filter(valid_tick).collect();
             let mut asks: Vec<_> = asks.into_iter().filter(|ask| valid_ask_id(&ask.id)).collect();
@@ -5342,7 +5772,7 @@ async fn markup_answer(
         answers: request.answers,
         device_id: Some(phone.device_id().to_string()),
     };
-    match markup_call(&state, request).await {
+    match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "answered": true }))),
         Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
         Err(error) => error,
@@ -5381,7 +5811,7 @@ async fn markup_dismiss(
     };
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     let request = DesktopRequest::MarkupDismiss { request_id, project_id, tmux_session: tab.tmux_name.clone(), ask_id: request.ask_id };
-    match markup_call(&state, request).await {
+    match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "dismissed": true }))),
         Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
         Err(error) => error,
@@ -5633,6 +6063,8 @@ where
 /// The whole HTTP surface in one place, so tests can drive every route
 /// through the same middleware stack the sidecar serves.
 fn router(state: HostState) -> Router {
+    // Behind the gateway the socket is `wss:`; the CSP names it so.
+    let secure = state.web.secure();
     Router::new()
         .route("/healthz", get(health))
         .route("/api/v1/pair", post(pair))
@@ -5643,6 +6075,15 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/alerts", get(alerts).post(alerts_resolve))
         .route("/api/v1/calendar", get(calendar).post(calendar_mutate))
         .route("/api/v1/push", get(push_get).put(push_put).delete(push_delete))
+        .route("/api/v1/secrets", get(secrets_state))
+        .route("/api/v1/secrets/enrol", post(secrets_enrol))
+        .route("/api/v1/secrets/unlock", post(secrets_unlock_start))
+        .route("/api/v1/secrets/unlock/finish", post(secrets_unlock_finish))
+        .route("/api/v1/secrets/challenge", post(secrets_challenge))
+        .route("/api/v1/secrets/repin", post(secrets_repin))
+        .route("/api/v1/secrets/setup", post(secrets_setup))
+        .route("/api/v1/secrets/recover", post(secrets_recover))
+        .route("/api/v1/secrets/recovery-code", post(secrets_new_recovery_code))
         .route("/api/v1/mail", get(mail_overview))
         // Host-wide, no project or path: list, and load / unload / start.
         // A body is one action and at most one model name.
@@ -5773,9 +6214,42 @@ fn router(state: HostState) -> Router {
         .route(PDF_FRAME_PATH, get(pdf_frame))
         .route("/", get(index))
         .route("/{*path}", get(static_asset))
+        .with_state(state.clone())
+        // The browser desktop client's routes (`/desktop/*`, its socket) sit
+        // under the same limits and headers; `/desktop/…` outranks the PWA's
+        // catch-all by its static prefix.
+        .merge(web_client::routes(state.web))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_MESSAGE))
-        .layer(middleware::from_fn(security_headers))
-        .with_state(state)
+        .layer(middleware::from_fn(feature_gate))
+        .layer(middleware::from_fn_with_state(secure, security_headers))
+}
+
+/// The phone's mail, calendar and todo routes answer `403 feature_off` while
+/// the admin or the user switched the feature off (hosted plan §6.7; always
+/// on outside server mode).
+async fn feature_gate(request: Request<Body>, next: Next) -> Response<Body> {
+    use crate::services::server::{feature_on, Feature};
+    let path = request.uri().path();
+    let gated = |prefix: &str| path == prefix || path.starts_with(&format!("{prefix}/"));
+    let off = (gated("/api/v1/mail") && !feature_on(Feature::Mail))
+        || (gated("/api/v1/calendar") && !feature_on(Feature::Calendar))
+        || (gated("/api/v1/todo") && !feature_on(Feature::Todo));
+    if off {
+        return api_error(StatusCode::FORBIDDEN, "feature_off").into_response();
+    }
+    next.run(request).await
+}
+
+/// Where the host listens.
+pub enum Listen {
+    /// The Mobile sidecar: loopback on `port`, Tailscale Serve in front, the
+    /// user-content origin on the next port.
+    Loopback { port: u16 },
+    /// The per-user server daemon (hosted plan §3.1): a unix socket only
+    /// `peer_uid` — the gateway — may connect to; the gateway's public host is
+    /// what `Host` carries, and `/content/*` is served on this socket too, for
+    /// the gateway to forward from `content_origin` (none → no tickets).
+    Unix { path: PathBuf, peer_uid: Option<u32>, content_origin: Option<String> },
 }
 
 /// How often [`sweep_mcp_tokens`] looks, and how many looks in a row a tab's
@@ -5859,10 +6333,94 @@ fn mcp_sweep_step(missed: &mut HashMap<Generation, u8>, held: &[Generation], ali
 pub async fn run(state_dir: PathBuf) -> Result<(), String> {
     let config = HostConfig::load(&state_dir)?;
     verify_tailscale_serve(&config.origin, config.host.port)?;
+    let port = config.host.port;
+    enable_background_relays();
+    run_with(config, Listen::Loopback { port }).await
+}
+
+/// Whether [`run_with`] starts this process's background relays (below).
+static BACKGROUND_RELAYS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Let [`run_with`] start the process-wide background work a host owns
+/// beside its listener: the agent turn relay (`services::agent_turn`, for
+/// the browser clients — the window's own relay feeds only the window) and,
+/// in the server daemon, the usage samplers the window would run. Called by
+/// the real entry points only (the sidecar's [`run`], the daemon's `main`):
+/// a test serving a host must not watch or write the real state dir.
+pub fn enable_background_relays() {
+    BACKGROUND_RELAYS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Start the relays [`enable_background_relays`] allowed. The turn relay
+/// only reads the hooks' records and emits to this process's own clients, so
+/// the window and the sidecar may each run one; the usage samplers write
+/// `usage_stats`/net-usage files, so only a server (no window) runs them.
+fn start_background_relays(core_ctx: &app_core::CoreCtx, browser_clients: bool, server: bool) {
+    if !BACKGROUND_RELAYS.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if browser_clients || server {
+        crate::services::agent_turn::start(core_ctx.clone());
+        // The browser Reader's transcript watches (`transcript-changed`), as
+        // the window installs its own: this process's `agent_tab_transcript`
+        // arms them, and without a sink the panel would only poll.
+        let events = core_ctx.clone();
+        crate::services::transcript_watch::install(move |id| events.emit("transcript-changed", id));
+    }
+    if server {
+        if let Some(pool) = core_ctx.state.try_get::<crate::services::remote::RemotePoolState>() {
+            crate::services::net_usage::start(pool.clone());
+        }
+        if let Some(watch) = core_ctx.state.try_get::<crate::services::usage_stats::UsageWatchState>() {
+            crate::services::usage_stats::start(watch.clone());
+        }
+    }
+}
+
+/// The host's whole life on `listen`: the sidecar's and the daemon's one body.
+pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> {
+    let state_dir = config.state_dir.clone();
     let auth = Arc::new(Mutex::new(AuthStore::open(
         &config.control_dir,
         config.origin.clone(),
     )?));
+    // This process as a host of `app_core` (hosted plan §10 P2): the core's
+    // runtime seam points at this runtime, TLS has its provider before any
+    // client is built, and the browser clients are the event sink of a system
+    // context over fresh singletons. The window's own singletons live in the
+    // window's process; nothing here shares them.
+    app_core::rt::install(tokio::runtime::Handle::current());
+    crate::services::mail_engine::install_crypto_provider();
+    let web_events = Arc::new(web_client::WebEvents::default());
+    let core_ctx = app_core::CoreCtx::system(Arc::new(crate::standalone_core_state()), web_events.clone());
+    let mut web = web_client::WebClientState::new(
+        config.host.browser_client == Some(true),
+        core_ctx.clone(),
+        web_events,
+        &config.control_dir,
+        config.host.port,
+        web_client::bundle_dir(&config.control_dir),
+    );
+    if let Listen::Unix { content_origin, .. } = &listen {
+        web = web.behind_gateway(web_client::ServerLink {
+            public_host: crate::services::server::host_of(&config.origin),
+            content_origin: content_origin.clone(),
+            auth: auth.clone(),
+        });
+    }
+    start_background_relays(&core_ctx, web.enabled, matches!(listen, Listen::Unix { .. }));
+    if web.enabled {
+        match (&web.bundle, web.has_token(), &listen) {
+            (Some(bundle), _, Listen::Unix { .. }) => eprintln!("desktop client: serving {} at {}/desktop/ behind the gateway", bundle.display(), config.origin),
+            (Some(bundle), true, Listen::Loopback { port }) => eprintln!(
+                "desktop client: serving {} at http://127.0.0.1:{port}/desktop/ (sign in with the link in Settings → Mobile → Browser access, or the token in {})",
+                bundle.display(),
+                config.control_dir.join(web_client::TOKEN_FILE).display()
+            ),
+            (None, _, _) => eprintln!("desktop client: on, but no web bundle was found (npm run web:bundle)"),
+            (_, false, _) => eprintln!("desktop client: on, but no login token could be written"),
+        }
+    }
     let state = HostState {
         config: config.clone(),
         auth: auth.clone(),
@@ -5872,10 +6430,36 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
         runner: Arc::new(scheduler::TmuxRunner::new(&state_dir, None)),
         holds: Arc::default(),
+        web: web.clone(),
         git_overview: Arc::default(),
         worktree_spots: Arc::default(),
     };
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    // The user-content origin (plan §3.5): ticketed files on the next port,
+    // a different origin from the app's, so a project's HTML never runs on
+    // it. Only with the browser client on; a bind failure is reported, not
+    // fatal — the app runs without "open outside".
+    if web.enabled && matches!(listen, Listen::Loopback { .. }) {
+        let content_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), web.content_port);
+        match tokio::net::TcpListener::bind(content_address).await {
+            Ok(listener) => {
+                let content_app = web_client::content_routes(web.clone());
+                let mut content_shutdown = shutdown_tx.subscribe();
+                tokio::spawn(async move {
+                    let _ = axum::serve(limits::GuardedListener::new(listener), content_app)
+                        .with_graceful_shutdown(async move {
+                            while !*content_shutdown.borrow() {
+                                if content_shutdown.changed().await.is_err() {
+                                    break;
+                                }
+                            }
+                        })
+                        .await;
+                });
+            }
+            Err(error) => eprintln!("desktop client: user-content origin: bind {content_address}: {error}"),
+        }
+    }
     // A Serve verification failure must be a real service failure. A clean
     // graceful shutdown would satisfy systemd's `Restart=on-failure` policy,
     // leaving Mobile permanently down after a transient tailscaled restart.
@@ -5900,15 +6484,21 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
     // The agent MCP servers of the tabs this host spawns with no window open
     // (`docs/headless_mcp_plan.md`): schedule, push and help on a listener of
     // its own, bound here, before the scheduler's first restart can need it.
+    // A server daemon has no window at all, so its listener serves every
+    // lane the window would — root, reader and markup too — with this host's
+    // context: the browser client's review, session and markup commands and
+    // the phone's markup routes (`markup_call`) read the same state here.
     // This process never reads the git token from the keychain.
     crate::services::git_push_mcp::serve_without_keyring();
     let notice_dir = config.control_dir.clone();
+    let on_server = matches!(listen, Listen::Unix { .. });
     let listener = crate::commands::root_mcp::start_headless(
         Arc::new(move |notice| {
             if notice == crate::commands::root_mcp::Notice::Schedules {
                 poke_desktop(&notice_dir, None, &["schedules"]);
             }
         }),
+        on_server.then_some(&core_ctx),
         shutdown_tx.subscribe(),
     )
     .await;
@@ -5926,40 +6516,118 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         shutdown_tx.subscribe(),
     ));
     tokio::spawn(alarms::run(state.config.state_dir.clone(), state.auth.clone(), shutdown_tx.subscribe()));
-    let publisher_shutdown = shutdown_tx.clone();
-    let publisher_origin = config.origin.clone();
-    let publisher_failure = serve_failure.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        interval.tick().await;
-        loop {
+    if matches!(listen, Listen::Loopback { .. }) {
+        let publisher_shutdown = shutdown_tx.clone();
+        let publisher_origin = config.origin.clone();
+        let publisher_failure = serve_failure.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
             interval.tick().await;
-            if let Err(error) = verify_tailscale_serve(&publisher_origin, port) {
-                *publisher_failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
-                let _ = publisher_shutdown.send(true);
-                break;
-            }
-        }
-    });
-    let app = router(state);
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
-        .map_err(|e| format!("bind {address}: {e}"))?;
-    axum::serve(limits::GuardedListener::new(listener), app)
-        .with_graceful_shutdown(async move {
-            while !*shutdown_rx.borrow() {
-                if shutdown_rx.changed().await.is_err() {
+            loop {
+                interval.tick().await;
+                if let Err(error) = verify_tailscale_serve(&publisher_origin, port) {
+                    *publisher_failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+                    let _ = publisher_shutdown.send(true);
                     break;
                 }
             }
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+        });
+    }
+    let shutdown = async move {
+        while !*shutdown_rx.borrow() {
+            if shutdown_rx.changed().await.is_err() {
+                break;
+            }
+        }
+    };
+    match listen {
+        Listen::Loopback { port } => {
+            let app = router(state);
+            let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+            let listener = tokio::net::TcpListener::bind(address)
+                .await
+                .map_err(|e| format!("bind {address}: {e}"))?;
+            axum::serve(limits::GuardedListener::new(listener), app)
+                .with_graceful_shutdown(shutdown)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(unix)]
+        Listen::Unix { path, peer_uid, .. } => {
+            // The content routes ride the same socket: the gateway forwards
+            // `/content/*` from the user-content origin here.
+            let app = router(state).merge(web_client::content_routes(web.clone()));
+            let (listener, inherited) = bind_unix(&path)?;
+            axum::serve(limits::PeerGatedUnixListener::new(listener, peer_uid), app)
+                .with_graceful_shutdown(shutdown)
+                .await
+                .map_err(|e| e.to_string())?;
+            // A socket systemd made (socket activation) is systemd's to keep.
+            if !inherited {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        #[cfg(not(unix))]
+        Listen::Unix { .. } => return Err("the per-user daemon runs on Linux only".into()),
+    }
+    // Nothing outlives a clean stop: the PTYs browser clients spawned here
+    // (tmux attach clients, mostly — the sessions live on) go with the
+    // process, as the window's do at its exit.
+    if let Some(registry) = core_ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
+        registry.lock().unwrap_or_else(PoisonError::into_inner).kill_all();
+    }
     if let Some(error) = serve_failure.lock().unwrap_or_else(PoisonError::into_inner).take() {
         return Err(format!("Tailscale Serve verification failed: {error}"));
     }
     Ok(())
+}
+
+/// Bind the daemon's socket. In a deployment the socket unit always makes
+/// it (below); binding here is the unprivileged path tests and a hand-run
+/// daemon use: a stale file is removed first and the new one is `0660`.
+///
+/// Under socket activation (`<slug>-serverd@.socket`) systemd already made
+/// the socket — `root:<slug>-gw 0660` in a directory only root and the
+/// gateway's group may enter — and passes it as fd 3; it is adopted as is
+/// (`true`), never re-bound, and never removed at exit.
+#[cfg(unix)]
+fn bind_unix(path: &std::path::Path) -> Result<(tokio::net::UnixListener, bool), String> {
+    use std::os::unix::fs::PermissionsExt;
+    if let Some(fd) = crate::services::server::activation_fd(|k| std::env::var(k).ok(), std::process::id()) {
+        let listener = adopt_activation_fd(fd)?;
+        std::env::remove_var("LISTEN_PID");
+        std::env::remove_var("LISTEN_FDS");
+        std::env::remove_var("LISTEN_FDNAMES");
+        return Ok((listener, true));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) | Err(_) => {}
+    }
+    let listener = tokio::net::UnixListener::bind(path).map_err(|e| format!("bind {}: {e}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).map_err(|e| format!("chmod {}: {e}", path.display()))?;
+    Ok((listener, false))
+}
+
+/// Take over the listening socket systemd passed as `fd`. systemd hands it
+/// over without `FD_CLOEXEC` (it had to survive the exec); left so, every
+/// child this daemon spawns — git, an installer, a tmux that starts its own
+/// server — would inherit the listening socket and could accept the
+/// gateway's connections in the daemon's place. So it is set first.
+#[cfg(unix)]
+fn adopt_activation_fd(fd: i32) -> Result<tokio::net::UnixListener, String> {
+    use std::os::unix::io::FromRawFd;
+    // SAFETY: F_SETFD on the descriptor systemd passed this process.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+        return Err(format!("activation socket: {}", std::io::Error::last_os_error()));
+    }
+    // SAFETY: systemd hands this process `fd` as its listening socket
+    // (LISTEN_PID matched); nothing else in the process owns it.
+    let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+    std_listener.set_nonblocking(true).map_err(|e| format!("activation socket: {e}"))?;
+    tokio::net::UnixListener::from_std(std_listener).map_err(|e| format!("activation socket: {e}"))
 }
 
 #[cfg(test)]
@@ -6066,7 +6734,7 @@ mod tests {
                 state: HostState {
                     config: HostConfig {
                         state_dir,
-                        control_dir,
+                        control_dir: control_dir.clone(),
                         host: MobileHostSettings {
                             display_name: "Desk".into(),
                             ..MobileHostSettings::default()
@@ -6080,6 +6748,11 @@ mod tests {
                     readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
                     runner,
                     holds: Arc::default(),
+                    web: {
+                        let events = Arc::new(web_client::WebEvents::default());
+                        let ctx = app_core::CoreCtx::system(Arc::new(app_core::CoreState::new()), events.clone());
+                        web_client::WebClientState::new(false, ctx, events, &control_dir, 8742, None)
+                    },
                     git_overview: Arc::default(),
                     worktree_spots: Arc::default(),
                 },
@@ -6390,6 +7063,23 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(serde_json::to_vec(body).expect("body")))
             .expect("request")
+    }
+
+    /// The socket systemd passes arrives without `FD_CLOEXEC`; adopted, it
+    /// has it, so no child of the daemon inherits the listener.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_adopted_activation_socket_is_close_on_exec() {
+        use std::os::unix::io::IntoRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let fd = std::os::unix::net::UnixListener::bind(dir.path().join("a.sock")).unwrap().into_raw_fd();
+        // SAFETY: F_SETFD/F_GETFD on a descriptor this test owns.
+        unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) } & libc::FD_CLOEXEC, 0, "as systemd passes it");
+        let listener = adopt_activation_fd(fd).unwrap();
+        // SAFETY: as above; the listener still owns `fd`.
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) } & libc::FD_CLOEXEC, libc::FD_CLOEXEC);
+        drop(listener);
     }
 
     /// A phone subscribes only from the exact origin, only to a push vendor's
@@ -7317,7 +8007,7 @@ mod tests {
     async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
         use crate::services::root_mcp::{self, TokenStore};
         let (stop, stopped) = tokio::sync::watch::channel(false);
-        let port = crate::commands::root_mcp::start_headless(Arc::new(|_| {}), stopped).await.expect("the host's listener binds");
+        let port = crate::commands::root_mcp::start_headless(Arc::new(|_| {}), None, stopped).await.expect("the host's listener binds");
         let runtime = root_mcp::runtime().expect("a) the host publishes its runtime");
         assert_eq!(runtime.port, port);
         assert!(!runtime.serves_root, "the host serves no root lane");
@@ -7419,7 +8109,7 @@ mod tests {
             }))
             .expect("options")
         };
-        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true };
+        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true };
         for project in [None, Some("vm-reader")] {
             let mut here = spawn("headless:c", project);
             root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
@@ -7429,7 +8119,8 @@ mod tests {
             assert!(window.env.contains_key(root_mcp::TOKEN_ENV), "{project:?}: the settings do grant it");
         }
         // The markup lane likewise: a project tab with a schedule target gets
-        // it from the window's runtime only.
+        // it from the window's runtime (or a server daemon's), never from a
+        // desktop's Mobile host.
         let mut here = spawn("headless:m", Some(RAW_PROJECT));
         here.schedule_target_id = Some("target-m".into());
         let mut window = here.clone();
@@ -9399,7 +10090,7 @@ mod tests {
         assert_eq!(json(&body)["error"], "undo_gone");
     }
 
-    /// The markup questions routes: with no window, a quiet
+    /// The markup questions routes on a desktop's Mobile host: with no window, a quiet
     /// `desktop_unavailable` (the phone shows no card); with one, the view's
     /// source goes to the desktop as a project-relative path, the asks come
     /// back with a bare leaf name and nothing else of the path, and an answer
@@ -9551,6 +10242,96 @@ mod tests {
         assert_eq!(answers[1].options, vec![0, 2]);
         assert_eq!(answers[1].other.as_deref(), Some("both"));
         assert!(matches!(&seen[4], DesktopRequest::MarkupDismiss { .. }));
+    }
+
+    /// A server daemon has no window: it serves the markup lane itself, so
+    /// the phone's markup requests read and answer this process's asks
+    /// (`markup_here`), never a desktop socket. The asks cross as the
+    /// window's bridge builds them (the path for the Focus banner only), an
+    /// answer is held for the tab as a phone prompt is, and a closed ask is
+    /// refused with its code.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_server_daemon_answers_markup_from_its_own_asks() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(66)).await.0;
+        let (_, tab_id) = project_and_tab(&host, &cookie).await;
+        let mut tab = catalog_unfiltered(&host.state).expect("catalog").tab(&tab_id).expect("the tab").1.clone();
+        let target = "t-server-markup";
+        tab.schedule_target_id = Some(target.into());
+        let ask = crate::services::markup_mcp::test_open_ask(
+            "server-markup",
+            RAW_PROJECT,
+            target,
+            json!([{ "question": "Which word?", "header": "Word", "page": 2, "quote": "the lede",
+                     "options": [{ "label": "lead" }, { "label": "lede", "description": "as written" }] }]),
+        );
+        let mut state = host.state.clone();
+        state.web = state.web.behind_gateway(web_client::ServerLink {
+            public_host: "server.example".into(),
+            content_origin: None,
+            auth: state.auth.clone(),
+        });
+        let rid = || "r".to_string();
+        let list = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
+        let Ok(DesktopResponse::MarkupQuestions { asks, ticks }) = markup_call(&state, list, &tab).await else { panic!("the daemon answers") };
+        assert!(ticks.is_empty());
+        assert_eq!(asks.len(), 1);
+        assert_eq!(asks[0].id, ask);
+        let question = &asks[0].questions[0];
+        assert_eq!((question.header.as_deref(), question.page, question.quote.as_deref()), (Some("Word"), Some(2), Some("the lede")));
+        assert_eq!(question.options[1].description.as_deref(), Some("as written"));
+        // Without the server link the same request goes to a window, and
+        // there is none: the desktop's quiet `desktop_unavailable`.
+        let desktop = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
+        let refused = markup_call(&host.state, desktop, &tab).await.expect_err("no window");
+        assert_eq!(refused.0, StatusCode::SERVICE_UNAVAILABLE);
+
+        let answer = DesktopRequest::MarkupAnswer {
+            request_id: rid(),
+            project_id: RAW_PROJECT.into(),
+            tmux_session: tab.tmux_name.clone(),
+            ask_id: ask.clone(),
+            answers: vec![super::super::protocol::MobileMarkupAnswer { options: vec![1], other: None }],
+            device_id: Some("phone-1".into()),
+        };
+        assert!(matches!(markup_call(&state, answer.clone(), &tab).await, Ok(DesktopResponse::Seen)));
+        let held = crate::services::agent_tasks::list_at(&state.config.state_dir, RAW_PROJECT, target).expect("the tab's rules");
+        assert_eq!(held.len(), 1, "the answer's prompt is held for the tab");
+        assert!(held[0].message.contains("lede"), "{}", held[0].message);
+        assert_eq!(held[0].phone_device.as_deref(), Some("phone-1"));
+        assert!(state.holds.due(&held[0].id), "typed at once, as a phone hold");
+        let again = markup_call(&state, answer, &tab).await.expect_err("answered once");
+        assert_eq!((refused_code(&again), again.0), ("answered".to_string(), StatusCode::CONFLICT));
+        let dismiss = DesktopRequest::MarkupDismiss { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), ask_id: ask };
+        assert!(matches!(markup_call(&state, dismiss, &tab).await, Ok(DesktopResponse::Seen)), "dismissing a closed ask is idempotent");
+
+        // The phone's Local models on a server: the administrator's phone
+        // only (§3.3), by the gateway's role header.
+        std::fs::write(state.config.state_dir.join("settings.json"), json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true } }).to_string()).unwrap();
+        let role = |role: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(role) = role {
+                headers.insert(crate::services::server::ROLE_HEADER, role.parse().unwrap());
+            }
+            headers
+        };
+        assert!(!local_models_closed(&host.state, &role(None)), "a desktop with the switch on");
+        assert!(!local_models_closed(&host.state, &role(Some("user"))), "a desktop has no roles");
+        assert!(local_models_closed(&state, &role(None)), "behind the gateway, no role is a user");
+        assert!(local_models_closed(&state, &role(Some("user"))));
+        assert!(!local_models_closed(&state, &role(Some("admin"))), "the administrator's phone");
+
+        // A tab with no schedule target has no asks to read.
+        tab.schedule_target_id = None;
+        let list = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
+        let none = markup_call(&state, list, &tab).await.expect_err("no target");
+        assert_eq!(refused_code(&none), "tab_not_found");
+    }
+
+    #[cfg(unix)]
+    fn refused_code(refusal: &ApiRefusal) -> String {
+        refusal.1["error"].as_str().unwrap_or_default().to_string()
     }
 
     /// Local models from the phone: the switch and every refusal the sidecar

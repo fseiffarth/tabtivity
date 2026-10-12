@@ -38,7 +38,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::commands::fs::enforce_confinement;
-use crate::services::remote::RemotePoolState;
 
 /// Emitted once a capture's PNG is on disk in the staging area. The frontend
 /// answers with `save_pending_screenshot` or `discard_pending_screenshot`.
@@ -78,7 +77,7 @@ struct CapturedShot {
 /// soon as the tool is launched — region selection blocks the *tool*, not
 /// Tabtivity — and the shot itself arrives later as an [`EV_CAPTURED`] event. A
 /// cancelled capture writes no file and so reports nothing, which is normal.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn capture_screenshot(app: AppHandle, exec: Option<String>) -> Result<(), String> {
     let dir = ensure_pending_dir()?;
     prune_stale_pending(&dir);
@@ -100,7 +99,7 @@ pub fn capture_screenshot(app: AppHandle, exec: Option<String>) -> Result<(), St
 /// The bytes of a staged shot, for the overlay's preview. Confined to the
 /// staging area: this is the one command that reads a path outside every
 /// project tree, so it must never be talked into reading anything else.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn read_pending_screenshot(path: String) -> Result<tauri::ipc::Response, String> {
     let shot = pending_shot(&path)?;
     std::fs::read(&shot)
@@ -113,12 +112,12 @@ pub fn read_pending_screenshot(path: String) -> Result<tauri::ipc::Response, Str
 /// The write goes through `fs::write_project_file_bytes`, so it is confined to
 /// the project root exactly like every other project write — and reaches a
 /// remote project's host over SFTP rather than writing a local orphan.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn save_pending_screenshot(
     path: String,
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: crate::tauri_host::Ctx,
 ) -> Result<String, String> {
     let shot = pending_shot(&path)?;
     let bytes = std::fs::read(&shot).map_err(|e| e.to_string())?;
@@ -138,7 +137,7 @@ pub async fn save_pending_screenshot(
         project_dir.clone(),
         rel_path.clone(),
         bytes,
-        pool,
+        ctx,
     )
     .await?;
     // The staged copy has served its purpose. A failed cleanup must not fail a
@@ -152,7 +151,7 @@ pub async fn save_pending_screenshot(
 }
 
 /// Drop a staged shot the user chose not to file. The clipboard copy stands.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn discard_pending_screenshot(path: String) -> Result<(), String> {
     let shot = pending_shot(&path)?;
     std::fs::remove_file(&shot).map_err(|e| e.to_string())
@@ -744,7 +743,7 @@ mod platform {
                 return Err("GetDIBits failed".to_string());
             }
             // GDI delivers BGRA with an unused alpha byte; convert to opaque RGBA.
-            for px in buffer.chunks_exact_mut(4) {
+            for px in buffer.as_chunks_mut::<4>().0 {
                 px.swap(0, 2);
                 px[3] = 0xFF;
             }

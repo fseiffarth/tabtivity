@@ -181,6 +181,12 @@ export function fileMtime(path: string, projectId: string | null): Promise<numbe
   return invoke<number>("file_mtime", { path, projectId });
 }
 
+/** A file's size in bytes — the PDF viewer's "has the compiler finished writing
+ *  it" probe (`file_size`), a stat where a read would move the whole file. */
+export function fileSize(path: string, projectId: string | null): Promise<number> {
+  return invoke<number>("file_size", { path, projectId });
+}
+
 export function detectMime(path: string, projectId: string | null): Promise<string> {
   return invoke<string>("detect_mime", { path, projectId });
 }

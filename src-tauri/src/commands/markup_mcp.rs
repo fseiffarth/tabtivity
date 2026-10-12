@@ -1,22 +1,24 @@
-//! The window's half of the markup questions MCP (`services::markup_mcp`):
+//! The view's half of the markup questions MCP (`services::markup_mcp`), run
+//! in the process that serves the lane — the window, or a server daemon for
+//! its browser client and phone (`mobile_control::host::markup_here`):
 //! list a tab's open ask for the file a markup view shows, answer it (the
 //! desktop builds the prompt; the caller queues it into the tab the way the
 //! markup Submit does, and reopens the ask with the answer's receipt when
 //! queueing fails) or dismiss it. Payloads are camelCase; errors are wire
 //! codes (`superseded`, `answered`, `gone`, `invalid_answer`,
 //! `invalid_target`, `markup_failed`). The service rings `markup-mcp-changed`
-//! through the hook installed here, so it stays `AppHandle`-free.
+//! through the hook installed here, so it stays context-free.
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use app_core::CoreCtx;
 
 use crate::services::markup_mcp::{self, Answer, AskView, Shown, TickView};
 
 /// Called once from the listener's start (`commands::root_mcp::start`).
-pub fn install_change_hook(app: &AppHandle) {
-    let app = app.clone();
+pub fn install_change_hook(ctx: &CoreCtx) {
+    let ctx = ctx.clone();
     markup_mcp::set_change_hook(Box::new(move || {
-        let _ = app.emit(markup_mcp::CHANGED_EVENT, ());
+        ctx.emit(markup_mcp::CHANGED_EVENT, ());
     }));
 }
 
@@ -49,10 +51,10 @@ fn with_shown<T>(project_id: &str, path: Option<&str>, read: impl FnOnce(Shown) 
 
 /// `markup_mcp_list({ projectId, scheduleTargetId, path? })` → the open asks
 /// (`[{ id, file, fileName, createdAt, questions }]`; at most one per tab).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn markup_mcp_list(project_id: String, schedule_target_id: String, path: Option<String>) -> Result<Vec<AskView>, String> {
     valid_target(&project_id, &schedule_target_id)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         with_shown(&project_id, path.as_deref(), |shown| markup_mcp::list(&project_id, &schedule_target_id, shown))
     })
     .await
@@ -63,10 +65,10 @@ pub async fn markup_mcp_list(project_id: String, schedule_target_id: String, pat
 /// the tab's agent ticked off with `markup_done` for the file `path` shows
 /// (`[{ round, page, mark }]`, oldest first; every file's without `path`).
 /// The view maps each onto the mark it sent in that round.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn markup_mcp_ticks(project_id: String, schedule_target_id: String, path: Option<String>) -> Result<Vec<TickView>, String> {
     valid_target(&project_id, &schedule_target_id)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         with_shown(&project_id, path.as_deref(), |shown| markup_mcp::ticks(&project_id, &schedule_target_id, shown))
     })
     .await
@@ -84,7 +86,7 @@ pub struct MarkupAnswered {
 /// [{ options: number[], other? }] })` → `{ prompt, receipt }`, one answer
 /// per question in order. The ask is closed before the prompt is returned; a
 /// caller that then fails to queue the prompt reopens it with `receipt`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn markup_mcp_answer(project_id: String, schedule_target_id: String, ask_id: String, answers: Vec<Answer>) -> Result<MarkupAnswered, String> {
     valid_target(&project_id, &schedule_target_id)?;
     markup_mcp::answer(&project_id, &schedule_target_id, &ask_id, &answers)
@@ -96,7 +98,7 @@ pub fn markup_mcp_answer(project_id: String, schedule_target_id: String, ask_id:
 /// prompt of the answer `receipt` names never reached the tab — open the ask
 /// again so its card stays usable. Refused (`answered`, `superseded`, `gone`)
 /// when anything else closed or replaced it since.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn markup_mcp_reopen(project_id: String, schedule_target_id: String, ask_id: String, receipt: String) -> Result<(), String> {
     valid_target(&project_id, &schedule_target_id)?;
     markup_mcp::reopen(&project_id, &schedule_target_id, &ask_id, &receipt).map_err(|e| e.code().to_string())
@@ -104,7 +106,7 @@ pub fn markup_mcp_reopen(project_id: String, schedule_target_id: String, ask_id:
 
 /// `markup_mcp_dismiss({ projectId, scheduleTargetId, askId })`: **Answer in
 /// chat instead**. Idempotent.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn markup_mcp_dismiss(project_id: String, schedule_target_id: String, ask_id: String) -> Result<(), String> {
     valid_target(&project_id, &schedule_target_id)?;
     markup_mcp::dismiss(&project_id, &schedule_target_id, &ask_id).map_err(|e| e.code().to_string())
@@ -136,7 +138,7 @@ mod tests {
     #[test]
     fn ticks_are_read_per_target_and_refuse_a_bad_one() {
         let run = |project: &str, target: &str, path: Option<&str>| {
-            tauri::async_runtime::block_on(markup_mcp_ticks(project.into(), target.into(), path.map(str::to_string)))
+            app_core::rt::block_on(markup_mcp_ticks(project.into(), target.into(), path.map(str::to_string)))
         };
         assert_eq!(run("", "t", None), Err("invalid_target".into()));
         assert_eq!(run("p", "a\nb", None), Err("invalid_target".into()));

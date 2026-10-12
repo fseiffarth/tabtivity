@@ -29,6 +29,8 @@ pub mod scheduler;
 pub mod push;
 pub mod sign_in;
 pub mod store;
+// The browser desktop client's transport (hosted plan §3.5, §10 P2).
+pub mod web_client;
 
 // The bundle baked in at compile time, when it was built, and the directory a
 // dev build may serve a newer one from. Included here rather than in `host`

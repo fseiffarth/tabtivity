@@ -30,6 +30,10 @@ export interface TranscriptTurn {
   role?: string;
   /** On a subagent: it has reported back, where its CLI records that. */
   finished?: boolean;
+  /** On a subagent: not reported back yet, and sent to the background — read
+   * with the session's own state by `subagentAtWork`. */
+  running?: boolean;
+  background?: boolean;
   /** On a subagent: the linked worktree it works in, when not the project folder. */
   worktree?: TabWorktree;
   /** On an `answer`: the plan the agent put up for approval. */
@@ -87,7 +91,7 @@ export function transcriptTurns(entries: readonly TranscriptEntry[]): Transcript
       index,
       ...((entry.pending !== undefined ? entry.sentAt : entry.at) ? { stamp: entry.pending !== undefined ? entry.sentAt : entry.at } : {}),
       command: entry.kind === "prompt" ? slashCommand(entry.text) : null,
-      ...(entry.kind === "agent" ? { subagent: entry.subagent, role: entry.role, ...(entry.finished ? { finished: true } : {}), ...(entry.worktree ? { worktree: entry.worktree } : {}) } : {}),
+      ...(entry.kind === "agent" ? { subagent: entry.subagent, role: entry.role, ...(entry.finished ? { finished: true } : {}), ...(entry.running ? { running: true } : {}), ...(entry.background ? { background: true } : {}), ...(entry.worktree ? { worktree: entry.worktree } : {}) } : {}),
       ...(entry.kind === "answer" && entry.plan === true ? { plan: true } : {}),
       ...(entry.kind === "answer" && entry.questions?.length ? { questions: entry.questions } : {}),
       ...(entry.pending !== undefined ? { pending: entry.pending, failed: entry.failed === true, retrying: entry.retrying === true, ...(entry.held ? { held: true } : {}), ...(entry.queued ? { queued: true } : {}) } : {}),

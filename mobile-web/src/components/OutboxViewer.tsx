@@ -9,6 +9,7 @@ import { MarkupView } from "./MarkupView";
 import type { AgentSignal } from "../markup/submitState";
 import type { FileTabFile } from "../filesPlace";
 import { openingOutsideStrands } from "../platform";
+import { canPrint, clearPrint, printContent } from "../print";
 
 /** How a markup prompt left: into the agent's queue (it was working), typed
  * straight in, or not at all. */
@@ -206,6 +207,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
     );
     return () => controller.abort();
   }, [url, isText, whole, t]);
+  // A print still up when the viewer goes is taken down with it.
+  useEffect(() => clearPrint, []);
   // Fetch the bytes on opening, so a tap on Share shares at once rather than
   // after the radio — the button itself does not wait for them.
   useEffect(() => { prepare(file); }, [prepare, file]);
@@ -349,6 +352,10 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
     return <MarkupView tabId={markup?.tabId} projectId={target} scope={marked.scope} file={marked.file} place={marked.place} folder={marked.folder}
       onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} />;
   }
+  /** Print: a picture, or a text once the whole of it is read in; a PDF's
+   * pages are the reader's to print (`MarkupView`). */
+  const printable = canPrint() && !isPdf && (isImage || (isText && text !== null && (file.size <= INLINE_LIMIT || whole)));
+  const print = () => void printContent(isText ? { text: text ?? "" } : { pictures: [url] }, sentName(file));
   const actions = <>
     {markable && <button className="outbox-action" onClick={() => setMarking(true)} aria-label={t("mobile.markup.openFile", { name: sentName(file) })}>{t("mobile.markup.open")}</button>}
     <a className="outbox-action" href={viewerFileUrl(scope, file, true)} download={sentName(file)}>{t("mobile.outbox.save")}</a>
@@ -356,6 +363,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
       {t(sharing.ready === file.name ? "mobile.outbox.shareReady" : "mobile.outbox.share")}
     </button>}
     {shareable && isUntested("mobile.outbox.share") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+    {printable && <button className="outbox-action" onClick={print} aria-label={t("mobile.outbox.printFile", { name: sentName(file) })}>{t("mobile.outbox.print")}</button>}
+    {printable && isUntested("mobile.outbox.print") && <span className="untested">{t("mobile.outbox.untested")}</span>}
   </>;
   // A PDF's pages are drawn here, by the sealed pdf.js frame, and Mark up
   // switches on in that same view.

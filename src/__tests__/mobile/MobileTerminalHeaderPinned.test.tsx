@@ -18,6 +18,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -62,6 +63,7 @@ const agent: TabRow = { id: "tab-4", label: "Claude", kind: "agent", available: 
 describe(`${BRAND.display} Mobile — the terminal header stays on screen`, () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    stubTerminalSideChannels();
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
 
@@ -86,7 +88,7 @@ describe(`${BRAND.display} Mobile — the terminal header stays on screen`, () =
     render(<Terminal tab={agent} back={() => {}} />);
     await act(async () => {});
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add to the message" })); });
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /A project file/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Project file/ })); });
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message agent" }));
     expect(document.body.classList.contains("terminal-open")).toBe(true);
   });

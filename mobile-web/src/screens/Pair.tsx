@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ApiError } from "../api";
-import { pair } from "../auth";
+import { oidcProvider, pair, startOidc, type OidcOutcome } from "../auth";
 import { classifyUnavailable, describeUnavailable, localFailureText } from "../connection";
 import { BrandHead } from "../components/BrandHead";
 import { MIN_NEW_PIN, configureLocalUnlock, platformBiometricAvailable, validPin } from "../localLock";
@@ -25,6 +25,24 @@ export function describePairFailure(reason: unknown, t: ReturnType<typeof useT>)
   return `${title} ${hint}`;
 }
 
+/** How the last identity-provider sign-in came back, for the pairing
+ * screen to say (set once by the app's start, read once by the screen). */
+let lastOidcOutcome: OidcOutcome | null = null;
+export function noteOidcOutcome(outcome: OidcOutcome | null) {
+  lastOidcOutcome = outcome;
+}
+
+/** What to say about a provider sign-in that paired nothing. */
+export function describeOidcOutcome(outcome: OidcOutcome, t: ReturnType<typeof useT>): string {
+  switch (outcome) {
+    case "unknown": return t("mobile.pair.oidcUnknown");
+    case "expired": return t("mobile.pair.oidcExpired");
+    case "provider": return t("mobile.pair.oidcProvider");
+    case "busy": return t("mobile.pair.tooManyAttempts");
+    default: return t("mobile.pair.oidcRefused");
+  }
+}
+
 /** First pairing and local lock setup share one form. A failed biometric setup
  * leaves the phone paired, so a retry only finishes the lock: the one-time
  * pairing code has already been consumed. */
@@ -34,7 +52,25 @@ export function Pair({ setupLock, onDone }: { setupLock: boolean; onDone: () => 
   const [name, setName] = useState(() => appleTouchDevice() ?? t("mobile.pair.defaultName"));
   const [pin, setPin] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => {
+    const outcome = lastOidcOutcome;
+    lastOidcOutcome = null;
+    return outcome && outcome !== "paired" ? describeOidcOutcome(outcome, t) : "";
+  });
+  const [provider, setProvider] = useState<string | null>(null);
+  useEffect(() => {
+    void oidcProvider().then(setProvider);
+  }, []);
+  const signInThere = async () => {
+    setError("");
+    setStage("pairing");
+    try {
+      await startOidc(name);
+    } catch (reason) {
+      setError(describePairFailure(reason, t));
+      setStage("idle");
+    }
+  };
   const [stage, setStage] = useState<"idle" | "pairing" | "securing">("idle");
   const [paired, setPaired] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState<boolean | null>(null);
@@ -67,6 +103,13 @@ export function Pair({ setupLock, onDone }: { setupLock: boolean; onDone: () => 
     <p>{paired ? t("mobile.pair.finishHint") : t("mobile.pair.intro")}</p>
     {!paired && <>
       <label>{t("mobile.pair.deviceName")}<input value={name} maxLength={64} onChange={(event) => setName(event.target.value)} /></label>
+      {provider && <>
+        <button className="primary" disabled={stage !== "idle" || !name.trim()} onClick={() => void signInThere()}>
+          {t("mobile.pair.oidc", { name: provider })}
+          {isUntested("server.oidc") && <small className="untested"> {t("mobile.newTab.untested")}</small>}
+        </button>
+        <p className="pair-lock-hint">{t("mobile.pair.oidcOr")}</p>
+      </>}
       <label>{t("mobile.pair.code")}<input className="code" value={code} inputMode="numeric" autoComplete="one-time-code" maxLength={8} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></label>
     </>}
     {setupLock && <>

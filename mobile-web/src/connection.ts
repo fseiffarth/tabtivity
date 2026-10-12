@@ -163,9 +163,11 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   project_ineligible: "mobile.failure.projectNotShared",
   tab_not_found: "mobile.failure.tabNotFound",
   shells_off: "mobile.failure.shellsOff",
+  feature_off: "mobile.failure.featureOff",
   // A sign-in address the phone handed back (`sign_in.rs`).
   invalid_callback: "mobile.failure.invalidCallback",
   callback_not_local: "mobile.failure.callbackNotLocal",
+  callback_not_yours: "mobile.failure.callbackNotYours",
   callback_without_code: "mobile.failure.callbackWithoutCode",
   callback_unreachable: "mobile.failure.callbackUnreachable",
   callback_refused: "mobile.failure.callbackRefused",

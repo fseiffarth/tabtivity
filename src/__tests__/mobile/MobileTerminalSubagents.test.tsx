@@ -323,6 +323,26 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
     expect(within(screen.getByRole("navigation", { name: "Subagents in this conversation" })).getByRole("button", { name: /^Subagents \(3\)/ }).getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("marks a subagent at work with ▶ on its card and in the index, and one that reported back with ✓", async () => {
+    // Sent to the background: at work after the session's own turn is over.
+    const main = { ...MAIN, entries: MAIN.entries.map((entry) => (entry.subagent === "00000000000000b2" ? { ...entry, running: true, background: true } : entry)) };
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.endsWith("/outbox")) return Promise.resolve(jsonResponse(200, { files: [] }));
+      if (url.includes("/transcript")) return Promise.resolve(jsonResponse(200, { transcript: main }));
+      return Promise.resolve(jsonResponse(404, { error: "not_found" }));
+    }));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    const session = screen.getByTestId("session-transcript");
+    expect(within(session).getByRole("button", { name: "Subagent: general-purpose · Find the tests" }).querySelector(".agent-status.working")).not.toBeNull();
+    expect(within(session).getByRole("button", { name: "Subagent: Plan · Still starting" }).querySelector(".agent-status")).toBeNull();
+    const index = screen.getByRole("navigation", { name: "Subagents in this conversation" });
+    fireEvent.click(within(index).getByRole("button", { name: /^Subagents \(3\)/ }));
+    expect(within(index).getByRole("button", { name: "general-purpose · Find the tests" }).querySelector(".agent-status.working")).not.toBeNull();
+    expect(within(index).getByRole("button", { name: "Explore · Map the backend" }).querySelector(".agent-status.done")).not.toBeNull();
+    expect(within(index).getByRole("button", { name: "Plan · Still starting" }).querySelector(".agent-status")).toBeNull();
+  });
+
   it("can fetch older turns from the list when the visible tail has no subagents", async () => {
     const fetch = vi.fn((url: string) => {
       if (url.endsWith("/outbox")) return Promise.resolve(jsonResponse(200, { files: [] }));

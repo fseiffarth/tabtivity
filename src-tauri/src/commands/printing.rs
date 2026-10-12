@@ -1186,7 +1186,7 @@ fn print_file_impl(printer: &str, path: &str, _title: &str) -> Result<(), String
 /// probe below shells out, and a synchronous command would run the whole thing
 /// on the main thread — which is how a printer behind a dead VPN freezes the
 /// window rather than showing a message in a pane.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_system_snapshot() -> PrintSnapshot {
     tauri::async_runtime::spawn_blocking(snapshot_impl)
         .await
@@ -1200,7 +1200,7 @@ pub async fn print_system_snapshot() -> PrintSnapshot {
 
 /// Cancel one job. `printer` is only read by the Windows backend (its API needs
 /// the queue as well as the id); CUPS cancels by id alone.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_job_cancel(printer: String, job_id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || cancel_job_impl(&printer, &job_id))
         .await
@@ -1208,7 +1208,7 @@ pub async fn print_job_cancel(printer: String, job_id: String) -> Result<(), Str
 }
 
 /// Cancel everything queued on one printer.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_jobs_cancel_all(printer: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || cancel_all_impl(&printer))
         .await
@@ -1217,7 +1217,7 @@ pub async fn print_jobs_cancel_all(printer: String) -> Result<(), String> {
 
 /// Make `printer` the default. On CUPS this is the *user's* default and needs no
 /// elevation; on Windows it is the per-user default too.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_set_default(printer: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || set_default_impl(&printer))
         .await
@@ -1228,7 +1228,7 @@ pub async fn print_set_default(printer: String) -> Result<(), String> {
 /// here that commonly needs rights the user may not have — CUPS answers
 /// "Forbidden" for a user outside `lpadmin` — so the error text is passed
 /// through verbatim for the pane to show.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_set_enabled(printer: String, enabled: bool) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || set_enabled_impl(&printer, enabled))
         .await
@@ -1241,7 +1241,7 @@ pub async fn print_set_enabled(printer: String, enabled: bool) -> Result<(), Str
 /// The page is written by Tabtivity into the OS temp dir rather than taken from a
 /// path the frontend supplies: the print manager deliberately has no
 /// print-this-file command at all, so no caller can turn it into one.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_test_page(printer: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         check_printer_name(&printer)?;

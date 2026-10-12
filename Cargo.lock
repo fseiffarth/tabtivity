@@ -115,6 +115,57 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "app-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "idna",
+ "ipnet",
+ "libc",
+ "regex",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "app-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64ct",
+ "futures-util",
+ "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "mime_guess",
+ "rand 0.8.6",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
+name = "app-serverd"
+version = "0.1.0"
+dependencies = [
+ "tabtivity",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6040,10 +6091,12 @@ dependencies = [
 
 [[package]]
 name = "tabtivity"
-version = "0.1.115"
+version = "0.2.2"
 dependencies = [
  "aes-gcm",
  "ammonia",
+ "app-core",
+ "app-gateway",
  "arboard",
  "argon2",
  "async-imap",
@@ -6085,9 +6138,11 @@ dependencies = [
  "plist",
  "png 0.17.16",
  "portable-pty",
+ "quote",
  "rand 0.8.6",
  "regex",
  "reqwest",
+ "ring",
  "roxmltree",
  "rusqlite",
  "rustls",
@@ -6100,6 +6155,7 @@ dependencies = [
  "spellbook",
  "starship-battery",
  "subtle",
+ "syn 2.0.118",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -6108,6 +6164,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
  "toml_edit 0.25.12+spec-1.1.0",
  "tower",
  "url",

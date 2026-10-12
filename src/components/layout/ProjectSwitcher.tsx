@@ -1,14 +1,12 @@
 import { useHeaderMenu } from "../../hooks/useHeaderMenu";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { ProjectSearch } from "../projects/ProjectSearch";
-import { ProjectDialog } from "../projects/ProjectDialog";
-import { ProjectImportBundleDialog } from "../projects/ProjectImportBundleDialog";
-import { SettingsDialog, type SettingsPanelKind } from "./SettingsPanel";
+import type { SettingsPanelKind } from "./SettingsPanel";
 import { UntestedTag } from "../common/UntestedTag";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useBigFoldersStore } from "../../stores/bigFolders";
@@ -19,7 +17,7 @@ import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
-import { GIT_DOT_TICK_MS, gitDotsDue, useGitDirtyStore } from "../../stores/gitDirty";
+import { GIT_DOT_TICK_MS, gitDotProbedAt, gitDotsDue, useGitDirtyStore } from "../../stores/gitDirty";
 import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
 import { projectStations, useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useQuiesce, saverInterval } from "../../stores/power";
@@ -39,6 +37,23 @@ export {
   buildScaffoldFillPrompt,
   collectScaffoldAgentFills,
 } from "../projects/scaffold";
+
+// Code-split (perf plan §6): Settings (with its sub-panels) and the project
+// dialogs are opened by a click and mounted only while open, so their module
+// graphs load on first open instead of with every window's startup chunk. The
+// fallback is nothing, the same nothing a closed dialog renders; steering's
+// settings region waits for the dialog to mount (`placeCursorSoon`).
+const SettingsDialog = lazy(() =>
+  import("./SettingsPanel").then((m) => ({ default: m.SettingsDialog })),
+);
+const ProjectDialog = lazy(() =>
+  import("../projects/ProjectDialog").then((m) => ({ default: m.ProjectDialog })),
+);
+const ProjectImportBundleDialog = lazy(() =>
+  import("../projects/ProjectImportBundleDialog").then((m) => ({
+    default: m.ProjectImportBundleDialog,
+  })),
+);
 
 /** This bar's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const ADD_MENU_ID = "project-add";
@@ -194,10 +209,11 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   // it feeds is the definition of an aid — the project's own file view says the
   // same thing, on the project being worked in, for free.
   const fastMode = useFastMode();
-  // When each project's dot was last probed. A ref, not effect-local: the effect
-  // re-arms on every focus change (`quiesce`), and probing every project on each
-  // re-arm made an alt-tab cost one `git status` per open project.
-  const gitDotProbedAt = useRef(new Map<string, number>());
+  // When each project's dot was last probed: the store's map, not effect-local
+  // — the effect re-arms on every focus change (`quiesce`), and probing every
+  // project on each re-arm made an alt-tab cost one `git status` per open
+  // project — and shared with the Files view's `.git`-watcher refresh, so a
+  // project whose tree is on screen is probed by its watcher, not this timer.
   useEffect(() => {
     if (gitDotTargets.length === 0 || fastMode) return;
     const refresh = useGitDirtyStore.getState().refresh;
@@ -213,11 +229,10 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     const run = () => {
       const now = Date.now();
       const due = new Set(
-        gitDotsDue(gitDotTargets.map((t) => t.id), foreground(), gitDotProbedAt.current, now, tickMs),
+        gitDotsDue(gitDotTargets.map((t) => t.id), foreground(), gitDotProbedAt, now, tickMs),
       );
       for (const t of gitDotTargets) {
         if (!due.has(t.id)) continue;
-        gitDotProbedAt.current.set(t.id, now);
         void refresh(t.id, t.dir);
       }
     };
@@ -496,36 +511,44 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   return (
     <>
       {showSettings && createPortal(
-        <SettingsDialog
-          onClose={() => setShowSettings(false)}
-          initialPanel={settingsPanel}
-          initialAnchor={settingsAnchor}
-        />,
+        <Suspense fallback={null}>
+          <SettingsDialog
+            onClose={() => setShowSettings(false)}
+            initialPanel={settingsPanel}
+            initialAnchor={settingsAnchor}
+          />
+        </Suspense>,
         document.body,
       )}
 
       {dialog === "new" && createPortal(
-        <ProjectDialog
-          kind="new"
-          onClose={() => setDialog(null)}
-          onProject={(project) => void addAndAudit(project)}
-        />,
+        <Suspense fallback={null}>
+          <ProjectDialog
+            kind="new"
+            onClose={() => setDialog(null)}
+            onProject={(project) => void addAndAudit(project)}
+          />
+        </Suspense>,
         document.body,
       )}
       {(dialog === "import" || dialog === "clone") && createPortal(
-        <ProjectDialog
-          kind="import"
-          initialImportSource={dialog === "clone" ? "git" : "folder"}
-          onClose={() => setDialog(null)}
-          onProject={(project) => void addAndAudit(project)}
-        />,
+        <Suspense fallback={null}>
+          <ProjectDialog
+            kind="import"
+            initialImportSource={dialog === "clone" ? "git" : "folder"}
+            onClose={() => setDialog(null)}
+            onProject={(project) => void addAndAudit(project)}
+          />
+        </Suspense>,
         document.body,
       )}
       {dialog === "bundle" && (
-        <ProjectImportBundleDialog
-          onClose={() => setDialog(null)}
-          onProject={(project) => void addAndAudit(project)}
-        />
+        <Suspense fallback={null}>
+          <ProjectImportBundleDialog
+            onClose={() => setDialog(null)}
+            onProject={(project) => void addAndAudit(project)}
+          />
+        </Suspense>
       )}
 
       <div

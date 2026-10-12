@@ -8,7 +8,7 @@ import type { TextRun } from "../markup/findText";
 import { readFlag, writeFlag } from "../prefs";
 import {
   addMark, approveMark, approveMarks, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, finishStroke, forgetRound, stylusErases, hasSent, inkWidth, isEmpty, MARK_COLORS, markAnchors, markBox, markedPages,
-  markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickedMarks, undo,
+  markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickBadgeSpot, tickedMarks, undo,
   type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type TextMark,
 } from "../markup/layer";
 import { composedPng, drawMark, drawPage, INK, LAYER_WIDTH, layerPng, pagePng, type Paint } from "../markup/rasterize";
@@ -26,6 +26,7 @@ import { useMarkupAsks } from "../markup/questions";
 import { ARRIVAL_GUARD_MS, MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
 import { EraserIcon } from "../markup/EraserIcon";
 import { OptionSheet } from "./OptionSheet";
+import { bitmapDataUrl, canPrint, MAX_PRINT_PAGES, PRINT_WIDTH, printContent } from "../print";
 
 type Tool = "ink" | "box" | "text" | "eraser";
 type Size = [number, number];
@@ -476,6 +477,12 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** Submit's own questions to the frame (`snapshot`, `text`), by id. */
   const frameCalls = useRef(new Map<number, (answer: FromFrame | null) => void>());
   const frameCallId = useRef(0);
+  /** Print, while the frame draws the pages for paper: the page it is at. */
+  const [printing, setPrinting] = useState<{ n: number; count: number } | null>(null);
+  const [printFailure, setPrintFailure] = useState<string | null>(null);
+  /** Bumped when the view goes, so a print still drawing never opens. */
+  const printRun = useRef(0);
+  useEffect(() => () => { printRun.current++; }, []);
   /** A pin tapped: the card opens at its question. */
   const [questionFocus, setQuestionFocus] = useState<QuestionFocus | null>(null);
   /** **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): the
@@ -1101,6 +1108,34 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   };
 
   // --- Submit ----------------------------------------------------------------
+  /** Print in the reader: every page drawn afresh by the frame at paper
+   * width — not the pages on screen, which are kept only near the reader —
+   * then the browser's own dialog (`print.ts`). The marks are not printed. */
+  const print = async () => {
+    if (!sizes || printing) return;
+    const count = sizes.length;
+    setPrintFailure(null);
+    if (count > MAX_PRINT_PAGES) { setPrintFailure(t("mobile.outbox.printTooLong", { count: MAX_PRINT_PAGES })); return; }
+    const run = ++printRun.current;
+    const pictures: string[] = [];
+    try {
+      for (let n = 1; n <= count; n++) {
+        setPrinting({ n, count });
+        const shot = await askFrame({ type: "snapshot", id: ++frameCallId.current, n, width: PRINT_WIDTH });
+        if (printRun.current !== run) { if (shot?.type === "snapshot") shot.bitmap?.close(); return; }
+        if (shot?.type !== "snapshot" || !shot.bitmap) throw new Error("page");
+        pictures.push(await bitmapDataUrl(shot.bitmap));
+      }
+    } catch {
+      if (printRun.current === run) setPrintFailure(t("mobile.outbox.printError"));
+      return;
+    } finally {
+      if (printRun.current === run) setPrinting(null);
+    }
+    if (printRun.current !== run) return;
+    await printContent({ pictures }, sentName(file));
+  };
+  const printable = reading && isPdf && canPrint() && sizes !== null && !failure && !reopening;
   /** The marked pages a Submit carries: a page past the end of the PDF (it
    * shrank on a Reload) keeps its marks, but they are not drawn or sent. */
   const sendable = markedPages(history.present).filter((n) => !isPdf || !sizes || n <= sizes.length);
@@ -1697,18 +1732,15 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       return marks.length ? commit(now, approveMarks(now.present, marks)) : now;
     });
   };
-  /** One page's ✓ badges, centred on each ticked mark's top-right corner and
-   * kept on the page — placed as the question pins are. */
+  /** One page's ✓ badges, just outside each ticked mark's top-right corner
+   * (`tickBadgeSpot`: never over the words it was on) and kept on the page. */
   const tickLayer = (n: number, size: Size) => {
     const badges = tickBadges.get(n);
     if (!badges?.length) return null;
     const scale = cssWidth / size[0];
-    const maxLeft = Math.max(0, cssWidth - TICK_BADGE);
-    const maxTop = Math.max(0, size[1] * scale - TICK_BADGE);
+    const page: [number, number] = [cssWidth, size[1] * scale];
     return badges.map(({ index, mark, box }) => {
-      const [x, y, w] = box;
-      const left = Math.min(maxLeft, Math.max(0, (x + w) * scale - TICK_BADGE / 2));
-      const top = Math.min(maxTop, Math.max(0, y * scale - TICK_BADGE / 2));
+      const [left, top] = tickBadgeSpot(box, scale, page, TICK_BADGE);
       return <button key={`${tickKey(mark)}:${index}`} className="markup-pin is-tick" style={{ left, top }} disabled={sending !== null}
         aria-label={t("mobile.markup.ticks.approveTitle")} title={t("mobile.markup.ticks.approveTitle")}
         onClick={(event) => { if (event.detail <= 1) approveTicked(n, index, mark); }}>✓</button>;
@@ -1758,6 +1790,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         {canMark && <button className={`outbox-action markup-toggle${empty ? "" : " has-marks"}`} onClick={() => setMarking(true)}
           aria-label={t("mobile.markup.openFile", { name: sentName(file) })}>{t("mobile.markup.open")}</button>}
         {reader?.actions}
+        {printable && <button className="outbox-action" disabled={printing !== null} onClick={() => void print()}
+          aria-label={t("mobile.outbox.printFile", { name: sentName(file) })}>{t("mobile.outbox.print")}</button>}
+        {printable && isUntested("mobile.outbox.print") && <span className="untested">{t("mobile.outbox.untested")}</span>}
       </>}
     </div>
     <div className="markup-notes">
@@ -1806,6 +1841,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       {sendFailure && <p role="alert">{sendFailure}</p>}
       {failure && <p role="alert">{t(FAILURE_KEYS[failure])}</p>}
       {reader?.alert && <p role="alert">{reader.alert}</p>}
+      {printing && <p role="status">{t("mobile.outbox.printing", { n: printing.n, count: printing.count })}</p>}
+      {printFailure && <p role="alert">{printFailure}</p>}
     </div>
     <div ref={scroller} className={`markup-scroller${fingerDrawsRef.current ? " finger-draws" : ""}`}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onPointerDown={() => setPopover(null)}>

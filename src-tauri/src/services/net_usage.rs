@@ -5,7 +5,8 @@
 //! socket carries all of that project's multiplexed channels (terminal, SFTP,
 //! sync, git). This loop reads that socket's cumulative `bytes_sent` /
 //! `bytes_received` counters for each connected project on a timer — regardless
-//! of whether the Network Traffic tab is open — diffs them against the previous
+//! of whether the Network Traffic tab is open (every 15 s while it is, every
+//! minute while not) — diffs them against the previous
 //! sample, and folds the deltas into the current UTC hour bucket (and thereby
 //! the current UTC day). That is what makes the tab's "this hour / today / this
 //! week / this month / overall" totals reflect real usage rather than only what
@@ -36,25 +37,69 @@
 
 use crate::services::remote::RemotePoolState;
 
-/// How often to sample each connected project's link counters. Each sample is
-/// a system-wide `ss -p` (a walk of every process's fds) plus an `ssh -O check`
-/// per project, while any remote is connected. The counters are cumulative, so
-/// a slower cadence books the same totals; it only widens the tail a master
-/// that dies between two samples takes with it.
+/// How often the sampler wakes: it books (and flushes) on this clock, and
+/// samples on it while a Network pane is open.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const SAMPLE_INTERVAL_SECS: u64 = 15;
+const TICK_SECS: u64 = 15;
+/// How often each connected project's link counters are sampled while no
+/// Network pane is open. Each sample is an `ss -t -i -e` dump (no process
+/// walk) plus, only when the project's ControlMaster is not the one last
+/// confirmed, an `ssh -O check`. The counters are cumulative, so a slower
+/// cadence books the same totals; it only widens the tail a master that dies
+/// between two samples takes with it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const IDLE_SAMPLE_SECS: u64 = 60;
 /// Flush the in-memory accumulator to disk every this-many ticks (~30 s). The
 /// bytes for a project persist in memory between flushes, so a slower cadence
 /// only widens the tail lost on a hard kill — not steady-state accuracy.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const FLUSH_EVERY_TICKS: u64 = 2;
+/// A Network pane counts as open this long after its last read (it reads
+/// every second while shown, every 12 s on a careful host).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const PANE_OPEN_MS: u64 = 30_000;
+
+/// When a Network pane last read (ms since the epoch; 0 = never).
+static PANE_READ_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// A Network pane just read (`commands::network`): sample on the short tick
+/// while it stays open.
+pub fn note_pane_read() {
+    PANE_READ_AT.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn pane_open() -> bool {
+    pane_open_at(PANE_READ_AT.load(std::sync::atomic::Ordering::Relaxed), now_ms())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn pane_open_at(read_at: u64, now: u64) -> bool {
+    read_at != 0 && now.saturating_sub(read_at) < PANE_OPEN_MS
+}
+
+/// Whether a tick samples: the first one does, then every tick while a pane
+/// is open and every [`IDLE_SAMPLE_SECS`] otherwise. A second of slack keeps
+/// a tick that wakes a little early from skipping a whole period.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn sample_due(since_last: Option<std::time::Duration>, pane_open: bool) -> bool {
+    let period = if pane_open { TICK_SECS } else { IDLE_SAMPLE_SECS };
+    since_last.is_none_or(|d| d.as_secs() + 1 >= period)
+}
 
 /// Start the background traffic sampler. Spawns a single detached task that runs
 /// for the life of the process. A no-op on Windows (no ControlMaster there).
 pub fn start(pool: RemotePoolState) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        tauri::async_runtime::spawn(run(pool));
+        app_core::rt::spawn(run(pool));
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -67,7 +112,7 @@ mod sampler {
     use std::collections::HashMap;
     use std::time::Duration;
 
-    use super::{FLUSH_EVERY_TICKS, SAMPLE_INTERVAL_SECS};
+    use super::{pane_open, sample_due, FLUSH_EVERY_TICKS, TICK_SECS};
     use crate::commands::network::{local_ssh_link_shared, SsDump};
     use crate::schema::net_usage::{self, ByteCounts};
     use crate::services::remote::{self, RemotePoolState};
@@ -120,9 +165,10 @@ mod sampler {
         let mut known_conns: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut pending: HashMap<String, ByteCounts> = HashMap::new();
         let mut tick: u64 = 0;
+        let mut last_sample: Option<std::time::Instant> = None;
 
         loop {
-            tokio::time::sleep(Duration::from_secs(SAMPLE_INTERVAL_SECS)).await;
+            tokio::time::sleep(Duration::from_secs(TICK_SECS)).await;
             tick += 1;
 
             let ids = remote::connected_ids(&pool).await;
@@ -151,14 +197,16 @@ mod sampler {
             }
 
             // One system-wide `ss` scan serves every project this tick: the
-            // scan is machine-global (`-p` walks every `/proc/<pid>/fd`), so
-            // running it per project multiplied that cost by N and threw away
-            // all but one master's rows each time. The per-master `ssh -O
-            // check` stays per project — that part genuinely differs.
-            let snaps: Vec<(String, _)> = if ids.is_empty() {
+            // scan is machine-global, so running it per project multiplied
+            // that cost by N and threw away all but one master's rows each
+            // time. The per-master lookup stays per project — that part
+            // genuinely differs. A tick that is not due samples nothing.
+            let due = sample_due(last_sample.map(|at| at.elapsed()), pane_open());
+            let snaps: Vec<(String, _)> = if ids.is_empty() || !due {
                 Vec::new()
             } else {
-                tauri::async_runtime::spawn_blocking(move || {
+                last_sample = Some(std::time::Instant::now());
+                app_core::rt::spawn_blocking(move || {
                     // A unit struct on macOS only: `default()` is the
                     // spelling Linux compiles too.
                     #[cfg_attr(target_os = "macos", allow(clippy::default_constructed_unit_structs))]
@@ -233,7 +281,7 @@ mod sampler {
         if drained.is_empty() {
             return;
         }
-        let _ = tauri::async_runtime::spawn_blocking(move || {
+        let _ = app_core::rt::spawn_blocking(move || {
             let mut summary = net_usage::load();
             let hour = storage::hour_utc();
             for (id, c) in &drained {
@@ -246,7 +294,26 @@ mod sampler {
 
     #[cfg(test)]
     mod tests {
+        use super::super::{pane_open_at, sample_due, PANE_OPEN_MS};
         use super::{decide_booking, Baseline, Booking};
+        use std::time::Duration;
+
+        #[test]
+        fn samples_every_tick_with_the_pane_open_and_every_minute_without() {
+            assert!(sample_due(None, false), "the first tick samples");
+            assert!(sample_due(Some(Duration::from_secs(15)), true));
+            assert!(sample_due(Some(Duration::from_millis(14_500)), true), "a tick waking early still samples");
+            assert!(!sample_due(Some(Duration::from_secs(15)), false));
+            assert!(!sample_due(Some(Duration::from_secs(45)), false));
+            assert!(sample_due(Some(Duration::from_secs(60)), false));
+        }
+
+        #[test]
+        fn a_pane_counts_as_open_shortly_after_its_last_read() {
+            assert!(!pane_open_at(0, 1_000_000), "never read");
+            assert!(pane_open_at(1_000_000, 1_000_000 + PANE_OPEN_MS - 1));
+            assert!(!pane_open_at(1_000_000, 1_000_000 + PANE_OPEN_MS));
+        }
 
         fn base(cid: &str, rx: u64, tx: u64) -> Baseline {
             Baseline {

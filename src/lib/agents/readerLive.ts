@@ -60,10 +60,18 @@ export const NO_LIVE: ReaderLive = {
   question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null,
 };
 
+/** Rows read off the end of the buffer for the live reading. What it looks
+ * for — a dialog, the busy row, the status line — sits at the bottom of the
+ * screen, below the last echoed prompt; the whole `MAX_ROWS` (1200) was read
+ * cell by cell on every settled write for a tail a few dozen rows long.
+ * Deliberately not the viewport: a dialog drawn under a long answer is still
+ * found, and the phone reads the same tail. */
+export const READER_ROWS = 300;
+
 /** Reads `buffer` (the pane's active xterm buffer, `columns` wide) for
  * `agentLabel`'s TUI. */
 export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, columns?: number): ReaderLive {
-  const { lines } = readableScreen(buffer);
+  const { lines } = readableScreen(buffer, READER_ROWS);
   const status = sessionStatus(lines, agentLabel);
   // The input box and the rows under it are the TUI's frame, not output; the
   // tail after the last echoed prompt is what the session draws now.
@@ -130,7 +138,7 @@ function sameStatus(a: SessionStatus | null, b: SessionStatus | null): boolean {
  * it the same way — the session's own rows, not a list Tabtivity believes in.
  */
 export function readModelPicker(buffer: ReadableBufferLike, agentLabel: string): SelectPrompt | null {
-  const { lines } = readableScreen(buffer);
+  const { lines } = readableScreen(buffer, READER_ROWS);
   return isOpenCodeTab(agentLabel) ? readOpenCodePicker(lines) : readSelectPrompt(lines, agentLabel);
 }
 

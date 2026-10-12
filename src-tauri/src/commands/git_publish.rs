@@ -366,7 +366,7 @@ fn origin_site(project: &Project, project_id: &str) -> Result<PublishSite, Strin
 /// the bodies spawn `git`/`gh`/`glab` or ssh and block on them, and a sync
 /// Tauri command runs on the main thread, so a slow push or an unreachable host
 /// froze the whole window for its duration.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn publish_project(
     project_id: String,
     provider: Option<String>,
@@ -487,7 +487,7 @@ fn publish_project_blocking(
 /// Off-thread even though it is a local `git remote get-url`: the pill calls it
 /// on every right-click of a published project, and a fork+wait on the main
 /// thread there is a visible hitch before the context menu opens.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_has_origin(project_id: String) -> Result<bool, String> {
     run_off_thread(move || project_has_origin_blocking(project_id)).await
 }
@@ -509,7 +509,7 @@ fn project_has_origin_blocking(project_id: String) -> Result<bool, String> {
 /// This is the safe inverse of `publish_project`: commits are never touched and
 /// the GitHub/GitLab repo is left intact — only the local tree is detached from
 /// it. Re-publishing later re-creates or re-attaches a remote.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn unpublish_project(project_id: String) -> Result<(), String> {
     run_off_thread(move || unpublish_project_blocking(project_id)).await
 }
@@ -581,7 +581,7 @@ fn unpublish_project_blocking(project_id: String) -> Result<(), String> {
 ///
 /// Runs locally, or over ssh on the work-remote host for a remote project
 /// (relying on that host's provider auth, exactly like `publish_project`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_project_visibility(
     project_id: String,
     visibility: String,
@@ -661,7 +661,7 @@ fn set_project_visibility_blocking(
 /// then a fresh publish creates the repo on the new provider, wires `origin`,
 /// and pushes. Records the new `git_provider` + `git_type` (via the reused
 /// `publish_project`). Returns the create CLI's stdout (new repo URL).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn switch_project_provider(
     project_id: String,
     provider: Option<String>,

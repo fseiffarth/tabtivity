@@ -4,6 +4,7 @@
  * non-destructive banner over a DIRTY buffer (never clobbering edits).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
@@ -39,6 +40,8 @@ async function renderTextView() {
     render(<FileViewerPane viewer="text" path="/p/notes.txt" projectId="proj" />);
   });
 }
+
+warmFileViewer();
 
 describe("diff-aware auto-reload (#43)", () => {
   beforeEach(() => {

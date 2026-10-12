@@ -51,6 +51,17 @@ export interface PdfReloadEnvelope {
   from: string;
 }
 
+/** Tauri event carrying a compile's start or end across the window boundary. */
+export const PDF_COMPILE_EVENT = "pdf-sync-compile";
+
+/** Envelope for a cross-window compile notice: the PDF the build will rewrite,
+ *  whether it is starting or over, and the origin label. */
+export interface PdfCompileEnvelope {
+  pdf: string;
+  compiling: boolean;
+  from: string;
+}
+
 /** The current window's Tauri label, or "" outside a Tauri context (tests). */
 function currentLabel(): string {
   try {
@@ -96,6 +107,18 @@ interface PdfSyncStore {
   /** The local half of `requestReload` (also what the cross-window listener
    *  calls for a reload broadcast from another window). */
   applyReload: (pdf: string) => void;
+  /** How many builds are rewriting each PDF right now. While one is, the view
+   *  for that path leaves its mtime poll alone: a multi-pass latexmk build
+   *  rewrites the file several times and the poll used to read every
+   *  intermediate PDF (and retry each one it caught mid-write) — the compile's
+   *  own reload request at the end is the one read that matters. */
+  compilingByPath: Record<string, number>;
+  /** A build that will rewrite `pdf` has started. Local + broadcast. */
+  beginCompile: (pdf: string) => void;
+  /** That build is over (however it ended). Local + broadcast. */
+  endCompile: (pdf: string) => void;
+  /** The local half of `beginCompile`/`endCompile`. */
+  applyCompile: (pdf: string, compiling: boolean) => void;
 }
 
 // Monotonic reveal counter. The nonce must STRICTLY increase across reveals:
@@ -108,6 +131,35 @@ let revealSeq = 0;
 export const usePdfSyncStore = create<PdfSyncStore>((set, get) => ({
   byPath: {},
   reloadByPath: {},
+  compilingByPath: {},
+  applyCompile: (pdf, compiling) =>
+    set((s) => {
+      const n = Math.max(0, (s.compilingByPath[pdf] ?? 0) + (compiling ? 1 : -1));
+      const next = { ...s.compilingByPath };
+      if (n === 0) delete next[pdf];
+      else next[pdf] = n;
+      return { compilingByPath: next };
+    }),
+  beginCompile: (pdf) => {
+    get().applyCompile(pdf, true);
+    try {
+      emit(PDF_COMPILE_EVENT, { pdf, compiling: true, from: currentLabel() } satisfies PdfCompileEnvelope).catch(
+        () => {},
+      );
+    } catch {
+      /* no Tauri event bus available (synchronous failure) */
+    }
+  },
+  endCompile: (pdf) => {
+    get().applyCompile(pdf, false);
+    try {
+      emit(PDF_COMPILE_EVENT, { pdf, compiling: false, from: currentLabel() } satisfies PdfCompileEnvelope).catch(
+        () => {},
+      );
+    } catch {
+      /* no Tauri event bus available (synchronous failure) */
+    }
+  },
   applyReload: (pdf) =>
     set((s) => ({
       reloadByPath: { ...s.reloadByPath, [pdf]: (s.reloadByPath[pdf] ?? 0) + 1 },
@@ -175,9 +227,17 @@ export async function listenPdfReveal(): Promise<() => void> {
       if (from === self) return;
       usePdfSyncStore.getState().applyReload(pdf);
     });
+    // And the compile notices: a PDF popped out into its own window must hold
+    // its poll for a build running in the main window's editor.
+    const unCompile = await listen<PdfCompileEnvelope>(PDF_COMPILE_EVENT, (ev) => {
+      const { pdf, compiling, from } = ev.payload;
+      if (from === self) return;
+      usePdfSyncStore.getState().applyCompile(pdf, compiling);
+    });
     return () => {
       unReveal();
       unReload();
+      unCompile();
     };
   } catch {
     return () => {};

@@ -289,7 +289,12 @@ describe("MarkupView · the agent's questions", () => {
   });
 
   it("keeps the card when the answer could not be delivered, and closes it to answer in the chat", async () => {
-    const calls = desktop(() => [TWO], () => ({ status: 409, body: { error: "delivery_failed" } }));
+    // Like the desktop, stop listing the ask once it is dismissed: a poll that
+    // lands after the dismissal must not bring the card back.
+    const calls: Call[] = desktop(
+      () => (posted(calls, "/markup/dismiss").length ? [] : [TWO]),
+      () => ({ status: 409, body: { error: "delivery_failed" } }),
+    );
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });

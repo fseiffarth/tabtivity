@@ -3,6 +3,9 @@ import { renderHook } from "@testing-library/react";
 import type { Calendar, CalendarEvent, CalendarTask } from "../../types";
 
 const sendNotification = vi.fn();
+// No backend: the cross-window alarm claim answers nothing (this window
+// decides) and the phone notice has nowhere to go.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: async () => true,
   requestPermission: async () => "granted",

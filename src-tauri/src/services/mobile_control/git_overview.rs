@@ -479,6 +479,13 @@ fn linked_dot(wt: &Worktree, branches: &[GitBranch]) -> Option<Option<&'static s
 /// every spawn hardened (hooks off, optional locks off, repo config
 /// sanitized) — so the host runs it off the async thread and caches it.
 pub fn probe(root: &Path, host_key: &[u8], tab_cwds: &[String]) -> GitOverview {
+    probe_within(root, host_key, tab_cwds, PROBE_BUDGET)
+}
+
+/// [`probe`] with the change probes under `budget` instead of [`PROBE_BUDGET`]
+/// (a test that checks which rows are probed must not depend on how fast a
+/// loaded machine runs git).
+fn probe_within(root: &Path, host_key: &[u8], tab_cwds: &[String], budget: Duration) -> GitOverview {
     let dir = root.to_string_lossy().into_owned();
     // `mirror`, as the desktop bridge lists them: a local project ignores the
     // side, and it can never pick an SSH host.
@@ -494,7 +501,7 @@ pub fn probe(root: &Path, host_key: &[u8], tab_cwds: &[String]) -> GitOverview {
     let started = Instant::now();
     let mut dots = HashMap::new();
     for at in order {
-        if dots.len() >= MAX_DIRTY_PROBES || started.elapsed() >= PROBE_BUDGET {
+        if dots.len() >= MAX_DIRTY_PROBES || started.elapsed() >= budget {
             break;
         }
         let wt = &worktrees[at];
@@ -793,7 +800,9 @@ mod tests {
         let via_link = link.join("proj").join(crate::brand::WORKTREES_DIR).join("topic").join("deep");
         std::fs::create_dir_all(&via_link).expect("tab dir");
         let cwds = vec![via_link.to_string_lossy().into_owned()];
-        let overview = probe(&root, &KEY, &cwds);
+        // Every row is probed here however slowly git runs (a loaded CI
+        // runner passed the 3 s budget before reaching `topic`).
+        let overview = probe_within(&root, &KEY, &cwds, Duration::from_secs(600));
 
         assert!(overview.repo);
         assert_eq!(overview.head.as_ref().and_then(|h| h.branch.as_deref()), Some("main"));

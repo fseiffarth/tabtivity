@@ -4,6 +4,7 @@
  * by an external tool refreshes in place (no manual reopen).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, act, waitFor } from "@testing-library/react";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
@@ -30,6 +31,8 @@ async function renderImageView() {
     render(<FileViewerPane viewer="image" path="/p/fig.png" projectId="proj" />);
   });
 }
+
+warmFileViewer();
 
 describe("image auto-reload (#68)", () => {
   beforeEach(() => {

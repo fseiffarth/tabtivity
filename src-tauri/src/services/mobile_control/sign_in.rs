@@ -85,9 +85,75 @@ pub fn parse_callback(raw: &str, own_port: u16) -> Result<Callback, &'static str
     })
 }
 
+/// The loopback TCP listeners in a `/proc/net/tcp{,6}` table: `(address,
+/// port, uid)` of every socket in `LISTEN` (`0A`).
+pub fn listeners(table: &str) -> Vec<(IpAddr, u16, u32)> {
+    fn ip_of(hex: &str) -> Option<IpAddr> {
+        // The kernel prints each 32-bit word in host (little-endian) order.
+        let words: Vec<u32> = (0..hex.len() / 8).map(|i| u32::from_str_radix(&hex[i * 8..i * 8 + 8], 16).ok()).collect::<Option<_>>()?;
+        match words.as_slice() {
+            [w] => Some(IpAddr::V4(Ipv4Addr::from(w.to_le_bytes()))),
+            [a, b, c, d] => {
+                let mut bytes = [0u8; 16];
+                for (i, w) in [a, b, c, d].iter().enumerate() {
+                    bytes[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+                }
+                Some(IpAddr::V6(Ipv6Addr::from(bytes)))
+            }
+            _ => None,
+        }
+    }
+    table
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() < 8 || fields[3] != "0A" {
+                return None;
+            }
+            let (addr, port) = fields[1].split_once(':')?;
+            Some((ip_of(addr)?, u16::from_str_radix(port, 16).ok()?, fields[7].parse().ok()?))
+        })
+        .collect()
+}
+
+/// The callback's targets whose listener belongs to `uid` (hosted plan
+/// §5.1): on a server every user shares the loopback, so the relay hands a
+/// code only to a listener of the caller's own uid — never to another
+/// user's. A listener on the unspecified address counts for its family.
+pub fn own_targets(callback: &Callback, uid: u32, tables: &[String]) -> Vec<SocketAddr> {
+    let listening: Vec<(IpAddr, u16, u32)> = tables.iter().flat_map(|t| listeners(t)).collect();
+    callback
+        .targets
+        .iter()
+        .copied()
+        .filter(|target| {
+            listening.iter().any(|(ip, port, owner)| {
+                *owner == uid && *port == target.port() && (*ip == target.ip() || (ip.is_unspecified() && ip.is_ipv4() == target.is_ipv4()))
+            })
+        })
+        .collect()
+}
+
 /// Whether the CLI took the answer: any 2xx or 3xx (Codex redirects to its
 /// success page). A 4xx/5xx is the CLI saying no — a stale or reused code.
+/// On a server only a listener of this daemon's own uid is ever contacted.
 pub async fn deliver(callback: &Callback) -> Result<u16, &'static str> {
+    #[cfg(unix)]
+    let restricted;
+    #[cfg(unix)]
+    let callback = if crate::services::server::is_server() {
+        let tables: Vec<String> = ["/proc/net/tcp", "/proc/net/tcp6"].iter().filter_map(|p| std::fs::read_to_string(p).ok()).collect();
+        // SAFETY: getuid has no preconditions.
+        let targets = own_targets(callback, unsafe { libc::getuid() }, &tables);
+        if targets.is_empty() {
+            return Err("callback_not_yours");
+        }
+        restricted = Callback { targets, path_and_query: callback.path_and_query.clone() };
+        &restricted
+    } else {
+        callback
+    };
     // Plain http only, but reqwest builds its TLS half regardless.
     crate::services::mail_engine::install_crypto_provider();
     let client = reqwest::Client::builder()
@@ -205,5 +271,29 @@ mod tests {
         drop(closed);
         let nobody = parse_callback(&format!("http://127.0.0.1:{dead}/cb?code=c&state=st"), OWN).unwrap();
         assert_eq!(deliver(&nobody).await, Err("callback_unreachable"));
+    }
+
+    #[test]
+    fn only_the_callers_own_listener_gets_the_code() {
+        // 127.0.0.1:1455 (Codex's) of uid 1001, [::1]:1455 of uid 1002,
+        // 0.0.0.0:8085 of uid 1001, and a connected (not listening) socket.
+        let tcp = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
+   0: 0100007F:05AF 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 1 1 0000000000000000 100 0 0 10 0\n\
+   1: 00000000:1F95 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 2 1 0000000000000000 100 0 0 10 0\n\
+   2: 0100007F:0BB8 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1001        0 3 1 0000000000000000 100 0 0 10 0\n".to_string();
+        let tcp6 = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
+   0: 00000000000000000000000001000000:05AF 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1002        0 4 1 0000000000000000 100 0 0 10 0\n".to_string();
+        let found = listeners(&tcp);
+        assert!(found.contains(&(IpAddr::V4(Ipv4Addr::LOCALHOST), 1455, 1001)), "{found:?}");
+        assert_eq!(found.len(), 2, "the connected socket is no listener");
+        assert_eq!(listeners(&tcp6), vec![(IpAddr::V6(Ipv6Addr::LOCALHOST), 1455, 1002)]);
+        let tables = [tcp, tcp6];
+        let codex = parse_callback("http://localhost:1455/auth/callback?code=c&state=s", OWN).unwrap();
+        assert_eq!(own_targets(&codex, 1001, &tables), vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1455)]);
+        assert_eq!(own_targets(&codex, 1002, &tables), vec![SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1455)]);
+        assert!(own_targets(&codex, 1003, &tables).is_empty(), "nobody else's listener");
+        let any = parse_callback("http://127.0.0.1:8085/cb?code=c&state=s", OWN).unwrap();
+        assert_eq!(own_targets(&any, 1001, &tables).len(), 1, "an unspecified-address listener counts");
+        assert!(own_targets(&any, 1002, &tables).is_empty());
     }
 }

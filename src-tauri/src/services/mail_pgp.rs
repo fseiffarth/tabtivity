@@ -137,6 +137,12 @@ impl PgpKeyInfo {
 pub struct PgpKeyring {
     path: PathBuf,
     wrap: mail_crypt::Key,
+    /// The `wrap` keys of previous masters while a server's mailbox re-keys
+    /// (hosted plan §6.8): read with, never written with.
+    old_wraps: Vec<mail_crypt::Key>,
+    /// [`mail_crypt::side_files`]' switch count when the keys were read; a
+    /// write after a switch is refused rather than sealed under replaced keys.
+    generation: u64,
 }
 
 impl std::fmt::Debug for PgpKeyring {
@@ -155,8 +161,9 @@ impl std::fmt::Debug for PgpKeyring {
 /// have saved them first.
 pub fn keyring_plaintext(dir: &Path, keys: &MailKeys) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
     match std::fs::read(dir.join(KEYRING_FILE)) {
-        Ok(raw) => mail_crypt::open(&keys.wrap, KEYRING_AAD, &raw)
-            .map(|plain| Some(Zeroizing::new(plain.to_vec())))
+        Ok(raw) => keys
+            .open_any(|k| &k.wrap, KEYRING_AAD, &raw)
+            .map(|(plain, _)| Some(Zeroizing::new(plain.to_vec())))
             .map_err(|e| format!("the keyring could not be decrypted: {e}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
@@ -169,21 +176,48 @@ pub fn write_keyring_plaintext(dir: &Path, keys: &MailKeys, plain: &[u8]) -> Res
     mail_crypt::write_bytes_atomic(&dir.join(KEYRING_FILE), &sealed)
 }
 
+/// A re-key's pass over the keyring file: re-sealed under `keys`' current
+/// master if it opens only under a previous one. Whether it was rewritten.
+/// The caller holds [`mail_crypt::side_files`].
+pub fn reseal_keyring(dir: &Path, keys: &MailKeys) -> Result<bool, String> {
+    let path = dir.join(KEYRING_FILE);
+    let raw = match std::fs::read(&path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.to_string()),
+    };
+    match keys.open_any(|k| &k.wrap, KEYRING_AAD, &raw) {
+        Ok((plain, false)) => {
+            mail_crypt::write_bytes_durable(&path, &mail_crypt::seal(&keys.wrap, KEYRING_AAD, &plain))?;
+            Ok(true)
+        }
+        // Under the current master already, or under none (damaged: left as
+        // it is, the keyring reports it itself).
+        _ => Ok(false),
+    }
+}
+
 impl PgpKeyring {
     /// Open (or create) the keyring in `dir`, sealed under the store's `k_wrap`.
-    pub fn open(dir: &Path, keys: &MailKeys) -> Result<Self, String> {
+    /// `generation`: [`mail_crypt::side_files`]' count, read under the lock
+    /// together with `keys`.
+    pub fn open(dir: &Path, keys: &MailKeys, generation: u64) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         Ok(PgpKeyring {
             path: dir.join(KEYRING_FILE),
             wrap: keys.wrap.clone(),
+            old_wraps: keys.previous().iter().map(|k| k.wrap.clone()).collect(),
+            generation,
         })
     }
 
     fn read(&self) -> Result<KeyringFile, String> {
         match std::fs::read(&self.path) {
             Ok(raw) => {
-                let plain = mail_crypt::open(&self.wrap, KEYRING_AAD, &raw)
-                    .map_err(|e| format!("the keyring could not be decrypted: {e}"))?;
+                let plain = std::iter::once(&self.wrap)
+                    .chain(self.old_wraps.iter())
+                    .find_map(|wrap| mail_crypt::open(wrap, KEYRING_AAD, &raw).ok())
+                    .ok_or_else(|| format!("the keyring could not be decrypted: {}", mail_crypt::CryptError::NotAuthentic))?;
                 let file: KeyringFile = serde_json::from_slice(&plain)
                     .map_err(|e| format!("the keyring is corrupt: {e}"))?;
                 if file.version != KEYRING_VERSION {
@@ -204,6 +238,10 @@ impl PgpKeyring {
 
     fn write(&self, file: &KeyringFile) -> Result<(), String> {
         let json = Zeroizing::new(serde_json::to_vec(file).map_err(|e| e.to_string())?);
+        let side = mail_crypt::side_files();
+        if *side != self.generation {
+            return Err("the mail store's key changed a moment ago — try again".into());
+        }
         let sealed = mail_crypt::seal(&self.wrap, KEYRING_AAD, &json);
         mail_crypt::write_bytes_atomic(&self.path, &sealed)
     }
@@ -1314,7 +1352,7 @@ mod tests {
     fn keyring() -> (tempfile::TempDir, PgpKeyring) {
         let dir = tempfile::tempdir().unwrap();
         let keys = MailKeys::derive(Key::from_bytes([11u8; 32]));
-        let ring = PgpKeyring::open(dir.path(), &keys).unwrap();
+        let ring = PgpKeyring::open(dir.path(), &keys, *mail_crypt::side_files()).unwrap();
         (dir, ring)
     }
 
@@ -1362,11 +1400,11 @@ mod tests {
     fn another_store_key_cannot_open_the_keyring() {
         let dir = tempfile::tempdir().unwrap();
         let ring =
-            PgpKeyring::open(dir.path(), &MailKeys::derive(Key::from_bytes([11u8; 32]))).unwrap();
+            PgpKeyring::open(dir.path(), &MailKeys::derive(Key::from_bytes([11u8; 32])), *mail_crypt::side_files()).unwrap();
         ring.generate("Alice", "alice@example.com", "a").unwrap();
 
         let wrong =
-            PgpKeyring::open(dir.path(), &MailKeys::derive(Key::from_bytes([12u8; 32]))).unwrap();
+            PgpKeyring::open(dir.path(), &MailKeys::derive(Key::from_bytes([12u8; 32])), *mail_crypt::side_files()).unwrap();
         assert!(wrong.list().is_err());
     }
 

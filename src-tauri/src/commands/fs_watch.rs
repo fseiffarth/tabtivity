@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use notify::event::{AccessKind, AccessMode};
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
-use tauri::{AppHandle, Emitter, State};
+use crate::tauri_host::Ctx;
 
 /// How long to coalesce a burst of raw `notify` events into a single
 /// `fs-change` emit. A single write (or a `git status` touching `.git/*` while
@@ -30,9 +30,10 @@ use tauri::{AppHandle, Emitter, State};
 /// the frontend would receive a storm of `fs-change` events.
 const DEBOUNCE: Duration = Duration::from_millis(200);
 
-/// Currently-watched canonical directory and its live watcher. `None` when
-/// nothing is being watched (panel closed / unmounted).
-pub type FsWatchState = Arc<Mutex<Option<(PathBuf, notify::RecommendedWatcher)>>>;
+/// Currently-watched canonical directory, the path as the frontend spelled it
+/// (the `fs-change` payload), and the live watcher. `None` when nothing is
+/// being watched (panel closed / unmounted).
+pub type FsWatchState = Arc<Mutex<Option<(PathBuf, String, notify::RecommendedWatcher)>>>;
 
 pub fn new_state() -> FsWatchState {
     Arc::new(Mutex::new(None))
@@ -132,13 +133,13 @@ fn is_git_state_event(path: &Path, git_roots: &[PathBuf]) -> bool {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn watch_dir(
-    app: AppHandle,
-    state: State<'_, FsWatchState>,
+    ctx: Ctx,
     path: String,
     repo_dir: Option<String>,
 ) -> Result<(), String> {
+    let state = ctx.get::<FsWatchState>();
     // Mount-free remote (Phase 2): inotify cannot see a remote (SFTP) tree, and a
     // remote project's watched dir is its non-fs mountpoint root. No-op so the
     // remote file tree just relies on manual refresh; the frontend already skips
@@ -149,13 +150,17 @@ pub fn watch_dir(
     let canonical = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
 
     let mut guard = state.lock().unwrap();
-    if let Some((current, _)) = guard.as_ref() {
-        if *current == canonical {
+    if let Some((current, spelled, _)) = guard.as_ref() {
+        if *current == canonical && *spelled == path {
             return Ok(()); // already watching this directory
         }
     }
 
-    let emit_path = canonical.to_string_lossy().to_string();
+    // The payload is the path exactly as the frontend asked for it, not the
+    // canonical one: a tree compares it with its own folder to ignore events
+    // meant for another tree (the slot is shared by every window), and only
+    // the backend can canonicalize (perf plan §3.4).
+    let emit_path = path.clone();
     // Trailing-edge debounce: each raw event bumps a shared generation, and ONE
     // long-lived thread waits out `DEBOUNCE` and emits only if no newer event
     // arrived meanwhile. A burst of raw events thus collapses into a single
@@ -170,6 +175,8 @@ pub fn watch_dir(
     let (tx, rx) = std::sync::mpsc::channel::<u64>();
     {
         let generation = Arc::clone(&generation);
+        // The debounce thread outlives this call: it keeps its own context.
+        let ctx = ctx.0.clone();
         std::thread::spawn(move || {
             // Ends when the watcher (and with it the sender) is dropped.
             while let Ok(mut seen) = rx.recv() {
@@ -188,7 +195,7 @@ pub fn watch_dir(
                     // Only the last event of a burst still matches; anything newer
                     // means the burst is still going — drain and wait again.
                     if generation.load(Ordering::SeqCst) == seen {
-                        let _ = app.emit("fs-change", &emit_path);
+                        ctx.emit("fs-change", &emit_path);
                         break;
                     }
                 }
@@ -198,7 +205,13 @@ pub fn watch_dir(
     // Git state lives in the repo containing the project, not necessarily in
     // one containing the listed subfolder (a nested repo shows up in the tree
     // but is not what its markers come from).
-    let git_paths = git_watch_paths(Path::new(repo_dir.as_deref().unwrap_or(&path)));
+    // By its real path, as the listed folder is: macOS's FSEvents reports
+    // events under real paths, so a git dir reached through a symlink would
+    // never match its root and every write in it would count.
+    let repo = repo_dir.as_deref().map_or_else(|| canonical.clone(), |dir| {
+        std::fs::canonicalize(dir).unwrap_or_else(|_| PathBuf::from(dir))
+    });
+    let git_paths = git_watch_paths(&repo);
     let git_roots: Vec<PathBuf> = git_paths
         .iter()
         .filter(|(_, mode)| *mode == RecursiveMode::NonRecursive)
@@ -238,12 +251,13 @@ pub fn watch_dir(
     }
 
     // Replacing the stored watcher drops the previous one, unwatching it.
-    *guard = Some((canonical, watcher));
+    *guard = Some((canonical, path, watcher));
     Ok(())
 }
 
-#[tauri::command]
-pub fn unwatch_dir(state: State<'_, FsWatchState>) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn unwatch_dir(ctx: Ctx) -> Result<(), String> {
+    let state = ctx.get::<FsWatchState>();
     *state.lock().unwrap() = None;
     Ok(())
 }

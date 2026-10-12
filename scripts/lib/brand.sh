@@ -4,7 +4,7 @@
 #   . "$ROOT/scripts/lib/brand.sh"
 #
 # No script spells the app's name itself. The name's forms are read from the
-# backend's brand module (src-tauri/src/brand.rs, the one place they are
+# backend's brand module (src-core/src/brand.rs, the one place they are
 # written), and the built binary's name from src-tauri/Cargo.toml's `[[bin]]`,
 # so a rename edits those two files and every script follows.
 #
@@ -49,7 +49,7 @@ _brand_sh_macro() {
       exit
     }
     found && /^}/ { exit }
-  ' "$_brand_sh_root/src-tauri/src/brand.rs" 2>/dev/null
+  ' "$_brand_sh_root/src-core/src/brand.rs" 2>/dev/null
 }
 
 # `name` of the first `[[bin]]` table in src-tauri/Cargo.toml.
@@ -77,7 +77,7 @@ APP_REPO="$(_brand_sh_macro app_repo)"
 APP_BIN_NAME="$(_brand_sh_bin_name)"
 
 if [ -z "$APP_DISPLAY" ] || [ -z "$APP_SLUG" ] || [ -z "$APP_UPPER" ] || [ -z "$APP_LEGACY_DISPLAY" ] || [ -z "$APP_LEGACY_SLUG" ] || [ -z "$APP_LEGACY_UPPER" ]; then
-  echo "scripts/lib/brand.sh: could not read the app's name from $_brand_sh_root/src-tauri/src/brand.rs" >&2
+  echo "scripts/lib/brand.sh: could not read the app's name from $_brand_sh_root/src-core/src/brand.rs" >&2
   return 1
 fi
 if [ -z "$APP_BIN_NAME" ]; then

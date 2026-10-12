@@ -8,7 +8,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { addMark, EMPTY_LAYER, markBox, markSent, type Layer } from "../../../mobile-web/src/markup/layer";
+import { addMark, EMPTY_LAYER, markBox, markSent, tickBadgeSpot, type Layer } from "../../../mobile-web/src/markup/layer";
 
 const store = vi.hoisted(() => ({
   loadLayer: vi.fn(),
@@ -160,11 +160,15 @@ describe("MarkupView · the agent's ticks", () => {
     rerender(view("working"));
     await waitFor(() => expect(badges()).toHaveLength(1));
     expect(screen.getByText("1 done")).toBeTruthy();
-    // At the stroke's top-right corner, on a 336 px wide picture of 800.
-    const [x, y, w] = markBox(STROKE);
+    // Just outside the stroke's top-right corner, on a 336 px wide picture of
+    // 800 — never over the words the stroke was on.
+    const box = markBox(STROKE);
     const scale = 336 / 800;
-    expect(badges()[0].style.left).toBe(`${(x + w) * scale - 13}px`);
-    expect(badges()[0].style.top).toBe(`${Math.max(0, y * scale - 13)}px`);
+    const [x, y, w, h] = box.map((v) => v * scale);
+    const [left, top] = [parseFloat(badges()[0].style.left), parseFloat(badges()[0].style.top)];
+    const clear = left >= x + w || left + 26 <= x || top >= y + h || top + 26 <= y;
+    expect(clear).toBe(true);
+    expect([left, top]).toEqual(tickBadgeSpot(box, scale, [336, 600 * scale], 26));
   });
 
   it("approves a ticked mark on a tap — never in the moment after the ✓ appeared, never twice — and ↶ brings it back", async () => {
@@ -275,8 +279,10 @@ describe("MarkupView · the agent's ticks", () => {
     say({ type: "ready" });
     say({ type: "meta", pages: [{ w: 600, h: 800 }] });
     await waitFor(() => expect(badges()).toHaveLength(1));
-    // The box's corner is the page's: the badge stays inside, 336 px wide.
-    expect(badges()[0].style.left).toBe(`${336 - 26}px`);
-    expect(badges()[0].style.top).toBe("0px");
+    // The box's corner is the page's: the badge goes left of and below it,
+    // still on the 336 px wide page and still off the box.
+    const scale = 336 / 600;
+    expect(badges()[0].style.left).toBe(`${560 * scale - 2 - 26}px`);
+    expect(badges()[0].style.top).toBe(`${30 * scale + 2}px`);
   });
 });

@@ -11,6 +11,7 @@ import {
   readerRequest,
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
+import { watchedReads } from "../../lib/agents/transcriptWatch";
 import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, type ReaderLive } from "../../lib/agents/readerLive";
 import { onSentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
@@ -20,7 +21,7 @@ import { submitScheduledAgentMessage } from "../../lib/agents/scheduledAgentInpu
 import { agentFamily, agentInputWrites } from "../../../shared/agentComposer";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
-import { terminalFor } from "../../lib/terminal/terminalRegistry";
+import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry";
 import { noteUserInput, useActivityStore } from "../../stores/activity";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { useUse24h } from "../../lib/timeFormat";
@@ -51,9 +52,6 @@ import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn }
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import type { AskedQuestion, RunningShell } from "../../../mobile-web/src/api";
 
-/** How often a shown Reader asks for the transcript again. The backend
- * answers an unchanged file by its fingerprint, without a parse. */
-const POLL_MS = 2000;
 /** How long a sent prompt shows as sending while the transcript has not
  * recorded it yet — counted from the send, or from the last moment the agent
  * was seen working (a prompt queued behind a long turn is recorded only once
@@ -734,25 +732,43 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const recordedEffort = transcript?.available ? transcript.effort : undefined;
   useEffect(() => { if (recordedEffort) setSeenEffort(recordedEffort); }, [recordedEffort]);
 
-  // The live screen: read on the pane's output (settled), and on a slow
-  // clock for the busy row's timer and a terminal not created yet.
+  // The live screen: read on the pane's output (settled). The slow clock runs
+  // only while the pane has no terminal yet (it builds its xterm on first
+  // show); once one exists its own write event drives every read — the busy
+  // row's timer is repainted — and the registry says when the terminal is
+  // built, swapped under the Reader (a respawn) or retired.
   useEffect(() => {
     if (!visible) return;
     let settle: ReturnType<typeof setTimeout> | undefined;
-    let subscribed: { dispose: () => void } | undefined;
+    let subscribed: { term: NonNullable<ReturnType<typeof terminalFor>>; dispose: () => void } | undefined;
+    let clock: ReturnType<typeof setInterval> | undefined;
     const read = () => {
       settle = undefined;
       const term = terminalFor(ptyId);
-      if (!term) return;
-      if (!subscribed) subscribed = term.onWriteParsed(() => { settle ??= setTimeout(read, LIVE_SETTLE_MS); });
+      if (!term) {
+        subscribed?.dispose();
+        subscribed = undefined;
+        clock ??= setInterval(read, LIVE_POLL_MS);
+        return;
+      }
+      if (clock) {
+        clearInterval(clock);
+        clock = undefined;
+      }
+      if (subscribed?.term !== term) {
+        subscribed?.dispose();
+        const writes = term.onWriteParsed(() => { settle ??= setTimeout(read, LIVE_SETTLE_MS); });
+        subscribed = { term, dispose: () => writes.dispose() };
+      }
       const next = readReaderLive(term.buffer.active, agentLabel, term.cols);
       if (next.working) workingSeenAt.current = Date.now();
       setLive((previous) => (sameReaderLive(previous, next) ? previous : next));
     };
     read();
-    const clock = setInterval(read, LIVE_POLL_MS);
+    const unwatch = watchTerminal(ptyId, read);
     return () => {
-      clearInterval(clock);
+      unwatch();
+      if (clock) clearInterval(clock);
       if (settle) clearTimeout(settle);
       subscribed?.dispose();
     };
@@ -881,64 +897,59 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     setSubagentListOpen(false);
   }, [sessionId]);
 
+  // Read at once, then whenever the backend's watch on the transcript says it
+  // changed (`watchedReads`), with a slow backstop — or every 2 s while the
+  // read cannot be watched (nothing on disk yet).
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    let busy = false;
-    const read = async () => {
+    const stop = watchedReads(async (watch) => {
       const current = tabRef.current;
-      if (busy || !current) return;
+      if (!current) return false;
       const args = readerRequest(scope, current, cwd, version.current, limit);
       if (!args) {
         setTranscript({ available: false, reason: "no_session", entries: [], truncated: false });
-        return;
+        return false;
       }
-      busy = true;
-      const next = await invoke<SessionTranscript>("agent_tab_transcript", args)
+      const next = await invoke<SessionTranscript>("agent_tab_transcript", { ...args, watch })
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
       await learnPaths(next.entries);
-      busy = false;
-      if (cancelled) return;
+      if (cancelled) return next.watched === true;
       if (!next.unchanged) version.current = next.version;
       setTranscript((previous) => mergeTranscript(previous, next));
-    };
-    void read();
-    const timer = setInterval(() => void read(), POLL_MS);
+      return next.watched === true;
+    });
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stop();
     };
   }, [visible, scope, cwd, limit, sessionId, readTick, learnPaths]);
 
   // The open subagent's conversation, read as the session is: at once, then
-  // every POLL_MS while shown — a subagent still at work keeps writing.
+  // on each change while shown — a subagent still at work keeps writing.
   useEffect(() => {
     if (!visible || !subToken) return;
     let cancelled = false;
-    let busy = false;
     let subVersion: string | undefined;
-    const read = async () => {
+    const stop = watchedReads(async (watch) => {
       const current = tabRef.current;
-      if (busy || !current) return;
+      if (!current) return false;
       const args = readerRequest(scope, current, cwd, subVersion, subLimit, subToken);
-      if (!args) return;
-      busy = true;
-      const next = await invoke<SessionTranscript>("agent_tab_transcript", args)
+      if (!args) return false;
+      const next = await invoke<SessionTranscript>("agent_tab_transcript", { ...args, watch })
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
       await learnPaths(next.entries);
-      busy = false;
-      if (cancelled) return;
+      if (cancelled) return next.watched === true;
       if (!next.unchanged) subVersion = next.version;
       setSubRead((previous) => ({
         token: subToken,
         transcript: mergeTranscript(previous?.token === subToken ? previous.transcript : null, next),
       }));
-    };
-    void read();
-    const timer = setInterval(() => void read(), POLL_MS);
+      return next.watched === true;
+    });
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stop();
     };
   }, [visible, scope, cwd, subToken, subLimit, sessionId, learnPaths]);
 

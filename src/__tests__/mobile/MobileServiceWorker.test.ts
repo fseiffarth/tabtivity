@@ -28,7 +28,7 @@ function boot(held: Record<string, unknown>, fetch: (url: string) => Promise<unk
   const listeners = new Map<string, Listener>();
   const store = new Map(Object.entries(held).map(([path, body]) => [`${ORIGIN}${path}`, body]));
   const added: string[] = [];
-  let puts = 0;
+  const stored: string[] = [];
   const self = {
     location: { origin: ORIGIN },
     addEventListener: (name: string, listener: Listener) => listeners.set(name, listener),
@@ -39,7 +39,7 @@ function boot(held: Record<string, unknown>, fetch: (url: string) => Promise<unk
     match: (request: { url: string } | string) => Promise.resolve(store.get(typeof request === "string" ? `${ORIGIN}${request}` : request.url)),
     open: () => Promise.resolve({
       addAll: (paths: string[]) => { added.push(...paths); return Promise.resolve(); },
-      put: () => { puts += 1; return Promise.resolve(); },
+      put: (request: { url: string }) => { stored.push(request.url.slice(ORIGIN.length)); return Promise.resolve(); },
     }),
     keys: () => Promise.resolve([]),
     delete: () => Promise.resolve(true),
@@ -60,7 +60,7 @@ function boot(held: Record<string, unknown>, fetch: (url: string) => Promise<unk
       waitUntil: (work) => void work.then(() => resolve()),
     });
   });
-  return { dispatch, install, added, puts: () => puts };
+  return { dispatch, install, added, puts: () => stored.length, stored };
 }
 
 const html = { body: "<!doctype html>", ok: true, headers: new Headers({ "content-type": "text/html" }) };
@@ -128,6 +128,33 @@ describe(`${BRAND.display} Mobile service worker`, () => {
     const { install, added } = boot({}, () => Promise.resolve(script), stamped);
     await install();
     expect(added).toEqual(expect.arrayContaining(["/", "/manifest.webmanifest", ...assets]));
+  });
+
+  it("keeps a newer build's start page out of its cache", async () => {
+    // The phone still runs the previous build's worker when the desktop has
+    // updated. The new start page names a script this cache does not hold;
+    // stored over the old one, an offline open painted a black page with no
+    // app to explain it (2026-10-11). It is served, never stored.
+    const stamped = SOURCE.split("__APP_BUILD__").join("old").split("__APP_ASSETS__").join("/assets/index-old.js,/assets/index-old.css");
+    const page = (entry: string) => new Response(`<script type="module" src="${entry}"></script>`, { headers: { "content-type": "text/html" } });
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    const newer = boot({}, () => Promise.resolve(page("/assets/index-new.js")), stamped);
+    await expect(newer.dispatch("/", "navigate")).resolves.toBeInstanceOf(Response);
+    await settle();
+    expect(newer.stored).toEqual([]);
+
+    const own = boot({}, () => Promise.resolve(page("/assets/index-old.js")), stamped);
+    await own.dispatch("/", "navigate");
+    await settle();
+    expect(own.stored).toEqual(["/"]);
+  });
+
+  it("stores any start page while unstamped, as in dev", async () => {
+    const { dispatch, stored } = boot({}, () => Promise.resolve(new Response("<!doctype html>", { headers: { "content-type": "text/html" } })));
+    await dispatch("/", "navigate");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stored).toEqual(["/"]);
   });
 
   it("precaches only the static shell while unstamped, as in dev", async () => {

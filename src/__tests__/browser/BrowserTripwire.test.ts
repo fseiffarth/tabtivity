@@ -443,7 +443,7 @@ describe("no machine token ever reaches the user", () => {
    * one proves every entry in it has a phrase.
    */
   function rustReasonTokens(): string[] {
-    const src: string = readFileSync("src-tauri/src/services/web_safety.rs", "utf8");
+    const src: string = readFileSync("src-core/src/services/web_safety.rs", "utf8");
     const decl = /pub const REASON_TOKENS: &\[&str\] = &\[([\s\S]*?)\n\];/.exec(src);
     expect(decl, "REASON_TOKENS is gone from web_safety.rs").not.toBeNull();
     const tokens = Array.from(decl![1].matchAll(/"([^"]+)"/g)).map((m) => m[1]);
@@ -610,7 +610,7 @@ describe("origin emphasis: a documented v1 limitation", () => {
   it("mail's registrable() is untouched, so its cached decisions still hold", () => {
     // The reason the browser did not upgrade it. If this ever changes,
     // SANITIZER_VERSION has to change with it.
-    const rust: string = readFileSync("src-tauri/src/services/web_safety.rs", "utf8");
+    const rust: string = readFileSync("src-core/src/services/web_safety.rs", "utf8");
     expect(rust).toContain("pub fn registrable(");
     expect(rust).not.toContain("psl::");
   });
@@ -634,8 +634,9 @@ describe("live pages are opt-in, and stay opt-in", () => {
   /**
    * The one browser switch that must be OFF in a debug build too.
    *
-   * Every other experimental flag follows "unset means on in debug", which is
-   * right for a surface that is merely unfinished and wrong for this one: a live
+   * An experimental flag on a profile not yet marked `experimental_explicit`
+   * still follows "unset means on in debug", which is tolerable for a surface
+   * that is merely unfinished and wrong for this one: a live
    * page can reach a loopback service by way of any hostname that resolves
    * there, and `ws://` reaches one regardless of the scheme allowlist because a
    * WebSocket is not a navigation. Neither is fixable from app code. A debug

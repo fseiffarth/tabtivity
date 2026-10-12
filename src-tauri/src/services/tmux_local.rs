@@ -77,6 +77,26 @@ pub fn kill_failure_is_already_gone(stderr: &str) -> bool {
         || stderr.contains("server exited unexpectedly")
 }
 
+/// The tmux client every local spawn, attach and probe runs: the app's PATH
+/// (`paths::command_no_window`) and, in server mode, `-L <socket>` — the
+/// dedicated server of `services::server::tmux_socket` (plan §3.1), so a
+/// user's SSH-started tmux never hosts the app's sessions. The desktop passes
+/// no `-L` and shares the default server as before.
+pub fn tmux_command() -> std::process::Command {
+    let mut cmd = crate::paths::command_no_window("tmux");
+    cmd.args(socket_args());
+    cmd
+}
+
+/// `["-L", "<socket>"]` in server mode, nothing otherwise — what a tmux argv
+/// assembled by hand (the PTY's own client, `local_tmux_args_with`) starts with.
+pub fn socket_args() -> Vec<String> {
+    match crate::services::server::tmux_socket() {
+        Some(socket) => vec!["-L".into(), socket],
+        None => Vec::new(),
+    }
+}
+
 /// End every tmux session Tabtivity created on the local machine — the clean-quit
 /// reap (TODO #85). Blocking; callers off the main thread wrap it in
 /// `spawn_blocking`, the exit path runs it inline.
@@ -96,7 +116,7 @@ pub fn kill_app_sessions() -> Result<(), String> {
     if !tmux_available() {
         return Ok(());
     }
-    let listed = crate::paths::command_no_window("tmux")
+    let listed = tmux_command()
         .args(local_tmux_ls_args())
         .output()
         .map_err(|e| format!("could not list tmux sessions: {e}"))?;
@@ -108,7 +128,7 @@ pub fn kill_app_sessions() -> Result<(), String> {
     let sessions = crate::services::ssh_exec::parse_tmux_ls(&String::from_utf8_lossy(&listed.stdout));
     let mut failures = Vec::new();
     for name in sessions_to_reap(sessions.iter().map(|s| s.name.as_str())) {
-        let output = crate::paths::command_no_window("tmux")
+        let output = tmux_command()
             .args(local_tmux_kill_args(&name))
             .output()
             .map_err(|e| format!("could not run tmux: {e}"))?;
@@ -244,7 +264,7 @@ pub fn tmux_available() -> bool {
 ///
 /// `-A` = attach if it exists / create otherwise (one command that is both start
 /// and resume). Attach is deliberately non-evicting so desktop and phone clients
-/// coexist. `status off` / `mouse on` / `window-size largest` are session-scoped
+/// coexist. `status off` / `mouse on` / `window-size` ([`window_size_policy`]) are session-scoped
 /// after a literal `;` argv item (tmux splits its argv on a standalone `;`).
 /// `history-limit` alone comes **before** `new-session` and is `-g`: a pane
 /// copies the limit at creation, so a `-t`-scoped set after the fact would leave
@@ -340,8 +360,10 @@ fn trailing_shell(fenced: bool, carries: bool) -> String {
         if !carries {
             return "exec \"${SHELL:-/bin/bash}\" -l".to_string();
         }
-        let unset: String = crate::services::agent_api_keys::CARRIERS
+        // Every carrier `SECRET_ENV` knows: the proxy tokens'.
+        let unset: String = SECRET_ENV
             .iter()
+            .filter(|k| k.starts_with(crate::services::agent_exec::CARRIER_PREFIX))
             .map(|k| format!("-u {k} "))
             .collect();
         return format!("exec env {unset}\"${{SHELL:-/bin/bash}}\" -l");
@@ -429,6 +451,9 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     // raw keys in slots 8636–8639; none of them shipped.)
     crate::services::agent_api_keys::ANTHROPIC_CARRIER,
     crate::services::agent_api_keys::GEMINI_CARRIER,
+    // (A hosted server's administrator's key reaches agents through the same
+    // proxy tokens since #2389; the two raw-key carrier slots that followed
+    // here never shipped.)
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -475,14 +500,27 @@ fn local_tmux_args_for(
     session_env: bool,
     fenced: bool,
 ) -> Vec<String> {
+    local_tmux_args_on(session, line, env, session_env, fenced, socket_args())
+}
+
+/// [`local_tmux_args_for`] on the tmux server `socket` names ([`socket_args`]).
+fn local_tmux_args_on(
+    session: &str,
+    line: Option<&str>,
+    env: &HashMap<String, String>,
+    session_env: bool,
+    fenced: bool,
+    socket: Vec<String>,
+) -> Vec<String> {
     let pairs = session_env_pairs(env);
-    let mut args: Vec<String> = vec![
+    let mut args: Vec<String> = socket;
+    args.extend([
         "set-option".into(),
         "-g".into(),
         "history-limit".into(),
         TMUX_HISTORY_LINES.to_string(),
         ";".into(),
-    ];
+    ]);
     if session_env {
         // #864: a secret never rides `-e KEY=VALUE` — this client's argv is
         // world-readable for the tab's life. It is in the client's environment
@@ -490,7 +528,9 @@ fn local_tmux_args_for(
         // global `update-environment` is copied from the creating (or attaching)
         // client's environment into the session's. A key the tab lacks is marked
         // removed, so a tab never inherits the token of the tab that started the
-        // server. Fixed slots: idempotent, and the user's own entries are kept.
+        // server. Fixed slots: idempotent, and the user's own entries are kept
+        // — every name here is Tabtivity's own (a token, or a key's app-named
+        // carrier), never a CLI's variable the user's own sessions could lose.
         for (i, key) in SECRET_ENV.iter().enumerate() {
             args.extend([
                 "set-option".into(),
@@ -540,7 +580,7 @@ fn local_tmux_args_for(
         "-t",
         session,
         "window-size",
-        "largest",
+        window_size_policy(session_env),
         // A CLI that sees `$TMUX` wraps its OSC 52 copy in tmux's passthrough
         // (`ESC P tmux; …`), which tmux drops unless this is on — Mistral
         // Vibe's "copy this URL (press c)" then copied nothing. Passthrough
@@ -568,6 +608,43 @@ fn local_tmux_args_for(
     ] {
         args.push(tok.to_string());
     }
+    args
+}
+
+/// The `window-size` a Tabtivity session's window gets: `latest` — the size of
+/// the client that most recently typed, resized or attached — from tmux 3.2
+/// (it exists since 3.1; 3.2 is the floor the probe here already knows), else
+/// `largest`.
+///
+/// Every client of a session holds its own PTY with its own size (the desktop
+/// window, each browser page — TODO #2347 — and the phone's bridge), but the
+/// program in the pane sees one size per window, so the option decides whose.
+/// `largest` gave the widest client a fit and panned every smaller one across
+/// a window wider than its screen (a narrow browser page saw a cut-off slice);
+/// `smallest` padded every larger one, and with the phone — which adopts the
+/// window's geometry (`pty_bridge::window_size`) — it could never grow again;
+/// `aggressive-resize` only weighs the clients *looking at* a window, which
+/// all of these always are. `latest` gives the client in use an exact fit and
+/// lets the others pan or pad until they are used, and with the phone it
+/// changes nothing: the phone resizes only to the window's own size. One
+/// client (the desktop alone) gets its own size under any of them.
+pub fn window_size_policy(session_env: bool) -> &'static str {
+    if session_env {
+        "latest"
+    } else {
+        "largest"
+    }
+}
+
+/// The `tmux` argv (the PTY's `cmd` is `tmux`) that attaches one more client
+/// to the existing local session `session`, and never creates one: a server
+/// client's own view of a tab another client runs (TODO #2347,
+/// `terminal::join_tab`). `-u` as the phone's bridge has it: the sidecar is a
+/// headless service with no guaranteed UTF-8 locale. `=` matches the name
+/// exactly.
+pub fn attach_argv(session: &str) -> Vec<String> {
+    let mut args = socket_args();
+    args.extend(["-u".into(), "attach-session".into(), "-t".into(), format!("={session}")]);
     args
 }
 
@@ -739,8 +816,13 @@ pub fn spawn_detached_with(opts: &PtyOptions, socket: Option<&str>) -> Result<()
     }
     let args = detached_argv(session, opts);
     let mut cmd = crate::paths::command_no_window("tmux");
-    if let Some(socket) = socket {
-        cmd.args(["-L", socket, "-f", "/dev/null"]);
+    match socket {
+        Some(socket) => {
+            cmd.args(["-L", socket, "-f", "/dev/null"]);
+        }
+        None => {
+            cmd.args(socket_args());
+        }
     }
     cmd.args(&args);
     if !opts.cwd.is_empty() {
@@ -864,6 +946,20 @@ mod tests {
         );
     }
 
+    /// TODO #2347: every client of a session has its own size, and the window
+    /// follows the one in use — `latest` wherever the tmux is new enough for
+    /// it; the attach a second client runs never creates a session.
+    #[test]
+    fn windows_follow_the_latest_client_and_an_attach_never_creates() {
+        let args = local_tmux_args_with("s1", "", &[], &HashMap::new(), true);
+        let at = args.iter().position(|a| a == "window-size").expect("window-size is set");
+        assert_eq!(args[at + 1], "latest");
+        assert_eq!(window_size_policy(false), "largest", "tmux before 3.2 keeps the old policy");
+        let attach = attach_argv("s1");
+        assert!(attach.ends_with(&["-u".to_string(), "attach-session".into(), "-t".into(), "=s1".into()]), "{attach:?}");
+        assert!(!attach.iter().any(|a| a == "new-session" || a == "-A"));
+    }
+
     #[test]
     fn command_tab_runs_command_then_keeps_a_shell() {
         // A command tab keeps a login shell AFTER the command so the finished run
@@ -962,6 +1058,21 @@ mod tests {
         // A shell tab has no command line and so no trailing shell to guard.
         let args = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), "", &[], &env, true);
         assert!(!args.iter().any(|a| a.contains("stty")));
+    }
+
+    /// The shell after an unfenced command that carried a key (the Host
+    /// session) loses every carrier — every proxy token's, the user's own
+    /// key's and the administrator's alike (#2389) — and nothing else.
+    #[test]
+    fn the_shell_after_a_carrying_host_command_drops_every_carrier() {
+        let line = trailing_shell(false, true);
+        for key in SECRET_ENV {
+            let carrier = key.starts_with(crate::services::agent_exec::CARRIER_PREFIX);
+            assert_eq!(line.contains(&format!("-u {key} ")), carrier, "{key}");
+        }
+        assert!(line.contains(&format!("-u {} ", crate::services::agent_api_keys::GEMINI_CARRIER)));
+        assert!(!line.contains("stty"), "{line}");
+        assert_eq!(trailing_shell(false, false), "exec \"${SHELL:-/bin/bash}\" -l");
     }
 
     #[test]
@@ -1128,7 +1239,16 @@ mod tests {
             (crate::services::root_mcp::MARKUP_TOKEN_ENV, "markup-s3cret"),
             (crate::services::copilot_auth::TOKEN_ENV, "gho_copilot-s3cret"),
             (crate::services::agent_api_keys::ANTHROPIC_CARRIER, "sk-test-anthropic-s3cret"),
+            (crate::services::agent_api_keys::GEMINI_CARRIER, "gemini-token-s3cret"),
         ]);
+        // Every carrier a proxy token is delivered under is a secret; the
+        // CLI's own name never is (it would cost the user's own tmux sessions
+        // theirs).
+        for var in crate::services::agent_exec::targets() {
+            let carrier = crate::services::agent_exec::carrier_name(var);
+            assert!(SECRET_ENV.contains(&carrier.as_str()), "{carrier} must never ride an argv");
+            assert!(!SECRET_ENV.contains(&var), "{var}");
+        }
         let leaks = |args: &[String]| args.iter().any(|a| a.contains("s3cret"));
         // The API key's carrier is listed: it never rides `-e`, and the
         // script skips it.
@@ -1148,7 +1268,7 @@ mod tests {
         assert!(!leaks(&launched), "{launched:?}");
         // Instead every secret key is listed in `update-environment`, ahead of
         // `new-session`, so tmux copies it from the client's environment.
-        let args = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), "claude", &[], &env, true);
+        let args = local_tmux_args_on(concat!(crate::app_slug!(), "-x"), Some("claude"), &env, true, false, vec!["-L".into(), "own".into()]);
         let new_session = args.iter().position(|a| a == "new-session").unwrap();
         for (i, key) in SECRET_ENV.iter().enumerate() {
             let slot = format!("update-environment[{}]", SECRET_UPDATE_ENV_SLOT + i);
@@ -1163,6 +1283,7 @@ mod tests {
         let old = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), "", &[], &env, false);
         assert!(!old.iter().any(|a| a.starts_with("update-environment")));
     }
+
 
     /// Live check against a real tmux on a private socket (skipped when tmux is
     /// missing or older than 3.2): the pane gets the token from the client's

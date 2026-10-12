@@ -16,7 +16,6 @@ use axum::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
 
 use crate::services::root_mcp::{self, Runtime, Stores};
 use crate::storage;
@@ -27,6 +26,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::future::Future;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use app_core::CoreCtx;
+use crate::tauri_host::Ctx;
 
 /// Bounds sockets as well as requests: idle/slow headers otherwise consume
 /// connections before the handler has a chance to authenticate anything.
@@ -112,10 +113,13 @@ pub type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 
 #[derive(Clone)]
 struct ServerState {
-    /// The window's handle: the root lane's mail and events. `None` in the
-    /// Mobile host, whose listener serves the schedule, push and help lanes
-    /// only (`docs/headless_mcp_plan.md`) — `/mcp` is not even routed there.
-    app: Option<AppHandle>,
+    /// The context of a process with no other listener to defer to — the
+    /// window, or a server daemon (no window at all): the root and reader
+    /// lanes' mail and events, and the markup lane's views. `None` in a
+    /// desktop's Mobile host, whose listener serves the schedule, push and
+    /// help lanes only (`docs/headless_mcp_plan.md`) — `/mcp` and
+    /// `/mcp/markup` are not even routed there.
+    ctx: Option<CoreCtx>,
     port: u16,
     /// The process's token store, the only one this listener accepts.
     store: &'static root_mcp::TokenStore,
@@ -292,16 +296,18 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         if changed { (state.notify)(Notice::GitPush); }
         return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
     }
-    // The root lane is the window's: its mail, review and session controls
-    // live there. The Mobile host does not route `/mcp` and holds no root,
-    // local-model or reader token, so this is a second wall, not the first.
-    let Some(app) = state.app.clone() else {
+    // The root lane is served where its mail, review and session controls
+    // live: the window, or a server daemon (its browser client). A desktop's
+    // Mobile host does not route `/mcp` and holds no root, local-model or
+    // reader token, so this is a second wall, not the first.
+    let Some(ctx) = state.ctx.clone() else {
         security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("window_required"));
         return StatusCode::FORBIDDEN.into_response();
     };
-    let mail = app
-        .try_state::<crate::commands::mail::MailState>()
-        .map(|s| crate::commands::mail::AgentMail(s.inner().clone()));
+    let mail = ctx
+        .state
+        .try_get::<crate::commands::mail::MailState>()
+        .map(|s| crate::commands::mail::AgentMail(s.clone()));
     let outcome = tokio::task::spawn_blocking(move || {
         // Permits live in the worker: an HTTP disconnect cannot free capacity
         // while blocking work is still running.
@@ -355,10 +361,10 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
     security::audit(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed());
     // One event per row: a board move can reindex a whole column.
     for change in effects.changes {
-        let _ = app.emit(CHANGED_EVENT, change);
+        ctx.emit(CHANGED_EVENT, change);
     }
     if security::tool(&tool).is_some_and(|t| t.write) {
-        let _ = app.emit("root-mcp-review-changed",
+        ctx.emit("root-mcp-review-changed",
             crate::services::root_mcp_review::pending_count(&storage::state_dir()));
     }
     match reply {
@@ -400,7 +406,7 @@ async fn close_connection(mut response: Response) -> Response {
 /// the safe direction to fail in.
 /// Raised by [`stop_for_exit`]; the listener stops accepting on it.
 static SHUTDOWN: tokio::sync::Notify = tokio::sync::Notify::const_new();
-static SERVER: std::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>> = std::sync::Mutex::new(None);
+static SERVER: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>> = std::sync::Mutex::new(None);
 
 /// `RunEvent::Exit`: stop accepting, give the workers in flight a short bounded
 /// drain, and remove every per-tab copy — nothing of the endpoint outlives a
@@ -410,33 +416,18 @@ pub fn stop_for_exit() {
     SHUTDOWN.notify_one();
     let handle = SERVER.lock().unwrap_or_else(|p| p.into_inner()).take();
     if let Some(handle) = handle {
-        tauri::async_runtime::block_on(async {
+        app_core::rt::block_on(async {
             let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
         });
     }
     crate::services::root_mcp_review::sweep_sandboxes(&storage::state_dir());
 }
 
-pub fn start(app: AppHandle) {
-    // Copies a crash left behind: no tab is live yet, so every one of them goes.
-    crate::services::root_mcp_review::sweep_sandboxes(&storage::state_dir());
-    // Push proposals change state on worker threads; the service stays
-    // AppHandle-free and rings this instead.
-    let push_events = app.clone();
-    crate::services::git_push_mcp::set_change_hook(Box::new(move || {
-        let _ = push_events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
-    }));
-    crate::commands::markup_mcp::install_change_hook(&app);
-    let events = app.clone();
-    let notify: NoticeSink = Arc::new(move |notice| {
-        let _ = match notice {
-            Notice::Schedules => events.emit("agent-schedules-changed", ()),
-            Notice::GitPush => events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()),
-        };
-    });
-    let handle = tauri::async_runtime::spawn(async move {
+pub fn start(ctx: CoreCtx) {
+    let notify = serve_everything(&ctx, Arc::new(|_| {}));
+    let handle = app_core::rt::spawn(async move {
         let served = match bind(LOOPBACK).await {
-            Ok(listener) => serve(listener, Some(app), notify, async { SHUTDOWN.notified().await }),
+            Ok(listener) => serve(listener, Some(ctx), notify, async { SHUTDOWN.notified().await }),
             Err(error) => Err(error),
         };
         match served {
@@ -447,18 +438,53 @@ pub fn start(app: AppHandle) {
     *SERVER.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
 }
 
+/// What a listener that serves every lane sets up first — the window's, and
+/// a server daemon's ([`start_headless`] with a context): the review copies
+/// a crash left behind are swept (no tab of this process holds a token yet,
+/// so every one goes; they are rebuilt from the log on the next call), push
+/// proposals and markup asks ring their events through `ctx` (the services
+/// stay AppHandle-free), and `notify` — a caller's own sink, called first —
+/// is wrapped to ring the schedule and push events too.
+fn serve_everything(ctx: &CoreCtx, notify: NoticeSink) -> NoticeSink {
+    crate::services::root_mcp_review::sweep_sandboxes(&storage::state_dir());
+    let push_events = ctx.clone();
+    crate::services::git_push_mcp::set_change_hook(Box::new(move || {
+        push_events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+    }));
+    crate::commands::markup_mcp::install_change_hook(ctx);
+    let events = ctx.clone();
+    Arc::new(move |notice| {
+        notify(notice);
+        match notice {
+            Notice::Schedules => events.emit("agent-schedules-changed", ()),
+            Notice::GitPush => events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()),
+        };
+    })
+}
+
 /// The Mobile host's listener (`docs/headless_mcp_plan.md`): the schedule,
 /// push and help lanes for the tabs it spawns with no window open, on its own
-/// loopback port and token store; never the root lane. Bound before this
+/// loopback port and token store. `server` is the host's context when it is
+/// a server daemon: there is no window to defer to, so the listener serves
+/// every lane the window would — root, reader and markup too — and rings
+/// their events to the browser clients ([`serve_everything`]). A desktop's
+/// Mobile host passes `None` and never serves those: a second root listener
+/// would sweep the window's review copies, and asks it held would be
+/// invisible to the window. Bound before this
 /// returns, so a spawn after it is wired; the server runs until `shutdown`
 /// turns true. When the first bind fails, the error is returned (for the
 /// journal) and a task keeps retrying with [`bind_retry_delay`] until a bind
 /// succeeds or the host shuts down — tabs spawned meanwhile go without tools.
 pub async fn start_headless(
     notify: NoticeSink,
+    server: Option<&CoreCtx>,
     shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u16, String> {
-    start_headless_on(LOOPBACK, notify, shutdown).await
+    let notify = match server {
+        Some(ctx) => serve_everything(ctx, notify),
+        None => notify,
+    };
+    start_headless_on(LOOPBACK, notify, server.cloned(), shutdown).await
 }
 
 /// Any free loopback port.
@@ -468,10 +494,11 @@ const LOOPBACK: std::net::SocketAddr = std::net::SocketAddr::new(std::net::IpAdd
 async fn start_headless_on(
     addr: std::net::SocketAddr,
     notify: NoticeSink,
+    ctx: Option<CoreCtx>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u16, String> {
     let first = match bind(addr).await {
-        Ok(listener) => serve(listener, None, notify.clone(), until_true(shutdown.clone())),
+        Ok(listener) => serve(listener, ctx.clone(), notify.clone(), until_true(shutdown.clone())),
         Err(error) => Err(error),
     };
     match first {
@@ -492,7 +519,7 @@ async fn start_headless_on(
                     }
                     attempt = attempt.saturating_add(1);
                     let Ok(listener) = bind(addr).await else { continue };
-                    if let Ok((port, server)) = serve(listener, None, notify.clone(), until_true(shutdown.clone())) {
+                    if let Ok((port, server)) = serve(listener, ctx.clone(), notify.clone(), until_true(shutdown.clone())) {
                         eprintln!("[root-mcp] bound on port {port} after {attempt} retries");
                         server.await;
                         return;
@@ -520,16 +547,15 @@ async fn until_true(mut flag: tokio::sync::watch::Receiver<bool>) {
 }
 
 /// The routes a listener answers: the schedule, push and help lanes
-/// everywhere, the root and markup lanes only where there is a window to
-/// serve them.
+/// everywhere, the root (and reader) and markup lanes where this process
+/// serves the views and controls they need — the window, or a server daemon,
+/// which has no window ([`ServerState::ctx`]).
 fn router(state: ServerState) -> Router {
     let mut router = Router::new()
         .route("/mcp/schedule", post(handle))
         .route("/mcp/git", post(handle))
         .route("/mcp/help", post(handle));
-    if state.app.is_some() {
-        // The markup questions live in this process and are answered in the
-        // window's markup view, so the lane is the window's alone.
+    if state.ctx.is_some() {
         router = router.route("/mcp", post(handle)).route("/mcp/markup", post(handle));
     }
     router.layer(axum::middleware::map_response(close_connection)).with_state(state)
@@ -543,13 +569,14 @@ async fn bind(addr: std::net::SocketAddr) -> Result<tokio::net::TcpListener, Str
 /// port and the server, which stops on `shutdown`.
 fn serve(
     listener: tokio::net::TcpListener,
-    app: Option<AppHandle>,
+    ctx: Option<CoreCtx>,
     notify: NoticeSink,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
-    root_mcp::set_runtime(Runtime { port, serves_root: app.is_some() });
-    let router = router(ServerState { app, port, store: root_mcp::tokens(), notify });
+    let serves = ctx.is_some();
+    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves });
+    let router = router(ServerState { ctx, port, store: root_mcp::tokens(), notify });
     let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
     Ok((port, async move {
         if let Err(error) = axum::serve(listener, router).with_graceful_shutdown(shutdown).await {
@@ -608,7 +635,7 @@ pub struct HelpMcpStatus {
 
 /// What the overlay's rights badge shows. Deliberately carries neither the port
 /// nor the token — the renderer has no use for either.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn root_mcp_status() -> RootMcpStatus {
     let settings = storage::state_dir().join("settings.json");
     let reader = root_mcp::serves(&settings, root_mcp::Caller::Reader);
@@ -642,19 +669,19 @@ pub fn root_mcp_status() -> RootMcpStatus {
 /// The window's own view of the help corpus (an intro / Settings "Ask" box):
 /// the same index and bounds the `tabtivity-help` MCP server answers from.
 /// Off the main thread: the first call builds the index.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn help_search(query: String, limit: Option<usize>) -> Result<Vec<crate::services::help_mcp::Hit>, String> {
     tokio::task::spawn_blocking(move || {
         let query: String = query.chars().take(crate::services::help_mcp::MAX_QUERY_BYTES).collect();
         crate::services::help_mcp::index().search(&query, limit.unwrap_or(crate::services::help_mcp::DEFAULT_RESULTS))
     }).await.map_err(|e| e.to_string())
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn help_read(topic_id: String, section: Option<String>) -> Result<crate::services::help_mcp::Read, String> {
     tokio::task::spawn_blocking(move || crate::services::help_mcp::index().read(&topic_id, section.as_deref()))
         .await.map_err(|e| e.to_string())?
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn help_topics() -> Result<Vec<crate::services::help_mcp::TopicRef>, String> {
     tokio::task::spawn_blocking(|| crate::services::help_mcp::index().list()).await.map_err(|e| e.to_string())
 }
@@ -675,18 +702,18 @@ fn review_stores<T>(f: impl FnOnce(&Stores) -> Result<T, String>) -> Result<T, S
         access: Access::initial(root_mcp::Caller::Agent), session: None, deadline: None,
     })
 }
-fn emit_review(app: &AppHandle, changes: Vec<root_mcp::Change>) {
+fn emit_review(ctx: &CoreCtx, changes: Vec<root_mcp::Change>) {
     for change in changes {
-        let _ = app.emit(CHANGED_EVENT, change);
+        ctx.emit(CHANGED_EVENT, change);
     }
-    let _ = app.emit(
+    ctx.emit(
         "root-mcp-review-changed",
         crate::services::root_mcp_review::pending_count(&storage::state_dir()),
     );
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_list(
-    app: AppHandle,
+    ctx: Ctx,
 ) -> Result<Vec<crate::services::root_mcp_review::ReviewEntry>, String> {
     let (entries, before) = tokio::task::spawn_blocking(|| {
         let before = crate::services::root_mcp_review::pending_count(&storage::state_dir());
@@ -699,13 +726,13 @@ pub async fn root_mcp_review_list(
         .filter(|p| p.proposal.status == "pending")
         .count();
     if count != before {
-        let _ = app.emit("root-mcp-review-changed", count);
+        ctx.emit("root-mcp-review-changed", count);
     }
     Ok(entries)
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_apply(
-    app: AppHandle,
+    ctx: Ctx,
     id: String,
     digest: String,
 ) -> Result<(), String> {
@@ -714,12 +741,12 @@ pub async fn root_mcp_review_apply(
     })
     .await
     .map_err(|e| e.to_string())?;
-    emit_review(&app, result?);
+    emit_review(&ctx, result?);
     Ok(())
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_reject(
-    app: AppHandle,
+    ctx: Ctx,
     id: String,
     digest: String,
 ) -> Result<(), String> {
@@ -728,12 +755,12 @@ pub async fn root_mcp_review_reject(
     })
     .await
     .map_err(|e| e.to_string())?;
-    emit_review(&app, result?);
+    emit_review(&ctx, result?);
     Ok(())
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_undo(
-    app: AppHandle,
+    ctx: Ctx,
     id: String,
     digest: String,
 ) -> Result<(), String> {
@@ -742,12 +769,12 @@ pub async fn root_mcp_review_undo(
     })
     .await
     .map_err(|e| e.to_string())?;
-    emit_review(&app, result?);
+    emit_review(&ctx, result?);
     Ok(())
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_apply_all(
-    app: AppHandle,
+    ctx: Ctx,
     approvals: Vec<crate::services::root_mcp_review::Approval>,
 ) -> Result<(), String> {
     let result = tokio::task::spawn_blocking(move || {
@@ -755,25 +782,25 @@ pub async fn root_mcp_review_apply_all(
     })
     .await
     .map_err(|e| e.to_string())?;
-    emit_review(&app, result?);
+    emit_review(&ctx, result?);
     Ok(())
 }
 
 /// The `.ics` files root agents staged (`services::root_mcp_import`), text and
 /// all: the window's parser reads them, and its importer runs on the user's ✓.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_import_list() -> Result<Vec<crate::services::root_mcp_import::StagedImport>, String> {
     tokio::task::spawn_blocking(|| crate::services::root_mcp_import::list(&storage::state_dir()))
         .await
         .map_err(|e| e.to_string())
 }
 /// Imported or discarded: the staged copy goes either way.
-#[tauri::command]
-pub async fn root_mcp_import_remove(app: AppHandle, id: String) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn root_mcp_import_remove(ctx: Ctx, id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || crate::services::root_mcp_import::remove(&storage::state_dir(), &id))
         .await
         .map_err(|e| e.to_string())??;
-    emit_review(&app, Vec::new());
+    emit_review(&ctx, Vec::new());
     Ok(())
 }
 
@@ -782,18 +809,18 @@ pub struct SecurityStatus {
     sessions: Vec<root_mcp::SessionInfo>,
     audit: Vec<security::Audit>,
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn root_mcp_security_status() -> SecurityStatus {
     SecurityStatus { sessions: root_mcp::sessions(), audit: security::audit_rows() }
 }
-#[tauri::command]
-pub async fn root_mcp_session_access(app: AppHandle, id: String, access: Access) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn root_mcp_session_access(ctx: Ctx, id: String, access: Access) -> Result<(), String> {
     tokio::task::spawn_blocking(move || root_mcp::set_access(&id, access)).await.map_err(|e| e.to_string())??;
-    let _ = app.emit(SESSIONS_EVENT, ());
+    ctx.emit(SESSIONS_EVENT, ());
     Ok(())
 }
-#[tauri::command]
-pub async fn root_mcp_session_revoke(app: AppHandle, id: String, remove_proposals: Option<bool>) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn root_mcp_session_revoke(ctx: Ctx, id: String, remove_proposals: Option<bool>) -> Result<(), String> {
     // Invalidate first, before waiting on the review lock to clean the sandbox.
     let tab = root_mcp::revoke_session(&id)?;
     tokio::task::spawn_blocking(move || {
@@ -801,35 +828,35 @@ pub async fn root_mcp_session_revoke(app: AppHandle, id: String, remove_proposal
         crate::services::agent_tasks::drain_mutations();
         if remove_proposals == Some(true) { crate::services::schedule_mcp::remove_proposals(&id)?; }
         // A push proposal is useless without the session that made it.
-        if crate::services::git_push_mcp::remove_for_session(&id) { let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()); }
+        if crate::services::git_push_mcp::remove_for_session(&id) { ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()); }
         // A markup question dies with its session (the sweep rings its event).
         crate::services::markup_mcp::sweep();
-        let _ = app.emit("agent-schedules-changed", ());
-        let _ = app.emit(SESSIONS_EVENT, ());
+        ctx.emit("agent-schedules-changed", ());
+        ctx.emit(SESSIONS_EVENT, ());
         Ok(())
     }).await.map_err(|e| e.to_string())?
 }
 
 /// The push proposals of one project (the git bar's and the Agents view's
 /// card), pruned of expired and orphaned ones.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn git_push_mcp_proposals(project_id: String) -> Vec<crate::services::git_push_mcp::Proposal> {
     crate::services::git_push_mcp::proposals_for(Some(&project_id), None)
 }
 /// Push (approve) or dismiss a pending proposal. Approval re-checks the
 /// bound SHA and the remote, confirms a first URL, then pushes; the reply is
 /// the proposal in its final state.
-#[tauri::command]
-pub async fn git_push_mcp_decide(app: AppHandle, id: String, approve: bool) -> Result<crate::services::git_push_mcp::Proposal, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn git_push_mcp_decide(ctx: Ctx, id: String, approve: bool) -> Result<crate::services::git_push_mcp::Proposal, String> {
     let result = tokio::task::spawn_blocking(move || crate::services::git_push_mcp::decide(&id, approve)).await.map_err(|e| e.to_string())?;
-    let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+    ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     result
 }
 /// Close a finished (pushed, failed, dismissed, expired) proposal's card.
-#[tauri::command]
-pub fn git_push_mcp_clear(app: AppHandle, id: String) -> Result<crate::services::git_push_mcp::Proposal, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn git_push_mcp_clear(ctx: Ctx, id: String) -> Result<crate::services::git_push_mcp::Proposal, String> {
     let result = crate::services::git_push_mcp::clear(&id);
-    let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+    ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     result
 }
 
@@ -941,7 +968,7 @@ mod security_tests {
     async fn a_token_is_admitted_only_by_the_listener_whose_process_minted_it() {
         let host: &'static root_mcp::TokenStore = Box::leak(Box::default());
         let window: &'static root_mcp::TokenStore = Box::leak(Box::default());
-        let runtime = Runtime { port: 8765, serves_root: false };
+        let runtime = Runtime { port: 8765, serves_root: false, serves_markup: false };
         let mut opts: crate::terminal::PtyOptions = serde_json::from_value(serde_json::json!({
             "id": "headless:t", "cmd": "claude", "args": [], "env": {}, "cwd": "/w", "cols": 80, "rows": 24,
             "local_only": false, "sandbox": false, "agent": true, "project_id": "p", "schedule_target_id": "target-1",
@@ -970,7 +997,7 @@ mod security_tests {
         let taken = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
         let addr = taken.local_addr().unwrap();
         let (stop, stopped) = tokio::sync::watch::channel(false);
-        let error = start_headless_on(addr, Arc::new(|_| {}), stopped).await.unwrap_err();
+        let error = start_headless_on(addr, Arc::new(|_| {}), None, stopped).await.unwrap_err();
         assert!(error.starts_with("bind failed:"), "{error}");
         assert!(root_mcp::runtime().is_none_or(|r| r.port != addr.port()), "nothing was published for the taken port");
         assert_eq!(bind_retry_delay(0), Duration::from_secs(5));
@@ -984,22 +1011,32 @@ mod security_tests {
         drop(taken);
     }
 
-    /// The Mobile host's listener has no root or markup lane at all: `/mcp`
-    /// and `/mcp/markup` are not routed (404 before any handler).
+    /// A desktop's Mobile host listener has no root or markup lane at all:
+    /// `/mcp` and `/mcp/markup` are not routed (404 before any handler). A
+    /// server daemon's routes every lane.
     #[tokio::test]
     async fn the_headless_router_does_not_route_the_root_lane() {
         use tower::ServiceExt;
-        let state = ServerState { app: None, port: 8765, store: root_mcp::tokens(), notify: Arc::new(|_| {}) };
+        let state = ServerState { ctx: None, port: 8765, store: root_mcp::tokens(), notify: Arc::new(|_| {}) };
         let req = |path: &str| Request::builder().method("POST").uri(path).header("host", "127.0.0.1:8765")
             .header("content-type", "application/json").header("authorization", "Bearer x")
             .body(axum::body::Body::from("{}")).unwrap();
         let root = router(state.clone()).oneshot(req("/mcp")).await.unwrap();
         assert_eq!(root.status(), StatusCode::NOT_FOUND);
         let markup = router(state.clone()).oneshot(req("/mcp/markup")).await.unwrap();
-        assert_eq!(markup.status(), StatusCode::NOT_FOUND, "the markup lane is the window's");
+        assert_eq!(markup.status(), StatusCode::NOT_FOUND, "a desktop's Mobile host never serves the markup lane");
         for path in ["/mcp/schedule", "/mcp/git", "/mcp/help"] {
             let side = router(state.clone()).oneshot(req(path)).await.unwrap();
             assert_eq!(side.status(), StatusCode::UNAUTHORIZED, "{path}");
+        }
+        // A server daemon's listener (its context, no window): every lane is
+        // routed — admission answers.
+        let events = Arc::new(crate::services::mobile_control::web_client::WebEvents::default());
+        let ctx = CoreCtx::system(Arc::new(app_core::CoreState::new()), events);
+        let server = ServerState { ctx: Some(ctx), ..state };
+        for path in ["/mcp", "/mcp/markup", "/mcp/schedule", "/mcp/git", "/mcp/help"] {
+            let served = router(server.clone()).oneshot(req(path)).await.unwrap();
+            assert_eq!(served.status(), StatusCode::UNAUTHORIZED, "a server daemon serves {path}");
         }
     }
 

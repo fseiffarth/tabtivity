@@ -10,6 +10,7 @@
  * other panes — and their drafts — alone.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { parseYaml, MAX_YAML_DEPTH } from "../../lib/viewers/yaml";
 
@@ -112,6 +113,8 @@ afterEach(() => {
   consoleError.mockRestore();
   window.removeEventListener("error", muteWindowError);
 });
+
+warmFileViewer();
 
 describe("YAML/JSON nesting cap", () => {
   it("bails on deep flow nesting with the reason, without throwing", () => {

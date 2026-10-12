@@ -28,7 +28,7 @@ pub struct NetUsageReport {
 /// (bytes from the `services::net_usage` sampler, file counts from the sync
 /// engine), so there is no companion write command — mirrors
 /// `commands::timer::get_project_activity`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_net_usage(project_id: String) -> NetUsageReport {
     let summary = net_usage::load();
     NetUsageReport {

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { parseUsageReport, type UsageReport } from "../../../shared/usageReport";
 import { readAgentUsage } from "../../lib/agents/agentUsage";
 import { usageResetMarks, type UsageResetMark } from "../../lib/agents/agentUsageResets";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 
 /** How often the chart re-reads a panel while it is on screen. The backend
  *  reuses a read for a minute and the run spends no quota, but a reset moves
@@ -19,26 +20,21 @@ export function usePromptChartUsage(agents: string[], enabled: boolean, now: Dat
   const [reports, setReports] = useState<Record<string, UsageReport>>({});
   const agentsKey = [...new Set(agents)].sort().join("\n");
 
-  useEffect(() => {
-    if (!enabled || !agentsKey) return;
-    let disposed = false;
-    const read = () => {
-      for (const agent of agentsKey.split("\n")) {
-        void readAgentUsage(agent).then((report) => {
-          if (disposed) return;
-          setReports((current) => {
-            const next = { ...current };
-            if (report?.supported && report.raw) next[agent] = parseUsageReport(report.raw);
-            else delete next[agent];
-            return next;
-          });
+  const read = useCallback((poll: PollRun) => {
+    for (const agent of agentsKey.split("\n")) {
+      void readAgentUsage(agent).then((report) => {
+        if (poll.stopped) return;
+        setReports((current) => {
+          const next = { ...current };
+          if (report?.supported && report.raw) next[agent] = parseUsageReport(report.raw);
+          else delete next[agent];
+          return next;
         });
-      }
-    };
-    read();
-    const timer = setInterval(read, USAGE_POLL_MS);
-    return () => { disposed = true; clearInterval(timer); };
-  }, [agentsKey, enabled]);
+      });
+    }
+  }, [agentsKey]);
+  // While the timeline shows, with the window in front (`usePoll`).
+  usePoll(read, USAGE_POLL_MS, { enabled: enabled && !!agentsKey });
 
   return useMemo(() => {
     if (!enabled) return [];

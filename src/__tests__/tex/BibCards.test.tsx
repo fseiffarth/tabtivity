@@ -10,6 +10,7 @@
  * change. A card view that re-serialized parsed records would pass none of this.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
@@ -122,6 +123,8 @@ async function saveAndRead(): Promise<string> {
   );
   return onDisk;
 }
+
+warmFileViewer();
 
 describe("bib card viewer", () => {
   beforeEach(() => {

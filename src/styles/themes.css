@@ -286,7 +286,10 @@
   --glass-blur: 18px;
   --glass-blur-strong: 34px;
   --glass-saturate: 150%;
-  --glass-panel: rgba(20, 30, 52, 0.6);
+  /* Near-opaque: the tab bars and docked file column it fills carry no blur
+     (performance plan §3.5), so the fill alone must keep what is behind them
+     unreadable. */
+  --glass-panel: rgba(20, 30, 52, 0.9);
   --glass-elevated: rgba(22, 32, 56, 0.94);
   --glass-header: linear-gradient(90deg, rgba(16, 22, 36, 0.55) 0%, rgba(22, 33, 58, 0.55) 48%, rgba(36, 23, 53, 0.55) 100%);
 }
@@ -601,7 +604,7 @@
   --glass-blur: 16px;
   --glass-blur-strong: 30px;
   --glass-saturate: 130%;
-  --glass-panel: rgba(242, 239, 250, 0.58);
+  --glass-panel: rgba(242, 239, 250, 0.9);
   --glass-elevated: rgba(248, 246, 253, 0.95);
   --glass-header: rgba(242, 239, 250, 0.5);
 }
@@ -719,19 +722,22 @@
 
 /* ── Glass chrome (fancy_dark / light_lavender) ───────────────────────────
    Frosted-glass treatment for the app's outer chrome ONLY — header, right
-   file panel, tab bars, docked file sidebar, project pills, dialogs, and
-   popover menus. Reads the --glass-* tokens defined on each theme above, not
-   the shared --bg-panel/--bg-elevated (see the comment on those tokens for
-   why). Both themes share one rule set since they read the same variable
-   names with theme-appropriate values. */
+   file panel, project pills, dialogs, and popover menus. Reads the --glass-*
+   tokens defined on each theme above, not the shared --bg-panel/--bg-elevated
+   (see the comment on those tokens for why). Both themes share one rule set
+   since they read the same variable names with theme-appropriate values.
+
+   The tab bars and the docked file sidebar keep their glass fills
+   (--glass-subheader, --glass-panel below) but no backdrop-filter: there is
+   one of each per subwindow, all beside live panes, and on WebKitGTK's
+   software path a backdrop-filter re-blurs its region on every repaint
+   beneath it (performance plan §3.5). To make up for the lost frost those
+   fills are near-opaque (--glass-panel at 0.9 alpha in both themes), so
+   nothing behind them reads through. */
 [data-theme="fancy_dark"] .app-header,
 [data-theme="light_lavender"] .app-header,
 [data-theme="fancy_dark"] .side-panel,
-[data-theme="light_lavender"] .side-panel,
-[data-theme="fancy_dark"] .tab-bar,
-[data-theme="light_lavender"] .tab-bar,
-[data-theme="fancy_dark"] .subwindow-files,
-[data-theme="light_lavender"] .subwindow-files {
+[data-theme="light_lavender"] .side-panel {
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }

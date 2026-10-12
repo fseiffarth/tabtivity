@@ -27,7 +27,7 @@ pub mod windows;
 /// `#[cfg]`-gated) so its safety-critical unit tests run on any platform; the
 /// Win32 FFI that consumes it lives in `windows.rs`.
 pub mod windows_park;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "desktop"))]
 pub mod x11;
 
 // ── Backend trait ─────────────────────────────────────────────────────────
@@ -128,7 +128,9 @@ pub fn detect_backend() -> Box<dyn WorkspaceBackend> {
         Box::new(windows::WindowsBackend::new())
     }
 
-    #[cfg(target_os = "linux")]
+    // The server daemon's build has no X11 client (no `xcb`): a headless
+    // server parks nothing.
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
     {
         let desktop = std::env::var("XDG_CURRENT_DESKTOP")
             .unwrap_or_default()
@@ -176,9 +178,13 @@ pub fn detect_backend() -> Box<dyn WorkspaceBackend> {
 /// OS. Linux delegates to [`x11::session_is_wayland`] (a non-empty
 /// `WAYLAND_DISPLAY`); no other OS has a Wayland session.
 pub fn session_is_wayland() -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
     {
         x11::session_is_wayland()
+    }
+    #[cfg(all(target_os = "linux", not(feature = "desktop")))]
+    {
+        std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
     }
     #[cfg(not(target_os = "linux"))]
     {

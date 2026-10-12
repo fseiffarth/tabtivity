@@ -15,12 +15,15 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import {
   useTabsStore,
   duplicateSpec,
+  flushViewerState,
+  pendingViewerState,
   type GroupNode,
   type TabEntry,
 } from "../../stores/tabs";
 import { BRAND, envName } from "../../lib/brand";
 
 function seed() {
+  flushViewerState();
   useTabsStore.setState({
     scope: "p",
     tabsByScope: {},
@@ -77,6 +80,33 @@ describe("tabs store — duplicateTab", () => {
     const copy = useTabsStore.getState().duplicateTab(source.key)!;
     expect(copy.tmuxSession).toBeTruthy();
     expect(copy.tmuxSession).not.toBe(source.tmuxSession);
+  });
+
+  it("copies the reader's position as it is now, not as the store last saw it", () => {
+    // A viewer's scroll/zoom is staged (§3.1) and reaches the store only on a
+    // flush; the copy must still open where the reader IS.
+    const source = useTabsStore.getState().addTab({
+      label: "paper.pdf",
+      cmd: "",
+      cwd: "/p",
+      kind: "embed",
+      embedPath: "/p/paper.pdf",
+      viewer: "pdf",
+    });
+    useTabsStore.getState().setViewerState(source.key, { fontSize: 14 });
+    useTabsStore.getState().setViewerState(source.key, { scrollTop: 640, scale: 1.3 });
+    expect(byLabel("paper.pdf").viewerState).toEqual({ fontSize: 14 });
+    const copy = useTabsStore.getState().duplicateTab(source.key)!;
+    expect(copy.viewerState).toEqual({ fontSize: 14, scrollTop: 640, scale: 1.3 });
+    expect(useTabsStore.getState().tabs.find((t) => t.key === copy.key)?.viewerState).toEqual({
+      fontSize: 14,
+      scrollTop: 640,
+      scale: 1.3,
+    });
+    // The source's own stage is untouched: it still folds into the source.
+    expect(pendingViewerState(copy.key)).toBeUndefined();
+    flushViewerState(source.key);
+    expect(byLabel("paper.pdf").viewerState).toEqual({ fontSize: 14, scrollTop: 640, scale: 1.3 });
   });
 
   it("returns null for a key that is not in the current scope", () => {

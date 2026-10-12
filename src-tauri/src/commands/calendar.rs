@@ -212,9 +212,21 @@ pub(crate) fn apply_change_at(
         let mut value = serde_json::to_value(&*data).map_err(|e| e.to_string())?;
         let changes = crate::services::root_mcp_review::apply_rows(&mut value, rows, calendars)?;
         *data = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        // Agents see shared calendars read-only (hosted plan §6.7): a
+        // proposal naming one never writes, here or anywhere.
+        if refuses_shared_rows(data) {
+            return Err("An agent cannot write a shared calendar".to_string());
+        }
         Ok(changes)
     })?;
     Ok(changes)
+}
+
+/// Does `data` hold a calendar, event or task that names a shared calendar
+/// (`shared:<id>`)? Such a record never belongs in `calendar.json`.
+pub(crate) fn refuses_shared_rows(data: &CalendarData) -> bool {
+    use crate::services::server::shared_calendar::is_shared_id;
+    data.calendars.iter().any(|c| is_shared_id(&c.id)) || data.events.iter().any(|e| is_shared_id(&e.calendar_id)) || data.tasks.iter().any(|t| is_shared_id(&t.calendar_id))
 }
 
 /// Mint an id not already present among `existing` (guards against back-to-back
@@ -1174,7 +1186,7 @@ async fn run_off_thread<T: Send + 'static>(
 }
 
 /// Read an `.ics` file the user picked, for the frontend parser.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_read_ics(path: String) -> Result<String, String> {
     run_off_thread(move || calendar_read_ics_blocking(path)).await
 }
@@ -1197,7 +1209,7 @@ fn calendar_read_ics_blocking(path: String) -> Result<String, String> {
 }
 
 /// Write an `.ics` file to the path the user picked.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_write_ics(path: String, content: String) -> Result<(), String> {
     run_off_thread(move || calendar_write_ics_blocking(path, content)).await
 }
@@ -1216,7 +1228,7 @@ fn calendar_write_ics_blocking(path: String, content: String) -> Result<(), Stri
 /// network, and it does so only on an explicit "Refresh from URL" click —
 /// never on a timer — through the same SSRF-guarded fetch the in-app browser's
 /// reader mode uses (`services::browser_engine::fetch_ics`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_fetch_ics(url: String) -> Result<String, String> {
     crate::services::browser_engine::fetch_ics(&url).await
 }
@@ -1225,33 +1237,49 @@ pub async fn calendar_fetch_ics(url: String) -> Result<String, String> {
 /// answers the keys nobody had claimed yet — another window, or the Mobile
 /// sidecar with no window open, may have shown one already — and records
 /// them all (`services::calendar_alarms`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn calendar_alarms_claim(keys: Vec<String>) -> Result<Vec<String>, String> {
     crate::services::calendar_alarms::claim(&keys)
 }
 
 /// Replace `calendar_id`'s events/tasks with a freshly parsed set, in one
 /// atomic write.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_replace_events(
     calendar_id: String,
     events: Vec<CalendarEvent>,
     tasks: Vec<CalendarTask>,
 ) -> Result<CalendarData, String> {
+    // A shared calendar lives in the server's calendar service: a bulk
+    // write would put its records into `calendar.json` beside it.
+    if crate::services::server::shared_calendar::is_shared_id(&calendar_id) {
+        return Err("A shared calendar cannot be replaced in bulk; import into a calendar of your own".to_string());
+    }
     run_off_thread(move || replace_calendar_events_at(&calendar_path(), &calendar_id, events, tasks))
         .await
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_load() -> Result<CalendarData, String> {
-    run_off_thread(move || read_data(&calendar_path())).await
+    run_off_thread(move || {
+        let mut data = read_data(&calendar_path())?;
+        // A hosted server: the calendars other users opened to this one, and
+        // this user's own shared ones (plan §6.7).
+        if let Some(shared) = crate::services::server::shared_calendar::global() {
+            shared.merge_into(&mut data);
+        }
+        Ok(data)
+    })
+    .await
 }
 
 /// Replace the whole store. Used by ICS import, which rewrites in bulk.
-#[tauri::command]
-pub async fn calendar_save(data: CalendarData) -> Result<(), String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn calendar_save(mut data: CalendarData) -> Result<(), String> {
+    // Shared calendars live in the server's calendar service, never here.
+    crate::services::server::shared_calendar::strip_shared(&mut data);
     run_off_thread(move || save_document_at(&calendar_path(), data)).await
 }
 
@@ -1274,44 +1302,111 @@ pub(crate) fn save_document_at(path: &Path, data: CalendarData) -> Result<(), St
     .map(|_| ())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_event(event: CalendarEvent) -> Result<CalendarEvent, String> {
-    run_off_thread(move || create_event_at(&calendar_path(), event)).await
+    run_off_thread(move || {
+        if let Some(routed) = shared().and_then(|s| s.put_event(&event, false)) {
+            return routed;
+        }
+        create_event_at(&calendar_path(), event)
+    })
+    .await
 }
 
-#[tauri::command]
+/// The server's shared calendars, when this is a server daemon.
+fn shared() -> Option<&'static crate::services::server::shared_calendar::Shared> {
+    crate::services::server::shared_calendar::global()
+}
+
+/// Is there a record `id` in `calendar.json` (a shared calendar's edit must
+/// not take a private record along)?
+fn exists_locally(id: &str, events: bool) -> bool {
+    !id.is_empty()
+        && read_data(&calendar_path()).is_ok_and(|d| if events { d.events.iter().any(|e| e.id == id) } else { d.tasks.iter().any(|t| t.id == id) })
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_event(event: CalendarEvent) -> Result<CalendarEvent, String> {
-    run_off_thread(move || update_event_at(&calendar_path(), event)).await
+    run_off_thread(move || {
+        if let Some(routed) = shared().and_then(|s| s.put_event(&event, exists_locally(&event.id, true))) {
+            return routed;
+        }
+        update_event_at(&calendar_path(), event)
+    })
+    .await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_event(id: String) -> Result<(), String> {
-    run_off_thread(move || delete_event_at(&calendar_path(), &id)).await
+    run_off_thread(move || {
+        if let Some(routed) = shared().and_then(|s| s.delete_event(&id)) {
+            return routed;
+        }
+        delete_event_at(&calendar_path(), &id)
+    })
+    .await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_task(task: CalendarTask) -> Result<CalendarTask, String> {
-    run_off_thread(move || create_task_at(&calendar_path(), task)).await
+    run_off_thread(move || {
+        if let Some(routed) = shared().and_then(|s| s.put_task(&task, false)) {
+            return routed;
+        }
+        create_task_at(&calendar_path(), task)
+    })
+    .await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_task(task: CalendarTask) -> Result<CalendarTask, String> {
-    run_off_thread(move || update_task_at(&calendar_path(), task)).await
+    run_off_thread(move || {
+        if let Some(routed) = shared().and_then(|s| s.put_task(&task, exists_locally(&task.id, false))) {
+            return routed;
+        }
+        update_task_at(&calendar_path(), task)
+    })
+    .await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_task(id: String) -> Result<(), String> {
-    run_off_thread(move || delete_task_at(&calendar_path(), &id)).await
+    run_off_thread(move || {
+        if let Some(routed) = shared().and_then(|s| s.delete_task(&id)) {
+            return routed;
+        }
+        delete_task_at(&calendar_path(), &id)
+    })
+    .await
 }
 
 /// Apply a board drag. See [`move_tasks_at`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn todo_move_tasks(moves: Vec<TaskPlacement>) -> Result<Vec<CalendarTask>, String> {
-    run_off_thread(move || move_tasks_at(&calendar_path(), moves)).await
+    run_off_thread(move || {
+        // A shared to-do list's card moves to its new column through the
+        // calendar service (its place within the column is not shared in
+        // v1); every other card as before.
+        let Some(shared) = shared() else { return move_tasks_at(&calendar_path(), moves) };
+        let (remote, local): (Vec<TaskPlacement>, Vec<TaskPlacement>) = moves.into_iter().partition(|m| shared.holds_task(&m.id));
+        let mut out = Vec::new();
+        for placement in remote {
+            let Some(mut task) = shared.task(&placement.id) else { continue };
+            task.column = placement.column;
+            if let Some(routed) = shared.put_task(&task, false) {
+                out.push(routed?);
+            }
+        }
+        if !local.is_empty() {
+            out.extend(move_tasks_at(&calendar_path(), local)?);
+        }
+        Ok(out)
+    })
+    .await
 }
 
 /// Replace the board's columns. See [`columns_set_at`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn todo_columns_set(
     columns: Vec<TaskColumn>,
     fallback_column: Option<String>,
@@ -1319,23 +1414,34 @@ pub async fn todo_columns_set(
     run_off_thread(move || columns_set_at(&calendar_path(), columns, fallback_column)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_calendar(calendar: Calendar) -> Result<Calendar, String> {
     run_off_thread(move || create_calendar_at(&calendar_path(), calendar)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_calendar(calendar: Calendar) -> Result<Calendar, String> {
-    run_off_thread(move || update_calendar_at(&calendar_path(), calendar)).await
+    run_off_thread(move || {
+        // A shared calendar's only setting here is this user's own checkbox.
+        if let (Some(shared), true) = (shared(), crate::services::server::shared_calendar::is_shared_id(&calendar.id)) {
+            shared.set_visible(&calendar.id, calendar.visible)?;
+            return Ok(calendar);
+        }
+        update_calendar_at(&calendar_path(), calendar)
+    })
+    .await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_calendar(id: String) -> Result<(), String> {
+    if crate::services::server::shared_calendar::is_shared_id(&id) {
+        return Err("A shared calendar is deleted by stopping sharing it (Server settings), or by its owner".to_string());
+    }
     run_off_thread(move || delete_calendar_at(&calendar_path(), &id)).await
 }
 
 /// Undo of [`delete_calendar`]. See [`restore_calendar_at`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn restore_calendar(
     calendar: Calendar,
     events: Vec<CalendarEvent>,

@@ -14,6 +14,17 @@
     <link rel="icon" href="/icons/icon.svg" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <title>Tabtivity Mobile</title>
+    <!-- What shows when the app's script never runs: an unreachable host
+         behind a cached start page painted nothing but black, with nothing
+         to say why (2026-10-11). React replaces #root's content on its first
+         render, so a booting app never shows this; the delay keeps a slow
+         first load from flashing it. Plain English and inline: no script has
+         run to pick a language, and the stylesheet may be missing as well. -->
+    <style>
+      .boot-stalled { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; background: #0b0d13; color: #c9cbe0; font: 15px/1.5 system-ui, sans-serif; text-align: center; visibility: hidden; animation: boot-stalled 0s 10s forwards; }
+      .boot-stalled p { max-width: 32em; margin: 0 0 12px; }
+      @keyframes boot-stalled { to { visibility: visible; } }
+    </style>
   </head>
-  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
+  <body><div id="root"><div class="boot-stalled" role="status"><div><p>The app could not load.</p><p>If this stays: force-stop Tailscale on this phone (Settings → Apps → Tailscale → Force stop), open Tailscale again, then reopen this page.</p></div></div></div><script type="module" src="/src/main.tsx"></script></body>
 </html>

@@ -511,6 +511,17 @@ names! {
     TERMINAL_PROTOCOL / LEGACY_TERMINAL_PROTOCOL = [slug, "-terminal.v1"];
     /// The phone session cookie.
     SESSION_COOKIE / LEGACY_SESSION_COOKIE = ["__Host-", slug, "_session"];
+    /// The browser desktop client's session cookie (hosted plan P2; plain
+    /// http on loopback, so no `__Host-` prefix, which needs `Secure`).
+    DESKTOP_SESSION_COOKIE / LEGACY_DESKTOP_SESSION_COOKIE = [slug, "_desktop_session"];
+    /// WebSocket subprotocol of the browser desktop client.
+    DESKTOP_PROTOCOL / LEGACY_DESKTOP_PROTOCOL = [slug, "-desktop.v1"];
+    /// The server gateway's routing cookie (hosted plan §3.1): which account's
+    /// daemon a request goes to, signed by the gateway; grants nothing itself.
+    GATEWAY_COOKIE / LEGACY_GATEWAY_COOKIE = ["__Host-", slug, "_gateway"];
+    /// The server's service accounts and groups (`<slug>-gw`, `<slug>-users`,
+    /// `<slug>-cli`, …) start with this.
+    SERVER_ACCOUNT_PREFIX / LEGACY_SERVER_ACCOUNT_PREFIX = [slug, "-"];
     /// Domain-separation prefix of the phone's signed requests.
     MOBILE_AUTH_CONTEXT / LEGACY_MOBILE_AUTH_CONTEXT = [slug, "-mobile-auth-v1"];
     /// Prefix of the admin control pipe on Windows.
@@ -714,6 +725,10 @@ mod tests {
             (LEGACY_MOBILE_HOST_RUN_VALUE, "EldrunMobileHost"),
             (LEGACY_TERMINAL_PROTOCOL, "eldrun-terminal.v1"),
             (LEGACY_SESSION_COOKIE, "__Host-eldrun_session"),
+            (LEGACY_DESKTOP_SESSION_COOKIE, "eldrun_desktop_session"),
+            (LEGACY_GATEWAY_COOKIE, "__Host-eldrun_gateway"),
+            (LEGACY_SERVER_ACCOUNT_PREFIX, "eldrun-"),
+            (LEGACY_DESKTOP_PROTOCOL, "eldrun-desktop.v1"),
             (LEGACY_MOBILE_AUTH_CONTEXT, "eldrun-mobile-auth-v1"),
             (LEGACY_CONTROL_PIPE_PREFIX, "eldrun-control-"),
             (LEGACY_TMUX_PREFIX, "eldrun-"),
@@ -871,7 +886,7 @@ mod tests {
 
     /// `name = "…"` of the first `[[bin]]` table in the crate's manifest.
     fn manifest_bin_name() -> String {
-        let manifest = include_str!("../Cargo.toml");
+        let manifest = include_str!("../../src-tauri/Cargo.toml");
         let table = manifest.split("[[bin]]").nth(1).expect("Cargo.toml has a [[bin]] table");
         let line = table
             .lines()

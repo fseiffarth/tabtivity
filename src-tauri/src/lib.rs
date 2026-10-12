@@ -8,8 +8,20 @@
 // them into a struct would move the same fields behind one more indirection and
 // change nothing about the call site the lint is worried about.
 #![allow(clippy::too_many_arguments)]
+// The server daemon builds this library without the `desktop` feature
+// (hosted plan §3.2, `src-serverd/`): the window, its toolkit and the OS
+// credential store are compiled out, and with them every caller of some
+// shared helpers. The desktop build — the one CI lints with `-D warnings` —
+// still sees every dead item; this only quiets the daemon's build.
+#![cfg_attr(not(feature = "desktop"), allow(dead_code, unused_imports, unused_variables))]
 
-pub mod brand;
+// The brand module lives in the core crate; re-exported with its macros so
+// `crate::brand::…` and `crate::app_slug!()` resolve here unchanged.
+pub use app_core::brand;
+pub use app_core::{
+    app_env, app_name, app_repo, app_slug, app_tab_command, app_upper, legacy_name, legacy_slug,
+    legacy_upper,
+};
 pub mod commands;
 pub mod duscan;
 pub mod gpustat;
@@ -19,7 +31,10 @@ pub mod schema;
 pub mod services;
 pub mod storage;
 pub mod sysstat;
+pub mod tauri_host;
 pub mod terminal;
+#[cfg(test)]
+pub(crate) mod test_util;
 
 use commands::apps::{WindowRegistry, WindowRegistryState};
 use commands::terminal::RegistryState;
@@ -555,6 +570,7 @@ pub fn format_crash_line(code: u32, addr: usize, buf: &mut [u8]) -> usize {
 /// showing its last frame — an apparent freeze. Hook WebKit's
 /// web-process-terminated signal to log the reason to crash.log and reload
 /// the page, which respawns the renderer.
+#[cfg(feature = "desktop")]
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn install_webview_crash_reporter(app: &tauri::App) {
     use tauri::Manager;
@@ -596,6 +612,7 @@ fn bump_renderer_reloads(counts: &mut std::collections::BTreeMap<String, u32>, l
 
 /// Hook one window's renderer-crash signal. Safe to call on any window, at any
 /// point after it is built.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
     use webkit2gtk::{WebProcessTerminationReason, WebViewExt};
@@ -638,6 +655,7 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
 /// talk to (the user's remedy is a relaunch, which the log line now explains).
 /// An unresponsive renderer is logged and left alone — it may recover, and a
 /// reload would destroy whatever it was doing.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "windows")]
 pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -703,6 +721,7 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
 /// per-window call is a no-op here and [`with_webview_crash_reporter`] installs
 /// the hook once for every window, present and future. (Any other platform
 /// reports through its signal handlers.)
+#[cfg(feature = "desktop")]
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
     let _ = window;
@@ -715,6 +734,7 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
 /// reload cap. Applies to every window the app ever builds (popouts, the
 /// presenter, live browser pages), which is why it lives on the builder rather
 /// than beside the per-window Linux/Windows hooks.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "macos")]
 fn with_webview_crash_reporter(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     // Per-window budgets behind one app-wide hook: keyed by webview label.
@@ -740,6 +760,7 @@ fn with_webview_crash_reporter(builder: tauri::Builder<tauri::Wry>) -> tauri::Bu
 
 /// Linux and Windows hook each window as it is built (see
 /// [`hook_webview_crash_reporter`]); nothing to add to the builder.
+#[cfg(feature = "desktop")]
 #[cfg(not(target_os = "macos"))]
 fn with_webview_crash_reporter(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
@@ -800,6 +821,7 @@ fn macos_menu_plan() -> Vec<(&'static str, Vec<MacMenuItem>)> {
     ]
 }
 
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "macos")]
 fn build_macos_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -845,6 +867,7 @@ fn build_macos_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<t
 
 /// macOS: install the explicit menu bar (see [`macos_menu_plan`]) and route its
 /// custom Quit through the main window's close, so the frontend teardown runs.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "macos")]
 fn with_macos_menu(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
@@ -867,6 +890,7 @@ fn with_macos_menu(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri:
 
 /// Linux and Windows get no menu bar: Tauri installs none there, and one would
 /// draw into Windows' undecorated overlay header.
+#[cfg(feature = "desktop")]
 #[cfg(not(target_os = "macos"))]
 fn with_macos_menu(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
@@ -884,6 +908,7 @@ fn with_macos_menu(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri:
 /// solid accent-blue slider — so it reads as "Tabtivity blue" without having to
 /// follow the live in-app theme. Best-effort and behind an env opt-out: any
 /// failure simply leaves the native scrollbar untouched.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 fn install_scrollbar_theme() {
     use gtk::prelude::*;
@@ -941,6 +966,7 @@ fn install_scrollbar_theme() {
 ///
 /// Geometry rules (which monitor, what if it was unplugged) live in
 /// `services::window_state::resolve_startup_geometry`, which is pure and tested.
+#[cfg(feature = "desktop")]
 fn restore_main_window(app: &tauri::App) {
     use tauri::Manager;
 
@@ -1010,6 +1036,148 @@ fn restore_main_window(app: &tauri::App) {
     let _ = win.show();
 }
 
+
+/// The managed singletons as the core sees them (`app_core::CoreState`,
+/// hosted plan §3.2). Every value is a clone of the `Arc` Tauri manages too,
+/// so a converted command (`tauri_host::Ctx`) and an unconverted one
+/// (`State<'_, T>`) share one instance. Keyed by type: two singletons of one
+/// type cannot both be managed, and `manage` panics at startup if they are —
+/// `core_state_types_are_distinct` holds the list to that.
+#[allow(clippy::too_many_arguments)]
+fn core_state(
+    pty_registry: &RegistryState,
+    win_registry: &WindowRegistryState,
+    workspace: &WorkspaceStateArc,
+    fs_watch: &commands::fs_watch::FsWatchState,
+    remote_pool: &services::remote::RemotePoolState,
+    sync_manifest: &services::remote_sync::SyncManifestState,
+    auto_sync: &services::sync_auto::AutoSyncState,
+    git_peer: &services::git_peer::GitPeerRegistry,
+    worker_sync: &services::worker_sync::WorkerSyncState,
+    disk_scans: &commands::disk_usage::DuScanState,
+    mail_state: &commands::mail::MailState,
+    caldav_state: &commands::caldav::CalDavState,
+    usage_watch: &services::usage_stats::UsageWatchState,
+    mobile_desktop: &commands::mobile_control::MobileDesktopState,
+    pick_grants: &services::pick_grants::PickGrantsState,
+) -> app_core::CoreState {
+    app_core::CoreState::new()
+        .manage(pty_registry.clone())
+        .manage(win_registry.clone())
+        .manage(workspace.clone())
+        .manage(fs_watch.clone())
+        .manage(remote_pool.clone())
+        .manage(sync_manifest.clone())
+        .manage(auto_sync.clone())
+        .manage(git_peer.clone())
+        .manage(worker_sync.clone())
+        .manage(disk_scans.clone())
+        .manage(mail_state.clone())
+        .manage(caldav_state.clone())
+        .manage(usage_watch.clone())
+        .manage(mobile_desktop.clone())
+        .manage(pick_grants.clone())
+}
+
+/// The process-wide singletons every host manages (`core_state`), built in
+/// one place so the desktop window and a server host (`standalone_core_state`)
+/// start from the same list.
+struct Singletons {
+    pty_registry: RegistryState,
+    win_registry: WindowRegistryState,
+    workspace: WorkspaceStateArc,
+    fs_watch: commands::fs_watch::FsWatchState,
+    /// Pooled SSH/SFTP connections, one per active remote project (Phase 0 of
+    /// the mount-free remote model). Opened on activation, torn down at exit.
+    remote_pool: services::remote::RemotePoolState,
+    /// Single-writer cache of per-project sync manifests (SSH-sync Phase 1).
+    /// Guards every `sync.json` mutation so concurrent syncs/saves can't
+    /// clobber it (G7).
+    sync_manifest: services::remote_sync::SyncManifestState,
+    /// Registry of per-project auto-sync tasks (started on remote_connect,
+    /// stopped on remote_disconnect / app exit). See `services::sync_auto`.
+    auto_sync: services::sync_auto::AutoSyncState,
+    /// Registry of per-project git lockstep tasks (.git watcher + host poll;
+    /// started on remote_connect when enabled, stopped on disconnect / exit).
+    /// See `services::git_peer` (TODO #28n).
+    git_peer: services::git_peer::GitPeerRegistry,
+    /// Registry of per-(project,worker) code-sync fan-outs (multi-host remote,
+    /// `docs/multi_host_remote_plan.md`). Kicked on a worker connect / commit /
+    /// manual "Push code to machines". See `services::worker_sync`.
+    worker_sync: services::worker_sync::WorkerSyncState,
+    /// Cancel flags for in-flight disk-usage scans, one per scanning pane. See
+    /// `commands::disk_usage`.
+    disk_scans: commands::disk_usage::DuScanState,
+    /// The mail client's session state: the lazily-opened local store, the
+    /// in-memory-only passwords for accounts the user chose not to persist, and
+    /// the per-account sync cancel flags. See `commands::mail`.
+    mail_state: commands::mail::MailState,
+    /// CalDAV: session-only passwords for accounts the user chose not to
+    /// persist (docs/caldav_plan.md). Nothing here is ever serialized.
+    caldav_state: commands::caldav::CalDavState,
+    /// Recursive file-churn watcher on the active project + the counters it
+    /// has seen since the last flush (see `services::usage_stats`).
+    usage_watch: services::usage_stats::UsageWatchState,
+    mobile_desktop: commands::mobile_control::MobileDesktopState,
+    /// Picked server files as single-use grants for the browser client's mail
+    /// file commands (`services::pick_grants`); empty in the window.
+    pick_grants: services::pick_grants::PickGrantsState,
+}
+
+impl Singletons {
+    fn new() -> Self {
+        Self {
+            pty_registry: Arc::new(Mutex::new(PtyRegistry::default())),
+            win_registry: Arc::new(Mutex::new(WindowRegistry::default())),
+            workspace: Arc::new(Mutex::new(WorkspaceState::new())),
+            fs_watch: commands::fs_watch::new_state(),
+            remote_pool: services::remote::new_pool(),
+            sync_manifest: services::remote_sync::new_manifest_state(),
+            auto_sync: services::sync_auto::new_state(),
+            git_peer: services::git_peer::new_registry(),
+            worker_sync: services::worker_sync::new_state(),
+            disk_scans: commands::disk_usage::new_state(),
+            mail_state: commands::mail::new_state(),
+            caldav_state: Default::default(),
+            usage_watch: services::usage_stats::new_state(),
+            mobile_desktop: commands::mobile_control::MobileDesktopState::default(),
+            pick_grants: services::pick_grants::new_state(),
+        }
+    }
+
+    /// The core's view of these singletons: clones of the same `Arc`s.
+    fn core_state(&self) -> app_core::CoreState {
+        core_state(
+            &self.pty_registry,
+            &self.win_registry,
+            &self.workspace,
+            &self.fs_watch,
+            &self.remote_pool,
+            &self.sync_manifest,
+            &self.auto_sync,
+            &self.git_peer,
+            &self.worker_sync,
+            &self.disk_scans,
+            &self.mail_state,
+            &self.caldav_state,
+            &self.usage_watch,
+            &self.mobile_desktop,
+            &self.pick_grants,
+        )
+    }
+}
+
+/// The managed singletons for a host that is not the desktop window — the
+/// Mobile sidecar serving a browser (hosted plan §10 P2), later the per-user
+/// daemon. Fresh instances: a second process never shares the window's. Every
+/// type `lib.rs` manages for Tauri is here too, so a converted command's
+/// `ctx.get::<T>()` finds what it would in the window (`CoreState::get`
+/// panics for an unmanaged type).
+pub fn standalone_core_state() -> app_core::CoreState {
+    Singletons::new().core_state()
+}
+
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKit's DMA-BUF renderer SIGBUSes inside Mesa on some driver stacks
@@ -1080,41 +1248,29 @@ pub fn run() {
     // disk indefinitely.
     services::browser_engine::sweep_quarantine();
 
-    let pty_registry: RegistryState = Arc::new(Mutex::new(PtyRegistry::default()));
-    let win_registry: WindowRegistryState = Arc::new(Mutex::new(WindowRegistry::default()));
-    let workspace: WorkspaceStateArc = Arc::new(Mutex::new(WorkspaceState::new()));
-    let fs_watch = commands::fs_watch::new_state();
-    // Pooled SSH/SFTP connections, one per active remote project (Phase 0 of the
-    // mount-free remote model). Opened on activation, torn down at exit below.
-    let remote_pool = services::remote::new_pool();
-    // Single-writer cache of per-project sync manifests (SSH-sync Phase 1). Guards
-    // every `sync.json` mutation so concurrent syncs/saves can't clobber it (G7).
-    let sync_manifest = services::remote_sync::new_manifest_state();
-    // Registry of per-project auto-sync tasks (started on remote_connect, stopped
-    // on remote_disconnect / app exit). See `services::sync_auto`.
-    let auto_sync = services::sync_auto::new_state();
-    // Registry of per-project git lockstep tasks (.git watcher + host poll; started
-    // on remote_connect when enabled, stopped on disconnect / exit). See
-    // `services::git_peer` (TODO #28n).
-    let git_peer = services::git_peer::new_registry();
-    // Registry of per-(project,worker) code-sync fan-outs (multi-host remote,
-    // `docs/multi_host_remote_plan.md`). Kicked on a worker connect / commit /
-    // manual "Push code to machines". See `services::worker_sync`.
-    let worker_sync = services::worker_sync::new_state();
-    // Cancel flags for in-flight disk-usage scans, one per scanning pane. See
-    // `commands::disk_usage`.
-    let disk_scans = commands::disk_usage::new_state();
-    // The mail client's session state: the lazily-opened local store, the
-    // in-memory-only passwords for accounts the user chose not to persist, and
-    // the per-account sync cancel flags. See `commands::mail`.
-    let mail_state = commands::mail::new_state();
-    // CalDAV: session-only passwords for accounts the user chose not to persist
-    // (docs/caldav_plan.md). Nothing here is ever serialized.
-    let caldav_state: commands::caldav::CalDavState = Default::default();
-    // Recursive file-churn watcher on the active project + the counters it has
-    // seen since the last flush (see `services::usage_stats`).
-    let usage_watch = services::usage_stats::new_state();
-    let mobile_desktop = commands::mobile_control::MobileDesktopState::default();
+    // The managed singletons, built once and handed to both halves of the
+    // app: Tauri's `State` and the core's `CoreState` (clones of one `Arc`
+    // each, never two values). Also what `standalone_core_state` builds for
+    // a host that is not this window.
+    let s = Singletons::new();
+    let core_state = s.core_state();
+    let Singletons {
+        pty_registry,
+        win_registry,
+        workspace,
+        fs_watch,
+        remote_pool,
+        sync_manifest,
+        auto_sync,
+        git_peer,
+        worker_sync,
+        disk_scans,
+        mail_state,
+        caldav_state,
+        usage_watch,
+        mobile_desktop,
+        pick_grants,
+    } = s;
 
     with_macos_menu(with_webview_crash_reporter(tauri::Builder::default()))
         .manage(pty_registry)
@@ -1125,6 +1281,7 @@ pub fn run() {
         // Carries PDF pages between two Tabtivity windows: they are separate WebViews
         // with separate JS heaps, so the bytes must cross the process boundary.
         .manage(commands::pdf_clip::PdfClipboard::default())
+        .manage(commands::connect::ConnectBridgeState::default())
         .manage(sync_manifest)
         .manage(auto_sync)
         .manage(git_peer)
@@ -1134,11 +1291,12 @@ pub fn run() {
         .manage(caldav_state)
         .manage(usage_watch.clone())
         .manage(mobile_desktop.clone())
+        .manage(pick_grants)
         .setup(move |_app| {
-            commands::mobile_control::start_desktop_bridge(
-                _app.handle().clone(),
-                mobile_desktop.clone(),
-            );
+            // First: converted commands and services read their `CoreCtx`
+            // from here, and `rt::spawn` needs Tauri's runtime installed.
+            let core = tauri_host::install(_app.handle(), core_state);
+            commands::mobile_control::start_desktop_bridge(core.clone(), mobile_desktop.clone());
             // The Mobile host's lifetime is the app's: `RunEvent::Exit` stops
             // it, so an enabled configuration has to bring it back here rather
             // than waiting for the next login. Off the main thread, bounded,
@@ -1150,7 +1308,7 @@ pub fn run() {
             services::brand_migration::project::sweep_at_launch();
             // The root console's MCP endpoint (`services::root_mcp`): loopback,
             // token minted here per run, handed only to root-scope agent tabs.
-            commands::root_mcp::start(_app.handle().clone());
+            commands::root_mcp::start(core.clone());
             // The provider API proxy (`services::api_proxy`): loopback, holds
             // the stored API keys so a keyed agent tab gets only a token.
             services::api_proxy::start();
@@ -1259,7 +1417,15 @@ pub fn run() {
             commands::subwindow::spawn_monitor_watcher(_app.handle().clone());
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
-            services::agent_turn::start(_app.handle().clone());
+            services::agent_turn::start(tauri_host::system_ctx(_app.handle()));
+            {
+                // The Reader's transcript watches (`services::transcript_watch`)
+                // announce a change as `transcript-changed` with the watch id.
+                let ctx = tauri_host::system_ctx(_app.handle());
+                services::transcript_watch::install(move |id| {
+                    ctx.emit("transcript-changed", id);
+                });
+            }
             // Install the global Claude SessionStart hook so Tabtivity can follow a
             // tab's live session id across `/clear` (see services::agent_session).
             if let Err(e) = services::agent_bin::install() {
@@ -1362,7 +1528,11 @@ pub fn run() {
             restore_main_window(_app);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        // The Connect window reaches only its own few app commands
+        // (`commands::connect::CONNECT_WINDOW_COMMANDS`); every other window
+        // the whole set, as before. The state-file commands run on an ordered
+        // worker, not the GTK thread (`commands::persist_lane`).
+        .invoke_handler(commands::connect::gate_connect_window(commands::persist_lane::ordered(tauri::generate_handler![
             // Settings
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -1409,6 +1579,8 @@ pub fn run() {
             commands::mobile_control::mobile_paired_devices,
             commands::mobile_control::mobile_host_status,
             commands::mobile_control::mobile_host_apply,
+            commands::mobile_control::mobile_browser_client_link,
+            commands::mobile_control::mobile_browser_client_rotate,
             commands::mobile_control::mobile_verify_tailscale_serve,
             commands::mobile_control::mobile_tailscale_serve_status,
             commands::mobile_control::mobile_desktop_images,
@@ -1543,6 +1715,7 @@ pub fn run() {
             commands::boxes::rename_box,
             commands::boxes::delete_box,
             commands::boxes::set_box_members,
+            commands::boxes::patch_box,
             commands::boxes::ensure_box_folder,
             commands::boxes::refresh_box_agent_docs,
             commands::boxes::set_box_relations,
@@ -1638,9 +1811,11 @@ pub fn run() {
             commands::mail::mail_contact_list_delete,
             commands::mail::mail_contacts_set_collect,
             commands::mail::mail_contacts_import,
+            commands::mail::mail_contacts_import_grant,
             commands::mail::mail_contacts_import_thunderbird,
             commands::mail::mail_contacts_harvest_inbox,
             commands::mail::mail_contacts_export,
+            commands::mail::mail_contacts_export_grant,
             commands::mail::mail_filters_apply,
             // Local-model mail assistant (Group Q, #203–#208). Every one runs a
             // prompt against a loopback Ollama via `services::mail_ai`, which
@@ -1661,8 +1836,10 @@ pub fn run() {
             commands::mail::mail_agent_marks,
             commands::mail::mail_draft_send,
             commands::mail::mail_attach_pick,
+            commands::mail::mail_attach_grants,
             commands::mail::mail_attach_remove,
             commands::mail::mail_attachment_save,
+            commands::mail::mail_attachment_save_grant,
             commands::mail::mail_attachment_save_to_project,
             commands::mail::mail_attachment_preview,
             commands::mail::mail_staged_preview,
@@ -1685,6 +1862,7 @@ pub fn run() {
             commands::mail::mail_pgp_generate,
             commands::mail::mail_pgp_import,
             commands::mail::mail_pgp_import_pick,
+            commands::mail::mail_pgp_import_grant,
             commands::mail::mail_pgp_export,
             commands::mail::mail_pgp_set_verified,
             commands::mail::mail_pgp_bind,
@@ -1828,6 +2006,7 @@ pub fn run() {
             commands::fs::dir_size,
             commands::fs::dir_size_breakdown,
             commands::fs::list_dirs,
+            commands::fs::list_dir_all,
             commands::fs::list_project_endings,
             commands::fs::list_project_paths,
             commands::fs::rename_path,
@@ -1840,6 +2019,14 @@ pub fn run() {
             commands::clipboard::save_clipboard_image,
             commands::clipboard::copy_png_bytes_to_clipboard,
             commands::clipboard::copy_text_to_clipboard,
+            commands::connect::connect_status,
+            commands::connect::connect_pair,
+            commands::connect::connect_forget,
+            commands::connect::connect_open,
+            commands::connect::connect_ws_open,
+            commands::connect::connect_ws_send,
+            commands::connect::connect_ws_close,
+            commands::connect::connect_open_download,
             commands::screenshot::capture_screenshot,
             commands::projects::project_generated_dir,
             commands::screenshot::read_pending_screenshot,
@@ -1865,6 +2052,7 @@ pub fn run() {
             commands::pdf_markup::pdf_markup_undo_preview,
             commands::pdf_markup::pdf_markup_undo,
             commands::fs::file_mtime,
+            commands::fs::file_size,
             commands::format::format_source,
             commands::format::formatter_available,
             commands::format::check_syntax,
@@ -1970,6 +2158,7 @@ pub fn run() {
             commands::workspace::network_identity,
             // Project-runtime switching (replaces switch_project_windows)
             commands::project_runtime::switch_project_runtime,
+            commands::project_runtime::switch_project_session,
             commands::project_runtime::load_side_panel_folder,
             commands::project_runtime::save_side_panel_folder,
             // Git
@@ -2091,6 +2280,27 @@ pub fn run() {
             commands::agents::agent_logins,
             commands::agents::agent_login_import,
             commands::agents::agent_login_sign_out,
+            commands::agents::agent_login_use_admin_key,
+            commands::share::share_list,
+            commands::share::share_create,
+            commands::share::share_grant,
+            commands::share::share_revoke,
+            commands::share::share_delete,
+            commands::share::share_add,
+            commands::share::share_push,
+            commands::share::share_fetch,
+            commands::share::share_presence,
+            commands::share::share_review,
+            commands::share::share_review_page,
+            commands::share::share_merge,
+            commands::share::share_pending,
+            commands::share::share_accept,
+            commands::shared_calendar::shared_calendar_list,
+            commands::shared_calendar::shared_calendar_share,
+            commands::shared_calendar::shared_calendar_grant,
+            commands::shared_calendar::shared_calendar_revoke,
+            commands::shared_calendar::shared_calendar_unshare,
+            commands::shared_calendar::shared_calendar_wait,
             commands::agents::agent_api_keys_status,
             commands::agents::agent_api_key_set,
             commands::agents::agent_api_key_clear,
@@ -2109,6 +2319,7 @@ pub fn run() {
             commands::agents::agent_tab_recent_prompts,
             commands::agents::agent_tab_transcript,
             commands::agents::agent_tab_changes,
+            commands::agents::agent_transcript_unwatch,
             commands::agents::agent_tab_undo_clear,
             commands::ollama::ollama_is_running,
             commands::ollama::ollama_status,
@@ -2158,7 +2369,7 @@ pub fn run() {
             commands::spell::spell_dictionaries,
             commands::spell::spell_install_language,
             commands::spell::spell_remove_language,
-        ])
+        ])))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_notification::init())
@@ -2250,6 +2461,9 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                // Saves the window sent on its way out are still queued on the
+                // ordered worker; let them land before anything is torn down.
+                commands::persist_lane::drain_at_exit();
                 // Old-name lookups counted since the last write (nothing
                 // while the app's name is unchanged).
                 services::brand_migration::hits::flush();
@@ -2354,6 +2568,34 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `core_state` keys the singletons by type. Two aliases over one
+    /// underlying type (`Arc<Mutex<HashMap<String, …>>>` twice, say) would
+    /// make `manage` panic at startup — which this build cannot observe, so
+    /// hold the list here. Keep it in step with `core_state`'s parameters.
+    #[test]
+    fn core_state_types_are_distinct() {
+        use std::any::TypeId;
+        let ids = [
+            TypeId::of::<RegistryState>(),
+            TypeId::of::<WindowRegistryState>(),
+            TypeId::of::<WorkspaceStateArc>(),
+            TypeId::of::<commands::fs_watch::FsWatchState>(),
+            TypeId::of::<services::remote::RemotePoolState>(),
+            TypeId::of::<services::remote_sync::SyncManifestState>(),
+            TypeId::of::<services::sync_auto::AutoSyncState>(),
+            TypeId::of::<services::git_peer::GitPeerRegistry>(),
+            TypeId::of::<services::worker_sync::WorkerSyncState>(),
+            TypeId::of::<commands::disk_usage::DuScanState>(),
+            TypeId::of::<commands::mail::MailState>(),
+            TypeId::of::<commands::caldav::CalDavState>(),
+            TypeId::of::<services::usage_stats::UsageWatchState>(),
+            TypeId::of::<commands::mobile_control::MobileDesktopState>(),
+            TypeId::of::<services::pick_grants::PickGrantsState>(),
+        ];
+        let distinct: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len(), "two managed singletons share a type");
+    }
 
     /// tauri-utils merges `tauri.macos.conf.json` over the base config with RFC
     /// 7396 merge-patch, which REPLACES arrays: a `windows` array there drops

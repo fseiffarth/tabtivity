@@ -4196,3 +4196,23 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
 `docs/mobile_box_parity_plan.md`): editing a box from the phone (membership,
 rename, Dissolve), listing a box's members as project rows, a per-member
 status column, and box-folder file browsing.*
+
+- [~] **31ce — Handwriting into the chat composer with a pen** (2026-10-11;
+  untested id `mobile.composer.penWriting`). Needs the frozen dev build (the
+  PWA is baked in). On the iPad (Home Screen PWA, Settings → Apple Pencil →
+  Scribble on): touch or hover anywhere in the app with the Pencil → an agent
+  tab's message field opens about four lines tall and keeps that after a
+  reload. Write over it with the Pencil → the words turn into text in the
+  field; Send delivers them. A long draft still grows and then scrolls. A
+  pen-less phone keeps the one-line field. Android with an S Pen: the same
+  height; note whether its handwriting-to-text writes into the field.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

@@ -1137,7 +1137,7 @@ pub fn call(stores: &Stores, name: &str, args: &Value) -> Result<(Value, Effects
             None => {
                 let settings: crate::schema::Settings = crate::storage::read_json(stores.settings)
                     .map_err(|_| LOCAL_READ_REMOTE.to_string())?;
-                super::mail_ai::resolve_endpoint(settings.ollama_host.as_deref()).map_err(|_| LOCAL_READ_REMOTE.to_string())?
+                super::mail_ai::resolve_endpoint(crate::commands::ollama::host_setting(&settings).0).map_err(|_| LOCAL_READ_REMOTE.to_string())?
             }
         };
         super::mail_ai::resolve_endpoint(Some(&endpoint)).map_err(|_| LOCAL_READ_REMOTE.to_string())?;

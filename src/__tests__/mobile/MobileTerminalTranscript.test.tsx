@@ -114,12 +114,13 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     const { unmount } = render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
-    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Output view").textContent).toBe("Chat");
     screen.getByTestId("session-transcript");
     // The default is not written down as the reader's choice.
     expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Terminal" }));
     await settle();
     expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBe("terminal");
     unmount();
@@ -127,7 +128,7 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     // Another Claude tab opens where this one was left.
     render(<Terminal tab={{ ...TAB, id: "tab-8" }} back={() => {}} />);
     await settle();
-    expect(screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
     expect(screen.queryByTestId("session-transcript")).toBeNull();
   });
 
@@ -135,7 +136,7 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     vi.stubGlobal("fetch", sidecarFetch(() => ({ available: false, reason: "unsupported", entries: [], truncated: false })));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
-    expect(screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
     expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBeNull();
   });
 
@@ -147,14 +148,14 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     vi.stubGlobal("fetch", sidecarFetch(() => stored));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
-    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Output view").textContent).toBe("Chat");
     expect(screen.queryByTestId("session-transcript")).toBeNull();
     expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBeNull();
 
     stored = STORED;
     act(() => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
-    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Output view").textContent).toBe("Chat");
     screen.getByTestId("session-transcript");
   });
 
@@ -221,7 +222,7 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     stored = { available: false, reason: "unsupported", entries: [], truncated: false };
     act(() => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
-    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Output view").textContent).toBe("Chat");
     screen.getByTestId("session-transcript");
     expect(composer).toBe(document.activeElement);
 
@@ -231,7 +232,7 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     act(() => { composer.blur(); });
     await settle();
     expect(reads()).toBe(before + 1);
-    expect(screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
     expect(screen.queryByTestId("session-transcript")).toBeNull();
   });
 
@@ -239,7 +240,7 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     render(<Terminal tab={{ ...TAB, id: "tab-9", kind: "shell", agent_label: undefined }} back={() => {}} />);
     await settle();
-    expect(screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
   });
 
   it("lays the stored prompts and answers out as a chat and polls with the last version", async () => {

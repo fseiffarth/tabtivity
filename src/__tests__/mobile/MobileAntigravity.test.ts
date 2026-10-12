@@ -7,7 +7,11 @@ import {
   readAntigravityEffort,
   readAntigravityPicker,
 } from "../../../mobile-web/src/terminal/antigravity";
-import type { ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
+import {
+  readableScreen,
+  type ReadableBufferLike,
+  type ReadableLine,
+} from "../../../mobile-web/src/terminal/readableScreen";
 import { BRAND } from "../../lib/brand";
 
 /**
@@ -192,5 +196,98 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort`, () => {
 
   it("cuts an idle frame at its own box, blank row and all", () => {
     expect(inputFrameStart(lines("The tests pass.", "", ...IDLE), LABEL)).toBe(1);
+  });
+
+  it("reads the efforts past high that `--effort` takes", () => {
+    // `max` has its own gauge colour since at least 1.2.14, and 1.3 added
+    // `xhigh`: a footer naming either still names the session's model.
+    expect(antigravityFooter("? for shortcuts                                Claude Opus 4.6 (Thinking) · xhigh"))
+      .toEqual({ model: "Claude Opus 4.6 (Thinking)", effort: "xhigh" });
+    expect(antigravityFooter("? for shortcuts                                Claude Opus 4.6 (Thinking) · max"))
+      .toEqual({ model: "Claude Opus 4.6 (Thinking)", effort: "max" });
+    // The gauge's own label row is not a model called "max".
+    expect(antigravityFooter("            low       medium       high       xhigh       max")).toBeNull();
+  });
+});
+
+/** Raw rows as tmux's `capture-pane` printed them, fed through the phone's
+ * own `readableScreen` — so the box's rules and the underline under `Search:`
+ * are dropped by the code that drops them in the app, not by the fixture. */
+function capturedScreen(rows: string[]): ReadableLine[] {
+  const buffer: ReadableBufferLike = {
+    length: rows.length,
+    getLine: (row) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }),
+  };
+  return readableScreen(buffer).lines;
+}
+
+const RULE = "─".repeat(80);
+
+describe(`${BRAND.display} Mobile — Antigravity 1.3.3, captured`, () => {
+  // `agy` 1.3.3 at 80×24 in a private tmux server, signed in with a Gemini
+  // API key (its four-model catalog, so every row fits and no window note is
+  // drawn). 1.2.14 drew these screens byte for byte the same; only the
+  // banner's version differs. The banner's folder row is shortened here.
+  const BANNER = ["  Antigravity CLI 1.3.3", "  Gemini API key", "  Gemini 3.1 Pro (Low)", "  ~/work", ""];
+  const BOX = [RULE, ">", RULE];
+
+  it("reads the idle footer", () => {
+    const screen = capturedScreen([
+      ...BANNER, ...BOX,
+      "? for shortcuts                                             Gemini 3.1 Pro · low",
+    ]);
+    expect(sessionStatus(screen, LABEL)).toEqual({ model: "Gemini 3.1 Pro", effort: "low" });
+  });
+
+  it("reads the /model dialog and its three-stop gauge", () => {
+    const screen = capturedScreen([
+      ...BANNER, ...BOX,
+      "Switch Model",
+      "",
+      "  Search:",
+      `          ${"─".repeat(20)}`,
+      "",
+      "> Gemini 3.8 Flash",
+      "  Gemini 3.7 Flash",
+      "  Gemini 3.6 Flash",
+      "  Gemini 3.1 Pro   (current)",
+      "",
+      "  Effort  ◂        ●━━━━━━━━━━━━━━◉──────────────○        ▸",
+      "                  low          medium          high",
+      "            Balanced speed and reasoning quality for most tasks",
+      "",
+      "Keyboard: ↑/↓ Navigate  ←/→ Effort  enter Select  esc Go Back",
+      "",
+      "                                                            Gemini 3.1 Pro · low",
+    ]);
+    const picker = readAntigravityPicker(screen);
+    expect(picker!.options.map((option) => `${option.number}. ${option.label}`)).toEqual([
+      "1. Gemini 3.8 Flash",
+      "2. Gemini 3.7 Flash",
+      "3. Gemini 3.6 Flash",
+      "4. Gemini 3.1 Pro",
+    ]);
+    expect(picker!.options[3].description).toBe("(current)");
+    expect(picker!.current).toBe(0);
+    expect(picker!.hidden).toBeUndefined();
+    expect(readAntigravityEffort(screen)).toEqual({
+      current: 1,
+      stops: [
+        { label: "low" },
+        { label: "medium", description: "Balanced speed and reasoning quality for most tasks" },
+        { label: "high" },
+      ],
+    });
+    // The chips read the session's own status, not the highlighted row's.
+    expect(sessionStatus(screen, LABEL)).toEqual({ model: "Gemini 3.1 Pro", effort: "low" });
+  });
+
+  it("reads the footer once Enter has applied model and effort together", () => {
+    const screen = capturedScreen([
+      "  ⎿  Model set to Gemini 3.8 Flash (High)",
+      "", ...BOX,
+      "? for shortcuts                                          Gemini 3.8 Flash · high",
+    ]);
+    expect(sessionStatus(screen, LABEL)).toEqual({ model: "Gemini 3.8 Flash", effort: "high" });
   });
 });

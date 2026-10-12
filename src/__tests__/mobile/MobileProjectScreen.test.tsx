@@ -11,6 +11,8 @@ import { Project } from "../../../mobile-web/src/screens/Project";
 const fetchMock = vi.fn();
 
 beforeEach(() => {
+  // The header test picks a sort order, which the screen remembers.
+  localStorage.clear();
   vi.stubGlobal("fetch", fetchMock);
 });
 

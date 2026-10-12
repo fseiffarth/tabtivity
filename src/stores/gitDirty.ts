@@ -126,12 +126,26 @@ interface GitDirtyStore {
 /** Probes currently running, keyed by project and directory. */
 const PROBES_IN_FLIGHT = new Map<string, Promise<void>>();
 
+/** When each project's dot last got a fresh reading (a probe started, or a
+ *  full reading written through `set`), by any caller. The switcher's timer
+ *  reads it (`gitDotsDue`), so a dot the `.git` watcher just refreshed through
+ *  the Files view (`ProjectFilesView`) is not probed again on the next tick:
+ *  the watcher drives the dot of the project on screen, the timer is the
+ *  backstop for the rest. */
+export const gitDotProbedAt = new Map<string, number>();
+
+/** How long a watcher-driven dot refresh waits to coalesce a burst of
+ *  `fs-change` events (perf plan §3.4: at most one probe per second). */
+export const GIT_WATCH_COALESCE_MS = 1_000;
+
 export const useGitDirtyStore = create<GitDirtyStore>((set) => ({
   byId: {},
-  set: (projectId, state) =>
+  set: (projectId, state) => {
+    gitDotProbedAt.set(projectId, Date.now());
     set((s) =>
       s.byId[projectId] === state ? s : { byId: { ...s.byId, [projectId]: state } },
-    ),
+    );
+  },
   refresh: (projectId, dir) => {
     if (!dir) return Promise.resolve();
     // One probe per project at a time: the switcher's tick, the phone's project
@@ -141,6 +155,7 @@ export const useGitDirtyStore = create<GitDirtyStore>((set) => ({
     const key = `${projectId}\0${dir}`;
     const running = PROBES_IN_FLIGHT.get(key);
     if (running) return running;
+    gitDotProbedAt.set(projectId, Date.now());
     const probe = probeDirty(projectId, dir).finally(() => PROBES_IN_FLIGHT.delete(key));
     PROBES_IN_FLIGHT.set(key, probe);
     return probe;

@@ -78,3 +78,58 @@ describe("projects store — load() picks up the scope the last session left", (
     expect(useProjectsStore.getState().loaded).toBe(true);
   });
 });
+
+describe("projects store — load() launch chain (performance plan §3.5)", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useProjectsStore.setState({ projects: [], activeId: null, loaded: false, sidePanelFolderByProject: {} });
+  });
+
+  it("asks for the side-panel folder while root_work_dir is still pending, and restores it", async () => {
+    let releaseRoot: (dir: string) => void = () => {};
+    invoke.mockImplementation((cmd: string, args?: { localFile?: string }) => {
+      switch (cmd) {
+        case "get_projects":
+          return Promise.resolve([proj("a", 10), proj("b", 20, "current")]);
+        case "root_work_dir":
+          return new Promise((resolve) => {
+            releaseRoot = resolve;
+          });
+        case "load_side_panel_folder":
+          return Promise.resolve(args?.localFile === "/p/b/project.json" ? "src/lib" : null);
+        case "detect_git_providers":
+          return Promise.resolve({});
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+    const loading = useProjectsStore.getState().load();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Not serial behind root_work_dir any more.
+    expect(invoke.mock.calls.some(([c]) => c === "load_side_panel_folder")).toBe(true);
+    expect(useProjectsStore.getState().loaded).toBe(false);
+    releaseRoot(`/home/u/${BRAND.slug}/root`);
+    await loading;
+    const state = useProjectsStore.getState();
+    expect(state.activeId).toBe("b");
+    expect(state.sidePanelFolderByProject).toEqual({ b: "src/lib" });
+  });
+
+  it("skips the folder read when the root scope is current, and survives a failed one", async () => {
+    serve([proj("a", 10)]);
+    await useProjectsStore.getState().load();
+    expect(invoke.mock.calls.some(([c]) => c === "load_side_panel_folder")).toBe(false);
+
+    invoke.mockReset();
+    useProjectsStore.setState({ loaded: false });
+    serve([proj("a", 10, "current")]);
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation((cmd: string, ...rest: unknown[]) =>
+      cmd === "load_side_panel_folder" ? Promise.reject(new Error("unreadable")) : base(cmd, ...rest),
+    );
+    await useProjectsStore.getState().load();
+    expect(useProjectsStore.getState().loaded).toBe(true);
+    expect(useProjectsStore.getState().activeId).toBe("a");
+    expect(useProjectsStore.getState().sidePanelFolderByProject).toEqual({});
+  });
+});

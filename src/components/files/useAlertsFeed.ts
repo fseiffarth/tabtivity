@@ -197,11 +197,14 @@ export function useAlertsFeed(options?: AlertsFeedOptions): AlertsFeed {
   // `newCount` — meant N identical queries per minute and N more per delivery.
   // The poll itself re-reads on arrival, so no `newCount` subscription is left
   // here at all.
+  // A feed read past the strip's visibility serves the phone's Alerts screen
+  // (`MobileBridgeHost`), so its backstop tick keeps running while this window
+  // is blurred — the phone is in use exactly then.
   useEffect(() => {
     if (!wantMail) return; // includes the `mail_client` gate — before the invoke.
-    retainUrgentMailPoll();
-    return releaseUrgentMailPoll;
-  }, [wantMail]);
+    retainUrgentMailPoll(ignoreVisibility);
+    return () => releaseUrgentMailPoll(ignoreVisibility);
+  }, [wantMail, ignoreVisibility]);
 
   useEffect(() => {
     if (!wantEvents && !wantTasks) return;

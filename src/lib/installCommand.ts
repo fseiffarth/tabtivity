@@ -1,6 +1,6 @@
 import { useProjectsStore } from "../stores/projects";
 import { openTabInRootConsole, useRootOverlayStore } from "../stores/rootOverlay";
-import { IS_WINDOWS, IS_MAC } from "./platform";
+import { IS_HOST_MAC, IS_HOST_WINDOWS } from "./platform";
 import type { TranslationKey } from "./i18n";
 
 /** A supported git-hosting provider, as chosen in the fork-import dropdown and
@@ -15,17 +15,17 @@ export type GitHostProvider = "github" | "gitlab";
 export const PROVIDER_CLI_INSTALL: Record<GitHostProvider, { bin: string; cmd: string }> = {
   github: {
     bin: "gh",
-    cmd: IS_WINDOWS
+    cmd: IS_HOST_WINDOWS
       ? "winget install --id GitHub.cli -e --source winget"
-      : IS_MAC
+      : IS_HOST_MAC
         ? "brew install gh"
         : "sudo apt-get install -y gh",
   },
   gitlab: {
     bin: "glab",
-    cmd: IS_WINDOWS
+    cmd: IS_HOST_WINDOWS
       ? "winget install --id GitLab.GLab -e --source winget"
-      : IS_MAC
+      : IS_HOST_MAC
         ? "brew install glab"
         : "sudo apt-get install -y glab",
   },
@@ -76,7 +76,7 @@ export function installShellCommand(shellKind: InstallShellKind): string {
  *  runs in. The backend quotes the Dockerfile directory as `'…'` for exactly
  *  these two shells; the Windows default shell is cmd.exe, which does not treat
  *  `'` as a quote, so it must never be `"default"`. */
-export function containerBuildShell(windows: boolean = IS_WINDOWS): InstallShellKind {
+export function containerBuildShell(windows: boolean = IS_HOST_WINDOWS): InstallShellKind {
   return windows ? "powershell" : "bash";
 }
 

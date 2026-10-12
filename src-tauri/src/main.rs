@@ -29,7 +29,13 @@ fn main() {
     #[cfg(target_os = "linux")]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--fence-scope")) {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
-        std::process::exit(app_lib::services::fence_scope::run(&args));
+        std::process::exit(app_lib::services::fence_scope::run(&args, app_lib::services::agent_exec::apply));
+    }
+    // `tabtivity --serverd`: the per-user server daemon (hosted plan §3.1),
+    // the same entry as the `tabtivity-serverd` binary.
+    #[cfg(unix)]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--serverd")) {
+        app_lib::services::server::daemon::main();
     }
     // `tabtivity --agent-exec <program> [args…]`: an agent launch's last step
     // (`services::agent_exec`) — carriers become the CLI's variables, then exec.

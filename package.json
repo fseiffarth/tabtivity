@@ -1,15 +1,19 @@
 {
   "name": "tabtivity",
   "private": true,
-  "version": "0.1.115",
+  "version": "0.2.2",
   "license": "MIT OR Apache-2.0",
   "type": "module",
+  "engines": {
+    "node": "^22.13.0 || >=24.0.0"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && npm run mobile:build",
+    "build": "tsc && vite build && npm run mobile:build && npm run web:bundle",
     "mobile:build": "tsc -p tsconfig.mobile.json && npm run mobile:bundle",
     "mobile:bundle": "vite build --config vite.mobile.config.ts && vite build --config vite.pdf-frame.config.ts",
     "mobile:dev": "vite --config vite.mobile.config.ts",
+    "web:bundle": "vite build --config vite.web.config.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "pretauri:dev": "./scripts/guard-single-instance.sh",

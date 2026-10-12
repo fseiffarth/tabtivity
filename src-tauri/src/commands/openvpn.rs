@@ -13,7 +13,7 @@
 
 use crate::services::openvpn;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use crate::tauri_host::Ctx;
 
 /// Which secrets `config` needs the user to supply, so the UI can show exactly
 /// those fields. The two are independent — a config can need both.
@@ -57,9 +57,9 @@ pub struct VpnAuthNeeds {
 /// checkbox) authenticates *from* the saved passphrase — folding that into
 /// "unticked" deleted the passphrase it had just used, so the tunnel came up once
 /// and prompted ever after.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_connect(
-    app: AppHandle,
+    ctx: Ctx,
     config: String,
     username: Option<String>,
     password: Option<String>,
@@ -108,7 +108,7 @@ pub async fn openvpn_connect(
             &pw,
             key_passphrase.as_deref(),
             |line| {
-                let _ = app.emit(
+                ctx.emit(
                     "openvpn-progress",
                     serde_json::json!({ "config": config, "line": line }),
                 );
@@ -128,7 +128,7 @@ pub async fn openvpn_connect(
 
 /// Which secrets `config` needs from the user (see [`VpnAuthNeeds`]). The UI calls
 /// this when a config is chosen, to decide which fields to show and require.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_auth_needs(config: String) -> VpnAuthNeeds {
     VpnAuthNeeds {
         username: openvpn::config_requires_userpass(&config),
@@ -148,7 +148,7 @@ pub async fn openvpn_auth_needs(config: String) -> VpnAuthNeeds {
 /// unlock prompt the user cannot reach, because the window is frozen mid-frame
 /// waiting for it. The auto-connect-on-launch path asks these questions before it
 /// does anything else, so on the main thread they are a startup freeze.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vpn_has_saved_password(config: String) -> bool {
     tokio::task::spawn_blocking(move || has_saved_password_blocking(&config))
         .await
@@ -177,7 +177,7 @@ pub async fn vpn_has_saved_password(config: String) -> bool {
 /// The lock state is read *first*, so it refreshes the cache that `has()`'s own
 /// gate consults and the two facts describe the same moment rather than
 /// straddling a probe.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vpn_saved_password_state(config: String) -> crate::commands::ssh::SavedPasswordState {
     tokio::task::spawn_blocking(move || {
         use crate::services::remote_credentials as creds;
@@ -220,7 +220,7 @@ fn has_saved_password_blocking(config: &str) -> bool {
 /// spec) or one saved alongside the password. `vpn_has_saved_password` deliberately
 /// still answers the narrower keychain-state question the "Save password" checkbox
 /// and "Forget" button are asking; this one answers "would connecting now be silent?".
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vpn_can_connect_silently(config: String, username: Option<String>) -> bool {
     tokio::task::spawn_blocking(move || {
         use crate::services::remote_credentials as creds;
@@ -243,7 +243,7 @@ pub async fn vpn_can_connect_silently(config: String, username: Option<String>) 
 /// password, any separately-stored key passphrase, and the saved auth username, so a
 /// partial forget can't leave a stale half behind. The SSH-side twin is
 /// `remote_forget_password`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vpn_forget_password(config: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || forget_password_blocking(&config))
         .await
@@ -265,7 +265,7 @@ fn forget_password_blocking(config: &str) -> Result<(), String> {
 /// passphrase is typed into a visible terminal, no askpass file). Returned for
 /// the frontend to type into a root-scope shell tab when headless connections are
 /// off (see `services::openvpn::interactive_connect_command`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_login_command(config: String) -> Result<String, String> {
     let command = openvpn::interactive_connect_command(&config)?;
     // Same reason as `remote_login_command`: record which tunnel this command line
@@ -279,7 +279,7 @@ pub async fn openvpn_login_command(config: String) -> Result<String, String> {
 }
 
 /// Tear down the OpenVPN tunnel for `config` if it is up. Idempotent.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_disconnect(config: String) -> Result<(), String> {
     openvpn::disconnect(&config)
 }
@@ -300,7 +300,7 @@ pub async fn openvpn_disconnect(config: String) -> Result<(), String> {
 /// for) by the exit-time `disconnect_all`. On Linux this raises the `pkexec` password
 /// prompt while the window is still on screen (the whole point); elsewhere it is the
 /// ordinary best-effort teardown.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_disconnect_all_on_quit() -> Result<(), String> {
     // Offload for the same reason `openvpn_connect` does: the teardown is fully
     // synchronous and blocks for as long as `pkexec` sits on the polkit prompt —
@@ -312,7 +312,7 @@ pub async fn openvpn_disconnect_all_on_quit() -> Result<(), String> {
 }
 
 /// Whether the OpenVPN tunnel for `config` is currently up.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_status(config: String) -> Result<bool, String> {
     Ok(openvpn::is_connected(&config))
 }
@@ -322,14 +322,14 @@ pub async fn openvpn_status(config: String) -> Result<bool, String> {
 /// machine-level object (`stores/remote/vpn/vpnStatus.ts`) rather than a per-project one; this
 /// is how that store seats itself on launch and re-seats after a renderer reload,
 /// where the tunnel outlives the window that started it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_active() -> Result<Vec<String>, String> {
     Ok(openvpn::active_configs())
 }
 
 /// Copy a selected `.ovpn` config into Tabtivity's storage and return the stored
 /// path, so the project no longer depends on the original file's location.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_store_config(config: String) -> Result<String, String> {
     openvpn::store_config(&config)
 }
@@ -337,7 +337,7 @@ pub async fn openvpn_store_config(config: String) -> Result<String, String> {
 /// List the `.ovpn` configs Tabtivity has previously stored (newest first), so the
 /// project dialog can offer a previously-used config for reuse instead of
 /// browsing for the file again.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_list_configs() -> Result<Vec<openvpn::StoredConfig>, String> {
     Ok(openvpn::list_configs())
 }
@@ -348,7 +348,7 @@ pub async fn openvpn_list_configs() -> Result<Vec<openvpn::StoredConfig>, String
 /// Order matters: the removal is the guarded step (must be a stored path, tunnel
 /// must be down), so it goes first — a refused removal leaves the credentials
 /// alone. Deletes Tabtivity's copy only, never the user's original file.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_remove_config(config: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         openvpn::remove_config(&config)?;

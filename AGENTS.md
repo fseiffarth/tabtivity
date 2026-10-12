@@ -28,15 +28,23 @@ Run before calling work done; all are CI gates and all sit at zero warnings
 except `npm run lint` (see below):
 
 ```
-npm run build        # the ONLY type-check (tsc + both bundles); vitest/eslint don't type-check
+npm run build        # the ONLY type-check (tsc + desktop, mobile, web bundles)
 npm test
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --workspace
+cargo test -p tabtivity --no-default-features --lib --test server_secrets   # the daemon's build
 npm run lint
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p tabtivity --no-default-features --lib -- -D warnings
+cargo clippy -p app-serverd --all-targets -- -D warnings
 scripts/brand-check.sh   # the app's name is spelled only in the brand modules
 ```
 
-CI clippy is latest stable; a stale local toolchain can pass what CI fails.
+Before pushing, run `scripts/ci-local.sh` (`--fast` for a small change): every
+Linux step of `ci-cd.yml` plus the cross-checks below; CI fails if they drift.
+
+Rust is pinned in `rust-toolchain.toml`, and CI installs the same version
+(`RUST_TOOLCHAIN` in `ci-cd.yml`); bump both together, then install it on the
+host outside the fence (`~/.rustup` is read-only inside one).
 `npm run lint` fails only on errors. Its `react-hooks/exhaustive-deps`
 warnings are advisory and mostly deliberate omissions (mount-only effects,
 timer `tick`s): don't add a dependency just to silence one, since that can
@@ -45,9 +53,23 @@ restart a terminal or refetch on every render. Add no new warnings; no new `any`
 `cargo test -q`, `npm test -- --reporter=dot`, `npm run build 2>&1 | tail -40`. `git diff --check` for whitespace. If a gate's
 tool is unavailable, say so — never skip silently.
 
+CI runs the tests on Linux, Windows and macOS; the local gates run Linux only.
+Backend tests must be cross-OS: paths built per component with `Path::join`
+(no `"a/b"` literals), absolute-path literals gated with `cfg!(windows)`,
+spawned programs compared by file stem. Before pushing backend changes to
+paths, process spawning or `cfg(...)` code, run the Windows cross-check where
+the msvc shims are installed:
+`RC=$HOME/.local/bin/eldrun-msvc-rc-shim AR_x86_64_pc_windows_msvc=$HOME/.local/bin/eldrun-msvc-lib-shim cargo clippy --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings`,
+and `cargo check --workspace --all-targets` for that target (the same shims)
+and for `aarch64-apple-darwin` (check-only CC/AR shims): the workspace's
+server crates build there too. Touched the daemon? `cargo build -p
+app-serverd` and `ldd` it: no GTK/WebKit/X11/dbus.
+Don't push new work while the branch's last ci-cd run is red; the next push is its fix.
+
 ## Git & privacy (public repo)
 
-- Work on `develop`; `main` is reached by PR.
+- Work on `develop`; `main` is reached by PR. Every green push to `main` is
+  released automatically (`release.yml`), so a merge into `main` is a release.
 - Before any push: `scripts/privacy-check.sh` must pass (the pre-commit and
   pre-push hooks and CI run it; hooks need `git config core.hooksPath
   .githooks` once per clone). A plumbing commit (private index + `update-ref`)
@@ -71,7 +93,9 @@ tool is unavailable, say so — never skip silently.
   brand_migration, caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
   markup_mcp, mobile_access, multi_host_remote, openvpn, project_boxes, project_transfer,
   release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console,
-  tmux_sessions, usage_stats, vm_projects.
+  server_gateway, sharing, tmux_sessions, usage_stats, vm_projects, web_client.
+- Server version (hosted plan, gateway, daemon, sharing): start at
+  `docs/server.md` — status, the user's decisions, open problems, doc map.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.
 - Updating a wrapped third-party tool: `docs/third_party_update_checklist.md`.
 - New TODOs go in the matching `todo/<group>.md`. A 🖐️ manual box gets a
@@ -81,6 +105,18 @@ tool is unavailable, say so — never skip silently.
   spot with `rg -n`, then read or edit only that range. Never read one whole.
 
 ## Conventions
+
+- New Tauri commands (the server daemon builds the library without Tauri):
+  `#[cfg_attr(feature = "desktop", tauri::command)]`, never a bare
+  `#[tauri::command]`; take `tauri_host::Ctx` (or nothing), never
+  `AppHandle`/`State`/`Window`, and no `use tauri::…` outside
+  `#[cfg(feature = "desktop")]` code. Give every new command a row in
+  `services::command_class` (`core`/`client`/`admin`/`off`) and regenerate
+  `src/lib/transport/commandClasses.ts` (`UPDATE_COMMAND_CLASSES=1 cargo
+  test -p tabtivity --lib -- the_generated_command_classes_ts_is_current`).
+  A command that names an Ollama model gets a `model_allowlist::MODEL_ARG`
+  row. A browser client cannot run a whole-document save: give a new store a
+  patch or compare-and-swap command.
 
 - Match surrounding style; small focused changes; `rg` for search.
 - Never spell the app's name in code. Rust: `crate::brand` constants and

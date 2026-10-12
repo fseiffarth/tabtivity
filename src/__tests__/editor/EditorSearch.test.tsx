@@ -4,6 +4,7 @@
  * a live match count, Enter cycles, the case toggle, and the highlight overlay).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
@@ -23,6 +24,8 @@ import {
   decorateSearchRanges,
   applyReplacements,
 } from "../../components/embed/FileViewerPane";
+
+warmFileViewer();
 
 describe("findMatches (#67)", () => {
   it("finds non-overlapping occurrences, case-insensitive by default", () => {

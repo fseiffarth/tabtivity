@@ -1327,6 +1327,10 @@ pub fn wrap_pty_options_bwrap(
         return Err(fence_unavailable_message());
     }
     let bwrap = crate::paths::system_executable("bwrap").ok_or_else(fence_unavailable_message)?;
+    // A hosted server's shared project: no agent starts on agent
+    // instructions from other members this user has not reviewed (plan
+    // §6.5 gate 2); a no-op everywhere else.
+    crate::services::server::share::spawn_gate(roots)?;
     // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
@@ -1370,6 +1374,14 @@ pub fn wrap_pty_options_bwrap(
     );
     // Last: overlapping roots and allowlists must not reopen private stores.
     mask_private_state(&mut args, &storage::state_dir(), &support_mounts);
+    // A hosted server's shared hubs: all hidden but this scope's own
+    // project's, read-only (plan §6.3); a no-op everywhere else.
+    crate::services::server::share::apply_fence(&mut args, roots);
+    // A hosted server's administrator's key, for a CLI this user runs on it
+    // (plan §5.4): checked against the keeper's offer here (a withdrawn key
+    // fails the spawn), delivered below as a proxy grant like the user's own
+    // key (#2389); a no-op everywhere else.
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
     let filter = write_keyring_filter()?;
     opts.env
         .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
@@ -1389,7 +1401,7 @@ pub fn wrap_pty_options_bwrap(
     // environment carries something.
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, admin, binding, &mut opts.env);
     let step = launcher_step(
         crate::services::fence_scope::helper_for(&bwrap),
         crate::services::agent_exec::has_carriers(&opts.env),
@@ -1720,6 +1732,9 @@ pub fn wrap_pty_options_sandbox_exec(
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
+    // A hosted server's administrator's key (plan §5.4) — a server is
+    // Linux, so this is a no-op; kept for the one spawn path.
+    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
     // A proxy token and base URL for a CLI the user switched on for a key
     // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier;
     // `agent_exec` in front of sandbox-exec maps it to the CLI's variable, and
@@ -1727,7 +1742,7 @@ pub fn wrap_pty_options_sandbox_exec(
     // Seatbelt profile, which need not grant Tabtivity's binary.
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, admin, binding, &mut opts.env);
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
 }
@@ -1988,6 +2003,7 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
         settings().agent_fence_cargo_credentials.unwrap_or(false)));
     guard_git_control(&mut argv, crate::services::git_guard::guard_paths(&roots, Some(cwd)));
     mask_private_state(&mut argv, &storage::state_dir(), &[]);
+    crate::services::server::share::apply_fence(&mut argv, &roots);
     let filter = write_keyring_filter()?;
     let scope = crate::services::fence_scope::helper_for(&bwrap);
     let step = scope.as_deref().map(|helper| (helper, "--fence-scope"));
@@ -2186,7 +2202,7 @@ pub fn live_unfenced_by_scope(pid_of: impl Fn(&str) -> Option<u32>) -> HashMap<S
     // A tmux tab's registry pid is the tmux *client*; its agent lives under
     // the server's pane.
     let panes = if tabs.iter().any(|(_, t)| t.tmux_session.is_some()) {
-        paths::command_no_window("tmux")
+        crate::services::tmux_local::tmux_command()
             .args(["list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}"])
             .output()
             .ok()
@@ -2198,10 +2214,10 @@ pub fn live_unfenced_by_scope(pid_of: impl Fn(&str) -> Option<u32>) -> HashMap<S
     let Ok(own_ns) = std::fs::read_link("/proc/self/ns/mnt") else {
         return counts;
     };
-    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (pid, ppid) in crate::sysstat::parent_map() {
-        children.entry(ppid).or_default().push(pid);
-    }
+    // The shared process table (`services::proc_table`): a 15 s marker reads
+    // a tree at most a second old as well as a walk of its own.
+    let table = crate::services::proc_table::snapshot();
+    let children = table.children();
     for (tab_id, tab) in tabs {
         let Some(leader) = pid_of(&tab_id) else {
             continue;

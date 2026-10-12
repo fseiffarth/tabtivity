@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::services::remote::{remote_target_for_dir, PRIMARY_HOST};
 use crate::services::ssh_exec::shell_quote;
+use crate::tauri_host::Ctx;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -447,7 +448,7 @@ async fn run_off_thread<T: Send + 'static>(
 /// Does this host hand out workspaces, and on which filesystems? Constant script.
 /// A host without the tooling answers `available: false` — never an error, since
 /// most hosts are not clusters.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_available(target: HpcWsTarget) -> Result<HpcWsInfo, String> {
     run_off_thread(move || {
         let script = concat!("command -v ws_allocate >/dev/null 2>&1 || exit 0\n\
@@ -471,7 +472,7 @@ pub async fn hpc_ws_available(target: HpcWsTarget) -> Result<HpcWsInfo, String> 
 
 /// The caller's existing workspaces. Constant script: `ws_list` for the detail,
 /// then `ws_find` per id for an authoritative path — one round trip.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_list(target: HpcWsTarget) -> Result<Vec<HpcWorkspace>, String> {
     run_off_thread(move || {
         let script = format!(
@@ -494,7 +495,7 @@ pub async fn hpc_ws_list(target: HpcWsTarget) -> Result<Vec<HpcWorkspace>, Strin
 /// Allocate a workspace (`ws_allocate <id> <days>`), then confirm its path with
 /// `ws_find` in the same round trip. Every interpolated value is validated above
 /// and `shell_quote`d here.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_allocate(
     target: HpcWsTarget,
     req: HpcWsAllocate,
@@ -546,7 +547,7 @@ pub async fn hpc_ws_allocate(
 /// `ws_extend`, falling back to `ws_allocate -x` (older tooling has only the
 /// latter). The same `-F` used at allocation must be repeated, so the caller
 /// passes the workspace's own filesystem.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_extend(
     target: HpcWsTarget,
     id: String,
@@ -580,7 +581,7 @@ pub async fn hpc_ws_extend(
 /// Release a workspace. The data is not deleted immediately (sites keep it for a
 /// grace period and `ws_restore` can recover it), but the directory goes away —
 /// so the UI must confirm before calling this.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_release(
     target: HpcWsTarget,
     id: String,
@@ -612,7 +613,7 @@ pub async fn hpc_ws_release(
 /// job writes under it are not mirrored. That is exactly why the wizard's default
 /// is instead to put the project *in* the workspace, where every transport
 /// already works unchanged.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_link(
     project_dir: String,
     workspace_path: String,
@@ -711,7 +712,7 @@ pub fn parse_scratch_candidates(stdout: &str) -> Vec<ScratchCandidate> {
 /// conventional locations, and reports only directories that actually exist.
 /// Writability is stated rather than filtered on, because a read-only hit is
 /// still information (it is usually the group's shared tree, not yours).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_scratch_candidates(target: HpcWsTarget) -> Result<Vec<ScratchCandidate>, String> {
     run_off_thread(move || {
         // `eval` only ever expands a name from SCRATCH_VARS, and every value is
@@ -789,7 +790,7 @@ fn validate_anchor_rel(rel: &str) -> Result<String, String> {
 /// Refuses to replace a real file/directory named `workspace` (only its own
 /// symlink is re-pointed), so an anchor folder someone put real data in is never
 /// clobbered.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_anchor(
     target: HpcWsTarget,
     anchor_rel: String,
@@ -865,7 +866,7 @@ pub async fn hpc_ws_anchor(
 /// Persist a project's workspace/anchor record. Writes BOTH the `projects.json`
 /// entry's `extra["hpc"]` (what the frontend reads on load) and the `project.json`
 /// `hpc` field, exactly as `set_project_run_host` does for its own value.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_hpc(
     project_id: String,
     hpc: Option<crate::schema::project::HpcInfo>,
@@ -893,14 +894,15 @@ pub fn set_project_hpc(
 /// (SLURM out/err only), so it is a plain per-file SFTP read, not a sync pass;
 /// nothing is deleted locally and an unreadable file is skipped rather than
 /// failing the batch. Returns how many files were copied.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_pull_logs(
-    pool: tauri::State<'_, crate::services::remote::RemotePoolState>,
+    ctx: Ctx,
     project_id: String,
     logs_dir: String,
 ) -> Result<u32, String> {
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
     let dir = validate_abs_path("logs folder", &logs_dir)?;
-    let sftp = crate::services::remote::pooled_sftp(pool.inner(), &project_id)
+    let sftp = crate::services::remote::pooled_sftp(pool, &project_id)
         .await
         .ok_or_else(|| "remote project is not connected".to_string())?;
     let entries = crate::services::sftp::list_dir_on(&sftp, &dir).await?;
@@ -946,7 +948,7 @@ pub async fn hpc_ws_pull_logs(
 /// The local mirror — the durable copy — is never touched, which is exactly why
 /// losing a workspace costs a re-pair rather than the work. The caller must
 /// disconnect and reconnect the project around this: the pool caches the spec.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_move_root(
     project_id: String,
     new_root: String,
@@ -1008,16 +1010,17 @@ pub async fn hpc_ws_move_root(
         }
 
         // Byte-sync: markers stay (they are the user's consent), bases clear.
-        let mut manifest = crate::services::remote_sync::load_manifest(&project_id);
-        for entry in manifest.values_mut() {
-            entry.host_size = 0;
-            entry.host_mtime = None;
-            entry.local_size = 0;
-            entry.local_mtime = None;
-            entry.last_pull_ts = None;
-            entry.last_push_ts = None;
-        }
-        if let Err(e) = crate::services::remote_sync::save_manifest(&project_id, &manifest) {
+        let reset = crate::services::remote_sync::update_manifest(&project_id, |manifest| {
+            for entry in manifest.values_mut() {
+                entry.host_size = 0;
+                entry.host_mtime = None;
+                entry.local_size = 0;
+                entry.local_mtime = None;
+                entry.last_pull_ts = None;
+                entry.last_push_ts = None;
+            }
+        });
+        if let Err(e) = reset {
             eprintln!("hpc_ws_move_root: could not reset sync bases: {e}");
         }
 

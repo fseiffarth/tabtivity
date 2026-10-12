@@ -164,6 +164,15 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    /// `reqwest` is built with `rustls-no-provider`: the HOST installs the
+    /// process-wide crypto provider at startup (`mail_engine::
+    /// install_crypto_provider`), and a client built before that panics.
+    /// These tests are the host here, so install one (idempotent) first.
+    fn client() -> Result<reqwest::Client, String> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        super::client()
+    }
+
     async fn server() -> (String, tokio::net::TcpListener) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         (

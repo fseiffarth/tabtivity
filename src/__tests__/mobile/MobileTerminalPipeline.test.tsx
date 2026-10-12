@@ -6,6 +6,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 /** xterm's trim emitter, as the lazy history rides it: `onTrim(listener)`. */
 class FakeTrimEmitter {
@@ -129,6 +130,7 @@ describe(`${BRAND.display} Mobile terminal pipeline`, () => {
     terminalState.emitters = [];
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    stubTerminalSideChannels();
     // These read the Focus view; the phone opens on Terminal until the
     // reader chose Focus for the agent, so the stored choice is preset.
     localStorage.setItem(storageKey("mobile.view.agent"), "focus");
@@ -168,7 +170,8 @@ describe(`${BRAND.display} Mobile terminal pipeline`, () => {
   it("keeps the model and mode facts current while the Terminal view is up", async () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});
-    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Terminal" }));
     expect(screen.queryByLabelText("Session output")).toBeNull();
 
     // The session switches to plan mode with the reading view unmounted. The

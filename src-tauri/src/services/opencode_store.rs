@@ -131,6 +131,7 @@ pub fn session_transcript(
         shells: Vec::new(),
         cwd: None,
         running_cwds: Vec::new(),
+        watched: false,
     })
 }
 

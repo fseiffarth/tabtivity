@@ -29,7 +29,7 @@ use crate::commands::fs::{canonical_or_new, enforce_confinement};
 /// appear, since it fires this probe as it opens. Keeping the work off-thread
 /// lets the menu paint immediately and the "Paste screenshot" item appear once
 /// the probe resolves.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn clipboard_has_image() -> bool {
     tauri::async_runtime::spawn_blocking(|| match arboard::Clipboard::new() {
         Ok(mut cb) => cb.get_image().is_ok(),
@@ -41,7 +41,7 @@ pub async fn clipboard_has_image() -> bool {
 
 /// Read the clipboard image and write it as a PNG at `project_dir`/`rel_path`.
 /// The destination is confined to the project root and must not already exist.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_clipboard_image(project_dir: String, rel_path: String) -> Result<(), String> {
     let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let img = cb
@@ -132,7 +132,7 @@ fn check_clipboard_text(text: &str) -> Result<(), String> {
 /// once it has a clipboard connection, so a missing clipboard is an error here,
 /// but a failure after that (the set itself) is silent. Off the main thread
 /// throughout: arboard can stall negotiating with X11 (see [`clipboard_has_image`]).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     check_clipboard_text(&text)?;
 
@@ -180,7 +180,7 @@ pub fn copy_png_file_to_clipboard(path: &Path) -> Result<(), String> {
 /// and sends those compressed bytes here. Keeping the IPC payload compressed is
 /// important: a moderately sized selection can contain several million RGBA
 /// bytes, while the PNG is normally a fraction of that size.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn copy_png_bytes_to_clipboard(png: Vec<u8>) -> Result<(), String> {
     let (width, height, rgba) = decode_png_bytes_rgba(&png)?;
     copy_image_to_clipboard(width, height, rgba)

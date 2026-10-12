@@ -62,8 +62,8 @@ nav button,.keys button { flex:1; }
 .project-title > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .project-title > .view-caret { flex:0 0 auto; }
 .project-menu { right:auto; left:44px; }
-.project-header-tools .drawer-open { display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border:1px solid #34384a; border-radius:10px; background:#151822; color:#e7e9f2; }
-.project-header-tools .drawer-open svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; }
+.drawer-open { flex:0 0 auto; display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border:1px solid #34384a; border-radius:10px; background:#151822; color:#e7e9f2; }
+.drawer-open svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; }
 /* The drawer's own rows (the agent's files, Git), above the file
    browser and set off from it by the head's rule. */
 .drawer-menu { padding:4px 0 10px; border-bottom:1px solid #2b3040; }
@@ -396,9 +396,16 @@ small { color:#9498aa; }
    the project header's ＋, and never shrinking: the brand gives way. */
 .home-settings { display:grid; place-items:center; flex:0 0 auto; width:40px; height:40px; padding:0; border-color:#45476a; border-radius:11px; background:rgba(27,30,44,.7); color:#d7d3f5; }
 .home-settings svg { width:21px; height:21px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-.tab-card.home-project-card { --oct-edge:#3b4055; --oct-face:linear-gradient(115deg,rgba(54,49,85,.42),rgba(54,49,85,0) 38%),#1c1f2b; }
+/* A project row must not read as one more button: every other control on the
+   page is the same grey octagon. So it wears a violet-tinted edge and face,
+   and a 3px accent down its left side, cuts included — the tab-colour edge
+   the project screen's cards use (`has-tab-color`), here in the brand violet. */
+.tab-card.home-project-card { --oct-edge:#4b4780; --oct-face:linear-gradient(100deg,rgba(124,108,255,.24),rgba(124,108,255,.07) 45%,rgba(124,108,255,0) 80%),#1d1f2e; }
+.tab-card.home-project-card::before { background:linear-gradient(90deg, #8c7df4 calc(var(--oct) + 3px), var(--oct-edge) 0); }
+.tab-card.home-project-card::after { left:3px; }
 .tab-card.home-project-card:focus-within { --oct-edge:#8d80ee; }
-.home-project-card .card { min-height:62px; }
+.home-project-card .card { min-height:62px; padding-left:18px; }
+.home-project-card .card strong { font-size:1.05rem; letter-spacing:-.01em; }
 /* A row's agent tabs by state: the tab cards' status pills, a size down so
    three of them and the tab count fit one phone-width row. */
 .home-project-card .card-trailing { gap:6px; }
@@ -734,6 +741,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .focus-menu button { display:flex; align-items:center; gap:12px; width:100%; padding:11px 12px; border:0; border-radius:10px; background:#1e2230; text-align:left; }
 .focus-menu button[aria-checked="true"] { color:#8fb6ff; background:#1c2336; }
 .focus-menu button.unavailable { opacity:.6; }
+.focus-menu-rule { margin:3px 4px; border:0; border-top:1px solid #2c3040; }
 .focus-menu button > span { display:grid; flex:1; gap:3px; min-width:0; }
 .focus-menu strong { font-weight:600; }
 .focus-menu em { margin-left:6px; color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
@@ -918,8 +926,11 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-agent-body small { color:#8fb8ff; font-size:.66rem; text-transform:uppercase; letter-spacing:.05em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .transcript-agent-body small em { font-style:normal; }
 .transcript-agent-body > span { font-size:.86rem; line-height:1.35; overflow-wrap:break-word; }
-/* A subagent that has reported back: the tab cards' ✓, as a small square. */
-.transcript-agent > .agent-status { flex:0 0 auto; padding:2px 5px; font-size:.72rem; line-height:1; }
+/* A subagent that has reported back: the tab cards' ✓, as a small square; one at work: their ▶. */
+.transcript-agent > .agent-status, .subagent-index-list .agent-status { flex:0 0 auto; padding:2px 5px; font-size:.72rem; line-height:1; }
+.transcript-agent > .agent-status svg { width:1em; height:1em; stroke:none; }
+.subagent-index-list button.has-status { position:relative; padding-right:36px; }
+.subagent-index-list button > .agent-status { position:absolute; top:50%; right:10px; transform:translateY(-50%); }
 /* Over a subagent's conversation: back up, its task, and ‹ n of m › through
    the subagents beside it. Sticks to the top of the reading view, over its
    padding, so the way back never scrolls away. */
@@ -937,7 +948,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* The strip over the chat: the subagent index and the sent-files index side by
    side, one list open at a time. */
 .chat-index { position:sticky; top:-12px; z-index:2; display:flex; align-items:flex-start; gap:6px; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid #262a3a; background:#10131b; }
-.chat-index > nav { flex:1 1 0; min-width:0; }
+/* Not the global `nav` row: the chip stacks over its list at full width. */
+.chat-index > nav { display:block; flex:1 1 0; min-width:0; margin:0; }
 /* An open list takes the strip's full width; the shut chip moves to a line of
    its own above it. */
 .chat-index:has(> nav.open) { flex-wrap:wrap; }
@@ -1059,11 +1071,19 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .prompt-composer:focus-within { border-color:#8c7df4; box-shadow:0 0 0 2px rgba(120,104,217,.4),0 6px 20px rgba(0,0,0,.18); }
 .prompt-composer textarea { width:100%; min-height:42px; max-height:min(200px,32vh); resize:none; border:0; padding:8px 0; appearance:none; -webkit-appearance:none; background-color:#171a24 !important; color:#fff !important; -webkit-text-fill-color:#fff; caret-color:#fff; line-height:1.35; }
 .prompt-composer textarea:focus { outline:0; }
+/* A pen writes here (`penWriting.ts`): about four lines to handwrite in, as
+   the question box gives it; a longer draft still grows to the max-height. */
+.prompt-composer.pen-writing textarea { min-height:calc(5.4em + 16px); }
 .prompt-composer textarea:disabled { opacity:1; color:#9fa4b6 !important; -webkit-text-fill-color:#9fa4b6; }
 .composer-bar { display:flex; align-items:center; gap:6px; }
 .composer-bar svg,.composer-dictate svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
 .composer-dictate,.composer-bar .send-icon { display:grid; place-items:center; width:40px; min-width:40px; height:40px; padding:0; border:0; border-radius:10px; }
-.composer-add { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:transparent; color:#c8cdda; }
+.composer-add { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:#252a3a; color:#c8cdda; }
+/* The ＋ turns into an ✕ while its tray is up, as messengers do. */
+.composer-add svg { transition:transform .15s ease-out; }
+.composer-add.open svg { transform:rotate(45deg); }
+/* Send is a round button, as messengers draw it. */
+.composer-bar .send-icon { border-radius:50%; }
 .composer-spacer { flex:1 0 0; }
 /* Folds the key row under the composer in and out; lit while it shows. */
 .composer-keys { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:transparent; color:#c8cdda; }
@@ -1187,6 +1207,21 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .sheet-note.error { color:#ffb4c0; }
 .notifications-group { display:grid; gap:6px; }
 .notifications-group h3 { margin:4px 6px 0; color:#9da3b6; font-size:.78rem; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+/* The composer's ＋ as an attach tray (`AttachSheet`): round, coloured icon
+   tiles with a short name under each. The fills are messenger colours that
+   read on every theme, so they are kept as written. */
+.attach-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(70px,1fr)); gap:16px 6px; margin:0; padding:4px 2px 6px; list-style:none; }
+.attach-tile { display:grid; justify-items:center; align-content:start; gap:7px; width:100%; padding:2px 0; border:0; background:transparent; color:#c8cdda; font-size:.78rem; }
+.attach-icon { display:grid; place-items:center; width:56px; height:56px; border-radius:50%; transition:transform .1s ease-out; }
+.attach-tile:active .attach-icon { transform:scale(.92); }
+.attach-icon svg { width:26px; height:26px; fill:none; stroke:#fff; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; /* theme: fixed */ }
+.attach-tile-camera .attach-icon { background:#e8546b; /* theme: fixed */ }
+.attach-tile-gallery .attach-icon { background:#7c6cff; /* theme: fixed */ }
+.attach-tile-files .attach-icon { background:#3b82f6; /* theme: fixed */ }
+.attach-tile-desktop .attach-icon { background:#22a565; /* theme: fixed */ }
+.attach-tile-project .attach-icon { background:#e09b1a; /* theme: fixed */ }
+.attach-label { text-align:center; line-height:1.2; overflow-wrap:anywhere; }
+.attach-tile .untested { margin-left:0; }
 .option-list { display:grid; gap:3px; margin:0; padding:0; list-style:none; }
 .option-list button { display:flex; align-items:center; gap:12px; width:100%; padding:13px 14px; border:0; border-radius:13px; background:#1e2230; text-align:left; }
 .option-list button.current { color:#8fb6ff; background:#1c2336; }
@@ -1493,10 +1528,11 @@ span.files-close { background:transparent; }
 .markup-host { display:contents; }
 .markup-host.away { display:none; }
 .outbox-viewer { position:fixed; inset:0; z-index:13; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); background:rgba(4,5,9,.97); color:#e6e9f2; }
-.outbox-viewer-head { display:flex; align-items:center; gap:8px; min-width:0; min-height:0; padding:calc(8px + env(safe-area-inset-top)) 10px 8px; }
+.outbox-viewer-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; min-height:0; padding:calc(8px + env(safe-area-inset-top)) 10px 8px; }
 .outbox-viewer-head > a, .outbox-viewer-head > button { flex:0 0 auto; }
-/* The name over its position and size, so neither squeezes the other. */
-.outbox-viewer-title { display:grid; flex:1; min-width:0; }
+/* The name over its position and size, so neither squeezes the other. Kept
+   at least 7rem wide: on a narrow phone the actions wrap under it instead. */
+.outbox-viewer-title { display:grid; flex:1 1 7rem; min-width:0; }
 .outbox-viewer-head h2 { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.95rem; }
 .outbox-viewer-head small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#95a6c8; font-size:.72rem; }
 /* The picture fills the stage and is letterboxed in it; ‹ › sit on its edges
@@ -1569,7 +1605,7 @@ span.files-close { background:transparent; }
 .outbox-clear-all { border:1px solid #6b2f33; border-radius:999px; background:#2a1416; color:#f2b8b5; font-size:.78rem; padding:6px 12px; }
 .outbox-entry-error { padding:0 2px; color:#f2b8b5; font-size:.7rem; }
 .outbox-viewer-head a, .outbox-text-body a, .outbox-viewer > a { color:#8fb8ff; }
-/* The head's actions — Mark up, Save, Share — as one row of the same small
+/* The head's actions — Mark up, Save, Share, Print — as one row of the same small
    pills; Save is a download link drawn like the buttons beside it. */
 .outbox-viewer-head .outbox-action { display:inline-flex; align-items:center; min-height:32px; padding:0 11px; border:1px solid #34384a; border-radius:999px; background:#141a26; color:#d8e2f5; font:500 .78rem/1 Inter,ui-sans-serif,system-ui,sans-serif; text-decoration:none; white-space:nowrap; }
 .outbox-viewer-head .outbox-action:disabled { opacity:.45; }
@@ -1678,8 +1714,8 @@ span.files-close { background:transparent; }
 .markup-questions p[role="alert"] { margin:0; color:#f2b8b5; font-size:.8rem; }
 .markup-pin { position:absolute; z-index:1; display:grid; place-items:center; min-width:26px; height:24px; padding:0 6px; border:0; border-radius:12px 12px 12px 3px; background:#ffd36b; color:#1b1f2b; font:700 .74rem/1 Inter,ui-sans-serif,system-ui,sans-serif; box-shadow:0 1px 3px rgba(0,0,0,.45); }
 .markup-pin-hit { position:absolute; z-index:1; border-radius:2px; background:rgba(255,211,107,.38); pointer-events:none; }
-/* The agent's ticks (`markup_done`): a ✓ pin in the finished colour at a
-   ticked sent mark's top-right corner — the question pin's static shadow, no
+/* The agent's ticks (`markup_done`): a ✓ pin in the finished colour just
+   outside a ticked sent mark's top-right corner (`tickBadgeSpot`) — the question pin's static shadow, no
    animation. A tap approves the mark; "n done · Approve all" sits under the
    round's pill in its look. */
 .markup-pin.is-tick { width:26px; min-width:26px; height:26px; padding:0; border-radius:50%; background:#91e6a9; color:#0f2a18; font-size:.9rem; }
@@ -1698,3 +1734,16 @@ span.files-close { background:transparent; }
 .readable-turn.user .transcript-send-state button { margin-left: 0.5rem; padding: 0.1rem 0.55rem; font-size: 0.78rem; border-radius: 999px; border: 1px solid currentColor; background: transparent; color: inherit; }
 .readable-turn.user .transcript-send-state em { margin-left: 0.4rem; font-style: normal; opacity: 0.7; }
 .readable-turn.user[data-send-failed] { outline: 1px dashed var(--danger, #ff6b6b); outline-offset: 2px; }
+/* Print (`print.ts`): the viewer's file is laid out in a .print-root beside
+   the app, hidden on screen; on paper it stands alone, black on white, one
+   picture per sheet, each fitted inside the sheet's printable area. */
+.print-root { display:none; }
+@media print {
+  html, body { height:auto !important; min-height:0 !important; overflow:visible !important; background:#fff !important; color:#000 !important; }
+  body > :not(.print-root) { display:none !important; }
+  .print-root { display:block; }
+  .print-root pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font:9.5pt/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#000; }
+  .print-page { break-after:page; break-inside:avoid; }
+  .print-page:last-child { break-after:auto; }
+  .print-page img { display:block; max-width:100%; max-height:98vh; margin:0 auto; }
+}

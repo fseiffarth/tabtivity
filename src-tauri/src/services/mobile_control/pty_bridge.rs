@@ -166,7 +166,7 @@ const MOBILE_SCROLLBACK_LINES: usize = crate::services::ssh_exec::TMUX_HISTORY_L
 
 fn tmux_capture_command(tmux_name: &str) -> Command {
     // Tabtivity's effective PATH, as for the attach (see `tmux_attach_command`).
-    let mut command = crate::paths::command_no_window("tmux");
+    let mut command = crate::services::tmux_local::tmux_command();
     command.args([
         "-u",
         "capture-pane",
@@ -190,7 +190,7 @@ fn tmux_capture_command(tmux_name: &str) -> Command {
 
 /// The tmux *window* geometry, which is what the pane is actually rendered at.
 fn tmux_window_size_command(tmux_name: &str) -> Command {
-    let mut command = crate::paths::command_no_window("tmux");
+    let mut command = crate::services::tmux_local::tmux_command();
     command.args([
         "-u",
         "display-message",
@@ -212,10 +212,12 @@ fn parse_window_size(raw: &str) -> Option<(u16, u16)> {
     Some((cols, rows))
 }
 
-/// `window-size largest` sizes a window to the widest attached client, and tmux
-/// then *pans* any smaller client across it — so a phone fitted to its own
-/// viewport received a ~44-column moving slice of a ~180-column pane with every
-/// line silently truncated. The phone adopts the window geometry instead: its
+/// A window wider than a client's screen is *panned* across it — under
+/// `window-size largest` that was every smaller client, so a phone fitted to its
+/// own viewport received a ~44-column moving slice of a ~180-column pane with
+/// every line silently truncated (`latest`, the policy since tmux 3.2 —
+/// `tmux_local::window_size_policy` — would shrink the desktop's window to the
+/// phone's instead the moment it typed). The phone adopts the window geometry: its
 /// xterm is an offscreen emulator whose column count never had to match the
 /// physical screen, and the reading view re-wraps for display.
 fn window_size(tmux_name: &str) -> Option<(u16, u16)> {

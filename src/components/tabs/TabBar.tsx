@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   BLOB_TAB_CMD,
@@ -87,7 +87,13 @@ import { closeTabWithConfirm } from "../../lib/remote/closeRemoteTab";
 import { reopenClosedAgentTab, useClosedAgentTabs } from "../../stores/agents/closedAgentTabs";
 import { registerHostBoundTab } from "../../lib/remote/hostBound";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
-import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
+import {
+  attentionStateClass,
+  busyStateClass,
+  useActivityStore,
+  type AttentionKind,
+  type BusyKind,
+} from "../../stores/activity";
 import { UntestedTag } from "../common/UntestedTag";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { MenuShortcut } from "../common/MenuShortcut";
@@ -151,6 +157,297 @@ function canDuplicateTab(tab: TabEntry): boolean {
   return !(isFileTabKind(tab.kind) && !tab.folder);
 }
 
+// Empty activity maps a bar without a tab group subscribes to (see `TabItem`).
+const NO_BUSY: Record<string, boolean> = {};
+const NO_BUSY_KIND: Record<string, BusyKind> = {};
+const NO_ATTENTION: Record<string, AttentionKind> = {};
+
+// Whole-tab status ring (no dot, no width change, nothing animated —
+// see `--status-*` in themes.css):
+//  - working (green, dotted): PTY producing sustained output.
+//  - finished (green, solid): an agent you're not looking at went quiet
+//    with no prompt — the same work as above, done, its result unread.
+//  - needs-decision (amber, solid): an agent went quiet with a
+//    choice/permission prompt on its screen. Its own colour because it
+//    is the one state that is about you rather than about the agent.
+//  - interrupted (`--status-interrupted`, solid): you cut the agent's
+//    turn off; it holds until the next turn starts. Like finished, it is
+//    left off the viewed tab, whose screen already says "interrupted".
+// Working wins, and shows on the viewed tab too: it says the tab is still
+// RUNNING, which a screen that has paused scrolling (an agent thinking, a
+// long build) doesn't always show. Finished is about output you HAVEN'T
+// seen, so it never shows on the viewed tab — its screen says it better. A
+// pending decision is the exception: it's about an agent that is BLOCKED,
+// and it stays blocked whether or not you're looking at it. The lamp holds
+// until the prompt is answered, so a tab left on screen mid-prompt while you
+// work elsewhere in the window still says so.
+function tabStateClassOf(
+  tab: TabEntry,
+  isActive: boolean,
+  busy: boolean,
+  busyKind: BusyKind | undefined,
+  rawAttention: AttentionKind | null,
+): string {
+  const working = isPtyTabKind(tab.kind) && busy;
+  const rawAttn = tab.kind === "agent" || tab.kind === "local_agent" ? rawAttention : null;
+  const attn = !isActive || rawAttn === "decision" ? rawAttn : null;
+  return working ? busyStateClass(busyKind, tab.kind) : attentionStateClass(attn);
+}
+
+/** One tab's status ring, subscribed to its own three activity entries only
+ *  (keyed by the composed PTY id, `<scope>:<tabKey>`, since tab keys alone can
+ *  collide across projects) — the whole maps are republished on any tab's
+ *  change, which would re-render every item in every bar. */
+function useTabStateClass(scope: string, tab: TabEntry, isActive: boolean): string {
+  const ptyId = `${scope}:${tab.key}`;
+  const busy = useActivityStore((s) => !!s.busyByTab[ptyId]);
+  const busyKind = useActivityStore((s) => s.busyKindByTab[ptyId]);
+  const rawAttention = useActivityStore((s) => s.attentionByTab[ptyId] ?? null);
+  return tabStateClassOf(tab, isActive, busy, busyKind, rawAttention);
+}
+
+/** The bar's per-tab handlers, behind ONE object per bar that never changes
+ *  identity (the bar rebuilds its closures every render; a fresh prop would
+ *  void every item's memo). Each forwarder reads the bar's latest closure. */
+interface TabItemBar {
+  contextMenu: (event: React.MouseEvent, key: string, index: number) => void;
+  pointerDown: (event: React.PointerEvent, tab: TabEntry) => void;
+  /** Hover card anchor (the tab's bottom-center). */
+  hoverEnter: (key: string, x: number, y: number) => void;
+  hoverLeave: (key: string) => void;
+  commitRename: (key: string, value: string) => void;
+  cancelRename: () => void;
+  /** Activate a tab in whatever group owns it (the TeX ⇄ PDF jump). */
+  activate: (key: string) => void;
+  openLocality: (key: string, rect: DOMRect, startOnMachines: boolean) => void;
+  clearLanded: (nonce: number) => void;
+}
+
+interface TabItemProps {
+  tab: TabEntry;
+  /** Position in the bar's ordered tabs (`data-tab-index`, the drop slot). */
+  index: number;
+  scope: string;
+  isActive: boolean;
+  isDragging: boolean;
+  /** Inline rename (#56): the label is an <input>. */
+  editing: boolean;
+  /** Freshly dropped into this bar: plays the drop-in landing once. */
+  landing: boolean;
+  landedNonce: number;
+  fastMode: boolean;
+  isRemoteScope: boolean;
+  primaryHost?: string;
+  computeHosts?: React.ComponentProps<typeof TabLocalityBadge>["computeHosts"];
+  /** The scope's `.tex`/`.pdf` viewer tabs (`useTexPdfCandidates`). */
+  texPdfTabs: readonly TabEntry[];
+  bar: TabItemBar;
+}
+
+// Selects the label once, when the rename input mounts. Module-level so it is
+// one ref for every item: an inline one is a new ref every render, so React
+// re-ran it on each re-render (agent status ticks) and the next keystroke
+// replaced what was typed.
+function selectOnMount(el: HTMLInputElement | null) {
+  if (el) el.select();
+}
+
+/**
+ * One plain tab of the strip. Memoised (performance plan §5.1): the bar
+ * re-renders on hover, drag, menu and activity changes, and with sixty tabs
+ * each of those used to rebuild sixty tabs' worth of badges. Everything that
+ * crosses this boundary is a primitive, the tab entry, a store reference or
+ * the bar's stable handler object, so only the item whose own inputs changed
+ * renders. The status ring and the schedule indicator subscribe per key here.
+ */
+const TabItem = memo(function TabItem({
+  tab,
+  index,
+  scope,
+  isActive,
+  isDragging,
+  editing,
+  landing,
+  landedNonce,
+  fastMode,
+  isRemoteScope,
+  primaryHost,
+  computeHosts,
+  texPdfTabs,
+  bar,
+}: TabItemProps) {
+  const t = useT();
+  const chordHint = useChordHint();
+  const stateClass = useTabStateClass(scope, tab, isActive);
+  const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
+  // This tab's own schedules (none for a non-agent or an unscheduled tab): a
+  // store reference, so the next-occurrence sort below runs once per change
+  // of the list rather than per render of the bar.
+  const schedules = useAgentSchedulesStore((s) =>
+    isAgent && tab.scheduleTargetId
+      ? s.byTarget[scheduleCacheKey(scope, tab.scheduleTargetId)]
+      : undefined,
+  );
+  // Recomputed against a fresh "now" on every list change, and again (via the
+  // epoch) when the indicator is hovered after the shown occurrence has
+  // passed: the title used to be worked out on every bar render, so it never
+  // named a past slot, and a cached one must refresh itself once the clock
+  // crosses it — a run or an edit republishes the list, a skipped slot does not.
+  const [scheduleEpoch, setScheduleEpoch] = useState(0);
+  const schedule = useMemo(() => {
+    const enabled = (schedules ?? []).filter((item) => item.enabled);
+    const now = new Date();
+    const next = enabled
+      .map((item) => nextScheduleOccurrence(item, now)?.at)
+      .filter((at): at is Date => !!at)
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+    return { count: enabled.length, next };
+    // `scheduleEpoch` looks unnecessary to the linter because the body reads
+    // the clock, which it cannot see — the bump is what re-reads it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schedules, scheduleEpoch]);
+  const refreshScheduleNext = () => {
+    if (schedule.next && schedule.next.getTime() <= Date.now()) setScheduleEpoch((n) => n + 1);
+  };
+  // Expose the kind colour to CSS on every tab (not just the active one)
+  // so the top stripe reads as the tab-group colour consistently — plain
+  // themes draw the rail above, fancy themes move it below. Inactive tabs
+  // keep a transparent stripe slot; hover/active tint it with this colour.
+  // A user-set colour (#264) REPLACES the kind colour in the same slot, so
+  // every treatment already keyed off `--tab-accent` (the active tab's
+  // bottom rule, and a fancy theme's rail below it) follows it without a
+  // second code path. `has-tab-color` is what makes it visible on an
+  // INACTIVE tab too: colouring tabs is for telling them apart at a
+  // glance, and a mark only the current tab carries would say nothing.
+  const userColor = tabColorCss(tab.color);
+  const style = { "--tab-accent": userColor ?? TAB_ACCENT[tab.kind] } as React.CSSProperties;
+  return (
+    <div
+      className={`tab ${isActive ? "active" : ""}${stateClass}${userColor ? " has-tab-color" : ""}${isDragging ? " dragging" : ""}${editing ? " editing" : ""}${landing ? " landing" : ""}`}
+      style={style}
+      data-tab-index={index}
+      data-kind={tab.kind}
+      onContextMenu={(e) => bar.contextMenu(e, tab.key, index)}
+      onPointerDown={(e) => bar.pointerDown(e, tab)}
+      // Fast mode has no card, so the label becomes a plain tooltip —
+      // otherwise a tab whose name is ellipsized would have no way at all
+      // to read it out.
+      title={fastMode ? tab.label : undefined}
+      // Styled hover card (mirrors the project pill's popup) anchored to
+      // this tab's bottom-center. Skipped while inline-renaming.
+      onMouseEnter={(e) => {
+        if (editing || fastMode) return;
+        const r = e.currentTarget.getBoundingClientRect();
+        bar.hoverEnter(tab.key, r.left + r.width / 2, r.bottom);
+      }}
+      onMouseLeave={() => bar.hoverLeave(tab.key)}
+      // Clear the landing once it finishes so the class doesn't linger
+      // (guard on currentTarget so a child's animationend never clears it
+      // early; the status glow is an infinite ::after animation and emits
+      // no animationend).
+      onAnimationEnd={
+        landing
+          ? (e) => {
+              if (e.target === e.currentTarget) bar.clearLanded(landedNonce);
+            }
+          : undefined
+      }
+    >
+      <TabStatusMark stateClass={stateClass} />
+      {editing ? (
+        <input
+          className="tab-label-edit"
+          defaultValue={tab.label}
+          autoFocus
+          aria-label={t("tabBar.renameAriaLabel")}
+          // Mount focused with the whole label selected for a fast retype.
+          ref={selectOnMount}
+          // Keep editing keystrokes / clicks out of drag + activation.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") {
+              bar.commitRename(tab.key, (e.target as HTMLInputElement).value);
+            } else if (e.key === "Escape") {
+              bar.cancelRename();
+            }
+          }}
+          onBlur={(e) => bar.commitRename(tab.key, e.target.value)}
+        />
+      ) : (
+        <span className="tab-label">{tab.label}</span>
+      )}
+      <TabMarkBadge tab={tab} />
+      <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
+      {tab.hostSession && (
+        <span className="tab-host-session" title={t("tab.hostSessionBadgeTitle")}>
+          {t("tab.hostSessionBadge")}
+        </span>
+      )}
+      {schedule.count > 0 && (
+        <span
+          className="tab-schedule-indicator"
+          // The hover that is about to read the title refreshes a stale one.
+          onMouseEnter={refreshScheduleNext}
+          title={schedule.next
+            ? t("agentSchedule.indicatorNext", { count: schedule.count, value: schedule.next.toLocaleString() })
+            : t("agentSchedule.indicator", { count: schedule.count })}
+        >
+          ◷
+        </span>
+      )}
+      {/* Viewer file-source badge — remote-native (host SFTP) vs local
+          mirror, a clickable toggle when the file exists on both sides.
+          Shared with the detached strip (see TabLocalityBadges). */}
+      <TabSourceBadge tabKey={tab.key} />
+      {/* TeX ⇄ PDF coupling mark: this tab's other half (the compiled PDF,
+          or the LaTeX source that produces it) when that tab is open —
+          click to jump to it. Derived from the paths, so it needs nothing
+          persisted on the tab; see lib/viewers/tex/texPdfLink. */}
+      <TabTexLinkBadge
+        partner={texPdfPartner(texPdfTabs, tab)}
+        onFocus={bar.activate}
+      />
+      {/* There is deliberately no Plan/Auto TOGGLE here. An agent's
+          permission mode is the agent's own to set, through its own CLI
+          (Claude's shift+tab, Codex's mode picker) — Tabtivity launches the
+          plain command and injects no mode flag. The badge that used to
+          sit here rewrote the tab's launch args, which respawned the PTY
+          on every flip; the mode a user sets inside the session still
+          survives a restart, because `services::agent_session` re-applies
+          the mode Claude's own hook recorded. The PLAN/GOAL pills after
+          the label only SHOW what the session's status line says. */}
+      {/* Locality badge — click to choose where this agent/shell tab runs:
+          the local mirror, the primary host, or (multi-host remote,
+          docs/multi_host_remote_plan.md) any worker machine. Only shown for
+          a remote project's locatable tabs. Shared with the detached strip. */}
+      {isRemoteScope && (
+        <TabLocalityBadge
+          tab={tab}
+          primaryHost={primaryHost}
+          computeHosts={computeHosts}
+          onOpen={(r, startOnMachines) => bar.openLocality(tab.key, r, startOnMachines)}
+        />
+      )}
+      <button
+        className="tab-close"
+        onClick={(e) => { e.stopPropagation(); closeTabWithConfirm(tab.key); }}
+        // The chord closes the ACTIVE tab, so only the active tab's ×
+        // claims it — on any other it would name a key that closes a
+        // different tab than the one being pointed at.
+        title={
+          isActive
+            ? chordHint(t("tabBar.closeTabTitle"), "closeTab")
+            : t("tabBar.closeTabTitle")
+        }
+      >
+        ×
+      </button>
+    </div>
+  );
+});
+
 interface Props {
   groupId: string;
   projectCwd: string;
@@ -212,7 +509,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const duplicateTab = useTabsStore((s) => s.duplicateTab);
   const storeEnsureTab = useTabsStore((s) => s.ensureTab);
   const setTabLocation = useTabsStore((s) => s.setTabLocation);
-  // Experimental — off for users, on in debug: the in-app browser (#61). This is
+  // Experimental — off until ticked: the in-app browser (#61). This is
   // the entry-point half of the gate; the other half is the withdrawal
   // (`lib/experimentalSweep`), which closes any browser tab already open when the
   // flag goes off, so hiding the menu entry here is never the whole story.
@@ -264,13 +561,19 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // green status lamp so busy agents are visible even when not the active tab.
   // Both maps are keyed by the composed PTY id (`<scope>:<tabKey>`), since tab
   // keys alone can collide across projects.
-  const busyByTab = useActivityStore((s) => s.busyByTab);
+  // Each plain tab reads its own three entries inside `TabItem`
+  // (`useTabStateClass`), so a status flip re-renders that one item. The whole
+  // maps are read here only for a tab group's folded members (`TabStackChip`
+  // takes their classes as data); a bar without a group subscribes to
+  // constants and never re-renders on activity.
+  const hasStacks = tabs.some((tb) => tb.stack != null);
+  const busyByTab = useActivityStore((s) => (hasStacks ? s.busyByTab : NO_BUSY));
   // What each busy tab is busy WITH, so an agent turn, a command and the two at
   // once are drawn apart (`busyStateClass`).
-  const busyKindByTab = useActivityStore((s) => s.busyKindByTab);
+  const busyKindByTab = useActivityStore((s) => (hasStacks ? s.busyKindByTab : NO_BUSY_KIND));
   // Per-tab "needs attention" map: an agent tab that finished its turn, or that
   // is waiting on a decision, while not being looked at pulses until it's viewed.
-  const attentionByTab = useActivityStore((s) => s.attentionByTab);
+  const attentionByTab = useActivityStore((s) => (hasStacks ? s.attentionByTab : NO_ATTENTION));
   const clearAttention = useActivityStore((s) => s.clearAttention);
   // All the "+"-menu data plumbing (agent registry probe, enabled/compact/
   // custom agents, local-model drivers, box-member rows) is the shared hook —
@@ -341,12 +644,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // #56: Shift+right-click on a tab enters inline rename mode for that key (no
   // menu, no prompt dialog). The label becomes a focused, text-selected <input>.
   const [editingKey, setEditingKey] = useState<string | null>(null);
-  // Selects the label once, when the input mounts. A stable callback: an
-  // inline one is a new ref every render, so React re-ran it on each re-render
-  // (agent status ticks) and the next keystroke replaced what was typed.
-  const selectOnMount = useCallback((el: HTMLInputElement | null) => {
-    if (el) el.select();
-  }, []);
   // Right-click on a tab-group chip: its own menu (rename / ungroup / close).
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string } | null>(null);
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
@@ -354,7 +651,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // The manage-custom-agents dialog the "+" menu's "Add custom…" opens.
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
-  const schedulesByTarget = useAgentSchedulesStore((s) => s.byTarget);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   // The tabs live in their own horizontally-scrolling strip; chevrons flank it
   // and appear only when the strip overflows in that direction (the native
@@ -802,36 +1098,57 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   }
 
   // Right-click a tab → context menu; Shift+right-click → straight to rename.
-  // Whole-tab status ring (no dot, no width change, nothing animated —
-  // see `--status-*` in themes.css):
-  //  - working (green, dotted): PTY producing sustained output.
-  //  - finished (green, solid): an agent you're not looking at went quiet
-  //    with no prompt — the same work as above, done, its result unread.
-  //  - needs-decision (amber, solid): an agent went quiet with a
-  //    choice/permission prompt on its screen. Its own colour because it
-  //    is the one state that is about you rather than about the agent.
-  //  - interrupted (`--status-interrupted`, solid): you cut the agent's
-  //    turn off; it holds until the next turn starts. Like finished, it is
-  //    left off the viewed tab, whose screen already says "interrupted".
-  // Working wins, and shows on the viewed tab too: it says the tab is still
-  // RUNNING, which a screen that has paused scrolling (an agent thinking, a
-  // long build) doesn't always show. Finished is about output you HAVEN'T
-  // seen, so it never shows on the viewed tab — its screen says it better. A
-  // pending decision is the exception: it's about an agent that is BLOCKED,
-  // and it stays blocked whether or not you're looking at it. The lamp holds
-  // until the prompt is answered, so a tab left on screen mid-prompt while you
-  // work elsewhere in the window still says so.
+  // One tab's ring (`tabStateClassOf`), read off the whole maps: used for a
+  // tab group's folded members only; plain tabs subscribe per key in `TabItem`.
   function tabStateClass(tab: TabEntry): string {
-    const isActive = tab.key === activeKey;
     const ptyId = `${scope}:${tab.key}`;
-    const working = isPtyTabKind(tab.kind) && !!busyByTab[ptyId];
-    const rawAttn =
-      tab.kind === "agent" || tab.kind === "local_agent"
-        ? attentionByTab[ptyId] ?? null
-        : null;
-    const attn = !isActive || rawAttn === "decision" ? rawAttn : null;
-    return working ? busyStateClass(busyKindByTab[ptyId], tab.kind) : attentionStateClass(attn);
+    return tabStateClassOf(
+      tab,
+      tab.key === activeKey,
+      !!busyByTab[ptyId],
+      busyKindByTab[ptyId],
+      attentionByTab[ptyId] ?? null,
+    );
   }
+
+  // The one stable handler object every `TabItem` of this bar gets (see
+  // `TabItemBar`). The bar's closures are rebuilt each render; the forwarders
+  // read the latest set, refreshed after every commit, so the items' memo holds.
+  const latestBar = useRef<TabItemBar | null>(null);
+  useLayoutEffect(() => {
+    latestBar.current = {
+      contextMenu: onTabContextMenu,
+      pointerDown: onTabPointerDown,
+      hoverEnter: (key, x, y) => setHoverTab({ key, x, y }),
+      hoverLeave: (key) => setHoverTab((h) => (h?.key === key ? null : h)),
+      commitRename,
+      cancelRename: () => setEditingKey(null),
+      activate: setActive,
+      openLocality: (key, r, startOnMachines) =>
+        setLocalityMenu({
+          key,
+          x: r.left,
+          y: r.bottom + 2,
+          view: startOnMachines ? "machines" : "root",
+        }),
+      clearLanded,
+    };
+  });
+  const bar = useMemo<TabItemBar>(
+    () => ({
+      contextMenu: (e, key, index) => latestBar.current?.contextMenu(e, key, index),
+      pointerDown: (e, tab) => latestBar.current?.pointerDown(e, tab),
+      hoverEnter: (key, x, y) => latestBar.current?.hoverEnter(key, x, y),
+      hoverLeave: (key) => latestBar.current?.hoverLeave(key),
+      commitRename: (key, value) => latestBar.current?.commitRename(key, value),
+      cancelRename: () => latestBar.current?.cancelRename(),
+      activate: (key) => latestBar.current?.activate(key),
+      openLocality: (key, r, startOnMachines) =>
+        latestBar.current?.openLocality(key, r, startOnMachines),
+      clearLanded: (nonce) => latestBar.current?.clearLanded(nonce),
+    }),
+    [],
+  );
 
   // Tab groups (`lib/tabStacks`): a tab joins one by name. "New tab group…"
   // asks for the name; the group appears as a chip in the tab's place.
@@ -1416,167 +1733,27 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           );
         }
         const { tab, index } = item;
-        const isActive = tab.key === activeKey;
         const isDragging = dragKey === tab.key;
-        // The status ring — see `tabStateClass`.
-        const stateClass = tabStateClass(tab);
-        // Expose the kind colour to CSS on every tab (not just the active one)
-        // so the top stripe reads as the tab-group colour consistently — plain
-        // themes draw the rail above, fancy themes move it below. Inactive tabs
-        // keep a transparent stripe slot; hover/active tint it with this colour.
-        // A user-set colour (#264) REPLACES the kind colour in the same slot, so
-        // every treatment already keyed off `--tab-accent` (the active tab's
-        // bottom rule, and a fancy theme's rail below it) follows it without a
-        // second code path. `has-tab-color` is what makes it visible on an
-        // INACTIVE tab too: colouring tabs is for telling them apart at a
-        // glance, and a mark only the current tab carries would say nothing.
-        const userColor = tabColorCss(tab.color);
-        const style = { "--tab-accent": userColor ?? TAB_ACCENT[tab.kind] } as React.CSSProperties;
-        const editing = editingKey === tab.key;
-        // A tab freshly dropped into this bar plays the drop-in landing once.
-        const landing = !isDragging && landedKey === tab.key;
         return (
           <Fragment key={tab.key}>
           {showMarkerBefore && dropPlaceholder}
-          <div
-            className={`tab ${isActive ? "active" : ""}${stateClass}${userColor ? " has-tab-color" : ""}${isDragging ? " dragging" : ""}${editing ? " editing" : ""}${landing ? " landing" : ""}`}
-            style={style}
-            data-tab-index={index}
-            data-kind={tab.kind}
-            onContextMenu={(e) => onTabContextMenu(e, tab.key, index)}
-            onPointerDown={(e) => onTabPointerDown(e, tab)}
-            // Fast mode has no card, so the label becomes a plain tooltip —
-            // otherwise a tab whose name is ellipsized would have no way at all
-            // to read it out.
-            title={fastMode ? tab.label : undefined}
-            // Styled hover card (mirrors the project pill's popup) anchored to
-            // this tab's bottom-center. Skipped while inline-renaming.
-            onMouseEnter={(e) => {
-              if (editing || fastMode) return;
-              const r = e.currentTarget.getBoundingClientRect();
-              setHoverTab({ key: tab.key, x: r.left + r.width / 2, y: r.bottom });
-            }}
-            onMouseLeave={() =>
-              setHoverTab((h) => (h?.key === tab.key ? null : h))
-            }
-            // Clear the landing once it finishes so the class doesn't linger
-            // (guard on currentTarget so a child's animationend never clears it
-            // early; the status glow is an infinite ::after animation and emits
-            // no animationend).
-            onAnimationEnd={
-              landing
-                ? (e) => {
-                    if (e.target === e.currentTarget) clearLanded(landedNonce);
-                  }
-                : undefined
-            }
-          >
-            <TabStatusMark stateClass={stateClass} />
-            {editing ? (
-              <input
-                className="tab-label-edit"
-                defaultValue={tab.label}
-                autoFocus
-                aria-label={t("tabBar.renameAriaLabel")}
-                // Mount focused with the whole label selected for a fast retype.
-                ref={selectOnMount}
-                // Keep editing keystrokes / clicks out of drag + activation.
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === "Enter") {
-                    commitRename(tab.key, (e.target as HTMLInputElement).value);
-                  } else if (e.key === "Escape") {
-                    setEditingKey(null);
-                  }
-                }}
-                onBlur={(e) => commitRename(tab.key, e.target.value)}
-              />
-            ) : (
-              <span className="tab-label">{tab.label}</span>
-            )}
-            <TabMarkBadge tab={tab} />
-            <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
-            {tab.hostSession && (
-              <span className="tab-host-session" title={t("tab.hostSessionBadgeTitle")}>
-                {t("tab.hostSessionBadge")}
-              </span>
-            )}
-            {(tab.kind === "agent" || tab.kind === "local_agent") && tab.scheduleTargetId && (() => {
-              const enabled = (schedulesByTarget[scheduleCacheKey(scope, tab.scheduleTargetId)] ?? [])
-                .filter((schedule) => schedule.enabled);
-              const count = enabled.length;
-              const next = enabled
-                .map((schedule) => nextScheduleOccurrence(schedule, new Date())?.at)
-                .filter((at): at is Date => !!at)
-                .sort((a, b) => a.getTime() - b.getTime())[0];
-              return count > 0 ? (
-                <span
-                  className="tab-schedule-indicator"
-                  title={next
-                    ? t("agentSchedule.indicatorNext", { count, value: next.toLocaleString() })
-                    : t("agentSchedule.indicator", { count })}
-                >
-                  ◷
-                </span>
-              ) : null;
-            })()}
-            {/* Viewer file-source badge — remote-native (host SFTP) vs local
-                mirror, a clickable toggle when the file exists on both sides.
-                Shared with the detached strip (see TabLocalityBadges). */}
-            <TabSourceBadge tabKey={tab.key} />
-            {/* TeX ⇄ PDF coupling mark: this tab's other half (the compiled PDF,
-                or the LaTeX source that produces it) when that tab is open —
-                click to jump to it. Derived from the paths, so it needs nothing
-                persisted on the tab; see lib/viewers/tex/texPdfLink. */}
-            <TabTexLinkBadge
-              partner={texPdfPartner(texPdfTabs, tab)}
-              onFocus={setActive}
-            />
-            {/* There is deliberately no Plan/Auto TOGGLE here. An agent's
-                permission mode is the agent's own to set, through its own CLI
-                (Claude's shift+tab, Codex's mode picker) — Tabtivity launches the
-                plain command and injects no mode flag. The badge that used to
-                sit here rewrote the tab's launch args, which respawned the PTY
-                on every flip; the mode a user sets inside the session still
-                survives a restart, because `services::agent_session` re-applies
-                the mode Claude's own hook recorded. The PLAN/GOAL pills after
-                the label only SHOW what the session's status line says. */}
-            {/* Locality badge — click to choose where this agent/shell tab runs:
-                the local mirror, the primary host, or (multi-host remote,
-                docs/multi_host_remote_plan.md) any worker machine. Only shown for
-                a remote project's locatable tabs. Shared with the detached strip. */}
-            {isRemoteScope && (
-              <TabLocalityBadge
-                tab={tab}
-                primaryHost={primaryHost}
-                computeHosts={computeHosts}
-                onOpen={(r, startOnMachines) =>
-                  setLocalityMenu({
-                    key: tab.key,
-                    x: r.left,
-                    y: r.bottom + 2,
-                    view: startOnMachines ? "machines" : "root",
-                  })
-                }
-              />
-            )}
-            <button
-              className="tab-close"
-              onClick={(e) => { e.stopPropagation(); closeTabWithConfirm(tab.key); }}
-              // The chord closes the ACTIVE tab, so only the active tab's ×
-              // claims it — on any other it would name a key that closes a
-              // different tab than the one being pointed at.
-              title={
-                isActive
-                  ? chordHint(t("tabBar.closeTabTitle"), "closeTab")
-                  : t("tabBar.closeTabTitle")
-              }
-            >
-              ×
-            </button>
-          </div>
+          <TabItem
+            tab={tab}
+            index={index}
+            scope={scope}
+            isActive={tab.key === activeKey}
+            isDragging={isDragging}
+            editing={editingKey === tab.key}
+            // A tab freshly dropped into this bar plays the drop-in landing once.
+            landing={!isDragging && landedKey === tab.key}
+            landedNonce={landedNonce}
+            fastMode={fastMode}
+            isRemoteScope={isRemoteScope}
+            primaryHost={primaryHost}
+            computeHosts={computeHosts}
+            texPdfTabs={texPdfTabs}
+            bar={bar}
+          />
           </Fragment>
         );
       })}

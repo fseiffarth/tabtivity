@@ -22,6 +22,13 @@ class ResizeObserverStub {
 }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver =
   ResizeObserverStub;
+// The pane builds its xterm only once it has a layout box (it is constructed
+// on first show, not at mount), and jsdom lays nothing out: give every
+// element one, so the mocked terminal — and its keyboard callback — exist.
+for (const [prop, value] of [["clientWidth", 800], ["clientHeight", 600]] as const) {
+  Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, value });
+}
+Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get: () => document.body });
 
 const { invoke } = vi.hoisted(() => ({
   invoke: vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve(undefined)),
@@ -208,6 +215,40 @@ describe("keystrokes typed before an agent tab's launch line", () => {
       await vi.advanceTimersByTimeAsync(8000);
     });
     expect(written()).toBe("/rename P\r");
+  });
+
+  // TODO #2347: a browser page that opens a tab another page already runs
+  // gets its own tmux client onto the running program; the launch types
+  // nothing into it — no `/rename`, no run command — and keys pass at once.
+  it("types nothing into a tab another page already runs (`attached`)", async () => {
+    const id = "p7:t1";
+    invoke.mockImplementation((cmd: unknown) =>
+      Promise.resolve(cmd === "claude_folder_trusted" ? true : cmd === "pty_spawn" ? { attached: true } : undefined),
+    );
+    await act(async () => {
+      render(<TerminalView id={id} cmd="claude" cwd="/p" kind="agent" initialInput="/rename P" visible focused />);
+    });
+    await type("hi");
+    await act(async () => {
+      bus.ready.get(id)?.();
+      bus.output.get(id)?.("\x1b[?25l");
+      await vi.advanceTimersByTimeAsync(8000);
+    });
+    expect(written()).toBe("hi");
+  });
+
+  it("does not re-run a joined shell tab's command", async () => {
+    const id = "p8:t1";
+    invoke.mockImplementation((cmd: unknown) => Promise.resolve(cmd === "pty_spawn" ? { attached: true } : undefined));
+    await act(async () => {
+      render(<TerminalView id={id} cmd="bash" cwd="/p" kind="shell" initialInput="make" visible focused />);
+    });
+    await act(async () => {
+      bus.ready.get(id)?.();
+      bus.output.get(id)?.("$ ");
+      await vi.advanceTimersByTimeAsync(8000);
+    });
+    expect(written()).toBe("");
   });
 
   it("leaves a shell tab's typing alone", async () => {

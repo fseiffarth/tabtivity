@@ -1,5 +1,6 @@
 import { act, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 /**
  * The phone's composer and its keyboard both take height from the output above
@@ -104,6 +105,7 @@ describe(`${BRAND.display} Mobile: the output follows the composer`, () => {
     FakeWebSocket.instances = [];
     observers.length = 0;
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    stubTerminalSideChannels();
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });

@@ -33,7 +33,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use tauri::State;
 
 use crate::commands::projects::uuid_v4;
 use crate::schema::caldav::{
@@ -45,6 +44,7 @@ use crate::services::caldav::{self, Credentials};
 use crate::services::openvpn;
 use crate::services::remote_credentials::{self, KeyringState};
 use crate::storage;
+use crate::tauri_host::Ctx;
 
 // ── Managed state ───────────────────────────────────────────────────────────
 
@@ -201,7 +201,7 @@ fn blank_save_error(already_saved: bool, store_readable: bool) -> Option<String>
 
 // ── Commands: accounts ──────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_accounts_list() -> Result<Vec<CalDavAccount>, String> {
     tokio::task::spawn_blocking(|| Ok(read_accounts(&accounts_path())?.accounts))
         .await
@@ -216,14 +216,15 @@ pub async fn caldav_accounts_list() -> Result<Vec<CalDavAccount>, String> {
 /// live copy of the secret is the session map. Passing the blank field straight
 /// to `remember_secret` would mean `Save` with no secret, which is a *clear* —
 /// exactly what "saving the password does not work" looks like from outside.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_account_upsert(
+    ctx: Ctx,
     account: CalDavAccount,
     password: Option<String>,
     remember: Option<bool>,
-    state: State<'_, CalDavState>,
 ) -> Result<CalDavAccountSaved, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<CalDavState>();
+    let rt = state.clone();
     let remember = remember_arg(remember);
     tokio::task::spawn_blocking(move || {
         let mut account = upsert_account_at(&accounts_path(), account)?;
@@ -286,12 +287,13 @@ pub async fn caldav_account_upsert(
 /// `calendar.json` at this point, and silently deleting a month of appointments
 /// because an account was removed is a surprise, not a cleanup. Deleting the
 /// calendar is `delete_calendar`, which the sidebar already offers.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_account_delete(
+    ctx: Ctx,
     account_id: String,
-    state: State<'_, CalDavState>,
 ) -> Result<(), String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<CalDavState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         if let Ok(mut guard) = rt.lock() {
             guard.passwords.remove(&account_id);
@@ -302,7 +304,7 @@ pub async fn caldav_account_delete(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_password_state(account_id: String) -> Result<CalDavPasswordState, String> {
     tokio::task::spawn_blocking(move || {
         let account = account_by_id(&accounts_path(), &account_id)?;
@@ -320,12 +322,13 @@ pub async fn caldav_password_state(account_id: String) -> Result<CalDavPasswordS
 }
 
 /// The **only** path that deletes a saved CalDAV password.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_forget_password(
+    ctx: Ctx,
     account_id: String,
-    state: State<'_, CalDavState>,
 ) -> Result<(), String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<CalDavState>();
+    let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let mut account = account_by_id(&accounts_path(), &account_id)?;
         // `remember_secret(Some(false), …)` refuses to clear an entry it could
@@ -354,15 +357,16 @@ pub async fn caldav_forget_password(
 /// The "Test connection" analogue of `mail_account_test`: **the password passed
 /// here is never persisted by this call**, and a saved one is used when the
 /// field was left blank (the usual second-visit case).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_discover(
+    ctx: Ctx,
     base_url: String,
     user: String,
     password: Option<String>,
     account_id: Option<String>,
-    state: State<'_, CalDavState>,
 ) -> Result<Vec<CalDavCollection>, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<CalDavState>();
+    let rt = state.clone();
     let typed = password.filter(|p| !p.is_empty());
     let secret = match typed {
         Some(p) => Some(p),
@@ -397,14 +401,15 @@ pub async fn caldav_discover(
 /// timer cost one small request rather than a whole calendar. `force` skips it,
 /// for the "Sync now" button — a user clicking Sync after fixing something on
 /// the server should not be told "nothing changed" by a token.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_fetch(
+    ctx: Ctx,
     account_id: String,
     href: String,
     force: bool,
-    state: State<'_, CalDavState>,
 ) -> Result<CalDavChanges, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<CalDavState>();
+    let rt = state.clone();
     let (account, cred) = {
         let rt2 = rt.clone();
         let account_id = account_id.clone();
@@ -456,7 +461,7 @@ pub async fn caldav_fetch(
 /// saved over a write that failed would make the next sync skip the very change
 /// it just dropped, and the calendar would sit quietly wrong until something
 /// else happened to move the ctag.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_apply(
     account_id: String,
     href: String,
@@ -560,8 +565,9 @@ fn writable(account: &CalDavAccount, href: &str) -> Result<(), String> {
 /// in that order, after the server accepted, never before. A row stamped
 /// optimistically and then refused would claim to be synced while the server had
 /// never heard of it, and the next sync would create a *second* copy.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_push(
+    ctx: Ctx,
     account_id: String,
     href: String,
     kind: String,
@@ -570,9 +576,9 @@ pub async fn caldav_push(
     ics: String,
     resource_href: Option<String>,
     etag: Option<String>,
-    state: State<'_, CalDavState>,
 ) -> Result<CalDavWrite, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<CalDavState>();
+    let rt = state.clone();
     let (account, cred) = {
         let rt2 = rt.clone();
         let account_id = account_id.clone();
@@ -632,15 +638,16 @@ pub async fn caldav_push(
 /// ordinary `delete_event`/`delete_task` after this returns, so the order is
 /// server-then-local. The other order loses the row whenever the server refuses,
 /// and there is nothing left to retry from.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_delete(
+    ctx: Ctx,
     account_id: String,
     href: String,
     resource_href: String,
     etag: String,
-    state: State<'_, CalDavState>,
 ) -> Result<CalDavWrite, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<CalDavState>();
+    let rt = state.clone();
     let (account, cred) = {
         let rt2 = rt.clone();
         let account_id = account_id.clone();
@@ -663,13 +670,14 @@ pub async fn caldav_delete(
 /// the user what they are about to replace, and the write that follows is still
 /// conditional on *that* — so an edit that lands in the seconds between the
 /// question and the answer conflicts again rather than being lost.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_resource_etag(
+    ctx: Ctx,
     account_id: String,
     resource_href: String,
-    state: State<'_, CalDavState>,
 ) -> Result<String, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<CalDavState>();
+    let rt = state.clone();
     let cred = tokio::task::spawn_blocking(move || {
         let account = account_by_id(&accounts_path(), &account_id)?;
         credentials(&rt, &account)
@@ -685,13 +693,14 @@ pub async fn caldav_resource_etag(
 /// after it was subscribed to — and without this the only way to pick that up
 /// would be deleting the subscription and making it again, which costs the local
 /// calendar's board state. Returns the collection's new `read_only`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_refresh_access(
+    ctx: Ctx,
     account_id: String,
     href: String,
-    state: State<'_, CalDavState>,
 ) -> Result<bool, String> {
-    let rt = state.inner().clone();
+    let state = ctx.get::<CalDavState>();
+    let rt = state.clone();
     let cred = {
         let rt2 = rt.clone();
         let account_id = account_id.clone();

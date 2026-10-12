@@ -42,7 +42,7 @@ describe("sweepWithdrawnExperiments", () => {
     expect(closeLive).toHaveBeenCalledWith("browser-2");
   });
 
-  it("treats an unset flag as off outside debug mode, and as on inside it", () => {
+  it("treats an unset flag as off outside debug mode, and as on inside it while unmarked", () => {
     useSettingsStore.setState({ settings: {}, loaded: true });
     sweepWithdrawnExperiments();
     expect(closeTabsOfKinds).toHaveBeenCalledWith(["browser"]);
@@ -55,6 +55,23 @@ describe("sweepWithdrawnExperiments", () => {
     sweepWithdrawnExperiments();
     expect(closeTabsOfKinds).not.toHaveBeenCalled();
     expect(closeLive).not.toHaveBeenCalled();
+  });
+
+  it("treats an unset flag as off inside debug mode too once the profile is marked", () => {
+    useSettingsStore.setState({
+      settings: { debug: true, experimental_explicit: true },
+      loaded: true,
+    });
+    sweepWithdrawnExperiments();
+    expect(closeTabsOfKinds).toHaveBeenCalledWith(["browser"]);
+    closeTabsOfKinds.mockClear();
+    // The migration's own result: the browser ticked explicitly, nothing closes.
+    useSettingsStore.setState({
+      settings: { debug: true, experimental_explicit: true, web_browser: true },
+      loaded: true,
+    });
+    sweepWithdrawnExperiments();
+    expect(closeTabsOfKinds).not.toHaveBeenCalled();
   });
 });
 

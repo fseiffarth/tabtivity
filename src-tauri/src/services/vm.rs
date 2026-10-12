@@ -236,6 +236,40 @@ pub fn images_dir() -> PathBuf {
     vm_root().join("images")
 }
 
+/// The `process_lease` key of the VM whose directory is `dir`.
+fn lease_key(dir: &Path) -> String {
+    crate::services::process_lease::vm_key(&dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+}
+
+/// The VM's lease while `ensure_booted` boots it: let go again when the boot
+/// fails before the VM is registered, kept once it is.
+struct BootClaim(Option<String>);
+
+impl BootClaim {
+    fn take(key: String) -> Result<Self, String> {
+        if crate::services::process_lease::claim(&key) {
+            Ok(Self(Some(key)))
+        } else {
+            Err(RUNS_ELSEWHERE.to_string())
+        }
+    }
+
+    fn keep(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for BootClaim {
+    fn drop(&mut self) {
+        if let Some(key) = self.0.take() {
+            crate::services::process_lease::release(&key);
+        }
+    }
+}
+
+/// `ensure_booted` refused a VM the other process runs.
+const RUNS_ELSEWHERE: &str = "This project's VM runs in another window of this app (or its browser access) — open the project's tabs there, or close them there first.";
+
 pub fn vm_dir(project_id: &str) -> PathBuf {
     // Project ids are uuids (minted by us); sanitize anyway so a hand-edited
     // projects.json can never traverse out of the vm root.
@@ -1114,12 +1148,14 @@ fn vm_hostname_for(names: &VmNames, project_name: &str) -> String {
 /// The per-project NoCloud `user-data`: the `tabtivity` account with the per-VM
 /// public key, the project dir, and — under `Proxy` egress — the proxy env
 /// pointing at the fixed guest-side `guestfwd` address. Pure.
-pub fn cloud_init_user_data(hostname: &str, pubkey: &str, proxy: bool) -> String {
+/// `proxy` is the VM's egress-proxy token under `Proxy` egress (empty: no
+/// credentials, the desktop's form), `None` otherwise.
+pub fn cloud_init_user_data(hostname: &str, pubkey: &str, proxy: Option<&str>) -> String {
     cloud_init_user_data_for(&VmNames::of(&crate::brand::CURRENT), hostname, pubkey, proxy)
 }
 
 /// [`cloud_init_user_data`] with the names of the VM it is for.
-fn cloud_init_user_data_for(names: &VmNames, hostname: &str, pubkey: &str, proxy: bool) -> String {
+fn cloud_init_user_data_for(names: &VmNames, hostname: &str, pubkey: &str, proxy: Option<&str>) -> String {
     let slug = names.slug.as_str();
     let mut doc = format!(
         r#"#cloud-config
@@ -1138,8 +1174,11 @@ ssh_pwauth: false
         user = names.user,
         pubkey = pubkey.trim(),
     );
-    if proxy {
-        let addr = crate::services::vm_proxy::GUEST_PROXY_ADDR;
+    if let Some(token) = proxy {
+        // `vm_proxy::guest_proxy_url`: the credentials every CONNECT
+        // must carry (`vm_proxy`, TODO #2355).
+        let url = crate::services::vm_proxy::guest_proxy_url(token);
+        let addr = url.trim_start_matches("http://");
         doc.push_str(&format!(
             r#"write_files:
   - path: /etc/profile.d/{slug}-proxy.sh
@@ -1167,8 +1206,9 @@ ssh_pwauth: false
         dir = names.project_dir,
         user = names.user,
     ));
-    if proxy {
-        let addr = crate::services::vm_proxy::GUEST_PROXY_ADDR;
+    if let Some(token) = proxy {
+        let url = crate::services::vm_proxy::guest_proxy_url(token);
+        let addr = url.trim_start_matches("http://");
         doc.push_str(&format!(
             "  - [sh, -c, \"printf 'http_proxy=http://{addr}\\nhttps_proxy=http://{addr}\\nHTTP_PROXY=http://{addr}\\nHTTPS_PROXY=http://{addr}\\nno_proxy=localhost,127.0.0.1,::1\\nNO_PROXY=localhost,127.0.0.1,::1\\n' >> /etc/environment\"]\n",
         ));
@@ -1347,13 +1387,51 @@ fn ensure_overlay(dir: &Path, disk_gb: u32) -> Result<(PathBuf, String), String>
     Ok((disk, base.display().to_string()))
 }
 
+/// The VM's egress-proxy token (`<vm dir>/proxy.token`, `0600`), made once
+/// and then stable: it is baked into the guest's proxy env by cloud-init,
+/// and a changing token would move the seed's instance id at every boot. A
+/// VM made before tokens existed gets one at its next boot; the new user-data
+/// moves its instance id once, so cloud-init re-applies the proxy env.
+fn ensure_proxy_token(dir: &Path) -> Result<String, String> {
+    let path = dir.join("proxy.token");
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        let token = text.trim().to_string();
+        if token.len() >= 32 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Ok(token);
+        }
+    }
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| format!("no system randomness: {e}"))?;
+    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    crate::services::mobile_control::store::write_bytes_atomic(&path, token.as_bytes(), 0o600)?;
+    Ok(token)
+}
+
+/// A changed user-data moves the instance id, and cloud-init's per-instance
+/// `ssh` module then deletes and regenerates the guest's host keys
+/// (`ssh_deletekeys` defaults on). The per-VM `known_hosts` still holds the
+/// old key, and `accept-new` refuses a *changed* key — so a VM whose config
+/// moved (egress switched, or the proxy token added to an existing Proxy VM)
+/// could no longer be reached. Forget the recorded key when an earlier seed
+/// exists; the first connection records the new one, as at creation.
+fn forget_host_key_on_reprovision(dir: &Path, seed_dir: &Path) -> Result<(), String> {
+    if !seed_dir.join("user-data").is_file() {
+        return Ok(());
+    }
+    match std::fs::remove_file(dir.join("known_hosts")) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("known_hosts: {e}")),
+    }
+}
+
 fn ensure_seed(
     dir: &Path,
     names: &VmNames,
     project_id: &str,
     hostname: &str,
     pubkey: &str,
-    proxy: bool,
+    proxy: Option<&str>,
 ) -> Result<PathBuf, String> {
     let seed_dir = dir.join("seed");
     std::fs::create_dir_all(&seed_dir).map_err(|e| e.to_string())?;
@@ -1367,6 +1445,9 @@ fn ensure_seed(
     let stale = std::fs::read_to_string(seed_dir.join("user-data"))
         .map(|prev| prev != user_data)
         .unwrap_or(true);
+    if stale {
+        forget_host_key_on_reprovision(dir, &seed_dir)?;
+    }
     if stale || !iso.is_file() {
         std::fs::write(seed_dir.join("user-data"), &user_data).map_err(|e| e.to_string())?;
         std::fs::write(seed_dir.join("meta-data"), &meta_data).map_err(|e| e.to_string())?;
@@ -1443,6 +1524,10 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
     }
     // Not (live-)registered: clear any stale entry.
     registry().lock().unwrap().remove(project_id);
+    // One QEMU per disk: a VM the other process sharing this state dir (the
+    // window or its desktop sidecar) booted is that process's, never booted a
+    // second time nor reaped from here (`process_lease`, final review B4).
+    let claim = BootClaim::take(lease_key(&vm_dir(project_id)))?;
 
     let spec = vm_spec_for(project_id)
         .ok_or_else(|| format!("project '{project_id}' has no VM config"))?;
@@ -1458,12 +1543,21 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
 
     // Egress proxy first — the seed bakes whether proxy env exists, and the
     // netdev needs the listener's port.
-    let proxy_port = match spec.egress {
-        VmEgress::Proxy => Some(crate::services::vm_proxy::ensure_proxy(
+    // Credentials on a server only (#2355's threat is another account on the
+    // shared loopback); a desktop VM keeps its open proxy and the user-data it
+    // always had (final review B11).
+    let proxy_token = match spec.egress {
+        VmEgress::Proxy if crate::services::server::is_server() => Some(ensure_proxy_token(&dir)?),
+        VmEgress::Proxy => Some(String::new()),
+        _ => None,
+    };
+    let proxy_port = match &proxy_token {
+        Some(token) => Some(crate::services::vm_proxy::ensure_proxy(
             project_id,
             crate::services::vm_proxy::allowlist_for(&spec.allow_hosts, spec.allow_github),
+            token,
         )?),
-        _ => None,
+        None => None,
     };
 
     // The names this VM was created under (see [`VmNames`]): they decide
@@ -1476,7 +1570,7 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
         project_id,
         &hostname,
         &pubkey,
-        matches!(spec.egress, VmEgress::Proxy),
+        proxy_token.as_deref(),
     )?;
 
     let ssh_port = alloc_loopback_port()?;
@@ -1575,6 +1669,8 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
             runtime: runtime.clone(),
         },
     );
+    // Registered: the VM is this process's until `shutdown` (which lets go).
+    claim.keep();
     // The endpoint must be recorded before readiness: a parallel caller that
     // sees the registry entry may resolve the spec at any point from here.
     record_vm_endpoint(project_id, ssh_port)?;
@@ -1703,6 +1799,11 @@ fn teardown_runtime_files(dir: &Path) {
 /// then SIGKILL after a grace period. Idempotent; also stops the egress
 /// proxy and clears runtime state.
 pub fn shutdown(project_id: &str) {
+    // A VM the other process booted and still runs stays up.
+    let Some(_free) = crate::services::process_lease::free_to_tear_down(&lease_key(&vm_dir(project_id))) else {
+        registry().lock().unwrap().remove(project_id);
+        return;
+    };
     let removed = registry().lock().unwrap().remove(project_id);
     let dir = removed
         .as_ref()
@@ -1775,6 +1876,11 @@ pub fn sweep_orphans() {
         if !dir.is_dir() || entry.file_name() == "images" || entry.file_name() == "bake" {
             continue;
         }
+        // Booted by the other process sharing this state dir, which still
+        // runs it: not an orphan.
+        let Some(_free) = crate::services::process_lease::free_to_tear_down(&lease_key(&dir)) else {
+            continue;
+        };
         let Ok(pid_text) = std::fs::read_to_string(dir.join("qemu.pid")) else {
             teardown_runtime_files(&dir);
             continue;
@@ -2116,9 +2222,27 @@ mod tests {
 
     // ── cloud-init ─────────────────────────────────────────────────────────
 
+    /// TODO #2355 moved every Proxy VM's user-data (the token): the guest
+    /// regenerates its host keys, so the recorded one must go — but only on a
+    /// re-provision, never at a first boot or a boot with the same config.
+    #[test]
+    fn a_reprovision_forgets_the_recorded_host_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed_dir = dir.path().join("seed");
+        std::fs::create_dir_all(&seed_dir).unwrap();
+        let known = dir.path().join("known_hosts");
+        std::fs::write(&known, "[127.0.0.1]:2222 ssh-ed25519 AAAA\n").unwrap();
+        forget_host_key_on_reprovision(dir.path(), &seed_dir).unwrap();
+        assert!(known.is_file(), "no earlier seed: nothing to forget");
+        std::fs::write(seed_dir.join("user-data"), "#cloud-config\n").unwrap();
+        forget_host_key_on_reprovision(dir.path(), &seed_dir).unwrap();
+        assert!(!known.exists(), "an earlier seed with other user-data: the guest makes new host keys");
+        forget_host_key_on_reprovision(dir.path(), &seed_dir).unwrap();
+    }
+
     #[test]
     fn user_data_carries_user_key_and_project_dir() {
-        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", false);
+        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", None);
         assert!(doc.starts_with("#cloud-config\n"));
         assert!(doc.contains(concat!("name: ", crate::app_slug!())));
         assert!(doc.contains("ssh-ed25519 AAAA test"));
@@ -2129,10 +2253,22 @@ mod tests {
 
     #[test]
     fn user_data_proxy_mode_sets_the_guest_proxy_env() {
-        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", true);
-        assert!(doc.contains("export https_proxy=http://10.0.2.100:3128")); // privacy-check: ok — QEMU slirp, not a real host
+        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", Some("0123456789abcdef0123456789abcdef"));
+        assert!(doc.contains("export https_proxy=http://vm:0123456789abcdef0123456789abcdef@10.0.2.100:3128")); // privacy-check: ok — QEMU slirp, not a real host
+        assert!(doc.contains("Acquire::https::Proxy \"http://vm:0123456789abcdef0123456789abcdef@"));
         assert!(doc.contains(concat!("/etc/apt/apt.conf.d/95", crate::app_slug!(), "-proxy")));
         assert!(doc.contains("/etc/environment"));
+    }
+
+    /// Final review B11: a desktop VM (no proxy token) is seeded with the
+    /// user-data it always had — no credentials, so cloud-init does not
+    /// re-provision it and its agents need not send proxy credentials.
+    #[test]
+    fn a_desktop_proxy_vm_keeps_the_user_data_without_credentials() {
+        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", Some(""));
+        assert!(doc.contains("export https_proxy=http://10.0.2.100:3128\n")); // privacy-check: ok — QEMU slirp, not a real host
+        assert!(!doc.contains("vm:"));
+        assert!(doc.contains("Acquire::https::Proxy \"http://10.0.2.100:3128\";")); // privacy-check: ok — QEMU slirp, not a real host
     }
 
     #[test]
@@ -2159,7 +2295,7 @@ mod tests {
         let key = "ssh-ed25519 AAAA test";
         // What the older build wrote at every boot of this VM.
         let old_names = VmNames::of(&LEGACY);
-        for proxy in [false, true] {
+        for proxy in [None, Some("0123456789abcdef0123456789abcdef")] {
             let was_data = cloud_init_user_data_for(&old_names, "vm-proj", key, proxy);
             let was_id = seed_instance_id_for(&old_names, "project-1234", &was_data);
 
@@ -2167,7 +2303,7 @@ mod tests {
             let names = VmNames::of_existing(&renamed, Some(LEGACY.name(crate::brand::Name::VM_USER).as_str()));
             assert_eq!(names, old_names);
             let data = cloud_init_user_data_for(&names, "vm-proj", key, proxy);
-            assert_eq!(data, was_data, "user-data moved (proxy: {proxy})");
+            assert_eq!(data, was_data, "user-data moved (proxy: {proxy:?})");
             assert_eq!(seed_instance_id_for(&names, "project-1234", &data), was_id);
             assert_eq!(vm_hostname_for(&names, "---"), vm_hostname_for(&old_names, "---"));
 
@@ -2187,8 +2323,8 @@ mod tests {
         assert_eq!(production.user, VM_USER);
         assert_eq!(production.project_dir, VM_PROJECT_DIR);
         assert_eq!(
-            cloud_init_user_data_for(&production, "vm-proj", key, true),
-            cloud_init_user_data("vm-proj", key, true)
+            cloud_init_user_data_for(&production, "vm-proj", key, Some("0123456789abcdef0123456789abcdef")),
+            cloud_init_user_data("vm-proj", key, Some("0123456789abcdef0123456789abcdef"))
         );
     }
 

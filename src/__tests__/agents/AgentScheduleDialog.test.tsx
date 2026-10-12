@@ -32,6 +32,9 @@ const tab: TabEntry = {
 };
 
 beforeEach(() => {
+  // Tests read the first `agent_schedule_upsert` call: one an earlier test
+  // made must not be it.
+  vi.mocked(invoke).mockClear();
   useAgentSchedulesStore.setState({ byTarget: {}, loading: {} });
 });
 

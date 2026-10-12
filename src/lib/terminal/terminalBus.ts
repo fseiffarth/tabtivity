@@ -1,6 +1,8 @@
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { parseDetachedParam } from "../../stores/detached";
+import { isServerClient, onLinkState } from "../transport/linkState";
 
 /**
  * Single global subscription per PTY-lifecycle event, fanned out to per-id
@@ -37,8 +39,18 @@ type ExitHandler = (code: number | null) => void;
 
 const outputHandlers = new Map<string, Set<OutputHandler>>();
 const replayHandlers = new Map<string, Set<OutputHandler>>();
+/** The end offset of the last chunk seen per PTY — where a catch-up resumes. */
+const lastEndOffset = new Map<string, number>();
 const readyHandlers = new Map<string, Set<ReadyHandler>>();
 const exitHandlers = new Map<string, Set<ExitHandler>>();
+
+/** A tap on EVERY `terminal-output` chunk, whichever PTY it came from: the
+ *  activity classifier (`stores/activity`, fed by `AppShell`). It used to be a
+ *  second `listen()` on the same event, and Tauri evaluates one script per
+ *  listener with the payload inlined — every chunk was parsed twice. Taps run
+ *  after the pane's own handlers, so they never delay the terminal write. */
+type OutputTap = (id: string, data: string) => void;
+const outputTaps = new Set<OutputTap>();
 
 let started = false;
 
@@ -64,12 +76,16 @@ function ensureStarted() {
 
   listen<TerminalOutput>(streamEventName("terminal-output"), (ev) => {
     const set = outputHandlers.get(ev.payload.id);
-    if (!set) return;
-    const range =
-      typeof ev.payload.startOffset === "number" && typeof ev.payload.endOffset === "number"
-        ? { startOffset: ev.payload.startOffset, endOffset: ev.payload.endOffset }
-        : undefined;
-    for (const h of set) h(ev.payload.data, range);
+    if (set) {
+      const range =
+        typeof ev.payload.startOffset === "number" && typeof ev.payload.endOffset === "number"
+          ? { startOffset: ev.payload.startOffset, endOffset: ev.payload.endOffset }
+          : undefined;
+      if (range) lastEndOffset.set(ev.payload.id, range.endOffset);
+      for (const h of set) h(ev.payload.data, range);
+    }
+    // Taps hear a chunk whether or not a pane is subscribed to its PTY.
+    for (const tap of outputTaps) tap(ev.payload.id, ev.payload.data);
   }).catch(() => {});
 
   // The backend's replay of output it buffered while the pane was hidden
@@ -98,7 +114,75 @@ function ensureStarted() {
     for (const h of set) h(ev.payload.code);
   }).catch(() => {});
 
+  // The browser client's link can drop and come back (hosted plan §3.5,
+  // "reconnect resumes by byte offset"): the server keeps this page's PTYs,
+  // and their output went on while nobody listened. On every return to `up`,
+  // each pane asks for the retained tail and takes only what lies beyond the
+  // last offset it saw — through the replay path, whose query guard treats
+  // it as the stale output it is.
+  if (isServerClient()) {
+    let wasDown = false;
+    onLinkState((state) => {
+      if (state !== "up") {
+        wasDown = true;
+        return;
+      }
+      if (!wasDown) return;
+      wasDown = false;
+      for (const id of outputHandlers.keys()) void catchUp(id);
+    });
+  }
 }
+
+interface PtyScrollback {
+  data: string;
+  startOffset: number;
+  endOffset: number;
+}
+
+/** Replay what `id` produced past the last chunk this page saw. */
+export async function catchUp(id: string): Promise<void> {
+  let snapshot: PtyScrollback | string | null;
+  try {
+    snapshot = await invoke<PtyScrollback | string | null>("pty_scrollback", { id });
+  } catch {
+    return;
+  }
+  if (!snapshot || typeof snapshot === "string") return;
+  const seen = lastEndOffset.get(id);
+  const slice = sliceBeyond(snapshot, seen);
+  if (slice === null) return;
+  lastEndOffset.set(id, snapshot.endOffset);
+  const set = replayHandlers.get(id);
+  if (!set) return;
+  for (const h of set) h(slice.data, slice.range);
+}
+
+/**
+ * The part of a retained tail that lies past `seen` (the end offset of the
+ * last chunk delivered), or `null` when nothing new is there. A pane that saw
+ * nothing yet takes the whole tail; a tail that starts past `seen` (the
+ * retained window moved on) is taken whole too — the gap is lost output, as
+ * `pty_bridge` sheds it.
+ */
+export function sliceBeyond(snapshot: PtyScrollback, seen: number | undefined): { data: string; range: TerminalOutputRange } | null {
+  if (seen !== undefined && snapshot.endOffset <= seen) return null;
+  if (seen === undefined || seen <= snapshot.startOffset) {
+    return { data: snapshot.data, range: { startOffset: snapshot.startOffset, endOffset: snapshot.endOffset } };
+  }
+  // Offsets count UTF-8 bytes of the text as the backend emitted it, not
+  // UTF-16 code units: the cut is made in the encoded bytes and decoded back,
+  // as `outputAfterScrollback` in TerminalView does (final review B8 — a
+  // string slice garbled every replay past non-ASCII output such as `⏺`/`│`).
+  const cut = seen - snapshot.startOffset;
+  return {
+    data: BYTE_DECODER.decode(BYTE_ENCODER.encode(snapshot.data).slice(cut)),
+    range: { startOffset: seen, endOffset: snapshot.endOffset },
+  };
+}
+
+const BYTE_ENCODER = new TextEncoder();
+const BYTE_DECODER = new TextDecoder();
 
 function subscribe<H>(registry: Map<string, Set<H>>, id: string, handler: H): () => void {
   ensureStarted();
@@ -115,7 +199,23 @@ function subscribe<H>(registry: Map<string, Set<H>>, id: string, handler: H): ()
 }
 
 export function onTerminalOutput(id: string, handler: OutputHandler): () => void {
-  return subscribe(outputHandlers, id, handler);
+  const unsubscribe = subscribe(outputHandlers, id, handler);
+  return () => {
+    unsubscribe();
+    // Only a pane still listening is caught up after a link drop; a PTY no
+    // pane shows any more needs no offset (one entry per PTY otherwise
+    // outlived every closed tab).
+    if (!outputHandlers.has(id)) lastEndOffset.delete(id);
+  };
+}
+
+/** Hear every `terminal-output` chunk of this window (see `outputTaps`). */
+export function onAnyTerminalOutput(tap: OutputTap): () => void {
+  ensureStarted();
+  outputTaps.add(tap);
+  return () => {
+    outputTaps.delete(tap);
+  };
 }
 
 export function onTerminalReplay(id: string, handler: OutputHandler): () => void {

@@ -82,8 +82,15 @@ describe("withdrawnTabKinds", () => {
     expect(withdrawnTabKinds(s({}))).toEqual(["browser"]);
   });
 
-  it("withdraws nothing in debug mode — unset follows debug", () => {
+  it("withdraws nothing in debug mode while unmarked — unset follows debug", () => {
     expect(withdrawnTabKinds(s({ debug: true }))).toEqual([]);
+  });
+
+  it("withdraws the browser in debug mode once the profile is marked", () => {
+    expect(withdrawnTabKinds(s({ debug: true, experimental_explicit: true }))).toEqual(["browser"]);
+    expect(
+      withdrawnTabKinds(s({ debug: true, experimental_explicit: true, web_browser: true })),
+    ).toEqual([]);
   });
 
   it("follows an explicit flag in either direction", () => {
@@ -191,6 +198,20 @@ describe("the restore half — loadFromLayout", () => {
 
   it("restores the browser tab when the flag is on", () => {
     useSettingsStore.setState({ settings: s({ web_browser: true }) });
+    seedTwoTabs();
+    const saved = useTabsStore.getState().snapshotScopeForSwitch("p");
+    resetTabs();
+
+    useTabsStore
+      .getState()
+      .loadFromLayout(saved.tabs, "/tmp", "p", saved.tabGroups ?? undefined);
+    expect(useTabsStore.getState().tabs.map((t) => t.kind).sort()).toEqual(["browser", "shell"]);
+  });
+
+  it("restores a debug profile's browser tab before the migration has marked it", () => {
+    // The first launch after the update: the settings read has landed, the
+    // migration's write has not. The unmarked rule keeps the tab.
+    useSettingsStore.setState({ settings: s({ debug: true }) });
     seedTwoTabs();
     const saved = useTabsStore.getState().snapshotScopeForSwitch("p");
     resetTabs();

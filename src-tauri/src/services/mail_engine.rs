@@ -72,7 +72,7 @@ pub fn install_crypto_provider() {
 /// that could be misconfigured. No custom cipher-suite list: rustls's defaults
 /// are the right answer, and hand-picking suites is how you end up maintaining
 /// a stale one.
-fn tls_config() -> std::sync::Arc<rustls::ClientConfig> {
+pub(crate) fn tls_config() -> std::sync::Arc<rustls::ClientConfig> {
     use rustls_platform_verifier::BuilderVerifierExt;
     static CFG: std::sync::OnceLock<std::sync::Arc<rustls::ClientConfig>> =
         std::sync::OnceLock::new();

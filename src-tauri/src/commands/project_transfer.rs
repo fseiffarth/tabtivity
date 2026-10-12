@@ -67,12 +67,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
 
 use crate::paths;
 use crate::schema::projects::ProjectEntry;
 use crate::schema::session::TerminalSession;
 use crate::storage;
+use crate::tauri_host::Ctx;
 
 use super::projects::{
     conflict_message, entry_directory, entry_is_remote, entry_mirror, find_project_conflict,
@@ -548,7 +548,7 @@ pub fn suggested_bundle_name(name: &str) -> String {
 // work that froze the window when run on the main thread (see
 // `commands::git::run_off_thread`). No `State`/`AppHandle`, so nothing binds it
 // to that thread.
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn preview_project_export(project_id: String) -> Result<ExportPreview, String> {
     validate_project_id(&project_id)?;
     let list = read_projects_list()?;
@@ -965,15 +965,15 @@ fn absolutize(path: &Path) -> PathBuf {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn export_project(
-    app: AppHandle,
+    ctx: Ctx,
     req: ExportProjectRequest,
 ) -> Result<ExportReport, String> {
     let project_id = req.project_id.clone();
     tokio::task::spawn_blocking(move || {
         let emit = |phase: &str, done: u64, total: u64| {
-            let _ = app.emit(
+            ctx.emit(
                 PROGRESS_EVENT,
                 ExportProgress {
                     project_id: project_id.clone(),
@@ -1028,7 +1028,7 @@ fn open_bundle(path: &str) -> Result<(Bundle, ExportManifest), String> {
 }
 
 /// Read a bundle's manifest without unpacking anything, for the import dialog.
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn inspect_project_export(bundle_path: String) -> Result<BundleInfo, String> {
     let (_zip, manifest) = open_bundle(&bundle_path)?;
     let list = read_projects_list()?;
@@ -1529,7 +1529,7 @@ pub fn import_project_export_blocking(
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_project_export(
     req: ImportBundleRequest,
 ) -> Result<ImportBundleResult, String> {

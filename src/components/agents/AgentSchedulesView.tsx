@@ -17,7 +17,7 @@ import { MarkdownPromptField } from "../common/MarkdownPromptField";
 import { AgentScheduleDialog } from "./AgentScheduleDialog";
 import { AgentScheduleProposal } from "./AgentScheduleProposal";
 import { GitPushProposals } from "./GitPushMcp";
-import { isPromptTargetTab } from "./PromptChartTab";
+import { isPromptTargetTab } from "./promptTarget";
 import { ArrowUpRightIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { storageKey } from "../../lib/brand";

@@ -101,8 +101,8 @@ flip_macro() { # macro, old literal, new literal
     inside && /^}/ { inside = 0 }
     { print }
     END { if (!done) exit 3 }
-  ' src-tauri/src/brand.rs > src-tauri/src/brand.rs.flip || { rm -f src-tauri/src/brand.rs.flip; echo "brand-flip: $1 not found in brand.rs" >&2; exit 1; }
-  mv src-tauri/src/brand.rs.flip src-tauri/src/brand.rs
+  ' src-core/src/brand.rs > src-core/src/brand.rs.flip || { rm -f src-core/src/brand.rs.flip; echo "brand-flip: $1 not found in brand.rs" >&2; exit 1; }
+  mv src-core/src/brand.rs.flip src-core/src/brand.rs
 }
 flip_macro app_name "$OLD_DISPLAY" "$NEW_DISPLAY"
 flip_macro app_slug "$OLD_SLUG" "$NEW_SLUG"
@@ -129,6 +129,10 @@ mv src/lib/brand.ts.flip src/lib/brand.ts
 # package name, so it follows.
 say "package names"
 sed -i -e "s/^name = \"$OLD_SLUG\"\$/name = \"$NEW_SLUG\"/" -e "s/^default-run = \"$OLD_SLUG\"\$/default-run = \"$NEW_SLUG\"/" src-tauri/Cargo.toml
+# The server binaries (`<slug>-serverd`, `<slug>-gateway`, `<slug>-admin-helper`).
+sed -i -e "s/^name = \"$OLD_SLUG-\([a-z-]*\)\"\$/name = \"$NEW_SLUG-\1\"/" src-tauri/Cargo.toml src-gateway/Cargo.toml src-serverd/Cargo.toml
+# The daemon crate depends on the desktop package by its (branded) name.
+sed -i -e "s/package = \"$OLD_SLUG\"/package = \"$NEW_SLUG\"/" src-serverd/Cargo.toml
 sed -i -e "s/^name = \"$OLD_SLUG\"\$/name = \"$NEW_SLUG\"/" Cargo.lock
 sed -i -e "s/^  \"name\": \"$OLD_SLUG\",\$/  \"name\": \"$NEW_SLUG\",/" package.json
 sed -i -e "1,10s/^\(  \|      \)\"name\": \"$OLD_SLUG\",\$/\1\"name\": \"$NEW_SLUG\",/" package-lock.json

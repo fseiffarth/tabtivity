@@ -10,6 +10,7 @@
  *    default reactively.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import { BRAND } from "../../lib/brand";
 
@@ -88,6 +89,8 @@ async function renderMarkdownView() {
     render(<FileViewerPane viewer="markdown" path="/p/notes.md" projectId="proj" tabKey={TAB_KEY} />);
   });
 }
+
+warmFileViewer();
 
 describe("editor text-size control", () => {
   beforeEach(() => {

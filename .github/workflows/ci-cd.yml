@@ -12,8 +12,19 @@ on:
 permissions:
   contents: read
 
+# A newer push to a branch (or commit on a PR) cancels the run it supersedes,
+# so a red run's fix doesn't queue behind it. Never on main: release.yml
+# releases only a main commit whose run passed, and waits for that run.
+concurrency:
+  group: ci-cd-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
+  # The Rust every job installs: the version rust-toolchain.toml pins, so CI
+  # lints and tests with exactly the compiler and clippy developers run (the
+  # lint job checks the two agree). Bump both together.
+  RUST_TOOLCHAIN: "1.99.0"
 
 jobs:
   # The pre-push hook runs this same scan, but the hook needs
@@ -72,7 +83,7 @@ jobs:
           echo "Scanning ${base}..${HEAD_SHA}"
           scripts/privacy-check.sh "$base" "$HEAD_SHA"
 
-  # The app's name is spelled in the brand modules only (src-tauri/src/brand.rs,
+  # The app's name is spelled in the brand modules only (src-core/src/brand.rs,
   # src/lib/brand.ts, scripts/lib/brand.sh); everything else reads it from
   # there. This fails when a tracked file outside the script's commented
   # allowlist spells it itself. No hook runs it, so CI is where it is enforced.
@@ -152,27 +163,58 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: CI's Rust is the pinned one
+        shell: bash
+        run: |
+          pinned="$(sed -nE 's/^channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml)"
+          if [ "$pinned" != "$RUST_TOOLCHAIN" ]; then
+            echo "::error::rust-toolchain.toml pins $pinned but ci-cd.yml installs $RUST_TOOLCHAIN; bump both together."
+            exit 1
+          fi
+
+      # scripts/ci-local.sh runs this workflow's Linux steps before a push;
+      # this fails when a step here is neither mirrored there nor on its
+      # allowlist, so the local run cannot fall behind CI unnoticed.
+      - name: ci-local.sh mirrors this workflow
+        run: bash scripts/ci-local.sh --check-drift
 
       - name: Lint frontend
         run: npm run lint
 
       - name: Lint backend
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Lint core crate
+        run: cargo clippy --manifest-path src-core/Cargo.toml --all-targets -- -D warnings
+
+      - name: Lint gateway crate
+        run: cargo clippy --manifest-path src-gateway/Cargo.toml --all-targets -- -D warnings
+
+      # The server daemon's build of the library: no `desktop` feature, so no
+      # Tauri/GTK/X11/libdbus (hosted plan §3.2, TODO #2349). Built alone, or
+      # Cargo would unify the desktop's features into it.
+      - name: Lint the daemon's build of the library
+        run: cargo clippy -p tabtivity --no-default-features --lib -- -D warnings
+
+      - name: Lint daemon crate
+        run: cargo clippy -p app-serverd -- -D warnings
 
   test:
     name: test
@@ -197,28 +239,80 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Fail fast: what failed in this branch's last run on this OS runs
+      # before anything else (scripts/ci-failed-first.sh), and the full
+      # suites below record what fails for the next run.
+      - name: Restore the last run's failed tests
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ci-failed-${{ runner.os }}-${{ github.ref_name }}-
+            ci-failed-${{ runner.os }}-
+
+      - name: Re-run the last run's failed tests first
+        shell: bash
+        run: bash scripts/ci-failed-first.sh previous
 
       - name: Build frontend
         run: npm run build
 
       - name: Run frontend tests
-        run: npm test
+        shell: bash
+        run: bash scripts/ci-failed-first.sh frontend
 
       - name: Run backend tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        shell: bash
+        run: bash scripts/ci-failed-first.sh backend
+
+      - name: Save this run's failed tests
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Run core crate tests
+        run: cargo test --manifest-path src-core/Cargo.toml
+
+      - name: Run gateway crate tests
+        run: cargo test --manifest-path src-gateway/Cargo.toml
+
+      # The library as the server daemon builds it (no `desktop` feature):
+      # code compiled only there (the vault-only credential paths, the
+      # headless platform stubs) is tested where it runs, plus the secrets
+      # end-to-end test against that build.
+      - name: Run the daemon build's library tests
+        run: cargo test -p tabtivity --no-default-features --lib --test server_secrets
+
+      # The daemon links no window toolkit: built on its own, `ldd` must name
+      # no GTK, GDK, WebKit, X11/xcb or libdbus library (TODO #2349).
+      - name: Daemon links no desktop libraries
+        run: |
+          cargo build -p app-serverd
+          daemon=$(ls target/debug/*-serverd)
+          ldd "$daemon"
+          if ldd "$daemon" | grep -Ei 'gtk|gdk|webkit|javascriptcore|libx11|xcb|dbus|soup|ayatana'; then
+            echo "the server daemon links a desktop library" >&2
+            exit 1
+          fi
 
   test-windows:
     name: test-windows
@@ -231,30 +325,64 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Fail fast: what failed in this branch's last run on this OS runs
+      # before anything else (scripts/ci-failed-first.sh), and the full
+      # suites below record what fails for the next run.
+      - name: Restore the last run's failed tests
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ci-failed-${{ runner.os }}-${{ github.ref_name }}-
+            ci-failed-${{ runner.os }}-
+
+      - name: Re-run the last run's failed tests first
+        shell: bash
+        run: bash scripts/ci-failed-first.sh previous
 
       - name: Build frontend
         run: npm run build
 
       - name: Run frontend tests
-        run: npm test
+        shell: bash
+        run: bash scripts/ci-failed-first.sh frontend
 
       - name: Run backend tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        shell: bash
+        run: bash scripts/ci-failed-first.sh backend
+
+      - name: Save this run's failed tests
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Run core crate tests
+        run: cargo test --manifest-path src-core/Cargo.toml
+
+      # The server crates (gateway, daemon) are Linux-only but must still
+      # compile here, tests included, so the workspace builds on every OS.
+      - name: Check the whole workspace, tests included
+        run: cargo check --workspace --all-targets
 
       # Staged gate: the Windows-only arms were linted locally through the
       # cross-target shims (zero findings), but never yet on a real Windows
@@ -274,30 +402,64 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Fail fast: what failed in this branch's last run on this OS runs
+      # before anything else (scripts/ci-failed-first.sh), and the full
+      # suites below record what fails for the next run.
+      - name: Restore the last run's failed tests
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ci-failed-${{ runner.os }}-${{ github.ref_name }}-
+            ci-failed-${{ runner.os }}-
+
+      - name: Re-run the last run's failed tests first
+        shell: bash
+        run: bash scripts/ci-failed-first.sh previous
 
       - name: Build frontend
         run: npm run build
 
       - name: Run frontend tests
-        run: npm test
+        shell: bash
+        run: bash scripts/ci-failed-first.sh frontend
 
       - name: Run backend tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        shell: bash
+        run: bash scripts/ci-failed-first.sh backend
+
+      - name: Save this run's failed tests
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-failed
+          key: ci-failed-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Run core crate tests
+        run: cargo test --manifest-path src-core/Cargo.toml
+
+      # The server crates (gateway, daemon) are Linux-only but must still
+      # compile here, tests included, so the workspace builds on every OS.
+      - name: Check the whole workspace, tests included
+        run: cargo check --workspace --all-targets
 
       # Staged gate: the macOS-only arms were linted locally only through
       # check-only `cc`/`ar` stand-ins (zero findings), never on a real Mac.
@@ -321,16 +483,18 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -383,16 +547,18 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -438,18 +604,19 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci

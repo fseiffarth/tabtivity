@@ -3,7 +3,7 @@
  * `BRAND.display` (the i18n dictionaries through their `{app}` placeholder),
  * and every name the frontend persists or shares with the backend is built
  * here, so a rename edits this file and its Rust twin
- * `src-tauri/src/brand.rs`, nothing else. The phone PWA imports this module
+ * `src-core/src/brand.rs`, nothing else. The phone PWA imports this module
  * too.
  *
  * Each such name comes as a pair: `NAMES.x`, built from the current brand,
@@ -82,6 +82,10 @@ function namesFor(b: BrandForms) {
     mcpHelpServer: `${b.slug}-help`,
     /** WebSocket subprotocol of a phone terminal. */
     terminalProtocol: `${b.slug}-terminal.v1`,
+    /** WebSocket subprotocol of the browser desktop client (hosted plan P2). */
+    desktopProtocol: `${b.slug}-desktop.v1`,
+    /** The hosted server's admin helper binary (`src-gateway`, plan §3.1). */
+    serverAdminHelper: `${b.slug}-admin-helper`,
     /** Custom-protocol request header: the file to serve. */
     filePathHeader: `x-${b.slug}-path`,
     /** Custom-protocol request header: the project the file belongs to. */

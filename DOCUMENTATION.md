@@ -551,6 +551,248 @@ the sidecar cannot tell from no window: 503 `desktop_unavailable`, "open the
 app". Only a window whose backend knows the request but whose page does not
 answers `unknown_request`; the phone then says to update the desktop app.
 
+**Browser access (the whole desktop app in a browser on this computer).**
+**Settings → Mobile → Browser access** has the Mobile host also serve the
+desktop app at `http://127.0.0.1:<port>/desktop/`, for a browser on this
+computer only (loopback; not through Tailscale). Terminals, agents and files
+run in the host; the browser is a thin client. **Show sign-in link** gives a
+one-time link carrying this computer's sign-in token: that token, a private
+file next to the host's socket, is the whole perimeter — whoever holds it
+(or the link) drives this app with your rights, so on a computer other
+people use, keep it off or rotate it. The window and the browser share one
+state dir: a project's container keeps running while either has tabs in
+it, a VM belongs to the one that booted it (the other is refused), a remote
+project's background sync runs in one of them, and a sync setting changed
+in both at once asks to be done again (`docs/context/web_client.md`). Takes
+effect when the host (re)starts.
+
+### Hosted server: signing in with your organisation's account
+
+If the administrator connected the server to an identity provider (for
+example a university's single sign-on), the pairing page shows **Sign in
+with …** above the invite-code field. Pressing it takes you to the
+provider's sign-in and back; the browser or phone is then paired with your
+account, exactly as an invite code would pair it, and the app's lock set-up
+follows. It works only for people the administrator linked to an account;
+anyone else comes back with a note to ask for that. A sign-in started in one
+browser can only be finished in that same browser.
+
+For the administrator: `sudo tabtivity-admin-helper oidc-set --issuer
+https://… --client-id … --name "…"` (the client secret is read from the
+input, never typed as an argument; register
+`https://<server>/gateway/v1/oidc/callback` as the redirect address at the
+provider), then per person `sudo tabtivity-admin-helper user-oidc NAME --sub
+<their id>` — the provider's stable subject id, never an email address.
+`user-oidc NAME --clear` and `oidc-clear` take it back. Invite
+codes keep working either way.
+
+### Hosted server: project containers
+
+On a server, "Run this project in a container" works once the administrator
+switches **Project containers** on (Server settings; it is off by default).
+Your containers are rootless Podman containers that run as you: nobody else
+on the server can see or enter them, and files they write in your project are
+yours. A missing image is built into your own image store the first time.
+While the administrator has the switch off, a project with its container on
+does not start new tabs — turn its container off to run them without one.
+
+For the administrator: install `podman` and `uidmap`, make sure every server
+user has a subordinate id range in `/etc/subuid` and `/etc/subgid`
+(`sudo tabtivity-admin-helper check` names who lacks one — and fails while
+Tailscale Funnel publishes the gateway), then switch
+**Project containers** on.
+
+### Hosted server: the desktop app as a client
+
+The desktop app can show a server's workspace too, in a window of its own
+beside your own workspace (the two never mix). Settings → Mobile → **Connect
+to a server**: the server's address (`https://…`), an invite code from its
+administrator (`name:12345678`) and a name for this computer → **Pair**.
+Then **Open the server window**. Everything in that window — projects,
+terminals, agents, mail — lives on the server, as in the browser; copy and
+paste, notifications and the window itself are this computer's, and opening
+a server file downloads it into your Downloads folder and opens it here —
+documents, pictures, plain text and media only; anything else (a program,
+a script, a disk image, a type the app does not know) is saved there and
+shown in its folder instead, and on Windows every download carries the Mark
+of the Web.
+**Forget this server** removes this computer's key; remove the device in the
+server's Mobile settings as well.
+
+### Hosted server: the secrets key
+
+On a Tabtivity server (the browser client behind the gateway, plan §6.8) your
+mail store and the passwords and tokens you chose to save are sealed under one
+secrets key. It is never written to disk in the clear; it lives in the
+kernel's per-user keyring, so it survives a restart of your Tabtivity
+service but not a reboot. After a reboot it stays locked until one of your
+paired devices signs in and releases it, or you type your recovery code.
+Settings → Mobile → Server → **Secrets key**:
+
+- **Set up the key** and **New recovery code** are signed by the paired
+  device's own key, not just its sign-in session: use the phone app or a
+  browser you paired at the server's address. The recovery code is shown once
+  and stored nowhere.
+- **Revoking a device changes the key.** When a device is disconnected (or
+  every device is forgotten) the server makes a new secrets key and re-seals
+  everything under it; your other devices and the same recovery code keep
+  working. If the key is locked at that moment, the device's access is
+  removed at once and the key changes at the next unlock. A revoked device,
+  even with an old copy of the server's files, opens nothing sealed after
+  that.
+- **Your mail is re-encrypted after a revoke.** The mail store gets a new key
+  of its own too: new mail is sealed under it at once, and the server
+  re-encrypts the mail already there in the background — the Secrets key
+  panel shows how far it is. Mail keeps working meanwhile, and a restart in
+  the middle just carries on. The old mail key is deleted only when
+  everything is moved, and only while the secrets key is unlocked (after a
+  reboot, once a device has signed in).
+- **Make a new recovery code after a revoke.** Your recovery code stays
+  valid through a revoke, but someone holding the revoked device and an old
+  copy of the server's files could use what it knows to fake the "identity
+  key changed" prompt below. So after a revoke the Secrets key panel — and
+  the phone, after signing in — recommends a new recovery code until you
+  make one (**Make a new recovery code**; the old code stops working).
+- **"This server's identity key changed."** Your devices remember the
+  server's identity key and release the secrets key only to it. If the server
+  lost that key (a partial restore), the phone shows this prompt after
+  signing in, and Server settings show it too. Enter your recovery code: the
+  device checks the new key against it — the code is not sent — and trusts it
+  only if it fits. A wrong code changes nothing; a code that should fit but
+  doesn't means the key is not your server's: don't trust it.
+
+**Who can read the key while it is unlocked.** Agents in fenced tabs can't:
+the fence blocks the keyring. Anything that runs as you *outside* the fence
+can: your own shell tabs on the server, an SSH login as your account, and
+project scripts Tabtivity runs on the host (build scripts, git hooks you
+allowed). That is by design — the key protects your data at rest. A copy of
+your home directory or a backup cannot open it: it holds only sealed wraps,
+which need a paired device or the recovery code. The server's administrator
+(root) can read a running service's memory and keyring.
+
+### Hosted server: the administrator's agent API keys
+
+Every user signs in to their agent CLIs with their own login; that is the
+default and always available. The administrator may additionally offer an
+API key per CLI to chosen users (plan §5.4), and each of those users decides
+per CLI which one their agents run on.
+
+- **The administrator** offers keys in Settings → Mobile → Server → **Agent
+  credentials** (shown to the administrator only). Each CLI that can take a
+  key has a card — today Claude (through its API key helper), Google Gemini
+  (`GEMINI_API_KEY`) and Mistral Vibe (`MISTRAL_API_KEY`); Codex takes a key
+  only through its own login file and is not offered. **Save key** offers or
+  replaces a key, **Withdraw** takes it back. A saved key is never shown
+  again; the card says since when and by whom it is offered and which users
+  fetched it lately. The keys are kept by a separate service account of the
+  server (`tabtivity-auth`), never in anyone's settings or home.
+- **Who may use a key** is chosen per key on its card: a new key may be used
+  by **nobody** until you pick users from the server's accounts and press
+  **Allow**; **Remove** takes a user off again. Replacing a key keeps its
+  list, withdrawing it forgets the list. Each change is logged (who added or
+  removed whom), never the key. A user not on the list does not see the key
+  in Manage CLIs.
+- **A user** picks per CLI in Settings → Manage CLIs → API keys, under
+  **runs on**: its own login, their own API key, or **the administrator's API
+  key** — one at a time (#2389). While the
+  administrator's key is chosen, that CLI's agents — agent tabs and the root
+  console's Host session — run on it, your own API key for that CLI (if you
+  had switched one on) is switched off, and your own login for that CLI is
+  taken out of the agent homes (it stays saved and comes back when you switch
+  back), so the CLI never has two credentials to choose from. The key goes
+  the same way as your own API key (#2389): it never enters an agent. Each
+  tab gets a token that works only through your server session's API proxy,
+  which adds the key — or, for a brokered key, sends the request to the key
+  broker with your own broker token. Only Claude and Gemini can be offered a
+  key (Mistral Vibe has no way to point it at the proxy). A CLI typed into a
+  shell tab, and an agent tab of a project container, cannot reach the proxy:
+  they fail to start with a note saying so.
+- **What a key costs.** No agent can read the key, but every agent of a user
+  who chose it can spend through its tab's token while it runs; a directly
+  delivered key has no per-user budget (usage counts against the
+  administrator's account). Withdrawing a key, or taking a user off its list,
+  makes their next agent start fail with a note to switch back to your own
+  login, and their running agents are refused within a minute. Remote agents
+  and Codex never get the administrator's key.
+- **Removing a user rotates nothing.** `user-remove` takes the account off
+  every key's list, but a copy of a directly delivered key the user saved
+  while they had it still works, and once they are off the list Tabtivity
+  treats such a copy as their own login. When you remove someone who used a
+  key, replace it on its card with a fresh one from the provider.
+- **Through the key broker (Claude).** On a Claude key's card the
+  administrator can press **Deliver through the key broker**. Users on its
+  list then never receive the key: each gets a token of their own, and the
+  server's key broker (`tabtivity-keybroker`, on the server itself) calls
+  Anthropic with the key on their behalf. The card then takes a **monthly
+  budget** per user (or one default for everyone; empty means no cap),
+  counted in tokens — input, output and cache writes in full, cache reads at
+  a tenth — and shows each user's use this month. A user over budget gets a
+  clear error in Claude until next month (or a higher budget). **Renew
+  *name*'s token** cuts that user's running agents off at their next
+  request without changing the key; **Deliver directly** goes back to
+  handing out the key. Users see their own month next to the switch in
+  Manage CLIs. Gemini keys are always delivered directly.
+
+### Hosted server: sharing projects and calendars
+
+On the hosted server you can share a project, a calendar or a to-do list
+with other users of the same server. Everything is in Settings → Mobile →
+Server.
+
+- **Sharing a project.** Under **Shared projects**, choose one of your git
+  projects and press **Share** (it needs a first commit; remote, VM and
+  container projects cannot be shared). Your project stays where it is; the
+  server keeps a shared copy of its history that only the people you add can
+  read. **Add member** with a user name and a role: a **viewer** may read it,
+  an **editor** may also push branches under their own name
+  (`<name>/<branch>`); only you move your own branches. **Push** sends your
+  checked-out branch, **Stop sharing** removes the shared copy (members keep
+  theirs; you can share the project again later). The app's own session
+  files are never shared.
+- **A project shared with you** appears under **Shared with you**. **Add to
+  my projects** makes your own copy (a clone) in your projects folder; from
+  then on it is your project, with your own tabs and agents. **Fetch** shows
+  each shared branch against yours (new there / only here); **Merge** takes a
+  branch in. Conflicts are never resolved for you: the merge is undone and
+  you resolve it in a terminal. Who has the project open right now is shown
+  on the card. If you are taken off a share, or the owner stops sharing, the
+  card turns grey ("no longer shared" / "deleted by owner") — your copy is
+  never deleted.
+- **Agent instructions from others are reviewed first.** Files an agent
+  reads as instructions (`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`,
+  `AGENTS.override.md`, `GEMINI.md`, `.mcp.json`, `.envrc`, `.cursorrules`,
+  `.clinerules`, `opencode.json`, the Copilot instructions under `.github/`,
+  and anything in `.claude/`, `.codex/`, `.gemini/`, `.cursor/`, `.agents/`,
+  `.agent/`, `.kiro/`, `.vibe/`, `.opencode/`, `.factory/`) that another
+  member changed are shown before a **Merge** goes through. After you add a
+  shared project, or merge in a terminal, no agent starts in it until you
+  press **Review** and **I have reviewed these** — also after the share is
+  revoked or stopped, and also if the other member's branch is deleted
+  meanwhile. In a shared
+  project git hooks never run on Commit or Push, and a merged `latexmkrc` or
+  prettier configuration asks for your approval again. Worktrees you make
+  in a shared project (Git history → Worktrees) count as part of it: a
+  change merged into any of them is reviewed before an agent starts anywhere
+  in the project, and the review names the worktree.
+- **Agents see only their own project's shared copy.** An agent in one
+  shared project cannot read the shared copy of any other.
+- **Sharing a calendar or a to-do list.** Under **Shared calendars and to-do
+  lists**, choose a calendar and press **Share** — it moves from your own
+  calendar to the server's calendar service (you are asked first; **Stop
+  sharing** moves it back). **Open to user** gives a user its **events**, its
+  **to-dos**, or both, each as viewer or editor. Shared calendars appear in
+  the calendar and on the board like your own; a viewer cannot change them,
+  and an editor's change shows on the other members' open pages within
+  moments. A task's mail and file links, the appointment it came from and its
+  project never reach anyone else (you still see them on your own cards), and
+  reminders stay each person's own. Revoking stops their next read; what they
+  copied before stays theirs. The default calendar, CalDAV calendars and
+  subscriptions cannot be shared.
+- **The administrator** can switch off sharing projects and sharing
+  calendars and to-do lists for the whole server. Off means nothing new is
+  shared; existing shared projects keep working, shared calendars opened to
+  you are hidden, and nothing is deleted.
+
 ### Workspace Apps
 
 Each of these replaced a global-app role, on the same reasoning: what sits
@@ -978,16 +1220,21 @@ runs without Remote Control. A project's CLI config can still point the CLI at
 another host, which then receives only the token — worthless off this machine.
 
 **Spending limit** (`services/api_usage.rs`, `services/api_meter.rs`,
-`services/api_prices.rs`, Part C, C3). Saving a key requires a monthly limit in
-US dollars per provider (`Settings::agent_api_limits`). The proxy reads each
+`services/api_prices.rs`, Part C, C3; tokens since #2389). Saving a key requires
+a monthly limit in billed tokens per provider (`Settings::agent_api_token_limits`;
+input, cache writes and output in full, cache reads at a tenth —
+`keys_wire::billed_tokens`, the key broker's unit; an older build's USD
+`agent_api_limits` is kept and shown as a hint only). The proxy reads each
 billed answer's usage as it relays it — Anthropic's `message_start` /
 `message_delta` usage (cache writes and reads, web searches, fast mode and
 US-only inference included) or a plain message's; Gemini's cumulative
 `usageMetadata` from SSE, JSON-array or plain answers — with a bounded streaming
-scanner that keeps nothing else, prices it from a dated per-model table (an
-unknown model at the provider's highest rate, flagged), and adds it to
-`<state_dir>/agent-api-usage.json` (UTC month, spend per provider, tokens per
-model; written atomically every few seconds and at quit; a corrupt file is set
+scanner that keeps nothing else, counts its billed tokens and prices it from a
+dated per-model table for the ≈ $ estimate (an unknown model at the provider's
+highest rate, flagged), and adds it to `<state_dir>/agent-api-usage.json`
+(version 2: UTC month, billed tokens and estimated dollars per provider, tokens
+per model; a version-1 file gets its billed tokens from its token counts on
+load; written atomically every few seconds and at quit; a corrupt file is set
 aside and the restart shown). An answer that ends before its final count — the
 client hangs up mid-stream or before the answer begins, the stream breaks, a
 usage object cannot be read — is charged an estimate on top of what it

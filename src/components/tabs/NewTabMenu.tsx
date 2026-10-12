@@ -69,7 +69,7 @@ interface Props {
 export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onClose, onManageAgents }: Props) {
   const t = useT();
 
-  // Experimental — off for users, on in debug. This menu is the DETACHED
+  // Experimental — off until ticked. This menu is the DETACHED
   // window's, and it is a separate React root: an entry added only to `TabBar`
   // exists in the main window and is silently missing from every popout.
   const webBrowser = useExperimental("web_browser");

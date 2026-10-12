@@ -6,6 +6,7 @@ import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
+import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { OutboxGallery } from "../components/OutboxGallery";
@@ -118,7 +119,7 @@ import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../terminal/subagentInput";
-import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
+import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, subagentAtWork, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, arrivedPending, pendingPrompt, reworded, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPosts";
 import { inboxLeaves, useInboxFiles, withoutInboxReferences } from "../terminal/inboxRefs";
@@ -145,6 +146,7 @@ import {
   type DictationProgress,
 } from "../voiceInput";
 import { startDictation, type DictationSession } from "../voiceSession";
+import { usePenWriting } from "../penWriting";
 import { speak, speechOutputSupported, spokenText, stopSpeaking, unlockSpeech } from "../speechOutput";
 
 /** A line the dictation strip shows: a key, not a sentence, so switching the
@@ -522,11 +524,13 @@ function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers;
  * agent's side. One that has reported back wears the tab cards' ✓ (where its
  * CLI records that). One whose CLI has not yet recorded where its
  * conversation lives cannot be opened yet. */
-function SubagentCard({ turn, label, untested, time, onOpen }: {
+function SubagentCard({ turn, label, untested, time, busy = false, onOpen }: {
   turn: TranscriptTurn;
   label: string;
   untested: string;
   time?: ReactNode;
+  /** The conversation it was spawned from is at work (`subagentAtWork`). */
+  busy?: boolean;
   onOpen?: (turn: TranscriptTurn) => void;
 }) {
   const t = useT();
@@ -543,7 +547,7 @@ function SubagentCard({ turn, label, untested, time, onOpen }: {
       </span>}
       {time}
     </span>
-    {turn.finished && <AgentStatusMark status="done" />}
+    {turn.finished ? <AgentStatusMark status="done" /> : subagentAtWork(turn, busy) && <AgentStatusMark status="working" />}
     {openable && <svg className="transcript-agent-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>}
   </button>;
 }
@@ -563,7 +567,7 @@ function SubagentCard({ turn, label, untested, time, onOpen }: {
  * `part` draws only the settled chat or only the prompts the desktop still
  * holds (`queued`), so the agent at work can be drawn between the two; both
  * halves key and date their bubbles from the whole of `entries`. */
-const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", onOpenAgent, onResend, onEdit, posts, renderPost, inbox }: {
+const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, posts, renderPost, inbox }: {
   entries: SessionTranscript["entries"];
   part?: "settled" | "queued";
   cutLabel: string;
@@ -573,6 +577,8 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   planUntested?: string;
   agentLabel?: string;
   agentUntested?: string;
+  /** The conversation is at work: its subagents that have not reported back are too. */
+  busy?: boolean;
   onOpenAgent?: (turn: TranscriptTurn) => void;
   /** Send a prompt the link lost once more, by its pending id. */
   onResend?: (pending: number) => void;
@@ -604,7 +610,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
       <span>{chatDayLabel(moment, now, dayLabels)}{timesUntested && <em> · {t("mobile.focus.untested")}</em>}</span>
     </div>}
     {turn.kind === "agent"
-      ? <SubagentCard turn={turn} label={agentLabel} untested={agentUntested} time={time} onOpen={onOpenAgent} />
+      ? <SubagentCard turn={turn} label={agentLabel} untested={agentUntested} time={time} busy={busy} onOpen={onOpenAgent} />
       : turn.questions
       ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={hold(turn.key, () => turn.text)} />
       : turn.command
@@ -815,6 +821,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   const wideHint = useRef<HTMLDivElement>(null);
   const readableHost = useRef<HTMLElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
+  /** A pen writes here: the composer opens a few lines tall, so the system's
+   * handwriting-to-text (iPad Scribble) has room to write in. */
+  const penWriting = usePenWriting();
   /** Re-reads the emulated screen on demand — used when Focus is opened, so the
    * reading view is current instead of waiting for the next output byte. */
   const refreshReadable = useRef<() => void>(() => {});
@@ -1224,6 +1233,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * types is what makes Android open the photo picker (and iOS the library)
    * instead of the file chooser `ANY_FILE_ACCEPT` lands in. */
   const galleryInput = useRef<HTMLInputElement>(null);
+  /** The same drop, straight from the camera: `capture` skips every chooser
+   * and opens it on Android and iOS alike. */
+  const cameraInput = useRef<HTMLInputElement>(null);
   /** Bumped when the tab changes so a late upload result lands nowhere. */
   const uploadRun = useRef(0);
   const uploadSeq = useRef(0);
@@ -3524,6 +3536,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     setAddSheet(false);
     if (key === "phone") {
       pickPhoneFiles(fileInput.current, attachFromPhone);
+    } else if (key === "camera") {
+      cameraInput.current?.click();
     } else if (key === "gallery") {
       galleryInput.current?.click();
     } else if (key === "desktop") {
@@ -3591,6 +3605,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** Agent tabs read as a chat (`ReadableTurns`); a shell's output has no
    * turns to lay out. */
   const chat = tab.kind === "agent";
+  /** What the non-terminal view is called: a chat on an agent tab. */
+  const focusLabel = chat ? "mobile.focus.chat" : "mobile.focus.reader";
   /** The live screen after the last prompt echo — what the session is
    * drawing right now. Shown under the stored session while it holds a
    * choice the session is waiting on, which the transcript cannot carry. */
@@ -3935,11 +3951,17 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     pending: choice.value === switching,
   }));
   const failedMode = modes.find((choice) => choice.value === switchFailed);
-  const addOptions: SheetOption[] = [
-    { key: "phone", label: t("mobile.add.phone"), description: t("mobile.add.phoneHint"), current: false },
-    { key: "gallery", label: t("mobile.add.gallery"), description: t("mobile.add.galleryHint"), current: false },
-    { key: "desktop", label: t("mobile.add.desktop"), description: t("mobile.add.desktopHint"), current: false },
-    { key: "project", label: t("mobile.add.project"), description: t("mobile.add.projectHint"), current: false },
+  const attachTiles: AttachTile[] = [
+    { key: "camera", tone: "camera", label: t("mobile.add.camera"), hint: t("mobile.add.cameraHint"), untested: "mobile.add.camera",
+      icon: <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" /><circle cx="12" cy="13" r="3.5" /></svg> },
+    { key: "gallery", tone: "gallery", label: t("mobile.add.gallery"), hint: t("mobile.add.galleryHint"),
+      icon: <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8.5" cy="9.5" r="1.5" /><path d="m21 15-5-5-10 10" /></svg> },
+    { key: "phone", tone: "files", label: t("mobile.add.phone"), hint: t("mobile.add.phoneHint"),
+      icon: <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" /><path d="M14 3v5h5" /></svg> },
+    { key: "desktop", tone: "desktop", label: t("mobile.add.desktopTile"), hint: t("mobile.add.desktopHint"),
+      icon: <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></svg> },
+    { key: "project", tone: "project", label: t("mobile.add.project"), hint: t("mobile.add.projectHint"),
+      icon: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.4 6.8" /></svg> },
   ];
   const desktopOptions: SheetOption[] = (desktopImages ?? []).map((image) => ({
     key: image.id,
@@ -4008,7 +4030,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       ? <div className="readable-empty"><strong>{t("mobile.subagent.empty")}</strong></div>
       : <div className="readable-lines chat transcript" data-testid="subagent-transcript">
           {subTranscript.truncated && <button className="readable-earlier" onClick={() => setSubLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
-          <TranscriptTurns entries={subTranscript.entries} cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.subagent.task")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} onOpenAgent={openSubagentTurn} />
+          <TranscriptTurns entries={subTranscript.entries} cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.subagent.task")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={subagentWorking} onOpenAgent={openSubagentTurn} />
           {subagentWorking && <div className="transcript-working" role="status" data-testid="subagent-working">
             <span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span>
             {subagentModel ? t("mobile.focus.workingModel", { model: subagentModel }) : t("mobile.focus.working")}
@@ -4019,13 +4041,39 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           </div>}
         </div>}
   </>;
-  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>{outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{outbox.length}</small></button>}<div className="terminal-view-switch" aria-label={t("mobile.focus.outputView")}><button className={view === "focus" ? "selected" : ""} aria-pressed={view === "focus"} aria-haspopup={chat ? "menu" : undefined} aria-expanded={chat ? focusMenu : undefined} onClick={() => {
-      // An agent tab's Reader is a list once it is up: where it reads from.
-      if (chat && view === "focus") setFocusMenu((open) => !open);
-      else chooseView("focus");
-    }}>{t(chat ? "mobile.focus.chat" : "mobile.focus.reader")}{chat && <span className="view-caret" aria-hidden="true" />}</button><button className={view === "terminal" ? "selected" : ""} aria-pressed={view === "terminal"} onClick={() => { setFocusMenu(false); chooseView("terminal"); }}>{t("mobile.focus.terminal")}</button></div><span className={connected ? "lamp" : "lamp off"} /></header>
-    {focusMenu && chat && view === "focus" && <div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
-      <div className="focus-menu" role="menu" aria-label={t("mobile.focus.source")} onClick={(event) => event.stopPropagation()}>
+  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button><div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>
+      {/* The project's drawer, the ☰ the project screen carries too: what a
+          left→right swipe over the output pulls in, offered while the
+          desktop's "Project files on the phone" switch is on. */}
+      {project && filesLabel !== null && <button
+        className="drawer-open"
+        onClick={() => setFilesOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={filesOpen}
+        aria-label={t("mobile.project.menu")}
+        title={t("mobile.project.menu")}
+      ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg></button>}
+      {outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{outbox.length}</small></button>}
+      {/* One pill named after the view on screen; its list switches views and,
+          on an agent tab's Chat, says where the chat reads from. */}
+      <div className="terminal-view-switch"><button
+        className="selected"
+        aria-haspopup="menu"
+        aria-expanded={focusMenu}
+        title={t("mobile.focus.outputView")}
+        onClick={() => setFocusMenu((open) => !open)}
+      >{t(view === "terminal" ? "mobile.focus.terminal" : focusLabel)}<span className="view-caret" aria-hidden="true" /></button></div><span className={connected ? "lamp" : "lamp off"} /></header>
+    {focusMenu && <div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
+      <div className="focus-menu" role="menu" aria-label={t("mobile.focus.outputView")} onClick={(event) => event.stopPropagation()}>
+        {([["focus", focusLabel], ["terminal", "mobile.focus.terminal"]] as const).map(([choice, label]) => <button key={choice} role="menuitemradio" aria-checked={view === choice} onClick={() => {
+          setFocusMenu(false);
+          if (view !== choice) chooseView(choice);
+        }}>
+          <span><strong>{t(label)}</strong></span>
+          {view === choice && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
+        </button>)}
+        {chat && view === "focus" && <>
+        <hr className="focus-menu-rule" />
         {/* Dimmed when the stored session cannot be read (an agent whose
             transcript Tabtivity does not read, no session id yet); the row then
             says which, rather than doing nothing. */}
@@ -4076,6 +4124,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           <span><strong>{t("mobile.speech.language")} {isUntested("mobile.speech.language") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{speechLangSummary(speechLang, t)}</small></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
         </button>
+        </>}
       </div>
     </div>}
     <div className="terminal-body">
@@ -4102,10 +4151,14 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
                 <svg className={subagentListOpen ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
               </button>
               {subagentListOpen && <div id="mobile-subagent-list" className="subagent-index-list">
-                {sessionAgents.map((entry, index) => <button type="button" key={`${entry.at ?? index}:${index}`} disabled={!entry.subagent} aria-label={`${entry.role ?? t("mobile.subagent.region")} · ${entry.text}`} onClick={() => openListedSubagent(entry)}>
-                  <small>{entry.role ?? t("mobile.subagent.region")}</small>
-                  <span>{entry.text}{entry.cut && "…"}</span>
-                </button>)}
+                {sessionAgents.map((entry, index) => {
+                  const status = entry.finished ? "done" : subagentAtWork(entry, sessionBusy) ? "working" : null;
+                  return <button type="button" key={`${entry.at ?? index}:${index}`} className={status ? "has-status" : undefined} disabled={!entry.subagent} aria-label={`${entry.role ?? t("mobile.subagent.region")} · ${entry.text}`} onClick={() => openListedSubagent(entry)}>
+                    <small>{entry.role ?? t("mobile.subagent.region")}</small>
+                    <span>{entry.text}{entry.cut && "…"}</span>
+                    {status && <AgentStatusMark status={status} />}
+                  </button>;
+                })}
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
             </nav>}
@@ -4128,7 +4181,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
                 : <div className="readable-empty"><strong>{t("mobile.transcript.empty")}</strong><span>{t("mobile.transcript.emptyHint")}</span></div>)
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
+                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.onScreen") && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
@@ -4280,7 +4333,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
         {shownLimits.week && <span className={`fact-limit${shownLimits.week.percent >= 90 ? " high" : ""}`} title={shownLimits.week.resets ? resetText(shownLimits.week.resets, limitTime, readTime) : undefined}>{t("mobile.facts.week", { percent: Math.round(100 - shownLimits.week.percent) })}{weekReset && <> · {t("mobile.facts.resetIn", { time: weekReset })}</>}</span>}
         {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
       </div>}
-      <div className="prompt-composer">
+      <div className={`prompt-composer${penWriting ? " pen-writing" : ""}`}>
         {slashMenu.length > 0 && <div className="slash-menu" role="group" aria-label={t("mobile.slash.title")}>
           <div className="slash-menu-head">{t("mobile.slash.title")} {isUntested("mobile.composer.slash") && <em>{t("mobile.focus.untested")}</em>}</div>
           {/* Pointer-down is held back so a tap does not take the focus off
@@ -4303,6 +4356,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
             event.preventDefault();
             submitDraft();
           }} />
+          {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
           {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
@@ -4311,7 +4365,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           {tab.kind === "agent" && <>
             <input ref={fileInput} type="file" accept={ANY_FILE_ACCEPT} multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-file-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={galleryInput} type="file" accept="image/*,video/*" multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-gallery-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
-            <button className="composer-add" disabled={!connected} onClick={() => setAddSheet(true)} aria-label={t("mobile.add.title")} aria-haspopup="dialog" aria-expanded={addSheet} title={t("mobile.add.hint")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+            <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-camera-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
+            <button className={`composer-add${addSheet ? " open" : ""}`} disabled={!connected} onClick={() => setAddSheet(true)} aria-label={t("mobile.add.title")} aria-haspopup="dialog" aria-expanded={addSheet} title={t("mobile.add.hint")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
             {/* Folds the key row below in and out; it starts folded. */}
             <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
             {/* Plan / Goal / Clear sit centred between the keys button and Send, evenly spaced. */}
@@ -4374,11 +4429,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
         onClose={closeModelSheet}
       />)}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}
-    {addSheet && <OptionSheet
+    {addSheet && <AttachSheet
       title={t("mobile.add.title")}
-      options={addOptions}
-      waiting=""
-      busy={false}
+      tiles={attachTiles}
       onPick={pickAdd}
       onClose={() => setAddSheet(false)}
     />}

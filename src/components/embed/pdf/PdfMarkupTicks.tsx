@@ -1,13 +1,13 @@
 /**
  * The agent's ticks on the desktop (`markup_done`,
- * `docs/markup_tick_approve_plan.md` §3): a ✓ badge at the top-right corner
- * of each sent mark the agent says it handled, over the markup layer as the
+ * `docs/markup_tick_approve_plan.md` §3): a ✓ badge just outside the
+ * top-right corner of each sent mark (`tickBadgeSpot`, never over its words) the agent says it handled, over the markup layer as the
  * question pins are (`PdfQuestionPins`, the same pin in the success colour).
  * A click approves the mark — it leaves the layer, undoably — and nothing
  * else ever removes it: a tick only offers the click.
  */
 import { useT } from "../../../lib/i18n";
-import { markBox, type Layer, type Mark, type TickedMark } from "../../../../mobile-web/src/markup/layer";
+import { markBox, tickBadgeSpot, type Layer, type Mark, type TickedMark } from "../../../../mobile-web/src/markup/layer";
 import { UntestedTag } from "../../common/UntestedTag";
 
 /** One badge: the ticked mark, its place on its page's sent side and its box. */
@@ -59,14 +59,11 @@ export function PdfTickBadges({
   onApprove: (index: number, mark: Mark) => void;
 }) {
   const t = useT();
-  const maxLeft = Math.max(0, size[0] * scale - BADGE);
-  const maxTop = Math.max(0, size[1] * scale - BADGE);
+  const page: [number, number] = [size[0] * scale, size[1] * scale];
   return (
     <>
       {badges.map(({ index, mark, box }) => {
-        const [x, y, w] = box;
-        const left = Math.min(maxLeft, Math.max(0, (x + w) * scale - BADGE / 2));
-        const top = Math.min(maxTop, Math.max(0, y * scale - BADGE / 2));
+        const [left, top] = tickBadgeSpot(box, scale, page, BADGE);
         return (
           <button
             key={`${badgeKey(mark)}:${index}`}

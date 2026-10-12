@@ -44,7 +44,9 @@
 
 use std::path::PathBuf;
 
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(feature = "desktop")]
 use tauri_plugin_dialog::DialogExt;
 
 use crate::commands::projects::uuid_v4;
@@ -100,7 +102,7 @@ const READER_SUPPORTED: bool = true;
 
 // ── Capability report ───────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn browser_capabilities() -> Result<BrowserCapabilities, String> {
     let live_enabled = read_settings()
         .map(|s| s.browser_live_pages())
@@ -146,7 +148,7 @@ fn read_settings() -> Option<crate::schema::settings::Settings> {
 /// type's two fields — in short, `allowed == true` with a `reason` is
 /// *"reachable, but it is a loopback or private address and the user should be
 /// told first"*.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn browser_check_url(url: String) -> Result<UrlVerdict, String> {
     Ok(check(&url))
 }
@@ -195,7 +197,7 @@ fn check(raw: &str) -> UrlVerdict {
 /// Async on purpose, and not only because it does I/O: a synchronous Tauri
 /// command runs on the main thread, and a 15-second fetch there would freeze
 /// the whole window.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn browser_reader_fetch(url: String) -> Result<ReaderPage, String> {
     if !READER_SUPPORTED {
         return Err(UNSUPPORTED.to_string());
@@ -223,7 +225,8 @@ pub async fn browser_reader_fetch(url: String) -> Result<ReaderPage, String> {
 /// `detach_subwindow` are: `WebviewWindowBuilder::build()` blocks on the
 /// main-thread event loop pumping WebView2's controller callback, which a
 /// synchronous command is itself blocking (wry#583 / tauri#4121).
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn browser_open_live(app: AppHandle, url: String) -> Result<LiveWindowRef, String> {
     if !LIVE_SUPPORTED {
         return Err(UNSUPPORTED.to_string());
@@ -260,6 +263,7 @@ pub async fn browser_open_live(app: AppHandle, url: String) -> Result<LiveWindow
 /// and for a window that shows the open web the answer is no. Best-effort in
 /// the sense that a failed hook install leaves the engine's default in place,
 /// which is a *prompt*, never a silent grant.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "windows")]
 pub(crate) fn deny_all_permissions(win: &tauri::WebviewWindow) {
     use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PERMISSION_STATE_DENY;
@@ -289,11 +293,13 @@ pub(crate) fn deny_all_permissions(win: &tauri::WebviewWindow) {
 /// `FALSE`), so a live window that installs none already grants nothing. macOS:
 /// WKWebView asks its UI delegate, and wry's delegate implements no media/
 /// geolocation grant, so the request is denied there too. Nothing to install.
+#[cfg(feature = "desktop")]
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn deny_all_permissions(win: &tauri::WebviewWindow) {
     let _ = win;
 }
 
+#[cfg(feature = "desktop")]
 fn spawn_live_window(app: &AppHandle, label: &str, url: url::Url) -> Result<(), String> {
     use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
     use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -417,6 +423,7 @@ fn spawn_live_window(app: &AppHandle, label: &str, url: url::Url) -> Result<(), 
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 fn emit_live_state(app: &AppHandle, label: &str, loading: bool) {
     let Some(rec) = engine::live_get(label) else {
         return;
@@ -444,7 +451,8 @@ fn emit_live_state(app: &AppHandle, label: &str, loading: bool) {
 /// Close a live window. Idempotent — a window already gone is the state the
 /// caller wanted, and the frontend's unmount races the user closing it from the
 /// window manager.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn browser_close_live(app: AppHandle, label: String) -> Result<(), String> {
     // Validated, not trusted: without this the frontend could hand any label in
     // the app to `destroy()`, `main` included.
@@ -458,7 +466,7 @@ pub async fn browser_close_live(app: AppHandle, label: String) -> Result<(), Str
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn browser_list_live() -> Result<Vec<LiveWindowRef>, String> {
     Ok(engine::live_list()
         .into_iter()
@@ -504,6 +512,7 @@ fn on_download_requested(url: &url::Url, destination: &mut PathBuf) -> bool {
     true
 }
 
+#[cfg(feature = "desktop")]
 fn on_download_finished(
     app: &AppHandle,
     window_label: &str,
@@ -601,7 +610,8 @@ fn read_head(path: &std::path::Path, max: usize) -> Vec<u8> {
 /// project tree can be `git add -A`'d and replicated to a remote host.
 ///
 /// Returns a **display name**, never a path.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn browser_download_decide(
     app: AppHandle,
     download_id: String,
@@ -668,7 +678,8 @@ pub async fn browser_download_decide(
 /// On an ephemeral profile there is deliberately very little to wipe — that is
 /// the design, not an omission — so this is mostly the quarantine plus a
 /// belt-and-braces `clear_all_browsing_data()` on any live window still open.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn browser_clear_data(app: AppHandle) -> Result<(), String> {
     for rec in engine::live_list() {
         if let Some(win) = app.get_webview_window(&rec.label) {
@@ -721,7 +732,7 @@ mod tests {
             ),
             (
                 "services/web_safety.rs",
-                include_str!("../services/web_safety.rs"),
+                include_str!("../../../src-core/src/services/web_safety.rs"),
             ),
         ]
     }
@@ -771,7 +782,7 @@ mod tests {
         // eventually slicing into the middle of a multi-byte char in a comment.
         for chunk in src.split_inclusive('\n') {
             let line = chunk.trim_end_matches('\n').trim_end_matches('\r');
-            if line.trim() == concat!("#[tauri", "::command]") {
+            if line.trim() == concat!("#[cfg_attr(feature = \"desktop\", tauri", "::command)]") {
                 starts.push(offset + line.len());
             }
             offset += chunk.len();
@@ -854,7 +865,7 @@ mod tests {
         let lines: Vec<&str> = src.lines().collect();
         let mut seen = 0usize;
         for (i, line) in lines.iter().enumerate() {
-            if line.trim() != concat!("#[tauri", "::command]") {
+            if line.trim() != concat!("#[cfg_attr(feature = \"desktop\", tauri", "::command)]") {
                 continue;
             }
             seen += 1;
@@ -1248,8 +1259,9 @@ mod tests {
     }
 
     /// The live window is opt-in, and its default must be OFF **in a debug build
-    /// too** — unlike every other experimental flag, whose unset-means-on-in-debug
-    /// rule is exactly wrong here. A debug build is what the author runs all day,
+    /// too** — unlike an experimental flag on a profile not yet marked
+    /// `experimental_explicit`, whose unset-means-on-in-debug rule is exactly
+    /// wrong here. A debug build is what the author runs all day,
     /// and this is the surface whose central security claim does not hold.
     #[test]
     fn live_pages_are_off_until_asked_for() {
@@ -1277,10 +1289,17 @@ mod tests {
         };
         assert!(asked.browser_live_pages());
 
-        // And the browser itself still follows the ordinary rule, so the two
-        // switches are visibly different things.
+        // And the browser itself still follows the experimental rule — on an
+        // unmarked debug profile, unset follows Debug mode — so the two switches
+        // are visibly different things. Once marked, neither is on unasked.
         assert!(Settings {
             debug: Some(true),
+            ..Default::default()
+        }
+        .web_browser());
+        assert!(!Settings {
+            debug: Some(true),
+            experimental_explicit: Some(true),
             ..Default::default()
         }
         .web_browser());

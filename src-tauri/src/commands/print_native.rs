@@ -57,7 +57,7 @@ fn gtk_paper_name(paper: &str) -> Option<&'static str> {
 /// Outcome of a native print: `"sent"` once the job reached the print system,
 /// `"cancelled"` when the user closed the dialog, `"opened"` where the system
 /// print UI owns the rest and reports nothing back (Windows).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_pdf_native(
     window: tauri::WebviewWindow,
     bytes: Vec<u8>,

@@ -38,6 +38,8 @@ describe("reading a session's login state", () => {
     expect(readSignedOut(rows("API Error: 401 · Invalid API key · Please run /login"))).toBe(true);
     expect(readSignedOut(rows(" Select login method:", " ❯ 1. Claude account with subscription"))).toBe(true);
     expect(readSignedOut(rows("How would you like to authenticate for this project?"))).toBe(true);
+    // Antigravity 1.3.3's expired or revoked login, read out of its binary.
+    expect(readSignedOut(rows("> fix the build", "Authentication expired. Please log back in."))).toBe(true);
   });
 
   it("lets go once the sign-in went through, and ignores what scrolled away", () => {

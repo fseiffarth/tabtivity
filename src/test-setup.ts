@@ -1,4 +1,9 @@
 import { configure } from "@testing-library/react";
+import {
+  installTestGuards,
+  unmockedFetch,
+  unmockedInvoke,
+} from "./__tests__/helpers/testGuards";
 
 // The heavy in-app viewer tests (FileViewerPane pulls in pdfjs/katex/mermaid/
 // xlsx) render and resolve async load chains that, under the full suite's
@@ -16,13 +21,14 @@ configure({ asyncUtilTimeout: 10000 });
 // resulting rejection is uncaught, which vitest reports as an "Unhandled
 // Rejection" error (failing the run's exit code) even though every test passes.
 // Tests that mock `@tauri-apps/api/*` are unaffected (the mock replaces the
-// module); this stub only makes the *real*, unmocked calls inert. Each test that
-// mocks core still controls its own `invoke` resolutions.
+// module); this stub only makes the real event plumbing inert. A real, unmocked
+// *command* fails its test (see `helpers/testGuards`). Each test that mocks core
+// still controls its own `invoke` resolutions.
 if (!(globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } })
   .window?.__TAURI_INTERNALS__) {
   (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
     transformCallback: () => 0,
-    invoke: () => Promise.resolve(null),
+    invoke: unmockedInvoke,
     convertFileSrc: (p: string) => p,
     unregisterCallback: () => {},
   };
@@ -60,3 +66,9 @@ if (!cssObj || typeof cssObj.escape !== "function") {
   if (cssObj) cssObj.escape = escape;
   else (globalThis as unknown as { CSS: unknown }).CSS = { escape };
 }
+
+// No test reaches the network or the Tauri backend: an unmocked `fetch` or
+// `invoke` command is rejected and fails the test that made it, by name, on
+// every machine — not just on the CI runner slow enough to see the fallout.
+globalThis.fetch = unmockedFetch;
+installTestGuards();

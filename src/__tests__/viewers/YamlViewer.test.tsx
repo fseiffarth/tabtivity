@@ -10,6 +10,7 @@
  * model would pass none of this.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
@@ -127,6 +128,8 @@ async function saveAndRead(): Promise<string> {
   );
   return onDisk;
 }
+
+warmFileViewer();
 
 describe("yaml tree viewer (#yaml)", () => {
   beforeEach(() => {
@@ -637,8 +640,13 @@ describe("card view (#yaml-grid)", () => {
     await act(async () => {
       fireEvent.click(await screen.findByRole("button", { name: "Cards" }));
     });
+    // The card view is a lazily split chunk (perf plan §6): wait for it OUTSIDE
+    // an `act` scope — inside one, React holds the Suspense retry until the scope
+    // ends, so the grid never appears while a findBy inside it is polling. Its
+    // first import after `resetModules` is a fresh transform, hence the timeout.
+    const openDocument = await screen.findByRole("button", { name: "Open document" }, { timeout: 15_000 });
     await act(async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Open document" }));
+      fireEvent.click(openDocument);
     });
     await screen.findByLabelText("Value of port");
   }
@@ -737,8 +745,12 @@ describe("card view (#yaml-grid)", () => {
     await act(async () => {
       fireEvent.click(await screen.findByRole("button", { name: "Cards" }));
     });
+    // The lazily split card chunk is awaited outside `act`, as `renderCards`
+    // explains; inside one it only appears when an earlier test happened to
+    // have warmed its transform.
+    const openDocument = await screen.findByRole("button", { name: "Open document" }, { timeout: 15_000 });
     await act(async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Open document" }));
+      fireEvent.click(openDocument);
     });
     await act(async () => {
       fireEvent.click(await screen.findByRole("button", { name: "Open services" }));

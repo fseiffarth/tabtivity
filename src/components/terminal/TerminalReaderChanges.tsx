@@ -6,6 +6,7 @@ import { basename, relativePathWithin } from "../../lib/paths";
 import { parseUnifiedDiff } from "../../lib/viewers/diff";
 import { disabledViewers, type FileEntry } from "../../lib/viewers/fileUtils";
 import { CHANGES_MIN_WIDTH, readerRequest } from "../../lib/agents/agentReader";
+import { watchedReads } from "../../lib/agents/transcriptWatch";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useSettingsStore } from "../../stores/settings";
 import type { TabEntry } from "../../stores/tabs";
@@ -34,8 +35,6 @@ export function changesWidthStyle(width: number): CSSProperties {
   return { "--reader-changes-w": `${Math.round(width)}px` } as CSSProperties;
 }
 
-/** As the chat: the backend answers an unchanged store by its fingerprint. */
-const POLL_MS = 2000;
 
 export interface FileChange {
   path: string;
@@ -55,6 +54,8 @@ interface AgentChanges {
   unchanged?: boolean;
   changes: FileChange[];
   truncated: boolean;
+  /** The read's watch is armed (`lib/agents/transcriptWatch`). */
+  watched?: boolean;
 }
 
 const KIND_KEY: Record<FileChange["kind"], TranslationKey> = {
@@ -214,20 +215,16 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    let busy = false;
     let version: string | undefined;
-    const fetchChanges = async () => {
+    const stop = watchedReads(async (watch) => {
       const args = readerRequest(scope, tabRef.current, cwd, version, 0, subagent);
-      if (busy) return;
       if (!args) {
         setRead({ key: readKey, changes: { available: false, reason: "no_session", changes: [], truncated: false } });
-        return;
+        return false;
       }
-      busy = true;
-      const next = await invoke<AgentChanges>("agent_tab_changes", { ...args, limit: null })
+      const next = await invoke<AgentChanges>("agent_tab_changes", { ...args, limit: null, watch })
         .catch((): AgentChanges => ({ available: false, reason: "read_failed", changes: [], truncated: false }));
-      busy = false;
-      if (cancelled) return;
+      if (cancelled) return next.watched === true;
       if (!next.unchanged) version = next.version;
       if (!next.unchanged && next.available) {
         const keys = changeKeys(next.changes);
@@ -242,12 +239,11 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
         }
       }
       setRead((previous) => (next.unchanged && previous?.key === readKey ? previous : { key: readKey, changes: next }));
-    };
-    void fetchChanges();
-    const timer = setInterval(() => void fetchChanges(), POLL_MS);
+      return next.watched === true;
+    });
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stop();
     };
   }, [visible, scope, cwd, subagent, readKey]);
 

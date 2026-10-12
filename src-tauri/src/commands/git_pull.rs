@@ -192,7 +192,7 @@ fn is_merging(target: Option<&RemoteTarget>, dir: &str) -> bool {
 
 // ── Fetch ────────────────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_fetch(
     project_dir: String,
     project_id: Option<String>,
@@ -261,7 +261,7 @@ fn git_fetch_blocking(project_dir: String, project_id: Option<String>) -> Result
 
 // ── Preview ──────────────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_pull_preview(
     project_dir: String,
     branch: Option<String>,
@@ -348,7 +348,7 @@ fn git_pull_preview_blocking_selected(
 
 // ── Apply ────────────────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_pull_apply(
     project_dir: String,
     branch: Option<String>,
@@ -427,7 +427,7 @@ fn git_pull_apply_blocking_selected(
 
 // ── The merge it can leave ───────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_merge_state(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -449,7 +449,7 @@ pub async fn git_merge_state(
     .await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_merge_abort(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -463,7 +463,7 @@ pub async fn git_merge_abort(
 
 /// Conclude the merge with git's prepared message. Refuses while a file is
 /// still unmerged, which git itself would too — but with a clearer sentence.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_merge_commit(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -504,7 +504,7 @@ fn git_merge_commit_blocking_selected(
 /// Both sides of one file for the `gitmerge` viewer, keyed by the file's
 /// absolute path so a restored tab needs nothing else. Local repos only: the
 /// resolved text is written to this machine's working tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_merge_sides(path: String) -> Result<MergeSides, String> {
     run_off_thread(move || git_merge_sides_blocking(path)).await
 }

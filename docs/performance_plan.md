@@ -26,6 +26,24 @@ cores (agents running in tabs: opencode, claude).
 | App RSS | 434 MB |
 | Stopwatch: agent tab / 100-page PDF | not yet recorded |
 
+After the run (2026-10-11, `before-merge` = dev build of develop ac24ce9e
+without this work, `after-merge` = fc5b7567 ~10 min after a restart; same tab
+set, idle, load < 9; full log in `docs/performance_numbers.md`). The 10-06
+baseline ran under load 72, so compare these two columns with each other:
+
+| Number | before-merge | after-merge |
+|---|---|---|
+| Renderer whole process / main thread | 7.5 % / 6.0 % | 3.6 % / 3.0 % |
+| Renderer runqueue wait per 30 s | 4 ms | 0 ms |
+| App process / main thread | 1.9 % / 0.9 % | 0.8 % / 0.2 % |
+| App voluntary ctxt switches | 21 /s | 3 /s |
+| Renderer RSS (PDFs open → closed) | 927–942 MB (closed snapshot taken earlier, not comparable) | 490–539 MB → 477 MB |
+| App RSS | 692 MB | 298–328 MB |
+
+Memory is not like for like: the after run is a fresh process, the before one
+had hours of uptime. Retake both RSS numbers after a few hours on the new
+build. Thin LTO's share of the CPU drop cannot be read off these runs.
+
 ## 0. Diagnosis in one paragraph
 
 The renderer is a single WebKitGTK thread (DMABUF is off, so JS, layout and
@@ -586,8 +604,45 @@ can be compared step by step with the §1 numbers.
 - Mobile host and the overlay agent dock add no frontend timers (grep 0); the
   sidecar's standing cost is unassessed — §1.2 covers it.
 
-Remaining direct `setInterval` sites after step 16 are listed here once the
-helper lands (today: 90 sites in 68 files).
+Remaining direct `setInterval` sites after step 16 (S12, `lib/usePoll`
+landed): **66** non-test lines in `src/` (90 at the plan's start, 84 before
+S12). Each stays direct for a reason; a new UI poll goes through `usePoll`.
+
+- **Must run unfocused (exempt by construction):** `AgentScheduleHost` ×2,
+  `AgentContinueHost`, `AgentCronHost`, `CalDavSyncHost`,
+  `calendar/alarms.ts`, `TimerLeaseHost`; `MailIndicator` (mail check and
+  new-mail notice); `AppShell` ×3 (usage timer flush, usage counter flush,
+  the SSH-pool reconcile that silently reconnects a background HPC tab's
+  host); `VpnIndicator` (tunnel-drop detection gates the SSH probes riding
+  it); `DetachedApp` (the popout's own hidden-window probe);
+  `rendererWatchdog`; `stores/power` (the battery reading Energy Saver and
+  `usePoll` themselves read).
+- **Already quiesce-aware, ×3 when blurred by choice** (`saverInterval(…,
+  quiesce)` — readouts on a visible but unfocused window): `StatusCluster`,
+  `AppResourceDisplay`, `DevBuildIndicator` (poll), `ProjectSwitcher` ×2,
+  `useModelsHub`, `PrinterNetworkDefaultsHost`, `Clock`, `AppTimerDisplay`,
+  `FileViewerPane` (the 1583 reload). `FileTree`'s remote re-stat already
+  skips without focus.
+- **File auto-reload, pane-gated with a catch-up on show; kept running
+  unfocused** so a viewer beside an external editor or a `latexmk -pvc`
+  follows its saves: `FileViewerPane` ×2, `PdfViewer`, `PdfPresentApp`
+  (reload), `OdtView`, `GifView`, `DeckView` ×2 (deck file, TeX figures).
+- **Live monitors watched from another window:** `NetworkTrafficPane` (the
+  1 s rate), `PrintManagerPane`. Candidates for `usePoll` if the user says a
+  monitor need not follow while unfocused.
+- **Local clocks and xterm reads, no IPC:** `SidePanel` (TTY rate),
+  `TerminalReaderFacts` ×2, `TerminalReaderStatus`, `TerminalReaderView` ×2
+  (the live-screen clock until the pane has its xterm, subagent clock),
+  `TabLocalityBadges`, `TabHoverCard`, `TodoIndicator`, `CalendarIndicator`, `TodoAgendaRail`,
+  `TimeGrid`, `useAlertsFeed`, `AgentSchedulesView`, `AgentScheduleDialog`,
+  `PromptChart`, `DevBuildIndicator` (clock), `PdfPresentApp` (clock),
+  `DeckPresenter`.
+- **Transient, one gesture or flow:** `ProjectHoverCard` (hover),
+  `TourHost`, `DetachedCenterPanel` + `window/coords.ts` (drag cursor poll,
+  must run while the source window is unfocused), `window/screenshot.ts`
+  (countdown), `PdfPresentApp`/`DeckAudienceApp` (connect retry),
+  `agents/ollamaUpgrade.ts` (install progress).
+- **Dev only:** `dev/perfMonitor.ts`, `dev/DevPerfHost.tsx` ×2.
 
 ## 11. Agent steps (implement + review routine)
 

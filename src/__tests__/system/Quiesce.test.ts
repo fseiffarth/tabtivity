@@ -10,7 +10,7 @@
  * stops listening, and the blur half never leaks into the *battery* reading
  * (`energySaverActive`), which decisions about power — model autoload — stay on.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
@@ -33,16 +33,25 @@ beforeEach(() => {
   delete document.documentElement.dataset.blurred;
 });
 
+/** A window blur, decided one task later (focus has landed by then). */
+async function blur() {
+  window.dispatchEvent(new Event("blur"));
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  document.querySelectorAll("iframe").forEach((f) => f.remove());
+});
+
 describe("startFocusTracking", () => {
-  it("blur engages quiesce and marks the root; focus disengages both", () => {
+  it("blur engages quiesce and marks the root; focus disengages both", async () => {
     const stop = startFocusTracking();
-    // Tracking seeds from document.hasFocus() (false in jsdom); a focus event
-    // settles it, which is also what a real window fires as it comes forward.
     window.dispatchEvent(new Event("focus"));
     expect(usePowerStore.getState().blurred).toBe(false);
     expect(quiesceActive()).toBe(false);
 
-    window.dispatchEvent(new Event("blur"));
+    await blur();
     expect(usePowerStore.getState().blurred).toBe(true);
     expect(quiesceActive()).toBe(true);
     expect(document.documentElement.dataset.blurred).toBe("on");
@@ -54,13 +63,83 @@ describe("startFocusTracking", () => {
     stop();
   });
 
-  it("stops listening after teardown", () => {
+  it("stops listening after teardown", async () => {
     const stop = startFocusTracking();
     window.dispatchEvent(new Event("focus"));
     stop();
-    window.dispatchEvent(new Event("blur"));
+    await blur();
     expect(usePowerStore.getState().blurred).toBe(false);
     expect(document.documentElement.dataset.blurred).toBeUndefined();
+  });
+});
+
+describe("startFocusTracking at startup", () => {
+  it("starts a visible window focused even when hasFocus() says otherwise", () => {
+    // WebKitGTK can report false for a window in front and never send `focus`;
+    // seeding from it held every quiesced poll until a blur/focus round trip.
+    usePowerStore.setState({ blurred: true });
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const stop = startFocusTracking();
+    expect(usePowerStore.getState().blurred).toBe(false);
+    expect(document.documentElement.dataset.blurred).toBeUndefined();
+    stop();
+  });
+
+  it("starts a hidden window blurred", () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const stop = startFocusTracking();
+    expect(usePowerStore.getState().blurred).toBe(true);
+    stop();
+  });
+});
+
+describe("startFocusTracking with an iframe", () => {
+  it("focus moving into an iframe of this window is not a blur", async () => {
+    const stop = startFocusTracking();
+    window.dispatchEvent(new Event("focus"));
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    // What a click into a mail body / reader view does: the frame becomes the
+    // active element and the window fires `blur`, while the window keeps focus.
+    vi.spyOn(document, "activeElement", "get").mockReturnValue(frame);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    await blur();
+    expect(usePowerStore.getState().blurred).toBe(false);
+    expect(document.documentElement.dataset.blurred).toBeUndefined();
+
+    // Leaving the window from inside a (same-origin) frame: its blur says so…
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    frame.contentWindow!.dispatchEvent(new Event("blur"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(usePowerStore.getState().blurred).toBe(true);
+    // …and coming back into it, its focus.
+    frame.contentWindow!.dispatchEvent(new Event("focus"));
+    expect(usePowerStore.getState().blurred).toBe(false);
+    stop();
+  });
+
+  it("focus that leaves for another app is still a blur", async () => {
+    const stop = startFocusTracking();
+    window.dispatchEvent(new Event("focus"));
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    await blur();
+    expect(usePowerStore.getState().blurred).toBe(true);
+    stop();
+  });
+
+  it("a blur answered by a focus within the same task never engages", async () => {
+    const stop = startFocusTracking();
+    window.dispatchEvent(new Event("focus"));
+    const seen: boolean[] = [];
+    const unsub = usePowerStore.subscribe((s) => seen.push(s.blurred));
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    window.dispatchEvent(new Event("blur"));
+    window.dispatchEvent(new Event("focus"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).not.toContain(true);
+    unsub();
+    stop();
   });
 });
 

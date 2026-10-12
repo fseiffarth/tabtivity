@@ -269,6 +269,15 @@ export function DeckPresenter({
     setLinkError(null);
     try {
       await invoke("open_presenter_window", { label });
+      // Closed (the tab, the talk) while the window was still coming up: the
+      // unmount close below saw no audience yet, so the window that just
+      // landed would be left on the projector. `label` is this call's own,
+      // captured before the await — the one opened even if the deck was
+      // renamed meanwhile.
+      if (!mountedRef.current) {
+        void invoke("close_presenter_window", { label }).catch(() => {});
+        return;
+      }
       setAudience(label);
       // Take focus back. The new window has it, and over there `N`, `G`, `D` and
       // digit-goto are all inert — so without this the speaker's first few
@@ -283,12 +292,17 @@ export function DeckPresenter({
     }
   }, [label, t]);
 
+  // Close the window actually opened, not `presenterLabel(path)` now: a deck
+  // renamed mid-talk changes `label`, and closing the new name would leave the
+  // audience window on the projector.
   const closeAudience = useCallback(() => {
+    const open = audience;
     setAudience(null);
-    void invoke("close_presenter_window", { label }).catch(() => {
+    if (!open) return;
+    void invoke("close_presenter_window", { label: open }).catch(() => {
       // A window already gone is the state we wanted.
     });
-  }, [label]);
+  }, [audience]);
 
   // Closing the talk takes the audience window with it — a slide left glowing on
   // a projector after the speaker has sat down is worse than no second display.
@@ -409,14 +423,18 @@ export function DeckPresenter({
   // teardown, instead of on every toggle.
   const audienceRef = useRef<string | null>(null);
   audienceRef.current = audience;
-  useEffect(
-    () => () => {
+  // `mountedRef` also lets an open still in flight at teardown close the
+  // window it lands (see `openAudience`).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
       if (audienceRef.current) {
         void invoke("close_presenter_window", { label: audienceRef.current }).catch(() => {});
       }
-    },
-    [],
-  );
+    };
+  }, []);
 
   // --- keys ----------------------------------------------------------------
 

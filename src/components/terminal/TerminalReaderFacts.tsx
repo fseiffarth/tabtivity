@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { readAgentUsage } from "../../lib/agents/agentUsage";
 import type { ReaderLive } from "../../lib/agents/readerLive";
@@ -17,6 +17,7 @@ import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
 import { TerminalReaderStatus } from "./TerminalReaderStatus";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, useSessionPicker } from "../../hooks/useSessionPicker";
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
@@ -75,30 +76,30 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const [readAt, setReadAt] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
 
+  // An agent without a usage recipe answers unsupported once: no more asking
+  // until the view is shown again or the tab's command changes. (Declared
+  // before the poll so a re-show clears it before the poll starts.)
+  const limitsUnsupported = useRef(false);
   useEffect(() => {
-    if (!visible || tab.kind !== "agent") return;
-    let stopped = false;
-    const poll = () => {
-      void readAgentUsage(tab.cmd).then((report) => {
-        if (stopped) return;
-        if (!report.supported) {
-          stopped = true;
-          return;
-        }
-        if (!report.raw) return;
-        const next = limitMeters(parseUsageReport(report.raw));
-        if (!next.session && !next.week) return;
-        setLimits(next);
-        setReadAt(Date.now());
-      });
-    };
-    poll();
-    const timer = setInterval(() => { if (!stopped) poll(); }, LIMITS_POLL_MS);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
+    limitsUnsupported.current = false;
   }, [visible, tab.kind, tab.cmd]);
+  const pollLimits = useCallback((poll: PollRun) => {
+    if (limitsUnsupported.current) return;
+    return readAgentUsage(tab.cmd).then((report) => {
+      if (poll.stopped) return;
+      if (!report.supported) {
+        limitsUnsupported.current = true;
+        return;
+      }
+      if (!report.raw) return;
+      const next = limitMeters(parseUsageReport(report.raw));
+      if (!next.session && !next.week) return;
+      setLimits(next);
+      setReadAt(Date.now());
+    });
+  }, [tab.cmd]);
+  // While the Reader shows, with the window in front (`usePoll`).
+  usePoll(pollLimits, LIMITS_POLL_MS, { enabled: visible && tab.kind === "agent" });
 
   useEffect(() => {
     if (!visible) return;
@@ -131,7 +132,9 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
    * screen, since the Reader's own reading may lag a settling redraw. */
   const readStatus = () => {
     const term = terminalFor(ptyId);
-    return term ? sessionStatus(readableScreen(term.buffer.active).lines, agentLabel) : status;
+    // The footer is the bottom of the screen, and `sessionStatus` reads words
+    // only: a screenful or two, no per-cell style walk.
+    return term ? sessionStatus(readableScreen(term.buffer.active, 120, { plain: true }).lines, agentLabel) : status;
   };
   const modeWalk = useRef(0);
   const modes = modeChoices(status?.mode, agentLabel);

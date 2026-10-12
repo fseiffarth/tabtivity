@@ -26,6 +26,7 @@ use crate::commands::projects::{sanitize_name, uuid_v4};
 use crate::paths;
 use crate::schema::boxes::{BoxRelation, BoxesList, ProjectBox};
 use crate::storage;
+use crate::tauri_host::Ctx;
 
 /// Agent md files written into a box folder, paired with the member md file a
 /// box file should link to (CLAUDE.md → members' CLAUDE.md, etc.).
@@ -533,7 +534,7 @@ fn write_box_agent_docs(
 
 // ── Box CRUD (Phase 1) ──────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_boxes() -> Result<BoxesList, String> {
     // Reconcile against the current project ids in-memory so a deleted project
     // never leaves a dangling member id in what the frontend sees. No surprise
@@ -545,12 +546,12 @@ pub fn get_boxes() -> Result<BoxesList, String> {
 /// The whole-list save. Answers the list as written: a box this save changed
 /// carries its new revision, which the window's store must adopt before its
 /// next save or that one is refused as stale.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_boxes(boxes: BoxesList) -> Result<BoxesList, String> {
     save_boxes_at(&boxes_path(), &boxes)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn create_box(name: String) -> Result<ProjectBox, String> {
     let mut boxes = read_boxes()?;
     // Guard against time-based `uuid_v4` collisions for back-to-back creation.
@@ -577,7 +578,7 @@ pub fn create_box(name: String) -> Result<ProjectBox, String> {
     write_boxes_answering(&boxes, &id)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn rename_box(box_id: String, name: String) -> Result<ProjectBox, String> {
     let mut boxes = read_boxes()?;
     let target = boxes
@@ -591,7 +592,7 @@ pub fn rename_box(box_id: String, name: String) -> Result<ProjectBox, String> {
     write_boxes_answering(&boxes, &box_id)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn delete_box(box_id: String) -> Result<(), String> {
     let mut boxes = read_boxes()?;
     let before = boxes.len();
@@ -654,7 +655,85 @@ pub(crate) fn box_names_for(project_id: &str) -> Vec<String> {
         .collect()
 }
 
-#[tauri::command]
+/// One edit of one box, applied to the box as the file holds it — the
+/// patch-style sibling of the whole-document `save_boxes` (which is `off` in a
+/// browser client: final review B5). Absent fields leave the box alone.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoxPatch {
+    /// Add this project to the members (additive; nothing if already in).
+    #[serde(default)]
+    pub add_member: Option<String>,
+    /// Take this project out of the members (the box survives, even empty).
+    #[serde(default)]
+    pub remove_member: Option<String>,
+    /// The picked colour, `#rrggbb`; `""` clears it (the hashed colour).
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Hide (`true`) or show the box's pill.
+    #[serde(default)]
+    pub hide_pill: Option<bool>,
+}
+
+/// Apply `patch` to box `box_id` under the boxes file's lock and return the
+/// box as stored. A box membership is an agent scope (its members share the
+/// fence's roots), so an edit that cannot be saved must fail loudly — the
+/// store reverts on the error.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn patch_box(box_id: String, patch: BoxPatch) -> Result<ProjectBox, String> {
+    patch_box_at(&boxes_path(), &box_id, patch)
+}
+
+fn patch_box_at(path: &Path, box_id: &str, patch: BoxPatch) -> Result<ProjectBox, String> {
+    let _lock = storage::FileLock::exclusive(path).map_err(|e| e.to_string())?;
+    let current = read_boxes_at(path)?;
+    let mut next = current.clone();
+    let target = next
+        .iter_mut()
+        .find(|b| b.id == box_id)
+        .ok_or_else(|| format!("box '{box_id}' not found"))?;
+    apply_box_patch(target, patch)?;
+    write_boxes_stamped(path, &current, &next)?;
+    read_boxes_at(path)?
+        .into_iter()
+        .find(|b| b.id == box_id)
+        .ok_or_else(|| format!("box '{box_id}' not found"))
+}
+
+/// [`patch_box`]'s edit on one box. Pure.
+fn apply_box_patch(target: &mut ProjectBox, patch: BoxPatch) -> Result<(), String> {
+    if let Some(id) = patch.add_member {
+        if !target.member_ids.contains(&id) {
+            target.member_ids.push(id);
+        }
+    }
+    if let Some(id) = patch.remove_member {
+        target.member_ids.retain(|m| *m != id);
+    }
+    if let Some(color) = patch.color {
+        let color = color.trim().to_ascii_lowercase();
+        if color.is_empty() {
+            target.extra.remove("color");
+        } else if color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+            target.extra.insert("color".to_string(), Value::String(color));
+        } else {
+            return Err(format!("not a box colour: {color:?} (#rrggbb)"));
+        }
+    }
+    match patch.hide_pill {
+        // Absent from disk while shown, like the mobile switch while off.
+        Some(true) => {
+            target.extra.insert("hide_pill".to_string(), Value::Bool(true));
+        }
+        Some(false) => {
+            target.extra.remove("hide_pill");
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<ProjectBox, String> {
     let mut boxes = read_boxes()?;
     let target = boxes
@@ -675,9 +754,9 @@ pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<Projec
 /// a box by that folder, and a box never opened on the desktop has none yet.
 /// `devices` narrows it to some paired phones, as for a project; omitted,
 /// every phone. Turning it off drops the list with the switch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_box_mobile_access(
-    app: tauri::AppHandle,
+    ctx: Ctx,
     box_id: String,
     enabled: bool,
     devices: Option<Vec<String>>,
@@ -707,7 +786,7 @@ pub fn set_box_mobile_access(
     target.app_mobile_devices = devices;
     let written = write_boxes_answering(&boxes, &box_id)?;
     // A phone this leaves out loses what it scheduled or held here.
-    crate::commands::agent_tasks::cancel_lost_phone_rules(&app, "after a box's Mobile access changed");
+    crate::commands::agent_tasks::cancel_lost_phone_rules(&ctx, "after a box's Mobile access changed");
     Ok(written)
 }
 
@@ -757,7 +836,7 @@ fn resolve_box_folder(boxes: &BoxesList, box_id: &str, name: &str) -> std::path:
 /// first open, and answer the box as the file now holds it: a first open
 /// stamps a new revision, and the window's store must adopt it or its next
 /// whole-list `save_boxes` is refused as stale.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ensure_box_folder(box_id: String) -> Result<ProjectBox, String> {
     let mut boxes = read_boxes()?;
     let target = boxes
@@ -795,7 +874,7 @@ pub fn ensure_box_folder(box_id: String) -> Result<ProjectBox, String> {
 /// Regenerate the box agent docs (CLAUDE/GEMINI/AGENTS link blocks) for a box
 /// that already has a folder. No-op when the box has never been opened (no
 /// `folder` yet) — we never create a folder here, only refresh existing docs.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn refresh_box_agent_docs(box_id: String) -> Result<(), String> {
     let boxes = read_boxes()?;
     let Some(b) = boxes.iter().find(|b| b.id == box_id) else {
@@ -815,7 +894,7 @@ pub fn refresh_box_agent_docs(box_id: String) -> Result<(), String> {
     write_box_agent_docs(folder, &b.name, &members).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_box_relations(
     box_id: String,
     relations: Vec<BoxRelation>,
@@ -834,6 +913,42 @@ pub fn set_box_relations(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_box_patch_edits_one_box_as_the_file_holds_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boxes.json");
+        let boxed = |id: &str, members: &[&str]| ProjectBox {
+            rev: 0,
+            id: id.into(),
+            name: id.into(),
+            member_ids: members.iter().map(|m| m.to_string()).collect(),
+            position: 0,
+            folder: None,
+            relations: vec![],
+            app_mobile_access: false,
+            app_mobile_devices: None,
+            extra: Default::default(),
+        };
+        storage::write_json_atomic(&path, &vec![boxed("b1", &["p1"]), boxed("b2", &["p9"])]).unwrap();
+        let add = BoxPatch { add_member: Some("p2".into()), ..Default::default() };
+        let b = patch_box_at(&path, "b1", add).unwrap();
+        assert_eq!(b.member_ids, ["p1", "p2"]);
+        assert!(b.rev > 0, "stamped like every other box write");
+        let again = BoxPatch { add_member: Some("p2".into()), remove_member: Some("p1".into()), ..Default::default() };
+        assert_eq!(patch_box_at(&path, "b1", again).unwrap().member_ids, ["p2"]);
+        let style = BoxPatch { color: Some("#A0b1C2".into()), hide_pill: Some(true), ..Default::default() };
+        let b = patch_box_at(&path, "b1", style).unwrap();
+        assert_eq!((b.extra["color"].as_str(), b.extra["hide_pill"].as_bool()), (Some("#a0b1c2"), Some(true)));
+        let clear = BoxPatch { color: Some(String::new()), hide_pill: Some(false), ..Default::default() };
+        let b = patch_box_at(&path, "b1", clear).unwrap();
+        assert!(!b.extra.contains_key("color") && !b.extra.contains_key("hide_pill"));
+        let bad = BoxPatch { color: Some("red; x".into()), ..Default::default() };
+        assert!(patch_box_at(&path, "b1", bad).is_err());
+        assert!(patch_box_at(&path, "nope", BoxPatch::default()).is_err());
+        let all: BoxesList = storage::read_json(&path).unwrap();
+        assert_eq!(all[1].member_ids, ["p9"], "the other box is untouched");
+    }
 
     fn mk_box(id: &str, members: &[&str]) -> ProjectBox {
         ProjectBox {

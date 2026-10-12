@@ -6,11 +6,13 @@ import { useBoxesStore } from "../../stores/boxes";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
-import { IS_WINDOWS } from "../../lib/platform";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
+import { isServerClient } from "../../lib/transport/linkState";
+import { ConnectToServer } from "../server/ConnectToServer";
 import { MobileAccessPicker, phoneReachLabel } from "./MobileAccessPicker";
 import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
 import { isMobileEligible, PairedDeviceAccess } from "./PairedDeviceAccess";
@@ -136,6 +138,10 @@ export function MobileSettings() {
   const rootDir = useProjectsStore((state) => state.rootDir);
   const setProjectMobileAccess = useProjectsStore((state) => state.setProjectMobileAccess);
   const stored = settings?.[MOBILE_HOST_KEY];
+  // The browser client's sign-in link, shown on request (it carries the token).
+  const [browserLink, setBrowserLink] = useState<string | null>(null);
+  const [browserLinkError, setBrowserLinkError] = useState<string | null>(null);
+  const [browserLinkCopied, setBrowserLinkCopied] = useState(false);
   // The sidecar's `discovery::root_open`, repeated so the switch can say why
   // root is missing from the phone while it is on.
   const [reviewEnforced, setReviewEnforced] = useState(true);
@@ -271,7 +277,7 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "stay_after_quit" | "shell_tabs" | "local_models", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
@@ -381,10 +387,10 @@ export function MobileSettings() {
       // own interpreter in the OS default shell.
       tabs.addTabToScope(ROOT_SCOPE, {
         label: tr("mobile.phoneInstallTab"),
-        cmd: IS_WINDOWS ? "" : "/bin/bash",
+        cmd: IS_HOST_WINDOWS ? "" : "/bin/bash",
         cwd: rootDir ?? "",
         kind: "shell",
-        initialInput: IS_WINDOWS
+        initialInput: IS_HOST_WINDOWS
           ? `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`
           : `bash "${scriptPath.replace(/(["\\$`])/g, "\\$1")}"`,
       });
@@ -538,7 +544,7 @@ export function MobileSettings() {
       <p className="settings-help">
         {t("mobile.scopeHelp")}
       </p>
-      {IS_WINDOWS && (
+      {IS_HOST_WINDOWS && (
         <p className="settings-help">
           {t("mobile.windowsTerminalsNote")} <UntestedTag id="mobile.windowsTerminalsNote" />
         </p>
@@ -662,6 +668,82 @@ export function MobileSettings() {
         onChange={(event) => void setMailGate("stay_after_quit", event.target.checked)}
       />
       <p className="settings-help">{t("mobile.stayAfterQuitHelp")}</p>
+
+      <div className="settings-subheader">{t("mobile.browserClientHeader")}</div>
+      <ToggleRow
+        label={<>{t("mobile.browserClient")} <UntestedTag id="mobile.browserClient" /></>}
+        checked={stored?.browser_client ?? false}
+        disabled={busy}
+        onChange={(event) => void setMailGate("browser_client", event.target.checked)}
+      />
+      <p className="settings-help">{t("mobile.browserClientHelp")}</p>
+      {stored?.browser_client && (
+        <div className="settings-link-row">
+          <button
+            type="button"
+            className="settings-btn sm"
+            disabled={busy}
+            onClick={() => {
+              setBrowserLinkError(null);
+              setBrowserLinkCopied(false);
+              invoke<string>("mobile_browser_client_link")
+                .then((link) => setBrowserLink(link))
+                .catch((reason) => setBrowserLinkError(String(reason)));
+            }}
+          >
+            {t("mobile.browserClientLink")} <UntestedTag id="mobile.browserClientLink" />
+          </button>
+          <button
+            type="button"
+            className="settings-btn sm"
+            disabled={busy}
+            onClick={() => {
+              setBrowserLinkError(null);
+              setBrowserLinkCopied(false);
+              invoke<string>("mobile_browser_client_rotate")
+                .then((link) => setBrowserLink(link))
+                .catch((reason) => setBrowserLinkError(String(reason)));
+            }}
+          >
+            {t("mobile.browserClientRotate")} <UntestedTag id="mobile.browserClientRotate" />
+          </button>
+          {browserLink && (
+            <>
+              <code className="settings-help" style={{ userSelect: "all" }}>{browserLink}</code>
+              <button
+                type="button"
+                className="settings-btn sm"
+                onClick={() => {
+                  invoke("copy_text_to_clipboard", { text: browserLink })
+                    .then(() => setBrowserLinkCopied(true))
+                    .catch((reason) => setBrowserLinkError(String(reason)));
+                }}
+              >
+                {browserLinkCopied ? t("mobile.browserClientCopied") : t("mobile.browserClientCopy")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {browserLinkError && <ErrorNote className="project-dialog-error" error={browserLinkError} />}
+      {stored?.browser_client && <p className="settings-help">{t("mobile.browserClientLinkHelp")} {t("mobile.browserClientRotateHelp")}</p>}
+      {isServerClient() && (
+        <div className="settings-link-row">
+          <button
+            type="button"
+            className="settings-btn sm"
+            onClick={() => {
+              invoke("desktop_logout")
+                .catch(() => undefined)
+                .then(() => window.location.replace("/desktop/"));
+            }}
+          >
+            {t("mobile.browserClientSignOut")} <UntestedTag id="mobile.browserClientSignOut" />
+          </button>
+          <p className="settings-help">{t("mobile.browserClientSignOutHelp")}</p>
+        </div>
+      )}
+      <ConnectToServer />
 
       <div className="settings-subheader">{t("mobile.mailWrites")}</div>
       <ToggleRow

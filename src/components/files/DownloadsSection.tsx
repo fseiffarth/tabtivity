@@ -12,6 +12,7 @@ import { InboxIcon } from "../common/icons/Icon";
 import { useResizableSection } from "./useResizableSection";
 import { ErrorNote } from "../common/ErrorNote";
 import { BRAND } from "../../lib/brand";
+import { isServerClient } from "../../lib/transport/linkState";
 
 /**
  * The side-panel Downloads section (fast-copy of freshly downloaded files into a
@@ -252,6 +253,11 @@ export function DownloadsSection({
 
   const targetLabel = targetFolder || t("downloads.projectRoot");
   const hasSources = paths.length > 0;
+
+  // Recent Downloads are the device the user sits at (hosted plan §3.3, user
+  // decision 2026-10-03): a browser cannot list its own folder, and listing
+  // the server's would be the wrong machine — so the section is not there.
+  if (isServerClient()) return null;
 
   return (
     <div className="downloads-section" ref={sectionRef} style={{ height: heightPx }}>

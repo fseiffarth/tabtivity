@@ -328,7 +328,8 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
     expect(open).not.toHaveBeenCalled();
     fireEvent.click(within(gallery).getByRole("button", { name: "Close" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Terminal" }));
     await settle();
     expect(screen.queryAllByRole("group", { name: /^Pictures and files from the agent/ })).toEqual([]);
     expect(screen.queryByRole("region", { name: "Files from the agent" })).toBeNull();

@@ -20,7 +20,7 @@ import { PillTabMarks } from "./PillTabMarks";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { adoptSyncOutcome, cmdToKind, isResumableAgentTab, isRestorableTab, syncWorkspace, useTabsStore } from "../../stores/tabs";
-import { IS_LINUX, IS_WINDOWS } from "../../lib/platform";
+import { IS_HOST_LINUX, IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL, providerAuthLoginCmd } from "../../lib/installCommand";
 import { PythonInterpreterWindow } from "./PythonInterpreterWindow";
 import { useGitDirtyStore } from "../../stores/gitDirty";
@@ -60,6 +60,7 @@ import {
   type AgentFenceStatus,
 } from "../../lib/agents/agentFence";
 import { ErrorNote } from "../common/ErrorNote";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 
 interface Props {
   project: ProjectEntry;
@@ -538,7 +539,7 @@ function PublishWindow({
                 runInstallInTab(
                   t("projectDialog.installBinLabel", { bin: cliInstall.bin }),
                   cliInstall.cmd,
-                  IS_WINDOWS ? "default" : "bash",
+                  IS_HOST_WINDOWS ? "default" : "bash",
                 )
               }
             >
@@ -556,7 +557,7 @@ function PublishWindow({
                 runInstallInTab(
                   t("pill.publishSignInBtn", { cli }),
                   providerAuthLoginCmd(provider),
-                  IS_WINDOWS ? "default" : "bash",
+                  IS_HOST_WINDOWS ? "default" : "bash",
                 )
               }
             >
@@ -1517,21 +1518,14 @@ export function ProjectPill({
   const [showVmSettings, setShowVmSettings] = useState(false);
   const isVmProject = Boolean(project.vm?.enabled);
   const [vmRunning, setVmRunning] = useState(false);
-  useEffect(() => {
-    if (!isVmProject) return;
-    let cancelled = false;
-    const poll = () => {
+  const pollVm = useCallback(
+    (poll: PollRun) =>
       invoke<{ running: boolean }>("vm_status", { projectId: project.id })
-        .then((s) => !cancelled && setVmRunning(s.running))
-        .catch(() => {});
-    };
-    poll();
-    const timer = window.setInterval(poll, 6000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [isVmProject, project.id]);
+        .then((s) => !poll.stopped && setVmRunning(s.running))
+        .catch(() => {}),
+    [project.id],
+  );
+  usePoll(pollVm, 6000, { enabled: isVmProject });
   const openRemoteMachines = useRemoteMachinesStore((s) => s.open);
   // A global machine picked for THIS (local) project in the header's Machines
   // menu: that menu can't own the extend dialog, so it parks the request here
@@ -2428,7 +2422,7 @@ export function ProjectPill({
               <UntestedTag id="gitPushMcp" />
             </button>
             )}
-            {IS_LINUX && agentFenceInstallCommand(agentFenceStatus) && (
+            {IS_HOST_LINUX && agentFenceInstallCommand(agentFenceStatus) && (
                 <button
                   className="untested"
                   onClick={() => {

@@ -116,7 +116,7 @@ pub fn detect_capability() -> TexCapability {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn tex_capability() -> TexCapability {
     detect_capability()
 }
@@ -384,9 +384,9 @@ fn auto_engine(src: &Path, installed: &[String]) -> Option<String> {
 /// The engine "Auto" builds `path` with — the label on the viewer's engine menu.
 /// `path` is the file Compile builds (the resolved root). `None` with no engine
 /// installed. Reads only; never runs anything.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn tex_auto_engine(path: String) -> Option<String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let cap = detect_capability();
         auto_engine(Path::new(&path), &cap.engines)
     })
@@ -1176,14 +1176,14 @@ fn discard_doc_fmt(key: &str, log: &str) {
 /// every Recompile and every starter-deck generation paid that (TODO V #105).
 /// `spawn_blocking` keeps the body's blocking process I/O legal on the async
 /// runtime while the webview stays live.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn compile_tex(
     path: String,
     engine: Option<String>,
     out_dir: Option<String>,
     extra_flags: Option<Vec<String>>,
 ) -> Result<TexCompileResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         compile_tex_blocking(path, engine, out_dir, extra_flags)
     })
     .await
@@ -1902,14 +1902,14 @@ fn preview_log_is_format_error(log: &str) -> bool {
 ///
 /// `async` for the same reason `compile_tex` is: a synchronous command runs on
 /// the main thread, and a preview must never be able to freeze the window.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn tex_preview_snippet(
     dir: String,
     preamble: String,
     body: String,
     engine: Option<String>,
 ) -> Result<TexPreviewResult, String> {
-    tauri::async_runtime::spawn_blocking(move || preview_snippet_blocking(dir, preamble, body, engine))
+    app_core::rt::spawn_blocking(move || preview_snippet_blocking(dir, preamble, body, engine))
         .await
         .map_err(|e| format!("preview task failed: {e}"))?
 }
@@ -2162,9 +2162,9 @@ fn collect_fonts(dir: &Path, depth: u32, out: &mut Vec<FontFile>) {
 /// Every embeddable font file on this machine, deduplicated by path and sorted
 /// by display name. Never an error: a missing directory is simply one fewer
 /// place to look.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_fonts() -> Result<Vec<FontFile>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    app_core::rt::spawn_blocking(|| {
         let mut out: Vec<FontFile> = Vec::new();
         for dir in font_dirs() {
             collect_fonts(&dir, 0, &mut out);
@@ -2306,9 +2306,9 @@ pub fn main_input_tag(text: &str, stem: &str) -> Option<u32> {
 /// plate was imported, or compiled by something that did not emit one, is an
 /// ordinary case that falls back to content fingerprinting. Only a map that
 /// exists and cannot be read is an error worth surfacing.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn synctex_page_lines(pdf: String) -> Result<Vec<PageLines>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let pdf_path = Path::new(&pdf);
         let stem = match pdf_path.file_stem().and_then(|s| s.to_str()) {
             Some(s) => s.to_string(),
@@ -2412,14 +2412,14 @@ fn parse_synctex_edit(out: &str, base: &Path) -> Option<SyncSource> {
 ///
 /// Async so the read + gunzip runs off the main thread: a sync `#[tauri::command]`
 /// is called on it, and a large document's map is megabytes.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn synctex_edit(
     pdf: String,
     page: u32,
     x: f64,
     y: f64,
 ) -> Result<Option<SyncSource>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let pdf_path = Path::new(&pdf);
         let dir = pdf_path.parent().unwrap_or_else(|| Path::new("."));
         if let Some((input, line)) = crate::commands::synctex::resolve(pdf_path, page, x, y) {
@@ -2447,9 +2447,9 @@ pub async fn synctex_edit(
 /// jumped to belongs to the build before the edit — and words a "recompile"
 /// notice from the answer. Off the main thread for the same reason as
 /// `synctex_edit`: the first call after a compile inflates the map.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn synctex_status(pdf: String) -> Result<crate::commands::synctex::MapStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::commands::synctex::status(Path::new(&pdf)))
+    app_core::rt::spawn_blocking(move || crate::commands::synctex::status(Path::new(&pdf)))
         .await
         .map_err(|e| format!("synctex task failed: {e}"))
 }
@@ -2558,7 +2558,7 @@ fn parse_synctex_view(out: &str) -> Vec<SyncRect> {
 ///
 /// `synctex view` remains the fallback for a PDF whose map this parser could not
 /// make sense of, or one with no map beside it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn synctex_view(
     pdf: String,
     input: String,
@@ -2733,7 +2733,7 @@ fn magic_root(source: &str, dir: &Path) -> Option<std::path::PathBuf> {
 ///   2. the stored child→root map (if the root still exists and still includes
 ///      this child), else
 ///   3. `path` itself.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn resolve_tex_root(path: String) -> Result<String, String> {
     let src = fs::canonicalize(&path).unwrap_or_else(|_| Path::new(&path).to_path_buf());
     let dir = src.parent().unwrap_or_else(|| Path::new("."));

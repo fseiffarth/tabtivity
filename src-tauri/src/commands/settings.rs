@@ -3,7 +3,7 @@ use crate::schema::Settings;
 use crate::storage;
 use serde_json::{Map, Value};
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_settings() -> Result<Settings, String> {
     let path = storage::state_dir().join("settings.json");
     let mut settings = if path.exists() {
@@ -44,7 +44,7 @@ pub const SETTINGS_STALE: &str =
 /// loaded, so a patch another window or the Mobile sidecar landed in between
 /// is never erased. The frontend only reaches this as a fallback for a
 /// backend without `patch_settings`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_settings(settings: Settings) -> Result<(), String> {
     save_settings_at(&storage::state_dir().join("settings.json"), settings)
 }
@@ -75,7 +75,7 @@ fn save_settings_at(path: &std::path::Path, settings: Settings) -> Result<(), St
 /// overwritten by the stale whole object. This command keeps read + shallow
 /// merge + write under `storage`'s process-wide JSON mutation lock and returns
 /// the exact object that won, so every sender can broadcast the same snapshot.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn patch_settings(patch: Map<String, Value>) -> Result<Settings, String> {
     patch_settings_at(&storage::state_dir().join("settings.json"), patch)
 }
@@ -99,8 +99,7 @@ fn patch_settings_at(path: &std::path::Path, mut patch: Map<String, Value>) -> R
 fn invalidate_copilot(previous: &Settings, next: &Settings) {
     if previous.code_completion_provider != next.code_completion_provider
         || previous.completion_project_policies != next.completion_project_policies
-        || previous.copilot_completion.unwrap_or(previous.debug.unwrap_or(false))
-            != next.copilot_completion.unwrap_or(next.debug.unwrap_or(false)) {
+        || previous.copilot_completion() != next.copilot_completion() {
         crate::services::copilot::session::sessions().stop_all_now();
     }
 }
@@ -120,7 +119,7 @@ fn merge_settings_patch(settings: &mut Settings, patch: Map<String, Value>) -> R
 ///
 /// Kept as a dedicated patch because this fires on a debounce every time the
 /// user drags or resizes the main window; it must never replace unrelated keys.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_window_state(state: WindowState) -> Result<(), String> {
     let path = storage::state_dir().join("settings.json");
     storage::patch_json(&path, Settings::default(), |settings| {

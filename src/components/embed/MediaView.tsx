@@ -3,6 +3,7 @@ import { ViewerHeader } from "./FileViewerPane";
 import { useFileScope, readFileBytes } from "./fileAccess";
 import { basename } from "../../lib/paths";
 import { useT } from "../../lib/i18n";
+import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
 
 /**
  * Audio/video player viewer (Dev D). Plays `.mp3`/`.mp4`/`.webm`/… in-tab via
@@ -118,6 +119,15 @@ export function MediaView({
   useEffect(() => {
     setPlaybackError(null);
   }, [url]);
+  // Playing media keeps the pane awake: a sleeping pane is unmounted, which
+  // would stop a track left playing in a background tab (performance plan §5.3).
+  const [playing, setPlaying] = useState(false);
+  usePaneSleepHold(playing);
+  const playback = {
+    onPlay: () => setPlaying(true),
+    onPause: () => setPlaying(false),
+    onEnded: () => setPlaying(false),
+  };
 
   return (
     <div className="file-viewer">
@@ -144,6 +154,7 @@ export function MediaView({
             src={url}
             controls
             preload="metadata"
+            {...playback}
             onError={() => setPlaybackError(t("mediaView.playbackFailed"))}
             style={{
               maxWidth: "100%",
@@ -157,6 +168,7 @@ export function MediaView({
             src={url}
             controls
             preload="metadata"
+            {...playback}
             onError={() => setPlaybackError(t("mediaView.playbackFailed"))}
             style={{ width: "100%", maxWidth: 640 }}
           />

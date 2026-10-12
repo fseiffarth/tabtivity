@@ -331,8 +331,13 @@ impl TmuxRunner {
 
     fn tmux(&self, args: &[&str]) -> Result<std::process::Output, String> {
         let mut cmd = crate::paths::command_no_window("tmux");
-        if let Some(socket) = &self.socket {
-            cmd.args(["-L", socket, "-f", "/dev/null"]);
+        match &self.socket {
+            Some(socket) => {
+                cmd.args(["-L", socket, "-f", "/dev/null"]);
+            }
+            None => {
+                cmd.args(crate::services::tmux_local::socket_args());
+            }
         }
         cmd.args(args);
         cmd.stdin(std::process::Stdio::null());

@@ -18,7 +18,7 @@ use crate::services::sheet_reader;
 /// Async + `spawn_blocking`: the read waits on a child process, and a large
 /// `.xlsx` (or one on a network mount) run synchronously froze the window (the
 /// main-thread freeze class `commands::git`'s `run_off_thread` doc describes).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn read_spreadsheet(
     path: String,
     sheet: Option<String>,

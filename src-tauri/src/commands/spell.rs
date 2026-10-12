@@ -27,13 +27,13 @@ pub struct GrammarIssue {
 /// `doc` is the editor's highlight language (`"tex"`/`"markdown"`/…) and only
 /// selects the prose masking. Errors are strings; `no_dictionary` is the token
 /// the frontend renders as "install a dictionary".
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_check(
     text: String,
     language: String,
     doc: String,
 ) -> Result<Vec<GrammarIssue>, String> {
-    tauri::async_runtime::spawn_blocking(move || spell::check(&text, &language, &doc))
+    app_core::rt::spawn_blocking(move || spell::check(&text, &language, &doc))
         .await
         .map_err(|e| format!("spell task failed: {e}"))?
         .map(|issues| {
@@ -55,9 +55,9 @@ pub async fn spell_check(
 
 /// The installed dictionary language codes (system dirs + the state dir's
 /// `dictionaries/` folder), for the settings dropdown.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_languages() -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    app_core::rt::spawn_blocking(|| {
         spell::available_languages_in(&spell::dict_dirs())
     })
     .await
@@ -66,9 +66,9 @@ pub async fn spell_languages() -> Result<Vec<String>, String> {
 
 /// Add a word to the personal dictionary (append-only
 /// `<state_dir>/dictionaries/personal.dic`, folded into every language).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_add_word(word: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || spell::add_personal_word(&word))
+    app_core::rt::spawn_blocking(move || spell::add_personal_word(&word))
         .await
         .map_err(|e| format!("spell task failed: {e}"))?
 }
@@ -82,9 +82,9 @@ pub struct SpellDictionaries {
     pub catalog: Vec<spell::CatalogEntry>,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_dictionaries() -> Result<SpellDictionaries, String> {
-    tauri::async_runtime::spawn_blocking(|| SpellDictionaries {
+    app_core::rt::spawn_blocking(|| SpellDictionaries {
         installed: spell::installed_in(&spell::dict_dirs()),
         catalog: spell::catalog(),
     })
@@ -95,15 +95,15 @@ pub async fn spell_dictionaries() -> Result<SpellDictionaries, String> {
 /// Download a catalog language into the state dir's `dictionaries/` folder.
 /// The only network call in this module; `code` must name a catalog entry —
 /// nothing else is ever fetched.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_install_language(code: String) -> Result<(), String> {
     spell::install_language(&code).await
 }
 
 /// Delete a dictionary pair from the state dir (never a system one).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_remove_language(code: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || spell::remove_language(&code))
+    app_core::rt::spawn_blocking(move || spell::remove_language(&code))
         .await
         .map_err(|e| format!("spell task failed: {e}"))?
 }

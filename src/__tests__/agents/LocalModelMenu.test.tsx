@@ -301,6 +301,42 @@ describe("LocalModelMenu button and the Models & agents overlay", () => {
     expect(useModelsOverlayStore.getState()).toMatchObject({ open: true, view: "ollama" });
   });
 
+  it("asks whether Ollama is installed at mount and on reveal, never on a timer", async () => {
+    ollamaInstalled = false;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const view = render(<LocalModelMenu />);
+      const wrap = view.container.querySelector(".global-apps-menu") as HTMLElement;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(calls("ollama_is_installed")).toHaveLength(1);
+      // A minute without Ollama: the old poll asked every 5 s (12 more calls).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(calls("ollama_is_installed")).toHaveLength(1);
+      // Installed meanwhile (the overlay's install tab): the next reveal notices.
+      ollamaInstalled = true;
+      fireEvent.mouseEnter(wrap);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(calls("ollama_is_installed")).toHaveLength(2);
+      const btn = screen.getByRole("button", { name: "Models & agents" });
+      await waitFor(() => expect(btn.getAttribute("title")).not.toMatch(/install/i));
+      // Detected: no further probe on the next reveal.
+      fireEvent.mouseLeave(wrap);
+      fireEvent.mouseEnter(wrap);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(calls("ollama_is_installed")).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not reveal the dropdown on hover while the overlay is open", async () => {
     const { wrap, btn } = await renderInstalled();
     fireEvent.click(btn);
