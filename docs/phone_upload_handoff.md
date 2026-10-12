@@ -692,3 +692,108 @@ model, file maps, QA 31cg`) on `phone-upload`; this section in the
 compiled into the binary (`build.rs` → `HELP_CORPUS`), which `gates.sh` does
 not select for a docs-only diff, so run by hand: `cargo test -p tabtivity
 --lib -- help_mcp` 9 passed (incl. `real_corpus_parses`). Not run live.
+
+## Final review
+
+Reviewed the whole range `282e8092..70dedbcd` for cross-step integration.
+
+### Fixed
+
+- **`c4e50567`** — `fix(mobile): an unreadable registry or upload log fails
+  the uploads list, so Keep is not pruned` (review C's flagged item, a
+  confirmed bug). `phone_uploads_list` answered `[]` when `projects.json`
+  (`unwrap_or_default`) or the upload log (`read_log`'s silent empty) could
+  not be read, and `InboxIndicator` prunes its Keep marks to the ids a good
+  list names — so one failed read un-kept every row and they all reappeared
+  on the next good read. Now `uploads::recent` returns `io::Result` (a
+  missing log is still empty, an unreadable one an error; `read_log` keeps
+  its lenient behaviour for the cap/undo/find callers via the new
+  `try_read_log`), and the command returns `Result<Vec<PhoneUpload>,
+  String>`, rejecting with `list_failed`; the indicator's existing catch
+  keeps both list and marks. Tests:
+  `uploads::recent_fails_on_an_unreadable_log_but_not_on_a_missing_one`,
+  `commands::mobile_control::phone_upload_tests::an_unreadable_registry_or_log_fails_the_list_instead_of_emptying_it`
+  (the command body factored into `phone_uploads_from` so it is testable
+  without the global state dir), and the indicator's *a failed list read
+  keeps the Keep marks*. `filemap_backend.md` row updated.
+
+### Checked and fine (cross-step)
+
+- Phone ↔ `host.rs`: routes, query names (`name`, `dir`, `f`), `201 { file }`
+  / `200 { undone }`, every code the phone maps (`uploads_off`, `files_off`,
+  `upload_refused`, `uploads_full`, `file_too_large` incl. axum's bare 413,
+  `empty_file`, `project_unavailable`, `project_not_found`,
+  `file_not_found`, `files_unavailable`, `write_failed`) is one the host can
+  answer with that status; the listing's `uploads` = `accepts(rel) &&
+  uploads_open` and the phone shows the button only on `listing.uploads`.
+- Desktop commands ↔ `InboxIndicator.tsx`: `phone_uploads_list` rows
+  (`id, projectName, rel, size, at, phone?`) match `PhoneUpload`;
+  `phone_upload_undo({ id })`; both `core` in `command_class.rs` and
+  `commandClasses.ts`, both in `generate_handler!`.
+- Switch name end to end: `AppMobileHostSettings.project_uploads` (+ flatten
+  catch-all) ↔ `types/index.ts` ↔ `setMailGate`/`apply`/`detectServeSettings`/
+  `lockDownNow` ↔ `uploads_open` reading `MOBILE_HOST_KEY.project_uploads`
+  (same `settings.json` as `files_open`). No other whole-object writer of
+  the mobile-host block exists (`MobileIndicator` spreads `stored`).
+- i18n: all 31 new keys present in en/de/fr/es/it and each used in code.
+  `UntestedTag` ids `mobile.files.upload` (switch + drawer head) and
+  `desktop.inbox.phoneUploads` both have register rows. No TODO/debug code
+  in the range. Docs (help, DOCUMENTATION, context, threat model, QA 31cg)
+  match the shipped labels and behaviour (200 not 204, Read-only/Add-only
+  note, `-2` names, safe names, 24 MiB / 1 GB a day, desktop-only Keep).
+- `scripts/brand-check.sh`, `scripts/privacy-check.sh`, `git diff --check`
+  clean.
+
+### Flagged for user (consolidated, all steps)
+
+Open:
+
+- Undo's hash → unlink is not atomic; an editor's atomic save in that
+  window is deleted (A; `(dev, ino)` re-check / Windows delete-on-handle).
+- Non-dot names tools pick up (`conftest.py`, a root `Makefile`/`build.rs`)
+  are accepted — within the threat notes (A).
+- The daily cap counts bytes, not files; tiny uploads are bounded only by
+  request rate (A).
+- Phone Undo is bound to neither time nor device: any in-scope phone can
+  undo any logged unchanged upload for up to 7 days, also one the desktop
+  pressed Keep on (B, C).
+- Body (≤ 24 MiB) is read before auth — pre-existing pattern of every inbox
+  route (B).
+- Badge label and the menu's `aria-label` still say "Sent from your phone"
+  while counting uploads too (C).
+- The three whole-object settings writers still drop a mobile-host key a
+  *newer* build adds — pre-existing, narrow (C).
+- Turning Project files off keeps `project_uploads` stored on; re-enabling
+  files re-opens uploads without a second confirmation (C; matches
+  decision 2).
+- Phone Undo is one tap, no arm-then-confirm (D).
+- Queued picks keep uploading after the drawer moves or closes; rows are lost
+  on close (D).
+- No highlighted row in the listing for the landed file (D; "no new
+  treatment").
+- A timed-out Undo or upload POST may still have landed; the retry then says
+  "Kept — changed or moved since" / the row says timeout (D; shared with the
+  inbox siblings).
+- `usePhonePicks` reads the folder stamp from a ref at answer time; only a
+  second Upload here during `showOpenFilePicker`'s `getFile()`s could
+  re-stamp (D; not reachable in practice).
+
+Resolved:
+
+- Keep pruned on a failed list read — fixed `c4e50567` (C).
+- Undo matches any record of project + rel — harmless; duplicate desktop
+  rows fixed in `bf68dc78` (A).
+- Axum's bare 413 — the phone maps it to `file_too_large` (B, D).
+- Handoff step D's test count — corrected in review D.
+
+### Gates (Linux, after `c4e50567`)
+
+`scripts/gates.sh --all`: brand, whitespace, lint-fe, clippy (workspace, all
+targets), clippy daemon lib, clippy app-serverd, `npm run build` (incl. the
+mobile bundle), `npm test`, `cargo test --workspace`, daemon test — all
+PASS. Counts (rerun for the numbers): vitest 802 files / 8027 tests;
+`cargo test --workspace` 4290 passed / 0 failed / 4 ignored; daemon build
+(`--no-default-features --lib --test server_secrets`) 3786 / 0 / 4.
+Windows cross-check `cargo clippy --target x86_64-pc-windows-msvc
+--all-targets -D warnings` (msvc shims) clean. Not run live;
+`npm run backend:stale` not run (worktree, no running window of this branch).
