@@ -179,3 +179,92 @@ change). Lib tests 3878 passed / 4 ignored (+3); `uploads` 17, `inbox` 18.
 Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc
 --all-targets -D warnings` (msvc shims) clean. macOS not re-checked (no
 cfg'd code changed). Windows tests not run (CI). Not run live.
+
+## Step B
+
+Commit: `6342e18a` (`feat(mobile): phone upload routes and desktop upload
+commands`) on `phone-upload`; this section in the `docs(mobile)` commit after it.
+
+### What landed
+
+- `host.rs`: route `/api/v1/projects/{project_id}/files/upload` =
+  `delete(project_files_upload_undo).merge(post(project_files_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE)))`;
+  shared guard `upload_scope` (authenticate → `exact_origin` → `files_scope`
+  → `uploads::uploads_open`); `upload_error` maps codes to statuses; the
+  folder listing gains `uploads`; `project_files_raw`'s doc fixed.
+- `commands/mobile_control.rs`: `phone_uploads_list`, `phone_upload_undo`
+  (both async, `spawn_blocking`, no `AppHandle`), registered in `lib.rs`,
+  `Core` rows in `command_class.rs`, `commandClasses.ts` regenerated.
+- Host test `upload_here_adds_a_new_file_to_a_plain_folder_and_undoes_only_it`;
+  both routes added to the per-phone scoping test's `routes`.
+
+### For agent D (phone) — routes
+
+All need the session cookie and the exact `Origin` (else `403 invalid_origin`).
+
+- `GET /api/v1/projects/{id}/files[?dir=<token>]` → the listing as before plus
+  `"uploads": bool` (switch on **and** no dot segment in the folder; the root
+  is `true` when on). An older host omits it.
+- `POST /api/v1/projects/{id}/files/upload?name=<file name>[&dir=<folder token>]`,
+  raw body = the file (no `dir` = project root) → `201 { "file": <listing
+  entry: token, name, kind, size, modified, created?> }`. The `name` may
+  differ from the phone's (`safe_name`, `-2` on a clash).
+- `DELETE /api/v1/projects/{id}/files/upload?f=<file token>` →
+  `200 { "undone": true }` (**not 204** — `api()` throws
+  `malformed_response` on an empty body).
+- Errors `{ "error": code }`: `files_off` 404, `uploads_off` 404 (both routes,
+  undo too), `project_not_found` 404, `files_unavailable` 404,
+  `file_not_found` 404 (forged/stale `dir`/`f` token, undo of an edited /
+  unlogged / gone file), `upload_refused` 403 (dot folder, a token naming a
+  file or a link), `empty_file` 400, `file_too_large` 413 (also axum's own
+  413 past 24 MiB, no JSON code — map a 413 without `error` the same),
+  `uploads_full` 507, `project_unavailable` 409, `write_failed` 500.
+
+### For agent C (desktop) — commands
+
+- `invoke<PhoneUpload[]>("phone_uploads_list")` — no args; newest first,
+  last 24 h, only files still intact on disk, one row per file; projects that
+  are unknown or remote now are left out. Row (camelCase):
+  `{ id: string, projectName: string, rel: string /* "/"-separated */,
+  size: number, at: number /* unix s */, phone?: string }`.
+- `invoke("phone_upload_undo", { id })` → `Promise<void>`; rejects with the
+  code string, practically always `"file_not_found"` (unknown id, gone or
+  remote project, file edited/moved) or `"write_failed"`.
+- Both class `core` (as `global_inbox_list/delete`).
+
+### Choices made where the plan left room
+
+- Undo answers `200 { "undone": true }` instead of the plan's `204` (see
+  above).
+- Undo is gated by the switch too (`uploads_off` once it is off), as "same
+  guards" read; the desktop undo is not gated (it is the user's own notice).
+- Row field is `projectName` (camelCase, the frontend's convention), not
+  `project_name`.
+- Project names come from `commands::projects::read_projects_list()` (read
+  only) rather than `get_projects()`, which rewrites `projects.json` on every
+  call — wrong for a 10 s poll.
+- A landed file whose row `files::entry` cannot build answers `404
+  file_not_found` (plan), although the file is on disk; `safe_name` never
+  yields a hidden name, so this is unreachable short of a race.
+- The device label is looked up per upload under one auth lock with the
+  host key (`AuthStore::devices()`), so a renamed phone logs its new name.
+
+### Gates (Linux, after `6342e18a`)
+
+`scripts/gates.sh`: brand, whitespace, lint-fe, clippy (tabtivity +
+app-serverd, all targets), clippy daemon lib, clippy app-serverd, `npm run
+build`, vitest `--changed`, `cargo test -p tabtivity -p app-serverd`, daemon
+test — all PASS. Lib tests 3879 passed / 4 ignored (desktop, +1), 3781 / 4
+(daemon build). Windows cross-check `cargo clippy --target
+x86_64-pc-windows-msvc --all-targets -D warnings` (msvc shims) clean; macOS
+not re-checked (no cfg'd code). Not run live; `npm run backend:stale` not run
+(worktree, no running window of this branch).
+
+### Flagged for user
+
+- The plan's open item from review A — the hash→unlink race in `undo` — is
+  unchanged (step B only calls `uploads::undo`).
+- A body past 24 MiB is refused by axum's `DefaultBodyLimit` before the
+  handler runs: a 413 with a plain-text body, not `{ "error":
+  "file_too_large" }`. The phone pre-checks `MAX_INBOX_FILE`, as the inbox
+  does, so only a stale build sees it.
