@@ -448,6 +448,32 @@ remote ones no local branch tracks — capped, with `+N more`. Worktrees cross a
 the same opaque ids the ＋ sheet's "Agents start in" row uses; no path, lock
 reason or full sha is sent. Boxes and the root console have no Git entry.
 
+**Upload here (phone → a project folder).** The phone's project-files drawer
+(**Settings → Mobile → Project files on the phone**, read-only) gains one write
+behind a second host-wide switch, **Phone may add files to projects**
+(`tabtivity_mobile_host.project_uploads`, default off, greyed out and without
+effect while the files switch is off; both read per request). The folder
+listing then carries `uploads: true` — switch on and no folder on the path
+starting with `.` — and the drawer shows **Upload here** under its trail: the
+picked files go one after another to `POST
+/api/v1/projects/{id}/files/upload?name=…&dir=<sealed folder token>`
+(`mobile_control/uploads.rs`). The route is add-only: the folder must exist
+and is walked from the project root through held folders with no link on the
+way, the name is the inbox's safe name without a stamp (a Windows device name
+gets a `_`), a taken name becomes `name-2.ext`, `-3`, … through an exclusive
+create, nothing is ever overwritten, and no dot folder (`.github`, `.cargo`,
+`.vscode`, …) takes a file. Each file ≤ 24 MiB, at most 1 GiB a day per
+project. The file lands untracked — no add, commit or sync push. Every landed
+file appends a line (project, relative path, size, sha256, time, phone name)
+to the sidecar's `<state_dir>/mobile-control/phone-uploads.jsonl`, kept 7
+days; the disk is the truth, so a line counts only while its file is still
+there, unchanged. **Undo** deletes only such a logged, byte-for-byte unchanged
+file: on the phone from the landed row while the drawer stays in that folder
+(`DELETE …/files/upload?f=<file token>`), on the desktop from the header
+inbox's **Added to projects** section (uploads of the last 24 h, `phone_uploads_list`
+/ `phone_upload_undo`; **Keep** hides a row on that desktop only). Design:
+`docs/phone_upload_plan.md`.
+
 **Mark up a PDF or picture for the agent.** In an agent tab's viewer (the
 files drawer, the 🖼 gallery or a picture/PDF bubble in the chat) a PDF or a
 picture carries **Mark up**: write on the pages with a pen (an Apple Pencil

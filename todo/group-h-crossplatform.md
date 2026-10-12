@@ -3649,6 +3649,58 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cg — Upload here: the phone adds files to a project folder** (2026-10-13;
+  ✅ code-complete, automated tests passing — `uploads.rs` (add-only, dot
+  segments refused, `-2` clash, cap, log, undo only of an intact logged file,
+  symlink/junction twins), host tests `upload_here_adds_a_new_file_to_a_plain_folder_and_undoes_only_it`
+  + `upload_here_takes_a_whole_file_up_to_the_inbox_limit`, settings round-trip
+  `mobile_host_switches_and_unknown_keys_survive_a_patch`,
+  `MobileProjectUploadsGate.test.tsx`, `InboxIndicator.test.tsx`,
+  `MobileProjectFiles.test.tsx`; ⚠️ never run on a phone; Windows runtime
+  never run). Plan `docs/phone_upload_plan.md`, handoff
+  `docs/phone_upload_handoff.md`. Second host-wide switch **Settings → Mobile →
+  Project access → Phone may add files to projects** (default off, under
+  Project files on the phone); the desktop header inbox gains *Added to
+  projects*. Untested ids `mobile.files.upload` (phone button + the switch),
+  `desktop.inbox.phoneUploads` (the inbox section).
+  - Needs the sidecar updated and the PWA rebuilt (`npm run backend:stale`,
+    `npm run mobile:bundle`).
+  - Open for the user (handoff): the phone's Undo is bound to neither time nor
+    phone; Undo's hash → unlink is not atomic.
+  - [ ] 🖐️ Manual QA, desktop + phone — (1) Settings → Mobile → Project
+    access: **Phone may add files to projects** is greyed out while **Project
+    files on the phone** is off; switch both on, close and reopen Settings →
+    both still on. (2) Phone: a Mobile project → left→right swipe (or ☰) →
+    open `docs/` (any plain folder): the note reads **Add-only**, **Upload
+    here** sits under the trail → pick a PDF → row **Uploading…**, then
+    **Added to docs** with its name; the list refreshes and shows the file;
+    the desktop's file tree shows it, untracked (no git add). The header's
+    inbox tray appears (badge counts it); hover → **Added to projects** lists
+    project · `docs/<name>`, size, "just now", the phone's name. (3) Upload
+    the same file again → it lands as `<name>-2.pdf`; pick two files at once →
+    both land, one after the other. (4) Open `.github` (or any dot folder; it
+    is listed) → no Upload here, the note says **Read-only**. (5) Phone
+    **Undo** on a landed row → "Removed again.", the file is gone from the
+    drawer and the desktop tree, and its inbox row drops within ~10 s. Upload
+    again, walk to another folder and back → that row's Undo is gone. (6)
+    Upload again, edit the file on the desktop and save → its *Added to
+    projects* row disappears within ~10 s (an Undo clicked before that is
+    refused, the file kept). Upload another: desktop **Undo** → **Undo?** →
+    click again → the file is deleted. Upload one more: **Keep** → the row
+    hides, the file stays; restart Tabtivity → the row stays hidden. (7) Turn
+    **Phone may add files to projects** off → the next folder listing on the
+    phone has no Upload here; an upload already picked says "was not added —
+    uploads were switched off on the desktop". A file over 24 MB is refused
+    on the phone before it is sent.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [~] **31bp — The phone's host updates itself at launch** (2026-09-28;
   ✅ code-complete, unit test `a_launch_updates_a_host_that_is_behind_…`;
   ⚠️ never seen live). `start_host_on_launch` reinstalls the sidecar copy

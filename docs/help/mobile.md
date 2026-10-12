@@ -1,13 +1,14 @@
 ---
 id: mobile
 title: Tabtivity Mobile (phone companion)
-keywords: [mobile, phone, files, browse, project files, read-only, search files, find a file, mark up, markup, annotate, pdf, markup_ask, questions about marks, markup_done, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, connecting, not connecting, stuck, force stop, version]
+keywords: [mobile, phone, files, browse, project files, read-only, upload, search files, find a file, mark up, markup, annotate, pdf, markup_ask, questions about marks, markup_done, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, not connecting, stuck, force stop, version]
 ---
 
 Tabtivity Mobile is a small companion web app for your phone. It shows the
 projects you opted in, their agent tabs (and shell tabs, if you allow them),
 and one tab at a time as a live terminal you can type into — plus a to-do board, read-only mail and a
-calendar, and — if you allow it — a read-only look at your projects' files.
+calendar, and — if you allow it — a look at your projects' files, and a
+way to add files from the phone to them.
 It is a remote control, not a phone-sized Tabtivity: no editor, git, browser or
 settings.
 
@@ -221,8 +222,9 @@ the screen; further right it shows the agent's status line (a shell tab has
 none, so there any left→right swipe opens the files); the ☰ in the header
 opens them too, in either view. Walk the folders and
 open a file —
-pictures and text full screen, PDFs in the browser, with Save and Share. It is
-read-only: nothing can be changed, moved or deleted from there.
+pictures and text full screen, PDFs in the browser, with Save and Share. Nothing
+can be changed, moved or deleted from there; the one write is adding a new
+file with **Upload here** (below), behind a switch of its own.
 
 The box under the drawer's head finds a file or folder anywhere in the
 project by name: type part of it (several words must all be in the name, in
@@ -241,6 +243,39 @@ collapsed — tap one to open it.
   followed, and a folder shows its first 500 entries.
 - Files up to 24 MiB open; a longer text file shows its first 24 MiB.
 - Switching it off closes the drawer within seconds, without restarting the host.
+
+### Upload here
+
+Switch on **Phone may add files to projects** under **Project files on the
+phone** (off by default, and greyed out while that one is off). The drawer
+then shows **Upload here** under the folder trail: tap it, pick one or more
+files, and they go into the folder the drawer stands in, one after another,
+under their own name. A row per file says **Uploading…**, then **Added to
+<folder>** with the name the file got, and the folder's list refreshes.
+
+- Nothing is ever overwritten: a name already taken gets `-2`, `-3`, … before
+  the extension (`report-2.pdf`). Spaces and symbols become `_`, and a name
+  starting with a dot loses the dot.
+- Folders whose name starts with a dot (`.github`, `.cargo`, `.vscode`, …)
+  and everything inside them take nothing: there the button is missing and
+  the drawer's note still says read-only. Elsewhere the note reads
+  **Add-only**. No folder is created; pick an existing one.
+- Each file can be up to 24 MiB, and the phone adds at most 1 GB a day to a
+  project (an undone upload still counts for that day).
+- The file lands untracked: nothing is added to git, committed or synced.
+- **Undo** on the landed row deletes the file again while the drawer stays
+  in that folder; leave the folder and the row's Undo is gone (the desktop's
+  stays). An Undo is refused ("Kept — it was changed or moved since") once the
+  file was edited, moved or renamed.
+- On the desktop, the header's inbox (the tray for what **Send to desktop**
+  sent) lists every upload of the last 24 hours under **Added to projects**:
+  project · path, size, how long ago and which phone. **Undo** (click twice)
+  deletes the file while it is still exactly as the phone sent it; **Keep**
+  keeps the file and hides the row on this desktop. A file edited or moved since drops off the
+  list.
+- Switching the setting off takes the button away at the next folder
+  listing; an upload or Undo still on its way is refused ("uploads were
+  switched off on the desktop").
 
 ## Git on the phone
 

@@ -115,6 +115,30 @@ holds the rule back, neither typed nor removed. Cancelled rules simply leave the
 held-prompt chip; each pass logs one line. A sent collected prompt's history
 row keeps saying *queued*.
 
+## Writing into a project (Upload here)
+
+The one route by which a phone puts a file into a visible project folder
+(`uploads.rs`, `docs/phone_upload_plan.md`); everything else a phone sends goes
+to the hidden, git-ignored drop box (`.tabtivity/inbox/`) or the state dir's
+global inbox. It sits behind its own host switch
+(`tabtivity_mobile_host.project_uploads`, default off, only with
+`project_files` on) on top of every layer above, and the folder the user
+stands in is the consent, so it is **add-only**: a new name through an
+exclusive create, never an overwrite, rename or delete — except the undo of a
+file this feature wrote that is still byte-for-byte as logged (the log in the
+sidecar's control dir names it; the disk decides). Folders are named by the
+browser's sealed tokens and walked held, no link followed, and none is
+created. **No path segment may start with `.`**: the listing shows `.github`,
+`.cargo`, `.vscode` (only `.git`, `.tabtivity`, `.env*` are hidden), and a
+new file there can change what tools run (`.github/workflows/*.yml`,
+`.cargo/config.toml`, `.envrc`) — the user picking the folder is not enough
+consent for that. A paired phone can already type into shells, so this widens
+nothing for a hostile phone; the risk it answers is a private document one
+`git add -A` from a public remote, hence untracked landing, the desktop's
+*Added to projects* notice with Undo, and nothing auto-committed. Non-dot
+names that tools pick up (`conftest.py`, a root `Makefile` in a project
+without one) are not refused — within that threat note.
+
 ## Known gaps
 
 - **Downgrade.** An older build ignores the list, so after a downgrade every
@@ -139,6 +163,12 @@ row keeps saying *queued*.
   registry project to every phone, switch or not (`MobileBridgeHost`
   `todoBoard` → `publicProjects`, headless `project_names`). Not a secret
   boundary today; filtering per phone is a follow-up TODO.
+- **Phone Undo is bound to neither time nor phone.** Any phone that reaches
+  the project may undo any logged, unchanged upload of it given the file's
+  listing token, until the log line is dropped (7 days, at the next upload's
+  rewrite) — also one the desktop pressed **Keep** on (Keep only hides the
+  row in that desktop's storage). Flagged in `docs/phone_upload_handoff.md`,
+  undecided.
 - **Sign-in callback.** `sign_in_callback` checks only that the phone sees
   *some* agent tab, then relays the localhost address to whichever CLI is
   listening — not bound to that tab. Pre-existing.
