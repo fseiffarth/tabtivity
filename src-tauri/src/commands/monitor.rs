@@ -55,7 +55,7 @@ pub async fn system_monitor_snapshot(
         let key = crate::services::hpc_mode::key_for(&spec);
         let mode =
             careful.or_else(|| crate::services::hpc_mode::is_known_careful(&key).then_some(true));
-        return tokio::task::spawn_blocking(move || {
+        return app_core::rt::blocking("monitor", move || {
             let out = crate::services::ssh_exec::run_remote_script(
                 &spec,
                 &sysstat::remote_snapshot_script(mode),
@@ -64,8 +64,7 @@ pub async fn system_monitor_snapshot(
             crate::services::hpc_mode::remember(&key, snap.careful);
             Ok::<_, String>(snap)
         })
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     }
     Ok(sysstat::system_snapshot())
 }

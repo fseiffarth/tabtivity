@@ -1,5 +1,6 @@
 //! MCP authorization is backend policy, never a model instruction or a hint.
 use serde::{Deserialize, Serialize};
+use app_core::sync::LockExt;
 use serde_json::Value;
 use std::path::Path;
 
@@ -40,7 +41,7 @@ pub const ADMISSION: &str = "admission";
 /// the header, the token material or the path as sent — and the category is
 /// bounded on its own ([`AUDIT_ADMISSION_ROWS`]).
 pub fn audit_admission(reason: &'static str) {
-    let mut rows = AUDIT.lock().unwrap_or_else(|p| p.into_inner());
+    let mut rows = AUDIT.lock_ok();
     if rows.iter().filter(|r| r.tool == ADMISSION).count() >= AUDIT_ADMISSION_ROWS {
         if let Some(oldest) = rows.iter().position(|r| r.tool == ADMISSION) {
             rows.remove(oldest);
@@ -52,7 +53,7 @@ pub fn audit_admission(reason: &'static str) {
     rows.push_back(Audit {
         session: String::new(), caller: None, tool: ADMISSION.into(), outcome: "denied",
         elapsed_ms: 0, target: None, reason: Some(reason),
-        time: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        time: crate::clock::now_secs(),
     });
 }
 pub fn audit(
@@ -65,7 +66,7 @@ pub fn audit(
 }
 
 pub fn audit_reason(session: &super::root_mcp::Session, name: &str, outcome: &'static str, elapsed: std::time::Duration, reason: Option<&'static str>) {
-    let mut rows = AUDIT.lock().unwrap_or_else(|p| p.into_inner());
+    let mut rows = AUDIT.lock_ok();
     if rows.len() >= AUDIT_ROWS {
         rows.pop_front();
     }
@@ -83,16 +84,12 @@ pub fn audit_reason(session: &super::root_mcp::Session, name: &str, outcome: &'s
         .into(),
         outcome,
         elapsed_ms: elapsed.as_millis().min(u64::MAX as u128) as u64,
-        time: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        time: crate::clock::now_secs(),
     });
 }
 pub fn audit_rows() -> Vec<Audit> {
     AUDIT
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_ok()
         .iter()
         .cloned()
         .collect()

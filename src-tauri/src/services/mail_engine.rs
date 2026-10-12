@@ -2249,7 +2249,7 @@ fn outgoing_message_id(from_addr: &str) -> String {
         .rsplit_once('@')
         .map(|(_, d)| d.to_ascii_lowercase())
         .unwrap_or_else(|| "localhost".into());
-    let random: String = id.iter().map(|b| format!("{b:02x}")).collect();
+    let random: String = crate::digest::hex(&id);
     format!("{random}@{domain}")
 }
 

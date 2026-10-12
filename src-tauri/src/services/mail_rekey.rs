@@ -9,7 +9,8 @@
 //! answer without reaching into `commands`.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use app_core::sync::LockExt;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
@@ -44,11 +45,11 @@ static STATUS: Mutex<Option<RekeyStatus>> = Mutex::new(None);
 
 /// The re-key thread's word (`None`: not running, or finished).
 pub fn set(status: Option<RekeyStatus>) {
-    *STATUS.lock().unwrap_or_else(PoisonError::into_inner) = status;
+    *STATUS.lock_ok() = status;
 }
 
 pub fn current() -> Option<RekeyStatus> {
-    STATUS.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    STATUS.lock_ok().clone()
 }
 
 /// What the Server settings show for the store in `mail_dir`: the thread's

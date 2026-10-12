@@ -29,6 +29,7 @@
 //! in `<live_sessions>/<project>/`; the watch is recursive for that reason.
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -121,11 +122,11 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
     // One PTY, one uid: a respawn under a new uid must not leave the old key
     // pointing at this PTY, nor its turn state and job flag behind it.
     on_tab_gone(pty_id);
-    bindings().lock().unwrap().insert(uid.to_string(), pty_id.to_string());
-    states().lock().unwrap().remove(uid);
-    jobs().lock().unwrap().remove(uid);
-    settled().lock().unwrap().remove(uid);
-    turn_ends().lock().unwrap().remove(uid);
+    bindings().lock_ok().insert(uid.to_string(), pty_id.to_string());
+    states().lock_ok().remove(uid);
+    jobs().lock_ok().remove(uid);
+    settled().lock_ok().remove(uid);
+    turn_ends().lock_ok().remove(uid);
     let paths = record_paths(uid, project_id);
     let cut_off = records_hold_turn_in_flight(&paths);
     let resting = !cut_off && records_hold_finished_turn(&paths);
@@ -155,15 +156,15 @@ fn records_hold_finished_turn(paths: &[PathBuf]) -> bool {
 /// Drop the binding(s) of a PTY that is gone, and whatever was recorded about
 /// its turn: a key reused by a later tab must start blank.
 pub fn on_tab_gone(pty_id: &str) {
-    let mut b = bindings().lock().unwrap();
+    let mut b = bindings().lock_ok();
     let gone: Vec<String> =
         b.iter().filter(|(_, v)| v.as_str() == pty_id).map(|(k, _)| k.clone()).collect();
     b.retain(|_, v| v != pty_id);
     drop(b);
-    let mut states = states().lock().unwrap();
-    let mut jobs = jobs().lock().unwrap();
-    let mut settled = settled().lock().unwrap();
-    let mut ends = turn_ends().lock().unwrap();
+    let mut states = states().lock_ok();
+    let mut jobs = jobs().lock_ok();
+    let mut settled = settled().lock_ok();
+    let mut ends = turn_ends().lock_ok();
     for uid in gone {
         states.remove(&uid);
         jobs.remove(&uid);
@@ -174,7 +175,7 @@ pub fn on_tab_gone(pty_id: &str) {
 
 /// The PTY id bound to `uid`, if any.
 pub fn pty_for(uid: &str) -> Option<String> {
-    bindings().lock().unwrap().get(uid).cloned()
+    bindings().lock_ok().get(uid).cloned()
 }
 
 fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
@@ -292,10 +293,10 @@ fn settled() -> &'static Mutex<HashSet<String>> {
 /// Whether the timer-driven scan has anything to find: some tab whose hooks
 /// have spoken is not [`settled`], or the backstop interval is up.
 fn job_poll_due() -> bool {
-    let last = *last_scan().lock().unwrap();
-    let bound: Vec<String> = bindings().lock().unwrap().keys().cloned().collect();
-    let states = states().lock().unwrap();
-    let settled = settled().lock().unwrap();
+    let last = *last_scan().lock_ok();
+    let bound: Vec<String> = bindings().lock_ok().keys().cloned().collect();
+    let states = states().lock_ok();
+    let settled = settled().lock_ok();
     poll_due(
         last,
         bound.iter().filter(|uid| states.contains_key(*uid)).map(|uid| settled.contains(uid)),
@@ -367,16 +368,16 @@ fn last_scan() -> &'static Mutex<Option<Instant>> {
 /// its state and job flag go with it.
 fn note_state(uid: &str, state: TurnState) {
     // Whatever the agent just did, the next timer tick must look again.
-    settled().lock().unwrap().remove(uid);
+    settled().lock_ok().remove(uid);
     if state == TurnState::Idle {
-        states().lock().unwrap().remove(uid);
-        jobs().lock().unwrap().remove(uid);
-        turn_ends().lock().unwrap().remove(uid);
+        states().lock_ok().remove(uid);
+        jobs().lock_ok().remove(uid);
+        turn_ends().lock_ok().remove(uid);
         return;
     }
-    let mut states = states().lock().unwrap();
+    let mut states = states().lock_ok();
     let prev = states.insert(uid.to_string(), state);
-    let mut ends = turn_ends().lock().unwrap();
+    let mut ends = turn_ends().lock_ok();
     // The turn ends at its first `done`: a later one (Claude's idle notice, a
     // job's end re-reported) is the same finished turn, not a new end.
     if state != TurnState::Done {
@@ -391,7 +392,7 @@ fn note_state(uid: &str, state: TurnState) {
 
 /// Whether a shell of `uid`'s agent was running at the last scan.
 fn job_flag(uid: &str) -> bool {
-    jobs().lock().unwrap().get(uid).copied().unwrap_or(false)
+    jobs().lock_ok().get(uid).copied().unwrap_or(false)
 }
 
 /// One scan of the tool shells the bound tabs are running, and what the change
@@ -402,19 +403,18 @@ fn job_flag(uid: &str) -> bool {
 /// flag on. A scan younger than [`JOB_SCAN_MAX_AGE`] is reused as it stands.
 fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
     {
-        let mut last = last_scan().lock().unwrap();
+        let mut last = last_scan().lock_ok();
         if last.is_some_and(|at| at.elapsed() < JOB_SCAN_MAX_AGE) {
             return Vec::new();
         }
         *last = Some(Instant::now());
     }
     let bound: Vec<(String, String)> = bindings()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .iter()
         .map(|(uid, pty)| (uid.clone(), pty.clone()))
         .collect();
-    let states = states().lock().unwrap();
+    let states = states().lock_ok();
     // Only a tab whose hooks have spoken can be asked about: the state is what
     // tells a backgrounded shell from the tool call the agent is waiting on, and
     // a tab with no state has no event to carry a flag on either.
@@ -429,7 +429,7 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
     // `JOB_POLL_SETTLED` backstop. Other scans reuse a recent walk (a job on
     // record is re-checked alive either way).
     let unsettled_done: Vec<&str> = {
-        let settled = settled().lock().unwrap();
+        let settled = settled().lock_ok();
         want.iter()
             .filter(|(uid, state)| {
                 matches!(state, TurnState::Done | TurnState::Decision) && !settled.contains(**uid)
@@ -438,13 +438,13 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
             .collect()
     };
     let may_settle = {
-        let jobs = jobs().lock().unwrap();
+        let jobs = jobs().lock_ok();
         unsettled_done.iter().any(|uid| !jobs.get(*uid).copied().unwrap_or(false))
     };
     let max_age = if may_settle { Duration::ZERO } else { JOB_SCAN_MAX_AGE };
-    let ends = turn_ends().lock().unwrap().clone();
+    let ends = turn_ends().lock_ok().clone();
     let live = tool_shell_uids(&want, &ends, max_age);
-    let mut jobs = jobs().lock().unwrap();
+    let mut jobs = jobs().lock_ok();
     let mut out = Vec::new();
     for (uid, pty) in &bound {
         let running = live.contains(uid.as_str());
@@ -464,7 +464,7 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
     // Settle every tab this scan cleared whose agent is not mid-turn. Taken
     // while `states` is still held, so a record noted after the walk (which
     // unsettles) cannot be overwritten by this scan's stale verdict.
-    let mut settled = settled().lock().unwrap();
+    let mut settled = settled().lock_ok();
     settled.retain(|uid| want.contains_key(uid.as_str()));
     for (uid, state) in &want {
         if !live.contains(*uid) && matches!(state, TurnState::Done | TurnState::Decision) {

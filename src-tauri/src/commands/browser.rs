@@ -104,7 +104,7 @@ const READER_SUPPORTED: bool = true;
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn browser_capabilities() -> Result<BrowserCapabilities, String> {
-    let live_enabled = read_settings()
+    let live_enabled = crate::storage::load_settings()
         .map(|s| s.browser_live_pages())
         .unwrap_or(false);
     Ok(BrowserCapabilities {
@@ -129,15 +129,6 @@ pub async fn browser_capabilities() -> Result<BrowserCapabilities, String> {
             }
         },
     })
-}
-
-fn read_settings() -> Option<crate::schema::settings::Settings> {
-    let path = crate::storage::state_dir().join("settings.json");
-    if path.exists() {
-        crate::storage::read_json::<crate::schema::settings::Settings>(&path).ok()
-    } else {
-        None
-    }
 }
 
 // ── The pure gate ───────────────────────────────────────────────────────────
@@ -235,7 +226,7 @@ pub async fn browser_open_live(app: AppHandle, url: String) -> Result<LiveWindow
     // answer: that call happens once when a pane mounts, and a setting the user
     // turned back off in between must take effect. A frontend that hides the
     // control is the courtesy; this is the control.
-    if !read_settings()
+    if !crate::storage::load_settings()
         .map(|s| s.browser_live_pages())
         .unwrap_or(false)
     {
@@ -649,7 +640,7 @@ pub async fn browser_download_decide(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| pending.name.clone());
 
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("browser", move || {
         // Rename first; fall back to copy+remove across filesystems. We do not
         // create directories and we do not append.
         if std::fs::rename(&staged, &target).is_err() {
@@ -662,8 +653,7 @@ pub async fn browser_download_decide(
         web_safety::mark_downloaded(&target);
         Ok::<_, String>(())
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     Ok(DownloadOutcome {
         saved: true,

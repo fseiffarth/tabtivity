@@ -67,6 +67,7 @@
 //! variant, which no project or agent can reach.
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
@@ -149,14 +150,10 @@ fn grants() -> &'static Mutex<HashMap<String, Held>> {
     GRANTS.get_or_init(Default::default)
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
-}
-
 fn mint() -> Option<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).ok()?;
-    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Some(crate::digest::hex(&bytes))
 }
 
 /// A grant for `tab` with no key, upstream or tmux session behind it, as
@@ -170,7 +167,7 @@ pub(crate) fn issue_for_test(scope: &str, tab: &str) -> Option<String> {
 /// re-attaches the agent that still carries it), else a new one. `None` only
 /// without system randomness.
 fn issue_grant(grant: Grant) -> Option<String> {
-    let mut map = lock(grants());
+    let mut map = grants().lock_ok();
     if let Some((token, _)) = map.iter().find(|(_, h)| h.grant == grant) {
         return Some(token.clone());
     }
@@ -215,13 +212,13 @@ pub fn tmux_binding(session: Option<&str>) -> Option<String> {
 }
 
 fn lookup(token: &str) -> Option<Grant> {
-    lock(grants()).get(token).map(|h| h.grant.clone())
+    grants().lock_ok().get(token).map(|h| h.grant.clone())
 }
 
 /// Whether a proxy token is live. For the spawn path's tests and diagnostics;
 /// never logs it.
 pub fn token_live(token: &str) -> bool {
-    lock(grants()).contains_key(token)
+    grants().lock_ok().contains_key(token)
 }
 
 /// A tab ended (closed, its process exited, or the app is quitting). Its
@@ -230,7 +227,7 @@ pub fn token_live(token: &str) -> bool {
 /// teardown path.
 pub fn on_tab_gone(tab: &str) {
     let mut tmux_bound = false;
-    lock(grants()).retain(|_, h| {
+    grants().lock_ok().retain(|_, h| {
         if h.grant.tab != tab {
             return true;
         }
@@ -246,13 +243,13 @@ pub fn on_tab_gone(tab: &str) {
 /// explicit close, the Sessions view): its grants go now, not at the next
 /// sweep.
 pub fn on_tmux_session_gone(session: &str) {
-    lock(grants()).retain(|_, h| h.grant.tmux.as_deref() != Some(session));
+    grants().lock_ok().retain(|_, h| h.grant.tmux.as_deref() != Some(session));
 }
 
 /// A local tmux session was renamed (`local_tmux_rename`): its agent keeps
 /// running, so its grants follow the new name rather than being swept as gone.
 pub fn on_tmux_renamed(old: &str, new: &str) {
-    for held in lock(grants()).values_mut() {
+    for held in grants().lock_ok().values_mut() {
         if held.grant.tmux.as_deref() == Some(old) {
             held.grant.tmux = Some(new.to_string());
         }
@@ -266,11 +263,11 @@ pub fn on_tmux_renamed(old: &str, new: &str) {
 /// tmux-bound grant is held (a session can also end with no PTY attached — a
 /// phone-started one, a `tmux kill-session` typed elsewhere).
 pub fn sweep_tmux() {
-    if !lock(grants()).values().any(|h| h.grant.tmux.is_some()) {
+    if !grants().lock_ok().values().any(|h| h.grant.tmux.is_some()) {
         return;
     }
     let Some(live) = live_tmux_sessions() else { return };
-    retain_live(&mut lock(grants()), &live, Instant::now());
+    retain_live(&mut grants().lock_ok(), &live, Instant::now());
 }
 
 /// How long a fresh tmux-bound grant is spared by the sweep: its session is
@@ -298,7 +295,7 @@ fn live_tmux_sessions() -> Option<HashSet<String>> {
 }
 
 fn revoke_all() {
-    lock(grants()).clear();
+    grants().lock_ok().clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -322,14 +319,14 @@ static KEY_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// prompting), remembered. A miss is remembered for [`MISSING_KEY_RETRY`] so a
 /// locked keyring is not asked once per request.
 pub fn key_for(provider: Provider) -> Option<String> {
-    match lock(keys()).get(&provider) {
+    match keys().lock_ok().get(&provider) {
         Some(Cached::Key(k)) => return Some(k.clone()),
         Some(Cached::Missing(at)) if at.elapsed() < MISSING_KEY_RETRY => return None,
         _ => {}
     }
     let generation = KEY_GENERATION.load(Ordering::Acquire);
     let read = super::agent_api_keys::get_key(provider);
-    let mut cache = lock(keys());
+    let mut cache = keys().lock_ok();
     if KEY_GENERATION.load(Ordering::Acquire) == generation {
         cache.insert(
             provider,
@@ -346,7 +343,7 @@ pub fn key_for(provider: Provider) -> Option<String> {
 /// Removing a key therefore stops running keyed tabs too, at their next
 /// request.
 pub fn forget_key(provider: Provider) {
-    let mut cache = lock(keys());
+    let mut cache = keys().lock_ok();
     KEY_GENERATION.fetch_add(1, Ordering::AcqRel);
     cache.remove(&provider);
 }
@@ -373,17 +370,17 @@ fn admin_keys() -> &'static Mutex<HashMap<&'static str, AdminCached>> {
 /// `cli`'s administrator key and broker URL for this user, from the cache or
 /// the keeper. `Err` with the refusal the request gets.
 fn admin_key_for(cli: &'static str) -> Result<(zeroize::Zeroizing<String>, Option<String>), Refusal> {
-    if let Some(held) = lock(admin_keys()).get(cli).filter(|h| h.at.elapsed() < ADMIN_KEY_FRESH) {
+    if let Some(held) = admin_keys().lock_ok().get(cli).filter(|h| h.at.elapsed() < ADMIN_KEY_FRESH) {
         return Ok((held.key.clone(), held.broker.clone()));
     }
     match super::server::agent_keys::for_proxy(cli) {
         Ok(Some(found)) => {
             let answer = (found.key.clone(), found.broker.clone());
-            lock(admin_keys()).insert(cli, AdminCached { key: found.key, broker: found.broker, at: Instant::now() });
+            admin_keys().lock_ok().insert(cli, AdminCached { key: found.key, broker: found.broker, at: Instant::now() });
             Ok(answer)
         }
         Ok(None) => {
-            lock(admin_keys()).remove(cli);
+            admin_keys().lock_ok().remove(cli);
             Err(Refusal::AdminWithdrawn)
         }
         Err(_) => Err(Refusal::AdminUnavailable),
@@ -392,7 +389,7 @@ fn admin_key_for(cli: &'static str) -> Result<(zeroize::Zeroizing<String>, Optio
 
 /// The upstream refused `cli`'s administrator key: ask the keeper anew next.
 fn forget_admin_key(cli: &str) {
-    lock(admin_keys()).remove(cli);
+    admin_keys().lock_ok().remove(cli);
 }
 
 // ---------------------------------------------------------------------------
@@ -660,7 +657,7 @@ pub fn start() {
         }
         PORT.store(0, Ordering::Release);
     });
-    *lock(&SERVER) = Some(handle);
+    *SERVER.lock_ok() = Some(handle);
     // Grants bound to a tmux session that ended with no PTY attached.
     app_core::rt::spawn(async {
         while !STOPPING.load(Ordering::Acquire) {
@@ -679,7 +676,7 @@ pub fn stop_for_exit() {
     revoke_all();
     SHUTDOWN.notify_waiters();
     SHUTDOWN.notify_one();
-    if let Some(handle) = lock(&SERVER).take() {
+    if let Some(handle) = SERVER.lock_ok().take() {
         app_core::rt::block_on(async {
             let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
         });
@@ -751,7 +748,7 @@ impl Busy {
 impl Drop for Busy {
     fn drop(&mut self) {
         if self.0.busy.fetch_sub(1, Ordering::AcqRel) == 1 {
-            *lock(&self.0.idle_since) = tokio::time::Instant::now();
+            *self.0.idle_since.lock_ok() = tokio::time::Instant::now();
         }
     }
 }
@@ -793,7 +790,7 @@ impl axum::serve::Listener for BoundedListener {
 impl AsyncRead for BoundedStream {
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         if self.conn.busy.load(Ordering::Acquire) == 0 {
-            let deadline = *lock(&self.conn.idle_since) + self.conn.idle_wait;
+            let deadline = *self.conn.idle_since.lock_ok() + self.conn.idle_wait;
             if self.idle.deadline() != deadline {
                 self.idle.as_mut().reset(deadline);
             }
@@ -1672,7 +1669,7 @@ mod tests {
         assert_eq!(lookup(&other).unwrap().tmux.as_deref(), Some("c2-sess-other"));
         // A respawn of the renamed tab binds the new name and gets its token.
         assert_eq!(issue_grant(grant(Provider::Anthropic, "p1:renamed", Some("c2-sess-new"))).unwrap(), renamed);
-        lock(grants()).retain(|t, _| *t != renamed && *t != other);
+        grants().lock_ok().retain(|t, _| *t != renamed && *t != other);
     }
 
     #[test]
@@ -1690,7 +1687,7 @@ mod tests {
         // has, so the sweep this spawns leaves it.
         on_tab_gone("p1:kept");
         assert!(token_live(&token));
-        lock(grants()).remove(&token);
+        grants().lock_ok().remove(&token);
     }
 
     #[tokio::test]
@@ -1731,7 +1728,7 @@ mod tests {
         let generation = KEY_GENERATION.load(Ordering::Acquire);
         forget_key(Provider::Gemini);
         assert_ne!(KEY_GENERATION.load(Ordering::Acquire), generation);
-        assert!(lock(keys()).get(&Provider::Gemini).is_none());
+        assert!(keys().lock_ok().get(&Provider::Gemini).is_none());
     }
 
     // ---- end to end, against an in-process stub upstream -----------------
@@ -1774,7 +1771,7 @@ mod tests {
                 let (parts, body) = req.into_parts();
                 let body = axum::body::to_bytes(body, usize::MAX).await.unwrap().to_vec();
                 seen.hits.fetch_add(1, Ordering::SeqCst);
-                lock(&seen.requests).push((
+                seen.requests.lock_ok().push((
                     parts.method.to_string(),
                     parts.uri.to_string(),
                     parts.headers.clone(),
@@ -1838,11 +1835,11 @@ mod tests {
     }
 
     pub(super) fn record_tap(grant: &Grant, end: Option<StreamEnd>) {
-        lock(taps()).push((grant.tab.clone(), end));
+        taps().lock_ok().push((grant.tab.clone(), end));
     }
 
     fn taps_of(tab: &str) -> Vec<Option<StreamEnd>> {
-        lock(taps()).iter().filter(|(t, _)| t == tab).map(|(_, e)| *e).collect()
+        taps().lock_ok().iter().filter(|(t, _)| t == tab).map(|(_, e)| *e).collect()
     }
 
     /// Waits up to 5 s for `tab`'s answer to end; its tap record.
@@ -1894,7 +1891,7 @@ mod tests {
         assert_eq!(rest, SSE_REST.as_bytes());
 
         {
-            let requests = lock(&seen.requests);
+            let requests = seen.requests.lock_ok();
             let (method, uri, headers, body) = &requests[0];
             assert_eq!(method, "POST");
             assert_eq!(uri, "/v1/messages?beta=true");
@@ -1999,7 +1996,7 @@ mod tests {
             .unwrap();
         assert_eq!(r.status(), 200);
         let _ = r.bytes().await.unwrap();
-        let requests = lock(&seen.requests);
+        let requests = seen.requests.lock_ok();
         let (_, uri, headers, _) = &requests[0];
         assert_eq!(uri, "/v1beta/models/gemini-test:streamGenerateContent?alt=sse");
         assert_eq!(headers["x-goog-api-key"], FAKE_KEY);
@@ -2178,7 +2175,7 @@ mod tests {
             .output();
         let out = tokio::time::timeout(Duration::from_secs(120), out).await.unwrap().unwrap();
         eprintln!("exit: {:?}\nstdout: {}", out.status, String::from_utf8_lossy(&out.stdout));
-        let requests = lock(&seen.requests);
+        let requests = seen.requests.lock_ok();
         for (method, uri, headers, body) in requests.iter() {
             eprintln!(
                 "upstream saw {method} {uri}; real key in its header: {}; bearer header present: {}; body {} bytes",
@@ -2226,7 +2223,7 @@ mod tests {
         assert_eq!(r.status(), 200, "no own key and no own limit, still forwarded");
         let _ = r.bytes().await.unwrap();
         {
-            let requests = lock(&seen.requests);
+            let requests = seen.requests.lock_ok();
             let (_, uri, headers, _) = &requests[0];
             assert_eq!(uri, "/v1/messages");
             assert_eq!(headers["x-api-key"], "fake-admin-key");
@@ -2261,7 +2258,7 @@ mod tests {
         assert_eq!(r.status(), 200);
         let _ = r.bytes().await.unwrap();
         {
-            let requests = lock(&seen.requests);
+            let requests = seen.requests.lock_ok();
             let (_, uri, headers, _) = &requests[0];
             assert_eq!(uri, "/claude/v1/messages?beta=true");
             assert_eq!(headers["x-api-key"], "broker-fake-token");

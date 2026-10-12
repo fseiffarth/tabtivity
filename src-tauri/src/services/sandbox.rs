@@ -90,6 +90,7 @@
 //! relying on `$HOME` shell-expansion, because `docker` is exec'd directly.
 
 use crate::brand::SLUG;
+use app_core::sync::LockExt;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -146,15 +147,11 @@ impl Default for HardenOpts {
 }
 
 // ── Naming ────────────────────────────────────────────────────────────────
-
-/// Reduce an id to a docker-name/shell/path-safe key (`[A-Za-z0-9_-]`, never
-/// empty). Shared by the container name, the per-project stage dir, and the
-/// per-tab pidfile so all three stay derivable from the same id — and, via
-/// [`crate::storage::project_key`], by the per-project session directory, so a
-/// project's container and its session state are named by the same rule.
-fn sanitize_key(id: &str) -> String {
-    crate::storage::project_key(id)
-}
+//
+// The container name, the per-project stage dir and the per-tab pidfile all
+// reduce their id through `crate::storage::project_key` (`[A-Za-z0-9_-]`, never
+// empty) — the rule that also names the per-project session directory, so a
+// project's container and its session state are named alike.
 
 // ── The engine ────────────────────────────────────────────────────────────
 
@@ -231,14 +228,14 @@ pub fn is_engine_cmd(cmd: &str) -> bool {
 
 /// Name of the session container for a project: `tabtivity-<sanitized-id>`.
 pub fn container_name_for(project_id: &str) -> String {
-    format!("{}{}", crate::brand::CONTAINER_PREFIX, sanitize_key(project_id))
+    format!("{}{}", crate::brand::CONTAINER_PREFIX, crate::storage::project_key(project_id))
 }
 
 /// Image tag to run for a project: a `dockerfile` spec builds a per-project tag,
 /// otherwise the spec's `image` override, otherwise the built-in default.
 pub fn image_for(project_id: &str, spec: Option<&SandboxSpec>) -> String {
     if spec.is_some_and(|s| s.dockerfile.is_some()) {
-        return format!("{}{}:latest", crate::brand::CONTAINER_PREFIX, sanitize_key(project_id));
+        return format!("{}{}:latest", crate::brand::CONTAINER_PREFIX, crate::storage::project_key(project_id));
     }
     spec.and_then(|s| s.image.clone())
         .unwrap_or_else(|| DEFAULT_IMAGE.to_string())
@@ -484,7 +481,7 @@ pub fn docker_exec_args(
     a.push(name.to_string());
     a.push("sh".to_string());
     a.push("-c".to_string());
-    // `pidfile` is built from sanitize_key output — shell-safe by construction.
+    // `pidfile` is built from `storage::project_key` output — shell-safe by construction.
     let bin = container_path(&crate::services::agent_bin::bin_dir().to_string_lossy());
     let bin = bin.replace('\'', "'\"'\"'");
     a.push(format!("export PATH='{bin}':\"$PATH\"; echo $$ > {pidfile}; exec \"$@\""));
@@ -944,7 +941,7 @@ pub fn up(
     spec: Option<&SandboxSpec>,
     project_dir: &str,
 ) -> Result<String, String> {
-    let _guard = lifecycle_lock().lock().unwrap();
+    let _guard = lifecycle_lock().lock_ok();
     preflight_docker()?;
     preflight_daemon()?;
 
@@ -1075,7 +1072,7 @@ pub fn up(
 /// and leased so the other process sharing the state dir (window or desktop
 /// sidecar) never removes it under this one's tabs (`process_lease`).
 fn mark_created(name: &str) {
-    created_set().lock().unwrap().insert(name.to_string());
+    created_set().lock_ok().insert(name.to_string());
     crate::services::process_lease::hold(&crate::services::process_lease::container_key(name));
 }
 
@@ -1107,15 +1104,14 @@ pub fn up_for_project(project_id: &str) -> Result<Option<String>, String> {
 /// or the toggle is currently on — a never-containerized project costs nothing.
 pub fn down_for_project(project_id: &str) {
     let name = container_name_for(project_id);
-    let created = created_set().lock().unwrap().contains(&name);
+    let created = created_set().lock_ok().contains(&name);
     if !created && !sandbox_spec_for(project_id).is_some_and(|s| s.enabled) {
         return;
     }
-    let _guard = lifecycle_lock().lock().unwrap();
-    created_set().lock().unwrap().remove(&name);
+    let _guard = lifecycle_lock().lock_ok();
+    created_set().lock_ok().remove(&name);
     exec_tabs()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .retain(|_, t| t.container != name);
     // The other process sharing the state dir may still run tabs in it: then
     // it stays, and goes with that process's own teardown.
@@ -1128,12 +1124,12 @@ pub fn down_for_project(project_id: &str) {
 /// when this run never created one (a crash's leftovers are `sweep_orphans`'s
 /// job next startup).
 pub fn down_all() {
-    if created_set().lock().unwrap().is_empty() {
+    if created_set().lock_ok().is_empty() {
         return;
     }
     remove_all_owned();
-    created_set().lock().unwrap().clear();
-    exec_tabs().lock().unwrap().clear();
+    created_set().lock_ok().clear();
+    exec_tabs().lock_ok().clear();
 }
 
 /// Startup: wipe the per-scope stage root (a previous run's private launcher
@@ -1166,7 +1162,7 @@ fn sweep_should_probe(docker_on_path: bool) -> bool {
 
 /// `docker rm -f` every container carrying our owner label. Best-effort.
 fn remove_all_owned() {
-    let _guard = lifecycle_lock().lock().unwrap();
+    let _guard = lifecycle_lock().lock_ok();
     // The owner label, and — after a rename — the one an older build put on
     // its containers: both are this app's, and both are stale — unless the
     // other process sharing the state dir (window or desktop sidecar) still
@@ -1468,9 +1464,9 @@ fn build_command(project_id: &str, image: &str) -> Option<String> {
 /// would split.
 pub(crate) fn install_shell_quote(path: &str, windows: bool) -> String {
     if windows {
-        format!("'{}'", path.replace('\'', "''"))
+        crate::quote::powershell(path)
     } else {
-        format!("'{}'", path.replace('\'', "'\\''"))
+        crate::quote::posix(path)
     }
 }
 
@@ -1497,12 +1493,12 @@ fn exec_tabs() -> &'static Mutex<HashMap<String, ExecTab>> {
 fn register_exec_tab(tab_id: &str, container: &str) -> String {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let n = NONCE.fetch_add(1, Ordering::Relaxed);
-    let pidfile = format!("/tmp/{SLUG}-tab-{}-{n}.pid", sanitize_key(tab_id));
+    let pidfile = format!("/tmp/{SLUG}-tab-{}-{n}.pid", crate::storage::project_key(tab_id));
     let tab = ExecTab {
         container: container.to_string(),
         pidfile: pidfile.clone(),
     };
-    if let Some(old) = exec_tabs().lock().unwrap().insert(tab_id.to_string(), tab) {
+    if let Some(old) = exec_tabs().lock_ok().insert(tab_id.to_string(), tab) {
         spawn_kill(old);
     }
     pidfile
@@ -1513,7 +1509,7 @@ fn register_exec_tab(tab_id: &str, container: &str) -> String {
 /// kills the `docker exec` *client*; the agent inside would otherwise keep
 /// running until session end. Cheap no-op for tabs that never containerized.
 pub fn kill_tab_process(tab_id: &str) {
-    if let Some(tab) = exec_tabs().lock().unwrap().remove(tab_id) {
+    if let Some(tab) = exec_tabs().lock_ok().remove(tab_id) {
         spawn_kill(tab);
     }
 }
@@ -1549,7 +1545,7 @@ pub fn sandbox_spec_for(project_id: &str) -> Option<SandboxSpec> {
 /// mount, and a value read from it would let the contained process choose what
 /// the next container mounts.
 pub fn project_dir_for(project_id: &str) -> Option<String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
     let entry = list.iter().find(|e| e.id == project_id)?;
     entry.directory().map(str::to_string)
@@ -1571,7 +1567,7 @@ pub fn project_dir_for(project_id: &str) -> Option<String> {
 /// therefore the same rule that decides where we look for its interpreter, rather
 /// than two conditions that can drift apart.
 pub fn containerized_project_for_dir(project_dir: &str) -> Option<String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
     let entry = list.iter().find(|e| e.directory() == Some(project_dir.trim()))?;
     if crate::services::remote::remote_target_for(&entry.id).is_some() {
@@ -1604,7 +1600,7 @@ pub fn run_in_container(project_id: &str, cwd: &str, script: &str) -> Option<Str
 }
 
 fn project_entry_value(project_id: &str, key: &str) -> Option<serde_json::Value> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
     let entry = list.iter().find(|e| e.id == project_id)?;
     entry.extra.get(key).cloned()
@@ -1650,12 +1646,7 @@ pub fn detect_spec_source(project_dir: &Path) -> Option<DetectedSpecSource> {
     })
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
-}
+use crate::digest::sha256_hex;
 
 /// Test/back-compat shim over [`detect_spec_source`]: writes straight into a
 /// `SandboxSpec` the way the pre-#143 auto-adopt path did. Production code
@@ -1783,7 +1774,7 @@ pub(crate) fn ro_mounts_for_hooks(hooks_dir: &Path) -> Vec<String> {
 pub(crate) fn stage_dir(project_id: &str) -> PathBuf {
     storage::state_dir()
         .join("sandbox-stage")
-        .join(sanitize_key(project_id))
+        .join(crate::storage::project_key(project_id))
 }
 
 /// Whether Claude will skip its trust dialog in `cwd` for scope `scope_id`:

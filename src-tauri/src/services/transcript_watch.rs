@@ -19,6 +19,7 @@
 //! command layer points at its event emitter.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, Weak};
@@ -245,7 +246,7 @@ impl TranscriptWatch {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner())
+        self.state.lock_ok()
     }
 
     /// Point watch `id` at `targets`, replacing what it watched. True when it
@@ -365,7 +366,7 @@ fn run(rx: mpsc::Receiver<notify::Result<notify::Event>>, state: Weak<Mutex<Stat
             Ok(Ok(event)) => {
                 if let Some(created) = classify(&event.kind) {
                     let Some(state) = state.upgrade() else { return };
-                    let state = state.lock().unwrap_or_else(|p| p.into_inner());
+                    let state = state.lock_ok();
                     let now = Instant::now();
                     let both = matches!(event.kind, EventKind::Modify(ModifyKind::Name(RenameMode::Both)));
                     for (i, path) in event.paths.iter().enumerate() {
@@ -390,7 +391,7 @@ fn run(rx: mpsc::Receiver<notify::Result<notify::Event>>, state: Weak<Mutex<Stat
         }
         let Some(state) = state.upgrade() else { return };
         let armed: Vec<String> = {
-            let state = state.lock().unwrap_or_else(|p| p.into_inner());
+            let state = state.lock_ok();
             due.into_iter().filter(|id| state.registry.targets(id).is_some()).collect()
         };
         for id in armed {

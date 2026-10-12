@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useHostKeyPromptStore } from "../../stores/remote/hostKeyPrompt";
 import { UntestedTag } from "./UntestedTag";
 import { useT } from "../../lib/i18n";
@@ -24,6 +25,8 @@ export function HostKeyConfirmDialog() {
   const accept = useHostKeyPromptStore((s) => s.accept);
   const cancel = useHostKeyPromptStore((s) => s.cancel);
 
+  // Escape answers nothing, like the backdrop (see below).
+  const modalRef = useModalFocus(() => {}, !!pending);
   if (!pending) return null;
   const canAccept = status === "ready" && keys.length > 0;
 
@@ -31,7 +34,7 @@ export function HostKeyConfirmDialog() {
     // No backdrop dismiss: the answer decides whether a password leaves this
     // machine, so it must be given, not clicked past.
     <div className="modal-backdrop">
-      <div className="project-dialog host-key-dialog">
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog host-key-dialog">
         <h2 className="host-key-title">
           {t("hostKey.title")} <UntestedTag id="hostKey.title" />
         </h2>

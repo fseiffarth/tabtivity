@@ -1,4 +1,5 @@
 use std::fs;
+use app_core::sync::LockExt;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
@@ -24,35 +25,34 @@ where
     write_json_file(path, value, path.starts_with(state_dir()))
 }
 
-/// [`write_json`] with the new-file mode decided by the caller. An existing
-/// file keeps whatever mode it has — the 0700 state dir is the real barrier
-/// (see [`ensure_private_state_dir`]).
+/// [`write_json`] with the privacy decided by the caller.
+///
+/// A private file goes through [`write_private_atomic`]: owner-only on every
+/// write (an existing file too, not just a new one), and replaced whole, so a
+/// crash or a reader never sees it half-written. Each write costs an fsync
+/// and, on Windows, an `icacls` pair for the staged file; state files are
+/// written at human or timer pace, not per message, so that is affordable.
+///
+/// A shared file (a project folder's) is truncated and rewritten in place,
+/// keeping its mode, owner and links: a group-shared project dir stays
+/// readable to its group.
 fn write_json_file<T>(path: &Path, value: &T, private: bool) -> Result<(), Box<dyn std::error::Error>>
 where
     T: serde::Serialize,
 {
+    let json = serde_json::to_string_pretty(value)?;
+    if private {
+        write_private_atomic(path, json.as_bytes())?;
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(value)?;
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    if private {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    // Windows: like the Unix mode, only a file this call creates is
-    // restricted (an `icacls` run per write would cost a spawn each time).
-    #[cfg(windows)]
-    let created = private && !path.exists();
-    #[cfg(not(any(unix, windows)))]
-    let _ = private;
-    let mut file = opts.open(path)?;
-    #[cfg(windows)]
-    if created {
-        crate::services::private_file::restrict_to_owner(path);
-    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)?;
     file.write_all(json.as_bytes())?;
     Ok(())
 }
@@ -61,8 +61,9 @@ where
 /// beside the target and are then `rename`d over it, so a reader (or a crash)
 /// never observes a half-written file.
 ///
-/// [`write_json`] truncates in place, which is fine for a store with one writer
-/// that rewrites it rarely. Prefer this for a store written from several places
+/// [`write_json`] replaces a state file atomically too, but without this
+/// function's process-wide lock, and truncates a project-folder file in place.
+/// Prefer this for a store written from several places
 /// (see `schema::usage_stats`, fed by both the frontend flush and the file
 /// watcher). Same rename trick as `services::agent_session::write_live_session_in`.
 pub fn write_json_atomic<T>(path: &Path, value: &T) -> Result<(), Box<dyn std::error::Error>>
@@ -70,8 +71,7 @@ where
     T: serde::Serialize,
 {
     let _guard = JSON_MUTATION_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .lock_ok();
     write_json_atomic_unlocked(path, value)
 }
 
@@ -91,8 +91,7 @@ where
     T: serde::de::DeserializeOwned + serde::Serialize,
 {
     let _guard = JSON_MUTATION_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .lock_ok();
     // The process-wide lock serialises this process; the file lock serialises
     // a second Tabtivity process patching the same file (#171's lesson applied
     // to every read-modify-write here).
@@ -429,6 +428,23 @@ pub fn state_dir() -> std::path::PathBuf {
     )
 }
 
+/// `<state_dir>/projects.json`, the project registry.
+pub fn projects_path() -> std::path::PathBuf {
+    state_dir().join("projects.json")
+}
+
+/// `<state_dir>/settings.json`, the app-wide settings.
+pub fn settings_path() -> std::path::PathBuf {
+    state_dir().join("settings.json")
+}
+
+/// The app-wide settings, or `None` when the file is missing or unreadable.
+/// A caller that must fail closed on a corrupt file (`commands::copilot`)
+/// reads it itself.
+pub fn load_settings() -> Option<crate::schema::Settings> {
+    read_json(&settings_path()).ok()
+}
+
 /// The folder the environment names as the state dir, if it names one.
 pub fn state_dir_override() -> Option<std::path::PathBuf> {
     crate::brand::env("STATE_DIR").map(std::path::PathBuf::from)
@@ -572,13 +588,7 @@ pub fn rewrite_path_prefix(value: &mut serde_json::Value, old: &str, new: &str) 
     }
 }
 
-fn now_secs() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::clock::now_secs;
 
 /// Current date in UTC as "YYYY-MM-DD".
 pub fn today_utc() -> String {
@@ -897,12 +907,27 @@ mod tests {
         fs::write(&plain, "").unwrap();
         assert_eq!(mode_of(&shared), mode_of(&plain));
 
-        // Rewriting an existing file truncates it and leaves its mode alone.
+        // Rewriting a shared file truncates it in place and leaves its mode
+        // alone.
         fs::set_permissions(&shared, fs::Permissions::from_mode(0o640)).unwrap();
-        write_json_file(&shared, &serde_json::json!({"b": 2}), true).unwrap();
+        write_json_file(&shared, &serde_json::json!({"b": 2}), false).unwrap();
         assert_eq!(mode_of(&shared), 0o640);
         let back: serde_json::Value = read_json(&shared).unwrap();
         assert_eq!(back, serde_json::json!({"b": 2}));
+
+        // Rewriting a private file replaces it whole, owner-only, even one an
+        // older build left wider; no staging file is left beside it.
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o644)).unwrap();
+        write_json_file(&private, &serde_json::json!({"c": 3}), true).unwrap();
+        assert_eq!(mode_of(&private), 0o600);
+        let back: serde_json::Value = read_json(&private).unwrap();
+        assert_eq!(back, serde_json::json!({"c": 3}));
+        let mut left: Vec<_> = fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["plain", "project.json", "settings.json"]);
     }
 
     // ── root_work_dir ─────────────────────────────────────────────────────

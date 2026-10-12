@@ -38,6 +38,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
@@ -282,7 +283,7 @@ fn process_config(file: &HomeFile) -> bool {
         return true;
     };
     let stored = stored_token();
-    let refused = signed_out().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let refused = signed_out().lock_ok().clone();
     let adopt = should_adopt(stored.as_deref(), &found, &refused, |s| {
         app_core::rt::block_on(github_login(s)).ok().map(|login| login.is_some())
     });
@@ -384,7 +385,7 @@ pub fn sign_out() -> Result<(), String> {
     let old = crate::services::remote_credentials::get(ACCOUNT);
     crate::services::remote_credentials::set(ACCOUNT, None)?;
     if let Some(old) = old {
-        signed_out().lock().unwrap_or_else(|e| e.into_inner()).insert(old);
+        signed_out().lock_ok().insert(old);
     }
     Ok(())
 }

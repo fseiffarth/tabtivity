@@ -6,6 +6,12 @@
 //!   entries dropped (`icacls`). The Unix callers keep their mode bits
 //!   (`0600`); this is their Windows spelling. A failure is logged, never
 //!   fatal — the file then keeps the profile directory's ACL, as before.
+//! - [`restrict_dir_to_owner_inheritable`] does the same for a folder
+//!   Tabtivity owns outright (the mail store). The user's grant carries
+//!   `(OI)(CI)`, so every file already inside, and every file written there
+//!   later, inherits "owner only" without an `icacls` run of its own. A
+//!   folder already in that shape is left alone ([`dir_is_owner_inheritable`]),
+//!   because rewriting a folder's ACL walks everything below it.
 //! - [`admin_locked`] is the Windows reading of `paths::root_owned_file`: a
 //!   program only an administrator can have put there or changed, i.e. the
 //!   file and its folder are owned by Administrators, SYSTEM or
@@ -13,7 +19,8 @@
 //!   `paths::system_executable` takes a trusted helper only when this holds.
 //!
 //! The decisions are pure ([`classify_sid`], [`sid_string`],
-//! [`windows_acl_is_locked`], [`icacls_restrict_steps`]) and tested on every
+//! [`windows_acl_is_locked`], [`icacls_restrict_steps`],
+//! [`icacls_restrict_dir_steps`], [`dir_is_owner_inheritable`]) and tested on every
 //! OS; only reading the security descriptor and spawning `icacls` are
 //! Windows code. Verifying an existing file's ACL (the Windows half of
 //! `mobile_control::store::ensure_private_file`) is a second reader and not
@@ -142,6 +149,68 @@ pub fn icacls_restrict_steps(path: &Path, user_sid: &str) -> [Vec<OsString>; 2] 
     ]
 }
 
+/// The two `icacls` runs that make the folder `dir` and everything in it the
+/// user's alone: [`icacls_restrict_steps`] with an inheritable grant
+/// (`(OI)(CI)`: files and subfolders, present and future). Windows pushes the
+/// change down to what is already inside, so a child that still inherits
+/// loses the profile's entries and gains the user's; a child with its own
+/// protected ACL (an older per-file restriction) keeps its explicit grant.
+pub fn icacls_restrict_dir_steps(dir: &Path, user_sid: &str) -> [Vec<OsString>; 2] {
+    [
+        vec![
+            dir.as_os_str().to_owned(),
+            "/grant:r".into(),
+            format!("*{user_sid}:(OI)(CI)F").into(),
+            "/Q".into(),
+        ],
+        vec![
+            dir.as_os_str().to_owned(),
+            "/inheritance:r".into(),
+            "/Q".into(),
+        ],
+    ]
+}
+
+/// One entry of a folder's DACL, as [`dir_is_owner_inheritable`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirAce {
+    /// `false` for an access-denied entry.
+    pub allow: bool,
+    /// `S-1-…`, or `None` for an entry type that is not parsed.
+    pub sid: Option<String>,
+    /// The ACE header's flags (`OBJECT_INHERIT_ACE`, …).
+    pub flags: u8,
+    pub mask: u32,
+}
+
+const OBJECT_INHERIT_ACE: u8 = 0x01;
+const CONTAINER_INHERIT_ACE: u8 = 0x02;
+const INHERIT_ONLY_ACE: u8 = 0x08;
+/// `FILE_ALL_ACCESS`, what `icacls … :F` grants.
+const FILE_ALL_ACCESS: u32 = 0x001F_01FF;
+const GENERIC_ALL: u32 = 0x1000_0000;
+
+/// Whether a folder's DACL already is what [`icacls_restrict_dir_steps`]
+/// leaves: protected (nothing inherited from above), every allow entry the
+/// user's, and one of them full control that files and subfolders inherit.
+/// A NULL DACL (`None`) lets everyone in.
+pub fn dir_is_owner_inheritable(protected: bool, dacl: Option<&[DirAce]>, user_sid: &str) -> bool {
+    let Some(dacl) = dacl else {
+        return false;
+    };
+    let inherits = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    protected
+        && dacl
+            .iter()
+            .all(|ace| !ace.allow || ace.sid.as_deref() == Some(user_sid))
+        && dacl.iter().any(|ace| {
+            ace.allow
+                && ace.flags & inherits == inherits
+                && ace.flags & INHERIT_ONLY_ACE == 0
+                && (ace.mask & FILE_ALL_ACCESS == FILE_ALL_ACCESS || ace.mask & GENERIC_ALL != 0)
+        })
+}
+
 /// Make `path` readable and writable by the signed-in user only (see the
 /// module docs). Logged, not returned: callers write the file either way.
 #[cfg(windows)]
@@ -157,10 +226,44 @@ pub fn restrict_to_owner(path: &Path) {
 #[cfg(windows)]
 fn try_restrict_to_owner(path: &Path) -> Result<(), String> {
     let sid = win::current_user_sid().ok_or("the user's SID is unreadable")?;
+    run_icacls(icacls_restrict_steps(path, &sid))
+}
+
+/// Make the folder `dir` and everything in it readable and writable by the
+/// signed-in user only, now and for files created there later (see the
+/// module docs). Only for a folder Tabtivity owns outright, never a project
+/// folder or one another program shares. Idempotent, and cheap once done: a
+/// folder already in that shape is not touched. Logged, not returned, like
+/// [`restrict_to_owner`].
+#[cfg(windows)]
+pub fn restrict_dir_to_owner_inheritable(dir: &Path) {
+    if let Err(e) = try_restrict_dir_to_owner_inheritable(dir) {
+        eprintln!(
+            "private_file: could not restrict the folder {} to its owner: {e}",
+            dir.display()
+        );
+    }
+}
+
+#[cfg(windows)]
+fn try_restrict_dir_to_owner_inheritable(dir: &Path) -> Result<(), String> {
+    let sid = win::current_user_sid().ok_or("the user's SID is unreadable")?;
+    let done = win::read_dir_dacl(dir).is_some_and(|(protected, dacl)| {
+        dir_is_owner_inheritable(protected, dacl.as_deref(), &sid)
+    });
+    if done {
+        return Ok(());
+    }
+    run_icacls(icacls_restrict_dir_steps(dir, &sid))
+}
+
+/// Run `icacls` once per step, in order, stopping at the first failure.
+#[cfg(windows)]
+fn run_icacls(steps: [Vec<OsString>; 2]) -> Result<(), String> {
     // `icacls` from System32 when its ACL checks out, by bare name otherwise
     // (`paths::command_no_window` puts it through the same trusted-helper
     // lookup).
-    for args in icacls_restrict_steps(path, &sid) {
+    for args in steps {
         let out = crate::paths::command_no_window("icacls")
             .args(&args)
             .output()
@@ -199,7 +302,8 @@ mod win {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::Security::{
-        GetAce, GetFileSecurityW, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+        GetAce, GetFileSecurityW, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+        GetSecurityDescriptorOwner,
         GetSidIdentifierAuthority, GetSidSubAuthority, GetSidSubAuthorityCount,
         GetTokenInformation, IsValidSid, TokenUser, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
         DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
@@ -207,7 +311,7 @@ mod win {
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-    use super::{classify_sid, sid_string, AceEntry, WinPrincipal};
+    use super::{classify_sid, sid_string, AceEntry, DirAce, WinPrincipal};
 
     const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
     const ACCESS_DENIED_ACE_TYPE: u8 = 1;
@@ -215,6 +319,8 @@ mod win {
     const ACCESS_DENIED_CALLBACK_ACE_TYPE: u8 = 10;
     const ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE: u8 = 12;
     const INHERIT_ONLY_ACE: u8 = 0x08;
+    /// `SE_DACL_PROTECTED`: the DACL takes nothing from the parent.
+    const SE_DACL_PROTECTED: u16 = 0x1000;
 
     /// The identifier authority and sub-authorities of a SID.
     ///
@@ -263,14 +369,12 @@ mod win {
         }
     }
 
-    /// The owner and DACL of `path`. `Some((owner, None))` is a NULL DACL.
-    pub(super) fn read_security(path: &Path) -> Option<(WinPrincipal, Option<Vec<AceEntry>>)> {
+    /// The security descriptor of `path` (the parts `info` names), in a
+    /// u64-aligned buffer the caller reads it from.
+    fn descriptor(path: &Path, info: u32) -> Option<Vec<u64>> {
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let info = (OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION).0;
-        // SAFETY: the descriptor buffer is sized by the first call and
-        // u64-aligned; the owner SID, the ACL and every ACE are read only
-        // while it lives, through the API's own accessors, and only ACEs
-        // below the ACL's own count are fetched.
+        // SAFETY: the buffer is sized by the first call, and the second call
+        // writes at most `needed` bytes into it.
         unsafe {
             let mut needed = 0u32;
             let _ = GetFileSecurityW(PCWSTR(wide.as_ptr()), info, None, 0, &mut needed);
@@ -284,6 +388,81 @@ mod win {
             {
                 return None;
             }
+            Some(buf)
+        }
+    }
+
+    /// Whether a folder's DACL is protected, and its entries with their SIDs
+    /// spelled out. `Some((_, None))` is a NULL DACL.
+    pub(super) fn read_dir_dacl(path: &Path) -> Option<(bool, Option<Vec<DirAce>>)> {
+        let mut buf = descriptor(path, DACL_SECURITY_INFORMATION.0)?;
+        // SAFETY: as in `read_security`: the ACL and every ACE are read only
+        // while `buf` lives, through the API's own accessors, and only ACEs
+        // below the ACL's own count are fetched.
+        unsafe {
+            let sd = PSECURITY_DESCRIPTOR(buf.as_mut_ptr().cast());
+            let mut control = 0u16;
+            let mut revision = 0u32;
+            GetSecurityDescriptorControl(sd, &mut control, &mut revision).ok()?;
+            let protected = control & SE_DACL_PROTECTED != 0;
+            let mut present = windows::core::BOOL(0);
+            let mut defaulted = windows::core::BOOL(0);
+            let mut dacl: *mut ACL = std::ptr::null_mut();
+            GetSecurityDescriptorDacl(sd, &mut present, &mut dacl, &mut defaulted).ok()?;
+            if !present.as_bool() || dacl.is_null() {
+                return Some((protected, None));
+            }
+            let mut entries = Vec::new();
+            for i in 0..u32::from((*dacl).AceCount) {
+                let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
+                GetAce(dacl, i, &mut ace).ok()?;
+                let header = &*(ace as *const ACE_HEADER);
+                let entry = match header.AceType {
+                    ACCESS_ALLOWED_ACE_TYPE | ACCESS_DENIED_ACE_TYPE => {
+                        // The SID pointer comes from the raw ACE pointer, as
+                        // in `read_security`.
+                        let body = ace as *const ACCESS_ALLOWED_ACE;
+                        let sid = PSID(std::ptr::addr_of!((*body).SidStart) as *mut _);
+                        let (authority, subs) = sid_parts(sid)?;
+                        DirAce {
+                            allow: header.AceType == ACCESS_ALLOWED_ACE_TYPE,
+                            sid: Some(sid_string(authority, &subs)),
+                            flags: header.AceFlags,
+                            mask: (*body).Mask,
+                        }
+                    }
+                    ACCESS_DENIED_OBJECT_ACE_TYPE
+                    | ACCESS_DENIED_CALLBACK_ACE_TYPE
+                    | ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE => DirAce {
+                        allow: false,
+                        sid: None,
+                        flags: header.AceFlags,
+                        mask: 0,
+                    },
+                    // Any other allow entry is not parsed: counted as
+                    // someone else's.
+                    _ => DirAce {
+                        allow: true,
+                        sid: None,
+                        flags: header.AceFlags,
+                        mask: u32::MAX,
+                    },
+                };
+                entries.push(entry);
+            }
+            Some((protected, Some(entries)))
+        }
+    }
+
+    /// The owner and DACL of `path`. `Some((owner, None))` is a NULL DACL.
+    pub(super) fn read_security(path: &Path) -> Option<(WinPrincipal, Option<Vec<AceEntry>>)> {
+        let info = (OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION).0;
+        let mut buf = descriptor(path, info)?;
+        // SAFETY: the descriptor buffer is u64-aligned; the owner SID, the
+        // ACL and every ACE are read only while it lives, through the API's
+        // own accessors, and only ACEs below the ACL's own count are fetched.
+        unsafe {
+            let sd = PSECURITY_DESCRIPTOR(buf.as_mut_ptr().cast());
             let mut owner = PSID::default();
             let mut defaulted = windows::core::BOOL(0);
             GetSecurityDescriptorOwner(sd, &mut owner, &mut defaulted).ok()?;
@@ -496,5 +675,115 @@ mod tests {
                 "/Q"
             ]
         );
+    }
+
+    #[test]
+    fn a_folder_grant_is_inheritable_and_comes_before_dropping_inheritance() {
+        let dir = Path::new(r"C:\Users\u\AppData\Roaming\x\mail");
+        let [grant, strip] = icacls_restrict_dir_steps(dir, "S-1-5-21-1-2-3-1001");
+        let s = |v: &[OsString]| {
+            v.iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            s(&grant),
+            [
+                r"C:\Users\u\AppData\Roaming\x\mail",
+                "/grant:r",
+                "*S-1-5-21-1-2-3-1001:(OI)(CI)F",
+                "/Q"
+            ]
+        );
+        assert_eq!(
+            s(&strip),
+            [r"C:\Users\u\AppData\Roaming\x\mail", "/inheritance:r", "/Q"]
+        );
+        // The file form never asks for inheritance: a file has no children.
+        let [file_grant, _] = icacls_restrict_steps(dir, "S-1-5-21-1-2-3-1001");
+        assert!(!s(&file_grant)[2].contains("(OI)"));
+    }
+
+    #[test]
+    fn only_a_protected_user_only_inheritable_folder_counts_as_done() {
+        const ME: &str = "S-1-5-21-1-2-3-1001";
+        let mine = |flags: u8, mask: u32| DirAce {
+            allow: true,
+            sid: Some(ME.into()),
+            flags,
+            mask,
+        };
+        let oici = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+        // What the two icacls steps leave.
+        let done = [mine(oici, FILE_ALL_ACCESS)];
+        assert!(dir_is_owner_inheritable(true, Some(&done), ME));
+        assert!(dir_is_owner_inheritable(
+            true,
+            Some(&[mine(oici, GENERIC_ALL)]),
+            ME
+        ));
+        // Still inheriting the profile's entries from above.
+        assert!(!dir_is_owner_inheritable(false, Some(&done), ME));
+        // A NULL DACL, or an empty one that grants no one anything.
+        assert!(!dir_is_owner_inheritable(true, None, ME));
+        assert!(!dir_is_owner_inheritable(true, Some(&[]), ME));
+        // Another user's SID.
+        assert!(!dir_is_owner_inheritable(
+            true,
+            Some(&done),
+            "S-1-5-21-1-2-3-1002"
+        ));
+        // The grant reaches files only, folders only, or not the folder itself.
+        for flags in [
+            OBJECT_INHERIT_ACE,
+            CONTAINER_INHERIT_ACE,
+            oici | INHERIT_ONLY_ACE,
+            0,
+        ] {
+            assert!(
+                !dir_is_owner_inheritable(true, Some(&[mine(flags, FILE_ALL_ACCESS)]), ME),
+                "flags {flags:#x}"
+            );
+        }
+        // Read-only is not the full control the steps grant.
+        assert!(!dir_is_owner_inheritable(
+            true,
+            Some(&[mine(oici, 0x0012_00A9)]),
+            ME
+        ));
+        // Anyone else allowed in, by SID or by an entry not parsed, undoes it;
+        // a deny entry does not.
+        let others = [
+            DirAce {
+                allow: true,
+                sid: Some("S-1-5-18".into()),
+                flags: oici,
+                mask: FILE_ALL_ACCESS,
+            },
+            DirAce {
+                allow: true,
+                sid: None,
+                flags: 0,
+                mask: u32::MAX,
+            },
+        ];
+        for other in others {
+            assert!(!dir_is_owner_inheritable(
+                true,
+                Some(&[mine(oici, FILE_ALL_ACCESS), other]),
+                ME
+            ));
+        }
+        let denied = DirAce {
+            allow: false,
+            sid: None,
+            flags: 0,
+            mask: 0,
+        };
+        assert!(dir_is_owner_inheritable(
+            true,
+            Some(&[denied, mine(oici, FILE_ALL_ACCESS)]),
+            ME
+        ));
     }
 }

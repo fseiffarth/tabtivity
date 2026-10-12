@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useT } from "../../lib/i18n";
 import { fmtSize } from "../../lib/viewers/fileUtils";
 import { useSyncConfirmStore } from "../../stores/remote/syncConfirm";
@@ -65,6 +66,7 @@ export function SyncConfirmDialog() {
   const proceed = useSyncConfirmStore((s) => s.proceed);
   const cancel = useSyncConfirmStore((s) => s.cancel);
 
+  const modalRef = useModalFocus(cancel, !!pending);
   if (!pending) return null;
   const { direction, isDir, relPath, label, relPaths, force, preview, doomed, loading, error } =
     pending;
@@ -100,7 +102,7 @@ export function SyncConfirmDialog() {
     const host = deleteSide === "host";
     return (
       <div className="modal-backdrop" onMouseDown={cancel}>
-        <div className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
+        <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
           <h2>
             {t(host ? "syncConfirm.deleteHostTitle" : "syncConfirm.deleteLocalTitle")}{" "}
             <UntestedTag id="syncConfirmDialog.1" />
@@ -147,7 +149,7 @@ export function SyncConfirmDialog() {
     // Backdrop-dismissable: "I didn't mean to click that" is the most likely
     // answer here and should cost exactly one click, in any direction.
     <div className="modal-backdrop" onMouseDown={cancel}>
-      <div className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <h2>
           {t(pull ? "syncConfirm.pullTitle" : "syncConfirm.pushTitle")} <UntestedTag id="syncConfirmDialog.2" />
         </h2>

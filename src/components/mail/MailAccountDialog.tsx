@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { PasswordInput } from "../common/PasswordInput";
@@ -124,6 +125,7 @@ export function MailAccountDialog({
   onDelete: (accountId: string) => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [form, setForm] = useState<MailAccount>(() => account ?? emptyAccount());
   const [presetId, setPresetId] = useState("");
   const [password, setPassword] = useState("");
@@ -243,7 +245,7 @@ export function MailAccountDialog({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="settings-dialog mail-account-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="settings-dialog mail-account-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>
             {account ? t("mail.accountDialogEdit") : t("mail.accountDialogNew")} <UntestedTag id="mail.accountDialogNew" />

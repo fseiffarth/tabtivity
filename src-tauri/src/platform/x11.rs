@@ -9,6 +9,7 @@
 //!   ChangeProperty, so KWin intercepts and honors the requests.
 
 use std::collections::HashSet;
+use app_core::sync::LockExt;
 use std::process::Command;
 use std::sync::Mutex;
 use std::thread;
@@ -184,19 +185,18 @@ impl WorkspaceBackend for X11Backend {
     }
 
     fn set_parkable(&self, window_id: u64) {
-        self.parkable.lock().unwrap().add_parkable(window_id);
+        self.parkable.lock_ok().add_parkable(window_id);
     }
 
     fn unset_parkable(&self, window_id: u64) {
         self.parkable
-            .lock()
-            .unwrap()
+            .lock_ok()
             .override_ids
             .remove(&window_id);
     }
 
     fn set_main_window_id(&self, window_id: u64) {
-        self.parkable.lock().unwrap().main_window_id = Some(window_id);
+        self.parkable.lock_ok().main_window_id = Some(window_id);
     }
 
     fn position_window(&self, window_id: u64, x: i32, y: i32) -> Result<(), String> {
@@ -230,7 +230,7 @@ impl WorkspaceBackend for X11Backend {
     }
 
     fn cleanup(&self) -> Result<(), String> {
-        let mut cleaned_up = self.cleaned_up.lock().unwrap();
+        let mut cleaned_up = self.cleaned_up.lock_ok();
         if *cleaned_up {
             return Ok(());
         }
@@ -270,7 +270,7 @@ impl WorkspaceBackend for X11Backend {
 
 impl X11Backend {
     fn is_parkable(&self, window_id: u64) -> bool {
-        self.parkable.lock().unwrap().is_parkable(window_id)
+        self.parkable.lock_ok().is_parkable(window_id)
     }
 
     fn move_window(&self, wid: Window, desktop: u32) -> Result<(), String> {

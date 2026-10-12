@@ -29,6 +29,7 @@
 //! needs a server.
 
 use std::collections::BTreeMap;
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -704,10 +705,7 @@ fn with_pathspec(mut args: Vec<&str>) -> Vec<&str> {
     args
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
-}
+use crate::digest::sha256_hex;
 
 /// Every checked-out commit of the project's repository: the main working
 /// tree's and each linked worktree's (the in-tree `.tabtivity/worktrees/`
@@ -828,7 +826,7 @@ fn page_bounds(text: &str) -> Vec<(usize, usize)> {
 static SERVED_PAGES: std::sync::Mutex<Vec<(String, usize, std::collections::BTreeSet<usize>)>> = std::sync::Mutex::new(Vec::new());
 
 fn note_served(digest: &str, pages: usize, page: usize) {
-    let mut served = SERVED_PAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut served = SERVED_PAGES.lock_ok();
     if let Some((_, _, seen)) = served.iter_mut().find(|(d, ..)| d == digest) {
         seen.insert(page);
         return;
@@ -840,7 +838,7 @@ fn note_served(digest: &str, pages: usize, page: usize) {
 
 /// Was every page of the review `digest` served?
 fn all_pages_served(digest: &str) -> bool {
-    let served = SERVED_PAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let served = SERVED_PAGES.lock_ok();
     served.iter().any(|(d, pages, seen)| d == digest && seen.len() >= *pages)
 }
 

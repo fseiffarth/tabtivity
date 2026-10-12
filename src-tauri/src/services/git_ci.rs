@@ -13,6 +13,7 @@
 //! writes: no re-run, no cancel, no dispatch. `tip_ci` is the same read for
 //! the Release gate (`git_release::plan`).
 use std::collections::{HashMap, VecDeque};
+use app_core::sync::LockExt;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -74,7 +75,7 @@ fn api_token(project: &str) -> Option<String> {
 /// Per-tab budget, taken at admission.
 pub fn admit_rate(tab: &str) -> bool {
     static CALLS: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
-    let mut map = CALLS.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner());
+    let mut map = CALLS.get_or_init(Default::default).lock_ok();
     admit_in(&mut map, tab, Instant::now())
 }
 

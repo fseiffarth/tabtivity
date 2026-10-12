@@ -1,4 +1,5 @@
-import { Fragment, useEffect } from "react";
+import { useModalFocus } from "../../hooks/useModalFocus";
+import { Fragment } from "react";
 import { LESSONS, categoryLabel } from "../../lib/lessons";
 import { UntestedTag } from "../common/UntestedTag";
 import { useTourStore } from "../../stores/tour";
@@ -17,17 +18,13 @@ export function LessonsMenu({ onClose }: { onClose: () => void }) {
   const t = useT();
   const startLesson = useTourStore((s) => s.startLesson);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const modalRef = useModalFocus(onClose);
 
   return (
     <div className="modal-backdrop how-to-start-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="settings-dialog how-to-start-dialog"
         role="dialog"
         aria-modal="true"

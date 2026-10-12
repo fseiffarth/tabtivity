@@ -101,7 +101,7 @@ pub async fn openvpn_connect(
     // still while `pkexec` waits on the polkit prompt. Awaiting it directly on the
     // async runtime starves a worker and froze the headless VPN connect; mirror
     // `ssh_connect`, which spawn_blocks its ssh probe for exactly this reason.
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("openvpn connect", move || {
         openvpn::connect_streaming(
             &config,
             username.as_deref(),
@@ -123,7 +123,6 @@ pub async fn openvpn_connect(
         Ok(())
     })
     .await
-    .map_err(|e| format!("openvpn connect task failed: {e}"))?
 }
 
 /// Which secrets `config` needs from the user (see [`VpnAuthNeeds`]). The UI calls
@@ -150,7 +149,7 @@ pub async fn openvpn_auth_needs(config: String) -> VpnAuthNeeds {
 /// does anything else, so on the main thread they are a startup freeze.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vpn_has_saved_password(config: String) -> bool {
-    tokio::task::spawn_blocking(move || has_saved_password_blocking(&config))
+    app_core::rt::spawn_blocking(move || has_saved_password_blocking(&config))
         .await
         // Unreadable keychain ⇒ "nothing saved" ⇒ the caller prompts. Never the
         // other way round: claiming a secret exists would license a silent
@@ -179,7 +178,7 @@ pub async fn vpn_has_saved_password(config: String) -> bool {
 /// straddling a probe.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vpn_saved_password_state(config: String) -> crate::commands::ssh::SavedPasswordState {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         use crate::services::remote_credentials as creds;
         let keyring = creds::keyring_state();
         let saved = has_saved_password_blocking(&config);
@@ -222,7 +221,7 @@ fn has_saved_password_blocking(config: &str) -> bool {
 /// and "Forget" button are asking; this one answers "would connecting now be silent?".
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vpn_can_connect_silently(config: String, username: Option<String>) -> bool {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         use crate::services::remote_credentials as creds;
         if !has_saved_password_blocking(&config) {
             return false;
@@ -245,9 +244,8 @@ pub async fn vpn_can_connect_silently(config: String, username: Option<String>) 
 /// `remote_forget_password`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vpn_forget_password(config: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || forget_password_blocking(&config))
+    app_core::rt::try_blocking("forget credentials", move || forget_password_blocking(&config))
         .await
-        .map_err(|e| format!("forget credentials task failed: {e}"))?
 }
 
 /// The blocking body of [`vpn_forget_password`], so `openvpn_remove_config` can
@@ -306,9 +304,7 @@ pub async fn openvpn_disconnect_all_on_quit() -> Result<(), String> {
     // synchronous and blocks for as long as `pkexec` sits on the polkit prompt —
     // i.e. until the user types a password. Awaiting that directly on the async
     // runtime starves a worker while the window is still on screen and waiting.
-    tokio::task::spawn_blocking(openvpn::disconnect_all_checked)
-        .await
-        .map_err(|e| format!("openvpn teardown task failed: {e}"))?
+    app_core::rt::try_blocking("openvpn teardown", openvpn::disconnect_all_checked).await
 }
 
 /// Whether the OpenVPN tunnel for `config` is currently up.
@@ -350,10 +346,9 @@ pub async fn openvpn_list_configs() -> Result<Vec<openvpn::StoredConfig>, String
 /// alone. Deletes Tabtivity's copy only, never the user's original file.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn openvpn_remove_config(config: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("remove config", move || {
         openvpn::remove_config(&config)?;
         forget_password_blocking(&config)
     })
     .await
-    .map_err(|e| format!("remove config task failed: {e}"))?
 }

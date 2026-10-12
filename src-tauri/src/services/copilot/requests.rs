@@ -1,6 +1,7 @@
 //! Window/project/editor-owned reservations. Cancellation can arrive while a
 //! server is starting, before a document opens or before the RPC id exists.
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
@@ -12,7 +13,7 @@ fn requests() -> &'static Mutex<HashMap<String, Request>> {
 }
 
 pub fn reserve(owner: String) -> Result<String, String> {
-    let mut map = requests().lock().unwrap();
+    let mut map = requests().lock_ok();
     map.retain(|_, request| request.started || request.created.elapsed() < Duration::from_secs(60));
     if map.len() >= 128 { return Err("copilot_request_limit".into()); }
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -24,11 +25,11 @@ pub fn reserve(owner: String) -> Result<String, String> {
 
 pub struct RequestLease { id: String, pub signal: watch::Receiver<bool> }
 impl Drop for RequestLease {
-    fn drop(&mut self) { requests().lock().unwrap().remove(&self.id); }
+    fn drop(&mut self) { requests().lock_ok().remove(&self.id); }
 }
 
 pub fn start(owner: &str, id: &str) -> Result<RequestLease, String> {
-    let mut map = requests().lock().unwrap();
+    let mut map = requests().lock_ok();
     let request = map.get_mut(id).filter(|request| request.owner == owner && !request.started)
         .ok_or("copilot_cancelled")?;
     request.started = true;
@@ -36,15 +37,15 @@ pub fn start(owner: &str, id: &str) -> Result<RequestLease, String> {
 }
 
 pub fn cancel(owner: &str, id: &str) {
-    let mut map = requests().lock().unwrap();
+    let mut map = requests().lock_ok();
     if map.get(id).is_some_and(|request| request.owner == owner) { map.remove(id); }
 }
 
 pub fn cancel_owner(owner: &str) {
-    requests().lock().unwrap().retain(|_, request| request.owner != owner);
+    requests().lock_ok().retain(|_, request| request.owner != owner);
 }
 
-pub fn cancel_all() { requests().lock().unwrap().clear(); }
+pub fn cancel_all() { requests().lock_ok().clear(); }
 
 /// Synchronous form, for the points where an await must not be abandoned.
 pub fn is_cancelled(signal: &watch::Receiver<bool>) -> bool {

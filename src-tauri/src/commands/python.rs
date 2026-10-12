@@ -398,18 +398,10 @@ pub fn parse_remote_probe(stdout: &str) -> Vec<PyInterpreter> {
 // to its ConnectTimeout/ServerAlive window on a dead/degraded host. Tauri runs a
 // synchronous `#[command]` on the MAIN thread, so doing that inline froze the
 // whole window — the same bug `commands::git` already fixed (see its
-// `run_off_thread` doc comment) but that fix never reached this file. The two
+// off-thread note) but that fix never reached this file. The two
 // remote-capable commands are now `async` wrappers that offload their blocking
 // body via `spawn_blocking`; the local-only `discover_local`/`project_python`
 // paths stay plain sync fns underneath, so they remain directly unit-testable.
-
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("python task failed: {e}"))?
-}
 
 /// Every interpreter offered for `project_dir` — the dialog's dropdown. Probes
 /// whichever machine the run tab will actually run on: the **host** for a remote
@@ -450,7 +442,7 @@ fn python_interpreters_blocking(project_dir: &str) -> Result<Vec<PyInterpreter>,
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn python_interpreters(project_dir: String) -> Result<Vec<PyInterpreter>, String> {
-    run_off_thread(move || python_interpreters_blocking(&project_dir)).await
+    app_core::rt::try_blocking("python", move || python_interpreters_blocking(&project_dir)).await
 }
 
 /// The interpreter Run/Debug should use *right now*: the project's explicit choice
@@ -464,7 +456,7 @@ pub async fn python_interpreter_for(
     if let Some(pinned) = project_id.as_deref().and_then(project_python) {
         return Ok(pinned);
     }
-    run_off_thread(move || {
+    app_core::rt::try_blocking("python", move || {
         let found = python_interpreters_blocking(&project_dir).unwrap_or_default();
         Ok(found
             .into_iter()
@@ -480,7 +472,7 @@ pub async fn python_interpreter_for(
 /// never consulted: that file is writable by a fenced agent, a container tab, a
 /// `git pull` or byte-sync, and Run would execute what it names on the host.
 fn project_python(project_id: &str) -> Option<String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: ProjectsList = storage::read_json(&list_path).ok()?;
     python_from_entry(list.iter().find(|p| p.id == project_id)?)
 }

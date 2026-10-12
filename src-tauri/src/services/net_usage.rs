@@ -62,12 +62,7 @@ const PANE_OPEN_MS: u64 = 30_000;
 /// When a Network pane last read (ms since the epoch; 0 = never).
 static PANE_READ_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+use crate::clock::now_ms;
 
 /// A Network pane just read (`commands::network`): sample on the short tick
 /// while it stays open.

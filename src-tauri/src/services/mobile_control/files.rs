@@ -147,14 +147,14 @@ fn token_key_with(salt: &str, host_key: &[u8]) -> [u8; 32] {
     key
 }
 
-/// Seals a project-relative path for the phone.
-pub fn seal(host_key: &[u8], raw_id: &str, rel: &str) -> String {
+/// Seals a project-relative path for the phone. Fails only when the OS has
+/// no randomness for the nonce.
+pub fn seal(host_key: &[u8], raw_id: &str, rel: &str) -> Result<String, FilesError> {
     seal_with(crate::brand::MOBILE_FILES_SALT, host_key, raw_id, rel)
 }
 
-fn seal_with(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> String {
-    let mut nonce = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce).expect("the OS RNG must be available to seal a path");
+fn seal_with(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> Result<String, FilesError> {
+    let nonce = super::auth::random_bytes::<NONCE_LEN>().map_err(FilesError::Io)?;
     let cipher = XChaCha20Poly1305::new((&token_key_with(salt, host_key)).into());
     let sealed = cipher
         .encrypt((&nonce).into(), Payload { msg: rel.as_bytes(), aad: raw_id.as_bytes() })
@@ -162,7 +162,7 @@ fn seal_with(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> String {
     let mut out = Vec::with_capacity(NONCE_LEN + sealed.len());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&sealed);
-    Base64UrlUnpadded::encode_string(&out)
+    Ok(Base64UrlUnpadded::encode_string(&out))
 }
 
 /// The relative path a token seals, if it was sealed for this project by this
@@ -498,15 +498,16 @@ pub fn list(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Lis
         let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
         let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
         let ignored = ignored.contains(&name);
-        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name)), name, kind, size, modified, created, ignored });
+        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name))?, name, kind, size, modified, created, ignored });
     }
     Ok(Listing { entries, truncated })
 }
 
 /// One file of the project as its folder's listing would row it, or `None`
 /// when it is not a regular file reached with no link on the way (or names
-/// something the browser hides). What the phone needs to open a file it was
-/// not browsing to — the Focus banner of an agent's markup question.
+/// something the browser hides), or when no token can be sealed for it (the
+/// OS has no randomness). What the phone needs to open a file it was not
+/// browsing to — the Focus banner of an agent's markup question.
 pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<Entry> {
     if rel.is_empty() || !valid_rel(rel) {
         return None;
@@ -517,7 +518,7 @@ pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
     let (_file, meta, kind) = outbox::sniff_opened(file, meta)?;
     let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
     let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
-    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false })
+    Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false })
 }
 
 /// One file's bytes and media type. Text longer than `MAX_OUTBOX_FILE` is
@@ -675,7 +676,7 @@ fn dir_entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
     let meta = ProjectDir::open(root, parent).ok()?.child_dir_meta(name)?;
     let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
     let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
-    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind: "dir", size: 0, modified, created, ignored: false })
+    Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind: "dir", size: 0, modified, created, ignored: false })
 }
 
 /// The project's files and folders whose names hold every word of `query`
@@ -735,7 +736,7 @@ pub fn search(root: &Path, query: &str, host_key: &[u8], raw_id: &str) -> Result
         while let Some(slash) = rel[end..].find('/') {
             let start = end;
             end += slash;
-            trail.push(Crumb { token: seal(host_key, raw_id, &rel[..end]), name: rel[start..end].to_string() });
+            trail.push(Crumb { token: seal(host_key, raw_id, &rel[..end])?, name: rel[start..end].to_string() });
             end += 1;
         }
         hits.push(Hit { entry, trail });
@@ -757,15 +758,15 @@ mod tests {
         use crate::brand::Name;
         use crate::services::brand_migration::{hits, testing::RENAMED};
         let _ = hits::taken();
-        let old = seal_with(&crate::brand::LEGACY.name(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf");
+        let old = seal_with(&crate::brand::LEGACY.name(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf").unwrap();
         assert_eq!(unseal_for(&RENAMED, KEY, "p1", &old).as_deref(), Some("docs/a.pdf"));
         assert_eq!(hits::taken(), ["mobile-files-salt"]);
-        let new = seal_with(&RENAMED.cur(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf");
+        let new = seal_with(&RENAMED.cur(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf").unwrap();
         assert_eq!(unseal_for(&RENAMED, KEY, "p1", &new).as_deref(), Some("docs/a.pdf"));
         assert_eq!(unseal_for(&RENAMED, KEY, "p2", &old), None);
         assert!(hits::taken().is_empty());
         // The production pair: what `seal` writes, `unseal` reads.
-        assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", "x/y.txt")).as_deref(), Some("x/y.txt"));
+        assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", "x/y.txt").unwrap()).as_deref(), Some("x/y.txt"));
     }
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-body";
 
@@ -795,12 +796,12 @@ mod tests {
 
     #[test]
     fn a_token_opens_only_for_its_own_project_and_host() {
-        let token = seal(KEY, "p1", "src/main.rs");
+        let token = seal(KEY, "p1", "src/main.rs").unwrap();
         assert_eq!(unseal(KEY, "p1", &token).as_deref(), Some("src/main.rs"));
         assert_eq!(unseal(KEY, "p2", &token), None, "replayed against another project");
         assert_eq!(unseal(b"another-host-key", "p1", &token), None);
         assert!(!token.contains("main"), "the path is not readable in the token");
-        assert_ne!(seal(KEY, "p1", "src/main.rs"), token, "a fresh nonce per seal");
+        assert_ne!(seal(KEY, "p1", "src/main.rs").unwrap(), token, "a fresh nonce per seal");
         let mut forged = Base64UrlUnpadded::decode_vec(&token).unwrap();
         *forged.last_mut().unwrap() ^= 1;
         assert_eq!(unseal(KEY, "p1", &Base64UrlUnpadded::encode_string(&forged)), None);
@@ -808,9 +809,9 @@ mod tests {
         assert_eq!(unseal(KEY, "p1", ""), None);
         // A sealed path the browser would not resolve does not open either.
         for bad in ["../etc", "a/../b", "/abs", ".git/config", "src/.env", "a//b"] {
-            assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", bad)), None, "{bad}");
+            assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", bad).unwrap()), None, "{bad}");
         }
-        assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", "")).as_deref(), Some(""));
+        assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", "").unwrap()).as_deref(), Some(""));
     }
 
     #[test]

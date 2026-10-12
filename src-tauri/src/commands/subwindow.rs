@@ -23,6 +23,7 @@
 //! The MAIN window owns project.json writes; the detached window never persists.
 
 use std::time::{SystemTime, UNIX_EPOCH};
+use app_core::sync::LockExt;
 
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, Size, State, WebviewUrl,
@@ -265,7 +266,7 @@ pub async fn detach_subwindow(
     let deadline = std::time::Instant::now() + RETIRE_WAIT;
     let seq = loop {
         let live = app.get_webview_window(&label).is_some();
-        let plan = plan_detach(&mut win_registry.lock().unwrap(), &label, live);
+        let plan = plan_detach(&mut win_registry.lock_ok(), &label, live);
         match plan {
             DetachPlan::AlreadyOpen => return Ok(label),
             DetachPlan::Build(seq) => break seq,
@@ -284,7 +285,7 @@ pub async fn detach_subwindow(
     // store's rect is unreliable (a Wayland popout never learns its position, so
     // its bounds stream rarely flushes), which is why the backend's own capture
     // wins on Wayland. Elsewhere it is only the fallback for a caller with none.
-    let saved = win_registry.lock().unwrap().detached_bounds.get(&label).copied();
+    let saved = win_registry.lock_ok().detached_bounds.get(&label).copied();
     let saved_size = saved.map(|b| (f64::from(b.w), f64::from(b.h)));
     // A Wayland respawn (the scope just came back) must not take the focus
     // the user is typing into in the main window.
@@ -336,7 +337,7 @@ pub async fn detach_subwindow(
         Err(e) => {
             // Release THIS call's reservation so a rare failed build doesn't
             // permanently skip a slot — and nothing a live window owns.
-            release_detach_reservation(&mut win_registry.lock().unwrap(), &label);
+            release_detach_reservation(&mut win_registry.lock_ok(), &label);
             return Err(format!("build detached window: {e}"));
         }
     };
@@ -372,7 +373,7 @@ pub async fn detach_subwindow(
         // Opt the detached window into the parkable override so the switch path
         // can actually park it despite its `tabtivity` WM_CLASS. The MAIN window id
         // can never enter this set (structural guard in the backend).
-        workspace.lock().unwrap().backend.set_parkable(wid);
+        workspace.lock_ok().backend.set_parkable(wid);
     }
 
     let opened_at = SystemTime::now()
@@ -394,7 +395,7 @@ pub async fn detach_subwindow(
     // Register and drop the reservation in ONE critical section, so no other
     // call ever sees this label as neither building nor registered.
     let retire_now = {
-        let mut reg = win_registry.lock().unwrap();
+        let mut reg = win_registry.lock_ok();
         reg.windows.insert(label.clone(), win);
         reg.detached_building.remove(&label);
         // Wayland: the scope this popout belongs to was left while it was
@@ -617,7 +618,7 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
                 .new_window_state()
                 .contains(gtk::gdk::WindowState::FULLSCREEN);
             let action = {
-                let mut hop = on_event.lock().unwrap();
+                let mut hop = on_event.lock_ok();
                 let (next, action) = monitor_hop_step(*hop, fullscreen);
                 *hop = next;
                 action
@@ -637,7 +638,7 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
             std::thread::sleep(MONITOR_HOP_TIMEOUT);
             let on_main = fallback.clone();
             let _ = fallback.run_on_main_thread(move || {
-                let prev = std::mem::replace(&mut *hop.lock().unwrap(), MonitorHop::Done);
+                let prev = std::mem::replace(&mut *hop.lock_ok(), MonitorHop::Done);
                 if prev == MonitorHop::Done {
                     return;
                 }
@@ -851,7 +852,7 @@ pub fn hide_detached_windows(
         };
         if win.is_visible().unwrap_or(false) {
             if let (Ok(pos), Ok(size)) = (win.outer_position(), win.inner_size()) {
-                win_registry.lock().unwrap().detached_bounds.insert(
+                win_registry.lock_ok().detached_bounds.insert(
                     label.clone(),
                     crate::commands::apps::DetachedBounds {
                         x: pos.x,
@@ -890,7 +891,7 @@ pub fn show_detached_windows(
         };
         if !window_positions_readable() {
             let changed = win_registry
-                .lock().unwrap().detached_parking.transition(label, true);
+                .lock_ok().detached_parking.transition(label, true);
             if changed {
                 // GTK deiconify/show alone cannot undo a Wayland minimize.
                 // Tauri's set_focus uses gtk_window_present_with_time, asking
@@ -899,7 +900,7 @@ pub fn show_detached_windows(
                     presented = true;
                 } else {
                     win_registry
-                        .lock().unwrap().detached_parking.transition(label, false);
+                        .lock_ok().detached_parking.transition(label, false);
                 }
             }
             continue;
@@ -912,8 +913,7 @@ pub fn show_detached_windows(
         // can't shift the placement. PHYSICAL px → correct monitor regardless of
         // per-monitor scaling (#42).
         let saved = win_registry
-            .lock()
-            .unwrap()
+            .lock_ok()
             .detached_bounds
             .get(label)
             .copied();
@@ -1105,7 +1105,7 @@ pub fn confirm_minimize(reg: &mut WindowRegistry, label: &str) -> bool {
 /// against this one, and a stale run could park the active scope's popout.
 pub fn sync_detached_visibility(app: &AppHandle, win_registry: &WindowRegistryState, scope: &str) {
     let plan = plan_detached_sync(
-        &mut win_registry.lock().unwrap(),
+        &mut win_registry.lock_ok(),
         scope,
         window_positions_readable(),
     );
@@ -1151,8 +1151,7 @@ fn retire_detached_window(app: AppHandle, label: String, token: u64) {
     std::thread::spawn(move || {
         let reg = app.state::<WindowRegistryState>().inner().clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        reg.lock()
-            .unwrap()
+        reg.lock_ok()
             .detached_retire
             .await_ack(&label, token, tx);
         use tauri::Emitter;
@@ -1161,7 +1160,7 @@ fn retire_detached_window(app: AppHandle, label: String, token: u64) {
             .is_ok()
             // A cancel (the scope came back) drops the sender: Err → Abandon.
             && rx.recv_timeout(RETIRE_ACK_TIMEOUT).unwrap_or(false);
-        let outcome = settle_retire(&mut reg.lock().unwrap(), &label, token, clean);
+        let outcome = settle_retire(&mut reg.lock_ok(), &label, token, clean);
         match outcome {
             // The window stays: if it answered clean it went inert waiting to
             // be closed, so tell it it is staying.
@@ -1180,19 +1179,19 @@ fn close_retiring_window(app: &AppHandle, label: &str) {
     let fallback = (app.clone(), label.clone());
     let dispatched = app.run_on_main_thread(move || {
         let reg = on_main.state::<WindowRegistryState>();
-        if !confirm_close(&mut reg.lock().unwrap(), &label) {
+        if !confirm_close(&mut reg.lock_ok(), &label) {
             emit_retire_withdrawn(&on_main, &label);
             return;
         }
         let Some(win) = on_main.get_webview_window(&label) else {
-            reg.lock().unwrap().detached_retire.finish(&label);
+            reg.lock_ok().detached_retire.finish(&label);
             return;
         };
         if let Ok(size) = win.inner_size() {
             // The screen it is on, so the respawn lands there again rather
             // than wherever GNOME puts new windows (the pointer's screen). A
             // surface that never entered an output keeps the last one known.
-            let mut reg = reg.lock().unwrap();
+            let mut reg = reg.lock_ok();
             let monitor = gdk_monitor_of(&win)
                 .or_else(|| reg.detached_bounds.get(&label).and_then(|b| b.monitor));
             reg.detached_bounds.insert(
@@ -1209,15 +1208,14 @@ fn close_retiring_window(app: &AppHandle, label: &str) {
         // No registry lock held here: `destroy()` may run the `Destroyed` hook,
         // which takes it.
         if win.destroy().is_err() {
-            reg.lock().unwrap().detached_retire.withdraw(&label);
+            reg.lock_ok().detached_retire.withdraw(&label);
             emit_retire_withdrawn(&on_main, &label);
         }
     });
     if dispatched.is_err() {
         let (app, label) = fallback;
         app.state::<WindowRegistryState>()
-            .lock()
-            .unwrap()
+            .lock_ok()
             .detached_retire
             .withdraw(&label);
         emit_retire_withdrawn(&app, &label);
@@ -1243,14 +1241,14 @@ fn minimize_parked_window(app: &AppHandle, label: &str) {
     let label = label.to_string();
     let _ = app.run_on_main_thread(move || {
         let reg = on_main.state::<WindowRegistryState>();
-        if !confirm_minimize(&mut reg.lock().unwrap(), &label) {
+        if !confirm_minimize(&mut reg.lock_ok(), &label) {
             return;
         }
         let minimized = on_main
             .get_webview_window(&label)
             .is_some_and(|win| win.minimize().is_ok());
         if !minimized {
-            reg.lock().unwrap().detached_parking.forget(&label);
+            reg.lock_ok().detached_parking.forget(&label);
         }
     });
 }
@@ -1265,8 +1263,7 @@ pub fn detached_retire_ack(
     clean: bool,
 ) -> bool {
     win_registry
-        .lock()
-        .unwrap()
+        .lock_ok()
         .detached_retire
         .ack(window.label(), clean)
 }
@@ -1278,8 +1275,7 @@ pub fn detached_retire_ack(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn detached_retire_ready(window: tauri::WebviewWindow, win_registry: State<'_, WindowRegistryState>) {
     win_registry
-        .lock()
-        .unwrap()
+        .lock_ok()
         .detached_retire
         .mark_ready(window.label());
 }
@@ -1299,8 +1295,7 @@ pub fn detached_window_is_parked(
 ) -> bool {
     window_positions_readable()
         && win_registry
-            .lock()
-            .unwrap()
+            .lock_ok()
             .detached_parking
             .is_parked(window.label())
 }
@@ -1371,7 +1366,7 @@ pub fn spawn_monitor_watcher(app: AppHandle) {
             // between two reads.
             let has_popouts = {
                 let reg = app.state::<WindowRegistryState>();
-                let reg = reg.lock().unwrap();
+                let reg = reg.lock_ok();
                 !crate::services::window_service::all_detached_labels(&reg.windows).is_empty()
             };
             if !has_popouts {
@@ -1400,7 +1395,7 @@ pub fn spawn_monitor_watcher(app: AppHandle) {
             std::thread::sleep(MONITOR_SETTLE);
             let labels = {
                 let reg = app.state::<WindowRegistryState>();
-                let reg = reg.lock().unwrap();
+                let reg = reg.lock_ok();
                 crate::services::window_service::all_detached_labels(&reg.windows)
             };
             for label in labels {
@@ -1422,9 +1417,9 @@ pub fn attach_subwindow(
 ) -> Result<(), String> {
     // Drop the parkable override first so a stray park can't target a closing id.
     // Free the display number in the same critical section so it can be reused.
-    let wid = release_detached_entry(&mut win_registry.lock().unwrap(), &registry_id);
+    let wid = release_detached_entry(&mut win_registry.lock_ok(), &registry_id);
     if let Some(wid) = wid {
-        workspace.lock().unwrap().backend.unset_parkable(wid);
+        workspace.lock_ok().backend.unset_parkable(wid);
     }
     if let Some(window) = app.get_webview_window(&registry_id) {
         // `destroy()` (not `close()`) so the removal is immediate: `close()` fires
@@ -1467,8 +1462,7 @@ pub fn detached_window_frontmost(
     registry_id: String,
 ) -> bool {
     let wid = win_registry
-        .lock()
-        .unwrap()
+        .lock_ok()
         .windows
         .get(&registry_id)
         .and_then(|w| w.window_id);

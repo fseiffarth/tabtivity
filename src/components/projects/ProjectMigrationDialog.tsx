@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -30,6 +31,7 @@ export function ProjectMigrationDialog({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [plan, setPlan] = useState<MigrationPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [declined, setDeclined] = useState<ReadonlySet<string>>(new Set());
@@ -77,7 +79,7 @@ export function ProjectMigrationDialog({
 
   return createPortal(
     <div className="modal-backdrop how-to-start-backdrop" onMouseDown={onClose}>
-      <div className="settings-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="settings-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <SettingsHeader
           title={
             <>

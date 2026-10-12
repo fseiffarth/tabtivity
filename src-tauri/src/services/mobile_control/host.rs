@@ -2,9 +2,10 @@ use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use app_core::sync::LockExt;
 
 use axum::{
     body::{Body, Bytes},
@@ -309,8 +310,7 @@ fn authenticate(
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
     state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         // Every authenticated request slides the session (`auth::SESSION_IDLE`).
         .touch(token)
         .map(Phone)
@@ -328,8 +328,7 @@ fn section_guard(
     let phone = authenticate(headers, state)?;
     if state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .hides(phone.device_id(), section)
     {
         return Err(api_error(StatusCode::FORBIDDEN, "section_hidden"));
@@ -359,8 +358,7 @@ fn open_alerts(hidden: &[String], mut alerts: super::protocol::MobileAlertsSnaps
 fn hidden_sections(state: &HostState, phone: &Phone) -> Vec<String> {
     state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .hidden_sections(phone.device_id())
 }
 
@@ -400,8 +398,7 @@ fn authenticate_or_ticket(
     match ticket {
         Some(ticket) => state
             .auth
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_ok()
             .redeem_ticket(ticket, &ticket_target(uri))
             .map(Phone)
             .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required")),
@@ -429,7 +426,7 @@ async fn open_ticket(
         _ => return api_error(StatusCode::BAD_REQUEST, "invalid_url"),
     };
     let target = ticket_target(&uri);
-    match state.auth.lock().unwrap_or_else(PoisonError::into_inner).open_ticket(token, &target) {
+    match state.auth.lock_ok().open_ticket(token, &target) {
         Ok(ticket) => {
             let joiner = if target.contains('?') { '&' } else { '?' };
             (StatusCode::OK, Json(json!({ "url": format!("{target}{joiner}ticket={ticket}") })))
@@ -465,12 +462,11 @@ fn catalog(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCode, Jso
 /// request: only the agent-notice lookup (`agent_tab_ref`), which carries the
 /// scope's list on to the push filter.
 fn catalog_unfiltered(state: &HostState) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     off_worker(|| {
         state
             .catalog
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_ok()
             .load(&state.config.state_dir, &key)
     })
     .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable"))
@@ -479,12 +475,11 @@ fn catalog_unfiltered(state: &HostState) -> Result<Catalog, (StatusCode, Json<se
 /// The create-tab poll is waiting for a tab the desktop has just been asked to
 /// open, so by definition it is not in the cached snapshot yet.
 fn catalog_fresh(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     off_worker(|| {
         state
             .catalog
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_ok()
             .load_fresh(&state.config.state_dir, &key)
     })
     .map(|catalog| catalog.for_device(phone.device_id()))
@@ -494,7 +489,7 @@ fn catalog_fresh(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCod
 /// The host key the desktop mints its opaque ids with — the same
 /// `mobile-control/host.key` — so an id minted here resolves there.
 fn host_key(state: &HostState) -> Vec<u8> {
-    state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec()
+    state.auth.lock_ok().host_key().to_vec()
 }
 
 /// Whether a desktop answer means no window is open: the persisted-state
@@ -514,13 +509,7 @@ fn scope_session_file(state: &HostState, raw_id: &str) -> PathBuf {
     headless::session_file(&state.config.state_dir, raw_id)
 }
 
-/// Milliseconds since the epoch, the desktop's close stamp.
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+use crate::clock::now_ms;
 
 /// A tab edit applied to the session file because no window was open to
 /// apply it to a store (headless owner plan, H3): the catalog is re-read so
@@ -594,12 +583,12 @@ fn poke_desktop(control_dir: &std::path::Path, raw_id: Option<&str>, slices: &[&
 /// project for `READING_TTL`; the probe runs off the async thread.
 async fn headless_git_dot(state: &HostState, raw_id: &str, root: &std::path::Path) -> Option<&'static str> {
     let now = Instant::now();
-    if let Some(dot) = state.readings.lock().unwrap_or_else(PoisonError::into_inner).git(raw_id, now) {
+    if let Some(dot) = state.readings.lock_ok().git(raw_id, now) {
         return dot;
     }
     let dir = root.to_path_buf();
     let dot = tokio::task::spawn_blocking(move || headless::git_dot_for(&dir)).await.ok().flatten();
-    state.readings.lock().unwrap_or_else(PoisonError::into_inner).set_git(raw_id, dot, Instant::now());
+    state.readings.lock_ok().set_git(raw_id, dot, Instant::now());
     dot
 }
 
@@ -607,8 +596,7 @@ async fn headless_git_dot(state: &HostState, raw_id: &str, root: &std::path::Pat
 fn headless_readings(state: &HostState, project: &super::discovery::ResolvedProject) -> headless::TurnReadings {
     state
         .readings
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .readings(&state.config.state_dir, project, Instant::now())
 }
 
@@ -622,8 +610,7 @@ fn local_today() -> String {
 fn catalog_stale(state: &HostState) {
     state
         .catalog
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .invalidate();
 }
 
@@ -735,20 +722,19 @@ async fn pair(
         // The provider's sign-in instead of a code: this daemon checks the
         // token itself (signature, issuer, audience, its own binding, the
         // nonce bound to this very key) before the store registers it.
-        let control_dir = state.auth.lock().unwrap_or_else(PoisonError::into_inner).control_dir().to_path_buf();
+        let control_dir = state.auth.lock_ok().control_dir().to_path_buf();
         if let Err(reason) = crate::services::server::oidc::check(&control_dir, token, &body.public_key).await {
             eprintln!("pair: identity provider sign-in refused: {reason}");
             return api_error(StatusCode::BAD_REQUEST, "invalid_oidc");
         }
-        return match state.auth.lock().unwrap_or_else(PoisonError::into_inner).pair_verified(&body.device_name, &body.public_key) {
+        return match state.auth.lock_ok().pair_verified(&body.device_name, &body.public_key) {
             Ok(device_id) => (StatusCode::CREATED, Json(json!({ "device_id": device_id }))),
             Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
         };
     }
     match state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .pair(&body.code, &body.device_name, &body.public_key)
     {
         Ok(device_id) => (StatusCode::CREATED, Json(json!({ "device_id": device_id }))),
@@ -764,7 +750,7 @@ async fn challenge(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    match state.auth.lock().unwrap_or_else(PoisonError::into_inner).challenge(&body.device_id) {
+    match state.auth.lock_ok().challenge(&body.device_id) {
         Ok((nonce, payload, expires_at)) => (
             StatusCode::OK,
             Json(json!({ "nonce": nonce, "payload": payload, "expires_at": expires_at })),
@@ -783,8 +769,7 @@ async fn login(
     }
     match state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .login(&body.device_id, &body.nonce, &body.signature)
     {
         Ok((token, expires_at)) => {
@@ -805,7 +790,7 @@ async fn logout(State(state): State<HostState>, headers: HeaderMap) -> Response<
         return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
     }
     if let Some(token) = cookie_token(&headers) {
-        state.auth.lock().unwrap_or_else(PoisonError::into_inner).logout(token);
+        state.auth.lock_ok().logout(token);
     }
     let mut response = Json(json!({ "ok": true })).into_response();
     response.headers_mut().insert(
@@ -1609,16 +1594,14 @@ async fn worktree_spots_for(
     }
     let cached = state
         .worktree_spots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .get(&project.raw_id, Instant::now());
     if let Some(spots) = cached {
         let unplaced: Vec<&str> = elsewhere.iter().copied().filter(|cwd| git_overview::unplaced(&spots, cwd)).collect();
         let retry = !unplaced.is_empty()
             && state
                 .worktree_spots
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                .lock_ok()
                 .first_miss(&project.raw_id, &unplaced);
         if !retry {
             return Some(spots);
@@ -1630,8 +1613,7 @@ async fn worktree_spots_for(
         .unwrap_or_default();
     state
         .worktree_spots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .set(&project.raw_id, spots.clone(), Instant::now());
     Some(spots)
 }
@@ -1662,8 +1644,7 @@ async fn project_git(
     let raw_id = project.raw_id.clone();
     if let Some(cached) = state
         .git_overview
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .get(&raw_id, Instant::now())
     {
         return (StatusCode::OK, Json(json!(cached)));
@@ -1676,8 +1657,7 @@ async fn project_git(
     };
     state
         .git_overview
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .set(&raw_id, overview.clone(), Instant::now());
     (StatusCode::OK, Json(json!(overview)))
 }
@@ -1943,7 +1923,7 @@ async fn alerts_resolve(
 /// of leaving notices off. A phone bundle that predates the field reads
 /// `subscribed: false` and behaves as it always did.
 fn push_state(state: &HostState, device_id: &str) -> (StatusCode, Json<serde_json::Value>) {
-    let auth = state.auth.lock().unwrap_or_else(PoisonError::into_inner);
+    let auth = state.auth.lock_ok();
     let push = auth.push();
     let subscription = push.subscription(device_id);
     (
@@ -1987,8 +1967,7 @@ async fn push_put(
     };
     let stored = state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .push_subscribe(&device_id, &request.endpoint, &request.p256dh, &request.auth, request.prefs);
     if stored.is_err() {
         return api_error(StatusCode::BAD_REQUEST, "invalid_push_subscription");
@@ -2025,7 +2004,7 @@ async fn secrets_state(State(state): State<HostState>, headers: HeaderMap) -> im
     let Some(vault) = crate::services::server::vault::vault() else {
         return (StatusCode::OK, Json(json!({ "available": false })));
     };
-    let enrolled = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys().iter().any(|k| k.id == device_id);
+    let enrolled = state.auth.lock_ok().secrets_device_keys().iter().any(|k| k.id == device_id);
     let status = vault.status();
     // The identity a device compares with the one it pinned: a mismatch is
     // the cue to re-pin with the recovery code, never to trust it silently.
@@ -2068,7 +2047,7 @@ async fn secrets_challenge(State(state): State<HostState>, headers: HeaderMap, b
     let Ok(request) = serde_json::from_slice::<SecretsChallengeBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    match state.auth.lock().unwrap_or_else(PoisonError::into_inner).action_challenge(&device_id, &request.action) {
+    match state.auth.lock_ok().action_challenge(&device_id, &request.action) {
         Ok((nonce, expires_at)) => (StatusCode::OK, Json(json!({ "nonce": nonce, "expiresAt": expires_at }))),
         Err(code) if code == "rate_limited" => api_error(StatusCode::TOO_MANY_REQUESTS, &code),
         Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
@@ -2093,8 +2072,7 @@ fn check_signed_action(state: &HostState, device_id: &str, action: &str, body: &
     };
     state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .verify_action(device_id, action, &nonce, &signature)
         .map_err(|code| api_error(StatusCode::FORBIDDEN, &code))
 }
@@ -2136,7 +2114,7 @@ async fn secrets_enrol(State(state): State<HostState>, headers: HeaderMap, body:
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let keys = {
-        let mut auth = state.auth.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut auth = state.auth.lock_ok();
         if let Err(code) = auth.enrol_secrets_key(&device_id, &request.ecdh_public_key, &request.signature) {
             return api_error(StatusCode::BAD_REQUEST, &code);
         }
@@ -2176,7 +2154,7 @@ async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap, body:
     if let Err(error) = check_signed_action(&state, &device_id, "secrets-setup", &body) {
         return error.into_response();
     }
-    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    let keys = state.auth.lock_ok().secrets_device_keys();
     match vault.set_up(&keys) {
         Ok(code) => {
             eprintln!("secrets: key set up from device {device_id} ({} device wraps)", keys.len());
@@ -2228,7 +2206,7 @@ async fn secrets_recover(State(state): State<HostState>, headers: HeaderMap, bod
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let code = zeroize::Zeroizing::new(request.code);
-    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    let keys = state.auth.lock_ok().secrets_device_keys();
     match vault.recover(&code, &keys) {
         Ok(()) => (StatusCode::OK, Json(json!({ "state": "unlocked" }))),
         Err(_) => api_error(StatusCode::BAD_REQUEST, "invalid_recovery_code"),
@@ -2266,7 +2244,7 @@ async fn secrets_unlock_finish(State(state): State<HostState>, headers: HeaderMa
     let Ok(request) = serde_json::from_slice::<SecretsFinishBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    let keys = state.auth.lock_ok().secrets_device_keys();
     // The ECDH and the wrap are a few microseconds; the listeners (mail
     // reopening) run on their own threads.
     match vault.finish_unlock(&device_id, &request.id, &request.transport, &request.nonce, &request.sealed, &keys) {
@@ -2285,8 +2263,7 @@ async fn push_delete(State(state): State<HostState>, headers: HeaderMap) -> impl
     }
     if state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .push_unsubscribe(&device_id)
         .is_err()
     {
@@ -4908,7 +4885,7 @@ fn row_seal(state: &HostState, project: &super::discovery::ResolvedProject) -> O
     if project.public.kind != ScopeKind::Project || !files::files_open(&state.config.state_dir) {
         return None;
     }
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     Some((project.raw_id.clone(), key))
 }
 
@@ -5685,7 +5662,7 @@ async fn markup_banner_files(state: &HostState, phone: &Phone, tab_id: &str, raw
     }
     let root = project.root.clone();
     let raw_id = raw_id.to_string();
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     tokio::task::spawn_blocking(move || {
         paths
             .into_iter()
@@ -5708,7 +5685,8 @@ fn file_row(root: &std::path::Path, rel: &str, key: &[u8], raw_id: &str) -> Opti
     }
     let entry = files::entry(root, rel, key, raw_id)?;
     let place = rel.rsplit_once('/').map(|(parent, _)| parent.to_string()).unwrap_or_default();
-    let folder = (!place.is_empty()).then(|| files::seal(key, raw_id, &place));
+    // No randomness for the folder token: left out, like the entry itself.
+    let folder = if place.is_empty() { None } else { Some(files::seal(key, raw_id, &place).ok()?) };
     Some(MobileMarkupFile {
         token: entry.token,
         name: entry.name,
@@ -5866,7 +5844,7 @@ fn files_rel(
     let Some(token) = token else {
         return Ok(String::new());
     };
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     files::unseal(&key, raw_id, token).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "file_not_found"))
 }
 
@@ -5891,7 +5869,7 @@ async fn project_files_list(
         Ok(rel) => rel,
         Err(error) => return error,
     };
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     // A directory walk that opens every kept file to type it: off the executor.
     let listed = tokio::task::spawn_blocking(move || files::list(&root, &rel, &key, &raw_id))
         .await
@@ -5924,7 +5902,7 @@ async fn project_files_search(
     if q.len() > files::MAX_QUERY {
         return api_error(StatusCode::BAD_REQUEST, "query_too_long");
     }
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     // A git listing or a walk of the whole tree: off the executor.
     let found = tokio::task::spawn_blocking(move || files::search(&root, &q, &key, &raw_id))
         .await
@@ -6531,7 +6509,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
             loop {
                 interval.tick().await;
                 if let Err(error) = verify_tailscale_serve(&publisher_origin, port) {
-                    *publisher_failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+                    *publisher_failure.lock_ok() = Some(error);
                     let _ = publisher_shutdown.send(true);
                     break;
                 }
@@ -6579,9 +6557,9 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     // (tmux attach clients, mostly — the sessions live on) go with the
     // process, as the window's do at its exit.
     if let Some(registry) = core_ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
-        registry.lock().unwrap_or_else(PoisonError::into_inner).kill_all();
+        registry.lock_ok().kill_all();
     }
-    if let Some(error) = serve_failure.lock().unwrap_or_else(PoisonError::into_inner).take() {
+    if let Some(error) = serve_failure.lock_ok().take() {
         return Err(format!("Tailscale Serve verification failed: {error}"));
     }
     Ok(())

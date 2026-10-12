@@ -109,22 +109,20 @@ pub async fn disk_usage_scan(
     let result = if let Some(target) = remote {
         let spec = target.spec.clone();
         let root = root.clone();
-        tokio::task::spawn_blocking(move || crate::services::ssh_exec::remote_du_tree(&spec, &root))
-            .await
-            .map_err(|e| e.to_string())?
+        app_core::rt::blocking("disk usage", move || crate::services::ssh_exec::remote_du_tree(&spec, &root))
+            .await?
     } else {
         let app2 = ctx.0.clone();
         let id = scan_id.clone();
         let root = root.clone();
         emit(&ctx, &scan_id, "start", &root, &Tally::default());
-        tokio::task::spawn_blocking(move || {
+        app_core::rt::blocking("disk usage", move || {
             let mut on_progress = |t: &Tally, at: &std::path::Path| {
                 emit(&app2, &id, "dir", &at.to_string_lossy(), t);
             };
             duscan::scan_local(&root, &cancel, &mut on_progress)
         })
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
     };
 
     if let Ok(mut map) = state.lock() {

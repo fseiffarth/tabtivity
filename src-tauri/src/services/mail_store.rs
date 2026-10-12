@@ -66,11 +66,11 @@
 //!   [`MailStore::rekey_digest_columns`].
 
 use std::path::{Path, PathBuf};
+use app_core::sync::LockExt;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, ToSql};
-use sha2::{Digest, Sha256};
 
 use crate::schema::mail::{
     MailAddress, MailAttachmentMeta, MailDraft, MailFlag, MailFolder, MailFolderKind, MailHeader,
@@ -262,7 +262,7 @@ impl MailStore {
     pub fn open_with_keys(dir: &Path, keys: Option<Arc<MailKeys>>) -> Result<Self, String> {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("could not create the mail store: {e}"))?;
-        harden(dir, 0o700);
+        mail_crypt::harden_store_dir(dir);
         let db = dir.join("mail.db");
         let conn = Connection::open(&db).map_err(|e| e.to_string())?;
         harden(&db, 0o600);
@@ -347,7 +347,7 @@ impl MailStore {
     /// rather than plaintext attachments in `/tmp`.
     pub fn open_ephemeral() -> Result<Self, String> {
         let scratch = tempfile::tempdir().map_err(|e| e.to_string())?;
-        harden(scratch.path(), 0o700);
+        mail_crypt::harden_store_dir(scratch.path());
         let keys = Arc::new(MailKeys::derive(mail_crypt::Key::random()?));
         let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
         configure(&conn);
@@ -369,7 +369,7 @@ impl MailStore {
 
     /// The keys right now. A writer calls this while holding `conn`.
     pub fn keys(&self) -> Option<Arc<MailKeys>> {
-        self.keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.keys.lock_ok().clone()
     }
 
     /// Whether this is the memory-only stand-in ([`MailStore::open_ephemeral`]).
@@ -385,7 +385,7 @@ impl MailStore {
     /// memory-only store: neither has a key file to follow.
     pub fn switch_keys(&self, keys: Arc<MailKeys>) -> Result<(), String> {
         let _conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
-        let mut slot = self.keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut slot = self.keys.lock_ok();
         if slot.is_none() || self.is_ephemeral() {
             return Err("this mail store has no key file to follow".into());
         }
@@ -821,7 +821,7 @@ impl MailStore {
     fn blob_name(keys: Option<&MailKeys>, bytes: &[u8]) -> String {
         match keys {
             Some(k) => mail_crypt::blob_id(&k.addr, bytes),
-            None => hex_digest(bytes),
+            None => crate::digest::sha256_hex(bytes),
         }
     }
 
@@ -843,8 +843,7 @@ impl MailStore {
                 Some(k) => mail_crypt::seal(&k.blob, &mail_crypt::blob_aad(&hex), bytes),
                 None => bytes.to_vec(),
             };
-            std::fs::write(&path, &payload).map_err(|e| e.to_string())?;
-            harden(&path, 0o600);
+            write_store_file(&path, &payload)?;
         }
         Ok(hex)
     }
@@ -2517,10 +2516,8 @@ impl MailStore {
             }
             for file in &add {
                 let path = dir.join(sanitize_id(&file.staged_id));
-                std::fs::write(&path, self.seal_staged(&after.id, &file.staged_id, &file.bytes))
-                    .map_err(|e| e.to_string())?;
+                write_store_file(&path, &self.seal_staged(&after.id, &file.staged_id, &file.bytes))?;
                 written.push(path.clone());
-                harden(&path, 0o600);
                 let row = staged_row(&after.id, &file.staged_id);
                 tx.execute(
                     "INSERT INTO staged (draft_id, staged_id, filename, mime, size, origin, source)
@@ -2798,9 +2795,7 @@ impl MailStore {
         // clear, outside the database, for as long as the draft exists. It is
         // consumed in memory by `build_outgoing` and never handed back as a
         // path.
-        std::fs::write(&path, self.seal_staged(draft_id, staged_id, bytes))
-            .map_err(|e| e.to_string())?;
-        harden(&path, 0o600);
+        write_store_file(&path, &self.seal_staged(draft_id, staged_id, bytes))?;
 
         let staged = StagedAttachment {
             staged_id: staged_id.to_string(),
@@ -3333,8 +3328,7 @@ impl MailStore {
             let new_id = mail_crypt::blob_id(&keys.addr, &bytes);
             let sealed = mail_crypt::seal(&keys.blob, &mail_crypt::blob_aad(&new_id), &bytes);
             let new_path = dir.join(&new_id);
-            std::fs::write(&new_path, &sealed).map_err(|e| e.to_string())?;
-            harden(&new_path, 0o600);
+            write_store_file(&new_path, &sealed)?;
             if new_id != old_id {
                 let _ = std::fs::remove_file(&path);
                 let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
@@ -3384,9 +3378,7 @@ impl MailStore {
                 if mail_crypt::looks_sealed(&bytes) {
                     continue;
                 }
-                std::fs::write(&path, self.seal_staged(&draft_id, &staged_id, &bytes))
-                    .map_err(|e| e.to_string())?;
-                harden(&path, 0o600);
+                write_store_file(&path, &self.seal_staged(&draft_id, &staged_id, &bytes))?;
                 changed += 1;
             }
         }
@@ -3953,6 +3945,34 @@ impl MailStore {
     }
 }
 
+/// Write a payload file into the store's own folders (`blobs/`, `outbox/`),
+/// owner-only from its first byte: created with mode `0600` on Unix (and an
+/// existing file narrowed before the new bytes go in), so it is never
+/// world-readable for the moment a write-then-chmod would leave. On Windows
+/// it inherits the store folder's owner-only ACL
+/// ([`mail_crypt::harden_store_dir`]), with no `icacls` run per file. Not
+/// synced, as the plain `fs::write` it replaces was not.
+fn write_store_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // The mode above applies to a file this call creates; one that was
+        // already there (a re-seal in place) is narrowed here. Best effort,
+        // like `harden`.
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    file.write_all(bytes).map_err(|e| e.to_string())
+}
+
 /// The pragmas every connection to this store runs with.
 ///
 /// `temp_store = MEMORY` is the one that belongs to the encryption work: it was
@@ -3995,17 +4015,6 @@ fn sanitize_id(id: &str) -> String {
     }
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let out = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for b in out {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{b:02x}");
-    }
-    hex
-}
 
 /// Whether `table` has a column named `column`. A table that does not exist
 /// has none.
@@ -4509,6 +4518,29 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(db, 0o600, "mail.db must be 0600, got {db:o}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blobs_and_staged_files_are_owner_only_from_creation() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let (dir, store) = store();
+        let hex = store.put_blob(b"payload").unwrap();
+        assert_eq!(mode(&store.blobs_dir().join(&hex)), 0o600);
+        store
+            .stage_attachment("d1", "s1", "a.txt", "text/plain", b"hi")
+            .unwrap();
+        assert_eq!(mode(&store.outbox_dir("d1").join("s1")), 0o600);
+
+        // A file rewritten in place (a re-seal) is narrowed too, not left at
+        // whatever mode it had.
+        let loose = dir.path().join("loose");
+        std::fs::write(&loose, b"old").unwrap();
+        std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_store_file(&loose, b"new").unwrap();
+        assert_eq!(mode(&loose), 0o600);
+        assert_eq!(std::fs::read(&loose).unwrap(), b"new");
     }
 
     #[test]

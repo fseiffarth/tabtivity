@@ -1183,11 +1183,10 @@ pub async fn compile_tex(
     out_dir: Option<String>,
     extra_flags: Option<Vec<String>>,
 ) -> Result<TexCompileResult, String> {
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("compile", move || {
         compile_tex_blocking(path, engine, out_dir, extra_flags)
     })
     .await
-    .map_err(|e| format!("compile task failed: {e}"))?
 }
 
 fn compile_tex_blocking(
@@ -1909,9 +1908,8 @@ pub async fn tex_preview_snippet(
     body: String,
     engine: Option<String>,
 ) -> Result<TexPreviewResult, String> {
-    app_core::rt::spawn_blocking(move || preview_snippet_blocking(dir, preamble, body, engine))
+    app_core::rt::try_blocking("preview", move || preview_snippet_blocking(dir, preamble, body, engine))
         .await
-        .map_err(|e| format!("preview task failed: {e}"))?
 }
 
 fn preview_snippet_blocking(
@@ -2164,7 +2162,7 @@ fn collect_fonts(dir: &Path, depth: u32, out: &mut Vec<FontFile>) {
 /// place to look.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_fonts() -> Result<Vec<FontFile>, String> {
-    app_core::rt::spawn_blocking(|| {
+    app_core::rt::try_blocking("font scan failed", || {
         let mut out: Vec<FontFile> = Vec::new();
         for dir in font_dirs() {
             collect_fonts(&dir, 0, &mut out);
@@ -2179,7 +2177,6 @@ pub async fn list_fonts() -> Result<Vec<FontFile>, String> {
         Ok(out)
     })
     .await
-    .map_err(|e| format!("font scan failed: {e}"))?
 }
 
 // ── SyncTeX: which source lines produced each page ───────────────────────────
@@ -2308,7 +2305,7 @@ pub fn main_input_tag(text: &str, stem: &str) -> Option<u32> {
 /// exists and cannot be read is an error worth surfacing.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn synctex_page_lines(pdf: String) -> Result<Vec<PageLines>, String> {
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("synctex", move || {
         let pdf_path = Path::new(&pdf);
         let stem = match pdf_path.file_stem().and_then(|s| s.to_str()) {
             Some(s) => s.to_string(),
@@ -2336,7 +2333,6 @@ pub async fn synctex_page_lines(pdf: String) -> Result<Vec<PageLines>, String> {
         Ok(parse_synctex_pages(&text, tag))
     })
     .await
-    .map_err(|e| format!("synctex task failed: {e}"))?
 }
 
 // ── SyncTeX forward/reverse search ───────────────────────────────────────────
@@ -2419,7 +2415,7 @@ pub async fn synctex_edit(
     x: f64,
     y: f64,
 ) -> Result<Option<SyncSource>, String> {
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("synctex", move || {
         let pdf_path = Path::new(&pdf);
         let dir = pdf_path.parent().unwrap_or_else(|| Path::new("."));
         if let Some((input, line)) = crate::commands::synctex::resolve(pdf_path, page, x, y) {
@@ -2437,7 +2433,6 @@ pub async fn synctex_edit(
         Ok(parse_synctex_edit(&out.text, dir))
     })
     .await
-    .map_err(|e| format!("synctex task failed: {e}"))?
 }
 
 /// Why a reverse-search click did nothing, or landed on the wrong line: whether
@@ -2449,9 +2444,8 @@ pub async fn synctex_edit(
 /// `synctex_edit`: the first call after a compile inflates the map.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn synctex_status(pdf: String) -> Result<crate::commands::synctex::MapStatus, String> {
-    app_core::rt::spawn_blocking(move || crate::commands::synctex::status(Path::new(&pdf)))
+    app_core::rt::blocking("synctex", move || crate::commands::synctex::status(Path::new(&pdf)))
         .await
-        .map_err(|e| format!("synctex task failed: {e}"))
 }
 
 /// Parse the `synctex view` stdout into every record block it emitted, in order.

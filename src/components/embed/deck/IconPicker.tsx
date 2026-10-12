@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../../hooks/useModalFocus";
 /**
  * The icon picker: a searchable grid over the bundled library
  * (`lib/viewers/deck/icons.ts`).
@@ -25,6 +26,7 @@ export interface IconPickerProps {
 
 export function IconPicker({ onPick, onClose }: IconPickerProps) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<IconCategory | null>(null);
 
@@ -38,6 +40,8 @@ export function IconPicker({ onPick, onClose }: IconPickerProps) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="project-dialog deck-icon-picker"
         onClick={(e) => e.stopPropagation()}
         role="dialog"

@@ -21,6 +21,7 @@
 //! Everything except the cache/personal-file plumbing is pure and unit-tested.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -281,7 +282,7 @@ pub fn add_personal_word(word: &str) -> Result<(), String> {
         .open(&path)
         .map_err(|e| format!("open personal dictionary: {e}"))?;
     writeln!(f, "{w}").map_err(|e| format!("write personal dictionary: {e}"))?;
-    dict_cache().lock().unwrap().clear();
+    dict_cache().lock_ok().clear();
     Ok(())
 }
 
@@ -289,7 +290,7 @@ pub fn add_personal_word(word: &str) -> Result<(), String> {
 /// list folded in. Errors are strings for the command layer; `no_dictionary` is
 /// the token the frontend recognises as "nothing installed".
 fn load_dict(code: &str) -> Result<Arc<Dictionary>, String> {
-    if let Some(d) = dict_cache().lock().unwrap().get(code) {
+    if let Some(d) = dict_cache().lock_ok().get(code) {
         return Ok(d.clone());
     }
     let (aff_path, dic_path) = find_dict_files(code).ok_or("no_dictionary")?;
@@ -302,8 +303,7 @@ fn load_dict(code: &str) -> Result<Arc<Dictionary>, String> {
     }
     let arc = Arc::new(dict);
     dict_cache()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .insert(code.to_string(), arc.clone());
     Ok(arc)
 }
@@ -531,7 +531,7 @@ pub async fn install_language(code: &str) -> Result<(), String> {
     std::fs::write(&dic_tmp, &dic).map_err(|e| format!("write dic: {e}"))?;
     std::fs::rename(&aff_tmp, &aff_path).map_err(|e| format!("write aff: {e}"))?;
     std::fs::rename(&dic_tmp, &dic_path).map_err(|e| format!("write dic: {e}"))?;
-    dict_cache().lock().unwrap().remove(code);
+    dict_cache().lock_ok().remove(code);
     Ok(())
 }
 
@@ -554,7 +554,7 @@ pub fn remove_language(code: &str) -> Result<(), String> {
             std::fs::remove_file(&p).map_err(|e| format!("remove: {e}"))?;
         }
     }
-    dict_cache().lock().unwrap().remove(code);
+    dict_cache().lock_ok().remove(code);
     Ok(())
 }
 

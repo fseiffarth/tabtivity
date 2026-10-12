@@ -5,6 +5,7 @@
 //! state dir, never in the project tree.
 
 use std::sync::{Mutex, OnceLock};
+use app_core::sync::LockExt;
 
 use crate::{
     schema::agent_prompts::{
@@ -54,7 +55,7 @@ struct Guard {
 }
 
 fn lock() -> Guard {
-    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock_ok();
     Guard { _file: storage::FileLock::exclusive(&path()).ok(), _mutex: mutex }
 }
 

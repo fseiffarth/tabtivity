@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 /**
  * The guided **HPC pipeline wizard** (`docs/quirky-knitting-umbrella` plan
  * Phases B + C).
@@ -132,6 +133,7 @@ export function HpcPipelineWizardHost() {
 
 function HpcPipelineWizard({ onClose }: { onClose: () => void }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const addProject = useProjectsStore((s) => s.addProject);
   const registerGlobalMachine = useGlobalMachinesStore((s) => s.register);
   const remote = useRemoteSession({ kind: "new" });
@@ -352,7 +354,7 @@ function HpcPipelineWizard({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog dialog-framed hpc-wizard" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog dialog-framed hpc-wizard" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>
             {t("hpcWizard.title")} <UntestedTag id="hpcWizard.title" />

@@ -43,7 +43,6 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use crate::commands::git::run_off_thread;
 use crate::commands::projects::{normalize_git_type, sanitize_name};
 use crate::schema::project::Project;
 use crate::schema::projects::ProjectsList;
@@ -356,7 +355,7 @@ fn origin_site(project: &Project, project_id: &str) -> Result<PublishSite, Strin
 /// trimmed stderr on failure.
 ///
 /// Every command in this module is an `async` wrapper over a sync `*_blocking`
-/// body run through [`run_off_thread`] (the same pattern as `commands::git`):
+/// body run through `app_core::rt::try_blocking` (the same pattern as `commands::git`):
 /// the bodies spawn `git`/`gh`/`glab` or ssh and block on them, and a sync
 /// Tauri command runs on the main thread, so a slow push or an unreachable host
 /// froze the whole window for its duration.
@@ -367,7 +366,7 @@ pub async fn publish_project(
     visibility: String,
     publish_from: Option<String>,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         publish_project_blocking(project_id, provider, visibility, publish_from)
     })
     .await
@@ -483,7 +482,7 @@ fn publish_project_blocking(
 /// thread there is a visible hitch before the context menu opens.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_has_origin(project_id: String) -> Result<bool, String> {
-    run_off_thread(move || project_has_origin_blocking(project_id)).await
+    app_core::rt::try_blocking("git", move || project_has_origin_blocking(project_id)).await
 }
 
 fn project_has_origin_blocking(project_id: String) -> Result<bool, String> {
@@ -505,7 +504,7 @@ fn project_has_origin_blocking(project_id: String) -> Result<bool, String> {
 /// it. Re-publishing later re-creates or re-attaches a remote.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn unpublish_project(project_id: String) -> Result<(), String> {
-    run_off_thread(move || unpublish_project_blocking(project_id)).await
+    app_core::rt::try_blocking("git", move || unpublish_project_blocking(project_id)).await
 }
 
 fn unpublish_project_blocking(project_id: String) -> Result<(), String> {
@@ -580,7 +579,7 @@ pub async fn set_project_visibility(
     project_id: String,
     visibility: String,
 ) -> Result<String, String> {
-    run_off_thread(move || set_project_visibility_blocking(project_id, visibility)).await
+    app_core::rt::try_blocking("git", move || set_project_visibility_blocking(project_id, visibility)).await
 }
 
 fn set_project_visibility_blocking(
@@ -662,7 +661,7 @@ pub async fn switch_project_provider(
     visibility: String,
     publish_from: Option<String>,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         switch_project_provider_blocking(project_id, provider, visibility, publish_from)
     })
     .await
@@ -707,7 +706,7 @@ fn switch_project_provider_blocking(
 
     // Delegate the create+wire+push+persist to the normal publish path, now
     // targeting the new provider. This must call the sync `_blocking` body, not
-    // the `publish_project` command: we are already inside `run_off_thread`'s
+    // the `publish_project` command: we are already inside `try_blocking`'s
     // closure, a non-async context that cannot `.await` the async wrapper.
     publish_project_blocking(
         project_id,
@@ -892,7 +891,7 @@ fn remote_publish_script(
 /// Find a project entry by id, returning its index and the full (owned) list so
 /// the caller can mutate + persist it.
 fn find_entry(project_id: &str) -> Result<(usize, ProjectsList), String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: ProjectsList = if list_path.exists() {
         storage::read_json(&list_path).map_err(|e| e.to_string())?
     } else {

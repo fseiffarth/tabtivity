@@ -22,6 +22,7 @@
 //! which the recap states, rather than showing a misleading zero.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -245,7 +246,7 @@ pub fn new_state() -> UsageWatchState {
 impl UsageWatchState {
     /// Fold one counted event into the pending batch.
     fn bump(&self, project_id: &str, key: &str) {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.lock_ok();
         let counters = pending.entry(project_id.to_string()).or_default();
         let slot = counters.entry(key.to_string()).or_insert(0);
         *slot = slot.saturating_add(1);
@@ -253,7 +254,7 @@ impl UsageWatchState {
 
     /// Take everything accumulated so far, leaving the batch empty.
     fn drain(&self) -> HashMap<String, Counters> {
-        std::mem::take(&mut *self.pending.lock().unwrap())
+        std::mem::take(&mut *self.pending.lock_ok())
     }
 }
 
@@ -354,7 +355,7 @@ fn watch_pruned(
 /// size walk reads (`commands::fs::excluded_rel_set`). Never the in-folder
 /// `project.json` copy, which anything working in the tree can rewrite.
 fn user_excluded_dirs(project_id: &str) -> std::collections::HashSet<String> {
-    let list_path = crate::storage::state_dir().join("projects.json");
+    let list_path = crate::storage::projects_path();
     let Ok(list) = crate::storage::read_json::<crate::schema::projects::ProjectsList>(&list_path)
     else {
         return Default::default();
@@ -379,7 +380,7 @@ fn user_excluded_dirs(project_id: &str) -> std::collections::HashSet<String> {
 /// One watcher at a time: the recap counts what you are working on, and watching
 /// every project a user has ever opened would mean an inotify tree per project.
 pub fn watch_project(state: &UsageWatchState, project_id: &str) -> Result<(), String> {
-    let mut guard = state.active.lock().unwrap();
+    let mut guard = state.active.lock_ok();
 
     let Some(root) = (!project_id.is_empty())
         .then(|| watch_root_for(project_id))

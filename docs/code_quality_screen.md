@@ -41,11 +41,8 @@ added this doc. None has been run live.** What changed:
   - the phone store
 
   The duplicate `write_bytes_durable` and both mail `harden` copies are
-  merged into one. *Open:* mail_store's per-blob `harden` now really runs on
-  Windows. That is two `icacls` spawns per blob; the old version was
-  deliberately a no-op there, relying on the profile ACL. Decide whether to
-  keep it, or to give the `blobs/` and `outbox/` folders an inheritable ACL
-  instead.
+  merged into one. The per-blob `icacls` cost this first introduced on
+  Windows is resolved in the follow-up round (below).
 - **3 — Mail migrations:** `add_column_if_missing` and `column_exists` now
   report real errors.
 - **4 — Project folder lookup:** one `ProjectEntry::directory()` in
@@ -68,6 +65,42 @@ added this doc. None has been run live.** What changed:
     desktop.
 - **8 — Sign-in URLs:** there is one `isSignInUrl` in `terminalUrls.ts`, which
   the phone imports. A bare `client_id` no longer counts.
+
+**Follow-up round (2026-10-12): done on `develop`, in the commit after the
+one above. Not run live.**
+
+- **Mail store on Windows:** the store's folders are locked to their owner
+  once, with an inheritable ACL (`private_file::restrict_dir_to_owner_inheritable`,
+  which skips the work when a folder is already in shape). Blobs and staged
+  files inherit it, with no per-file `icacls`. On Unix they are created `0600`
+  from the start (`write_store_file`). See `docs/context/mail_encryption.md`.
+- **Other leftovers:**
+  - `mobile_control/files.rs` returns an error instead of panicking when the
+    OS RNG fails.
+  - `storage::write_json_file`'s private branch goes through
+    `write_private_atomic`.
+- **Lock poisoning:** one `app_core::sync::LockExt::lock_ok`. It replaces 320
+  bare `lock().unwrap()`, 228 hand-written recovery forms and the three
+  private `fn lock` helpers. Kept as they were on purpose: mail_store's
+  "poisoned → error" mapping, and src-gateway, which doesn't link app-core.
+- **Blocking calls:** `app_core::rt::blocking`/`try_blocking` replace the 12
+  `run_off_thread` copies and about 344 call sites, on one runtime; mail
+  `with_store`/`on_store`. Left as they were on purpose: about 55 sites that
+  fall back on a join error or return a fixed error code.
+- **Shared helpers:**
+  - `crate::clock` (`now_secs`/`now_ms`/`unix_secs`)
+  - `crate::quote` (`posix`/`powershell`)
+  - `crate::digest` (`hex`/`sha256_hex`)
+  - `storage::{projects_path, settings_path, load_settings}`
+  - `storage::project_key` as the only tmux/sandbox key rule
+- **Dialogs:**
+  - ProjectPill's five confirm windows are now one `AsyncConfirmDialog`.
+  - About 58 hand-made modals use `useModalFocus`: shortcuts are blocked
+    while they are open, focus is trapped and restored, and Escape closes
+    only the topmost one.
+  - Related fixes: RemoteFeaturesPrompt's Escape no longer saves both
+    switches as off; an always-mounted dialog restores focus to the element
+    focused when it opened.
 
 Original findings:
 

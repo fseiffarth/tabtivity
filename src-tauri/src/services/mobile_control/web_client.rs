@@ -65,10 +65,11 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, PoisonError,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
+use app_core::sync::LockExt;
 
 use app_core::{Caller, ClientId, CoreCtx, EventSink};
 use axum::{
@@ -104,7 +105,7 @@ static ORDERED_TAIL: Mutex<Option<tokio::sync::oneshot::Receiver<()>>> = Mutex::
 /// sender whose drop lets the next one go.
 fn ordered_turn() -> (Option<tokio::sync::oneshot::Receiver<()>>, tokio::sync::oneshot::Sender<()>) {
     let (done, next) = tokio::sync::oneshot::channel();
-    let before = ORDERED_TAIL.lock().unwrap_or_else(PoisonError::into_inner).replace(next);
+    let before = ORDERED_TAIL.lock_ok().replace(next);
     (before, done)
 }
 
@@ -189,7 +190,7 @@ pub struct WebEvents {
 
 impl WebEvents {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ClientId, ClientLink>> {
-        self.clients.lock().unwrap_or_else(PoisonError::into_inner)
+        self.clients.lock_ok()
     }
 
     pub fn attach(&self, client: &ClientId, tx: mpsc::Sender<Outbound>) {
@@ -387,12 +388,7 @@ pub fn rotate_login_token(control_dir: &Path) -> Result<String, String> {
     Ok(token)
 }
 
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::clock::now_secs;
 
 /// `HMAC-SHA256(token, "desktop-login\n" ‖ exp ‖ "\n" ‖ nonce)`, base64url.
 /// What a sign-in link carries instead of the token itself; the nonce makes
@@ -413,7 +409,7 @@ fn login_signature(token: &str, exp: u64, nonce: &str) -> String {
 /// history is dead within minutes and was single-use anyway.
 pub fn login_url(port: u16, token: &str) -> String {
     let nonce = random_token().unwrap_or_default();
-    login_url_at(port, token, unix_now(), &nonce)
+    login_url_at(port, token, now_secs(), &nonce)
 }
 
 fn login_url_at(port: u16, token: &str, now: u64, nonce: &str) -> String {
@@ -548,15 +544,15 @@ impl WebClientState {
     }
 
     fn lock_sessions(&self) -> std::sync::MutexGuard<'_, WebSessions> {
-        self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
+        self.sessions.lock_ok()
     }
 
     fn lock_parked(&self) -> std::sync::MutexGuard<'_, HashMap<ClientId, Parked>> {
-        self.parked.lock().unwrap_or_else(PoisonError::into_inner)
+        self.parked.lock_ok()
     }
 
     fn lock_live(&self) -> std::sync::MutexGuard<'_, HashMap<ClientId, Live>> {
-        self.live.lock().unwrap_or_else(PoisonError::into_inner)
+        self.live.lock_ok()
     }
 
     /// A new connection's client id and generation. `resume` names the id a
@@ -626,7 +622,7 @@ impl WebClientState {
             return Some((SessionRef::Web(token), role));
         };
         let token = super::host::device_session_cookie(headers)?;
-        link.auth.lock().unwrap_or_else(PoisonError::into_inner).touch(token)?;
+        link.auth.lock_ok().touch(token)?;
         Some((SessionRef::Device(token.to_string()), server::gateway_role_in(headers)))
     }
 
@@ -637,7 +633,7 @@ impl WebClientState {
             SessionRef::Device(token) => self
                 .server
                 .as_ref()
-                .is_some_and(|link| link.auth.lock().unwrap_or_else(PoisonError::into_inner).touch(token).is_some()),
+                .is_some_and(|link| link.auth.lock_ok().touch(token).is_some()),
         }
     }
 
@@ -646,7 +642,7 @@ impl WebClientState {
             SessionRef::Web(token) => self.lock_sessions().logout(token),
             SessionRef::Device(token) => {
                 if let Some(link) = &self.server {
-                    link.auth.lock().unwrap_or_else(PoisonError::into_inner).logout(token);
+                    link.auth.lock_ok().logout(token);
                 }
             }
         }
@@ -870,7 +866,7 @@ async fn login(State(state): State<WebClientState>, headers: HeaderMap, Query(qu
         return page(StatusCode::TOO_MANY_REQUESTS, "<!doctype html><p>Too many sign-in attempts. Wait a minute.</p>".into());
     }
     let ok = match query.exp {
-        Some(exp) => state.lock_sessions().redeem_link(&expected, exp, &query.n, &query.sig, unix_now()),
+        Some(exp) => state.lock_sessions().redeem_link(&expected, exp, &query.n, &query.sig, now_secs()),
         None => false,
     };
     if !ok {
@@ -1273,7 +1269,7 @@ fn reap_if_still_parked(state: &WebClientState, client: &ClientId) {
 fn reap_client(state: &WebClientState, client: &ClientId) {
     crate::terminal::route_drop_window_views(client.as_str());
     if let Some(registry) = state.ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
-        let taken = registry.lock().unwrap_or_else(PoisonError::into_inner).release_client(client);
+        let taken = registry.lock_ok().release_client(client);
         for pty in &taken {
             // As `pty_kill` does: a login marking must not bless a later PTY
             // that reuses the id, and a pane this page put to sleep has no
@@ -1318,7 +1314,7 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, role: Role, id: u64,
             };
             let project_id = args.get("projectId").and_then(Value::as_str).map(str::to_string);
             let download = args.get("download").and_then(Value::as_bool).unwrap_or(false);
-            let out = match state.tickets.lock().unwrap_or_else(PoisonError::into_inner).mint(path, project_id, download) {
+            let out = match state.tickets.lock_ok().mint(path, project_id, download) {
                 Ok(ticket) => match state.content_url(&ticket) {
                     Some(url) => Ok(json!({ "url": url })),
                     None => Err(Value::String("desktop_file_ticket: this server has no user-content origin".into())),
@@ -1334,7 +1330,7 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, role: Role, id: u64,
             };
             let out = match (ctx.state.try_get::<crate::services::pick_grants::PickGrantsState>(), random_token()) {
                 (Some(grants), Ok(grant)) => {
-                    let grant = grants.lock().unwrap_or_else(PoisonError::into_inner).grant(std::path::PathBuf::from(path), grant);
+                    let grant = grants.lock_ok().grant(std::path::PathBuf::from(path), grant);
                     Ok(json!({ "grant": grant }))
                 }
                 (None, _) => Err(Value::String("desktop_file_grant: this host keeps no grants".into())),
@@ -1419,7 +1415,7 @@ async fn content(State(state): State<WebClientState>, headers: HeaderMap, RouteP
     if !state.enabled || !content_host_ok {
         return not_found();
     }
-    let Some((path, project_id, download)) = state.tickets.lock().unwrap_or_else(PoisonError::into_inner).get(&ticket) else {
+    let Some((path, project_id, download)) = state.tickets.lock_ok().get(&ticket) else {
         return not_found();
     };
     let name = Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());

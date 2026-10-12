@@ -23,6 +23,7 @@
 //! violation, so the asymmetry is the point.
 
 use std::collections::HashSet;
+use app_core::sync::LockExt;
 use std::sync::Mutex;
 
 use crate::schema::project::RemoteSpec;
@@ -47,7 +48,7 @@ pub fn remember(key: &str, careful: bool) {
     if !careful {
         return;
     }
-    let mut guard = CAREFUL_HOSTS.lock().unwrap();
+    let mut guard = CAREFUL_HOSTS.lock_ok();
     guard
         .get_or_insert_with(HashSet::new)
         .insert(key.to_string());
@@ -58,8 +59,7 @@ pub fn remember(key: &str, careful: bool) {
 /// target is never sampled wrongly, it just isn't gated yet.
 pub fn is_known_careful(key: &str) -> bool {
     CAREFUL_HOSTS
-        .lock()
-        .unwrap()
+        .lock_ok()
         .as_ref()
         .is_some_and(|s| s.contains(key))
 }
@@ -98,7 +98,7 @@ fn load_settings() -> Option<crate::schema::Settings> {
             }
         }
     }
-    let path = crate::storage::state_dir().join("settings.json");
+    let path = crate::storage::settings_path();
     match crate::storage::read_json::<crate::schema::Settings>(&path) {
         Ok(fresh) => {
             if let Ok(mut cache) = SETTINGS_CACHE.lock() {

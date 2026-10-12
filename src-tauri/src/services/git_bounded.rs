@@ -31,6 +31,7 @@
 //! pre-commit hook may run a test suite).
 
 use std::io::{Read, Write};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
@@ -229,7 +230,7 @@ fn refusal(path: &Path, what: &str) -> String {
 /// Log a refusal once per file, so a 12 s poll does not repeat it forever.
 fn warn_once(why: &str) {
     static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
-    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let mut seen = SEEN.lock_ok();
     if seen.get_or_insert_with(Default::default).insert(why.to_string()) {
         eprintln!("[git] {why}");
     }

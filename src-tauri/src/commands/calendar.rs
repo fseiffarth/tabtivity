@@ -15,6 +15,7 @@
 //! to unit-test. This module is storage plus identity.
 
 use std::collections::HashSet;
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -37,8 +38,7 @@ static CALENDAR_RMW_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_calendar() -> std::sync::MutexGuard<'static, ()> {
     CALENDAR_RMW_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock_ok()
 }
 
 pub(crate) fn calendar_path() -> PathBuf {
@@ -1171,24 +1171,17 @@ fn check_ics_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Offload a blocking calendar-store body to a worker thread. Every command
-/// below is a whole-file read (or read-modify-write) of `calendar.json` —
-/// written on every board drag — plus the user-picked `.ics` reads/writes; run
-/// synchronously on the main thread that turns into jank as CalDAV calendars
-/// grow (the freeze class `commands::git`'s `run_off_thread` doc describes).
-/// The `*_at` bodies stay sync and directly unit-testable.
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("calendar task failed: {e}"))?
-}
+// Offload a blocking calendar-store body to a worker thread. Every command
+// below is a whole-file read (or read-modify-write) of `calendar.json` —
+// written on every board drag — plus the user-picked `.ics` reads/writes; run
+// synchronously on the main thread that turns into jank as CalDAV calendars
+// grow (the freeze class `commands::git`'s off-thread note describes).
+// The `*_at` bodies stay sync and directly unit-testable.
 
 /// Read an `.ics` file the user picked, for the frontend parser.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_read_ics(path: String) -> Result<String, String> {
-    run_off_thread(move || calendar_read_ics_blocking(path)).await
+    app_core::rt::try_blocking("calendar", move || calendar_read_ics_blocking(path)).await
 }
 
 fn calendar_read_ics_blocking(path: String) -> Result<String, String> {
@@ -1211,7 +1204,7 @@ fn calendar_read_ics_blocking(path: String) -> Result<String, String> {
 /// Write an `.ics` file to the path the user picked.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_write_ics(path: String, content: String) -> Result<(), String> {
-    run_off_thread(move || calendar_write_ics_blocking(path, content)).await
+    app_core::rt::try_blocking("calendar", move || calendar_write_ics_blocking(path, content)).await
 }
 
 fn calendar_write_ics_blocking(path: String, content: String) -> Result<(), String> {
@@ -1255,7 +1248,7 @@ pub async fn calendar_replace_events(
     if crate::services::server::shared_calendar::is_shared_id(&calendar_id) {
         return Err("A shared calendar cannot be replaced in bulk; import into a calendar of your own".to_string());
     }
-    run_off_thread(move || replace_calendar_events_at(&calendar_path(), &calendar_id, events, tasks))
+    app_core::rt::try_blocking("calendar", move || replace_calendar_events_at(&calendar_path(), &calendar_id, events, tasks))
         .await
 }
 
@@ -1263,7 +1256,7 @@ pub async fn calendar_replace_events(
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_load() -> Result<CalendarData, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         let mut data = read_data(&calendar_path())?;
         // A hosted server: the calendars other users opened to this one, and
         // this user's own shared ones (plan §6.7).
@@ -1280,7 +1273,7 @@ pub async fn calendar_load() -> Result<CalendarData, String> {
 pub async fn calendar_save(mut data: CalendarData) -> Result<(), String> {
     // Shared calendars live in the server's calendar service, never here.
     crate::services::server::shared_calendar::strip_shared(&mut data);
-    run_off_thread(move || save_document_at(&calendar_path(), data)).await
+    app_core::rt::try_blocking("calendar", move || save_document_at(&calendar_path(), data)).await
 }
 
 /// Replace the whole store with `data` — the one whole-document write, and
@@ -1304,7 +1297,7 @@ pub(crate) fn save_document_at(path: &Path, data: CalendarData) -> Result<(), St
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_event(event: CalendarEvent) -> Result<CalendarEvent, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.put_event(&event, false)) {
             return routed;
         }
@@ -1327,7 +1320,7 @@ fn exists_locally(id: &str, events: bool) -> bool {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_event(event: CalendarEvent) -> Result<CalendarEvent, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.put_event(&event, exists_locally(&event.id, true))) {
             return routed;
         }
@@ -1338,7 +1331,7 @@ pub async fn update_event(event: CalendarEvent) -> Result<CalendarEvent, String>
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_event(id: String) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.delete_event(&id)) {
             return routed;
         }
@@ -1349,7 +1342,7 @@ pub async fn delete_event(id: String) -> Result<(), String> {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_task(task: CalendarTask) -> Result<CalendarTask, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.put_task(&task, false)) {
             return routed;
         }
@@ -1360,7 +1353,7 @@ pub async fn create_task(task: CalendarTask) -> Result<CalendarTask, String> {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_task(task: CalendarTask) -> Result<CalendarTask, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.put_task(&task, exists_locally(&task.id, false))) {
             return routed;
         }
@@ -1371,7 +1364,7 @@ pub async fn update_task(task: CalendarTask) -> Result<CalendarTask, String> {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_task(id: String) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.delete_task(&id)) {
             return routed;
         }
@@ -1383,7 +1376,7 @@ pub async fn delete_task(id: String) -> Result<(), String> {
 /// Apply a board drag. See [`move_tasks_at`].
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn todo_move_tasks(moves: Vec<TaskPlacement>) -> Result<Vec<CalendarTask>, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         // A shared to-do list's card moves to its new column through the
         // calendar service (its place within the column is not shared in
         // v1); every other card as before.
@@ -1411,17 +1404,17 @@ pub async fn todo_columns_set(
     columns: Vec<TaskColumn>,
     fallback_column: Option<String>,
 ) -> Result<CalendarData, String> {
-    run_off_thread(move || columns_set_at(&calendar_path(), columns, fallback_column)).await
+    app_core::rt::try_blocking("calendar", move || columns_set_at(&calendar_path(), columns, fallback_column)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_calendar(calendar: Calendar) -> Result<Calendar, String> {
-    run_off_thread(move || create_calendar_at(&calendar_path(), calendar)).await
+    app_core::rt::try_blocking("calendar", move || create_calendar_at(&calendar_path(), calendar)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_calendar(calendar: Calendar) -> Result<Calendar, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         // A shared calendar's only setting here is this user's own checkbox.
         if let (Some(shared), true) = (shared(), crate::services::server::shared_calendar::is_shared_id(&calendar.id)) {
             shared.set_visible(&calendar.id, calendar.visible)?;
@@ -1437,7 +1430,7 @@ pub async fn delete_calendar(id: String) -> Result<(), String> {
     if crate::services::server::shared_calendar::is_shared_id(&id) {
         return Err("A shared calendar is deleted by stopping sharing it (Server settings), or by its owner".to_string());
     }
-    run_off_thread(move || delete_calendar_at(&calendar_path(), &id)).await
+    app_core::rt::try_blocking("calendar", move || delete_calendar_at(&calendar_path(), &id)).await
 }
 
 /// Undo of [`delete_calendar`]. See [`restore_calendar_at`].
@@ -1447,7 +1440,7 @@ pub async fn restore_calendar(
     events: Vec<CalendarEvent>,
     tasks: Vec<CalendarTask>,
 ) -> Result<CalendarData, String> {
-    run_off_thread(move || restore_calendar_at(&calendar_path(), calendar, events, tasks)).await
+    app_core::rt::try_blocking("calendar", move || restore_calendar_at(&calendar_path(), calendar, events, tasks)).await
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 const modals: HTMLElement[] = [];
 export const hasActiveModal = () => modals.length > 0;
@@ -21,12 +21,21 @@ const focusable = 'button:not(:disabled), [href], input:not(:disabled), select:n
 export function useModalFocus(onDismiss: () => void, enabled = true) {
   const ref = useRef<HTMLDivElement>(null);
   const dismiss = useRef(onDismiss);
-  const opener = useRef(document.activeElement);
+  // Where the focus goes back to: read during render, before the dialog's own
+  // autoFocus moves it in. A host that stays mounted and opens through
+  // `enabled` (a store-driven question) reads it again each time it opens, not
+  // once at app start.
+  const [opener, setOpener] = useState(() => document.activeElement);
+  const [openState, setOpenState] = useState(enabled);
+  if (enabled !== openState) {
+    setOpenState(enabled);
+    if (enabled) setOpener(document.activeElement);
+  }
   useLayoutEffect(() => { dismiss.current = onDismiss; });
   useLayoutEffect(() => {
     const node = ref.current;
     if (!enabled || !node) return;
-    const previous = opener.current;
+    const previous = opener;
     modals.push(node);
     const items = () => Array.from(node.querySelectorAll<HTMLElement>(focusable))
       .filter((el) => el.tabIndex >= 0 && isVisibleControl(el));
@@ -58,6 +67,6 @@ export function useModalFocus(onDismiss: () => void, enabled = true) {
       document.removeEventListener("focusin", onFocus);
       if (wasTop && previous instanceof HTMLElement && previous.isConnected && (!modals.length || modals[modals.length - 1]?.contains(previous))) previous.focus();
     };
-  }, [enabled]);
+  }, [enabled, opener]);
   return ref;
 }

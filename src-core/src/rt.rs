@@ -64,6 +64,31 @@ where
     handle().spawn_blocking(func)
 }
 
+/// Run blocking work on the host runtime's blocking pool and wait for it — the
+/// one way an `async` command keeps file, process or socket work off the
+/// thread that drives it. A join failure (the closure panicked, or the runtime
+/// is shutting down) comes back as `"<label> task failed: …"`, so a caller
+/// needs one `?` instead of its own `.map_err(..)`.
+pub async fn blocking<F, T>(label: &str, func: F) -> Result<T, String>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    spawn_blocking(func)
+        .await
+        .map_err(|e| format!("{label} task failed: {e}"))
+}
+
+/// [`blocking`] for a closure that itself returns `Result<T, String>`: its
+/// error and a join failure land in the one `Err`, so no `??`.
+pub async fn try_blocking<F, T>(label: &str, func: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    blocking(label, func).await?
+}
+
 /// Drive a future to completion on the current thread. Like tokio's own
 /// `Handle::block_on`, this must not be called from inside a runtime worker —
 /// it is for plain threads (a watcher thread, a startup step).
@@ -90,5 +115,31 @@ mod tests {
         // can be awaited from this one.
         assert_eq!(spawn(async { 1 }).await.unwrap(), 1);
         assert_eq!(spawn_blocking(|| 2).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn blocking_returns_the_value_and_labels_a_panic() {
+        assert_eq!(blocking("probe", || 5).await, Ok(5));
+        let err = blocking("probe", || -> u8 { panic!("boom") }).await.unwrap_err();
+        assert!(err.starts_with("probe task failed: "), "{err}");
+    }
+
+    #[tokio::test]
+    async fn try_blocking_flattens_both_errors() {
+        assert_eq!(try_blocking("probe", || Ok::<_, String>(3)).await, Ok(3));
+        assert_eq!(
+            try_blocking("probe", || Err::<u8, _>("no such file".to_string())).await,
+            Err("no such file".to_string())
+        );
+        let err = try_blocking("probe", || -> Result<u8, String> { panic!("boom") })
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("probe task failed: "), "{err}");
+    }
+
+    #[test]
+    fn blocking_works_from_a_plain_thread() {
+        // No runtime current: the fallback's blocking pool still serves.
+        assert_eq!(block_on(try_blocking("probe", || Ok::<_, String>(9))), Ok(9));
     }
 }

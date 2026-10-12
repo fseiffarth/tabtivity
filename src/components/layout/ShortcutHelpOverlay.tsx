@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useRef, useState } from "react";
 import { useSettingsStore } from "../../stores/settings";
 import { useT } from "../../lib/i18n";
@@ -44,19 +45,11 @@ export function ShortcutHelpOverlay() {
   }, []);
 
   useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        setOpen(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
     // Focus the scroll body so the sheet is keyboard-walkable from the F1/?
     // press that opened it — arrows and PageUp/Down scroll with no pointer.
-    scrollRef.current?.focus();
-    return () => window.removeEventListener("keydown", onKey);
+    if (open) scrollRef.current?.focus();
   }, [open]);
+  const modalRef = useModalFocus(() => setOpen(false), open);
 
   if (!open) return null;
 
@@ -73,6 +66,8 @@ export function ShortcutHelpOverlay() {
       }}
     >
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="project-dialog dialog-framed shortcut-help-overlay"
         role="dialog"
         aria-modal="true"

@@ -37,16 +37,15 @@ pub struct UsageReport {
 /// a Tauri sync command would do that on the UI thread.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_bump(project_id: String, metrics: Counters) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || usage_stats::record(&project_id, &metrics))
+    app_core::rt::try_blocking("usage_bump", move || usage_stats::record(&project_id, &metrics))
         .await
-        .map_err(|e| format!("usage_bump task failed: {e}"))?
 }
 
 /// Every recorded counter for `project_id`, or summed across all projects when it
 /// is empty. Read-only — recording is internal to [`usage_bump`] and the watcher.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_summary(project_id: String) -> Result<UsageReport, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::blocking("usage_summary", move || {
         let stats = usage_stats::load();
         UsageReport {
             hours: stats.hourly_for(&project_id),
@@ -54,7 +53,6 @@ pub async fn usage_summary(project_id: String) -> Result<UsageReport, String> {
         }
     })
     .await
-    .map_err(|e| format!("usage_summary task failed: {e}"))
 }
 
 /// Agent token counters, in the [`UsageReport`] shape plus what the frontend
@@ -83,7 +81,7 @@ pub struct TokenReport {
 /// transcript there is.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_token_stats(project_id: String) -> Result<TokenReport, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::blocking("usage_token_stats", move || {
         let state_dir = crate::storage::state_dir();
         let scanned = crate::services::token_stats::scan(&state_dir, &known_scope_ids());
         TokenReport {
@@ -97,7 +95,6 @@ pub async fn usage_token_stats(project_id: String) -> Result<TokenReport, String
         }
     })
     .await
-    .map_err(|e| format!("usage_token_stats task failed: {e}"))
 }
 
 /// Every scope id an agent home can belong to: the root console, each
@@ -163,9 +160,8 @@ pub struct GitStats {
 /// an ordinary local path, works normally.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_git_stats(project_dir: String, since: String) -> Result<GitStats, String> {
-    tokio::task::spawn_blocking(move || git_stats_blocking(&project_dir, &since))
+    app_core::rt::try_blocking("usage_git_stats", move || git_stats_blocking(&project_dir, &since))
         .await
-        .map_err(|e| format!("usage_git_stats task failed: {e}"))?
 }
 
 fn git_stats_blocking(project_dir: &str, since: &str) -> Result<GitStats, String> {

@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { createPortal } from "react-dom";
 import { formatDownloadSize, stripControls } from "../../lib/browser";
 import { useT } from "../../lib/i18n";
@@ -33,11 +34,16 @@ export function BrowserDownloadDialog({
   onDecide: (accept: boolean) => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(() => onDecide(false));
   const size = formatDownloadSize(request.size_bytes);
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={() => onDecide(false)}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="settings-dialog browser-download-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

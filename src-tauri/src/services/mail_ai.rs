@@ -57,11 +57,6 @@ fn model_not_allowed_reason(model: &str) -> String {
 
 // ── Settings + model resolution ─────────────────────────────────────────────
 
-fn read_settings() -> Settings {
-    let path = crate::storage::state_dir().join("settings.json");
-    crate::storage::read_json(&path).unwrap_or_default()
-}
-
 /// The model the mail features run on: `ollama_roles["mail"] ?? ollama_model`.
 /// Pure over a settings snapshot so it can be tested without a state directory.
 pub fn mail_model_from(settings: &Settings) -> Option<String> {
@@ -82,7 +77,7 @@ pub fn mail_model_from(settings: &Settings) -> Option<String> {
 
 /// The configured mail model, or [`NO_MODEL`].
 pub fn mail_model() -> Result<String, String> {
-    mail_model_from(&read_settings()).ok_or_else(|| NO_MODEL.to_string())
+    mail_model_from(&crate::storage::load_settings().unwrap_or_default()).ok_or_else(|| NO_MODEL.to_string())
 }
 
 // ── Loopback enforcement ────────────────────────────────────────────────────
@@ -146,7 +141,7 @@ impl ChatOptions {
 /// unknown → allow, matching `model_capabilities`), and only then is the request
 /// sent. An unreachable server surfaces as [`NOT_RUNNING`].
 pub fn chat(system: &str, user: &str, opts: ChatOptions) -> Result<String, String> {
-    let settings = read_settings();
+    let settings = crate::storage::load_settings().unwrap_or_default();
     let model = mail_model_from(&settings).ok_or_else(|| NO_MODEL.to_string())?;
 
     // Loopback first — before capabilities, before the request, before anything
@@ -448,11 +443,7 @@ pub fn classify(
 /// on the message's own `Date`, so a UTC day boundary is close enough — the
 /// model is given both anchors and is never trusted as the clock anyway.
 pub fn today_iso() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0) as i64;
+    let secs = crate::clock::now_secs() as i64;
     let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
     format!("{y:04}-{m:02}-{d:02}")
 }

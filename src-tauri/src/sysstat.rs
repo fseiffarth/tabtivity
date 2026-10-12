@@ -18,6 +18,7 @@
 //! jiffies + USER_HZ; Windows 100-ns units + 10_000_000).
 
 use crate::brand::UPPER;
+use app_core::sync::LockExt;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -256,7 +257,7 @@ fn descendant_pids_within(roots: &[u32], max_age: Duration) -> Vec<u32> {
 
     let generation = PROC_TREE_GEN.load(Ordering::Relaxed);
     {
-        let cache = DESCENDANT_CACHE.lock().unwrap();
+        let cache = DESCENDANT_CACHE.lock_ok();
         if let Some(entry) = cache.iter().find(|e| {
             e.generation == generation && e.roots == key && e.computed_at.elapsed() < max_age
         }) {
@@ -274,7 +275,7 @@ fn descendant_pids_within(roots: &[u32], max_age: Duration) -> Vec<u32> {
     };
     let pids = compute_descendant_pids(&key, table_age);
 
-    let mut cache = DESCENDANT_CACHE.lock().unwrap();
+    let mut cache = DESCENDANT_CACHE.lock_ok();
     // A spawn/death or the TTL stales every entry at once (they all describe
     // the one process table), so dead entries are pruned wholesale — along
     // with any previous entry for this key, which the push below replaces.
@@ -2598,10 +2599,7 @@ mod platform {
 
         let uptime_secs = sysctl_read::<libc::timeval>(&mut [CTL_KERN, KERN_BOOTTIME])
             .map(|boot| {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
+                let now = crate::clock::now_secs() as i64;
                 (now - boot.tv_sec).max(0) as f64
             })
             .unwrap_or(0.0);

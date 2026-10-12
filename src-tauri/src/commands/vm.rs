@@ -38,9 +38,7 @@ pub struct VmStatus {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_doctor() -> Result<vm::VmDoctorReport, String> {
-    app_core::rt::spawn_blocking(vm::doctor)
-        .await
-        .map_err(|e| e.to_string())
+    app_core::rt::blocking("vm", vm::doctor).await
 }
 
 /// `async` + blocking pool rather than a plain synchronous command, which would
@@ -48,9 +46,7 @@ pub async fn vm_doctor() -> Result<vm::VmDoctorReport, String> {
 /// registry, and every VM project's pill polls it every few seconds.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_status(project_id: String) -> Result<VmStatus, String> {
-    app_core::rt::spawn_blocking(move || vm_status_blocking(&project_id))
-        .await
-        .map_err(|e| e.to_string())
+    app_core::rt::blocking("vm", move || vm_status_blocking(&project_id)).await
 }
 
 fn vm_status_blocking(project_id: &str) -> VmStatus {
@@ -73,18 +69,14 @@ fn vm_status_blocking(project_id: &str) -> VmStatus {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_boot(project_id: String) -> Result<vm::VmRuntime, String> {
     let name = project_name(&project_id).unwrap_or_else(|| "project".to_string());
-    app_core::rt::spawn_blocking(move || vm::ensure_booted(&project_id, &name))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("vm", move || vm::ensure_booted(&project_id, &name)).await
 }
 
 /// Shut the project's VM down (disconnecting the pooled session first is the
 /// caller's job — `stores/projects` already disconnects on deactivate).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_shutdown(project_id: String) -> Result<(), String> {
-    app_core::rt::spawn_blocking(move || vm::shutdown(&project_id))
-        .await
-        .map_err(|e| e.to_string())
+    app_core::rt::blocking("vm", move || vm::shutdown(&project_id)).await
 }
 
 /// Recreate the overlay from the base image. Refused while running; the
@@ -92,9 +84,7 @@ pub async fn vm_shutdown(project_id: String) -> Result<(), String> {
 /// or pulled to an opted-in mirror — survives").
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vm_rebuild(project_id: String) -> Result<(), String> {
-    app_core::rt::spawn_blocking(move || vm::rebuild(&project_id))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("vm", move || vm::rebuild(&project_id)).await
 }
 
 /// The blocked-connections log (Proxy egress) for the pill / settings dialog.
@@ -217,20 +207,19 @@ pub async fn vm_unpushed_commits(project_id: String) -> Result<Option<u64>, Stri
     let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
         return Ok(None);
     };
-    let count = app_core::rt::spawn_blocking(move || {
+    let count = app_core::rt::try_blocking("vm", move || {
         crate::services::ssh_exec::run_remote_script(
             &target.spec,
             "git rev-list --count --branches --not --remotes 2>/dev/null || true",
         )
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     let text = String::from_utf8_lossy(&count.stdout);
     Ok(text.trim().parse::<u64>().ok())
 }
 
 pub(crate) fn project_name(project_id: &str) -> Option<String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: ProjectsList = storage::read_json(&list_path).ok()?;
     list.into_iter()
         .find(|e| e.id == project_id)

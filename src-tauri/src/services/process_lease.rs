@@ -25,6 +25,7 @@
 //! On a server the daemon is the only process; the leases cost a lock file.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -91,7 +92,7 @@ pub fn claim(key: &str) -> bool {
 }
 
 fn with_held<R>(f: impl FnOnce(&mut HashMap<PathBuf, FileLock>) -> R) -> R {
-    let mut held = HELD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut held = HELD.lock_ok();
     f(held.get_or_insert_with(HashMap::new))
 }
 

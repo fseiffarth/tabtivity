@@ -1,8 +1,9 @@
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex},
 };
+use app_core::sync::LockExt;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -50,7 +51,7 @@ fn cancel_left_behind(context: &AdminContext, why: &str) {
 /// answers changes the reply.
 /// `allowed` narrows it to the phones an agent notice's scope is open to.
 fn queue_notice(auth: &Arc<Mutex<AuthStore>>, notice: &Notice, allowed: Option<&[String]>) -> AdminResponse {
-    let deliveries = match auth.lock().unwrap_or_else(PoisonError::into_inner).push_deliveries(notice, allowed) {
+    let deliveries = match auth.lock_ok().push_deliveries(notice, allowed) {
         Ok(deliveries) => deliveries,
         Err(message) => return AdminResponse::Error { message },
     };
@@ -59,7 +60,7 @@ fn queue_notice(auth: &Arc<Mutex<AuthStore>>, notice: &Notice, allowed: Option<&
             let auth = auth.clone();
             runtime.spawn(async move {
                 for endpoint in push::send(deliveries).await {
-                    auth.lock().unwrap_or_else(PoisonError::into_inner).push_lapse_endpoint(&endpoint);
+                    auth.lock_ok().push_lapse_endpoint(&endpoint);
                 }
             });
         }
@@ -186,15 +187,15 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
             origin: context.origin.clone(),
             version: Some(env!("CARGO_PKG_VERSION").into()),
         },
-        Ok(AdminRequest::PairingCode) => match auth.lock().unwrap_or_else(PoisonError::into_inner).create_pairing_code() {
+        Ok(AdminRequest::PairingCode) => match auth.lock_ok().create_pairing_code() {
             Ok((code, expires_at)) => AdminResponse::PairingCode { code: crate::services::server::routed_pairing_code(&code), expires_at },
             Err(message) => AdminResponse::Error { message },
         },
         Ok(AdminRequest::Devices) => AdminResponse::Devices {
-            devices: auth.lock().unwrap_or_else(PoisonError::into_inner).devices(),
+            devices: auth.lock_ok().devices(),
         },
         Ok(AdminRequest::Revoke { device_id }) => {
-            let revoked = auth.lock().unwrap_or_else(PoisonError::into_inner).revoke(&device_id);
+            let revoked = auth.lock_ok().revoke(&device_id);
             match revoked {
                 Ok(()) => {
                     cancel_left_behind(context, "after a revoke");
@@ -204,15 +205,14 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
             }
         }
         Ok(AdminRequest::SetHiddenSections { device_id, sections }) => match auth
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_ok()
             .set_hidden_sections(&device_id, &sections)
         {
             Ok(()) => AdminResponse::Ok,
             Err(message) => AdminResponse::Error { message },
         },
         Ok(AdminRequest::ForgetAll) => {
-            let forgotten = auth.lock().unwrap_or_else(PoisonError::into_inner).forget_all();
+            let forgotten = auth.lock_ok().forget_all();
             match forgotten {
                 Ok(()) => {
                     cancel_left_behind(context, "after Lock down");

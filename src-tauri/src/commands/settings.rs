@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_settings() -> Result<Settings, String> {
-    let path = storage::state_dir().join("settings.json");
+    let path = storage::settings_path();
     let mut settings = if path.exists() {
         storage::read_json(&path).map_err(|e| e.to_string())?
     } else {
@@ -46,7 +46,7 @@ pub const SETTINGS_STALE: &str =
 /// backend without `patch_settings`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_settings(settings: Settings) -> Result<(), String> {
-    save_settings_at(&storage::state_dir().join("settings.json"), settings)
+    save_settings_at(&storage::settings_path(), settings)
 }
 
 fn save_settings_at(path: &std::path::Path, settings: Settings) -> Result<(), String> {
@@ -77,7 +77,7 @@ fn save_settings_at(path: &std::path::Path, settings: Settings) -> Result<(), St
 /// the exact object that won, so every sender can broadcast the same snapshot.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn patch_settings(patch: Map<String, Value>) -> Result<Settings, String> {
-    patch_settings_at(&storage::state_dir().join("settings.json"), patch)
+    patch_settings_at(&storage::settings_path(), patch)
 }
 
 fn patch_settings_at(path: &std::path::Path, mut patch: Map<String, Value>) -> Result<Settings, String> {
@@ -121,7 +121,7 @@ fn merge_settings_patch(settings: &mut Settings, patch: Map<String, Value>) -> R
 /// user drags or resizes the main window; it must never replace unrelated keys.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_window_state(state: WindowState) -> Result<(), String> {
-    let path = storage::state_dir().join("settings.json");
+    let path = storage::settings_path();
     storage::patch_json(&path, Settings::default(), |settings| {
         settings.window_state = Some(state);
         settings.rev += 1;

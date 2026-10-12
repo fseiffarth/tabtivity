@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Toggle } from "../common/Toggle";
@@ -41,7 +42,7 @@ import { useRemoteMachinesStore, type DroppedGlobalMachine } from "../../stores/
 import { Dropdown } from "../common/Dropdown";
 import { PasswordInput } from "../common/PasswordInput";
 import { FolderPickerDialog } from "../common/FolderPickerDialog";
-import { useDialogs } from "../common/PromptDialogs";
+import { AsyncConfirmDialog, useDialogs } from "../common/PromptDialogs";
 import { RemoteConnMenu } from "../header/RemoteConnMenu";
 import { VmSettingsDialog } from "./VmSettingsDialog";
 import { categoryColor, primaryCategoryColor, projectCategories } from "../../lib/theme/categoryColor";
@@ -111,6 +112,7 @@ function ActivityWindow({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [data, setData] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
@@ -125,6 +127,10 @@ function ActivityWindow({
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="activity-window"
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -155,6 +161,7 @@ function EditDescriptionWindow({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [value, setValue] = useState(projectDescription(project));
   const [saving, setSaving] = useState(false);
 
@@ -171,6 +178,10 @@ function EditDescriptionWindow({
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="project-dialog edit-description-window"
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -185,7 +196,6 @@ function EditDescriptionWindow({
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void save();
-            if (e.key === "Escape") onClose();
           }}
         />
         <div className="project-dialog-actions">
@@ -235,6 +245,7 @@ function RenameWindow({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [value, setValue] = useState(project.name);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -290,6 +301,10 @@ function RenameWindow({
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="project-dialog edit-description-window"
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -308,7 +323,6 @@ function RenameWindow({
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter") void save();
-            if (e.key === "Escape") onClose();
           }}
         />
         {folderSupported && plan && (
@@ -336,7 +350,6 @@ function RenameWindow({
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void save();
-                    if (e.key === "Escape") onClose();
                   }}
                 />
                 <div className="project-dialog-path">
@@ -395,6 +408,7 @@ function PublishWindow({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [provider, setProvider] = useState<GitProvider>(() => guessProvider(project));
   const [visibility, setVisibility] = useState<"public" | "private">(
     project.git_type === "remote-public" ? "public" : "private",
@@ -457,7 +471,7 @@ function PublishWindow({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.publishTitle", { name: project.name, provider: providerName(provider) })}</h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
@@ -590,6 +604,7 @@ function GitHostingWindow({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const getProjectGitHosting = useProjectsStore((s) => s.getProjectGitHosting);
   const setProjectGitHosting = useProjectsStore((s) => s.setProjectGitHosting);
   const [info, setInfo] = useState<GitHostingInfo | null>(null);
@@ -651,7 +666,7 @@ function GitHostingWindow({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.gitHostingTitle", { name: project.name })}</h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
@@ -720,268 +735,6 @@ function GitHostingWindow({
   );
 }
 
-function DisableGitWindow({
-  project,
-  onConfirm,
-  onClose,
-}: {
-  project: ProjectEntry;
-  onConfirm: () => Promise<void>;
-  onClose: () => void;
-}) {
-  const t = useT();
-  const [typed, setTyped] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  // Require the exact project name to arm the destructive button.
-  const armed = typed.trim() === project.name.trim() && !busy;
-
-  const run = async () => {
-    if (!armed) return;
-    setBusy(true);
-    setError("");
-    try {
-      await onConfirm();
-      onClose();
-    } catch (err) {
-      setError(String(err));
-      setBusy(false);
-    }
-  };
-
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="settings-title-row">
-          <h2>{t("pill.disableGitTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
-        </div>
-        <div className="project-dialog-error">
-          {t("pill.disableGitWarn1")} <code>.git</code> {t("pill.disableGitWarn2")}{" "}
-          <strong>{t("pill.cannotBeUndone")}</strong>
-          {" "}{t("pill.disableGitWarn3")}
-        </div>
-        <label>
-          {t("pill.typeNameConfirmPre")} <code>{project.name}</code> {t("pill.typeNameConfirmPost")}
-          <input
-            type="text"
-            value={typed}
-            autoFocus
-            placeholder={project.name}
-            onChange={(e) => setTyped(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void run();
-              if (e.key === "Escape") onClose();
-            }}
-          />
-        </label>
-        {error && <ErrorNote className="project-dialog-error" error={error} />}
-        <div className="project-dialog-actions">
-          <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
-          <button
-            type="button"
-            className="danger"
-            onClick={() => void run()}
-            disabled={!armed}
-          >
-            {busy ? t("pill.removing") : t("pill.deleteGitHistory")}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-/** Simple (reversible) confirm for deleting a project to the archive. Permanent
- *  deletion lives behind a typed-confirm in Settings → Archived projects. */
-function ArchiveConfirmWindow({
-  project,
-  onConfirm,
-  onClose,
-}: {
-  project: ProjectEntry;
-  onConfirm: () => Promise<void>;
-  onClose: () => void;
-}) {
-  const t = useT();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const run = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await onConfirm();
-      onClose();
-    } catch (err) {
-      setError(String(err));
-      setBusy(false);
-    }
-  };
-
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="settings-title-row">
-          <h2>{t("pill.deleteProjectTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
-        </div>
-        <p className="settings-help">
-          {t("pill.archiveDescPre")} <strong>{project.name}</strong> {t("pill.archiveDescMid")}{" "}
-          <em>{t("pill.archiveSettingsLink")}</em>.
-          {project.remote && (
-            <> {t("pill.archiveRemoteNotTouchedPre")} <strong>{t("pill.notWord")}</strong> {t("pill.archiveRemoteNotTouchedPost")}</>
-          )}
-        </p>
-        {error && <ErrorNote className="project-dialog-error" error={error} />}
-        <div className="project-dialog-actions">
-          <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
-          <button
-            type="button"
-            className="danger"
-            autoFocus
-            onClick={() => void run()}
-            disabled={busy}
-          >
-            {busy ? t("pill.deleting") : t("pill.deleteToArchive")}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-/** Confirm for **Remove from Tabtivity**: the project leaves the pill list and Tabtivity's
- *  state dirs about it are purged, but its folder stays exactly where it is with
- *  everything in it — `project.json`, scaffold files, the user's own files. This is
- *  the "undo a botched import" verb: afterwards the folder can be imported again
- *  (the duplicate gate only looks at the registry). Same shape as
- *  `ArchiveConfirmWindow`; the only differences are the words and the verb. */
-function ForgetConfirmWindow({
-  project,
-  onConfirm,
-  onClose,
-}: {
-  project: ProjectEntry;
-  onConfirm: () => Promise<void>;
-  onClose: () => void;
-}) {
-  const t = useT();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const run = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await onConfirm();
-      onClose();
-    } catch (err) {
-      setError(String(err));
-      setBusy(false);
-    }
-  };
-
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="settings-title-row">
-          <h2>{t("pill.forgetProjectTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
-        </div>
-        <p className="settings-help">
-          {t("pill.forgetDescPre")} <strong>{project.name}</strong> {t("pill.forgetDescMid")}{" "}
-          <strong>{t("pill.notWord")}</strong> {t("pill.forgetDescPost")}
-          {project.remote && <> {t("pill.forgetRemoteNote")}</>}
-        </p>
-        {error && <ErrorNote className="project-dialog-error" error={error} />}
-        <div className="project-dialog-actions">
-          <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
-          <button
-            type="button"
-            className="danger"
-            autoFocus
-            onClick={() => void run()}
-            disabled={busy}
-          >
-            {busy ? t("pill.forgetting") : t("pill.forgetProjectConfirm")}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-/** Confirm for detaching a remote (SSH) project back to local. The host's files are never
- *  touched — only the local mirror is promoted back in place.
- *
- *  Lives in the pill's **danger zone** despite destroying nothing on either side, because
- *  what it drops is not a file but a *pairing*: `clear_host_bound_state` discards the
- *  byte-sync manifest (every auto-sync marker the user set up for this host, and every
- *  size/mtime base behind the file tree's green) along with the lockstep state. That purge
- *  is mandatory — those records describe ONE host, and a project that keeps its id can be
- *  re-extended to a different one — but it is not undoable, and re-attaching the very same
- *  host means choosing the auto-sync scope again from scratch. Say so before, not after. */
-function DetachRemoteWindow({
-  project,
-  onConfirm,
-  onClose,
-}: {
-  project: ProjectEntry;
-  onConfirm: () => Promise<void>;
-  onClose: () => void;
-}) {
-  const t = useT();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const run = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await onConfirm();
-      onClose();
-    } catch (err) {
-      setError(String(err));
-      setBusy(false);
-    }
-  };
-
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="settings-title-row">
-          <h2>{t("pill.detachTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
-        </div>
-        <p className="settings-help">
-          {t("pill.detachDesc1Pre")} <strong>{project.name}</strong> {t("pill.detachDesc1Mid")}
-          {" "}<strong>{t("pill.notWord")}</strong> {t("pill.detachDesc1Post")}
-        </p>
-        <p className="settings-help">
-          {t("pill.detachDesc2Pre")} <strong>{t("pill.pairingWord")}</strong>{t("pill.detachDesc2Post")}
-        </p>
-        {error && <ErrorNote className="project-dialog-error" error={error} />}
-        <div className="project-dialog-actions">
-          <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
-          <button type="button" autoFocus onClick={() => void run()} disabled={busy}>
-            {busy ? t("pill.detaching") : t("pill.detachToLocal")}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-/** Simple confirm for unpublishing (forgetting the push target). Non-destructive:
- *  the hosted repo and local history are both kept. */
 /**
  * Edit a project's container spec — image/Dockerfile source, network, resource
  * caps, read-only rootfs (#38). The knobs existed in `SandboxSpec` before but
@@ -999,6 +752,7 @@ function ContainerSettingsWindow({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const setProjectSandboxSpec = useProjectsStore((s) => s.setProjectSandboxSpec);
   const spec = project.sandbox;
   const [dockerfile, setDockerfile] = useState(spec?.dockerfile ?? "");
@@ -1049,7 +803,7 @@ function ContainerSettingsWindow({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.containerSettingsTitle", { name: project.name })}</h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
@@ -1184,7 +938,9 @@ function ContainerSettingsWindow({
   );
 }
 
-function UnpublishWindow({
+/** Delete `.git` and its history: the one danger-zone confirm armed only by
+ *  typing the project's exact name. */
+function DisableGitConfirm({
   project,
   onConfirm,
   onClose,
@@ -1194,44 +950,41 @@ function UnpublishWindow({
   onClose: () => void;
 }) {
   const t = useT();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const run = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await onConfirm();
-      onClose();
-    } catch (err) {
-      setError(String(err));
-      setBusy(false);
-    }
-  };
-
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="settings-title-row">
-          <h2>{t("pill.unpublishTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
-        </div>
-        <p className="settings-help">
-          {t("pill.unpublishDesc1")} <code>origin</code> {t("pill.unpublishDesc2")}
-          {" "}{providerName(project.git_provider)} {t("pill.unpublishDesc3")} <strong>{t("pill.notWord")}</strong>{" "}
-          {t("pill.unpublishDesc4")}
-        </p>
-        {error && <ErrorNote className="project-dialog-error" error={error} />}
-        <div className="project-dialog-actions">
-          <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
-          <button type="button" autoFocus onClick={() => void run()} disabled={busy}>
-            {busy ? t("pill.unpublishing") : t("pill.unpublishKeepRepo")}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+  const [typed, setTyped] = useState("");
+  return (
+    <AsyncConfirmDialog
+      title={t("pill.disableGitTitle", { name: project.name })}
+      confirmLabel={t("pill.deleteGitHistory")}
+      busyLabel={t("pill.removing")}
+      danger
+      armed={typed.trim() === project.name.trim()}
+      autoFocusConfirm={false}
+      onConfirm={onConfirm}
+      onClose={onClose}
+    >
+      {(confirm) => (
+        <>
+          <div className="project-dialog-error">
+            {t("pill.disableGitWarn1")} <code>.git</code> {t("pill.disableGitWarn2")}{" "}
+            <strong>{t("pill.cannotBeUndone")}</strong>
+            {" "}{t("pill.disableGitWarn3")}
+          </div>
+          <label>
+            {t("pill.typeNameConfirmPre")} <code>{project.name}</code> {t("pill.typeNameConfirmPost")}
+            <input
+              type="text"
+              value={typed}
+              autoFocus
+              placeholder={project.name}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") confirm();
+              }}
+            />
+          </label>
+        </>
+      )}
+    </AsyncConfirmDialog>
   );
 }
 
@@ -1246,6 +999,7 @@ function VisibilityWindow({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const current: "public" | "private" =
     project.git_type === "remote-public" ? "public" : "private";
   const target: "public" | "private" = current === "public" ? "private" : "public";
@@ -1270,7 +1024,7 @@ function VisibilityWindow({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.changeVisibilityTitle", { name: project.name })}</h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
@@ -1314,6 +1068,7 @@ function MigrateProviderWindow({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const currentProvider: GitProvider = project.git_provider === "gitlab" ? "gitlab" : "github";
   const [provider, setProvider] = useState<GitProvider>(
     currentProvider === "github" ? "gitlab" : "github",
@@ -1345,7 +1100,7 @@ function MigrateProviderWindow({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.moveToProviderTitle", { name: project.name })}</h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
@@ -2723,22 +2478,48 @@ export function ProjectPill({
         />
       )}
 
-      {/* Detach a remote project back to local */}
+      {/* Detach a remote project back to local. The host's files are never
+          touched; only the local mirror is promoted back in place. It sits in
+          the danger zone anyway: `clear_host_bound_state` drops the pairing
+          (the byte-sync manifest — every auto-sync marker and size/mtime base
+          for this host — and the lockstep state). That purge is mandatory,
+          since those records describe ONE host and a project keeping its id
+          can be re-extended to another, but it is not undoable: say so before,
+          not after. */}
       {showDetach && (
-        <DetachRemoteWindow
-          project={project}
+        <AsyncConfirmDialog
+          title={t("pill.detachTitle", { name: project.name })}
+          confirmLabel={t("pill.detachToLocal")}
+          busyLabel={t("pill.detaching")}
           onConfirm={() => detachProjectFromRemote(project.id)}
           onClose={() => setShowDetach(false)}
-        />
+        >
+          <p className="settings-help">
+            {t("pill.detachDesc1Pre")} <strong>{project.name}</strong> {t("pill.detachDesc1Mid")}
+            {" "}<strong>{t("pill.notWord")}</strong> {t("pill.detachDesc1Post")}
+          </p>
+          <p className="settings-help">
+            {t("pill.detachDesc2Pre")} <strong>{t("pill.pairingWord")}</strong>{t("pill.detachDesc2Post")}
+          </p>
+        </AsyncConfirmDialog>
       )}
 
-      {/* Unpublish (forget the push target, keep repo + history) */}
+      {/* Unpublish (forget the push target). Non-destructive: the hosted repo
+          and local history are both kept. */}
       {showUnpublish && (
-        <UnpublishWindow
-          project={project}
+        <AsyncConfirmDialog
+          title={t("pill.unpublishTitle", { name: project.name })}
+          confirmLabel={t("pill.unpublishKeepRepo")}
+          busyLabel={t("pill.unpublishing")}
           onConfirm={() => unpublishProject(project.id)}
           onClose={() => setShowUnpublish(false)}
-        />
+        >
+          <p className="settings-help">
+            {t("pill.unpublishDesc1")} <code>origin</code> {t("pill.unpublishDesc2")}
+            {" "}{providerName(project.git_provider)} {t("pill.unpublishDesc3")} <strong>{t("pill.notWord")}</strong>{" "}
+            {t("pill.unpublishDesc4")}
+          </p>
+        </AsyncConfirmDialog>
       )}
 
       {/* Flip repository visibility (public ↔ private) in place */}
@@ -2776,7 +2557,7 @@ export function ProjectPill({
 
       {/* Destructive: delete .git + history (typed-confirm) */}
       {showDisableGit && (
-        <DisableGitWindow
+        <DisableGitConfirm
           project={project}
           onConfirm={() => setProjectGitDisabled(project.id, true)}
           onClose={() => setShowDisableGit(false)}
@@ -2790,20 +2571,45 @@ export function ProjectPill({
 
       {/* Delete → archive (reversible; simple confirm) */}
       {showArchive && (
-        <ArchiveConfirmWindow
-          project={project}
+        <AsyncConfirmDialog
+          title={t("pill.deleteProjectTitle", { name: project.name })}
+          confirmLabel={t("pill.deleteToArchive")}
+          busyLabel={t("pill.deleting")}
+          danger
           onConfirm={() => archiveProject(project.id)}
           onClose={() => setShowArchive(false)}
-        />
+        >
+          {/* Reversible; permanent deletion lives behind a typed confirm in
+              Settings → Archived projects. */}
+          <p className="settings-help">
+            {t("pill.archiveDescPre")} <strong>{project.name}</strong> {t("pill.archiveDescMid")}{" "}
+            <em>{t("pill.archiveSettingsLink")}</em>.
+            {project.remote && (
+              <> {t("pill.archiveRemoteNotTouchedPre")} <strong>{t("pill.notWord")}</strong> {t("pill.archiveRemoteNotTouchedPost")}</>
+            )}
+          </p>
+        </AsyncConfirmDialog>
       )}
 
-      {/* Remove from Tabtivity (folder stays on disk; simple confirm) */}
+      {/* Remove from Tabtivity: the project leaves the pill list and the state
+          dirs about it are purged, but its folder stays where it is with
+          everything in it. The "undo a botched import" verb: the folder can be
+          imported again afterwards (the duplicate gate reads the registry). */}
       {showForget && (
-        <ForgetConfirmWindow
-          project={project}
+        <AsyncConfirmDialog
+          title={t("pill.forgetProjectTitle", { name: project.name })}
+          confirmLabel={t("pill.forgetProjectConfirm")}
+          busyLabel={t("pill.forgetting")}
+          danger
           onConfirm={() => forgetProject(project.id)}
           onClose={() => setShowForget(false)}
-        />
+        >
+          <p className="settings-help">
+            {t("pill.forgetDescPre")} <strong>{project.name}</strong> {t("pill.forgetDescMid")}{" "}
+            <strong>{t("pill.notWord")}</strong> {t("pill.forgetDescPost")}
+            {project.remote && <> {t("pill.forgetRemoteNote")}</>}
+          </p>
+        </AsyncConfirmDialog>
       )}
 
       <div

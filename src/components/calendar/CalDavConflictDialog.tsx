@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useState } from "react";
 import { UntestedTag } from "../common/UntestedTag";
 import { useCalDavStore } from "../../stores/calendar/caldav";
@@ -54,6 +55,9 @@ export function CalDavConflictDialog() {
   // re-syncs the whole collection, which can resolve a sibling conflict on its
   // own).
   const conflict = conflicts[0];
+  // Escape answers nothing, like the backdrop (see below): "Decide later" is
+  // the way out.
+  const modalRef = useModalFocus(() => {}, !!conflict);
   if (!conflict) return null;
 
   const run = async (fn: () => Promise<void>, tag: string) => {
@@ -70,7 +74,7 @@ export function CalDavConflictDialog() {
     // has not been told about, which is the thing the dialog exists to prevent.
     // "Decide later" is a button, so the way out is a decision to defer.
     <div className="modal-backdrop">
-      <div className="project-dialog caldav-conflict-dialog">
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog caldav-conflict-dialog">
         <h2 className="caldav-conflict-title">
           {t("caldavConflict.title")} <UntestedTag id="caldavConflict.title" />
         </h2>

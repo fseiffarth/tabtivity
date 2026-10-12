@@ -47,6 +47,7 @@
 //! may assume they are stable across boots.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -368,8 +369,7 @@ fn boot_locks() -> &'static Mutex<HashMap<String, Arc<Mutex<()>>>> {
 
 fn boot_lock_for(project_id: &str) -> Arc<Mutex<()>> {
     boot_locks()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .entry(project_id.to_string())
         .or_default()
         .clone()
@@ -387,7 +387,7 @@ pub fn vm_ssh_opts(host: &str, port: Option<u16>) -> Vec<String> {
     if host != "127.0.0.1" && host != "localhost" && host != "::1" {
         return Vec::new();
     }
-    let reg = registry().lock().unwrap();
+    let reg = registry().lock_ok();
     // A **live** claim on the port wins over a stale one. A QEMU killed from
     // outside (or crashed) leaves its registry entry behind and releases its
     // port back to the ephemeral pool, so the next VM can be handed exactly it —
@@ -431,7 +431,7 @@ pub fn is_vm_spec(spec: &RemoteSpec) -> bool {
 /// The `VmSpec` mirrored into a `projects.json` entry's `extra["vm"]`, or
 /// `None` for a non-VM project. The always-local copy, like `sandbox`'s.
 pub fn vm_spec_for(project_id: &str) -> Option<VmSpec> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: ProjectsList = storage::read_json(&list_path).ok()?;
     let entry = list.into_iter().find(|e| e.id == project_id)?;
     let value = entry.extra.get("vm")?;
@@ -440,7 +440,7 @@ pub fn vm_spec_for(project_id: &str) -> Option<VmSpec> {
 
 /// Whether this project's VM is currently running (registry + live pid).
 pub fn is_running(project_id: &str) -> bool {
-    let reg = registry().lock().unwrap();
+    let reg = registry().lock_ok();
     reg.get(project_id)
         .map(|vm| pid_is_live_qemu(vm.runtime.pid))
         .unwrap_or(false)
@@ -448,7 +448,7 @@ pub fn is_running(project_id: &str) -> bool {
 
 /// The live runtime record for a running VM (`None` when off).
 pub fn running_state(project_id: &str) -> Option<VmRuntime> {
-    let reg = registry().lock().unwrap();
+    let reg = registry().lock_ok();
     reg.get(project_id)
         .filter(|vm| pid_is_live_qemu(vm.runtime.pid))
         .map(|vm| vm.runtime.clone())
@@ -1402,7 +1402,7 @@ fn ensure_proxy_token(dir: &Path) -> Result<String, String> {
     }
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|e| format!("no system randomness: {e}"))?;
-    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let token = crate::digest::hex(&bytes);
     crate::services::mobile_control::store::write_bytes_atomic(&path, token.as_bytes(), 0o600)?;
     Ok(token)
 }
@@ -1517,13 +1517,13 @@ fn wait_ssh_ready(port: u16, timeout: Duration) -> Result<(), String> {
 /// has answered — `remote_connect` can proceed immediately.
 pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, String> {
     let lock = boot_lock_for(project_id);
-    let _guard = lock.lock().unwrap();
+    let _guard = lock.lock_ok();
 
     if let Some(runtime) = running_state(project_id) {
         return Ok(runtime);
     }
     // Not (live-)registered: clear any stale entry.
-    registry().lock().unwrap().remove(project_id);
+    registry().lock_ok().remove(project_id);
     // One QEMU per disk: a VM the other process sharing this state dir (the
     // window or its desktop sidecar) booted is that process's, never booted a
     // second time nor reaped from here (`process_lease`, final review B4).
@@ -1662,7 +1662,7 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
         base_image,
     };
     storage::write_json(&dir.join("vm.json"), &runtime).map_err(|e| e.to_string())?;
-    registry().lock().unwrap().insert(
+    registry().lock_ok().insert(
         project_id.to_string(),
         RunningVm {
             dir: dir.clone(),
@@ -1801,10 +1801,10 @@ fn teardown_runtime_files(dir: &Path) {
 pub fn shutdown(project_id: &str) {
     // A VM the other process booted and still runs stays up.
     let Some(_free) = crate::services::process_lease::free_to_tear_down(&lease_key(&vm_dir(project_id))) else {
-        registry().lock().unwrap().remove(project_id);
+        registry().lock_ok().remove(project_id);
         return;
     };
-    let removed = registry().lock().unwrap().remove(project_id);
+    let removed = registry().lock_ok().remove(project_id);
     let dir = removed
         .as_ref()
         .map(|vm| vm.dir.clone())
@@ -1856,7 +1856,7 @@ pub fn shutdown(project_id: &str) {
 /// Shut down every VM this process booted (app exit). VM lifetime is the app
 /// session, never longer — like the project containers.
 pub fn down_all() {
-    let ids: Vec<String> = registry().lock().unwrap().keys().cloned().collect();
+    let ids: Vec<String> = registry().lock_ok().keys().cloned().collect();
     for id in ids {
         shutdown(&id);
     }

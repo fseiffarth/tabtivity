@@ -16,6 +16,7 @@
 //! unwatches it.
 
 use std::path::{Path, PathBuf};
+use app_core::sync::LockExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -149,7 +150,7 @@ pub fn watch_dir(
     }
     let canonical = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
 
-    let mut guard = state.lock().unwrap();
+    let mut guard = state.lock_ok();
     if let Some((current, spelled, _)) = guard.as_ref() {
         if *current == canonical && *spelled == path {
             return Ok(()); // already watching this directory
@@ -258,7 +259,7 @@ pub fn watch_dir(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn unwatch_dir(ctx: Ctx) -> Result<(), String> {
     let state = ctx.get::<FsWatchState>();
-    *state.lock().unwrap() = None;
+    *state.lock_ok() = None;
     Ok(())
 }
 

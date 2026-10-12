@@ -14,8 +14,9 @@
 //! * Text frames pass as they are; binary frames as base64.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
@@ -42,7 +43,7 @@ impl ConnectBridge {
     /// (an event to a missing window is no error), and the server would keep
     /// serving a client that no longer exists.
     pub fn close_all(&self) {
-        for (_, sender) in self.sockets.lock().unwrap_or_else(PoisonError::into_inner).drain() {
+        for (_, sender) in self.sockets.lock_ok().drain() {
             let _ = sender.send(Message::Close(None));
         }
     }
@@ -182,7 +183,7 @@ pub async fn connect_ws_open(app: AppHandle, window: tauri::Window, bridge: taur
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let bridge = bridge.inner().clone();
     let id = bridge.next.fetch_add(1, Ordering::Relaxed) + 1;
-    bridge.sockets.lock().unwrap_or_else(PoisonError::into_inner).insert(id, tx);
+    bridge.sockets.lock_ok().insert(id, tx);
     tauri::async_runtime::spawn(async move {
         while let Some(message) = rx.recv().await {
             let closing = matches!(message, Message::Close(_));
@@ -205,7 +206,7 @@ pub async fn connect_ws_open(app: AppHandle, window: tauri::Window, bridge: taur
                 break;
             }
         }
-        bridge.sockets.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
+        bridge.sockets.lock_ok().remove(&id);
         let _ = app.emit_to(target, &event, Frame { kind: "close", text: None, binary: None });
     });
     Ok(id)
@@ -219,7 +220,7 @@ pub fn connect_ws_send(window: tauri::Window, bridge: tauri::State<'_, ConnectBr
         (None, Some(b64)) => Message::Binary(base64::engine::general_purpose::STANDARD.decode(b64).map_err(|_| "bad binary frame")?.into()),
         _ => return Err("one of text or binary".into()),
     };
-    let sockets = bridge.sockets.lock().unwrap_or_else(PoisonError::into_inner);
+    let sockets = bridge.sockets.lock_ok();
     let sender = sockets.get(&id).ok_or("the socket is closed")?;
     sender.send(message).map_err(|_| "the socket is closed".to_string())
 }
@@ -227,7 +228,7 @@ pub fn connect_ws_send(window: tauri::Window, bridge: tauri::State<'_, ConnectBr
 #[tauri::command]
 pub fn connect_ws_close(window: tauri::Window, bridge: tauri::State<'_, ConnectBridgeState>, id: u64) -> Result<(), String> {
     only_connect(&window)?;
-    if let Some(sender) = bridge.sockets.lock().unwrap_or_else(PoisonError::into_inner).remove(&id) {
+    if let Some(sender) = bridge.sockets.lock_ok().remove(&id) {
         let _ = sender.send(Message::Close(None));
     }
     Ok(())

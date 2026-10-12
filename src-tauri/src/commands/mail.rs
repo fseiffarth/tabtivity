@@ -48,6 +48,7 @@
 //! automatically.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -182,6 +183,30 @@ pub type MailState = Arc<Mutex<MailRuntime>>;
 
 pub fn new_state() -> MailState {
     Arc::new(Mutex::new(MailRuntime::default()))
+}
+
+/// Run `f` against the store (opened on first use) on the blocking pool — the
+/// shape of most store-only commands. Its error and a failed join both land in
+/// the one `Err`.
+fn with_store<T, F>(ctx: &Ctx, f: F) -> impl std::future::Future<Output = Result<T, String>> + Send + 'static
+where
+    T: Send + 'static,
+    F: FnOnce(&MailStore) -> Result<T, String> + Send + 'static,
+{
+    on_store(ctx.get::<MailState>(), f)
+}
+
+/// [`with_store`] for code that holds the state rather than the context.
+fn on_store<T, F>(state: &MailState, f: F) -> impl std::future::Future<Output = Result<T, String>> + Send + 'static
+where
+    T: Send + 'static,
+    F: FnOnce(&MailStore) -> Result<T, String> + Send + 'static,
+{
+    let state = state.clone();
+    app_core::rt::try_blocking("mail", move || {
+        let store = store_of(&state)?;
+        f(&store)
+    })
 }
 
 /// Get (opening on first use) the store handle. Runs on the caller's thread, so
@@ -441,7 +466,7 @@ fn open_store(dir: &Path) -> Result<OpenedStore, String> {
 /// their call — so it opens plain and `mail_encryption_state` tells the UI to
 /// ask, once. `Some(false)` means they answered no and are never asked again.
 fn open_unencrypted_or_enable(dir: &Path) -> Result<OpenedStore, String> {
-    let preference = read_settings().mail_encrypt_store;
+    let preference = crate::storage::load_settings().unwrap_or_default().mail_encrypt_store;
     let is_new = !dir.join("mail.db").exists();
     // The key file is gone but sealed data is still here. Minting a new key now
     // would make that data permanently unreadable *and* overwrite the keychain
@@ -509,17 +534,12 @@ fn open_unencrypted_or_enable(dir: &Path) -> Result<OpenedStore, String> {
     })
 }
 
-fn read_settings() -> crate::schema::Settings {
-    let path = storage::state_dir().join("settings.json");
-    storage::read_json(&path).unwrap_or_default()
-}
-
 /// Read-modify-write of the single field, for the reason
 /// `commands::settings::save_window_state` documents: the frontend's
 /// `updateSettings` writes the whole cached object back, so writing the whole
 /// object from here would clobber anything changed since that cache was filled.
 fn set_encrypt_preference(value: Option<bool>) {
-    let path = storage::state_dir().join("settings.json");
+    let path = storage::settings_path();
     let _ = storage::patch_json(&path, crate::schema::Settings::default(), |settings| {
         settings.mail_encrypt_store = value;
         Ok(())
@@ -564,7 +584,7 @@ fn open_persistent_store(state: &MailState) -> Option<Arc<MailStore>> {
 /// and under their lock, so no writer keeps sealing with the replaced keys.
 /// Whether a re-key is (still) due.
 fn refresh_keys(state: &MailState) -> Result<bool, String> {
-    let _serial = REFRESH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = REFRESH.lock_ok();
     let Some(store) = open_persistent_store(state) else {
         // No store open, but the files beside it may have published keys
         // (`silent_unlock`): those follow the key file too, or an account or
@@ -800,7 +820,7 @@ fn apply_crypto_at(
 async fn sent_folder_for(rt: &MailState, account: &MailAccount) -> Option<String> {
     let rt = rt.clone();
     let account_id = account.id.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let store = store_of(&rt).ok()?;
         store
             .folders(&account_id)
@@ -1103,20 +1123,13 @@ fn migrate_contacts_file(keys: Option<&MailKeys>) -> Result<(), String> {
 
 /// Read, change and write the book under the lock.
 fn with_contacts<T>(f: impl FnOnce(&mut MailContacts) -> Result<T, String>) -> Result<T, String> {
-    let _guard = CONTACTS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = CONTACTS_LOCK.lock_ok();
     let path = contacts_path();
     let mut book = read_contacts(&path)?;
     let out = f(&mut book)?;
     book.version = CONTACTS_VERSION;
     write_contacts(&path, &book)?;
     Ok(out)
-}
-
-fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or_default()
 }
 
 /// The enabled rules, or an empty list if the file cannot be read.
@@ -1394,9 +1407,7 @@ fn blank_save_error(already_saved: bool, store_readable: bool) -> Option<String>
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_accounts_list() -> Result<Vec<MailAccount>, String> {
-    tokio::task::spawn_blocking(|| Ok(read_accounts(&accounts_path())?.accounts))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("mail", || Ok(read_accounts(&accounts_path())?.accounts)).await
 }
 
 /// Set the per-account **Mail AI (local)** toggles for one account, returning
@@ -1406,9 +1417,8 @@ pub async fn mail_account_set_ai(
     account_id: String,
     ai: MailAiPrefs,
 ) -> Result<MailAccount, String> {
-    tokio::task::spawn_blocking(move || set_account_ai_at(&accounts_path(), &account_id, ai))
+    app_core::rt::try_blocking("mail", move || set_account_ai_at(&accounts_path(), &account_id, ai))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 /// Create or update an account, and apply the opt-in keychain write.
@@ -1436,7 +1446,7 @@ pub async fn mail_account_upsert(
     let state = ctx.get::<MailState>();
     let rt = state.clone();
     let remember = remember_arg(remember);
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         // A pooled IMAP session is an *authenticated* socket, and these are the
         // settings it was authenticated with. Evict on both sides of the write:
         // either the old server tuple or the new one may be the key holding a
@@ -1536,7 +1546,6 @@ pub async fn mail_account_upsert(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 // ── Encryption at rest ──────────────────────────────────────────────────────
@@ -1553,9 +1562,7 @@ pub async fn mail_encryption_state(
 ) -> Result<MailEncryptionState, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || encryption_state(&rt))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("mail", move || encryption_state(&rt)).await
 }
 
 /// The blocking half of [`mail_encryption_state`], so the commands that *change*
@@ -1583,7 +1590,7 @@ fn encryption_state(rt: &MailState) -> Result<MailEncryptionState, String> {
                 _ => None,
             },
             needs_passphrase: matches!(note, Some(UnlockNote::NeedsPassphrase)),
-            preference: read_settings().mail_encrypt_store,
+            preference: crate::storage::load_settings().unwrap_or_default().mail_encrypt_store,
             has_existing_mail: dir.join("mail.db").exists(),
             keyring: keyring_state_for_ui(),
         })
@@ -1609,7 +1616,7 @@ pub async fn mail_encryption_enable(
 ) -> Result<MailEncryptionState, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let dir = mail_dir();
         let keys = match mode.as_str() {
             "passphrase" => {
@@ -1625,7 +1632,6 @@ pub async fn mail_encryption_enable(
         encryption_state(&rt)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Open a passphrase-protected store that is currently showing its memory-only
@@ -1637,23 +1643,20 @@ pub async fn mail_encryption_unlock(
 ) -> Result<MailEncryptionState, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let dir = mail_dir();
         let keys = mail_crypt::unlock_with_passphrase(&dir, &passphrase)?;
         adopt_keys(&rt, &dir, Arc::new(keys))?;
         encryption_state(&rt)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Record that the user does not want the local store encrypted, so the one-time
 /// prompt stops asking.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_encryption_decline() -> Result<(), String> {
-    tokio::task::spawn_blocking(|| set_encrypt_preference(Some(false)))
-        .await
-        .map_err(|e| e.to_string())
+    app_core::rt::blocking("mail", || set_encrypt_preference(Some(false))).await
 }
 
 /// Delete the local mail and start again, encrypted.
@@ -1672,7 +1675,7 @@ pub async fn mail_encryption_reset(
 ) -> Result<MailEncryptionState, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let dir = mail_dir();
         // Drop the open handle first: on Windows a live SQLite connection holds
         // the file open and the removal below would fail rather than delete.
@@ -1717,10 +1720,7 @@ pub async fn mail_encryption_reset(
         if carried.is_none() {
             let aside = dir.join(format!(
                 "pre-reset-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or_default()
+                crate::clock::now_secs()
             ));
             for name in [
                 "key.json",
@@ -1781,7 +1781,6 @@ pub async fn mail_encryption_reset(
         encryption_state(&rt)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Configuration files opened under the old store key, held across a reset.
@@ -1844,18 +1843,14 @@ fn adopt_keys(rt: &MailState, dir: &Path, keys: Arc<MailKeys>) -> Result<(), Str
 pub async fn mail_pgp_available(ctx: Ctx) -> Result<bool, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || Ok(keyring_of(&rt).is_ok()))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("mail", move || Ok(keyring_of(&rt).is_ok())).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_keys(ctx: Ctx) -> Result<Vec<PgpKeyInfo>, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || keyring_of(&rt)?.list())
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("mail", move || keyring_of(&rt)?.list()).await
 }
 
 /// Generate this account's key. Curve25519, always — see `services::mail_pgp`.
@@ -1871,9 +1866,8 @@ pub async fn mail_pgp_generate(
 ) -> Result<PgpKeyInfo, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || keyring_of(&rt)?.generate(&name, &address, &account_id))
+    app_core::rt::try_blocking("mail", move || keyring_of(&rt)?.generate(&name, &address, &account_id))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 /// Import a key from **pasted text**, never a path.
@@ -1889,9 +1883,7 @@ pub async fn mail_pgp_import(
 ) -> Result<Vec<PgpKeyInfo>, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || keyring_of(&rt)?.import(armored.as_bytes()))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("mail", move || keyring_of(&rt)?.import(armored.as_bytes())).await
 }
 
 /// Import a key from a file the user picks in the **OS dialog raised by Rust**.
@@ -1939,7 +1931,7 @@ pub async fn mail_pgp_import_grant(ctx: Ctx, grant: String) -> Result<Vec<PgpKey
 
 async fn pgp_import_from(state: &MailState, path: PathBuf) -> Result<Vec<PgpKeyInfo>, String> {
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         // A key file is small; anything huge is not one, and reading it would be
         // the only unbounded read in the mail subsystem.
         let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
@@ -1950,7 +1942,6 @@ async fn pgp_import_from(state: &MailState, path: PathBuf) -> Result<Vec<PgpKeyI
         keyring_of(&rt)?.import(&bytes)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// The armored **public** half, to send to a correspondent. There is no command
@@ -1962,9 +1953,7 @@ pub async fn mail_pgp_export(
 ) -> Result<String, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || keyring_of(&rt)?.export_public(&fingerprint))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("mail", move || keyring_of(&rt)?.export_public(&fingerprint)).await
 }
 
 /// Record that the user compared this fingerprint out of band.
@@ -1980,9 +1969,8 @@ pub async fn mail_pgp_set_verified(
 ) -> Result<PgpKeyInfo, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || keyring_of(&rt)?.set_verified(&fingerprint, verified))
+    app_core::rt::try_blocking("mail", move || keyring_of(&rt)?.set_verified(&fingerprint, verified))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1994,11 +1982,10 @@ pub async fn mail_pgp_bind(
 ) -> Result<(), String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         keyring_of(&rt)?.bind_account(&fingerprint, &account_id, bind)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2008,9 +1995,7 @@ pub async fn mail_pgp_delete(
 ) -> Result<(), String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || keyring_of(&rt)?.delete(&fingerprint))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("mail", move || keyring_of(&rt)?.delete(&fingerprint)).await
 }
 
 /// Whether every recipient of a draft has a key, so the composer can enable or
@@ -2026,7 +2011,7 @@ pub async fn mail_pgp_recipients_ready(
 ) -> Result<Vec<String>, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let ring = keyring_of(&rt)?;
         if ring.secret_for_account(&account_id)?.is_none() {
             return Err("this account has no OpenPGP key".into());
@@ -2040,7 +2025,6 @@ pub async fn mail_pgp_recipients_ready(
         Ok(missing)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2050,7 +2034,7 @@ pub async fn mail_account_delete(
 ) -> Result<(), String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         // The local mail goes with the account; the keychain entry does not.
         // It is keyed by *server target*, so another account (or another app's
         // saved login for the same mailbox) may still be using it — deleting a
@@ -2072,7 +2056,6 @@ pub async fn mail_account_delete(
         delete_account_at(&accounts_path(), &account_id)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Try both endpoints once and report each. Never retries: one attempt per user
@@ -2105,7 +2088,7 @@ pub async fn mail_account_test(
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_password_state(account_id: String) -> Result<MailPasswordState, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let account = account_by_id(&accounts_path(), &account_id)?;
         let keyring = keyring_state_for_ui();
         // A locked keyring must read as "locked", never as "nothing saved" —
@@ -2117,7 +2100,6 @@ pub async fn mail_password_state(account_id: String) -> Result<MailPasswordState
         Ok(MailPasswordState { has_saved, keyring })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// The **only** path that deletes a saved mail password.
@@ -2128,7 +2110,7 @@ pub async fn mail_forget_password(
 ) -> Result<(), String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let account = account_by_id(&accounts_path(), &account_id)?;
         // `remember_secret(Some(false), …)` refuses to clear an entry it could
         // not first read, so a locked keyring cannot destroy a password the
@@ -2156,7 +2138,6 @@ pub async fn mail_forget_password(
         }
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 // ── Commands: folders, sync, headers ────────────────────────────────────────
@@ -2172,21 +2153,18 @@ pub async fn mail_folders(
     let (account, store) = {
         let rt2 = rt.clone();
         let id = account_id.clone();
-        tokio::task::spawn_blocking(move || {
+        app_core::rt::try_blocking("mail", move || {
             let account = account_by_id(&accounts_path(), &id)?;
             let store = store_of(&rt2)?;
             Ok::<_, String>((account, store))
         })
-        .await
-        .map_err(|e| e.to_string())??
+        .await?
     };
 
     if !refresh {
         let store2 = store.clone();
         let id = account_id.clone();
-        return tokio::task::spawn_blocking(move || store2.folders(&id))
-            .await
-            .map_err(|e| e.to_string())?;
+        return app_core::rt::blocking("mail", move || store2.folders(&id)).await?;
     }
 
     let Some(pw) = resolve_password(&rt, &account, MailProto::Imap) else {
@@ -2198,7 +2176,7 @@ pub async fn mail_folders(
         .map_err(String::from)?;
 
     let id = account_id.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         for f in fetched {
             let folder = MailFolder {
                 id: folder_id_for(&id, &f.path),
@@ -2215,7 +2193,6 @@ pub async fn mail_folders(
         store.folders(&id)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 fn no_password_message() -> String {
@@ -2298,11 +2275,10 @@ async fn sync_inner(
     let (account, store) = {
         let rt2 = rt.clone();
         let id = account_id.to_string();
-        tokio::task::spawn_blocking(move || {
+        app_core::rt::try_blocking("mail", move || {
             Ok::<_, String>((account_by_id(&accounts_path(), &id)?, store_of(&rt2)?))
         })
-        .await
-        .map_err(|e| e.to_string())??
+        .await?
     };
     let Some(pw) = resolve_password(rt, &account, MailProto::Imap) else {
         return Err(no_password_message());
@@ -2315,7 +2291,7 @@ async fn sync_inner(
         .map_err(String::from)?;
     let id = account_id.to_string();
     let store2 = store.clone();
-    let folders: Vec<MailFolder> = tokio::task::spawn_blocking(move || {
+    let folders: Vec<MailFolder> = app_core::rt::try_blocking("mail", move || {
         let mut out = Vec::new();
         for f in fetched {
             let folder = MailFolder {
@@ -2335,8 +2311,7 @@ async fn sync_inner(
         }
         Ok::<_, String>(out)
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     let targets: Vec<MailFolder> = match &only_folder {
         Some(want) => folders.into_iter().filter(|f| &f.id == want).collect(),
@@ -2365,7 +2340,7 @@ async fn sync_inner(
     // default; when on, the classifier runs AFTER the keyword pass and only over
     // still-unmarked new inbox messages, so an explicit rule always wins. A model
     // failure never fails a sync (best-effort below).
-    let autoclassify = read_settings().mail_ai_allow.unwrap_or(false)
+    let autoclassify = crate::storage::load_settings().unwrap_or_default().mail_ai_allow.unwrap_or(false)
         && account
             .ai
             .as_ref()
@@ -2423,7 +2398,7 @@ async fn sync_inner(
             autoclassify && classify_budget > 0 && folder2.kind == MailFolderKind::Inbox;
         #[allow(clippy::type_complexity)]
         let (added, filed, candidates): (u32, u32, Vec<ClassifyCandidate>) =
-            tokio::task::spawn_blocking(move || {
+            app_core::rt::try_blocking("mail", move || {
                 let mut added = 0u32;
                 let mut filed = 0u32;
                 let mut candidates: Vec<ClassifyCandidate> = Vec::new();
@@ -2483,8 +2458,7 @@ async fn sync_inner(
                 store3.refresh_counts(&folder2.id)?;
                 Ok::<_, String>((added, filed, candidates))
             })
-            .await
-            .map_err(|e| e.to_string())??;
+            .await?;
 
         // #205 classify hook: run the local model over the still-unmarked new
         // inbox messages this folder produced, bounded and best-effort. A model
@@ -2558,10 +2532,7 @@ pub async fn mail_headers(
     unread_only: Option<bool>,
     agent_only: Option<bool>,
 ) -> Result<MailHeaderPage, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt)?;
+    with_store(&ctx, move |store| {
         // `agent_only`: the "shared with agents" filter — the same page a reader
         // in `Marked` scope is served, so what the user sees under the chip is
         // exactly what such a reader can reach.
@@ -2571,7 +2542,7 @@ pub async fn mail_headers(
             MailStore::headers_page
         };
         let mut page = page_of(
-            &store,
+            store,
             &folder_id,
             offset,
             limit,
@@ -2584,7 +2555,6 @@ pub async fn mail_headers(
         Ok(page)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Search one folder's whole mailbox, then serve the page from the local index.
@@ -2654,7 +2624,7 @@ pub async fn mail_search(
         let (offset, limit, sort, desc, unread_only, agent_only) =
             (offset, limit, sort, desc, unread_only, agent_only);
         async move {
-            tokio::task::spawn_blocking(move || {
+            app_core::rt::blocking("mail", move || {
                 local_search_page(
                     &rt,
                     &folder_id,
@@ -2667,22 +2637,15 @@ pub async fn mail_search(
                     agent_only,
                 )
             })
-            .await
-            .map_err(|e| e.to_string())?
+            .await?
             .map(|page| MailSearchPage { page, remote, partial })
         }
     };
     // The folder first: its path is what the server is asked about, and an
     // unknown folder answers locally rather than failing the keystroke.
     let folder = {
-        let rt = rt.clone();
         let folder_id = folder_id.clone();
-        tokio::task::spawn_blocking(move || {
-            let store = store_of(&rt)?;
-            store.folder(&folder_id)
-        })
-        .await
-        .map_err(|e| e.to_string())??
+        with_store(&ctx, move |store| store.folder(&folder_id)).await?
     };
     let Some(folder) = folder else {
         return local(false, false).await;
@@ -2705,14 +2668,8 @@ pub async fn mail_search(
         return local(false, false).await;
     };
     let missing = {
-        let rt = rt.clone();
         let folder_id = folder_id.clone();
-        tokio::task::spawn_blocking(move || {
-            let store = store_of(&rt)?;
-            store.missing_uids(&folder_id, &uids)
-        })
-        .await
-        .map_err(|e| e.to_string())??
+        with_store(&ctx, move |store| store.missing_uids(&folder_id, &uids)).await?
     };
     // The server answered. `true` unless pulling what it named fails — then
     // the page still serves from what is indexed, flagged local-only.
@@ -2729,7 +2686,7 @@ pub async fn mail_search(
                 partial |= headers.len() != missing.len();
                 let rt = rt.clone();
                 let folder_id = folder_id.clone();
-                let backfilled = tokio::task::spawn_blocking(move || {
+                let backfilled = app_core::rt::blocking("mail", move || {
                     let store = store_of(&rt)?;
                     let mut inserted = 0u32;
                     let mut inserted_unseen = 0u32;
@@ -2747,8 +2704,7 @@ pub async fn mail_search(
                     store.note_indexed(&folder_id, inserted, inserted_unseen)?;
                     Ok::<_, String>(())
                 })
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
                 if backfilled.is_err() {
                     remote = false;
                 }
@@ -2794,15 +2750,12 @@ pub async fn mail_replies(
     ctx: Ctx,
     message_id: String,
 ) -> Result<Vec<MailHeader>, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
-        let mut replies = store_of(&rt)?.replies_to(&message_id)?;
+    with_store(&ctx, move |store| {
+        let mut replies = store.replies_to(&message_id)?;
         serve_auth_state(&mut replies);
         Ok(replies)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 // ── Commands: bodies ────────────────────────────────────────────────────────
@@ -2830,10 +2783,8 @@ pub async fn mail_body(
 async fn body_inner(rt: MailState, message_id: String) -> Result<MailBody, String> {
     // Cache first — sanitization is the expensive step, and the cache is keyed
     // by SANITIZER_VERSION so a sanitizer fix re-protects already-synced mail.
-    let rt2 = rt.clone();
     let id = message_id.clone();
-    let cached = tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt2)?;
+    let cached = on_store(&rt, move |store| {
         let Some((html, text, links_json, remote_refs, truncated)) =
             store.cached_body(&id, SANITIZER_VERSION)?
         else {
@@ -2854,8 +2805,7 @@ async fn body_inner(rt: MailState, message_id: String) -> Result<MailBody, Strin
             crypto: None,
         }))
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     if let Some(body) = cached {
         return Ok(body);
     }
@@ -2863,7 +2813,7 @@ async fn body_inner(rt: MailState, message_id: String) -> Result<MailBody, Strin
     // Not cached: resolve the message, fetch it, parse it, sanitize it, store it.
     let rt3 = rt.clone();
     let id = message_id.clone();
-    let (account, folder, header, store) = tokio::task::spawn_blocking(move || {
+    let (account, folder, header, store) = app_core::rt::try_blocking("mail", move || {
         let store = store_of(&rt3)?;
         let header = store
             .header(&id)?
@@ -2874,8 +2824,7 @@ async fn body_inner(rt: MailState, message_id: String) -> Result<MailBody, Strin
         let account = account_by_id(&accounts_path(), &header.account_id)?;
         Ok::<_, String>((account, folder, header, store))
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     let Some(pw) = resolve_password(&rt, &account, MailProto::Imap) else {
         return Err(no_password_message());
@@ -2888,7 +2837,7 @@ async fn body_inner(rt: MailState, message_id: String) -> Result<MailBody, Strin
     let id = message_id.clone();
     let rt4 = rt.clone();
     let from_address = header.from.address.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         // Decrypt FIRST, then parse, then sanitize, then render. The ordering is
         // the plan's one non-negotiable: decryption confers no trust, so the
         // plaintext goes through the same structural caps and the same sanitizer
@@ -2972,7 +2921,6 @@ async fn body_inner(rt: MailState, message_id: String) -> Result<MailBody, Strin
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 // ── Commands: flags and moves ───────────────────────────────────────────────
@@ -2988,7 +2936,7 @@ pub async fn mail_flag(
     let rt = state.clone();
     let id = message_id.clone();
     let rt2 = rt.clone();
-    let (account, folder, header, store) = tokio::task::spawn_blocking(move || {
+    let (account, folder, header, store) = app_core::rt::try_blocking("mail", move || {
         let store = store_of(&rt2)?;
         let header = store
             .header(&id)?
@@ -2999,8 +2947,7 @@ pub async fn mail_flag(
         let account = account_by_id(&accounts_path(), &header.account_id)?;
         Ok::<_, String>((account, folder, header, store))
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     // The local index is updated first so the UI stays responsive, then the
     // server. A server refusal is *reported* rather than swallowed — the two
@@ -3008,12 +2955,11 @@ pub async fn mail_flag(
     let id = message_id.clone();
     let store2 = store.clone();
     let folder_id = folder.id.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         store2.set_flag(&id, flag, value)?;
         store2.refresh_counts(&folder_id)
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     let Some(pw) = resolve_password(&rt, &account, MailProto::Imap) else {
         return Err(no_password_message());
@@ -3063,7 +3009,7 @@ pub async fn mail_mark_folder_read(
     // holding some is marked on the server by range instead — everything
     // through the newest indexed UID, which leaves mail that arrived after the
     // list the user was looking at unread.
-    let (account, folder, uids, through, store) = tokio::task::spawn_blocking(move || {
+    let (account, folder, uids, through, store) = app_core::rt::try_blocking("mail", move || {
         let store = store_of(&rt2)?;
         let folder = store
             .folder(&id)?
@@ -3077,8 +3023,7 @@ pub async fn mail_mark_folder_read(
         };
         Ok::<_, String>((account, folder, uids, through, store))
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     // Nothing unread is not an error and must not cost a login.
     if uids.is_empty() && through.is_none() {
@@ -3086,13 +3031,12 @@ pub async fn mail_mark_folder_read(
     }
 
     let id = folder_id.clone();
-    let changed = tokio::task::spawn_blocking(move || {
+    let changed = app_core::rt::try_blocking("mail", move || {
         let changed = store.mark_folder_seen(&id)?;
         store.refresh_counts(&id)?;
         Ok::<_, String>(changed)
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     let Some(pw) = resolve_password(&rt, &account, MailProto::Imap) else {
         return Err(no_password_message());
@@ -3145,11 +3089,7 @@ pub async fn mail_priority_set(
     message_id: String,
     priority: Option<MailPriority>,
 ) -> Result<bool, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || store_of(&rt)?.set_priority(&message_id, priority))
-        .await
-        .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.set_priority(&message_id, priority)).await
 }
 
 /// One page of everything carrying `priority`, across every account and folder.
@@ -3171,10 +3111,7 @@ pub async fn mail_priority_page(
     desc: Option<bool>,
     unread_only: Option<bool>,
 ) -> Result<MailHeaderPage, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt)?;
+    with_store(&ctx, move |store| {
         let mut page = store.priority_page(
             priority,
             offset,
@@ -3188,7 +3125,6 @@ pub async fn mail_priority_page(
         Ok(page)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Empty one of the two lists: clear the mark from **every** message carrying
@@ -3209,11 +3145,7 @@ pub async fn mail_priority_clear(
     ctx: Ctx,
     priority: MailPriority,
 ) -> Result<u32, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || store_of(&rt)?.clear_priority(priority))
-        .await
-        .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.clear_priority(priority)).await
 }
 
 /// The two rail badges' numbers, read together so they cannot disagree.
@@ -3221,11 +3153,7 @@ pub async fn mail_priority_clear(
 pub async fn mail_priority_counts(
     ctx: Ctx,
 ) -> Result<MailPriorityCounts, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || store_of(&rt)?.priority_counts())
-        .await
-        .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.priority_counts()).await
 }
 
 // ── Commands: filter rules (keywords → a priority mark) ─────────────────────
@@ -3252,9 +3180,7 @@ pub async fn mail_priority_counts(
 /// install's *account* list read empty at launch is described in full there.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_filters_list() -> Result<Vec<MailFilterRule>, String> {
-    tokio::task::spawn_blocking(|| Ok(read_filters(&filters_path())?.rules))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("mail", || Ok(read_filters(&filters_path())?.rules)).await
 }
 
 /// Replace the whole rule list.
@@ -3266,7 +3192,7 @@ pub async fn mail_filters_list() -> Result<Vec<MailFilterRule>, String> {
 /// store owns identity, exactly as it does for an account.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_filters_set(rules: Vec<MailFilterRule>) -> Result<Vec<MailFilterRule>, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let mut rules = rules;
         for rule in rules.iter_mut() {
             if rule.id.trim().is_empty() {
@@ -3290,7 +3216,6 @@ pub async fn mail_filters_set(rules: Vec<MailFilterRule>) -> Result<Vec<MailFilt
         Ok(rules)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// How many messages this many rules would (or did) file — the same command for
@@ -3315,7 +3240,7 @@ pub async fn mail_filters_apply(
 ) -> Result<MailFilterReport, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         // An explicit list is the dialog testing a rule it has not saved yet;
         // otherwise the saved, enabled ones. A rule under test is honoured even
         // when disabled — "what would this catch" is asked *before* switching it
@@ -3359,7 +3284,6 @@ pub async fn mail_filters_apply(
         Ok(report)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 // ── Local-model mail assistant (Group Q, #203–#208) ─────────────────────────
@@ -3443,10 +3367,8 @@ async fn fetch_message_text(
     message_id: &str,
     byte_cap: usize,
 ) -> Result<(MailHeader, String), String> {
-    let rt3 = rt.clone();
     let id = message_id.to_string();
-    let (account, folder, header) = tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt3)?;
+    let (account, folder, header) = on_store(rt, move |store| {
         let header = store
             .header(&id)?
             .ok_or_else(|| format!("message '{id}' is not in the local index"))?;
@@ -3456,8 +3378,7 @@ async fn fetch_message_text(
         let account = account_by_id(&accounts_path(), &header.account_id)?;
         Ok::<_, String>((account, folder, header))
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     let Some(pw) = resolve_password(rt, &account, MailProto::Imap) else {
         return Err(no_password_message());
@@ -3469,7 +3390,7 @@ async fn fetch_message_text(
 
     let rt4 = rt.clone();
     let from_address = header.from.address.clone();
-    let text = tokio::task::spawn_blocking(move || {
+    let text = app_core::rt::try_blocking("mail", move || {
         // Decrypt → parse, the same ordering `mail_body` uses; the plaintext is
         // used here and dropped, never stored.
         let (raw, _crypto) = apply_crypto(&rt4, raw, &from_address);
@@ -3481,8 +3402,7 @@ async fn fetch_message_text(
             .unwrap_or_default();
         Ok::<_, String>(truncate_bytes(&text, byte_cap))
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     Ok((header, text))
 }
@@ -3518,7 +3438,7 @@ async fn classify_new_inbox(
         let preview = c.preview.clone();
         let verdict = tokio::time::timeout(
             std::time::Duration::from_secs(20),
-            tokio::task::spawn_blocking(move || mail_ai::classify(&subject, &from, &preview)),
+            app_core::rt::spawn_blocking(move || mail_ai::classify(&subject, &from, &preview)),
         )
         .await;
         // Timed out, or the blocking task panicked: skip this one.
@@ -3530,7 +3450,7 @@ async fn classify_new_inbox(
             Ok(Some((mark, reason))) => {
                 let store = store.clone();
                 let id = c.id.clone();
-                let _ = tokio::task::spawn_blocking(move || {
+                let _ = app_core::rt::spawn_blocking(move || {
                     store.set_priority_ex(&id, Some(mark), MailPrioritySource::Model, &reason)
                 })
                 .await;
@@ -3556,7 +3476,7 @@ pub async fn mail_summarize(
     let rt = state.clone();
     let (header, text) = fetch_message_text(&rt, &message_id, SUMMARIZE_BODY_CAP).await?;
     let user = mail_ai::summarize_user(&header.subject, &from_display(&header.from), &text);
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         mail_ai::chat(
             mail_ai::SUMMARIZE_SYSTEM,
             &user,
@@ -3564,7 +3484,6 @@ pub async fn mail_summarize(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// #206 — turn rough notes into a formal reply body. **Never sends**: the result
@@ -3586,11 +3505,10 @@ pub async fn mail_formalize_reply(
     };
     // The sending identity's name to sign off with (best-effort).
     let acct = account_id.clone();
-    let sender_name = tokio::task::spawn_blocking(move || {
+    let sender_name = app_core::rt::blocking("mail", move || {
         account_by_id(&accounts_path(), &acct).ok().map(|a| a.label)
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await?
     .filter(|n| !n.trim().is_empty());
 
     let user = mail_ai::formalize_user(
@@ -3599,7 +3517,7 @@ pub async fn mail_formalize_reply(
         tone.as_deref(),
         sender_name.as_deref(),
     );
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         mail_ai::chat(
             mail_ai::FORMALIZE_SYSTEM,
             &user,
@@ -3607,7 +3525,6 @@ pub async fn mail_formalize_reply(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// #207 — extract a calendar event, anchored on the message `Date` and today so
@@ -3629,15 +3546,14 @@ pub async fn mail_extract_event(
         &header.date,
         &today,
     );
-    let out = tokio::task::spawn_blocking(move || {
+    let out = app_core::rt::try_blocking("mail", move || {
         mail_ai::chat(
             mail_ai::EVENT_SYSTEM,
             &user,
             mail_ai::ChatOptions::bounded(300),
         )
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     Ok(mail_ai::parse_event(&out))
 }
 
@@ -3659,15 +3575,14 @@ pub async fn mail_extract_task(
         &header.date,
         &today,
     );
-    let out = tokio::task::spawn_blocking(move || {
+    let out = app_core::rt::try_blocking("mail", move || {
         mail_ai::chat(
             mail_ai::TASK_SYSTEM,
             &user,
             mail_ai::ChatOptions::bounded(200),
         )
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     Ok(mail_ai::parse_task(&out))
 }
 
@@ -3688,9 +3603,7 @@ pub async fn mail_ai_classify_apply(
     let rt = state.clone();
     let store = {
         let rt = rt.clone();
-        tokio::task::spawn_blocking(move || store_of(&rt))
-            .await
-            .map_err(|e| e.to_string())??
+        app_core::rt::try_blocking("mail", move || store_of(&rt)).await?
     };
     // The same unmarked scope the filter apply uses, so the two previews agree
     // about what is in play. Bounded — a model call per message is not free.
@@ -3698,9 +3611,8 @@ pub async fn mail_ai_classify_apply(
     let headers = {
         let store = store.clone();
         let acc = account_id.clone();
-        tokio::task::spawn_blocking(move || store.unmarked_headers(acc.as_deref(), cap))
-            .await
-            .map_err(|e| e.to_string())??
+        app_core::rt::try_blocking("mail", move || store.unmarked_headers(acc.as_deref(), cap))
+            .await?
     };
 
     let mut report = MailAiClassifyReport::new(dry_run);
@@ -3711,7 +3623,7 @@ pub async fn mail_ai_classify_apply(
         let preview = h.preview.clone();
         let verdict = tokio::time::timeout(
             std::time::Duration::from_secs(20),
-            tokio::task::spawn_blocking(move || mail_ai::classify(&subject, &from, &preview)),
+            app_core::rt::spawn_blocking(move || mail_ai::classify(&subject, &from, &preview)),
         )
         .await;
         let verdict = match verdict {
@@ -3729,7 +3641,7 @@ pub async fn mail_ai_classify_apply(
                 if !dry_run {
                     let store = store.clone();
                     let id = h.id.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
+                    let _ = app_core::rt::spawn_blocking(move || {
                         store.set_priority_ex(&id, Some(mark), MailPrioritySource::Model, &reason)
                     })
                     .await;
@@ -3792,7 +3704,7 @@ pub async fn mail_move(
     let ids = message_ids.clone();
     let dest = dest_folder_id.clone();
     let (account, source_id, source_path, dest_path, uids, store) =
-        tokio::task::spawn_blocking(move || {
+        app_core::rt::try_blocking("mail", move || {
             let store = store_of(&rt2)?;
             let (account, source, uids) = resolve_uid_batch(&store, &ids, "moved")?;
             let target = store
@@ -3803,8 +3715,7 @@ pub async fn mail_move(
             }
             Ok::<_, String>((account, source.id, source.path, target.path, uids, store))
         })
-        .await
-        .map_err(|e| e.to_string())??;
+        .await?;
 
     let Some(pw) = resolve_password(&rt, &account, MailProto::Imap) else {
         return Err(no_password_message());
@@ -3814,7 +3725,7 @@ pub async fn mail_move(
         .await
         .map_err(String::from)?;
 
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         store.move_messages(&message_ids, &dest_folder_id)?;
         // Both folders' counters, because the rail's unread badge is read from
         // them: without this a mail moved out of the inbox — which is what a
@@ -3823,7 +3734,6 @@ pub async fn mail_move(
         store.refresh_counts(&dest_folder_id)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Delete messages **off the server** — `\Deleted` + `UID EXPUNGE` — and then
@@ -3848,13 +3758,12 @@ pub async fn mail_purge(
     let rt = state.clone();
     let rt2 = rt.clone();
     let ids = message_ids.clone();
-    let (account, folder_id, folder_path, uids, store) = tokio::task::spawn_blocking(move || {
+    let (account, folder_id, folder_path, uids, store) = app_core::rt::try_blocking("mail", move || {
         let store = store_of(&rt2)?;
         let (account, folder, uids) = resolve_uid_batch(&store, &ids, "deleted")?;
         Ok::<_, String>((account, folder.id, folder.path, uids, store))
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     let Some(pw) = resolve_password(&rt, &account, MailProto::Imap) else {
         return Err(no_password_message());
@@ -3864,13 +3773,12 @@ pub async fn mail_purge(
         .await
         .map_err(String::from)?;
 
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let removed = store.delete_messages(&message_ids)?;
         store.refresh_counts(&folder_id)?;
         Ok::<_, String>(removed)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 // ── Commands: drafts and sending ────────────────────────────────────────────
@@ -3880,10 +3788,7 @@ pub async fn mail_draft_save(
     ctx: Ctx,
     draft: MailDraft,
 ) -> Result<MailDraft, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt)?;
+    with_store(&ctx, move |store| {
         let mut draft = draft;
         if draft.id.trim().is_empty() {
             draft.id = uuid_v4();
@@ -3900,7 +3805,6 @@ pub async fn mail_draft_save(
         Ok(draft)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// The drafts an agent wrote through the root MCP and the user has not yet
@@ -3915,7 +3819,7 @@ pub async fn mail_draft_save(
 pub async fn mail_agent_drafts(ctx: Ctx) -> Result<Vec<MailDraft>, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let Ok(store) = AgentMail(rt).store() else {
             return Ok(Vec::new());
         };
@@ -3929,7 +3833,6 @@ pub async fn mail_agent_drafts(ctx: Ctx) -> Result<Vec<MailDraft>, String> {
         Ok(drafts)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// ✓ Approvals' approve on agent drafts: file each, exactly as the panel
@@ -3939,11 +3842,7 @@ pub async fn mail_agent_drafts_file(
     ctx: Ctx,
     drafts: Vec<MailDraft>,
 ) -> Result<usize, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || store_of(&rt)?.file_agent_drafts(&drafts))
-        .await
-        .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.file_agent_drafts(&drafts)).await
 }
 
 /// Discard one draft and whatever was staged for it.
@@ -3952,11 +3851,7 @@ pub async fn mail_draft_discard(
     ctx: Ctx,
     draft_id: String,
 ) -> Result<(), String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || store_of(&rt)?.delete_draft(&draft_id))
-        .await
-        .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.delete_draft(&draft_id)).await
 }
 
 // ── The root MCP's view of mail ─────────────────────────────────────────────
@@ -3993,11 +3888,7 @@ pub async fn mail_agent_mark(
     message_ids: Vec<String>,
     marked: bool,
 ) -> Result<usize, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || store_of(&rt)?.agent_mark(&message_ids, marked))
-        .await
-        .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.agent_mark(&message_ids, marked)).await
 }
 
 /// Mark every message of a folder.
@@ -4006,11 +3897,7 @@ pub async fn mail_agent_mark_folder(
     ctx: Ctx,
     folder_id: String,
 ) -> Result<usize, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || store_of(&rt)?.agent_mark_folder(&folder_id))
-        .await
-        .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.agent_mark_folder(&folder_id)).await
 }
 
 /// Mark every message of an account from one sender address.
@@ -4020,11 +3907,7 @@ pub async fn mail_agent_mark_sender(
     account_id: String,
     address: String,
 ) -> Result<usize, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || store_of(&rt)?.agent_mark_sender(&account_id, &address))
-        .await
-        .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.agent_mark_sender(&account_id, &address)).await
 }
 
 /// The ids of an account's marked messages, for the mail view's mark.
@@ -4033,11 +3916,7 @@ pub async fn mail_agent_marks(
     ctx: Ctx,
     account_id: String,
 ) -> Result<Vec<String>, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || store_of(&rt)?.agent_marks(&account_id))
-        .await
-        .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.agent_marks(&account_id)).await
 }
 
 /// `root_mcp_mail::MailAccess` over the live [`MailState`].
@@ -4188,7 +4067,7 @@ pub async fn mail_draft_send(
     let rt = state.clone();
     let rt2 = rt.clone();
     let id = draft_id.clone();
-    let prepared = tokio::task::spawn_blocking(move || {
+    let prepared = app_core::rt::blocking("mail", move || {
         let store = store_of(&rt2)?;
         let (draft, staged) = store.outgoing(&id, &staged_ids)?;
         let account = account_by_id(&accounts_path(), &draft.account_id)?;
@@ -4239,8 +4118,7 @@ pub async fn mail_draft_send(
         };
         Ok::<_, String>((account, raw, recipients, store))
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let (account, raw, recipients, store) = match prepared {
         Ok(v) => v,
@@ -4281,14 +4159,14 @@ pub async fn mail_draft_send(
                 }
             }
             let id = draft_id.clone();
-            let _ = tokio::task::spawn_blocking(move || store.delete_draft(&id)).await;
+            let _ = app_core::rt::spawn_blocking(move || store.delete_draft(&id)).await;
             // The address book learns who was written to — only now, after the
             // server took the message. Best effort: a locked or damaged book
             // must never turn a delivered message into a reported failure.
             let sent_to = recipients.clone();
-            let _ = tokio::task::spawn_blocking(move || {
+            let _ = app_core::rt::spawn_blocking(move || {
                 with_contacts(|book| {
-                    Ok(mail_contacts::collect(book, &sent_to, unix_now(), &mut uuid_v4))
+                    Ok(mail_contacts::collect(book, &sent_to, crate::clock::now_secs() as i64, &mut uuid_v4))
                 })
             })
             .await;
@@ -4314,8 +4192,8 @@ pub async fn mail_draft_send(
 /// The whole book, for the Address Book tab and the composer's autocomplete.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_get() -> Result<MailContactsView, String> {
-    tokio::task::spawn_blocking(|| {
-        let _guard = CONTACTS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    app_core::rt::try_blocking("mail", || {
+        let _guard = CONTACTS_LOCK.lock_ok();
         let book = read_contacts(&contacts_path())?;
         Ok(MailContactsView {
             contacts: book.contacts,
@@ -4324,60 +4202,54 @@ pub async fn mail_contacts_get() -> Result<MailContactsView, String> {
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Insert or replace one card; the backend mints the id and owns the counters.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contact_upsert(contact: MailContact) -> Result<MailContact, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         with_contacts(|book| {
-            mail_contacts::upsert_contact(book, contact, unix_now(), &mut uuid_v4)
+            mail_contacts::upsert_contact(book, contact, crate::clock::now_secs() as i64, &mut uuid_v4)
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_delete(ids: Vec<String>) -> Result<u32, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         with_contacts(|book| Ok(mail_contacts::delete_contacts(book, &ids) as u32))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contact_list_upsert(list: MailContactList) -> Result<MailContactList, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         with_contacts(|book| mail_contacts::upsert_list(book, list, &mut uuid_v4))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contact_list_delete(id: String) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         with_contacts(|book| Ok(mail_contacts::delete_list(book, &id)))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Thunderbird's "automatically add outgoing e-mail addresses to Collected
 /// Addresses". Off stops new cards; sends still count toward known ones.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_set_collect(enabled: bool) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         with_contacts(|book| {
             book.collect_disabled = !enabled;
             Ok(())
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Import a `.vcf`, an `.ldif` (Thunderbird's other export) or a Thunderbird
@@ -4420,7 +4292,7 @@ pub async fn mail_contacts_import_grant(ctx: Ctx, grant: String) -> Result<MailC
 }
 
 async fn contacts_import_from(source: PathBuf) -> Result<MailContactsImportReport, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let meta = std::fs::metadata(&source).map_err(|e| e.to_string())?;
         if !meta.is_file() {
             return Err("not a file".to_string());
@@ -4451,7 +4323,7 @@ async fn contacts_import_from(source: PathBuf) -> Result<MailContactsImportRepor
                     book,
                     cards,
                     MailContactBook::Personal,
-                    unix_now(),
+                    crate::clock::now_secs() as i64,
                     &mut uuid_v4,
                 ))
             });
@@ -4465,7 +4337,6 @@ async fn contacts_import_from(source: PathBuf) -> Result<MailContactsImportRepor
         with_contacts(|book| Ok(merge_thunderbird(book, read, MailContactBook::Personal)))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Fold one read address book — cards, then lists — into ours.
@@ -4475,7 +4346,7 @@ fn merge_thunderbird(
     target: MailContactBook,
 ) -> MailContactsImportReport {
     let mut report =
-        mail_contacts::merge_import(book, read.cards, target, unix_now(), &mut uuid_v4);
+        mail_contacts::merge_import(book, read.cards, target, crate::clock::now_secs() as i64, &mut uuid_v4);
     report.lists = mail_contacts::merge_lists(book, read.lists, &mut uuid_v4);
     report
 }
@@ -4487,7 +4358,7 @@ fn merge_thunderbird(
 /// stop the rest; only a run where none could be read is an error.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_contacts_import_thunderbird() -> Result<MailContactsImportReport, String> {
-    tokio::task::spawn_blocking(|| {
+    app_core::rt::try_blocking("mail", || {
         let books = mail_thunderbird::find_books(&crate::paths::home_dir());
         if books.is_empty() {
             return Err("no Thunderbird profile with an address book was found".to_string());
@@ -4527,7 +4398,6 @@ pub async fn mail_contacts_import_thunderbird() -> Result<MailContactsImportRepo
         Ok(total)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// "Add from Inbox": the senders of every locally indexed Inbox message, in
@@ -4537,10 +4407,7 @@ pub async fn mail_contacts_import_thunderbird() -> Result<MailContactsImportRepo
 pub async fn mail_contacts_harvest_inbox(
     ctx: Ctx,
 ) -> Result<MailContactsImportReport, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt)?;
+    with_store(&ctx, move |store| {
         let senders = store.inbox_senders(HARVEST_SCAN_CAP)?;
         let own: std::collections::HashSet<String> = read_accounts(&accounts_path())
             .unwrap_or_default()
@@ -4549,11 +4416,10 @@ pub async fn mail_contacts_harvest_inbox(
             .map(|a| a.address.trim().to_lowercase())
             .collect();
         with_contacts(|book| {
-            Ok(mail_contacts::harvest(book, &senders, &own, unix_now(), &mut uuid_v4))
+            Ok(mail_contacts::harvest(book, &senders, &own, crate::clock::now_secs() as i64, &mut uuid_v4))
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Most Inbox messages one "Add from Inbox" reads, newest first.
@@ -4595,8 +4461,8 @@ pub async fn mail_contacts_export_grant(ctx: Ctx, ids: Vec<String>, grant: Strin
 
 /// The cards `ids` name (every card when empty) as vCard text, and how many.
 async fn contacts_export_text(ids: Vec<String>) -> Result<(String, u32), String> {
-    tokio::task::spawn_blocking(move || {
-        let _guard = CONTACTS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    app_core::rt::try_blocking("mail", move || {
+        let _guard = CONTACTS_LOCK.lock_ok();
         let book = read_contacts(&contacts_path())?;
         let wanted: std::collections::HashSet<String> = ids.into_iter().collect();
         let cards: Vec<_> = book
@@ -4610,16 +4476,14 @@ async fn contacts_export_text(ids: Vec<String>) -> Result<(String, u32), String>
         Ok((mail_contacts::to_vcards(&cards), cards.len() as u32))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn write_export(vcards: String, count: u32, dest: PathBuf) -> Result<Option<u32>, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         std::fs::write(&dest, vcards).map_err(|e| e.to_string())?;
         Ok(Some(count))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 // ── Commands: the file boundary ─────────────────────────────────────────────
@@ -4681,9 +4545,7 @@ async fn stage_attachments(
     draft_id: String,
     paths: Vec<PathBuf>,
 ) -> Result<Vec<StagedAttachment>, String> {
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt)?;
+    on_store(state, move |store| {
         let mut out = Vec::new();
         for path in paths {
             let Ok(meta) = std::fs::metadata(&path) else {
@@ -4708,7 +4570,6 @@ async fn stage_attachments(
         Ok(out)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -4717,14 +4578,7 @@ pub async fn mail_attach_remove(
     draft_id: String,
     staged_id: String,
 ) -> Result<(), String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt)?;
-        store.remove_staged(&draft_id, &staged_id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    with_store(&ctx, move |store| store.remove_staged(&draft_id, &staged_id)).await
 }
 
 /// One attachment's metadata and decoded bytes.
@@ -4739,25 +4593,20 @@ async fn load_attachment(
     message_id: &str,
     part_id: &str,
 ) -> Result<(MailAttachmentMeta, Vec<u8>), String> {
-    let rt2 = rt.clone();
     let (mid, pid) = (message_id.to_string(), part_id.to_string());
-    let stored = tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt2)?;
+    let stored = on_store(rt, move |store| {
         match store.attachment(&mid, &pid)? {
             Some((meta, blob)) => Ok::<_, String>(Some((meta, store.get_blob(&blob)?))),
             None => Ok(None),
         }
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     if let Some(found) = stored {
         return Ok(found);
     }
 
-    let rt3 = rt.clone();
     let id = message_id.to_string();
-    let (account, folder, header) = tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt3)?;
+    let (account, folder, header) = on_store(rt, move |store| {
         let header = store
             .header(&id)?
             .ok_or_else(|| "attachment not found".to_string())?;
@@ -4767,8 +4616,7 @@ async fn load_attachment(
         let account = account_by_id(&accounts_path(), &header.account_id)?;
         Ok::<_, String>((account, folder, header))
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     let Some(pw) = resolve_password(rt, &account, MailProto::Imap) else {
         return Err(no_password_message());
     };
@@ -4780,7 +4628,7 @@ async fn load_attachment(
     let rt4 = rt.clone();
     let from_address = header.from.address.clone();
     let pid = part_id.to_string();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let (raw, crypto) = apply_crypto(&rt4, raw, &from_address);
         if !crypto.as_ref().is_some_and(|c| c.decrypted) {
             return Err("attachment not found".to_string());
@@ -4794,7 +4642,6 @@ async fn load_attachment(
             .ok_or_else(|| "attachment not found".to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Raise the OS **save** dialog inside Rust with the sanitized filename
@@ -4854,7 +4701,7 @@ pub async fn mail_attachment_save_grant(
 }
 
 async fn write_attachment_to(bytes: Vec<u8>, target: PathBuf) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         // A plain write of the already-decoded blob to the path the dialog
         // returned. We do not create directories, do not follow the name, do
         // not append.
@@ -4865,7 +4712,6 @@ async fn write_attachment_to(bytes: Vec<u8>, target: PathBuf) -> Result<Option<S
         Ok(Some(target.to_string_lossy().into_owned()))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Save an attachment into a project's `tabtivity-emails/` folder, creating that
@@ -4896,7 +4742,7 @@ pub async fn mail_attachment_save_to_project(
     let rt = state.clone();
     let (meta, bytes) = load_attachment(&rt, &message_id, &part_id).await?;
 
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         // A remote project's `directory` is Tabtivity's local state dir for it, not
         // its tree — the tree is on the host — so a save "into the project"
         // would land somewhere the user never sees. Refused rather than
@@ -4931,7 +4777,6 @@ pub async fn mail_attachment_save_to_project(
         Ok(target.to_string_lossy().into_owned())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// The emails folder's name in the project at `root`: a project that already
@@ -5039,7 +4884,7 @@ pub async fn mail_attachment_preview(
     let state = ctx.get::<MailState>();
     let rt = state.clone();
     let (meta, bytes) = load_attachment(&rt, &message_id, &part_id).await?;
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("mail", move || {
         let truncated = bytes.len() > MAX_PREVIEW_BYTES;
         let slice = &bytes[..bytes.len().min(MAX_PREVIEW_BYTES)];
         Ok(MailPreviewBlob {
@@ -5049,7 +4894,6 @@ pub async fn mail_attachment_preview(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Bounded bytes of one file staged on a draft — the outbox copy, decrypted
@@ -5061,10 +4905,7 @@ pub async fn mail_staged_preview(
     draft_id: String,
     staged_id: String,
 ) -> Result<MailPreviewBlob, String> {
-    let state = ctx.get::<MailState>();
-    let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
-        let store = store_of(&rt)?;
+    with_store(&ctx, move |store| {
         let meta = store
             .staged(&draft_id)?
             .into_iter()
@@ -5080,7 +4921,6 @@ pub async fn mail_staged_preview(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

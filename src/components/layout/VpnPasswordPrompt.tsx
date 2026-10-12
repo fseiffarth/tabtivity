@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -154,6 +155,7 @@ export function VpnPasswordPrompt() {
     if (status === "connecting" && machineState === "connected") markConnected();
   }, [status, machineState, markConnected]);
 
+  const modalRef = useModalFocus(() => (status === "connected" ? close() : cancel()), !!pending);
   if (!pending) return null;
 
   const connecting = status === "connecting";
@@ -186,7 +188,7 @@ export function VpnPasswordPrompt() {
       className="modal-backdrop"
       onMouseDown={connecting ? undefined : connected ? close : cancel}
     >
-      <div className="project-dialog vpn-prompt-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog vpn-prompt-dialog" onMouseDown={(e) => e.stopPropagation()}>
         {/* Title row with an explicit ×. The backdrop click is deliberately inert
             while connecting, and the only other way out was the action row — so a
             corner close is the dismissal users reach for and it must be present in

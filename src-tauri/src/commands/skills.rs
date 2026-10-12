@@ -8,42 +8,34 @@ use crate::schema::skills::{
 };
 use crate::services::skills;
 
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("skills task failed: {e}"))?
-}
-
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_list_sources() -> Result<Vec<SkillSource>, String> {
-    run_off_thread(|| Ok(skills::list_sources())).await
+    app_core::rt::try_blocking("skills", || Ok(skills::list_sources())).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_add_source(label: String, url: String) -> Result<SkillSource, String> {
-    run_off_thread(move || skills::add_source(label, url)).await
+    app_core::rt::try_blocking("skills", move || skills::add_source(label, url)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_remove_source(id: String) -> Result<(), String> {
-    run_off_thread(move || skills::remove_source(id)).await
+    app_core::rt::try_blocking("skills", move || skills::remove_source(id)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_refresh_source(id: String) -> Result<(), String> {
-    run_off_thread(move || skills::refresh_source(&id)).await
+    app_core::rt::try_blocking("skills", move || skills::refresh_source(&id)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_list_catalog(source_id: String) -> Result<Vec<SkillCatalogEntry>, String> {
-    run_off_thread(move || Ok(skills::list_catalog(&source_id))).await
+    app_core::rt::try_blocking("skills", move || Ok(skills::list_catalog(&source_id))).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_get_detail(source_id: String, rel_path: String) -> Result<SkillDetail, String> {
-    run_off_thread(move || skills::get_skill_detail(&source_id, &rel_path)).await
+    app_core::rt::try_blocking("skills", move || skills::get_skill_detail(&source_id, &rel_path)).await
 }
 
 /// The install trio takes a `SkillTarget`, never a bare path: the personal
@@ -56,15 +48,15 @@ pub async fn skills_install(
     source_id: String,
     rel_path: String,
 ) -> Result<(), String> {
-    run_off_thread(move || skills::install_skill(&target, &source_id, &rel_path)).await
+    app_core::rt::try_blocking("skills", move || skills::install_skill(&target, &source_id, &rel_path)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_uninstall(target: SkillTarget, name: String) -> Result<(), String> {
-    run_off_thread(move || skills::uninstall_skill(&target, &name)).await
+    app_core::rt::try_blocking("skills", move || skills::uninstall_skill(&target, &name)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_list_installed(target: SkillTarget) -> Result<Vec<InstalledSkill>, String> {
-    run_off_thread(move || Ok(skills::list_installed(&target))).await
+    app_core::rt::try_blocking("skills", move || Ok(skills::list_installed(&target))).await
 }

@@ -46,6 +46,7 @@
 //! `AppHandle`-free.
 
 use std::collections::BTreeMap;
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
@@ -310,7 +311,7 @@ impl Reservation {
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        let mut s = lock(&self.book.state);
+        let mut s = self.book.state.lock_ok();
         let held = &mut s.reserved[slot(self.provider)];
         *held = held.saturating_sub(self.tokens);
     }
@@ -327,10 +328,6 @@ pub struct Book {
     /// The exit flush ran: a charge that lands after it (an answer cut off
     /// by the quit) is written at once, not by a thread the exit outruns.
     closing: std::sync::atomic::AtomicBool,
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 impl Book {
@@ -351,7 +348,7 @@ impl Book {
 
     /// The ledger, loaded on first use and rolled to `now`'s month.
     fn with<R>(&self, now: DateTime<Utc>, f: impl FnOnce(&mut BookState) -> R) -> R {
-        let mut state = lock(&self.state);
+        let mut state = self.state.lock_ok();
         if !state.loaded {
             state.loaded = true;
             if let Some(path) = &self.path {
@@ -373,7 +370,7 @@ impl Book {
 
     /// What requests in flight for `provider` hold right now, billed tokens.
     pub fn reserved(&self, provider: Provider) -> u64 {
-        lock(&self.state).reserved[slot(provider)]
+        self.state.lock_ok().reserved[slot(provider)]
     }
 
     /// Whether a billed request for `provider` may start under `limit`:
@@ -438,7 +435,7 @@ impl Book {
                 book.flush();
             });
             if spawned.is_err() {
-                lock(&self.state).flush_scheduled = false;
+                self.state.lock_ok().flush_scheduled = false;
             }
         }
     }
@@ -447,9 +444,9 @@ impl Book {
     /// the next change or the exit flush.
     pub fn flush(&self) {
         let Some(path) = &self.path else { return };
-        let _writing = lock(&self.writing);
+        let _writing = self.writing.lock_ok();
         let ledger = {
-            let mut s = lock(&self.state);
+            let mut s = self.state.lock_ok();
             s.flush_scheduled = false;
             if !s.dirty || !s.loaded {
                 return;
@@ -459,7 +456,7 @@ impl Book {
         };
         if let Err(e) = crate::storage::write_json_atomic(path, &ledger) {
             eprintln!("[api-usage] could not write the usage ledger: {e}");
-            lock(&self.state).dirty = true;
+            self.state.lock_ok().dirty = true;
         }
     }
 }
@@ -554,9 +551,9 @@ const LIMITS_FRESH: Duration = Duration::from_secs(10);
 /// read (the proxy asks per request).
 pub fn limit_for(provider: Provider) -> Option<u64> {
     static CACHE: Mutex<Option<CachedLimits>> = Mutex::new(None);
-    let path = crate::storage::state_dir().join("settings.json");
+    let path = crate::storage::settings_path();
     let stamp: Stamp = std::fs::metadata(&path).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
-    let mut cache = lock(&CACHE);
+    let mut cache = CACHE.lock_ok();
     let fresh = matches!(&*cache, Some((s, read, _)) if stamp.is_some() && *s == stamp && read.elapsed() < LIMITS_FRESH);
     if !fresh {
         let settings: crate::schema::Settings = crate::storage::read_json(&path).unwrap_or_default();

@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import { useGlobalMachineMonitorStore } from "../../stores/remote/globalMachineMonitor";
@@ -31,9 +32,14 @@ function GlobalMachineMonitorDialog({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="project-dialog dialog-framed sysmon-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

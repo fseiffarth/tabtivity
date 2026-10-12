@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
@@ -278,6 +279,7 @@ interface Props {
 
 export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle }: Props) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [period, setPeriod] = useState<Period>("day");
   const [anchorMs] = useState(initialAnchorMs);
   const [timeByDay, setTimeByDay] = useState<Record<string, Record<string, number>>>({});
@@ -446,7 +448,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle }: Props) 
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="stats-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="stats-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("stats.title")}</h2>
           <div className="stats-period-switch" role="group" aria-label={t("stats.periodGroupLabel")}>

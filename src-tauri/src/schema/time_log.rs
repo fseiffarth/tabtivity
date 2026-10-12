@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -134,8 +135,7 @@ static TIME_SUMMARY_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_summary() -> std::sync::MutexGuard<'static, ()> {
     TIME_SUMMARY_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock_ok()
 }
 
 /// Load the rolling summary, migrating the legacy `time_log.json` in once if it

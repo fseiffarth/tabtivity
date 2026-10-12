@@ -367,7 +367,7 @@ pub struct CustomAgentSpec {
 /// sets. A custom agent with no resume flag has an empty `resume` — it is
 /// launch-only, so a persisted `resumeArgs` for it is never legitimate.
 pub(crate) fn custom_agent_specs() -> HashMap<String, CustomAgentSpec> {
-    let path = storage::state_dir().join("settings.json");
+    let path = storage::settings_path();
     let Ok(settings) = storage::read_json::<crate::schema::Settings>(&path) else {
         return HashMap::new();
     };
@@ -754,7 +754,7 @@ pub fn migrate_project_sessions_once() {
     if marker.exists() {
         return;
     }
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let projects: crate::schema::projects::ProjectsList =
         storage::read_json(&list_path).unwrap_or_default();
 

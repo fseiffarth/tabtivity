@@ -47,10 +47,11 @@
 const RS: char = '\x1e';
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -1040,12 +1041,7 @@ pub fn should_propagate_origin(source: Option<&str>, dest: Option<&str>) -> Opti
     }
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+use crate::clock::now_secs;
 
 // ── State persistence ───────────────────────────────────────────────────────
 
@@ -3234,7 +3230,7 @@ fn reconcile_locks() -> &'static std::sync::Mutex<HashMap<String, Arc<Mutex<()>>
 
 pub async fn reconcile_guard(project_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
     let lock = {
-        let mut locks = reconcile_locks().lock().unwrap_or_else(|e| e.into_inner());
+        let mut locks = reconcile_locks().lock_ok();
         Arc::clone(
             locks
                 .entry(project_id.to_string())

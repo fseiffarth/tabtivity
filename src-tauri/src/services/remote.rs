@@ -124,7 +124,7 @@ static PROJECTS_CACHE: std::sync::Mutex<Option<(std::time::SystemTime, u64, Arc<
 /// The value is an `Arc`, so a hit costs one clone of a pointer rather than of
 /// the whole list.
 fn read_projects_list() -> Option<Arc<ProjectsList>> {
-    let list_path = crate::storage::state_dir().join("projects.json");
+    let list_path = crate::storage::projects_path();
     let meta = std::fs::metadata(&list_path).ok()?;
     let stamp = (meta.modified().ok()?, meta.len());
 

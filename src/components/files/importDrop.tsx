@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -281,6 +282,7 @@ export function useImportDrop({ projectDir, enabled, destRel, onImported }: Opti
     }
     conflict.resolve({ choice: "rename", all: conflictAll, name: keepBothName });
   };
+  const modalRef = useModalFocus(skip, !!conflict);
 
   const conflictModal = conflict
     ? createPortal(
@@ -290,7 +292,7 @@ export function useImportDrop({ projectDir, enabled, destRel, onImported }: Opti
               the settings design system instead, which is why it sat flush
               against its own edges: `.settings-dialog` carries no padding of its
               own, expecting a `.dialog-scroll` child this dialog never had. */}
-          <div className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
+          <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
             <h2>
               {t("importDrop.title")} <UntestedTag id="importDrop.title" />
             </h2>
@@ -311,7 +313,6 @@ export function useImportDrop({ projectDir, enabled, destRel, onImported }: Opti
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") keepBoth();
-                if (e.key === "Escape") skip();
               }}
               // Selects the stem, not the extension — the rename dialog's rule,
               // and here the stem is the half the " (n)" was appended to.

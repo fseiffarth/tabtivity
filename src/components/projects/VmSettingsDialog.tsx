@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -29,6 +30,7 @@ export function VmSettingsDialog({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const spec = project.vm;
   const [memory, setMemory] = useState(String(spec?.memory_mb ?? 4096));
   const [cpus, setCpus] = useState(String(spec?.cpus ?? 2));
@@ -128,7 +130,7 @@ export function VmSettingsDialog({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.vmSettingsTitle", { name: project.name })} <UntestedTag id="pill.vmSettingsTitle" /></h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>

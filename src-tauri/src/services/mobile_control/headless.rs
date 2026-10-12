@@ -692,7 +692,7 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
             extra.insert("env".into(), json!({ crate::app_env!("TAB_UID"): uuid }));
             // The window's `launchedAt`: tells this tab's own OpenCode session
             // from the folder's older ones (`ResolvedTab::since`).
-            extra.insert("launchedAt".into(), json!(epoch_ms_now()));
+            extra.insert("launchedAt".into(), json!(crate::clock::now_ms() as i64));
             (agent.public.label.clone(), agent.bin.to_string(), Some(uuid))
         }
         _ => {
@@ -711,13 +711,6 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
         session_id,
         extra,
     }
-}
-
-fn epoch_ms_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// The size a session started with no window gets. Nobody looks at it at that
@@ -1273,7 +1266,7 @@ fn random_rule_id() -> Result<String, String> {
     let mut b = super::auth::random_bytes::<16>()?;
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
-    let hex: String = b.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex = crate::digest::hex(&b);
     Ok(format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]))
 }
 
@@ -1786,10 +1779,10 @@ mod tests {
             public: AgentCatalogEntry { id: "a".into(), label: "OpenCode".into(), modes: Vec::new(), default: false },
             bin: "opencode",
         };
-        let before = epoch_ms_now();
+        let before = crate::clock::now_ms() as i64;
         let record = tab_record(&CreateTabKind::Agent, Some(&agent), Path::new("/p"), "h");
         let stamped = record.extra.get("launchedAt").and_then(serde_json::Value::as_i64).expect("stamped");
-        assert!(stamped >= before && stamped <= epoch_ms_now());
+        assert!(stamped >= before && stamped <= crate::clock::now_ms() as i64);
         let shell = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");
         assert!(!shell.extra.contains_key("launchedAt"));
     }

@@ -33,9 +33,7 @@ pub async fn spell_check(
     language: String,
     doc: String,
 ) -> Result<Vec<GrammarIssue>, String> {
-    app_core::rt::spawn_blocking(move || spell::check(&text, &language, &doc))
-        .await
-        .map_err(|e| format!("spell task failed: {e}"))?
+    app_core::rt::blocking("spell", move || spell::check(&text, &language, &doc)).await?
         .map(|issues| {
             issues
                 .into_iter()
@@ -57,20 +55,17 @@ pub async fn spell_check(
 /// `dictionaries/` folder), for the settings dropdown.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_languages() -> Result<Vec<String>, String> {
-    app_core::rt::spawn_blocking(|| {
+    app_core::rt::blocking("spell", || {
         spell::available_languages_in(&spell::dict_dirs())
     })
     .await
-    .map_err(|e| format!("spell task failed: {e}"))
 }
 
 /// Add a word to the personal dictionary (append-only
 /// `<state_dir>/dictionaries/personal.dic`, folded into every language).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_add_word(word: String) -> Result<(), String> {
-    app_core::rt::spawn_blocking(move || spell::add_personal_word(&word))
-        .await
-        .map_err(|e| format!("spell task failed: {e}"))?
+    app_core::rt::try_blocking("spell", move || spell::add_personal_word(&word)).await
 }
 
 /// What the dictionary picker needs in one round trip: every installed
@@ -84,12 +79,11 @@ pub struct SpellDictionaries {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_dictionaries() -> Result<SpellDictionaries, String> {
-    app_core::rt::spawn_blocking(|| SpellDictionaries {
+    app_core::rt::blocking("spell", || SpellDictionaries {
         installed: spell::installed_in(&spell::dict_dirs()),
         catalog: spell::catalog(),
     })
     .await
-    .map_err(|e| format!("spell task failed: {e}"))
 }
 
 /// Download a catalog language into the state dir's `dictionaries/` folder.
@@ -103,7 +97,5 @@ pub async fn spell_install_language(code: String) -> Result<(), String> {
 /// Delete a dictionary pair from the state dir (never a system one).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn spell_remove_language(code: String) -> Result<(), String> {
-    app_core::rt::spawn_blocking(move || spell::remove_language(&code))
-        .await
-        .map_err(|e| format!("spell task failed: {e}"))?
+    app_core::rt::try_blocking("spell", move || spell::remove_language(&code)).await
 }

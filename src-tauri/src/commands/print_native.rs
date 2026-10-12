@@ -75,7 +75,7 @@ pub async fn print_pdf_native(
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 async fn write_spool(bytes: Vec<u8>) -> Result<tempfile::NamedTempFile, String> {
     use std::io::Write;
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::try_blocking("print", move || {
         let mut f = tempfile::Builder::new()
             .prefix(concat!(crate::app_slug!(), "-print-"))
             .suffix(".pdf")
@@ -86,7 +86,6 @@ async fn write_spool(bytes: Vec<u8>) -> Result<tempfile::NamedTempFile, String> 
         Ok(f)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]

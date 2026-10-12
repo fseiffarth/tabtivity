@@ -159,7 +159,7 @@ pub async fn git_fork_clone(
     dest: String,
     provider: Option<String>,
 ) -> Result<ForkResult, String> {
-    crate::commands::git::run_off_thread(move || fork_clone_blocking(url, dest, provider)).await
+    app_core::rt::try_blocking("git", move || fork_clone_blocking(url, dest, provider)).await
 }
 
 fn fork_clone_blocking(

@@ -370,24 +370,9 @@ pub fn sweep_stale_control_sockets() {
 #[cfg(target_os = "windows")]
 pub fn sweep_stale_control_sockets() {}
 
-/// Single-quote `s` for a POSIX shell, escaping embedded single quotes as
-/// `'\''`. The result parses back to exactly `s` regardless of spaces, `$`,
-/// quotes, or other metacharacters. `pub(crate)` so command modules that build
-/// their own host scripts (e.g. `commands::slurm`) share this one implementation
-/// rather than reinventing shell quoting.
-pub(crate) fn shell_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('\'');
-    for ch in s.chars() {
-        if ch == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('\'');
-    out
-}
+/// POSIX single-quoting ([`crate::quote::posix`]) under the name the remote
+/// script builders here and in `commands::*` already use.
+pub(crate) use crate::quote::posix as shell_quote;
 
 /// A POSIX-portable environment variable name (`[A-Za-z_][A-Za-z0-9_]*`). Used to
 /// gate which keys may be `export`ed into the remote `$SHELL -c` string: the
@@ -776,34 +761,12 @@ pub fn parse_tmux_ls(output: &str) -> Vec<TmuxSession> {
         .collect()
 }
 
-/// A project id can appear verbatim in a tmux session name (it's a uuid in
-/// practice), but is not schema-guaranteed to be — mirrors the frontend's
-/// `tmuxSession.ts` sanitizer (and `services::sandbox::sanitize_key`'s pattern)
-/// so an oddly-shaped id can never produce an invalid prefix to match against.
-fn sanitize_tmux_key(id: &str) -> String {
-    let safe: String = id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if safe.is_empty() {
-        "x".to_string()
-    } else {
-        safe
-    }
-}
-
 /// The `tabtivity-<project>--` prefix a session minted for `project_id` carries
 /// (`lib/terminal/tmuxSession.ts`'s `newTmuxSessionName`). The `--` cannot occur inside
 /// either half (a project id and a uuid are each single-hyphenated), so it
 /// unambiguously separates the project id from the trailing uuid.
 fn tmux_session_prefix_for(project_id: &str) -> String {
-    format!("{}{}--", crate::brand::TMUX_PREFIX, sanitize_tmux_key(project_id))
+    format!("{}{}--", crate::brand::TMUX_PREFIX, crate::storage::project_key(project_id))
 }
 
 /// Whether host path `path` is inside (or is) `root`. Both are normalized by
@@ -850,7 +813,7 @@ pub fn session_visible_for_project(
     // attributed the same way. (No old prefix while the name is unchanged.)
     let scoped = crate::services::brand_migration::compat::tmux_session_rest(&crate::brand::PAIR, name)
         .filter(|_| name.contains("--"));
-    if scoped.is_some_and(|rest| rest.starts_with(&format!("{}--", sanitize_tmux_key(own_project_id)))) {
+    if scoped.is_some_and(|rest| rest.starts_with(&format!("{}--", crate::storage::project_key(own_project_id)))) {
         return true;
     }
     // Another project's scoped name — the one case the name alone settles.

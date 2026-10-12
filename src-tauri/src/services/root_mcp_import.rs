@@ -11,6 +11,7 @@
 //!
 //! The reply names the staged id and nothing the file contains. AppHandle-free.
 use serde::{Deserialize, Serialize};
+use app_core::sync::LockExt;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -50,7 +51,7 @@ pub fn tool_schema() -> Value {
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    LOCK.lock_ok()
 }
 
 fn dir(state: &Path) -> PathBuf {
@@ -60,14 +61,6 @@ fn dir(state: &Path) -> PathBuf {
 /// An id is a file name here, so it is only ever the hex this module minted.
 fn valid_id(id: &str) -> bool {
     id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-fn now_ms() -> String {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .to_string()
 }
 
 /// Every staged import, oldest first. An unreadable file is skipped, not fatal:
@@ -134,7 +127,7 @@ pub fn call(stores: &Stores, tab: &str, args: &Value) -> Result<(Value, Effects)
         return Err("Too many calendar imports are waiting; the user has to decide on those first".into());
     }
     let id = super::root_mcp::mint_token().ok_or("No OS entropy")?;
-    let row = StagedImport { id: id.clone(), tab: tab.to_string(), name, created: now_ms(), text: text.to_string() };
+    let row = StagedImport { id: id.clone(), tab: tab.to_string(), name, created: crate::clock::now_ms().to_string(), text: text.to_string() };
     let folder = dir(stores.state);
     std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     crate::storage::write_json_atomic(&folder.join(format!("{id}.json")), &row).map_err(|e| e.to_string())?;

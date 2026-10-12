@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useStopProjectStore, type StopProjectTab } from "../../stores/stopProjectPrompt";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "./UntestedTag";
@@ -50,16 +50,8 @@ export function StopProjectDialog() {
   const proceed = useStopProjectStore((s) => s.proceed);
   const cancel = useStopProjectStore((s) => s.cancel);
 
-  // Escape backs out, like every other modal here. Safe to bind unconditionally:
-  // the handler is a no-op while nothing is pending.
-  useEffect(() => {
-    if (!pending) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [pending, cancel]);
+  // Escape backs out, like every other modal here.
+  const modalRef = useModalFocus(cancel, !!pending);
 
   if (!pending) return null;
   const { name, tabs, sessions, remoteSessions } = pending;
@@ -71,6 +63,10 @@ export function StopProjectDialog() {
     // answer is the harmless one, so a stray click must land there.
     <div className="modal-backdrop" onMouseDown={cancel}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="project-dialog stop-project-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

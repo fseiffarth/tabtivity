@@ -7,7 +7,6 @@ use crate::{
     services::agent_prompts,
 };
 
-use super::git::run_off_thread;
 use crate::tauri_host::Ctx;
 use app_core::CoreCtx;
 
@@ -103,7 +102,7 @@ pub async fn agent_prompt_archive(
     sent: SentAgentPromptInput,
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     let result =
-        run_off_thread(move || agent_prompts::archive(&project_id, &prompt_id, sent)).await?;
+        app_core::rt::try_blocking("git", move || agent_prompts::archive(&project_id, &prompt_id, sent)).await?;
     changed(&ctx);
     Ok(result)
 }
@@ -118,7 +117,7 @@ pub async fn agent_prompt_record(
     project_id: String,
     entry: RecordedAgentPromptInput,
 ) -> Result<Vec<SentAgentPrompt>, String> {
-    let result = run_off_thread(move || agent_prompts::record(&project_id, entry)).await?;
+    let result = app_core::rt::try_blocking("git", move || agent_prompts::record(&project_id, entry)).await?;
     changed(&ctx);
     Ok(result)
 }
@@ -135,7 +134,7 @@ pub async fn agent_prompt_blame(
     since: Option<String>,
 ) -> Result<Vec<SentAgentPrompt>, String> {
     let result =
-        run_off_thread(move || agent_prompts::blame(&project_id, &entry_id, since.as_deref()))
+        app_core::rt::try_blocking("git", move || agent_prompts::blame(&project_id, &entry_id, since.as_deref()))
             .await?;
     changed(&ctx);
     Ok(result)

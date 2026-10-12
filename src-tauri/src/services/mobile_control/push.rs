@@ -16,7 +16,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use aes_gcm::{aead::Aead, Aes128Gcm, KeyInit, Nonce};
@@ -58,12 +58,7 @@ const TTL_SECONDS: u32 = 60 * 60;
 /// push vendor in every request, so it must say nothing about who sent it.
 const VAPID_SUBJECT: &str = concat!("https://github.com/", crate::app_repo!());
 
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::clock::now_secs as now;
 
 fn random_secret_key() -> Result<SecretKey, String> {
     // A uniformly random 32-byte string is a valid scalar with overwhelming

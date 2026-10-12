@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -37,6 +38,7 @@ import { useT } from "../../lib/i18n";
 export function BigFolderExcludeDialog({ projectId }: { projectId: string }) {
   const t = useT();
   const close = useBigFoldersStore((s) => s.close);
+  const modalRef = useModalFocus(close);
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
   const bigFolders = useSyncStore((s) => s.bigFolders);
   const setExcluded = useSyncStore((s) => s.setExcluded);
@@ -156,7 +158,7 @@ export function BigFolderExcludeDialog({ projectId }: { projectId: string }) {
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={close}>
-      <div className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <h2>
           {t("bigFolder.titlePre")} {project?.name ?? t("bigFolder.thisProject")} <UntestedTag id="bigFolder.thisProject" />
         </h2>

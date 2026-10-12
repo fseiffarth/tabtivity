@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -281,10 +282,15 @@ export function AgentScheduleDialog({ scope, tab, onClose, initialMessage, initi
 
   const summary = scheduleSummary(schedules, now);
 
+  const modalRef = useModalFocus(onClose, !!targetId);
   if (!targetId) return null;
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="settings-dialog agent-schedule-dialog"
         style={{ color: "var(--text-primary)" }}
         onMouseDown={(event) => event.stopPropagation()}

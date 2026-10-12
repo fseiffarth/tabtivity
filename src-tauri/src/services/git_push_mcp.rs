@@ -19,6 +19,7 @@
 //! `state`. Proposals live in memory beside the tokens that made them: neither
 //! survives a restart.
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -79,14 +80,14 @@ impl ProjectPolicy {
 /// The global switch (`Settings::git_push_mcp`, absent = on: a project's
 /// default level only proposes). A missing settings file is a fresh install
 /// and answers on; an unreadable one answers off, so spawn and request agree.
-pub fn enabled() -> bool { enabled_in(&crate::storage::state_dir().join("settings.json")) }
+pub fn enabled() -> bool { enabled_in(&crate::storage::settings_path()) }
 pub fn enabled_in(settings: &Path) -> bool {
     if !settings.exists() { return true; }
     crate::storage::read_json::<crate::schema::Settings>(settings).is_ok_and(|s| s.git_push_mcp != Some(false))
 }
 
 pub fn policy(project: &str) -> Result<ProjectPolicy, String> {
-    policy_at(&crate::storage::state_dir().join("projects.json"), project)
+    policy_at(&crate::storage::projects_path(), project)
 }
 fn policy_at(projects: &Path, project: &str) -> Result<ProjectPolicy, String> {
     let list: crate::schema::projects::ProjectsList = crate::storage::read_json(projects).map_err(|_| "project policy unavailable")?;
@@ -747,7 +748,7 @@ fn project_locks() -> &'static Mutex<HashMap<String, Arc<Mutex<()>>>> {
     LOCKS.get_or_init(Default::default)
 }
 fn project_lock(project: &str) -> Arc<Mutex<()>> {
-    project_locks().lock().unwrap_or_else(|p| p.into_inner()).entry(project.to_string()).or_default().clone()
+    project_locks().lock_ok().entry(project.to_string()).or_default().clone()
 }
 /// Set once by the command layer; called after any state change from a
 /// worker thread, so the window learns of it without an `AppHandle` here.
@@ -785,13 +786,13 @@ fn new_proposal(session: &Session, project: &str, dir: &Path, note: String) -> P
 }
 
 fn update(id: &str, f: impl FnOnce(&mut Proposal)) -> Option<Proposal> {
-    let mut list = proposals().lock().unwrap_or_else(|p| p.into_inner());
+    let mut list = proposals().lock_ok();
     let p = list.iter_mut().find(|p| p.id == id)?;
     f(p);
     Some(p.clone())
 }
 fn get(id: &str) -> Option<Proposal> {
-    proposals().lock().unwrap_or_else(|p| p.into_inner()).iter().find(|p| p.id == id).cloned()
+    proposals().lock_ok().iter().find(|p| p.id == id).cloned()
 }
 fn fail(id: &str, failure: Failure) -> Option<Proposal> {
     let out = update(id, |p| {
@@ -819,13 +820,13 @@ fn apply_plan(p: &mut Proposal, plan: &Plan) {
 
 /// The proposals of one project (the card) or of one tab (`git_push_status`).
 pub fn proposals_for(project: Option<&str>, tab: Option<&str>) -> Vec<Proposal> {
-    let mut list = proposals().lock().unwrap_or_else(|p| p.into_inner());
+    let mut list = proposals().lock_ok();
     prune(&mut list);
     list.iter().filter(|p| project.is_none_or(|id| p.project == id) && tab.is_none_or(|t| p.tab == t)).cloned().collect()
 }
 /// Drop every proposal of a revoked session. Whether anything went.
 pub fn remove_for_session(session: &str) -> bool {
-    let mut list = proposals().lock().unwrap_or_else(|p| p.into_inner());
+    let mut list = proposals().lock_ok();
     let before = list.len();
     list.retain(|p| p.session != session || p.status == Status::Running);
     list.len() != before
@@ -868,7 +869,7 @@ pub(crate) fn creds(project: &str) -> (Option<String>, Vec<String>) {
 fn run_request(id: String, level: Level, requested: Option<String>) {
     let Some(p) = get(&id) else { return };
     let lock = project_lock(&p.project);
-    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = lock.lock_ok();
     let policy = match policy(&p.project) { Ok(policy) => policy, Err(e) => { fail(&id, Failure::new(Category::LevelOff, e)); return; } };
     let (token, origins) = creds(&p.project);
     let plan = match plan(&p.dir, &policy, requested.as_deref(), token.as_deref(), &origins) {
@@ -930,7 +931,7 @@ pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
         return out.ok_or("proposal not found".into());
     }
     let lock = project_lock(&p.project);
-    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = lock.lock_ok();
     if p.kind == Kind::Release { return decide_release(p); }
     let (Some(branch), Some(head), Some(remote), Some(url), Some(remote_sha)) = (p.branch.clone(), p.head.clone(), p.remote.clone(), p.url.clone(), p.remote_sha.clone()) else {
         return Err("incomplete proposal".into());
@@ -976,7 +977,7 @@ pub fn clear(id: &str) -> Result<Proposal, String> {
 fn run_release(id: String, requested: Option<String>) {
     let Some(p) = get(&id) else { return };
     let lock = project_lock(&p.project);
-    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = lock.lock_ok();
     let (token, origins) = creds(&p.project);
     let tag = match requested {
         Some(tag) => tag,
@@ -1195,7 +1196,7 @@ fn call_push(session: &Session, project: &str, dir: &Path, level: Level, args: P
     let proposal = new_proposal(session, project, dir, note);
     let id = proposal.id.clone();
     {
-        let mut list = proposals().lock().unwrap_or_else(|p| p.into_inner());
+        let mut list = proposals().lock_ok();
         prune(&mut list);
         list.push(proposal);
     }
@@ -1207,11 +1208,11 @@ fn call_push(session: &Session, project: &str, dir: &Path, level: Level, args: P
     std::thread::Builder::new().name("git-push-mcp".into()).spawn(move || {
         run_request(worker_id, level, requested);
         let (flag, cv) = &*signal;
-        *flag.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        *flag.lock_ok() = true;
         cv.notify_all();
     }).map_err(|e| e.to_string())?;
     let (flag, cv) = &*done;
-    let guard = flag.lock().unwrap_or_else(|p| p.into_inner());
+    let guard = flag.lock_ok();
     let _ = cv.wait_timeout_while(guard, INLINE_WAIT, |finished| !*finished);
     Ok(get(&id).map(|p| tool_result(&p)).unwrap_or_else(|| json!({"status":"failed","category":Category::NotFound,"message":"The request vanished.","output":"","state":Value::Null})))
 }
@@ -1227,7 +1228,7 @@ fn call_release(session: &Session, project: &str, dir: &Path, level: Level, args
     proposal.tag = args.tag.clone();
     let id = proposal.id.clone();
     {
-        let mut list = proposals().lock().unwrap_or_else(|p| p.into_inner());
+        let mut list = proposals().lock_ok();
         prune(&mut list);
         list.push(proposal);
     }
@@ -1238,11 +1239,11 @@ fn call_release(session: &Session, project: &str, dir: &Path, level: Level, args
     std::thread::Builder::new().name("git-release-mcp".into()).spawn(move || {
         run_release(worker_id, args.tag);
         let (flag, cv) = &*signal;
-        *flag.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        *flag.lock_ok() = true;
         cv.notify_all();
     }).map_err(|e| e.to_string())?;
     let (flag, cv) = &*done;
-    let guard = flag.lock().unwrap_or_else(|p| p.into_inner());
+    let guard = flag.lock_ok();
     let _ = cv.wait_timeout_while(guard, INLINE_WAIT, |finished| !*finished);
     Ok(get(&id).map(|p| tool_result(&p)).unwrap_or_else(|| json!({"status":"failed","category":Category::NotFound,"message":"The request vanished.","output":"","state":Value::Null})))
 }

@@ -18,6 +18,7 @@
 //! AppImage) has no source root, reads nothing, and shows no chip.
 
 use std::fs;
+use app_core::sync::LockExt;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -391,7 +392,7 @@ pub fn queue_if_behind() {
         .and_then(|line| line.split(' ').next().map(str::to_string));
     let busy = lock_holder_alive(&dir.join("package-dev-auto.lock"))
         || dir.join("package-dev-auto.pending").exists();
-    let mut last = LAST_QUEUED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut last = LAST_QUEUED.lock_ok();
     if !needs_queue(&head, stamp.as_deref(), failed.as_deref(), busy, last.as_deref()) {
         return;
     }
@@ -419,7 +420,7 @@ pub fn set_paused(paused: bool) -> Result<(), String> {
     if !paused {
         // The script queued what the pause skipped; forget any HEAD this
         // process asked for meanwhile so a later poll may ask again.
-        *LAST_QUEUED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *LAST_QUEUED.lock_ok() = None;
     }
     Ok(())
 }

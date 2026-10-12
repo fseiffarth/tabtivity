@@ -90,7 +90,7 @@ fn set_scope_env(env: &mut std::collections::HashMap<String, String>, scope: Str
 /// settings file or key is absent. A cheap per-spawn JSON read (spawns are
 /// infrequent), kept here so the spawn path has no `AppHandle` dependency.
 fn settings_agent_remote_control() -> bool {
-    let path = storage::state_dir().join("settings.json");
+    let path = storage::settings_path();
     if !path.exists() {
         return crate::schema::Settings::default().agent_remote_control();
     }
@@ -193,7 +193,7 @@ fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
         return false;
     }
     let settings: crate::schema::Settings =
-        storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default();
+        storage::read_json(&storage::settings_path()).unwrap_or_default();
     let admin = crate::services::server::is_server()
         && crate::services::agent_api_keys::cli_of(&opts.cmd) == Some("claude")
         && crate::services::server::agent_keys::chosen_in(&storage::state_dir()).contains("claude");
@@ -208,7 +208,7 @@ fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
 /// rw mount). Absent project id, missing entry, or an absent/unparseable
 /// override falls back to the global setting.
 fn resolve_agent_remote_control(project_id: Option<&str>) -> bool {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list =
         storage::read_json::<crate::schema::projects::ProjectsList>(&list_path).unwrap_or_default();
     agent_remote_control_effective(&list, project_id, settings_agent_remote_control())

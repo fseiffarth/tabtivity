@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../../hooks/useModalFocus";
 /**
  * The confirm before a link in a PDF leaves the app (#pdf-links).
  *
@@ -42,12 +43,13 @@ export function PdfLinkConfirmDialog({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [copied, setCopied] = useState(false);
   const host = linkHost(url);
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="settings-dialog pdf-link-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="settings-dialog pdf-link-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pdfLinks.confirmTitle")}</h2>
           <UntestedTag id="pdfLinkDialog.1" />

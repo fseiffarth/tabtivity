@@ -1,6 +1,7 @@
 //! Installed native CLS inside a filesystem boundary. No host credential stores,
 //! inherited tokens, shell resolution, or writable host mounts reach the server.
 use std::path::{Path, PathBuf};
+use app_core::sync::LockExt;
 use std::process::Stdio;
 use std::sync::Mutex;
 use tokio::process::{Child, ChildStdin, ChildStdout};
@@ -27,8 +28,8 @@ pub fn server_path(installation: &Path) -> Result<PathBuf, String> {
 
 pub fn install_command() -> Result<String, String> {
     if !supported() { return Err("copilot_unsupported_platform".into()); }
-    let path = install_directory().to_string_lossy().replace('\'', "'\\''");
-    Ok(format!("npm install --prefix '{path}' --ignore-scripts --no-audit --no-fund @github/copilot-language-server@{SERVER_VERSION}"))
+    let path = crate::quote::posix(&install_directory().to_string_lossy());
+    Ok(format!("npm install --prefix {path} --ignore-scripts --no-audit --no-fund @github/copilot-language-server@{SERVER_VERSION}"))
 }
 
 /// Pure plan, deliberately much narrower than the general agent fence: no host
@@ -101,11 +102,11 @@ impl ManagedProcess {
     }
 
     pub fn alive(&self) -> bool {
-        self.child.lock().unwrap().as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+        self.child.lock_ok().as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None)))
     }
 
     pub fn stop(&self) {
-        let Some(mut child) = self.child.lock().unwrap().take() else { return; };
+        let Some(mut child) = self.child.lock_ok().take() else { return; };
         if matches!(child.try_wait(), Ok(None)) {
             if let Some(pid) = child.id() {
                 crate::terminal::reap_child_subtree(pid, crate::terminal::ReapMode::Immediate);

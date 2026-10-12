@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useSettingsStore } from "../../stores/settings";
 import { SETTINGS_ANCHORS } from "../layout/settingsUi";
 import { runInstallInTab } from "../../lib/installCommand";
@@ -42,13 +42,7 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
     : DEFAULT_PORT;
   const command = `tailscale serve --bg http://127.0.0.1:${port}`;
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const modalRef = useModalFocus(onClose);
 
   // Same one-click shape as Mobile settings' own button (and every other
   // install-via-command flow): the command runs in a root terminal the root
@@ -69,6 +63,8 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop how-to-start-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="settings-dialog"
         role="dialog"
         aria-modal="true"

@@ -19,6 +19,7 @@
 //! tested on any OS.
 
 use std::sync::Mutex;
+use app_core::sync::LockExt;
 use std::thread;
 use std::time::Duration;
 
@@ -73,7 +74,7 @@ impl WindowsBackend {
     }
 
     fn is_parkable(&self, window_id: u64) -> bool {
-        self.state.lock().unwrap().is_parkable(window_id)
+        self.state.lock_ok().is_parkable(window_id)
     }
 
     /// Whether `hwnd` must NEVER be hidden. Combines owning-process identity (any
@@ -143,7 +144,7 @@ impl WorkspaceBackend for WindowsBackend {
             let _ = move_window_to_desktop(hwnd, desktop_id);
         }
         restore_and_raise(hwnd);
-        self.state.lock().unwrap().unmark_parked(window_id);
+        self.state.lock_ok().unmark_parked(window_id);
         Ok(())
     }
 
@@ -162,7 +163,7 @@ impl WorkspaceBackend for WindowsBackend {
         unsafe {
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
-        self.state.lock().unwrap().mark_parked(window_id);
+        self.state.lock_ok().mark_parked(window_id);
         Ok(())
     }
 
@@ -173,15 +174,15 @@ impl WorkspaceBackend for WindowsBackend {
     }
 
     fn set_parkable(&self, window_id: u64) {
-        self.state.lock().unwrap().add_parkable(window_id);
+        self.state.lock_ok().add_parkable(window_id);
     }
 
     fn unset_parkable(&self, window_id: u64) {
-        self.state.lock().unwrap().remove_parkable(window_id);
+        self.state.lock_ok().remove_parkable(window_id);
     }
 
     fn set_main_window_id(&self, window_id: u64) {
-        self.state.lock().unwrap().set_main(window_id);
+        self.state.lock_ok().set_main(window_id);
     }
 
     fn position_window(&self, window_id: u64, x: i32, y: i32) -> Result<(), String> {
@@ -210,7 +211,7 @@ impl WorkspaceBackend for WindowsBackend {
     }
 
     fn cleanup(&self) -> Result<(), String> {
-        let mut cleaned_up = self.cleaned_up.lock().unwrap();
+        let mut cleaned_up = self.cleaned_up.lock_ok();
         if *cleaned_up {
             return Ok(());
         }
@@ -219,7 +220,7 @@ impl WorkspaceBackend for WindowsBackend {
 
         // Restore exactly the windows Tabtivity hid (the SW_HIDE analog of x11.rs
         // cleanup moving PARKED_DESKTOP windows back to ACTIVE_DESKTOP).
-        let parked = self.state.lock().unwrap().drain_parked();
+        let parked = self.state.lock_ok().drain_parked();
         for window_id in parked {
             let Ok(hwnd) = hwnd_from_u64(window_id) else {
                 continue;

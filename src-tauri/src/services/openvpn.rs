@@ -35,6 +35,7 @@
 //! argv item.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::io::Write;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::io::{BufRead, BufReader};
@@ -141,7 +142,7 @@ enum Interactive {
 
 /// Classify (and reap) the interactive entry for `config`.
 fn interactive_state(config: &str) -> Interactive {
-    let pidfile = match interactive_registry().lock().unwrap().get(config) {
+    let pidfile = match interactive_registry().lock_ok().get(config) {
         Some(p) => p.clone(),
         None => return Interactive::None,
     };
@@ -150,7 +151,7 @@ fn interactive_state(config: &str) -> Interactive {
         Some(_) => {
             // The pid was written and is now gone: the tunnel died (or the user
             // closed its terminal). Reap the entry and its stale pidfile.
-            interactive_registry().lock().unwrap().remove(config);
+            interactive_registry().lock_ok().remove(config);
             let _ = std::fs::remove_file(&pidfile);
             Interactive::None
         }
@@ -173,7 +174,7 @@ fn disconnect_interactive(config: &str) {
         Interactive::Pending => None,
         Interactive::None => return,
     };
-    let pidfile = interactive_registry().lock().unwrap().remove(config);
+    let pidfile = interactive_registry().lock_ok().remove(config);
     if let Some(pid) = alive {
         kill_root_pid(pid);
     }
@@ -208,7 +209,7 @@ fn signalled_pids() -> &'static Mutex<std::collections::HashSet<i32>> {
 /// password prompt re-confirming it.
 #[cfg(any(target_os = "linux", test))]
 fn kill_already_handled(pid: i32) -> bool {
-    if signalled_pids().lock().unwrap().contains(&pid) {
+    if signalled_pids().lock_ok().contains(&pid) {
         return true;
     }
     !pid_alive(pid)
@@ -217,7 +218,7 @@ fn kill_already_handled(pid: i32) -> bool {
 /// Record that `pid` has been sent a TERM, so no later teardown pass re-elevates for it.
 #[cfg(any(target_os = "linux", test))]
 fn mark_signalled(pid: i32) {
-    signalled_pids().lock().unwrap().insert(pid);
+    signalled_pids().lock_ok().insert(pid);
 }
 
 /// Configs whose elevated teardown was explicitly **refused** (a dismissed polkit
@@ -238,14 +239,13 @@ fn declined_configs() -> &'static Mutex<std::collections::HashSet<String>> {
 #[cfg(target_os = "linux")]
 fn mark_declined(config: &str) {
     declined_configs()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .insert(config.to_string());
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn is_declined(config: &str) -> bool {
-    declined_configs().lock().unwrap().contains(config)
+    declined_configs().lock_ok().contains(config)
 }
 
 /// `kill -TERM` a **root-owned** pid, escalating the same way the platform's
@@ -512,8 +512,7 @@ fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
     prepare_root_pidfile(&pidfile)?;
     let _ = std::fs::remove_file(&pidfile);
     interactive_registry()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .insert(config.to_string(), pidfile.clone());
     // A terminal-started tunnel gets the same management socket a headless one does,
     // so stopping it costs no second elevation either. Best-effort: if no endpoint
@@ -1074,7 +1073,7 @@ fn random_hex(bytes: usize) -> Option<String> {
         .ok()?
         .read_exact(&mut buf)
         .ok()?;
-    Some(buf.iter().map(|b| format!("{b:02x}")).collect())
+    Some(crate::digest::hex(&buf))
 }
 
 /// Forget any endpoint recorded for `config`. Called before arming a new one (a
@@ -1242,7 +1241,7 @@ fn management_shutdown(config: &str) -> bool {
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn is_connected(config: &str) -> bool {
     {
-        let mut reg = registry().lock().unwrap();
+        let mut reg = registry().lock_ok();
         let headless = match reg.get_mut(config) {
             Some(proc) => match proc.child.try_wait() {
                 Ok(Some(_)) => {
@@ -1280,7 +1279,7 @@ pub fn is_connected(config: &str) -> bool {
 #[cfg(target_os = "macos")]
 pub fn is_connected(config: &str) -> bool {
     {
-        let mut reg = mac_registry().lock().unwrap();
+        let mut reg = mac_registry().lock_ok();
         let headless = match reg.get(config) {
             Some(proc) => match pidfile_pid(&proc.pidfile) {
                 Some(pid) if pid_alive(pid) => true,
@@ -1316,10 +1315,10 @@ pub fn is_connected(config: &str) -> bool {
 /// deadlock.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn active_configs() -> Vec<String> {
-    let mut keys: Vec<String> = registry().lock().unwrap().keys().cloned().collect();
-    keys.extend(interactive_registry().lock().unwrap().keys().cloned());
+    let mut keys: Vec<String> = registry().lock_ok().keys().cloned().collect();
+    keys.extend(interactive_registry().lock_ok().keys().cloned());
     #[cfg(target_os = "windows")]
-    keys.extend(svc_registry().lock().unwrap().keys().cloned());
+    keys.extend(svc_registry().lock_ok().keys().cloned());
     keys.sort();
     keys.dedup();
     keys.into_iter().filter(|c| is_connected(c)).collect()
@@ -1329,8 +1328,8 @@ pub fn active_configs() -> Vec<String> {
 /// way — by config path).
 #[cfg(target_os = "macos")]
 pub fn active_configs() -> Vec<String> {
-    let mut keys: Vec<String> = mac_registry().lock().unwrap().keys().cloned().collect();
-    keys.extend(interactive_registry().lock().unwrap().keys().cloned());
+    let mut keys: Vec<String> = mac_registry().lock_ok().keys().cloned().collect();
+    keys.extend(interactive_registry().lock_ok().keys().cloned());
     keys.sort();
     keys.dedup();
     keys.into_iter().filter(|c| is_connected(c)).collect()
@@ -1393,8 +1392,7 @@ fn adopt_config(config: &str) -> bool {
         match pidfile_pid(&pidfile) {
             Some(pid) if pid_alive(pid) => {
                 interactive_registry()
-                    .lock()
-                    .unwrap()
+                    .lock_ok()
                     .insert(config.to_string(), pidfile);
                 return true;
             }
@@ -1505,8 +1503,7 @@ pub fn connect_streaming(
     match ready {
         Ok(()) => {
             registry()
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .insert(config.to_string(), VpnProc { child, pidfile });
             Ok(())
         }
@@ -1623,7 +1620,7 @@ pub fn disconnect(config: &str) -> Result<(), String> {
     management_shutdown(config);
     // An interactive tunnel has no child of ours — kill it by the pid it wrote.
     disconnect_interactive(config);
-    let proc = registry().lock().unwrap().remove(config);
+    let proc = registry().lock_ok().remove(config);
     let Some(mut proc) = proc else {
         return Ok(());
     };
@@ -1645,14 +1642,14 @@ fn disconnect_interactive_checked(config: &str) -> bool {
             if !kill_root_pid_checked(pid) {
                 return false;
             }
-            if let Some(pidfile) = interactive_registry().lock().unwrap().remove(config) {
+            if let Some(pidfile) = interactive_registry().lock_ok().remove(config) {
                 let _ = std::fs::remove_file(&pidfile);
             }
             true
         }
         // Never authenticated — nothing root-owned to kill; drop the stale claim.
         Interactive::Pending => {
-            interactive_registry().lock().unwrap().remove(config);
+            interactive_registry().lock_ok().remove(config);
             true
         }
         Interactive::None => true,
@@ -1707,8 +1704,7 @@ pub fn disconnect_checked(config: &str) -> Result<(), String> {
     // Headless tunnel: peek the pidfile without removing, so a refused kill leaves
     // the entry in place.
     let pidfile = registry()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .get(config)
         .map(|p| p.pidfile.clone());
     let Some(pidfile) = pidfile else {
@@ -1719,7 +1715,7 @@ pub fn disconnect_checked(config: &str) -> Result<(), String> {
         return Err("openvpn teardown was not authorized".into());
     }
     // TERM delivered — now reap our child and forget it.
-    if let Some(mut proc) = registry().lock().unwrap().remove(config) {
+    if let Some(mut proc) = registry().lock_ok().remove(config) {
         let _ = proc.child.kill();
         let _ = proc.child.wait();
         let _ = std::fs::remove_file(&proc.pidfile);
@@ -1782,10 +1778,10 @@ pub fn disconnect_all() {
     // Interactive tunnels included: they are the ones that used to survive the app
     // and leave the machine's routing rewritten with nothing left to undo it.
     let keys: Vec<String> = {
-        let reg = registry().lock().unwrap();
-        let interactive = interactive_registry().lock().unwrap();
+        let reg = registry().lock_ok();
+        let interactive = interactive_registry().lock_ok();
         #[cfg(target_os = "windows")]
-        let svc = svc_registry().lock().unwrap();
+        let svc = svc_registry().lock_ok();
         let keys = reg.keys().chain(interactive.keys());
         #[cfg(target_os = "windows")]
         let keys = keys.chain(svc.keys());
@@ -1813,10 +1809,10 @@ pub fn disconnect_all() {
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn disconnect_all_checked() -> Result<(), String> {
     let keys: Vec<String> = {
-        let reg = registry().lock().unwrap();
-        let interactive = interactive_registry().lock().unwrap();
+        let reg = registry().lock_ok();
+        let interactive = interactive_registry().lock_ok();
         #[cfg(target_os = "windows")]
-        let svc = svc_registry().lock().unwrap();
+        let svc = svc_registry().lock_ok();
         let keys = reg.keys().chain(interactive.keys());
         #[cfg(target_os = "windows")]
         let keys = keys.chain(svc.keys());
@@ -2180,7 +2176,7 @@ fn svc_connect_streaming(
     );
     match ready {
         Ok(()) => {
-            svc_registry().lock().unwrap().insert(
+            svc_registry().lock_ok().insert(
                 config.to_string(),
                 SvcVpn {
                     pipe,
@@ -2205,7 +2201,7 @@ fn svc_connect_streaming(
 /// (service closed the pipe: its openvpn exited) is reaped with its files.
 #[cfg(target_os = "windows")]
 fn svc_connected(config: &str) -> bool {
-    let mut reg = svc_registry().lock().unwrap();
+    let mut reg = svc_registry().lock_ok();
     match reg.get(config) {
         Some(svc) if pipe_alive(&svc.pipe) => true,
         Some(_) => {
@@ -2336,8 +2332,7 @@ pub fn connect_streaming(
     match ready {
         Ok(()) => {
             registry()
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .insert(config.to_string(), VpnProc { child, pidfile });
             Ok(())
         }
@@ -2371,14 +2366,14 @@ pub fn disconnect(config: &str) -> Result<(), String> {
     // An interactive tunnel has no child of ours — kill it by the pid it wrote
     // (this was missing on Windows; Linux/macOS have always done it).
     disconnect_interactive(config);
-    let svc = svc_registry().lock().unwrap().remove(config);
+    let svc = svc_registry().lock_ok().remove(config);
     if let Some(svc) = svc {
         kill_root_pid(svc.pid as i32);
         drop(svc.pipe);
         let _ = std::fs::remove_file(&svc.pidfile);
         let _ = std::fs::remove_file(&svc.logfile);
     }
-    let proc = registry().lock().unwrap().remove(config);
+    let proc = registry().lock_ok().remove(config);
     let Some(mut proc) = proc else {
         return Ok(());
     };
@@ -2658,8 +2653,7 @@ pub fn connect_streaming(
     match ready {
         Ok(()) => {
             mac_registry()
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .insert(config.to_string(), MacVpn { pidfile, logfile });
             Ok(())
         }
@@ -2680,7 +2674,7 @@ pub fn disconnect(config: &str) -> Result<(), String> {
     management_shutdown(config);
     // An interactive tunnel has no entry in `mac_registry` — kill it by its pid.
     disconnect_interactive(config);
-    let proc = mac_registry().lock().unwrap().remove(config);
+    let proc = mac_registry().lock_ok().remove(config);
     let Some(proc) = proc else {
         return Ok(());
     };
@@ -2700,8 +2694,8 @@ pub fn disconnect(config: &str) -> Result<(), String> {
 pub fn disconnect_all() {
     // Interactive tunnels included — see the Linux/Windows twin.
     let keys: Vec<String> = {
-        let reg = mac_registry().lock().unwrap();
-        let interactive = interactive_registry().lock().unwrap();
+        let reg = mac_registry().lock_ok();
+        let interactive = interactive_registry().lock_ok();
         reg.keys().chain(interactive.keys()).cloned().collect()
     };
     for k in keys {
@@ -2713,8 +2707,8 @@ pub fn disconnect_all() {
 #[cfg(target_os = "macos")]
 pub fn disconnect_all_checked() -> Result<(), String> {
     let keys: Vec<String> = {
-        let reg = mac_registry().lock().unwrap();
-        let interactive = interactive_registry().lock().unwrap();
+        let reg = mac_registry().lock_ok();
+        let interactive = interactive_registry().lock_ok();
         reg.keys().chain(interactive.keys()).cloned().collect()
     };
     for k in keys {

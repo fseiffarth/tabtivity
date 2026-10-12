@@ -20,7 +20,7 @@
 //!     entries, so a printer called `; rm -rf ~` is a printer with a silly name
 //!     and not a command. The Windows path is the exception that proves it — a
 //!     PowerShell script *is* a string — so every name interpolated there goes
-//!     through [`ps_quote`] after [`check_printer_name`] has already refused the
+//!     through [`crate::quote::powershell`] after [`check_printer_name`] has already refused the
 //!     characters that make quoting interesting.
 //!  2. **Every read is capped in time** ([`run_capped`]). `lpstat` talks to a
 //!     CUPS server that may be a machine on the other end of a dead VPN, and it
@@ -923,14 +923,6 @@ fn print_file_impl(printer: &str, path: &str, title: &str) -> Result<(), String>
 
 // ── Windows backend ──────────────────────────────────────────────────────────
 
-/// Single-quote a value for a PowerShell literal string. [`check_printer_name`]
-/// has already refused `'` (and everything else that makes quoting delicate), so
-/// this is the second of two gates, not the only one.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn ps_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
 /// Run a PowerShell script and hand back stdout. `-NoProfile` so a user profile
 /// can neither slow the probe down nor print into the JSON we are about to
 /// parse.
@@ -1124,8 +1116,8 @@ fn cancel_job_impl(printer: &str, job_id: &str) -> Result<(), String> {
     check_job_id(job_id)?;
     let script = format!(
         "Remove-PrintJob -PrinterName {} -ID {}",
-        ps_quote(printer),
-        ps_quote(job_id)
+        crate::quote::powershell(printer),
+        crate::quote::powershell(job_id)
     );
     let (ok, out, err) = run_powershell(&script)?;
     action_error("Remove-PrintJob", ok, out, err)
@@ -1136,7 +1128,7 @@ fn cancel_all_impl(printer: &str) -> Result<(), String> {
     check_printer_name(printer)?;
     let script = format!(
         "Get-PrintJob -PrinterName {0} | Remove-PrintJob",
-        ps_quote(printer)
+        crate::quote::powershell(printer)
     );
     let (ok, out, err) = run_powershell(&script)?;
     action_error("Remove-PrintJob", ok, out, err)
@@ -1148,7 +1140,7 @@ fn set_default_impl(printer: &str) -> Result<(), String> {
     let script = format!(
         "$p=Get-CimInstance Win32_Printer -Filter (\"Name='\" + {0}.Replace(\"'\",\"''\") + \"'\"); \
          Invoke-CimMethod -InputObject $p -MethodName SetDefaultPrinter",
-        ps_quote(printer)
+        crate::quote::powershell(printer)
     );
     let (ok, out, err) = run_powershell(&script)?;
     action_error("SetDefaultPrinter", ok, out, err)
@@ -1161,7 +1153,7 @@ fn set_enabled_impl(printer: &str, enabled: bool) -> Result<(), String> {
     let script = format!(
         "$p=Get-CimInstance Win32_Printer -Filter (\"Name='\" + {0}.Replace(\"'\",\"''\") + \"'\"); \
          Invoke-CimMethod -InputObject $p -MethodName {1}",
-        ps_quote(printer),
+        crate::quote::powershell(printer),
         method
     );
     let (ok, out, err) = run_powershell(&script)?;
@@ -1173,8 +1165,8 @@ fn print_file_impl(printer: &str, path: &str, _title: &str) -> Result<(), String
     check_printer_name(printer)?;
     let script = format!(
         "Get-Content -LiteralPath {0} | Out-Printer -Name {1}",
-        ps_quote(path),
-        ps_quote(printer)
+        crate::quote::powershell(path),
+        crate::quote::powershell(printer)
     );
     let (ok, out, err) = run_powershell(&script)?;
     action_error("Out-Printer", ok, out, err)
@@ -1188,7 +1180,7 @@ fn print_file_impl(printer: &str, path: &str, _title: &str) -> Result<(), String
 /// window rather than showing a message in a pane.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_system_snapshot() -> PrintSnapshot {
-    tauri::async_runtime::spawn_blocking(snapshot_impl)
+    app_core::rt::spawn_blocking(snapshot_impl)
         .await
         .unwrap_or_else(|e| PrintSnapshot {
             supported: false,
@@ -1202,26 +1194,20 @@ pub async fn print_system_snapshot() -> PrintSnapshot {
 /// the queue as well as the id); CUPS cancels by id alone.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_job_cancel(printer: String, job_id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || cancel_job_impl(&printer, &job_id))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("print", move || cancel_job_impl(&printer, &job_id)).await
 }
 
 /// Cancel everything queued on one printer.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_jobs_cancel_all(printer: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || cancel_all_impl(&printer))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("print", move || cancel_all_impl(&printer)).await
 }
 
 /// Make `printer` the default. On CUPS this is the *user's* default and needs no
 /// elevation; on Windows it is the per-user default too.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_set_default(printer: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || set_default_impl(&printer))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("print", move || set_default_impl(&printer)).await
 }
 
 /// Resume (`true`) or pause (`false`) a printer's queue. This is the one action
@@ -1230,9 +1216,7 @@ pub async fn print_set_default(printer: String) -> Result<(), String> {
 /// through verbatim for the pane to show.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_set_enabled(printer: String, enabled: bool) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || set_enabled_impl(&printer, enabled))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("print", move || set_enabled_impl(&printer, enabled)).await
 }
 
 /// Send a small text page to `printer`, so "is this thing actually connected?"
@@ -1243,7 +1227,7 @@ pub async fn print_set_enabled(printer: String, enabled: bool) -> Result<(), Str
 /// print-this-file command at all, so no caller can turn it into one.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_test_page(printer: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::try_blocking("print", move || {
         check_printer_name(&printer)?;
         let body = format!(
             "{app} print test\n\n\
@@ -1256,7 +1240,6 @@ pub async fn print_test_page(printer: String) -> Result<(), String> {
         print_file_impl(&printer, &path_str, concat!(crate::app_name!(), " print test"))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -1386,12 +1369,6 @@ printer Lab-Plotter now printing Lab-Plotter-7.  enabled since Mon 28 Jul 2026 0
         assert!(check_job_id("Office_Laser-42").is_ok());
         assert!(check_job_id("42").is_ok());
         assert!(check_job_id("42; reboot").is_err());
-    }
-
-    #[test]
-    fn ps_quote_doubles_single_quotes() {
-        assert_eq!(ps_quote("plain"), "'plain'");
-        assert_eq!(ps_quote("it's"), "'it''s'");
     }
 
     #[test]

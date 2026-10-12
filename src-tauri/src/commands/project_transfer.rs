@@ -859,7 +859,7 @@ pub fn suggested_bundle_name(name: &str) -> String {
 /// Size/shape of what an export would carry, for the dialog. Read-only.
 // `(async)`: a full tree stat-walk of a large project is exactly the kind of
 // work that froze the window when run on the main thread (see
-// `commands::git::run_off_thread`). No `State`/`AppHandle`, so nothing binds it
+// `app_core::rt::try_blocking`). No `State`/`AppHandle`, so nothing binds it
 // to that thread.
 #[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn preview_project_export(project_id: String) -> Result<ExportPreview, String> {
@@ -1416,7 +1416,7 @@ pub async fn export_project(
     req: ExportProjectRequest,
 ) -> Result<ExportReport, String> {
     let project_id = req.project_id.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("export", move || {
         let emit = |phase: &str, done: u64, total: u64| {
             ctx.emit(
                 PROGRESS_EVENT,
@@ -1441,7 +1441,6 @@ pub async fn export_project(
         result
     })
     .await
-    .map_err(|e| format!("export task failed: {e}"))?
 }
 
 // ── Import ────────────────────────────────────────────────────────────────
@@ -2162,9 +2161,7 @@ pub fn import_project_export_blocking(
 pub async fn import_project_export(
     req: ImportBundleRequest,
 ) -> Result<ImportBundleResult, String> {
-    tokio::task::spawn_blocking(move || import_project_export_blocking(req))
-        .await
-        .map_err(|e| format!("import task failed: {e}"))?
+    app_core::rt::try_blocking("import", move || import_project_export_blocking(req)).await
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

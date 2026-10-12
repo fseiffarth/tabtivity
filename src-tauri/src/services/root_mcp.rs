@@ -40,6 +40,7 @@
 //! without `--remote-control` (see `commands::terminal`).
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -143,7 +144,7 @@ fn lane(caller: Caller) -> u8 {
 pub struct TokenStore(std::sync::Mutex<HashMap<String, Session>>);
 impl TokenStore {
     fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
-        self.0.lock().unwrap_or_else(|p| p.into_inner())
+        self.0.lock_ok()
     }
     /// The session `header` (the raw `Authorization` value) opens here.
     pub fn authenticate(&self, header: Option<&str>) -> Option<Session> {
@@ -225,7 +226,7 @@ pub fn token_generations() -> Vec<(String, Vec<String>)> {
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
     for s in tokens().map().values() {
         if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker) {
-            *s.projects_grant.lock().unwrap_or_else(|p| p.into_inner()) = grant.clone();
+            *s.projects_grant.lock_ok() = grant.clone();
         }
     }
 }
@@ -363,7 +364,7 @@ pub fn runtime() -> Option<&'static Runtime> {
 pub fn mint_token() -> Option<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).ok()?;
-    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Some(crate::digest::hex(&bytes))
 }
 
 pub fn endpoint_url(port: u16) -> String {
@@ -398,7 +399,7 @@ pub struct Session {
 }
 impl Session {
     pub fn admit_schedule_rate(&self) -> bool {
-        let mut calls = self.schedule_rate.lock().unwrap_or_else(|p| p.into_inner());
+        let mut calls = self.schedule_rate.lock_ok();
         calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(3600));
         if calls.len() >= 12 { return false; }
         calls.push_back(std::time::Instant::now());
@@ -406,14 +407,14 @@ impl Session {
     }
     /// Six `git_push` calls per tab per rolling hour (`services::git_push_mcp`).
     pub fn admit_push_rate(&self) -> bool {
-        let mut calls = self.push_rate.lock().unwrap_or_else(|p| p.into_inner());
+        let mut calls = self.push_rate.lock_ok();
         calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(3600));
         if calls.len() >= 6 { return false; }
         calls.push_back(std::time::Instant::now());
         true
     }
     pub fn admit_rate(&self) -> bool {
-        let mut rate = self.rate.lock().unwrap_or_else(|p| p.into_inner());
+        let mut rate = self.rate.lock_ok();
         if rate.0.elapsed() >= std::time::Duration::from_secs(60) { *rate = (std::time::Instant::now(), 0); }
         if rate.1 >= 120 { return false; }
         rate.1 += 1;
@@ -425,7 +426,7 @@ impl Session {
     pub fn mark_read_mail(&self) { self.read_mail.store(true, Ordering::Release); }
     pub fn has_read_mail(&self) -> bool { self.read_mail.load(Ordering::Acquire) }
     /// [`Self::projects_grant`] as recorded at spawn.
-    pub fn projects_grant(&self) -> ProjectsGrant { self.projects_grant.lock().unwrap_or_else(|p| p.into_inner()).clone() }
+    pub fn projects_grant(&self) -> ProjectsGrant { self.projects_grant.lock_ok().clone() }
     /// The stable per-tab id ownership is keyed by (`root_mcp_mail` drafts):
     /// the tab's hash, the same one that names its sandbox copy, so a resumed
     /// tab finds what its earlier spawn wrote. [`Self::id`] is per spawn.
@@ -693,7 +694,7 @@ pub fn serves(settings: &Path, caller: Caller) -> bool {
 
 /// [`enabled_in`] against the live `settings.json`.
 pub fn enabled() -> bool {
-    enabled_in(&crate::storage::state_dir().join("settings.json"))
+    enabled_in(&crate::storage::settings_path())
 }
 
 /// The trusted state a spawn's MCP grants are decided from, read once from a

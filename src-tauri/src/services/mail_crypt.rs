@@ -44,6 +44,7 @@
 //! rather than implying more.
 
 use std::path::{Path, PathBuf};
+use app_core::sync::LockExt;
 
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -644,7 +645,8 @@ pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
 ///
 /// A folder keeps its ACL on Windows: `restrict_to_owner`'s grant carries no
 /// inheritance flags, so dropping a folder's inherited entries would leave the
-/// files already inside it with no grant at all.
+/// files already inside it with no grant at all. The store's own folder is
+/// made owner-only once, inheritably, by [`harden_store_dir`].
 pub(crate) fn harden(path: &Path, mode: u32) {
     #[cfg(unix)]
     {
@@ -664,6 +666,24 @@ pub(crate) fn harden(path: &Path, mode: u32) {
     }
 }
 
+/// The mail store's own folder, owner-only for everything in it: `0700` on
+/// Unix; on Windows an owner-only ACL that files and subfolders inherit
+/// (`private_file::restrict_dir_to_owner_inheritable`), skipped when the folder
+/// already has it.
+///
+/// That is what lets a blob or a staged outbox file be written with no
+/// `icacls` run of its own: a mail sync writes one per message, and two
+/// process spawns each was the cost of restricting them one by one. They are
+/// created owner-only on Unix (mode `0600`) and inherit the folder's ACL on
+/// Windows. The database and the key file still get their own owner-only
+/// restriction ([`harden`], [`write_bytes_atomic`]); they are written rarely.
+pub(crate) fn harden_store_dir(dir: &Path) {
+    #[cfg(windows)]
+    crate::services::private_file::restrict_dir_to_owner_inheritable(dir);
+    #[cfg(not(windows))]
+    harden(dir, 0o700);
+}
+
 /// The lock every write of a sealed file *beside* the database takes (the
 /// account list, the filter rules, the address book, the OpenPGP keyring),
 /// holding the number of key switches so far. A switch of the store's keys
@@ -673,7 +693,7 @@ pub(crate) fn harden(path: &Path, mode: u32) {
 /// never see again.
 pub fn side_files() -> std::sync::MutexGuard<'static, u64> {
     static SIDE_FILES: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
-    SIDE_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    SIDE_FILES.lock_ok()
 }
 
 const B64: base64::engine::general_purpose::GeneralPurpose =

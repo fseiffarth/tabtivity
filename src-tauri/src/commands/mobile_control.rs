@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
+use app_core::sync::LockExt;
 
 use tokio::sync::oneshot;
 use app_core::CoreCtx;
@@ -60,8 +61,7 @@ pub fn mobile_desktop_respond(
     let state = ctx.get::<MobileDesktopState>();
     let sender = state
         .pending
-        .lock()
-        .unwrap()
+        .lock_ok()
         .remove(&request_id)
         .ok_or("mobile request expired")?;
     sender
@@ -261,9 +261,8 @@ pub fn mobile_prepare_phone_install_script() -> Result<String, String> {
 /// host runs).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_paired_devices() -> Result<Vec<AdminDevice>, String> {
-    app_core::rt::spawn_blocking(|| auth::read_paired_devices(&storage::state_dir().join("mobile-control")))
+    app_core::rt::try_blocking("mobile", || auth::read_paired_devices(&storage::state_dir().join("mobile-control")))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1468,7 +1467,7 @@ where
     let response_timeout = request.desktop_timeout();
     let mutation = request.is_mutation();
     let (tx, rx) = oneshot::channel();
-    state.pending.lock().unwrap().insert(id.clone(), tx);
+    state.pending.lock_ok().insert(id.clone(), tx);
     // Delivery is best-effort (`EventSink`); what can still fail is the
     // serialization, so that is the one case answered as unavailable.
     let delivered = match serde_json::to_string(&request) {
@@ -1480,7 +1479,7 @@ where
         Err(_) => false,
     };
     if !delivered {
-        state.pending.lock().unwrap().remove(&id);
+        state.pending.lock_ok().remove(&id);
         let _ = write_frame(
             &mut stream,
             &DesktopResponse::Error {
@@ -1499,7 +1498,7 @@ where
             code: "desktop_unavailable".into(),
             message: "Desktop did not answer".into(),
         });
-    state.pending.lock().unwrap().remove(&id);
+    state.pending.lock_ok().remove(&id);
     // Under the response cap, not the request one; an answer too large even
     // for that is stated to the sidecar rather than dropped — and for a
     // mutation, stated as applied: the window has made the change by now, so

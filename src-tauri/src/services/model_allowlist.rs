@@ -34,6 +34,7 @@
 //! `ollama_host`.
 
 use serde_json::Value;
+use app_core::sync::LockExt;
 
 /// `(command, the argument that names the model)` for every `core` command
 /// whose body forwards that name to Ollama.
@@ -162,7 +163,7 @@ fn cached_with(
     now: std::time::Instant,
     fetch: impl FnOnce() -> Option<Vec<String>>,
 ) -> Option<Vec<String>> {
-    let mut slot = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut slot = cache.lock_ok();
     if let Some((at, list)) = slot.as_ref() {
         if now.saturating_duration_since(*at) < TAGS_TTL {
             return list.clone();
