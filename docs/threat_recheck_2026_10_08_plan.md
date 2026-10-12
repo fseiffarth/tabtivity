@@ -10,19 +10,27 @@ listed under "Resume state" below.
 is answered, run it with the plan → implement → review routine (handoff:
 `docs/threat_recheck_2026_10_08_handoff.md`, append new sections there), mark
 its rows in `docs/threat_model.md`, then land on develop. Ask the user only
-the decision an item names.
+the decision an item names. Saying "continue" is the user's go-ahead for the
+subagents that routine spawns (plan reviewer, then a fresh implementer and
+reviewer per step, then a final reviewer), in a worktree under
+`.claude/worktrees/`.
 
-1. **Steps waiting on a decision** (see "Decisions for the user"):
+1. **Plan steps whose decisions were answered 2026-10-12** (see "Decisions
+   for the user"); suggested order 4, 5, 7, 11, 9, 10, 12 (7 after 5):
 
    | Plan step | Gaps | Decision |
    |---|---|---|
-   | 4 | 19 | A2 |
-   | 5 | 22, 31 | D1 |
-   | 7 | 23 (after step 5) | D3 |
-   | 9 | 25, 27, 33, 34 | E3 |
-   | 10 | 26, 32 | E2b |
-   | 11 | 21, 38 | C2, D6 |
-   | 12 | 20 | B1/C3 |
+   | 4 | 19 | A2: only the confirmed repo |
+   | 5 | 22, 31 | D1: refuse every symlinked leaf |
+   | 7 | 23 | D3: keep re-raster, own figure folder only |
+   | 9 | 25, 27, 33, 34 | E3: redact + mark external; CalDAV writes always stage |
+   | 10 | 26, 32 | E2b: refuse http CalDAV entirely |
+   | 11 | 21, 38 | C2: confirm all, refuse launchers; D6: navigation gate |
+   | 12 | 20 | B1: drop `live_pwa`; C3: keep auto-queue (document), launcher verifies a state-dir hash |
+
+   On 2026-10-12 other sessions had uncommitted edits in `commands/fs.rs`,
+   `services/git_ci.rs` and `services/agent_fence.rs` (steps 4 and 5 touch
+   them): branch from a develop that contains them, or edit around them.
 
 2. **Follow-ups that need no decision** (found during the run; details in
    the handoff's "Final review → Flagged for user"):
@@ -549,14 +557,14 @@ dropped. List it under "Flagged for user" in the handoff.
 ## Decisions for the user
 
 - **A1 (step 1) — decided 2026-10-08: per-scope.** per-scope logins for every env- or config-shaped file (a login is entered once per scope), or keep sharing behind a per-CLI content validator. Reviewer's recommendation: per-scope for the dotenv files and Cline.
-- **A2 (step 4):** gate CI reads on the confirmed push URL (CI then needs one confirmed push or a one-time "allow CI for <repo>" card), or let CI read public repos without the token until confirmed.
-- **B1/C3 (step 12):** keep the no-relaunch phone update behind an unfenced adoption step, or drop it. Keep auto-queueing dev builds from the window, or require a click. Should the launcher verify the artifact it adopts?
-- **C2 (step 11):** confirm before handing any no-viewer file to the OS, or refuse launcher types outright.
-- **D1 (step 5):** refuse every symlinked leaf on viewer writes (simplest, matches the drop-box rule), or follow in-root links by handle.
-- **D3 (step 7):** keep the deck's automatic re-raster, limited to its own figure folder, or make it click-only.
-- **D6 (step 11):** add an app-wide navigation gate on `main`/`detached-*`/`present-*` that refuses anything off the app origin.
-- **E3 (step 9):** mail-derived cards and events for a cloud root tab: redact URLs and mark them, or withhold title and notes entirely. Related: synced CalDAV invitation rows reach a cloud root agent unredacted today; and at the `destructive` level an agent's calendar write is pushed to a CalDAV server without a click. Should CalDAV-bound rows always stage?
-- **E2b (step 10):** refuse `http://` CalDAV hrefs entirely, or only under an `https` account URL.
+- **A2 (step 4) — decided 2026-10-12: only the confirmed repo.** CI reads only the repo confirmed for pushes, or one allowed once on an "Allow CI for <repo>" card; anything else answers `ci_repo_unconfirmed`.
+- **B1/C3 (step 12) — decided 2026-10-12:** (B1) drop the no-relaunch phone update: remove `live_pwa`, the phone app always comes from the binary. (C3) keep auto-queueing dev builds from the window and document the residual in the threat model (the next dev build runs agent-written code anyway). The launcher verifies what it adopts: the unfenced build writes the binary's hash into the state dir, and the launcher adopts only a matching `target/release/<bin>`.
+- **C2 (step 11) — decided 2026-10-12: confirm all, refuse launchers.** Every no-viewer hand-off to the OS asks first, naming the file; launcher types (`.desktop`, `.exe`, `.jar`, `.lnk`, `.cmd`, `.vbs`, …) and executable-bit files are refused outright. Same for Reader change cards.
+- **D1 (step 5) — decided 2026-10-12: refuse every symlinked leaf** on viewer writes, in-root links included.
+- **D3 (step 7) — decided 2026-10-12: keep the automatic re-raster**, writing only `.png` files inside the deck's own figure folder; absolute and `..` paths refused.
+- **D6 (step 11) — decided 2026-10-12: yes**, add the app-wide navigation gate on `main`/`detached-*`/`present-*`.
+- **E3 (step 9) — decided 2026-10-12: redact URLs and mark external** for mail-derived cards and events served to a cloud root tab (title and notes stay). Related, also decided: agent writes to a CalDAV-synced calendar always stage for approval, whatever the level.
+- **E2b (step 10) — decided 2026-10-12: refuse `http://` CalDAV entirely**, accounts added as http included (they need a clear message saying why).
 
 ## Not reviewed
 
