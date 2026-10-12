@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readFileBytes } from "../fileAccess";
+import { normalizePath } from "../../../lib/paths";
 import type { Deck, Interstitial } from "../../../lib/viewers/deck/model";
 import { type DecodedGif, decodeInterstitial, disposeGif } from "./gifPlayback";
 
@@ -22,10 +23,14 @@ export function dirOf(p: string): string {
   return i >= 0 ? p.slice(0, i) : "";
 }
 
-/** Resolve a deck-relative asset path against the sidecar's own directory. */
+/** Resolve a deck-relative asset path against the sidecar's own directory.
+ *
+ *  A `.`/`..` segment is folded away: `deckRelative` stores a figure beside or
+ *  above the deck as `../figures/x.png` (V #108), and the backend's file
+ *  commands refuse any path that still holds a `..` (threat recheck gap 22). */
 export function resolveRel(dir: string, rel: string): string {
-  if (/^([a-zA-Z]:[\\/]|\/)/.test(rel)) return rel;
-  return dir ? `${dir}/${rel}` : rel;
+  const joined = /^([a-zA-Z]:[\\/]|\/)/.test(rel) ? rel : dir ? `${dir}/${rel}` : rel;
+  return /(^|[\\/])\.\.?([\\/]|$)/.test(joined) ? normalizePath(joined) : joined;
 }
 
 /** Every interstitial in the deck, in slide order. */

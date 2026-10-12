@@ -207,12 +207,15 @@ export function detectMime(path: string, projectId: string | null): Promise<stri
 export function describeFileErrorKey(e: unknown): TranslationKey {
   const raw = String(e);
   const remote = /sftp/i.test(raw);
-  if (/permission|denied|eacces/i.test(raw)) {
-    return "fileError.permission";
-  }
   // A viewer save refused because the file is a link (D1, `open_confined`).
+  // First: the refusal quotes the path, and a path holding "permission" or
+  // "denied" must not turn it into a permission error (the deck's figure poll
+  // keys its stop-retrying on this one).
   if (/is a link; viewers do not save through links/.test(raw)) {
     return "fileError.link";
+  }
+  if (/permission|denied|eacces/i.test(raw)) {
+    return "fileError.permission";
   }
   // A remote stat/metadata failure means the host doesn't have this path — on a
   // remote project that's overwhelmingly a local-only file (never synced), which

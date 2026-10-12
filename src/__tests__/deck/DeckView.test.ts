@@ -14,6 +14,7 @@ import {
   deckRelative,
   withinProject,
 } from "../../components/embed/deck/DeckView";
+import { resolveRel } from "../../components/embed/deck/deckAssets";
 
 describe("clampRailWidth", () => {
   it("clamps to the documented bounds", () => {
@@ -55,6 +56,25 @@ describe("deckRelative (V #108)", () => {
   it("normalizes backslashes and trailing separators", () => {
     expect(deckRelative("/p/talks/", "/p/talks/fig.png")).toBe("fig.png");
     expect(deckRelative("C:\\p\\talks", "C:\\p\\talks\\fig.png")).toBe("fig.png");
+  });
+});
+
+describe("resolveRel", () => {
+  it("folds the `..` a deckRelative path climbs with, which the backend refuses", () => {
+    // The round trip of V #108: a figure above the deck is stored `../…`, and
+    // `read_file_bytes` refuses any path still holding a `..` (gap 22).
+    const src = deckRelative("/p/talks", "/p/figures/fig.png");
+    expect(resolveRel("/p/talks", src)).toBe("/p/figures/fig.png");
+    expect(resolveRel("/p/talks/2026", "../../fig.png")).toBe("/p/fig.png");
+    expect(resolveRel("C:\\p\\talks", "../figures/fig.png")).toBe("C:\\p\\figures\\fig.png");
+    expect(resolveRel("/p/talks", "/p/x/../fig.png")).toBe("/p/fig.png");
+  });
+
+  it("leaves a plain path exactly as joined", () => {
+    expect(resolveRel("/p/talks", "img/fig.png")).toBe("/p/talks/img/fig.png");
+    expect(resolveRel("/p/talks", "/abs/fig.png")).toBe("/abs/fig.png");
+    expect(resolveRel("", "fig.png")).toBe("fig.png");
+    expect(resolveRel("/p/talks", "fig..png")).toBe("/p/talks/fig..png");
   });
 });
 

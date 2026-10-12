@@ -12,6 +12,10 @@ describe("describeFileErrorKey", () => {
     expect(
       describeFileErrorKey("'/p/deck.eldeck.json' is a link; viewers do not save through links"),
     ).toBe("fileError.link");
+    // The refusal quotes the path; a folder named so is still a link refusal.
+    expect(
+      describeFileErrorKey("'/home/u/permissions denied/fig.png' is a link; viewers do not save through links"),
+    ).toBe("fileError.link");
   });
 
   it("keeps the existing mappings", () => {
