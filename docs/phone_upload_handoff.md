@@ -334,3 +334,86 @@ targets), clippy daemon lib, clippy app-serverd, `cargo test -p tabtivity -p
 app-serverd`, daemon test — all PASS (frontend gates skipped, no frontend
 change). Desktop lib tests 3880 passed / 4 ignored (+1). Windows cross-check
 not rerun (test-only change, no cfg'd code). Not run live.
+
+## Step C
+
+Commit: `73070ede` (`feat(mobile): phone uploads switch and the inbox's
+Added to projects`) on `phone-upload`; this section in the `docs(mobile)`
+commit after it.
+
+### What landed
+
+- `schema/settings.rs` `AppMobileHostSettings`: `project_uploads`,
+  `browser_client` (sibling bug: it was dropped by every patch) and a
+  `#[serde(flatten)] extra` catch-all. Test
+  `commands::settings::tests::mobile_host_switches_and_unknown_keys_survive_a_patch`
+  (both keys + an unknown nested key survive `merge_settings_patch` and a
+  write → read; unset stays absent). Placed in `commands/settings.rs`
+  because `merge_settings_patch` is private there.
+- `types/index.ts`: `project_uploads?: boolean`.
+- `MobileSettings.tsx`: `project_uploads` in `setMailGate` (stores `on ||
+  undefined`), carried by `apply`, `detectServeSettings`, `lockDownNow`;
+  `browser_client` by the first two only (lockdown comment says why). The
+  `ToggleRow` sits right under *Project files*, `disabled={busy ||
+  !stored?.project_files}`, `<UntestedTag id="mobile.files.upload" />`.
+- `InboxIndicator.tsx`: one `load` reads `global_inbox_list` and
+  `phone_uploads_list` in parallel (each keeps its last list on failure).
+  Section *Added to projects* (`<UntestedTag id="desktop.inbox.phoneUploads"
+  />`), rows `project · rel` over `size · age · phone`; **Keep** then
+  **Undo** (armed key `upload:<id>`, second click calls `phone_upload_undo`,
+  the row drops at once and the re-read decides). Kept ids in
+  `localStorage[storageKey("inbox.keptUploads")]` (JSON array, try/catch),
+  pruned to the listed ids on each successful list. Badge/label count =
+  global files + un-kept uploads; the button reveals the folder only while
+  global files exist, else opens the list; *Show in folder* only with files.
+- `mail-todo.css`: `.inbox-menu-upload` (the upload row is a plain two-line
+  `div`, not a button — nothing opens it from the desktop), beside the
+  sibling `.inbox-menu-*` rules; the buttons reuse `.inbox-menu-delete`.
+- `untested.ts`: rows `mobile.files.upload` (phone feature; the settings
+  switch carries this id too) and `desktop.inbox.phoneUploads`.
+- `mobile.projectFilesHelp` (all five languages): "Nothing can be changed
+  from the phone." → "…; adding new files is the switch below."
+
+### i18n keys added (en + de/fr/es/it)
+
+`mobile.projectUploads`, `mobile.projectUploadsHelp` (after
+`mobile.projectFilesHelp`); `inbox.uploads.{title, undo, undoConfirm,
+undoHint, undoLabel, keep, keepHint, keepLabel, justNow, minutesAgo,
+hoursAgo}` (after `inbox.showFolder`).
+
+### For agent D
+
+- `src/__tests__/shell/i18n.test.ts` fails unless **every** English key is
+  in all four `src/lib/i18nDicts/{de,fr,es,it}.ts` (and no extra key, and
+  every `{placeholder}` survives). The dicts are not sorted: insert each key
+  at the same spot as its sibling (e.g. after the `mobile.files.*` keys),
+  JSON-escaped double-quoted strings.
+- `mobile.projectUploadsHelp` names the phone button as **Upload here** /
+  „Hier hochladen“ / « Téléverser ici » / «Subir aquí» / «Carica qui». Use
+  those labels for the button key, or update the help text in all five.
+- The register row `mobile.files.upload` already exists; only add
+  `isUntested("mobile.files.upload")` to the drawer head's condition.
+
+### Gates (Linux, after `73070ede`)
+
+`scripts/gates.sh`: brand, whitespace, lint-fe (no warnings in the touched
+files), clippy (tabtivity + app-serverd, all targets), clippy daemon lib,
+clippy app-serverd, `npm run build`, vitest `--changed` (593 files / 5390
+tests passed), `cargo test -p tabtivity -p app-serverd`, daemon test — all
+PASS. New: `MobileProjectUploadsGate.test.tsx` 5, `InboxIndicator.test.tsx`
+7 (+4), settings round-trip 1. The first run hit
+`codex_bind::tests::a_watched_tree_is_walked_only_after_a_change` once
+(file-watcher timing under load, untouched code; 3/3 passes alone, green on
+the rerun). Not run live; `npm run backend:stale` not run (worktree).
+
+### Flagged for user
+
+- The badge label still reads "Sent from your phone — n waiting" and now
+  counts uploads too (one count, as the plan says).
+- Keep is per viewer (`localStorage`); the phone can still undo a kept file
+  (review B's open item).
+- Pre-existing: the three whole-object writers still drop any mobile-host
+  key they do not list (now only a key a *newer* build adds, since the
+  backend keeps it but the next whole write from this build replaces the
+  object). Spreading `...stored` would close it but also carry
+  `browser_client` into lockdown; left as the plan specified.
