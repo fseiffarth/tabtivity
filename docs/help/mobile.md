@@ -52,13 +52,13 @@ Tailscale command.
    phones**, including ones you pair later; to limit it, press the
    **All phones ▾** button beside it and pick **Only these phones**, then tick
    the phones. The side panel's phone button opens the same choice.
-6. **Open it on the phone.** Press **Show install QR**: a root terminal checks
-   the Serve mapping again and shows the `https://…ts.net` address as a QR
-   code. Scan it with the phone (Tailscale must be connected there).
-7. **Pair.** Click **New pairing code** on the desktop and type it on the
-   phone. The code is valid for five minutes. Never send it by chat, e-mail or
-   screenshot.
-8. **Optional: install it as an app.** Add the page to the Home Screen
+6. **Add the phone.** Press **Add device** (Settings → Mobile, or the header's
+   phone menu): it makes a one-time pairing code and shows it as a QR code.
+   Scan it with the phone's camera (Tailscale must be connected there); the
+   page opens with the code already filled in. Name the phone and pair. The
+   code can also be typed by hand. It is valid for five minutes. Never send it
+   by chat, e-mail or screenshot.
+7. **Optional: install it as an app.** Add the page to the Home Screen
    (iPhone: Share → Add to Home Screen; Android: browser menu → Install app or
    Add to Home screen). On iPhone this is needed for notifications.
 

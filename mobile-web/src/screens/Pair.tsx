@@ -58,12 +58,27 @@ export function pairingCodeComplete(code: string): boolean {
   return /^([a-z0-9_]{1,32}:)?\d{8}$/.test(code);
 }
 
+/** The code a desktop's Add device QR carried in the address fragment
+ * (`#pair=…`), taken once at load and wiped from the address at once, so it
+ * neither lingers in the phone's history nor survives a reload. */
+export function takeLinkedPairingCode(): string {
+  const match = /^#pair=([^&]*)/.exec(location.hash);
+  if (!match) return "";
+  history.replaceState(null, "", location.pathname + location.search);
+  try {
+    return cleanPairingCode(decodeURIComponent(match[1]));
+  } catch {
+    return "";
+  }
+}
+const linkedPairingCode = takeLinkedPairingCode();
+
 /** First pairing and local lock setup share one form. A failed biometric setup
  * leaves the phone paired, so a retry only finishes the lock: the one-time
  * pairing code has already been consumed. */
 export function Pair({ setupLock, onDone }: { setupLock: boolean; onDone: () => void }) {
   const t = useT();
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(linkedPairingCode);
   const [name, setName] = useState(() => appleTouchDevice() ?? t("mobile.pair.defaultName"));
   const [pin, setPin] = useState("");
   const [confirm, setConfirm] = useState("");
