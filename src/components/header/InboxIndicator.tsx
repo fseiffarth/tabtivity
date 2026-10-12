@@ -127,6 +127,8 @@ export function InboxIndicator() {
         if (writes.current !== seen) return;
         setUploads(listed);
         // Keep marks only what is still listed, so the stored set stays small.
+        // Safe only on a good read: the command rejects (`list_failed`) rather
+        // than answering [] when it cannot read projects.json or the log.
         const ids = new Set(listed.map((u) => u.id));
         setKept((current) => {
           const next = withStored(current).filter((id) => ids.has(id));

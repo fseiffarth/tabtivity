@@ -162,6 +162,34 @@ describe("InboxIndicator", () => {
     expect(screen.getByText("Paper · scan.jpg")).toBeTruthy();
   });
 
+  it("a failed list read keeps the Keep marks, so kept rows stay hidden after it", async () => {
+    // `phone_uploads_list` rejects (`list_failed`) when projects.json or the
+    // upload log cannot be read, rather than answering an empty list that
+    // would prune every Keep.
+    localStorage.setItem(storageKey("inbox.keptUploads"), JSON.stringify(["u1"]));
+    let failing = true;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "global_inbox_list") return files.slice(0, 1);
+      if (command === "phone_uploads_list") {
+        if (failing) throw "list_failed";
+        return uploads;
+      }
+      return undefined;
+    });
+    const first = render(<InboxIndicator />);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("phone_uploads_list"));
+    await screen.findByRole("button", { name: "Sent from your phone — 1 waiting" });
+    expect(JSON.parse(localStorage.getItem(storageKey("inbox.keptUploads")) ?? "[]")).toEqual(["u1"]);
+    first.unmount();
+
+    failing = false;
+    render(<InboxIndicator />);
+    expect(await screen.findByRole("button", { name: "Sent from your phone — 2 waiting" })).toBeTruthy();
+    act(() => useHeaderHoverMenuStore.getState().open("inbox"));
+    expect(screen.queryByText("Paper · docs/report.pdf")).toBeNull();
+    expect(screen.getByText("Paper · scan.jpg")).toBeTruthy();
+  });
+
   it("a read in flight when Undo is confirmed does not paint the row back", async () => {
     let listed = uploads;
     let hold = false;

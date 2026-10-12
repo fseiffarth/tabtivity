@@ -151,12 +151,21 @@ fn log_path(state_dir: &Path) -> PathBuf {
 }
 
 /// The log's records in file order (oldest first), and whether a line was
-/// unparseable. A missing log is empty. Read as bytes, line by line: a line
-/// torn mid-character (a short append on a full disk) is one garbage line,
-/// not a log that no longer reads as text at all.
+/// unparseable. A missing log is empty; an unreadable one reads as empty too
+/// (see [`try_read_log`] for a caller that must tell the two apart).
 fn read_log(state_dir: &Path) -> (Vec<Record>, bool) {
-    let Ok(bytes) = fs::read(log_path(state_dir)) else {
-        return (Vec::new(), false);
+    try_read_log(state_dir).unwrap_or_default()
+}
+
+/// [`read_log`], but a log that exists and cannot be read is an error rather
+/// than "nothing logged". Read as bytes, line by line: a line torn
+/// mid-character (a short append on a full disk) is one garbage line, not a
+/// log that no longer reads as text at all.
+fn try_read_log(state_dir: &Path) -> std::io::Result<(Vec<Record>, bool)> {
+    let bytes = match fs::read(log_path(state_dir)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), false)),
+        Err(error) => return Err(error),
     };
     let mut garbage = false;
     let records = bytes
@@ -168,7 +177,7 @@ fn read_log(state_dir: &Path) -> (Vec<Record>, bool) {
             record
         })
         .collect();
-    (records, garbage)
+    Ok((records, garbage))
 }
 
 /// Appends one record as a single write on an append handle, so a reader
@@ -350,11 +359,13 @@ static SEEN: Mutex<Option<Seen>> = Mutex::new(None);
 /// intact. `root_of` maps a raw project id to its directory (`None` drops the
 /// project's records: unknown, or remote now). The desktop polls this, so a
 /// file is re-hashed only when its size or mtime changed since the last call.
+/// A log that exists but cannot be read is an error, never an empty list: the
+/// desktop prunes its **Keep** marks to what a good read lists.
 pub fn recent(
     state_dir: &Path,
     within: Duration,
     root_of: impl Fn(&str) -> Option<PathBuf>,
-) -> Vec<Record> {
+) -> std::io::Result<Vec<Record>> {
     recent_at(state_dir, within, root_of, crate::clock::now_secs())
 }
 
@@ -363,7 +374,8 @@ fn recent_at(
     within: Duration,
     root_of: impl Fn(&str) -> Option<PathBuf>,
     now: u64,
-) -> Vec<Record> {
+) -> std::io::Result<Vec<Record>> {
+    let (records, _) = try_read_log(state_dir)?;
     let since = now.saturating_sub(within.as_secs());
     let mut roots: HashMap<String, Option<PathBuf>> = HashMap::new();
     let mut seen = SEEN.lock_ok();
@@ -373,7 +385,7 @@ fn recent_at(
     // One row per file: the same bytes uploaded again under a name an undo
     // freed leave two records for it, and the newest speaks for both.
     let mut listed = std::collections::HashSet::new();
-    for record in read_log(state_dir).0.into_iter().rev() {
+    for record in records.into_iter().rev() {
         if record.at < since || listed.contains(&(record.project.clone(), record.rel.clone())) {
             continue;
         }
@@ -398,7 +410,7 @@ fn recent_at(
     }
     // Only what this call saw: the cache never outgrows the log's window.
     *seen = Some(next);
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -617,16 +629,16 @@ mod tests {
         put(&f, "docs", "c.txt", b"c").unwrap();
         assert!(f.root.join("docs").join("old.txt").is_file());
         assert_eq!(old.rel, "docs/old.txt");
-        let listed = recent_at(&f.state, day, root_of(&f), NOW);
+        let listed = recent_at(&f.state, day, root_of(&f), NOW).unwrap();
         assert_eq!(rels(&listed), ["docs/c.txt", "edited.txt", "docs/moved.txt", "docs/a.txt"]);
         assert_eq!(listed[0].phone.as_deref(), Some("Pixel"));
 
         fs::rename(f.root.join("docs").join("moved.txt"), f.root.join("docs").join("elsewhere.txt")).unwrap();
         fs::write(f.root.join("edited.txt"), b"changed").unwrap();
-        let listed = recent_at(&f.state, day, root_of(&f), NOW);
+        let listed = recent_at(&f.state, day, root_of(&f), NOW).unwrap();
         assert_eq!(rels(&listed), ["docs/c.txt", "docs/a.txt"], "{moved:?} {edited:?}");
         // An unknown (or now remote) project drops out.
-        assert!(recent_at(&f.state, day, |_| None, NOW).is_empty());
+        assert!(recent_at(&f.state, day, |_| None, NOW).unwrap().is_empty());
     }
 
     /// The cache re-hashes on a size or mtime change only, and an edit that
@@ -636,13 +648,13 @@ mod tests {
         let f = fixture();
         let day = Duration::from_secs(CAP_WINDOW);
         put(&f, "docs", "same.txt", b"abc").unwrap();
-        assert_eq!(rels(&recent_at(&f.state, day, root_of(&f), NOW)), ["docs/same.txt"]);
+        assert_eq!(rels(&recent_at(&f.state, day, root_of(&f), NOW).unwrap()), ["docs/same.txt"]);
         let path = f.root.join("docs").join("same.txt");
         let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
         (&file).write_all(b"xyz").unwrap();
         file.set_modified(SystemTime::now() + Duration::from_secs(60)).unwrap();
         drop(file);
-        assert!(recent_at(&f.state, day, root_of(&f), NOW).is_empty());
+        assert!(recent_at(&f.state, day, root_of(&f), NOW).unwrap().is_empty());
     }
 
     #[test]
@@ -658,11 +670,24 @@ mod tests {
         text.insert_str(0, "{ not json\n");
         fs::write(log_path(&f.state), text).unwrap();
         assert_eq!(find(&f.state, &landed.id).map(|r| r.rel), Some(landed.rel.clone()));
-        assert_eq!(rels(&recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW)), [landed.rel.as_str()]);
+        assert_eq!(rels(&recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW).unwrap()), [landed.rel.as_str()]);
         put(&f, "docs", "next.txt", b"y").unwrap();
         let lines = log_lines(&f);
         assert_eq!(lines.len(), 3);
         assert!(lines.iter().all(|l| serde_json::from_str::<Record>(l).is_ok()));
+    }
+
+    /// The desktop prunes its Keep marks to what `recent` lists, so a log it
+    /// cannot read must not answer "nothing uploaded": every kept row would be
+    /// un-kept and show again on the next good read. No log yet is empty.
+    #[test]
+    fn recent_fails_on_an_unreadable_log_but_not_on_a_missing_one() {
+        let f = fixture();
+        let day = Duration::from_secs(CAP_WINDOW);
+        assert!(recent_at(&f.state, day, root_of(&f), NOW).unwrap().is_empty());
+        // A directory where the log should be: reading it fails on every OS.
+        fs::create_dir_all(log_path(&f.state)).unwrap();
+        assert!(recent_at(&f.state, day, root_of(&f), NOW).is_err());
     }
 
     /// A short append on a full disk can cut a line inside a multi-byte
@@ -680,7 +705,7 @@ mod tests {
         fs::write(log_path(&f.state), &bytes).unwrap();
 
         assert_eq!(find(&f.state, &landed.id).map(|r| r.rel), Some(landed.rel.clone()));
-        assert_eq!(rels(&recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW)), [landed.rel.as_str()]);
+        assert_eq!(rels(&recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW).unwrap()), [landed.rel.as_str()]);
         assert_eq!(put(&f, "docs", "b.txt", b"b"), Err(UploadError::Full), "the cap still sees the log");
         undo(&f.state, &f.root, "p1", &landed.rel).unwrap();
         put(&f, "", "c.txt", b"c").unwrap_err();
@@ -699,7 +724,7 @@ mod tests {
         undo(&f.state, &f.root, "p1", &first.rel).unwrap();
         let again = put(&f, "docs", "a.txt", b"same").unwrap();
         assert_eq!(again.rel, first.rel);
-        let listed = recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW);
+        let listed = recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW).unwrap();
         assert_eq!(listed.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), [again.id.as_str()]);
     }
 
@@ -731,7 +756,7 @@ mod tests {
         assert_eq!(undo(&f.state, &f.root, "p1", &landed.rel), Err(UploadError::NotFound));
         assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
         assert!(outside.path().join("a.txt").is_file());
-        assert!(recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW).is_empty());
+        assert!(recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW).unwrap().is_empty());
 
         // Its folder swapped for a link to a copy: the same.
         let landed = put(&f, "", "b.txt", b"b").unwrap();
@@ -793,7 +818,7 @@ mod tests {
         junction(outside.path(), &f.root.join("docs"));
         assert_eq!(undo(&f.state, &f.root, "p1", &landed.rel), Err(UploadError::NotFound));
         assert!(outside.path().join("c.txt").is_file());
-        assert!(recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW).is_empty());
+        assert!(recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW).unwrap().is_empty());
     }
 
     /// Windows creates names case-insensitively: a case-only clash is taken

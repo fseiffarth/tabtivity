@@ -270,31 +270,53 @@ fn upload_root(project_id: &str) -> Option<PathBuf> {
 }
 
 /// The phone's uploads of the last day whose file is still as it landed,
-/// newest first.
+/// newest first. An unreadable `projects.json` or upload log is an error
+/// (`list_failed`), never an empty list: the header prunes its **Keep** marks
+/// to what a good list names, so a failed read answered as "nothing" would
+/// un-keep every kept row.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn phone_uploads_list() -> Vec<PhoneUpload> {
+pub async fn phone_uploads_list() -> Result<Vec<PhoneUpload>, String> {
     app_core::rt::spawn_blocking(|| {
-        let names: HashMap<String, String> = crate::commands::projects::read_projects_list()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|entry| (entry.id, entry.name))
-            .collect();
-        uploads::recent(&storage::state_dir(), PHONE_UPLOADS_WINDOW, upload_root)
-            .into_iter()
-            .filter_map(|record| {
-                Some(PhoneUpload {
-                    project_name: names.get(&record.project)?.clone(),
-                    id: record.id,
-                    rel: record.rel,
-                    size: record.size,
-                    at: record.at,
-                    phone: record.phone,
-                })
-            })
-            .collect()
+        phone_uploads_from(
+            &storage::state_dir(),
+            crate::commands::projects::read_projects_list(),
+            upload_root,
+        )
     })
     .await
-    .unwrap_or_default()
+    .map_err(|_| PHONE_UPLOADS_LIST_FAILED.to_string())?
+}
+
+/// `phone_uploads_list`'s error code.
+const PHONE_UPLOADS_LIST_FAILED: &str = "list_failed";
+
+/// [`phone_uploads_list`] over a read of the project registry, with
+/// `root_of` resolving a raw project id to its local folder.
+fn phone_uploads_from(
+    state_dir: &Path,
+    projects: Result<crate::schema::projects::ProjectsList, String>,
+    root_of: impl Fn(&str) -> Option<PathBuf>,
+) -> Result<Vec<PhoneUpload>, String> {
+    let names: HashMap<String, String> = projects
+        .map_err(|_| PHONE_UPLOADS_LIST_FAILED.to_string())?
+        .into_iter()
+        .map(|entry| (entry.id, entry.name))
+        .collect();
+    let records = uploads::recent(state_dir, PHONE_UPLOADS_WINDOW, root_of)
+        .map_err(|_| PHONE_UPLOADS_LIST_FAILED.to_string())?;
+    Ok(records
+        .into_iter()
+        .filter_map(|record| {
+            Some(PhoneUpload {
+                project_name: names.get(&record.project)?.clone(),
+                id: record.id,
+                rel: record.rel,
+                size: record.size,
+                at: record.at,
+                phone: record.phone,
+            })
+        })
+        .collect())
 }
 
 /// Undo one phone upload by its record id: deletes the file only while it is
@@ -1827,5 +1849,59 @@ mod install_phone_script_tests {
                 assert_eq!(run(parser, settings, good), (1, String::new(), unset.to_string()), "{parser:?} {settings}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod phone_upload_tests {
+    use super::{phone_uploads_from, uploads, PHONE_UPLOADS_LIST_FAILED};
+    use crate::schema::projects::ProjectEntry;
+
+    fn entry(id: &str, name: &str) -> ProjectEntry {
+        ProjectEntry {
+            id: id.into(),
+            name: name.into(),
+            status: "active".into(),
+            position: 0,
+            local_file: String::new(),
+            extra: Default::default(),
+        }
+    }
+
+    /// The header prunes its Keep marks to the ids a good list names. A
+    /// registry or upload log it cannot read must therefore fail the list,
+    /// not answer an empty one — else every kept row is un-kept and shows
+    /// again on the next good read.
+    #[test]
+    fn an_unreadable_registry_or_log_fails_the_list_instead_of_emptying_it() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let state = temp.path().join("state");
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&state).expect("state dir");
+        std::fs::create_dir_all(&root).expect("project dir");
+        let landed = uploads::store(&state, &root, "p1", "", "note.txt", b"hello", Some("Pixel"))
+            .expect("upload lands");
+        let root_of = |id: &str| (id == "p1").then(|| root.clone());
+
+        let listed = phone_uploads_from(&state, Ok(vec![entry("p1", "Thesis")]), root_of).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, landed.id);
+        assert_eq!(listed[0].project_name, "Thesis");
+
+        assert_eq!(
+            phone_uploads_from(&state, Err("expected value at line 1".into()), root_of),
+            Err(PHONE_UPLOADS_LIST_FAILED.to_string()),
+            "an unreadable projects.json"
+        );
+
+        // The log replaced by something unreadable (a directory, on every OS).
+        let log = state.join("mobile-control").join(uploads::LOG_FILE);
+        std::fs::remove_file(&log).expect("the upload log");
+        std::fs::create_dir(&log).expect("dir in its place");
+        assert_eq!(
+            phone_uploads_from(&state, Ok(vec![entry("p1", "Thesis")]), root_of),
+            Err(PHONE_UPLOADS_LIST_FAILED.to_string()),
+            "an unreadable upload log"
+        );
     }
 }
