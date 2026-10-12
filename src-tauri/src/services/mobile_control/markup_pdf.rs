@@ -32,7 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::markup::{ink_width, Color, Mark, MarkupPage};
+use super::markup::{ink_width, Color, Mark, MarkupPage, PenStyle, StampSymbol};
 
 /// How long one bake may take before it gives up.
 pub const BAKE_DEADLINE: Duration = Duration::from_secs(20);
@@ -1292,7 +1292,9 @@ const CHAR_WIDTH: f64 = 0.72;
 
 fn annotation(mark: &Mark, map: &Map) -> Annotation {
     match mark {
-        Mark::Ink { color, width, points } => {
+        Mark::Stamp { color, at, size, symbol, .. } => stamp(*color, *at, *size, *symbol, map),
+        Mark::Ink { color, width, points, style, .. } if *style != PenStyle::Pen => styled_ink(*color, *width, points, *style, map),
+        Mark::Ink { color, width, points, .. } => {
             let [r, g, b] = rgb(*color);
             let widest = points.iter().map(|p| ink_width(*width, p[2])).fold(0.0, f64::max);
             let pad = widest / 2.0 + 1.0;
@@ -1306,7 +1308,7 @@ fn annotation(mark: &Mark, map: &Map) -> Annotation {
             let rect = map.bounds(x0 - pad, y0 - pad, x1 + pad, y1 + pad);
             let mut content = format!("q {} 1 J 1 j {} {} {} RG\n", map.cm(), num(r), num(g), num(b));
             for segment in ink_segments(points) {
-                content.push_str(&format!("{} w {}\n", num(ink_width(*width, segment.pressure)), segment.path));
+                content.push_str(&format!("{} w {}\n", num(ink_width(*width, segment.pressure)), segment.path()));
             }
             content.push_str("Q\n");
             let mut list = Vec::with_capacity(points.len() * 2);
@@ -1326,7 +1328,7 @@ fn annotation(mark: &Mark, map: &Map) -> Annotation {
             ];
             Annotation { dict, rect, resources: None, content }
         }
-        Mark::Box { color, rect: [x, y, w, h] } => {
+        Mark::Box { color, rect: [x, y, w, h], .. } => {
             let [r, g, b] = rgb(*color);
             let rect = map.bounds(*x, *y, x + w, y + h);
             let content = format!(
@@ -1417,10 +1419,200 @@ fn annotation(mark: &Mark, map: &Map) -> Annotation {
     }
 }
 
-/// One piece of a smoothed stroke and the pressure it is drawn at.
+/// A styled stroke (`PenStyle` other than the pen) as an Ink annotation, drawn
+/// as the viewer draws it (`rasterize.ts` `drawStyled`): one even path at the
+/// base width through the pen's curves — see-through for the marker, dashed,
+/// or with an open head for the arrow, which also goes into `/InkList` as a
+/// second path so a viewer that redraws the annotation keeps it.
+fn styled_ink(color: Color, width: f64, points: &[[f64; 3]], style: PenStyle, map: &Map) -> Annotation {
+    let [r, g, b] = rgb(color);
+    let head = if style == PenStyle::Arrow { arrow_head(points, width) } else { None };
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (x, y) in points.iter().map(|p| (p[0], p[1])).chain(head.iter().flatten().copied()) {
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
+    }
+    let pad = width / 2.0 + 1.0;
+    let rect = map.bounds(x0 - pad, y0 - pad, x1 + pad, y1 + pad);
+    let mut content = format!("q {} 1 J 1 j {} {} {} RG {} w\n", map.cm(), num(r), num(g), num(b), num(width));
+    if style == PenStyle::Marker {
+        content.push_str("/G0 gs\n");
+    }
+    if style == PenStyle::Dashed {
+        content.push_str(&format!("[{} {}] 0 d\n", num(DASH.0 * width), num(DASH.1 * width)));
+    }
+    let segments = ink_segments(points);
+    if let Some(first) = segments.first() {
+        content.push_str(&format!("{} m", first.start));
+        for segment in &segments {
+            content.push_str(&format!(" {}", segment.rest));
+        }
+        content.push_str(" S\n");
+    }
+    if let Some([a, tip, c]) = head {
+        content.push_str(&format!("{} {} m {} {} l {} {} l S\n", num(a.0), num(a.1), num(tip.0), num(tip.1), num(c.0), num(c.1)));
+    }
+    content.push_str("Q\n");
+    let path = |samples: &mut dyn Iterator<Item = (f64, f64)>| {
+        Obj::Array(
+            samples
+                .flat_map(|(x, y)| {
+                    let (px, py) = map.apply(x, y);
+                    [Obj::Real(px), Obj::Real(py)]
+                })
+                .collect(),
+        )
+    };
+    let mut ink_list = vec![path(&mut points.iter().map(|p| (p[0], p[1])))];
+    if let Some(head) = head {
+        ink_list.push(path(&mut head.into_iter()));
+    }
+    let shown = width * map.scale();
+    let mut border = vec![(b"W".to_vec(), Obj::Real(shown))];
+    if style == PenStyle::Dashed {
+        border.push((b"S".to_vec(), name("D")));
+        border.push((b"D".to_vec(), reals(&[DASH.0 * shown, DASH.1 * shown])));
+    }
+    let mut dict = vec![
+        (b"Subtype".to_vec(), name("Ink")),
+        (b"InkList".to_vec(), Obj::Array(ink_list)),
+        (b"C".to_vec(), reals(&[r, g, b])),
+        (b"BS".to_vec(), Obj::Dict(border)),
+    ];
+    let resources = (style == PenStyle::Marker).then(|| {
+        dict.push((b"CA".to_vec(), Obj::Real(MARKER_ALPHA)));
+        Obj::Dict(vec![(
+            b"ExtGState".to_vec(),
+            Obj::Dict(vec![(
+                b"G0".to_vec(),
+                Obj::Dict(vec![
+                    (b"Type".to_vec(), name("ExtGState")),
+                    (b"CA".to_vec(), Obj::Real(MARKER_ALPHA)),
+                    (b"BM".to_vec(), name("Multiply")),
+                ]),
+            )]),
+        )])
+    });
+    Annotation { dict, rect, resources, content }
+}
+
+/// A stamp's line width as a share of its size (`layer.ts` `STAMP_WIDTH`).
+const STAMP_WIDTH: f64 = 0.09;
+
+/// A stamp's symbol as unit polylines, x and y in −0.5…0.5 around its centre,
+/// y down — the viewer's `layer.ts` `STAMP_SHAPES`, point for point, so the
+/// marked copy shows what the reader placed.
+fn stamp_shape(symbol: StampSymbol) -> &'static [&'static [(f64, f64)]] {
+    match symbol {
+        StampSymbol::Insert => &[&[(-0.35, 0.4), (0.0, -0.3), (0.35, 0.4)]],
+        StampSymbol::Delete => &[&[(-0.4, -0.4), (0.4, 0.4)], &[(0.4, -0.4), (-0.4, 0.4)]],
+        StampSymbol::Paragraph => &[
+            &[(0.35, -0.45), (-0.15, -0.45), (-0.32, -0.38), (-0.4, -0.25), (-0.4, -0.15), (-0.32, -0.02), (-0.15, 0.05), (0.05, 0.05)],
+            &[(0.05, -0.45), (0.05, 0.45)],
+            &[(0.3, -0.45), (0.3, 0.45)],
+        ],
+        StampSymbol::Swap => &[
+            &[(-0.4, -0.2), (0.4, -0.2)],
+            &[(0.2, -0.38), (0.4, -0.2), (0.2, -0.02)],
+            &[(0.4, 0.2), (-0.4, 0.2)],
+            &[(-0.2, 0.02), (-0.4, 0.2), (-0.2, 0.38)],
+        ],
+    }
+}
+
+/// A stamp as an Ink annotation: its symbol's polylines, each a path of the
+/// `/InkList`, stroked evenly with round caps as the viewer draws it
+/// (`rasterize.ts` `drawMark`).
+fn stamp(color: Color, at: [f64; 2], size: f64, symbol: StampSymbol, map: &Map) -> Annotation {
+    let [r, g, b] = rgb(color);
+    let width = size * STAMP_WIDTH;
+    let lines: Vec<Vec<(f64, f64)>> = stamp_shape(symbol)
+        .iter()
+        .map(|line| line.iter().map(|(x, y)| (at[0] + x * size, at[1] + y * size)).collect())
+        .collect();
+    let reach = size / 2.0 + width / 2.0 + 1.0;
+    let rect = map.bounds(at[0] - reach, at[1] - reach, at[0] + reach, at[1] + reach);
+    let mut content = format!("q {} 1 J 1 j {} {} {} RG {} w\n", map.cm(), num(r), num(g), num(b), num(width));
+    for line in &lines {
+        let mut path = String::new();
+        for (i, (x, y)) in line.iter().enumerate() {
+            path.push_str(&format!("{} {} {} ", num(*x), num(*y), if i == 0 { "m" } else { "l" }));
+        }
+        content.push_str(&path);
+        content.push_str("S\n");
+    }
+    content.push_str("Q\n");
+    let ink_list = lines
+        .iter()
+        .map(|line| {
+            Obj::Array(
+                line.iter()
+                    .flat_map(|(x, y)| {
+                        let (px, py) = map.apply(*x, *y);
+                        [Obj::Real(px), Obj::Real(py)]
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    let dict = vec![
+        (b"Subtype".to_vec(), name("Ink")),
+        (b"InkList".to_vec(), Obj::Array(ink_list)),
+        (b"C".to_vec(), reals(&[r, g, b])),
+        (b"BS".to_vec(), Obj::Dict(vec![(b"W".to_vec(), Obj::Real(width * map.scale()))])),
+    ];
+    Annotation { dict, rect, resources: None, content }
+}
+
+/// How strongly the marker covers the page — the highlighter box's `0.4`.
+const MARKER_ALPHA: f64 = 0.4;
+/// A dashed stroke's dash and gap in multiples of its width (`rasterize.ts` `DASH`).
+const DASH: (f64, f64) = (2.5, 3.5);
+/// An arrow head's length in multiples of the stroke's width, and how far each
+/// side opens from the shaft (`layer.ts` `ARROW_HEAD`, `ARROW_SPREAD`).
+const ARROW_HEAD: f64 = 5.0;
+const ARROW_SPREAD: f64 = 0.5;
+
+/// An arrow's open head `[wing, tip, wing]` at the stroke's last sample,
+/// pointing the way the stroke ran over the head's length (`layer.ts`
+/// `arrowHead`); `None` for a stroke that never moved.
+fn arrow_head(points: &[[f64; 3]], width: f64) -> Option<[(f64, f64); 3]> {
+    if points.len() < 2 {
+        return None;
+    }
+    let tip = points[points.len() - 1];
+    let length = (width * ARROW_HEAD).max(1.0);
+    let mut back = points[points.len() - 2];
+    for point in points[..points.len() - 1].iter().rev() {
+        back = *point;
+        if (tip[0] - back[0]).hypot(tip[1] - back[1]) >= length {
+            break;
+        }
+    }
+    let (dx, dy) = (tip[0] - back[0], tip[1] - back[1]);
+    if dx == 0.0 && dy == 0.0 {
+        return None;
+    }
+    let angle = dy.atan2(dx);
+    let wing = |side: f64| (tip[0] - length * (angle + side * ARROW_SPREAD).cos(), tip[1] - length * (angle + side * ARROW_SPREAD).sin());
+    Some([wing(1.0), (tip[0], tip[1]), wing(-1.0)])
+}
+
+/// One piece of a smoothed stroke and the pressure it is drawn at: `start`
+/// is its first point (`x y`), `rest` its drawing operator (`… l` or `… c`),
+/// so a piece alone is `start m rest S` and a styled stroke runs them on.
 struct Segment {
-    path: String,
+    start: String,
+    rest: String,
     pressure: f64,
+}
+
+impl Segment {
+    fn path(&self) -> String {
+        format!("{} m {} S", self.start, self.rest)
+    }
 }
 
 /// A stroke as quadratic curves through the midpoints of its samples (the
@@ -1429,14 +1621,15 @@ struct Segment {
 fn ink_segments(points: &[[f64; 3]]) -> Vec<Segment> {
     let p = |i: usize| (points[i][0], points[i][1]);
     let mid = |a: (f64, f64), b: (f64, f64)| ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-    let line = |a: (f64, f64), b: (f64, f64)| format!("{} {} m {} {} l S", num(a.0), num(a.1), num(b.0), num(b.1));
+    let at = |a: (f64, f64)| format!("{} {}", num(a.0), num(a.1));
+    let line = |a: (f64, f64), b: (f64, f64), pressure: f64| Segment { start: at(a), rest: format!("{} l", at(b)), pressure };
     match points.len() {
         0 => Vec::new(),
-        1 => vec![Segment { path: line(p(0), p(0)), pressure: points[0][2] }],
-        2 => vec![Segment { path: line(p(0), p(1)), pressure: (points[0][2] + points[1][2]) / 2.0 }],
+        1 => vec![line(p(0), p(0), points[0][2])],
+        2 => vec![line(p(0), p(1), (points[0][2] + points[1][2]) / 2.0)],
         n => {
             let mut out = Vec::with_capacity(n);
-            out.push(Segment { path: line(p(0), mid(p(0), p(1))), pressure: points[0][2] });
+            out.push(line(p(0), mid(p(0), p(1)), points[0][2]));
             for window in points.windows(3) {
                 let [before, here, after] = [window[0], window[1], window[2]].map(|q| (q[0], q[1]));
                 let start = mid(before, here);
@@ -1446,21 +1639,12 @@ fn ink_segments(points: &[[f64; 3]]) -> Vec<Segment> {
                 let c1 = (start.0 + 2.0 / 3.0 * (control.0 - start.0), start.1 + 2.0 / 3.0 * (control.1 - start.1));
                 let c2 = (end.0 + 2.0 / 3.0 * (control.0 - end.0), end.1 + 2.0 / 3.0 * (control.1 - end.1));
                 out.push(Segment {
-                    path: format!(
-                        "{} {} m {} {} {} {} {} {} c S",
-                        num(start.0),
-                        num(start.1),
-                        num(c1.0),
-                        num(c1.1),
-                        num(c2.0),
-                        num(c2.1),
-                        num(end.0),
-                        num(end.1)
-                    ),
+                    start: at(start),
+                    rest: format!("{} {} {} c", at(c1), at(c2), at(end)),
                     pressure: window[1][2],
                 });
             }
-            out.push(Segment { path: line(mid(p(n - 2), p(n - 1)), p(n - 1)), pressure: points[n - 1][2] });
+            out.push(line(mid(p(n - 2), p(n - 1)), p(n - 1), points[n - 1][2]));
             out
         }
     }
@@ -1539,6 +1723,11 @@ fn bake_by(source: &[u8], pages: &[MarkupPage], deadline: Instant) -> Result<Vec
             writer.stream(appearance, form, built.content.as_bytes());
             let mut dict = vec![(b"Type".to_vec(), name("Annot"))];
             dict.extend(built.dict);
+            // The reader's comment is the annotation's text, which a PDF
+            // viewer shows on hover or in its comments list.
+            if let Some(comment) = mark.comment() {
+                dict.push((b"Contents".to_vec(), text_string(comment)));
+            }
             dict.extend([
                 (b"Rect".to_vec(), reals(&built.rect)),
                 (b"F".to_vec(), Obj::Int(4)),
@@ -1717,7 +1906,7 @@ pub(crate) mod tests {
     }
 
     fn ink() -> Mark {
-        Mark::Ink { color: Color::Red, width: 2.0, points: vec![[10.0, 10.0, 0.5], [20.0, 30.0, 0.7], [40.0, 35.0, 0.6]] }
+        Mark::Ink { color: Color::Red, width: 2.0, points: vec![[10.0, 10.0, 0.5], [20.0, 30.0, 0.7], [40.0, 35.0, 0.6]], style: PenStyle::Pen, comment: None }
     }
 
     fn reread(bytes: &[u8]) -> (Doc<'_>, Vec<Page>) {
@@ -1743,7 +1932,7 @@ pub(crate) mod tests {
     fn a_classic_file_gets_annotations_appended_and_keeps_its_bytes() {
         let source = classic_pdf(&[0, 0, 0], false);
         let text = Mark::Text { color: Color::Blue, at: [50.0, 60.0], size: 12.0, text: "use 2024\nnumbers".into() };
-        let boxed = Mark::Box { color: Color::Yellow, rect: [100.0, 100.0, 200.0, 20.0] };
+        let boxed = Mark::Box { color: Color::Yellow, rect: [100.0, 100.0, 200.0, 20.0], comment: None };
         let baked = bake(&source, &[page(2, [600.0, 800.0], vec![ink(), boxed, text])]).unwrap();
         assert!(baked.starts_with(&source), "the original bytes stay verbatim at the front");
         let (mut doc, pages) = reread(&baked);
@@ -1764,6 +1953,63 @@ pub(crate) mod tests {
         }
         let Some(Obj::Str(contents)) = get(&marked[2], b"Contents") else { panic!("no /Contents") };
         assert_eq!(&contents[..2], &[0xfe, 0xff]);
+    }
+
+    #[test]
+    fn styled_strokes_bake_as_one_even_path() {
+        let source = classic_pdf(&[0], false);
+        let stroke = |style| Mark::Ink { color: Color::Red, width: 2.0, points: vec![[10.0, 10.0, 0.5], [40.0, 12.0, 0.5], [80.0, 20.0, 0.5]], style, comment: None };
+        let baked = bake(&source, &[page(1, [600.0, 800.0], vec![stroke(PenStyle::Marker), stroke(PenStyle::Dashed), stroke(PenStyle::Arrow)])]).unwrap();
+        let (mut doc, pages) = reread(&baked);
+        let marked = annots(&mut doc, &pages[0]);
+        let content = |doc: &mut Doc<'_>, annotation: &Dict| {
+            let Some(Obj::Dict(ap)) = get(annotation, b"AP") else { panic!("no /AP") };
+            let Some(Obj::Ref(n, _)) = get(ap, b"N") else { panic!("no /N") };
+            let Some(Entry::Plain(offset)) = doc.xref.get(n).copied() else { panic!("appearance not in the xref") };
+            let (_, _, _, Some(content)) = doc.indirect_at(offset).unwrap() else { panic!("appearance is not a stream") };
+            String::from_utf8(content.to_vec()).unwrap()
+        };
+        // Each is one path stroked once — the arrow's head a second.
+        let marker = content(&mut doc, &marked[0]);
+        assert!(marker.contains("/G0 gs") && marker.matches(" S\n").count() == 1, "{marker}");
+        assert_eq!(get(&marked[0], b"CA"), Some(&Obj::Real(MARKER_ALPHA)));
+        let dashed = content(&mut doc, &marked[1]);
+        assert!(dashed.contains("[5 7] 0 d") && dashed.matches(" S\n").count() == 1, "{dashed}");
+        let Some(Obj::Dict(border)) = get(&marked[1], b"BS") else { panic!("no /BS") };
+        assert_eq!(get(border, b"S"), Some(&name("D")));
+        let arrow = content(&mut doc, &marked[2]);
+        assert_eq!(arrow.matches(" S\n").count(), 2, "{arrow}");
+        let Some(Obj::Array(paths)) = get(&marked[2], b"InkList") else { panic!("no /InkList") };
+        assert_eq!(paths.len(), 2, "the shaft and the head");
+        assert!(arrow_head(&[[0.0, 0.0, 0.5], [0.0, 0.0, 0.5]], 2.0).is_none(), "a stroke that never moved has no head");
+    }
+
+    #[test]
+    fn a_stamp_bakes_as_its_polylines_and_a_comment_as_contents() {
+        let source = classic_pdf(&[0], false);
+        let stamp = Mark::Stamp { color: Color::Blue, at: [100.0, 100.0], size: 20.0, symbol: StampSymbol::Swap, comment: Some("swap these two".into()) };
+        let blank = Mark::Box { color: Color::Yellow, rect: [100.0, 200.0, 200.0, 20.0], comment: Some("  ".into()) };
+        let commented = Mark::Ink {
+            color: Color::Red,
+            width: 2.0,
+            points: vec![[10.0, 300.0, 0.5], [80.0, 300.0, 0.5]],
+            style: PenStyle::Dashed,
+            comment: Some("Grüße".into()),
+        };
+        let baked = bake(&source, &[page(1, [600.0, 800.0], vec![stamp, blank, commented])]).unwrap();
+        let (mut doc, pages) = reread(&baked);
+        let marked = annots(&mut doc, &pages[0]);
+        assert_eq!(get(&marked[0], b"Subtype"), Some(&name("Ink")));
+        let Some(Obj::Array(paths)) = get(&marked[0], b"InkList") else { panic!("no /InkList") };
+        assert_eq!(paths.len(), stamp_shape(StampSymbol::Swap).len(), "one path per polyline");
+        let Some(Obj::Array(first)) = paths.first() else { panic!("a path is an array") };
+        assert_eq!(first.len(), 4, "the swap's first shaft is two points");
+        assert_eq!(get(&marked[0], b"Contents"), Some(&text_string("swap these two")));
+        assert_eq!(get(&marked[1], b"Contents"), None, "a blank comment is no /Contents");
+        assert_eq!(get(&marked[2], b"Contents"), Some(&text_string("Grüße")));
+        for symbol in [StampSymbol::Insert, StampSymbol::Delete, StampSymbol::Paragraph, StampSymbol::Swap] {
+            assert!(stamp_shape(symbol).iter().flat_map(|line| line.iter()).all(|(x, y)| x.abs() <= 0.5 && y.abs() <= 0.5));
+        }
     }
 
     #[test]

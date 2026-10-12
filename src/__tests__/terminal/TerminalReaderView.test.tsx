@@ -32,7 +32,7 @@ import { registerTerminal, unregisterTerminal } from "../../lib/terminal/termina
 import { noteSentPrompt } from "../../lib/agents/sentPrompts";
 import { setReaderDraft } from "../../lib/agents/readerDrafts";
 import type { Terminal } from "@xterm/xterm";
-import { NAMES, storageKey } from "../../lib/brand";
+import { NAMES, envName, storageKey } from "../../lib/brand";
 
 /** A pane's xterm as far as the Reader reads it: its active buffer, and the
  * write event it reads on — a splice into `rows` is this fake's write, as a
@@ -772,6 +772,26 @@ describe("the Reader's live rows", () => {
     expect((chip as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(chip);
     expect(submitCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a local-model tab's model without offering the driver's /model list", async () => {
+    submitCommand.mockClear();
+    written.length = 0;
+    const local: TabEntry = {
+      key: "agent-1", label: "qwen3:8b · OpenCode", cmd: "ollama", args: ["launch", "opencode"], cwd: "/p",
+      kind: "local_agent", localDriver: "opencode", scheduleTargetId: "st-1", env: { [envName("LOCAL_MODEL")]: "qwen3:8b" },
+    };
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [local] } }));
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript" ? transcript : []));
+    term = fakeTerminal([">"]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    const facts = host.querySelector(".terminal-reader-facts")!;
+    expect(within(facts as HTMLElement).getByText("qwen3:8b").tagName).toBe("SPAN");
+    expect(within(facts as HTMLElement).queryByRole("button", { name: /qwen3|Model/ })).toBeNull();
+    expect(submitCommand).not.toHaveBeenCalled();
+    expect(written).toEqual([]);
   });
 
   it("opens the session's own /model picker as a list and answers it there", async () => {

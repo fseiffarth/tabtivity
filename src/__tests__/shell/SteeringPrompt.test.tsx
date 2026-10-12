@@ -27,6 +27,7 @@ import {
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { envName } from "../../lib/brand";
 
 function Harness() {
   useKeyboard({ onTogglePanels: () => {} });
@@ -206,8 +207,8 @@ describe("steering prompt box", () => {
   });
 
   describe("chips", () => {
-    function openBox(target = "chips") {
-      activeTab({ kind: "agent", scheduleTargetId: target });
+    function openBox(target = "chips", tab: Partial<TabEntry> = { kind: "agent" }) {
+      activeTab({ ...tab, scheduleTargetId: target });
       registerScheduledAgentInput(target, {
         ptyId: "p:t1",
         ready: () => true,
@@ -278,6 +279,17 @@ describe("steering prompt box", () => {
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
       });
       expect(box()).toBeNull();
+    });
+
+    it("a local-model tab names its model and offers no model list", () => {
+      openBox("chips", {
+        kind: "local_agent", label: "qwen3:8b · OpenCode", cmd: "ollama", localDriver: "opencode",
+        env: { [envName("LOCAL_MODEL")]: "qwen3:8b" },
+      });
+      expect(document.querySelector(".steering-prompt-agent")?.textContent).toContain("qwen3:8b");
+      const keys = Array.from(document.querySelectorAll(".steering-prompt-chip kbd")).map((k) => k.textContent);
+      expect(keys).not.toContain("Alt+M");
+      expect(keys).not.toContain("Alt+E");
     });
 
     it("names each chip's key the way the platform does (Alt+M here)", () => {

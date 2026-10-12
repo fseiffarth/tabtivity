@@ -63,10 +63,11 @@
 //!   destination.
 //! - **A project VM's overlay disk.** Which is why a VM project is refused
 //!   outright rather than exported into something that cannot boot.
-//! - **Agent configuration** (hooks, MCP servers, skills, settings) — only the
-//!   conversations of [`AGENT_HISTORY_ROOTS`] travel, and only on request.
+//! - **Agent configuration** (hooks, MCP servers, skills, settings, logins) —
+//!   only the conversation stores `services::agent_history` lists travel, and
+//!   only on request.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -74,14 +75,20 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::services::agent_history;
+
 use crate::paths;
 use crate::schema::projects::ProjectEntry;
 use crate::schema::session::TerminalSession;
 use crate::storage;
 use crate::tauri_host::Ctx;
 
+use crate::schema::project::RemoteSpec;
+use crate::services::ssh_exec::shell_quote;
+
 use super::projects::{
-    conflict_message, entry_directory, entry_is_remote, entry_mirror, find_project_conflict,
+    conflict_message, entry_directory, entry_is_remote, entry_mirror, entry_remote_spec,
+    find_project_conflict,
     next_position, projects_root, read_projects_list, remote_project_state_dir,
     resolve_remote_mirror, sanitize_name, uuid_v4, validate_project_id, ProjectSite,
 };
@@ -114,19 +121,6 @@ const SECTION_MIRROR: &str = "mirror";
 const SECTION_AGENTS: &str = "agents";
 const AGENTS_HOME: &str = "home";
 const AGENTS_LOCAL: &str = "local";
-
-/// Where each CLI keeps its conversations inside an agent home. An allowlist,
-/// for the same reason as [`REMOTE_STATE_FILES`] and one more: everything
-/// else in a home is configuration — hooks, MCP servers, skills, settings —
-/// which an agent tab *runs*. A bundle is untrusted, so none of that travels;
-/// a conversation is data the user resumes on purpose. (Claude's per-folder
-/// `memory/` sits under `projects/` and travels with it: it is instructions
-/// in the same trust class as the `CLAUDE.md` in the project tree itself.)
-const AGENT_HISTORY_ROOTS: &[&str] = &[
-    ".claude/projects",
-    ".codex/sessions",
-    ".codex/archived_sessions",
-];
 
 /// How many skipped paths an export report names; the count covers them all.
 const SKIP_LIST_CAP: usize = 200;
@@ -219,6 +213,10 @@ pub struct BundleContents {
     /// The project's agent conversations travel (`agents/`, format 2).
     #[serde(default)]
     pub agent_history: bool,
+    /// `mirror/` holds the host's own tree, streamed at export, rather than
+    /// the exporting machine's mirror. Informational: import treats both alike.
+    #[serde(default)]
+    pub mirror_from_host: bool,
     pub files: u64,
     pub bytes: u64,
     /// Files the export could not carry (unreadable, a FIFO, too deep), so
@@ -297,7 +295,7 @@ pub struct ExportPreview {
     pub rebuildable_dirs: Vec<RebuildableDir>,
     /// Entries the walk cannot carry whatever the toggles say.
     pub skipped: u64,
-    /// The project's agent conversations ([`AGENT_HISTORY_ROOTS`]).
+    /// The project's agent conversations (`services::agent_history`).
     pub agent_history_files: u64,
     pub agent_history_bytes: u64,
     pub tabs: usize,
@@ -321,9 +319,12 @@ pub struct ExportProjectRequest {
     pub include_git: bool,
     #[serde(default = "yes")]
     pub include_session: bool,
-    /// Remote projects only: carry the local mirror tree as well.
+    /// Remote projects only: carry the project's tree as `mirror/`.
     #[serde(default = "yes")]
     pub include_mirror: bool,
+    /// Remote projects only: which copy of the tree `mirror/` is packed from.
+    #[serde(default)]
+    pub mirror_source: MirrorSource,
     #[serde(default = "yes")]
     pub skip_rebuildable: bool,
     /// Rebuildable folders (root-relative, `/`-separated, as the preview
@@ -334,6 +335,32 @@ pub struct ExportProjectRequest {
     /// whatever the agents read or printed, secrets included.
     #[serde(default)]
     pub include_agent_history: bool,
+}
+
+/// A remote project's two copies of its tree: which one a bundle carries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MirrorSource {
+    /// This machine's mirror — what has been synced down, as it stands.
+    #[default]
+    Local,
+    /// The host's own tree, streamed over SSH (`tar -cf -`): the project as
+    /// it is, when the mirror holds only part of it or is behind.
+    Host,
+}
+
+/// The host's tree measured for the export dialog
+/// ([`preview_host_export`]), shaped like the preview's counts: `files` and
+/// `bytes` leave out `.git` and the folders that are always rebuildable.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostTally {
+    pub files: u64,
+    pub bytes: u64,
+    pub git_files: u64,
+    pub git_bytes: u64,
+    pub rebuildable_files: u64,
+    pub rebuildable_bytes: u64,
 }
 
 /// One rebuildable folder in the preview.
@@ -494,7 +521,7 @@ struct WalkFilter {
     rebuildable: bool,
     /// Rebuildable folders (root-relative) carried anyway: they and what is
     /// under them walk as `Plain`.
-    keep: std::collections::HashSet<String>,
+    keep: HashSet<String>,
 }
 
 impl WalkFilter {
@@ -692,8 +719,8 @@ enum HistoryItem {
     Skipped(Skip),
 }
 
-/// Walk the conversation roots ([`AGENT_HISTORY_ROOTS`]) of one agent home,
-/// visiting home-relative paths.
+/// Walk the conversation stores (`services::agent_history::ROOTS`) of one
+/// agent home, visiting home-relative paths.
 ///
 /// A home is written by the scope's agents while this runs, so everything goes
 /// through `services::home_io` handles: a folder or file an agent swaps for a
@@ -703,7 +730,21 @@ fn walk_agent_history(
     home: &Path,
     visit: &mut impl FnMut(&str, HistoryItem) -> Result<(), String>,
 ) -> Result<(), String> {
-    use crate::services::home_io::HomeDir;
+    use crate::services::agent_history::{self, Found};
+    use crate::services::home_io::{HomeDir, HomeFile};
+    fn file_item(rel: &str, file: HomeFile) -> Option<HistoryItem> {
+        if !agent_history::allowed(rel) {
+            return None;
+        }
+        Some(match file.metadata() {
+            Some(meta) => HistoryItem::File {
+                file,
+                size: meta.len,
+                mode: meta.mode,
+            },
+            None => HistoryItem::Skipped(Skip::Unreadable),
+        })
+    }
     fn walk(
         dir: &HomeDir,
         rel: &str,
@@ -729,29 +770,26 @@ fn walk_agent_history(
                     None => visit(&rel, HistoryItem::Skipped(Skip::Unreadable))?,
                 }
             } else if meta.is_file {
-                visit(
-                    &rel,
-                    HistoryItem::File {
-                        file,
-                        size: meta.len,
-                        mode: meta.mode,
-                    },
-                )?;
+                // A SQLite sidecar is folded into its database's snapshot; a
+                // root's configuration file stays behind.
+                if let Some(item) = file_item(&rel, file) {
+                    visit(&rel, item)?;
+                }
             } else {
                 visit(&rel, HistoryItem::Skipped(Skip::Special))?;
             }
         }
         Ok(())
     }
-    if !home.is_dir() {
-        return Ok(());
-    }
-    for root in AGENT_HISTORY_ROOTS {
-        if let Some(dir) = HomeDir::open_existing(home, root) {
-            walk(&dir, root, 0, visit)?;
-        }
-    }
-    Ok(())
+    agent_history::for_each_root(home, &mut |rel, found| match found {
+        Found::Dir(dir) => walk(&dir, rel, 0, visit),
+        Found::File(file) => match file_item(rel, file) {
+            Some(item) => visit(rel, item),
+            None => Ok(()),
+        },
+        Found::Link => visit(rel, HistoryItem::Skipped(Skip::Link)),
+        Found::Special => visit(rel, HistoryItem::Skipped(Skip::Special)),
+    })
 }
 
 /// The scope's agent home and its local-model home, keyed like the bundle's
@@ -940,6 +978,360 @@ fn export_blocker(entry: &ProjectEntry) -> Option<String> {
     None
 }
 
+// ── The host's copy ───────────────────────────────────────────────────────
+
+/// Rebuildable folders a name alone proves ([`Proof::Name`]): the only ones
+/// the host's copy can leave out. The others need a look beside or inside the
+/// folder, and a streamed archive arrives in no order that could give one —
+/// so on the host they travel, which errs toward carrying too much.
+fn name_proof_dirs() -> impl Iterator<Item = &'static str> {
+    REBUILDABLE_DIRS
+        .iter()
+        .filter(|(_, proof)| matches!(proof, Proof::Name))
+        .map(|(name, _)| *name)
+}
+
+/// The shell program that measures the host's tree, run in the project's
+/// remote directory. Built only from constants ([`name_proof_dirs`]), as
+/// `run_remote_script` requires. Sizes are apparent bytes where `du -b`
+/// exists (GNU), 1 KiB blocks elsewhere (BSD, macOS).
+fn host_probe_script() -> String {
+    let names = name_proof_dirs()
+        .map(|name| format!("-name {}", shell_quote(name)))
+        .collect::<Vec<_>>()
+        .join(" -o ");
+    let pick = format!(r"find . -path ./.git -prune -o \( {names} \) -type d -prune");
+    format!(
+        r#"if du -sb /dev/null >/dev/null 2>&1; then DU='du -sb'; M=1; else DU='du -sk'; M=1024; fi
+total() {{ awk -v m="$M" '{{s+=$1}} END {{printf "%.0f\n", s*m}}'; }}
+echo "files $(find . -type f 2>/dev/null | wc -l)"
+echo "bytes $($DU . 2>/dev/null | total)"
+if [ -d .git ]; then
+  echo "gitFiles $(find ./.git -type f 2>/dev/null | wc -l)"
+  echo "gitBytes $($DU .git 2>/dev/null | total)"
+fi
+echo "rebuildableFiles $({pick} -exec find {{}} -type f \; 2>/dev/null | wc -l)"
+echo "rebuildableBytes $({pick} -exec $DU {{}} + 2>/dev/null | total)"
+"#
+    )
+}
+
+/// [`host_probe_script`]'s output as the preview's counts: the whole tree's
+/// figures less `.git` and the rebuildable folders, which are given apart.
+fn parse_host_probe(out: &str) -> HostTally {
+    let mut values: HashMap<&str, u64> = HashMap::new();
+    for line in out.lines() {
+        if let Some((key, value)) = line.trim().split_once(' ') {
+            if let Ok(n) = value.trim().parse() {
+                values.insert(key, n);
+            }
+        }
+    }
+    let get = |key: &str| values.get(key).copied().unwrap_or(0);
+    let (git_files, git_bytes) = (get("gitFiles"), get("gitBytes"));
+    let (rebuildable_files, rebuildable_bytes) = (get("rebuildableFiles"), get("rebuildableBytes"));
+    HostTally {
+        files: get("files").saturating_sub(git_files + rebuildable_files),
+        bytes: get("bytes").saturating_sub(git_bytes + rebuildable_bytes),
+        git_files,
+        git_bytes,
+        rebuildable_files,
+        rebuildable_bytes,
+    }
+}
+
+/// The primary host of a remote project.
+fn host_spec(entry: &ProjectEntry) -> Result<RemoteSpec, String> {
+    if !entry_is_remote(entry) {
+        return Err("This project has no host.".to_string());
+    }
+    entry_remote_spec(entry).ok_or_else(|| "This project's host is not set.".to_string())
+}
+
+/// The last few lines of what a host printed on failure, for an error message.
+fn stderr_tail(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    lines[lines.len().saturating_sub(3)..].join(" ")
+}
+
+fn host_tally(spec: &RemoteSpec) -> Result<HostTally, String> {
+    let out = crate::services::ssh_exec::run_remote_script(spec, &host_probe_script())?;
+    if !out.status.success() {
+        let tail = stderr_tail(&String::from_utf8_lossy(&out.stderr));
+        return Err(if tail.is_empty() {
+            "the host did not answer".to_string()
+        } else {
+            tail
+        });
+    }
+    Ok(parse_host_probe(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// The host's tree measured, for the export dialog's "the host's copy". Its
+/// own command so the ordinary preview never dials: the dialog asks only once
+/// that copy is picked, and only while the project is connected.
+#[cfg_attr(feature = "desktop", tauri::command(async))]
+pub fn preview_host_export(project_id: String) -> Result<HostTally, String> {
+    validate_project_id(&project_id)?;
+    let list = read_projects_list()?;
+    let entry = list
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("project '{project_id}' not found"))?;
+    let spec = host_spec(entry)?;
+    // Always a gesture: only the dialog calls this, when the user picks the
+    // host's copy.
+    let _dial = crate::services::ssh_common::user_dial(&spec.user, &spec.host, spec.port);
+    host_tally(&spec)
+}
+
+/// A host path from an archive as a bundle-relative one: `./` and a trailing
+/// `/` dropped; `None` for the root itself and for anything that could step
+/// outside it.
+fn host_rel(path: &str) -> Option<String> {
+    let mut rel = path;
+    while let Some(rest) = rel.strip_prefix("./") {
+        rel = rest;
+    }
+    let rel = rel.trim_end_matches('/');
+    if rel.is_empty() || rel == "." || rel.starts_with('/') {
+        return None;
+    }
+    if rel.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
+        return None;
+    }
+    Some(rel.to_string())
+}
+
+/// Whether the filter leaves `rel` out of the host's copy: under (or being)
+/// a `.git` folder or an always-rebuildable one.
+fn host_excluded(rel: &str, is_dir: bool, filter: &WalkFilter) -> bool {
+    let comps: Vec<&str> = rel.split('/').collect();
+    let dirs = if is_dir { &comps[..] } else { &comps[..comps.len() - 1] };
+    dirs.iter().any(|c| {
+        (!filter.git && *c == ".git") || (!filter.rebuildable && name_proof_dirs().any(|n| n == *c))
+    })
+}
+
+/// What a host's `tar` said it could not carry, from its stderr (GNU and
+/// bsdtar both write `tar: <path>: <why>`).
+fn tar_complaints(stderr: &str) -> Vec<(String, Skip)> {
+    const UNREADABLE: &[&str] = &[
+        "Cannot open",
+        "Couldn't open",
+        "Cannot read",
+        "Couldn't read",
+        "Cannot stat",
+        "Couldn't stat",
+        "Cannot savedir",
+        "Permission denied",
+    ];
+    stderr
+        .lines()
+        .filter_map(|line| {
+            let (path, why) = line.strip_prefix("tar: ")?.split_once(": ")?;
+            let reason = if why.contains("socket ignored") {
+                Skip::Special
+            } else if UNREADABLE.iter().any(|m| why.contains(m)) {
+                Skip::Unreadable
+            } else {
+                return None;
+            };
+            Some((host_rel(path)?, reason))
+        })
+        .collect()
+}
+
+/// What streaming the host's tree into a bundle carried and left out.
+#[derive(Debug, Default)]
+struct HostPack {
+    files: u64,
+    bytes: u64,
+    skipped: Vec<(String, Skip)>,
+}
+
+/// A child process killed and reaped when the export stops reading it.
+struct Reaped(std::process::Child);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Stream the host's tree into the bundle as `mirror/`: one `tar -cf -` over
+/// SSH, read as it arrives, nothing landing on this machine's disk but the
+/// bundle. `.git` and the always-rebuildable folders are left out on the host
+/// when the filter says so (and again here, for a nested one). A connection
+/// that breaks mid-archive fails the export; a file the host's `tar` could not
+/// read is named in the report like any other.
+fn pack_host_tree(
+    zip: &mut zip::ZipWriter<&mut fs::File>,
+    spec: &RemoteSpec,
+    filter: &WalkFilter,
+    progress: &mut dyn FnMut(u64),
+) -> Result<HostPack, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    crate::services::ssh_common::validate_arg("remote path", &spec.remote_path)?;
+    let mut command = format!("cd {} && tar -cf -", shell_quote(&spec.remote_path));
+    if !filter.git {
+        command.push_str(" --exclude=./.git");
+    }
+    if !filter.rebuildable {
+        for name in name_proof_dirs() {
+            command.push_str(&format!(" --exclude={}", shell_quote(name)));
+        }
+    }
+    command.push_str(" .");
+    let mut args = crate::services::ssh_common::ssh_base_args(&spec.user, &spec.host, spec.port)?;
+    args.push(command);
+    let mut child = Reaped(
+        crate::paths::command_no_window("ssh")
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("failed to run ssh: {e}"))?,
+    );
+    let mut stderr = child.0.stderr.take().ok_or("ssh has no stderr")?;
+    // Read apart from stdout, so a host printing many warnings never blocks
+    // the archive behind a full pipe; kept to its first 256 KiB.
+    let errors = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = (&mut stderr).take(256 * 1024).read_to_string(&mut text);
+        let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+        text
+    });
+    let stdout = child.0.stdout.take().ok_or("ssh has no stdout")?;
+    let (mut pack, failure) = pack_tar(
+        zip,
+        std::io::BufReader::with_capacity(256 * 1024, stdout),
+        filter,
+        progress,
+    )?;
+    let status = child.0.wait().map_err(|e| format!("ssh: {e}"))?;
+    let errors = errors.join().unwrap_or_default();
+    let fail = |why: &str| {
+        let tail = stderr_tail(&errors);
+        if tail.is_empty() {
+            format!("Could not pack the host's copy: {why}")
+        } else {
+            format!("Could not pack the host's copy: {why} ({tail})")
+        }
+    };
+    if let Some(why) = failure {
+        return Err(fail(&why));
+    }
+    // 255 is ssh's own failure; anything else is `tar` finishing with
+    // warnings, which are read below.
+    if status.code() == Some(255) {
+        return Err(fail("the connection failed"));
+    }
+    for (path, reason) in tar_complaints(&errors) {
+        if !pack.skipped.iter().any(|(p, _)| *p == path) {
+            pack.skipped.push((path, reason));
+        }
+    }
+    Ok(pack)
+}
+
+/// Read one archive into the bundle as `mirror/` — [`pack_host_tree`]'s
+/// half that knows nothing of SSH. `Err` for a failing bundle; a broken
+/// archive is the second value, so the caller can say why with the host's
+/// own words beside it.
+fn pack_tar(
+    zip: &mut zip::ZipWriter<&mut fs::File>,
+    archive: impl std::io::Read,
+    filter: &WalkFilter,
+    progress: &mut dyn FnMut(u64),
+) -> Result<(HostPack, Option<String>), String> {
+    use crate::services::tar_stream::{Kind, TarReader};
+    let mut tar = TarReader::new(archive);
+    let mut pack = HostPack::default();
+    let mut links: Vec<(String, String)> = Vec::new();
+    let mut carried: HashSet<String> = HashSet::new();
+    let mut pruned: Vec<String> = Vec::new();
+    let mut failure: Option<String> = None;
+    loop {
+        let header = match tar.next_header() {
+            Ok(Some(header)) => header,
+            Ok(None) => break,
+            Err(e) => {
+                failure = Some(e.to_string());
+                break;
+            }
+        };
+        let Some(rel) = host_rel(&header.path) else {
+            continue;
+        };
+        if pruned.iter().any(|p| rel.starts_with(p.as_str())) {
+            continue;
+        }
+        let is_dir = header.kind == Kind::Dir;
+        if host_excluded(&rel, is_dir, filter) {
+            if is_dir {
+                pruned.push(format!("{rel}/"));
+            }
+            continue;
+        }
+        if rel.matches('/').count() + usize::from(is_dir) > MAX_DEPTH {
+            if is_dir {
+                pruned.push(format!("{rel}/"));
+            }
+            pack.skipped.push((rel, Skip::TooDeep));
+            continue;
+        }
+        let name = format!("{SECTION_MIRROR}/{rel}");
+        match header.kind {
+            Kind::Dir => zip
+                .add_directory(format!("{name}/"), dir_options())
+                .map_err(|e| format!("zip {name}: {e}"))?,
+            Kind::File => {
+                let copied = zip_copy(zip, &name, tar.content(header.size), header.size, header.mode)?;
+                if copied != Some(header.size) {
+                    failure = Some(format!("{rel} ended early"));
+                    break;
+                }
+                carried.insert(rel);
+                pack.files += 1;
+                pack.bytes += header.size;
+                if pack.files.is_multiple_of(64) {
+                    progress(pack.files);
+                }
+            }
+            Kind::Symlink(target) => links.push((name, target)),
+            // The earlier member's bytes are already in the bundle: copied
+            // from there, not sent twice.
+            Kind::HardLink(target) => match host_rel(&target).filter(|t| carried.contains(t)) {
+                Some(target) => match zip.deep_copy_file(&format!("{SECTION_MIRROR}/{target}"), &name) {
+                    Ok(()) => {
+                        carried.insert(rel);
+                        pack.files += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("project_transfer: hard link {rel}: {e}");
+                        pack.skipped.push((rel, Skip::Unreadable));
+                    }
+                },
+                None => pack.skipped.push((rel, Skip::Unreadable)),
+            },
+            Kind::Special => pack.skipped.push((rel, Skip::Special)),
+        }
+    }
+    // Links last, as in a local walk: a link entry ahead of a file whose path
+    // runs through it would have the extractor follow it.
+    for (name, target) in links {
+        zip.add_symlink(&name, &target, link_options())
+            .map_err(|e| format!("zip symlink {name}: {e}"))?;
+    }
+    progress(pack.files);
+    Ok((pack, failure))
+}
+
 // ── Export ────────────────────────────────────────────────────────────────
 
 /// Write a project bundle. Progress is reported through `progress(done, total)`.
@@ -991,15 +1383,20 @@ pub fn export_project_blocking(
     // A local project: its folder. A remote project: the allowlisted state dir
     // plus (optionally) the local mirror.
     let mut sections: Vec<(&str, PathBuf)> = Vec::new();
+    // The host's copy, when that is the tree asked for: streamed, not walked.
+    let mut host_mirror: Option<RemoteSpec> = None;
     if remote {
         if let Some(dir) = &directory {
             sections.push((SECTION_STATE, PathBuf::from(dir)));
         }
         if req.include_mirror {
-            match mirror.as_deref() {
-                Some(m) if Path::new(m).is_dir() => sections.push((SECTION_MIRROR, PathBuf::from(m))),
-                Some(_) => notes.push("mirrorMissing".to_string()),
-                None => {}
+            match (req.mirror_source, mirror.as_deref()) {
+                (MirrorSource::Host, _) => host_mirror = Some(host_spec(&entry)?),
+                (MirrorSource::Local, Some(m)) if Path::new(m).is_dir() => {
+                    sections.push((SECTION_MIRROR, PathBuf::from(m)))
+                }
+                (MirrorSource::Local, Some(_)) => notes.push("mirrorMissing".to_string()),
+                (MirrorSource::Local, None) => {}
             }
         }
     } else if req.include_files {
@@ -1013,9 +1410,20 @@ pub fn export_project_blocking(
         notes.push("noFiles".to_string());
     }
     let homes = agent_homes(&req.project_id);
+    // A gesture: the user pressed Export with the host's copy picked.
+    let _dial = host_mirror
+        .as_ref()
+        .map(|spec| crate::services::ssh_common::user_dial(&spec.user, &spec.host, spec.port));
 
     // ── Count first, so progress has a denominator ──────────────────────
     let mut total: u64 = 0;
+    if let Some(spec) = &host_mirror {
+        // Also the check that the host answers, before a byte is written.
+        let tally = host_tally(spec).map_err(|e| format!("Could not reach the host: {e}"))?;
+        total += tally.files
+            + if req.include_git { tally.git_files } else { 0 }
+            + if req.skip_rebuildable { 0 } else { tally.rebuildable_files };
+    }
     for (section, root) in &sections {
         if *section == SECTION_STATE {
             total += REMOTE_STATE_FILES
@@ -1086,7 +1494,8 @@ pub fn export_project_blocking(
         contents: BundleContents {
             dir: sections.iter().any(|(s, _)| *s == SECTION_DIR),
             state: sections.iter().any(|(s, _)| *s == SECTION_STATE),
-            mirror: sections.iter().any(|(s, _)| *s == SECTION_MIRROR),
+            mirror: sections.iter().any(|(s, _)| *s == SECTION_MIRROR) || host_mirror.is_some(),
+            mirror_from_host: host_mirror.is_some(),
             git_history: req.include_git,
             rebuildable_skipped: req.skip_rebuildable,
             agent_history: false,
@@ -1188,6 +1597,16 @@ pub fn export_project_blocking(
             }
         }
 
+        if let Some(spec) = &host_mirror {
+            let base = written_files;
+            let pack = pack_host_tree(&mut zip, spec, &filter, &mut |n| progress(base + n, total))?;
+            written_files += pack.files;
+            written_bytes += pack.bytes;
+            for (path, reason) in pack.skipped {
+                skip(&path, reason);
+            }
+        }
+
         if req.include_agent_history {
             for (key, home) in &homes {
                 walk_agent_history(home, &mut |rel, item| {
@@ -1195,7 +1614,13 @@ pub fn export_project_blocking(
                         HistoryItem::Skipped(reason) => skip(rel, reason),
                         HistoryItem::File { file, mode, .. } => {
                             let name = format!("{SECTION_AGENTS}/{key}/{rel}");
-                            match file.open_read() {
+                            // A database goes in as a consistent, stripped
+                            // snapshot, held until its bytes are written.
+                            let (source, _snapshot) = match agent_history_source(&file, rel) {
+                                Some((read, snap)) => (Some(read), snap),
+                                None => (None, None),
+                            };
+                            match source {
                                 Some(read) => match zip_stream(&mut zip, &name, read, mode)? {
                                     Some(size) => {
                                         written_files += 1;
@@ -1245,6 +1670,27 @@ pub fn export_project_blocking(
     })
 }
 
+/// What an agent-history file is read from: the file itself, or — for a
+/// database — a snapshot ([`agent_history::snapshot_for_export`]) kept alive
+/// beside it. `None` when it cannot be read.
+fn agent_history_source(
+    file: &crate::services::home_io::HomeFile,
+    rel: &str,
+) -> Option<(fs::File, Option<agent_history::Snapshot>)> {
+    if !agent_history::is_database(rel) {
+        return file.open_read().map(|read| (read, None));
+    }
+    match agent_history::snapshot_for_export(file, rel) {
+        Ok(snap) => snap.open().ok().map(|read| (read, Some(snap))),
+        // A `.db` that is not SQLite at all is an ordinary file.
+        Err(_) if !agent_history::looks_like_sqlite(file) => file.open_read().map(|read| (read, None)),
+        Err(e) => {
+            eprintln!("project_transfer: snapshot of {rel}: {e}");
+            None
+        }
+    }
+}
+
 /// The oldest bundle format that holds `contents` — so a bundle without the
 /// sections a format added stays readable by the builds before it.
 fn format_for(contents: &BundleContents) -> u32 {
@@ -1287,11 +1733,23 @@ fn zip_file(
 fn zip_stream(
     zip: &mut zip::ZipWriter<&mut fs::File>,
     name: &str,
-    mut source: fs::File,
+    source: fs::File,
     mode: u32,
 ) -> Result<Option<u64>, String> {
     // The opened handle's size, not the walk's: the file may have changed.
     let size = source.metadata().map(|m| m.len()).unwrap_or(0);
+    zip_copy(zip, name, source, size, mode)
+}
+
+/// [`zip_stream`] from any reader; `size` only decides whether the entry
+/// needs zip64.
+fn zip_copy(
+    zip: &mut zip::ZipWriter<&mut fs::File>,
+    name: &str,
+    mut source: impl std::io::Read,
+    size: u64,
+    mode: u32,
+) -> Result<Option<u64>, String> {
     let options = zip::write::FileOptions::<()>::default()
         .unix_permissions(if mode == 0 { 0o644 } else { mode })
         .large_file(size >= u32::MAX as u64);
@@ -1666,80 +2124,15 @@ fn make_symlink(_target: &str, _at: &Path) -> std::io::Result<()> {
     Err(std::io::Error::other("no links on this platform"))
 }
 
-/// The largest single conversation file import restores. A transcript is
-/// read whole to re-point its paths; a bundle is untrusted, and a crafted
-/// entry must not be able to inflate past this in memory.
-const MAX_HISTORY_FILE: u64 = 1 << 30;
-
-/// The folder name Claude files a cwd's transcripts under: every character
-/// that is not an ASCII letter or digit becomes `-`.
-fn claude_folder_name(path: &str) -> String {
-    path.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
-}
-
-/// `name` — a Claude transcript folder — re-pointed from `old` to `new` when
-/// it is the folder of `old` or of a path under it. Matched loosely, since an
-/// older Claude turned only separators and dots into `-`: a `-` in the name
-/// stands for any character of `old` that is not a letter or digit.
-fn repoint_claude_folder(name: &str, old: &str, new: &str) -> Option<String> {
-    let mut rest = name.chars();
-    for o in old.chars() {
-        let n = rest.next()?;
-        if n != o && !(n == '-' && !o.is_ascii_alphanumeric()) {
-            return None;
-        }
-    }
-    let tail: String = rest.collect();
-    (tail.is_empty() || tail.starts_with('-')).then(|| format!("{}{tail}", claude_folder_name(new)))
-}
-
-/// Re-point every path in a JSON-lines transcript. A line that names none of
-/// the old prefixes — or is not JSON — is kept byte for byte; only a line that
-/// changed is re-serialized.
-fn rewrite_jsonl(bytes: &[u8], rewrites: &[(String, String)]) -> Vec<u8> {
-    // The prefixes as they appear inside a JSON string (a Windows path's
-    // backslashes are escaped there).
-    let needles: Vec<String> = rewrites
-        .iter()
-        .map(|(old, _)| {
-            let quoted = serde_json::to_string(old).unwrap_or_default();
-            quoted.trim_matches('"').to_string()
-        })
-        .collect();
-    let mut out = Vec::with_capacity(bytes.len());
-    for line in bytes.split_inclusive(|b| *b == b'\n') {
-        let (body, newline) = match line.strip_suffix(b"\n") {
-            Some(body) => (body, &b"\n"[..]),
-            None => (line, &b""[..]),
-        };
-        let mentions = std::str::from_utf8(body)
-            .is_ok_and(|text| needles.iter().any(|n| !n.is_empty() && text.contains(n.as_str())));
-        let rewritten = mentions
-            .then(|| serde_json::from_slice::<Value>(body).ok())
-            .flatten()
-            .and_then(|mut value| {
-                let mut changed = false;
-                for (old, new) in rewrites {
-                    changed |= storage::rewrite_path_prefix(&mut value, old, new);
-                }
-                changed.then(|| serde_json::to_vec(&value).ok()).flatten()
-            });
-        out.extend_from_slice(rewritten.as_deref().unwrap_or(body));
-        out.extend_from_slice(newline);
-    }
-    out
-}
-
 /// Restore a bundle's agent conversations (`agents/…`) into project `id`'s
 /// agent homes, with every path the old machine wrote re-pointed: inside each
-/// transcript, and in the name of each Claude transcript folder (Claude finds
-/// a session to resume by the folder named after its cwd).
+/// file and database, and in the name of each folder a CLI files a project's
+/// sessions under ([`agent_history::repoint_rel`]).
 ///
-/// Only regular files under [`AGENT_HISTORY_ROOTS`] are written — never a
+/// Only regular files `agent_history::allowed` names are written — never a
 /// link, never anything a CLI would run — through `home_io` handles, and a
-/// file already in the home is kept rather than overwritten.
+/// file already in the home is kept rather than overwritten. A database is
+/// stripped to its conversation tables again on the way in.
 fn import_agent_history(
     zip: &mut Bundle,
     id: &str,
@@ -1749,7 +2142,6 @@ fn import_agent_history(
     let homes = agent_homes(id);
     crate::services::agent_home::create_private_dir(&crate::services::agent_home::homes_root())
         .map_err(|e| e.to_string())?;
-    let claude_root = format!("{}/", AGENT_HISTORY_ROOTS[0]);
     let mut files: u64 = 0;
     for i in 0..zip.len() {
         let entry = zip.by_index(i).map_err(|e| e.to_string())?;
@@ -1766,28 +2158,12 @@ fn import_agent_history(
         let Some((_, home)) = homes.iter().find(|(k, _)| *k == key) else {
             continue;
         };
-        if !AGENT_HISTORY_ROOTS
-            .iter()
-            .any(|root| rel.starts_with(&format!("{root}/")))
-        {
+        if !agent_history::allowed(rel) {
             continue;
         }
-        let rel = match rel.strip_prefix(&claude_root) {
-            Some(under) => {
-                let (folder, tail) = under.split_once('/').unwrap_or((under, ""));
-                let folder = rewrites
-                    .iter()
-                    .find_map(|(old, new)| repoint_claude_folder(folder, old, new))
-                    .unwrap_or_else(|| folder.to_string());
-                if tail.is_empty() {
-                    format!("{claude_root}{folder}")
-                } else {
-                    format!("{claude_root}{folder}/{tail}")
-                }
-            }
-            None => rel.to_string(),
-        };
-        let Some((parent, leaf)) = rel.rsplit_once('/') else {
+        let database = agent_history::is_database(rel);
+        let target_rel = agent_history::repoint_rel(rel, rewrites);
+        let Some((parent, leaf)) = target_rel.rsplit_once('/') else {
             continue;
         };
         let Some(target) = HomeDir::open(home, parent).and_then(|dir| dir.file(leaf)) else {
@@ -1798,18 +2174,28 @@ fn import_agent_history(
         }
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(
-            &mut std::io::Read::take(entry, MAX_HISTORY_FILE + 1),
+            &mut std::io::Read::take(entry, agent_history::MAX_FILE + 1),
             &mut bytes,
         )
         .map_err(|e| format!("read {name}: {e}"))?;
-        if bytes.len() as u64 > MAX_HISTORY_FILE {
+        if bytes.len() as u64 > agent_history::MAX_FILE {
             eprintln!("project_transfer: {name} is over the size cap; not restored");
             continue;
         }
-        let bytes = if leaf.ends_with(".jsonl") {
-            rewrite_jsonl(&bytes, rewrites)
+        let snapshot = if database {
+            match agent_history::prepare_for_import(&bytes[..], rel, rewrites) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    eprintln!("project_transfer: {name}: {e}; not restored");
+                    continue;
+                }
+            }
         } else {
-            bytes
+            None
+        };
+        let bytes = match snapshot {
+            Some(snap) => fs::read(&snap.path).map_err(|e| format!("read {name}: {e}"))?,
+            None => agent_history::rewrite_file(rel, bytes, rewrites),
         };
         target
             .write(&bytes)
@@ -2309,40 +2695,152 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_folder_follows_the_project_to_its_new_path() {
-        assert_eq!(claude_folder_name("/home/a/my_proj.v2"), "-home-a-my-proj-v2");
-        // The folder of the project itself and of a cwd under it.
-        assert_eq!(
-            repoint_claude_folder("-home-a-proj", "/home/a/proj", "/srv/b/proj").as_deref(),
-            Some("-srv-b-proj")
-        );
-        assert_eq!(
-            repoint_claude_folder("-home-a-proj-src", "/home/a/proj", "/srv/b/proj").as_deref(),
-            Some("-srv-b-proj-src")
-        );
-        // An older Claude kept the underscore; matched all the same.
-        assert_eq!(
-            repoint_claude_folder("-home-a-my_proj", "/home/a/my_proj", "/x/y").as_deref(),
-            Some("-x-y")
-        );
-        // A sibling whose name merely starts the same is not the project's.
-        assert_eq!(repoint_claude_folder("-home-a-project", "/home/a/proj", "/x"), None);
-        assert_eq!(repoint_claude_folder("-tmp", "/home/a/proj", "/x"), None);
+    fn a_host_path_is_kept_inside_the_tree() {
+        assert_eq!(host_rel("./src/main.rs").as_deref(), Some("src/main.rs"));
+        assert_eq!(host_rel("././a/").as_deref(), Some("a"));
+        for bad in ["./", ".", "/etc/passwd", "./a/../../x", "a//b", ""] {
+            assert_eq!(host_rel(bad), None, "{bad}");
+        }
+        let skip_all = WalkFilter {
+            git: false,
+            rebuildable: false,
+            keep: Default::default(),
+        };
+        assert!(host_excluded("sub/.git", true, &skip_all));
+        assert!(host_excluded("sub/.git/HEAD", false, &skip_all));
+        assert!(!host_excluded("sub/.git", false, &skip_all), "a submodule's .git file travels");
+        assert!(host_excluded("web/node_modules/x.js", false, &skip_all));
+        assert!(!host_excluded("build/out", false, &skip_all), "a name alone does not prove build/");
+        assert!(!host_excluded("sub/.git/HEAD", false, &WalkFilter::all()));
     }
 
     #[test]
-    fn a_transcript_is_repointed_line_by_line_and_otherwise_kept_byte_for_byte() {
-        let rewrites = vec![("/home/a/proj".to_string(), "/srv/b/proj".to_string())];
-        let input = b"{\"z\":1,\"cwd\":\"/home/a/proj/src\"}\n{ \"untouched\" : \"/elsewhere\" }\nnot json /home/a/proj\n{\"cwd\":\"/home/a/project\"}";
-        let out = String::from_utf8(rewrite_jsonl(input, &rewrites)).unwrap();
-        let lines: Vec<&str> = out.split('\n').collect();
-        assert_eq!(lines.len(), 4);
-        let first: Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(first["cwd"], "/srv/b/proj/src");
-        assert_eq!(first["z"], 1);
-        assert_eq!(lines[1], "{ \"untouched\" : \"/elsewhere\" }");
-        assert_eq!(lines[2], "not json /home/a/proj");
-        assert_eq!(lines[3], "{\"cwd\":\"/home/a/project\"}", "a sibling path is not re-pointed");
+    fn what_the_hosts_tar_could_not_read_is_named() {
+        let stderr = "tar: ./secret.key: Cannot open: Permission denied\n\
+                      tar: ./run/app.sock: socket ignored\n\
+                      tar: locked: Couldn't open locked: Permission denied\n\
+                      tar: ./log.txt: file changed as we read it\n\
+                      tar: Exiting with failure status due to previous errors\n";
+        assert_eq!(
+            tar_complaints(stderr),
+            vec![
+                ("secret.key".to_string(), Skip::Unreadable),
+                ("run/app.sock".to_string(), Skip::Special),
+                ("locked".to_string(), Skip::Unreadable),
+            ]
+        );
+        assert_eq!(stderr_tail(stderr).matches("tar:").count(), 3);
+    }
+
+    #[test]
+    fn the_host_probe_output_reads_like_the_preview() {
+        let tally = parse_host_probe(
+            "files 120\nbytes 9000\ngitFiles 40\ngitBytes 3000\nrebuildableFiles 50\nrebuildableBytes 4000\n",
+        );
+        assert_eq!(
+            tally,
+            HostTally {
+                files: 30,
+                bytes: 2000,
+                git_files: 40,
+                git_bytes: 3000,
+                rebuildable_files: 50,
+                rebuildable_bytes: 4000,
+            }
+        );
+        // BSD `wc -l` pads its count.
+        assert_eq!(parse_host_probe("files       7\n").files, 7);
+    }
+
+    /// The tree both host tests below run on: plain files, a `.git`, an
+    /// always-rebuildable folder, a `build/` without its tool, a link and a
+    /// hard link.
+    #[cfg(unix)]
+    fn host_like_tree(root: &Path) {
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src").join("main.rs"), b"fn main() {}\n").unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git").join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+        fs::create_dir_all(root.join("web").join("node_modules")).unwrap();
+        fs::write(root.join("web").join("node_modules").join("x.js"), b"x();\n").unwrap();
+        fs::create_dir_all(root.join("build")).unwrap();
+        fs::write(root.join("build").join("paper.pdf"), b"%PDF").unwrap();
+        std::os::unix::fs::symlink("src/main.rs", root.join("link")).unwrap();
+        fs::hard_link(root.join("src").join("main.rs"), root.join("again.rs")).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_host_probe_script_measures_a_real_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        host_like_tree(tmp.path());
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(host_probe_script())
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let tally = parse_host_probe(&String::from_utf8_lossy(&out.stdout));
+        assert_eq!(tally.git_files, 1);
+        assert_eq!(tally.rebuildable_files, 1);
+        // main.rs, again.rs, build/paper.pdf (`find -type f` skips the link).
+        assert_eq!(tally.files, 3);
+        assert!(tally.git_bytes >= 21 && tally.rebuildable_bytes >= 5);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hosts_archive_is_packed_like_a_walked_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        host_like_tree(&tree);
+        let archive = match std::process::Command::new("tar")
+            .args(["-cf", "-", "."])
+            .current_dir(&tree)
+            .output()
+        {
+            Ok(out) if out.status.success() => out.stdout,
+            _ => {
+                eprintln!("no usable tar here; skipped");
+                return;
+            }
+        };
+        let bundle = tmp.path().join("b.zip");
+        // Read-write, like the staged bundle: a hard link is copied back out of it.
+        let mut file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&bundle).unwrap();
+        let filter = WalkFilter {
+            git: false,
+            rebuildable: false,
+            keep: Default::default(),
+        };
+        let mut seen = 0;
+        {
+            let mut zip = zip::ZipWriter::new(&mut file);
+            let (pack, failure) = pack_tar(&mut zip, &archive[..], &filter, &mut |n| seen = n).unwrap();
+            assert_eq!(failure, None);
+            assert!(pack.skipped.is_empty(), "{:?}", pack.skipped);
+            assert_eq!(pack.files, 3);
+            zip.finish().unwrap();
+        }
+        assert_eq!(seen, 3);
+        let mut zip = zip::ZipArchive::new(fs::File::open(&bundle).unwrap()).unwrap();
+        let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+        for want in ["mirror/src/main.rs", "mirror/again.rs", "mirror/build/paper.pdf", "mirror/link"] {
+            assert!(names.iter().any(|n| n == want), "{want} missing from {names:?}");
+        }
+        assert!(!names.iter().any(|n| n.contains(".git") || n.contains("node_modules")), "{names:?}");
+        let mut body = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("mirror/again.rs").unwrap(), &mut body).unwrap();
+        assert_eq!(body, "fn main() {}\n", "a hard link carries the content");
+
+        // An archive cut short fails rather than packing a shorter tree.
+        // Read-write, like the staged bundle: a hard link is copied back out of it.
+        let mut file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&bundle).unwrap();
+        let mut zip = zip::ZipWriter::new(&mut file);
+        let cut = &archive[..archive.len() / 2];
+        let (_, failure) = pack_tar(&mut zip, cut, &WalkFilter::all(), &mut |_| {}).unwrap();
+        assert!(failure.is_some());
     }
 
     #[test]

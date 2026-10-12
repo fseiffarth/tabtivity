@@ -4482,8 +4482,18 @@
   cursor: var(--cur-crosshair, crosshair);
   touch-action: none;
 }
-.file-viewer-pdf-markup-layer.is-text {
+.file-viewer-pdf-markup-layer.is-text,
+.file-viewer-pdf-markup-layer.is-textmark {
   cursor: var(--cur-text, text);
+}
+/* The select tool picks and drags marks: the plain pointer. */
+.file-viewer-pdf-markup-layer.is-select {
+  cursor: var(--cur-default, default);
+}
+/* The area eraser drags a rectangle: the crosshair, not the ring. The pen's
+   dot and the eraser's sized ring come inline (`penCursor`). */
+.file-viewer-pdf-markup-layer.is-eraser.is-area {
+  cursor: var(--cur-crosshair, crosshair);
 }
 /* The eraser's reach (`ERASE_PX`) as a ring, white under black so it shows on
    any page. */
@@ -4507,6 +4517,24 @@
 .file-viewer-pdf-markup-note .file-viewer-pdf-note-text {
   font-weight: 600;
 }
+/* The note's colour row, between its text and its buttons. */
+.file-viewer-pdf-markup-note-colors {
+  margin: 4px 0;
+}
+/* The target tab's model chip (`PdfMarkupModel`): the Reader's model list
+   (`terminal-reader-picker`, `subwindows.css`) dropped under the chip, over
+   the pages, instead of rising over a composer. */
+.file-viewer-pdf-markup-model {
+  position: relative;
+  display: inline-flex;
+}
+.file-viewer-pdf-markup-model .terminal-reader-picker {
+  top: calc(100% + 6px);
+  bottom: auto;
+  left: 0;
+  z-index: 20;
+  width: min(420px, 80vw);
+}
 /* The strip's tools and colours show which one is armed — the selected state
    of the generic toolbar button (`.toolbar-btn.active`). */
 /* An icon tool (the eraser) sits where a glyph would. */
@@ -4515,23 +4543,107 @@
   margin: 0 auto;
 }
 .file-viewer-pdf-markup-bar .file-viewer-zoom-btn[aria-pressed="true"],
+.file-viewer-pdf-markup-model .file-viewer-zoom-btn.active,
 .file-viewer-pdf-markup-status .file-viewer-zoom-btn.active,
 .file-viewer-pdf-markup-questions .file-viewer-zoom-btn.active {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
-.file-viewer-pdf-markup-colors {
+/* The strip's groups: tools, the armed tool's options (styles, sizes,
+   colours), and the sending half pushed to the right end. */
+.file-viewer-pdf-markup-tools,
+.file-viewer-pdf-markup-options,
+.file-viewer-pdf-markup-styles,
+.file-viewer-pdf-markup-sizes,
+.file-viewer-pdf-markup-colors,
+.file-viewer-pdf-markup-presets {
   display: inline-flex;
+  align-items: center;
   gap: 3px;
 }
+.file-viewer-pdf-markup-options {
+  gap: 8px;
+}
+.file-viewer-pdf-markup-send {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: auto;
+}
+/* A swatch: its colour (`--swatch`) as a dot, ringed in a text-coloured
+   border so black shows on a dark strip and yellow on a light one. */
 .file-viewer-pdf-markup-swatch span {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   vertical-align: middle;
-  border: 1px solid rgba(0, 0, 0, 0.35);
+  background: var(--swatch);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 45%, transparent);
+}
+/* The selected swatch is ringed in its own colour, not the accent — the
+   accent tint would fight the colour it frames. */
+.file-viewer-pdf-markup-bar .file-viewer-pdf-markup-swatch[aria-pressed="true"],
+.file-viewer-pdf-markup-note .file-viewer-pdf-markup-swatch[aria-pressed="true"] {
+  color: var(--text-primary);
+  border-color: var(--swatch);
+  background: color-mix(in srgb, var(--swatch) 16%, transparent);
+  box-shadow: inset 0 0 0 1px var(--swatch);
+}
+/* A size as a dot of that size in the pen's colour; the eraser's reach as a
+   ring; the area eraser as a dashed rectangle. */
+.file-viewer-pdf-markup-size span {
+  display: inline-block;
+  border-radius: 50%;
+  vertical-align: middle;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 35%, transparent);
+}
+.file-viewer-pdf-markup-size .file-viewer-pdf-markup-ring {
+  background: none;
+  border: 1.5px solid currentColor;
+}
+.file-viewer-pdf-markup-size .file-viewer-pdf-markup-area {
+  width: 13px;
+  height: 9px;
+  border-radius: 0;
+  border: 1.5px dashed currentColor;
+}
+.file-viewer-pdf-markup-check {
+  display: inline-block;
+  width: 16px;
+}
+/* A ⋯ menu entry's current value (the pen pressure), at its right end. */
+.file-viewer-pdf-markup-value {
+  float: right;
+  margin-left: 16px;
+  color: var(--text-muted);
+}
+/* The text marks' glyph: "ab" struck, underlined or highlighted. */
+.file-viewer-pdf-markup-tm {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+.file-viewer-pdf-markup-tm.is-strike {
+  text-decoration: line-through 2px;
+}
+.file-viewer-pdf-markup-tm.is-underline {
+  text-decoration: underline 2px;
+  text-underline-offset: 2px;
+}
+.file-viewer-pdf-markup-tm.is-highlight {
+  padding: 0 1px;
+  background: color-mix(in srgb, #ffd91a 55%, transparent);
+}
+/* A preset's chip: its tool's glyph over a bar of its colour (`--swatch`),
+   a static inset line, readable on a light strip and a dark one. */
+.file-viewer-pdf-markup-preset {
+  box-shadow: inset 0 -3px 0 var(--swatch);
+}
+.file-viewer-pdf-markup-more .dropdown-menu {
+  min-width: 180px;
 }
 .file-viewer-pdf-markup-round {
   display: inline-flex;
@@ -4655,6 +4767,17 @@
   flex: none;
   box-shadow: none;
 }
+/* A remark's own Submit while marking (`PdfMarkupGroups`): the same pin,
+   wider, outside the group and over no mark (`submitSpot`); dimmed for the
+   moment after its group changed, while it takes no click. */
+.file-viewer-pdf-question-pin.is-submit {
+  border-radius: 4px;
+  font-weight: 600;
+}
+.file-viewer-pdf-question-pin.is-submit.is-settling,
+.file-viewer-pdf-question-pin.is-submit:disabled {
+  opacity: 0.5;
+}
 /* A tick's ✓ (`PdfMarkupTicks`): the same pin just outside a sent mark's
    top-right corner (`tickBadgeSpot`, never over its words), in the success colour — the agent says it handled the mark; a click
    approves and removes it. */
@@ -4669,6 +4792,26 @@
 .file-viewer-pdf-question-pin.is-tick:disabled {
   cursor: var(--cur-default, default);
   opacity: 0.6;
+}
+/* Beside a ✓, what the words under its marks were at Submit and are now
+   (`tickCaption`): one line, cut short, in full on hover. */
+.file-viewer-pdf-tick-diff {
+  position: absolute;
+  z-index: 8;
+  display: block;
+  max-width: 260px;
+  height: 22px;
+  padding: 0 6px;
+  line-height: 20px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--success) 60%, transparent);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: auto;
 }
 
 .file-viewer-pdf-copy-bar {

@@ -42,6 +42,9 @@ pub const MAX_INSTRUCTION: usize = 2_000;
 /// Characters an anchor's words and its line may hold.
 pub const MAX_ANCHOR_WORDS: usize = 200;
 pub const MAX_ANCHOR_LINE: usize = 300;
+/// Characters the reader's comment on one mark may hold
+/// (`mobile-web/src/markup/layer.ts` `MAX_COMMENT`).
+pub const MAX_COMMENT: usize = 500;
 /// What the agent is told to do with the marks in a `list` round
 /// (`Mode::List`) when the phone's settings hold no instruction of their
 /// own. It asks first: a marked PDF is often built from a `.tex` or `.md`
@@ -140,12 +143,13 @@ pub fn valid_round(round: &str) -> bool {
 /// The line that tells the agent how to tick off the marks it has handled,
 /// so the reader can approve each and see it go (`markup_done`); "if you
 /// have it" covers remote tabs and the switch being off. A picture's marks
-/// are named `m<mark>` alone (`mark_line`), and `markup_done` takes them as
-/// page 1 — said here, or the agent has no page to give.
+/// are named `m<mark>` alone (`mark_label`), and `markup_done` takes them as
+/// page 1 — said here, or the agent has no page to give. A range (`mark_runs`)
+/// is one remark drawn in several strokes: every mark in it is ticked.
 fn tick_line(round: &str, picture: bool) -> String {
     let reference = if picture { "`m<mark>`, all on page 1" } else { "`p<page> m<mark>`" };
     format!(
-        "This is markup round `{round}`; each mark above has its reference ({reference}). Once you have made the change a mark asks for, tick it off with the `markup_done` tool if you have it (this round, the file, each mark's page and mark number), so I can approve it and clear it from the page."
+        "This is markup round `{round}`; each mark above has its reference ({reference}); a range such as `m4–m9` is one mark drawn in several strokes. Once you have made the change a mark asks for, tick it off with the `markup_done` tool if you have it (this round, the file, each mark's page and mark number — every number of a range), so I can approve it and clear it from the page."
     )
 }
 
@@ -181,15 +185,106 @@ pub enum Color {
     Yellow,
 }
 
+impl Color {
+    /// The colour as the prompt names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Color::Red => "red",
+            Color::Blue => "blue",
+            Color::Black => "black",
+            Color::Yellow => "yellow",
+        }
+    }
+
+    /// What the colour asks for — the viewer's colour key says the same
+    /// (`mobile-web/src/markup/pen.ts` `COLOR_MEANING`).
+    fn meaning(self) -> &'static str {
+        match self {
+            Color::Red => "delete or fix",
+            Color::Blue => "insert or add",
+            Color::Black => "no particular meaning",
+            Color::Yellow => "check this",
+        }
+    }
+}
+
+/// How a pen stroke is drawn (`mobile-web/src/markup/layer.ts` `PenStyle`):
+/// left out of the wire for the plain pen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PenStyle {
+    /// Follows the stylus's pressure.
+    #[default]
+    Pen,
+    /// A wide see-through highlighter drawn by hand.
+    Marker,
+    /// A broken line: a tentative remark.
+    Dashed,
+    /// An even line with an open head at its last sample: move this there.
+    Arrow,
+}
+
+/// The proofreader's symbol a stamp places (`mobile-web/src/markup/layer.ts`
+/// `StampSymbol`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StampSymbol {
+    /// A caret: insert something here.
+    Insert,
+    /// A cross: delete this.
+    Delete,
+    /// A pilcrow: start a new paragraph here.
+    Paragraph,
+    /// A pair of arrows: swap these.
+    Swap,
+}
+
+/// The reader's comment on a drawn mark rides on the mark itself, absent for
+/// none — every mark from before comments, and what an older desktop still
+/// takes. A typed note says what it wants in its own words and takes none.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Mark {
     /// A pen stroke: `[x, y, pressure]` samples, `width` its base width.
-    Ink { color: Color, width: f64, points: Vec<[f64; 3]> },
+    Ink {
+        color: Color,
+        width: f64,
+        points: Vec<[f64; 3]>,
+        #[serde(default)]
+        style: PenStyle,
+        #[serde(default)]
+        comment: Option<String>,
+    },
     /// A highlighter box, `[x, y, width, height]`.
-    Box { color: Color, rect: [f64; 4] },
+    Box {
+        color: Color,
+        rect: [f64; 4],
+        #[serde(default)]
+        comment: Option<String>,
+    },
     /// A typed note anchored at its top-left corner; `\n` breaks lines.
     Text { color: Color, at: [f64; 2], size: f64, text: String },
+    /// A proofreading stamp centred on `at`, `size` units across.
+    Stamp {
+        color: Color,
+        at: [f64; 2],
+        size: f64,
+        symbol: StampSymbol,
+        #[serde(default)]
+        comment: Option<String>,
+    },
+}
+
+impl Mark {
+    /// The reader's comment, when there is one with words in it.
+    pub fn comment(&self) -> Option<&str> {
+        match self {
+            Mark::Ink { comment, .. } | Mark::Box { comment, .. } | Mark::Stamp { comment, .. } => {
+                comment.as_deref().map(str::trim).filter(|text| !text.is_empty())
+            }
+            Mark::Text { .. } => None,
+        }
+    }
 }
 
 /// How a mark sits on the page's words, as the viewer read it off the page's
@@ -397,7 +492,21 @@ pub fn validate_body(request: &MarkupRequest) -> Result<(), MarkupError> {
         marks += page.marks.len();
         let mut text_chars = 0usize;
         for mark in &page.marks {
+            // A comment is the reader's one line about the mark: bounded,
+            // no control characters (`layer.ts` `cleanComment`).
+            let comment = match mark {
+                Mark::Ink { comment, .. } | Mark::Box { comment, .. } | Mark::Stamp { comment, .. } => comment.as_deref(),
+                Mark::Text { .. } => None,
+            };
+            if comment.is_some_and(|text| text.chars().count() > MAX_COMMENT || text.chars().any(char::is_control)) {
+                return invalid;
+            }
             match mark {
+                Mark::Stamp { at: [x, y], size, .. } => {
+                    if !finite(&[*x, *y, *size]) || !(2.0..=200.0).contains(size) || !inside(*x, *y, page.size) {
+                        return invalid;
+                    }
+                }
                 Mark::Ink { width, points: samples, .. } => {
                     if samples.is_empty() || !width.is_finite() || !(0.1..=100.0).contains(width) {
                         return invalid;
@@ -856,51 +965,176 @@ pub struct Prompt<'a> {
 
 /// What one mark says in the prompt's list: its kind, the page's words it is
 /// on and the source line they came from — `None` for a stroke nothing is
-/// known about, which the page's picture shows anyway.
+/// known about, which the page's picture shows anyway. The reference goes in
+/// front of it later (`mark_label`).
 ///
-/// `index` is the mark's place in its page's `marks`, given when the Submit
-/// has a round: the line then names it `p<page> m<index + 1>` for `markup_done`,
-/// and a stroke nothing is known about is listed too, pointing at the picture —
+/// `listed` says the Submit has a round, so every mark gets a reference: a
+/// stroke nothing is known about is listed too, pointing at the picture —
 /// unlisted, it has no reference and the agent could never tick it off.
-fn mark_line(n: Option<u32>, index: Option<usize>, mark: &Mark, anchor: Option<&Anchor>, source: Option<&String>) -> Option<String> {
+fn mark_what(listed: bool, mark: &Mark, anchor: Option<&Anchor>, source: Option<&String>) -> Option<String> {
     let words = anchor.map(|a| format!("\"{}\"", a.words));
     let what = match mark {
-        Mark::Text { text, .. } => {
+        Mark::Text { text, color, .. } => {
             let text = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ");
             match anchor {
-                // Nothing known of where it sits: the typed words alone.
-                None if source.is_none() => format!("\"{text}\""),
+                // Nothing known of where it sits: the typed words alone — a
+                // coloured note still named as one, so its colour has a noun.
+                None if source.is_none() && *color == Color::Black => format!("\"{text}\""),
                 None => format!("note \"{text}\""),
                 Some(a) => format!("note \"{text}\" {} {}", if a.how == How::On { "on" } else { "beside" }, words.unwrap_or_default()),
+            }
+        }
+        Mark::Stamp { symbol, .. } => {
+            let (noun, how) = match symbol {
+                StampSymbol::Insert => ("insert mark", "at"),
+                StampSymbol::Delete => ("delete mark", "on"),
+                StampSymbol::Paragraph => ("new paragraph", "at"),
+                StampSymbol::Swap => ("swap mark", "on"),
+            };
+            match words {
+                Some(words) => format!("{noun} {how} {words}"),
+                None if source.is_some() => noun.into(),
+                None if listed => format!("{noun} (see the page picture)"),
+                None => return None,
             }
         }
         Mark::Box { .. } => match words {
             Some(words) => format!("highlight on {words}"),
             None if source.is_some() => "highlight".into(),
-            None if index.is_some() => "highlight (see the page picture)".into(),
+            None if listed => "highlight (see the page picture)".into(),
             None => return None,
         },
-        Mark::Ink { .. } => match (anchor, words) {
+        Mark::Ink { style, .. } => match (anchor, words) {
             (Some(a), Some(words)) => format!(
                 "{} {words}",
-                match a.how {
-                    How::Through => "line through",
-                    How::Under => "line under",
-                    How::Around => "circled",
-                    How::At => "mark at",
-                    How::On | How::Beside => "pen on",
+                match (style, a.how) {
+                    (PenStyle::Marker, _) => "marker on",
+                    (PenStyle::Arrow, _) => "arrow on",
+                    (PenStyle::Pen, How::Through) => "line through",
+                    (PenStyle::Pen, How::Under) => "line under",
+                    (PenStyle::Pen, How::Around) => "circled",
+                    (PenStyle::Pen, How::At) => "mark at",
+                    (PenStyle::Pen, How::On | How::Beside) => "pen on",
+                    (PenStyle::Dashed, How::Through) => "dashed line through",
+                    (PenStyle::Dashed, How::Under) => "dashed line under",
+                    (PenStyle::Dashed, How::Around) => "dashed circle around",
+                    (PenStyle::Dashed, How::At) => "dashed mark at",
+                    (PenStyle::Dashed, How::On | How::Beside) => "dashed line on",
                 }
             ),
-            _ if source.is_some() => "pen mark".into(),
-            _ if index.is_some() => "pen mark (see the page picture)".into(),
-            _ => return None,
+            _ => {
+                let noun = match style {
+                    PenStyle::Pen => "pen mark",
+                    PenStyle::Marker => "marker",
+                    PenStyle::Dashed => "dashed pen mark",
+                    PenStyle::Arrow => "arrow",
+                };
+                match () {
+                    _ if source.is_some() => noun.into(),
+                    _ if listed => format!("{noun} (see the page picture)"),
+                    _ => return None,
+                }
+            }
         },
     };
+    // A drawn mark says what it wants by its colour; a typed note in words,
+    // and by its colour too unless that is the plain black.
+    let what = if named_color(mark) { format!("{} {what}", mark_color(mark).word()) } else { what };
     let context = anchor.filter(|a| !a.line.is_empty()).map(|a| format!(" in \"{}\"", a.line)).unwrap_or_default();
     let source = source.map(|s| format!(" — `{s}`")).unwrap_or_default();
-    let label = [n.map(|n| format!("p{n}")), index.map(|i| format!("m{}", i + 1))].into_iter().flatten().collect::<Vec<_>>().join(" ");
-    let label = if label.is_empty() { label } else { format!("{label}: ") };
-    Some(format!("- {label}{what}{context}{source}"))
+    // The reader's own words about the mark close its line.
+    let comment = mark.comment().map(|text| format!(" — comment: \"{text}\"")).unwrap_or_default();
+    Some(format!("{what}{context}{source}{comment}"))
+}
+
+fn mark_color(mark: &Mark) -> Color {
+    match mark {
+        Mark::Ink { color, .. } | Mark::Box { color, .. } | Mark::Text { color, .. } | Mark::Stamp { color, .. } => *color,
+    }
+}
+
+/// Whether the prompt names the mark's colour: every drawn mark's, and a
+/// typed note's unless it is black — the note's plain ink, which means nothing.
+fn named_color(mark: &Mark) -> bool {
+    match mark {
+        Mark::Text { color, .. } => *color != Color::Black,
+        _ => true,
+    }
+}
+
+/// The key to the colours the prompt names (`named_color`) and the pen
+/// styles, the ones these pages use only: the viewer offers the same meanings
+/// beside its swatches (`mobile-web/src/markup/pen.ts`), and the agent reads
+/// each listed mark's colour word against it.
+fn mark_key(pages: &[&MarkupPage]) -> Option<String> {
+    let marks = || pages.iter().flat_map(|page| page.marks.iter());
+    let colors: Vec<Color> = [Color::Red, Color::Blue, Color::Yellow, Color::Black]
+        .into_iter()
+        .filter(|color| marks().any(|mark| named_color(mark) && mark_color(mark) == *color))
+        .collect();
+    let styled = |wanted: PenStyle| marks().any(|mark| matches!(mark, Mark::Ink { style, .. } if *style == wanted));
+    let mut parts = Vec::new();
+    if !colors.is_empty() {
+        let listed: Vec<String> = colors.iter().map(|color| format!("{} = {}", color.word(), color.meaning())).collect();
+        parts.push(format!("Colours: {}.", listed.join(", ")));
+    }
+    if styled(PenStyle::Arrow) {
+        parts.push("An arrow moves what it starts at to where it points.".into());
+    }
+    if styled(PenStyle::Dashed) {
+        parts.push("A dashed mark is tentative: a suggestion to weigh, not a must.".into());
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// How close a mark must sit to the run before it to join it, as a share of
+/// the page's longer side — the viewer's `TICK_GROUP_GAP`, which groups the
+/// ticked marks' badges alike.
+const RUN_GAP: f64 = 0.01;
+
+/// A mark's extent `[x0, y0, x1, y1]` in page units: a stroke's samples, a
+/// box, a note's anchor point, a stamp's square.
+fn mark_extent(mark: &Mark) -> [f64; 4] {
+    match mark {
+        Mark::Ink { points, .. } => points.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |e, p| {
+            [e[0].min(p[0]), e[1].min(p[1]), e[2].max(p[0]), e[3].max(p[1])]
+        }),
+        Mark::Box { rect: [x, y, w, h], .. } => [x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)],
+        Mark::Text { at: [x, y], .. } => [*x, *y, *x, *y],
+        Mark::Stamp { at: [x, y], size, .. } => [x - size / 2.0, y - size / 2.0, x + size / 2.0, y + size / 2.0],
+    }
+}
+
+/// One page's marks as the prompt lists them: a run of marks in a row that
+/// say the same (`mark_what`) and sit together — the strokes of one
+/// handwritten word, a line drawn in several goes — is one line, named by its
+/// range, so the list reads remark by remark instead of stroke by stroke.
+/// Each line is `(first, last, what)`, by index in the page's `marks`.
+fn mark_runs(page: &MarkupPage, listed: bool, sources: &BTreeMap<(u32, usize), String>) -> Vec<(usize, usize, String)> {
+    let gap = RUN_GAP * page.size[0].max(page.size[1]);
+    let near = |a: &[f64; 4], b: &[f64; 4]| a[0].max(b[0]) - a[2].min(b[2]) <= gap && a[1].max(b[1]) - a[3].min(b[3]) <= gap;
+    let mut runs: Vec<(usize, usize, String, [f64; 4])> = Vec::new();
+    for (index, mark) in page.marks.iter().enumerate() {
+        let anchor = page.anchors.iter().find(|a| a.mark == index);
+        let Some(what) = mark_what(listed, mark, anchor, sources.get(&(page.n, index))) else { continue };
+        let extent = mark_extent(mark);
+        match runs.last_mut() {
+            Some((_, last, said, around)) if *last + 1 == index && *said == what && near(around, &extent) => {
+                *last = index;
+                *around = [around[0].min(extent[0]), around[1].min(extent[1]), around[2].max(extent[2]), around[3].max(extent[3])];
+            }
+            _ => runs.push((index, index, what, extent)),
+        }
+    }
+    runs.into_iter().map(|(first, last, what, _)| (first, last, what)).collect()
+}
+
+/// A listed line's reference: `p<page> m<mark>`, or `p<page> m<first>–m<last>`
+/// for a run, 1-based (a picture's without the page); none without a round.
+fn mark_label(n: Option<u32>, run: Option<(usize, usize)>) -> String {
+    let marks = run.map(|(first, last)| if first == last { format!("m{}", first + 1) } else { format!("m{}–m{}", first + 1, last + 1) });
+    let label = [n.map(|n| format!("p{n}")), marks].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    if label.is_empty() { label } else { format!("{label}: ") }
 }
 
 /// The chat message: deterministic, English (it is read by the agent, not
@@ -955,10 +1189,9 @@ pub fn prompt(parts: &Prompt) -> String {
     let marks: Vec<String> = pages
         .iter()
         .flat_map(|page| {
-            page.marks.iter().enumerate().filter_map(move |(index, mark)| {
-                let anchor = page.anchors.iter().find(|a| a.mark == index);
-                let source = parts.sources.get(&(page.n, index));
-                mark_line((!parts.picture).then_some(page.n), parts.round.map(|_| index), mark, anchor, source)
+            mark_runs(page, parts.round.is_some(), parts.sources).into_iter().map(move |(first, last, what)| {
+                let label = mark_label((!parts.picture).then_some(page.n), parts.round.map(|_| (first, last)));
+                format!("- {label}{what}")
             })
         })
         .collect();
@@ -984,11 +1217,13 @@ pub fn prompt(parts: &Prompt) -> String {
     // cannot crowd every one out. Whole lines only, in page order.
     let cost = |lines: &[String]| lines.iter().map(|line| line.len() + 1).sum::<usize>();
     let budget = MAX_PROMPT_BYTES.saturating_sub(cost(&head) + cost(&copy) + cost(&tail) + PROMPT_OMISSION_RESERVE);
-    let marks_cost = if marks.is_empty() { 0 } else { marks_head.len() + 1 + cost(&marks) };
+    let key = if marks.is_empty() { None } else { mark_key(&pages) };
+    let key_cost = key.as_ref().map_or(0, |key| key.len() + 1);
+    let marks_cost = if marks.is_empty() { 0 } else { marks_head.len() + 1 + key_cost + cost(&marks) };
     let layers_budget = budget - marks_cost.min(budget / 2);
     let shown_layers = fitting(&layers, layers_budget);
     let left = budget.saturating_sub(cost(&layers[..shown_layers]));
-    let shown_marks = fitting(&marks, left.saturating_sub(marks_head.len() + 1));
+    let shown_marks = fitting(&marks, left.saturating_sub(marks_head.len() + 1 + key_cost));
     let mut lines = head;
     lines.extend_from_slice(&layers[..shown_layers]);
     if let (Some(first), Some(last)) = (pages.get(shown_layers), pages.last()) {
@@ -1003,6 +1238,7 @@ pub fn prompt(parts: &Prompt) -> String {
     }
     if !marks.is_empty() {
         lines.push(marks_head.into());
+        lines.extend(key);
         lines.extend_from_slice(&marks[..shown_marks]);
         let more = marks.len() - shown_marks;
         if more > 0 {
@@ -1020,8 +1256,9 @@ pub fn prompt(parts: &Prompt) -> String {
 /// prompt has room to name.
 const MAX_SOURCE_LOOKUPS: usize = 400;
 
-/// The point of a mark SyncTeX is asked about: a stroke's or a box's middle,
-/// a note's first line — beside the line it is about, in a margin.
+/// The point of a mark SyncTeX is asked about: a stroke's, a box's or a
+/// stamp's middle, a note's first line — beside the line it is about, in a
+/// margin.
 fn probe(mark: &Mark) -> (f64, f64) {
     match mark {
         Mark::Ink { points, .. } => {
@@ -1033,6 +1270,7 @@ fn probe(mark: &Mark) -> (f64, f64) {
         }
         Mark::Box { rect: [x, y, w, h], .. } => (x + w / 2.0, y + h / 2.0),
         Mark::Text { at: [x, y], size, .. } => (*x, y + size / 2.0),
+        Mark::Stamp { at: [x, y], .. } => (*x, *y),
     }
 }
 
@@ -1112,7 +1350,7 @@ mod tests {
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-layer";
 
     fn ink() -> Mark {
-        Mark::Ink { color: Color::Red, width: 2.0, points: vec![[10.0, 10.0, 0.5], [20.0, 20.0, 0.6]] }
+        Mark::Ink { color: Color::Red, width: 2.0, points: vec![[10.0, 10.0, 0.5], [20.0, 20.0, 0.6]], style: PenStyle::Pen, comment: None }
     }
 
     fn page(n: u32, layer: &str) -> MarkupPage {
@@ -1174,10 +1412,10 @@ mod tests {
         }
         assert_eq!(validate(&request(MarkupSource::Outbox("../x.pdf".into()), vec![page(1, good_layer)])), Err(MarkupError::Invalid));
         let mut off_page = page(1, good_layer);
-        off_page.marks = vec![Mark::Ink { color: Color::Red, width: 2.0, points: vec![[700.0, 10.0, 0.5]] }];
+        off_page.marks = vec![Mark::Ink { color: Color::Red, width: 2.0, points: vec![[700.0, 10.0, 0.5]], style: PenStyle::Pen, comment: None }];
         assert_eq!(validate(&request(MarkupSource::Files("t".into()), vec![off_page])), Err(MarkupError::Invalid));
         let mut huge_box = page(1, good_layer);
-        huge_box.marks = vec![Mark::Box { color: Color::Yellow, rect: [10.0, 10.0, 900.0, 10.0] }];
+        huge_box.marks = vec![Mark::Box { color: Color::Yellow, rect: [10.0, 10.0, 900.0, 10.0], comment: None }];
         assert_eq!(validate(&request(MarkupSource::Files("t".into()), vec![huge_box])), Err(MarkupError::Invalid));
         let mut long_note = page(1, good_layer);
         long_note.marks = vec![Mark::Text { color: Color::Black, at: [1.0, 1.0], size: 12.0, text: "x".repeat(MAX_PAGE_TEXT + 1) }];
@@ -1187,10 +1425,10 @@ mod tests {
         assert_eq!(validate(&request(MarkupSource::Files("t".into()), vec![empty])), Err(MarkupError::Invalid));
         assert_eq!(validate(&request(MarkupSource::Files("t".into()), vec![page(1, good_layer), page(1, good_layer)])), Err(MarkupError::Invalid));
         let mut pressure = page(1, good_layer);
-        pressure.marks = vec![Mark::Ink { color: Color::Red, width: 2.0, points: vec![[1.0, 1.0, 1.5]] }];
+        pressure.marks = vec![Mark::Ink { color: Color::Red, width: 2.0, points: vec![[1.0, 1.0, 1.5]], style: PenStyle::Pen, comment: None }];
         assert_eq!(validate(&request(MarkupSource::Files("t".into()), vec![pressure])), Err(MarkupError::Invalid));
         let mut too_many = page(1, good_layer);
-        too_many.marks = vec![Mark::Ink { color: Color::Red, width: 2.0, points: vec![[1.0, 1.0, 0.5]; MAX_POINTS + 1] }];
+        too_many.marks = vec![Mark::Ink { color: Color::Red, width: 2.0, points: vec![[1.0, 1.0, 0.5]; MAX_POINTS + 1], style: PenStyle::Pen, comment: None }];
         assert_eq!(validate(&request(MarkupSource::Files("t".into()), vec![too_many])), Err(MarkupError::Invalid));
     }
 
@@ -1216,7 +1454,7 @@ mod tests {
         assert!(done.prompt.starts_with("I marked these changes by hand on `docs/draft.pdf`."));
         assert!(done.prompt.contains(&format!("@{marked}")));
         assert!(done.prompt.contains(&format!("Page 3: @{p3}")));
-        assert!(done.prompt.contains("- p3: \"use the 2024 numbers here\""));
+        assert!(done.prompt.contains("- p3: blue note \"use the 2024 numbers here\""));
         assert!(done.prompt.contains(concat!(crate::app_slug!(), "-send")));
         assert!(!done.prompt.contains(&root.to_string_lossy().to_string()), "no absolute path in the prompt");
     }
@@ -1312,6 +1550,126 @@ mod tests {
     }
 
     #[test]
+    fn pen_styles_are_read_and_named_with_their_colours_and_key() {
+        // No style is the pen — every stroke from before styles; an unknown one is refused.
+        let plain: Mark = serde_json::from_str(r#"{"kind":"ink","color":"red","width":2,"points":[[1,2,0.5]]}"#).unwrap();
+        assert!(matches!(plain, Mark::Ink { style: PenStyle::Pen, .. }));
+        let arrow: Mark =
+            serde_json::from_str(r#"{"kind":"ink","color":"blue","width":2,"points":[[1,2,0.5],[9,2,0.5]],"style":"arrow"}"#).unwrap();
+        assert!(matches!(arrow, Mark::Ink { style: PenStyle::Arrow, color: Color::Blue, .. }));
+        assert!(serde_json::from_str::<Mark>(r#"{"kind":"ink","color":"red","width":2,"points":[[1,2,0.5]],"style":"laser"}"#).is_err());
+
+        let stroke = |color, style, y: f64| Mark::Ink { color, width: 2.0, points: vec![[10.0, y, 0.5], [60.0, y, 0.5]], style, comment: None };
+        let mut first = page(1, "a.png");
+        first.marks = vec![
+            stroke(Color::Blue, PenStyle::Arrow, 10.0),
+            stroke(Color::Red, PenStyle::Dashed, 200.0),
+            stroke(Color::Yellow, PenStyle::Marker, 400.0),
+            Mark::Text { color: Color::Black, at: [10.0, 600.0], size: 12.0, text: "hi".into() },
+        ];
+        let pages = vec![first];
+        let parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: Some("r1"), origin: Origin::Chat, send_back: false };
+        let text = prompt(&parts);
+        // The key names the drawn marks' colours only — the black note's is not one.
+        assert!(
+            text.contains(concat!(
+                "Colours: red = delete or fix, blue = insert or add, yellow = check this. ",
+                "An arrow moves what it starts at to where it points. ",
+                "A dashed mark is tentative: a suggestion to weigh, not a must.\n",
+                "- p1 m1: blue arrow (see the page picture)\n",
+                "- p1 m2: red dashed pen mark (see the page picture)\n",
+                "- p1 m3: yellow marker (see the page picture)\n",
+                "- p1 m4: \"hi\"\n",
+            )),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn stamps_and_comments_are_read_and_checked() {
+        // A stamp parses with its symbol; marks from before comments have none.
+        let stamp: Mark = serde_json::from_str(r#"{"kind":"stamp","color":"blue","at":[100,50],"size":20,"symbol":"insert"}"#).unwrap();
+        assert!(matches!(stamp, Mark::Stamp { symbol: StampSymbol::Insert, comment: None, .. }));
+        let boxed: Mark = serde_json::from_str(r#"{"kind":"box","color":"yellow","rect":[1,2,30,4],"comment":"check the year"}"#).unwrap();
+        assert_eq!(boxed.comment(), Some("check the year"));
+        let blank: Mark = serde_json::from_str(r#"{"kind":"ink","color":"red","width":2,"points":[[1,2,0.5]],"comment":"  "}"#).unwrap();
+        assert_eq!(blank.comment(), None, "a blank comment says nothing");
+        assert!(serde_json::from_str::<Mark>(r#"{"kind":"stamp","color":"red","at":[1,2],"size":20,"symbol":"star"}"#).is_err());
+        // A typed note takes no comment.
+        assert!(serde_json::from_str::<Mark>(r#"{"kind":"text","color":"red","at":[1,2],"size":12,"text":"x","comment":"no"}"#).is_err());
+
+        let with = |mark: Mark| {
+            let mut one = page(1, concat!(".", crate::app_slug!(), "/inbox/a.png"));
+            one.marks = vec![mark];
+            validate(&request(MarkupSource::Files("tok".into()), vec![one]))
+        };
+        let stamp = |at: [f64; 2], size: f64, comment: Option<String>| Mark::Stamp { color: Color::Red, at, size, symbol: StampSymbol::Delete, comment };
+        assert_eq!(with(stamp([100.0, 50.0], 20.0, None)), Ok(()));
+        assert_eq!(with(stamp([100.0, 50.0], 1.0, None)), Err(MarkupError::Invalid), "too small");
+        assert_eq!(with(stamp([100.0, 50.0], 201.0, None)), Err(MarkupError::Invalid), "too large");
+        assert_eq!(with(stamp([700.0, 50.0], 20.0, None)), Err(MarkupError::Invalid), "off the page");
+        assert_eq!(with(stamp([100.0, 50.0], f64::NAN, None)), Err(MarkupError::Invalid));
+        assert_eq!(with(stamp([100.0, 50.0], 20.0, Some("é".repeat(MAX_COMMENT)))), Ok(()));
+        assert_eq!(with(stamp([100.0, 50.0], 20.0, Some("x".repeat(MAX_COMMENT + 1)))), Err(MarkupError::Invalid));
+        assert_eq!(with(stamp([100.0, 50.0], 20.0, Some("two\nlines".into()))), Err(MarkupError::Invalid));
+        let ink = Mark::Ink { color: Color::Red, width: 2.0, points: vec![[1.0, 1.0, 0.5]], style: PenStyle::Pen, comment: Some("tab\there".into()) };
+        assert_eq!(with(ink), Err(MarkupError::Invalid));
+    }
+
+    #[test]
+    fn stamps_comments_and_note_colours_are_named_in_the_prompt() {
+        let stamp = |symbol, x: f64| Mark::Stamp { color: Color::Blue, at: [x, 50.0], size: 20.0, symbol, comment: None };
+        let mut first = page(1, concat!(".", crate::app_slug!(), "/inbox/a.png"));
+        first.marks = vec![
+            stamp(StampSymbol::Insert, 100.0),
+            Mark::Stamp { color: Color::Red, at: [300.0, 200.0], size: 20.0, symbol: StampSymbol::Delete, comment: None },
+            Mark::Ink {
+                color: Color::Red,
+                width: 2.0,
+                points: vec![[10.0, 400.0, 0.5], [60.0, 400.0, 0.5]],
+                style: PenStyle::Pen,
+                comment: Some("too vague".into()),
+            },
+            Mark::Text { color: Color::Blue, at: [10.0, 600.0], size: 12.0, text: "add a citation".into() },
+            Mark::Text { color: Color::Black, at: [10.0, 700.0], size: 12.0, text: "keep".into() },
+            stamp(StampSymbol::Paragraph, 500.0),
+            stamp(StampSymbol::Swap, 400.0),
+        ];
+        first.anchors = vec![
+            Anchor { mark: 0, how: How::At, words: "the cat".into(), line: String::new() },
+            Anchor { mark: 5, how: How::At, words: "end. Next".into(), line: String::new() },
+            Anchor { mark: 6, how: How::On, words: "two words".into(), line: String::new() },
+        ];
+        let pages = vec![first];
+        let parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: Some("r1"), origin: Origin::Chat, send_back: false };
+        let text = prompt(&parts);
+        assert!(
+            text.contains(concat!(
+                "Colours: red = delete or fix, blue = insert or add.\n",
+                "- p1 m1: blue insert mark at \"the cat\"\n",
+                "- p1 m2: red delete mark (see the page picture)\n",
+                "- p1 m3: red pen mark (see the page picture) — comment: \"too vague\"\n",
+                "- p1 m4: blue note \"add a citation\"\n",
+                "- p1 m5: \"keep\"\n",
+                "- p1 m6: blue new paragraph at \"end. Next\"\n",
+                "- p1 m7: blue swap mark on \"two words\"\n",
+            )),
+            "{text}"
+        );
+        // A coloured note alone still gives the key its colour; a black one none.
+        let mut notes = page(2, concat!(".", crate::app_slug!(), "/inbox/b.png"));
+        notes.marks = vec![Mark::Text { color: Color::Blue, at: [10.0, 10.0], size: 12.0, text: "x".into() }];
+        let pages = vec![notes];
+        let text = prompt(&Prompt { pages: &pages, round: None, ..parts });
+        assert!(text.contains("Colours: blue = insert or add.\n- p2: blue note \"x\"\n"), "{text}");
+        let mut plain = page(2, concat!(".", crate::app_slug!(), "/inbox/b.png"));
+        plain.marks = vec![Mark::Text { color: Color::Black, at: [10.0, 10.0], size: 12.0, text: "x".into() }];
+        let pages = vec![plain];
+        let text = prompt(&Prompt { pages: &pages, round: None, ..parts });
+        assert!(!text.contains("Colours:") && text.contains("- p2: \"x\"\n"), "{text}");
+    }
+
+    #[test]
     fn a_round_names_each_listed_mark_by_its_index_for_markup_done() {
         let note = |text: &str| Mark::Text { color: Color::Black, at: [10.0, 10.0], size: 12.0, text: text.into() };
         let mut third = page(3, concat!(".", crate::app_slug!(), "/inbox/a.png"));
@@ -1324,10 +1682,10 @@ mod tests {
         // The unread stroke is listed by its place, pointing at the picture —
         // the views map `m<n>` to index n − 1 of the page's submitted marks.
         assert!(
-            text.contains("- p3 m1: \"one\"\n- p3 m2: pen mark (see the page picture)\n- p3 m3: \"two\"\n- p7 m1: \"three\"\n"),
+            text.contains("Colours: red = delete or fix.\n- p3 m1: \"one\"\n- p3 m2: red pen mark (see the page picture)\n- p3 m3: \"two\"\n- p7 m1: \"three\"\n"),
             "{text}"
         );
-        assert!(text.contains("This is markup round `abc123`; each mark above has its reference (`p<page> m<mark>`)."), "{text}");
+        assert!(text.contains("This is markup round `abc123`; each mark above has its reference (`p<page> m<mark>`);"), "{text}");
         // A picture's marks carry no page; the agent is told they are page 1.
         let mut picture = page(1, concat!(".", crate::app_slug!(), "/inbox/c.png"));
         picture.marks = vec![note("four")];
@@ -1340,6 +1698,39 @@ mod tests {
         parts.round = None;
         let text = prompt(&parts);
         assert!(text.contains("- \"four\"\n") && !text.contains("markup_done"), "{text}");
+    }
+
+    #[test]
+    fn a_remark_drawn_in_many_strokes_is_one_line_with_a_range() {
+        let stroke = |x: f64, y: f64| Mark::Ink { color: Color::Red, width: 1.0, points: vec![[x, y, 0.5], [x + 4.0, y + 6.0, 0.5]], style: PenStyle::Pen, comment: None };
+        let mut third = page(3, concat!(".", crate::app_slug!(), "/inbox/a.png"));
+        // A word in five strokes, a stroke far off, then two near ones that
+        // the note between keeps apart.
+        third.marks = vec![
+            stroke(100.0, 200.0),
+            stroke(105.0, 200.0),
+            stroke(110.0, 201.0),
+            stroke(115.0, 199.0),
+            stroke(120.0, 200.0),
+            stroke(400.0, 600.0),
+            stroke(300.0, 300.0),
+            Mark::Text { color: Color::Black, at: [10.0, 10.0], size: 12.0, text: "keep".into() },
+            stroke(302.0, 300.0),
+        ];
+        let pages = vec![third];
+        let parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: Some("abc123"), origin: Origin::Chat, send_back: false };
+        let text = prompt(&parts);
+        assert!(
+            text.contains(concat!(
+                "- p3 m1–m5: red pen mark (see the page picture)\n",
+                "- p3 m6: red pen mark (see the page picture)\n",
+                "- p3 m7: red pen mark (see the page picture)\n",
+                "- p3 m8: \"keep\"\n",
+                "- p3 m9: red pen mark (see the page picture)\n",
+            )),
+            "{text}"
+        );
+        assert!(text.contains("every number of a range"), "{text}");
     }
 
     #[test]
@@ -1365,9 +1756,9 @@ mod tests {
             r = crate::commands::fs::display_path(root)
         );
         fs::write(root.join("docs/draft.synctex"), map).unwrap();
-        let strike = Mark::Ink { color: Color::Red, width: 1.5, points: vec![[140.0, 131.0, 0.5], [190.0, 132.0, 0.5]] };
+        let strike = Mark::Ink { color: Color::Red, width: 1.5, points: vec![[140.0, 131.0, 0.5], [190.0, 132.0, 0.5]], style: PenStyle::Pen, comment: None };
         let note = Mark::Text { color: Color::Blue, at: [20.0, 195.0], size: 12.0, text: "cite Smith".into() };
-        let stray = Mark::Ink { color: Color::Red, width: 1.5, points: vec![[150.0, 298.0, 0.5]] };
+        let stray = Mark::Ink { color: Color::Red, width: 1.5, points: vec![[150.0, 298.0, 0.5]], style: PenStyle::Pen, comment: None };
         let mut page = page(1, &layer(root, "a-p1-marked.png"));
         page.marks = vec![strike, note, stray];
         page.composed = true;
@@ -1381,8 +1772,8 @@ mod tests {
         let text = done.prompt;
         assert!(text.contains(concat!("Each marked page, with my marks drawn on it:\nPage 1: @.", crate::app_slug!(), "/inbox/a-p1-marked.png\n")), "{text}");
         assert!(text.contains("and the source line SyncTeX gives for it:\n"), "{text}");
-        assert!(text.contains("- p1: line through \"quick brown\" in \"The quick brown fox\" — `docs/main.tex:3`\n"), "{text}");
-        assert!(text.contains("- p1: note \"cite Smith\" beside \"as shown in [3]\" — `docs/chapters/intro.tex:4`\n"), "{text}");
+        assert!(text.contains("Colours: red = delete or fix, blue = insert or add.\n- p1: red line through \"quick brown\" in \"The quick brown fox\" — `docs/main.tex:3`\n"), "{text}");
+        assert!(text.contains("- p1: blue note \"cite Smith\" beside \"as shown in [3]\" — `docs/chapters/intro.tex:4`\n"), "{text}");
         // Nothing known of the third stroke but a file outside the project.
         assert!(!text.contains("paper.cls") && !text.contains("pen mark"), "{text}");
         // The marked copy is named, not attached: the pictures carry the marks.

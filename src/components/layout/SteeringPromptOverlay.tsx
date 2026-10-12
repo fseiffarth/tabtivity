@@ -16,7 +16,7 @@ import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
-import { CLAUDE_EFFORTS, useSessionPicker } from "../../hooks/useSessionPicker";
+import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { selectMoveKeys } from "../../../mobile-web/src/terminal/selectPrompt";
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
@@ -146,6 +146,8 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   // The pane's picker can only be listed while its screen is in this window,
   // and opens once the agent is idle (the Reader's rule).
   const canPick = !!terminalFor(ptyId) && !!target.tab.scheduleTargetId && !working;
+  // A local-model tab keeps the model it was launched on: no picker to list.
+  const modelPickable = modelPickOffered(target.tab);
   // Not while the session's picker is up: the text would land in it.
   const submittable = !busy && !picking && value.trim().length > 0;
 
@@ -171,7 +173,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
       session.close();
       return;
     }
-    if (!canPick) return;
+    if (!canPick || !modelPickable) return;
     setEffortOpen(false);
     setNote(null);
     session.open("/model");
@@ -301,7 +303,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     {
       chip: "model",
       label: t("steering.prompt.chipModel", { model: model ?? "…" }),
-      shown: true,
+      shown: modelPickable,
       disabled: !picking && !canPick,
       on: picking,
       title: working ? t("steering.prompt.chipWorking") : undefined,
@@ -309,7 +311,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     {
       chip: "effort",
       label: effort ? t("steering.prompt.chipEffort", { effort }) : t("steering.prompt.chipEffortUnknown"),
-      shown: claude || !!effort,
+      shown: claude || (modelPickable && !!effort),
       disabled: claude ? false : !picking && !canPick,
       on: claude ? effortOpen : picking,
     },

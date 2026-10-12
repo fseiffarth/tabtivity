@@ -655,16 +655,21 @@ pub fn local_tmux_kill_args(session: &str) -> Vec<String> {
     vec!["kill-session".into(), "-t".into(), session.to_string()]
 }
 
-/// `tmux capture-pane -p -t =<session>:` argv: the session's visible screen as
-/// plain rows, for reading an agent's status line off the live pane. A hidden
-/// desktop pane's xterm stops receiving output, so its buffer is a stale
-/// screen; tmux always holds the current one. `=` makes the match exact — a
+/// `tmux capture-pane -p -J -t =<session>:` argv: the session's visible screen
+/// as plain lines, for reading an agent's status line off the live pane. A
+/// hidden desktop pane's xterm stops receiving output, so its buffer is a stale
+/// screen; tmux always holds the current one. `-J` joins the rows tmux wrapped
+/// into the lines the agent printed — the lines the phone's reader parses
+/// (`readableScreen` joins xterm's wrapped rows), so on a narrow pane a footer
+/// wrapped over several rows reads as one line on both sides and the tab tag
+/// names the model the phone's chip does. `=` makes the match exact — a
 /// missing session fails instead of prefix-matching a sibling's.
 pub fn local_tmux_screen_args(session: &str) -> Vec<String> {
     vec![
         "-u".into(),
         "capture-pane".into(),
         "-p".into(),
+        "-J".into(),
         "-t".into(),
         format!("={session}:"),
     ]
@@ -1364,7 +1369,7 @@ mod tests {
         assert_eq!(local_tmux_kill_args("s"), vec!["kill-session", "-t", "s"]);
         assert_eq!(
             local_tmux_screen_args(concat!(crate::app_slug!(), "-s")),
-            vec!["-u", "capture-pane", "-p", "-t", concat!("=", crate::app_slug!(), "-s:")]
+            vec!["-u", "capture-pane", "-p", "-J", "-t", concat!("=", crate::app_slug!(), "-s:")]
         );
         assert_eq!(
             local_tmux_rename_args("old", "new"),

@@ -52,6 +52,7 @@
     "pdfjs-dist": "^6.3.289",
     "react": "^18",
     "react-dom": "^18",
+    "uqr": "^0.1.3",
     "zustand": "^5"
   },
   "devDependencies": {

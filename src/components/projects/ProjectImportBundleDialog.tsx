@@ -164,6 +164,9 @@ export function ProjectImportBundleDialog({
                 {t("transfer.bundleSkipped", { count: String(info.contents.skipped) })}
               </p>
             )}
+            {info.contents.mirrorFromHost && (
+              <p className="settings-help">{t("transfer.bundleFromHost")}</p>
+            )}
             {!info.contents.gitHistory && !info.remote && (
               <p className="settings-help">{t("transfer.note.noGitHistory")}</p>
             )}

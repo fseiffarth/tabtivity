@@ -11,7 +11,7 @@ vi.mock("../../../mobile-web/src/localLock", () => ({
 
 import { oidcProvider, pair, startOidc } from "../../../mobile-web/src/auth";
 import { configureLocalUnlock } from "../../../mobile-web/src/localLock";
-import { Pair, cleanPairingCode, noteOidcOutcome, pairingCodeComplete } from "../../../mobile-web/src/screens/Pair";
+import { Pair, cleanPairingCode, noteOidcOutcome, pairingCodeComplete, takeLinkedPairingCode } from "../../../mobile-web/src/screens/Pair";
 
 const paired = vi.mocked(pair);
 const configured = vi.mocked(configureLocalUnlock);
@@ -102,5 +102,24 @@ describe("phone connection through a server's identity provider (hosted P5)", ()
     render(<Pair setupLock={false} onDone={vi.fn()} />);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button", { name: /Sign in with/ })).toBeNull();
+  });
+});
+
+describe("pairing link", () => {
+  afterEach(() => history.replaceState(null, "", "/"));
+
+  it("takes the code from an Add device QR's fragment and wipes it from the address", () => {
+    history.replaceState(null, "", "/?x=1#pair=1234%205678");
+    expect(takeLinkedPairingCode()).toBe("12345678");
+    expect(location.hash).toBe("");
+    expect(location.search).toBe("?x=1");
+  });
+
+  it("keeps a server's account prefix and ignores other fragments", () => {
+    history.replaceState(null, "", "/#pair=alice%3A12345678");
+    expect(takeLinkedPairingCode()).toBe("alice:12345678");
+    history.replaceState(null, "", "/#inbox");
+    expect(takeLinkedPairingCode()).toBe("");
+    expect(location.hash).toBe("#inbox");
   });
 });

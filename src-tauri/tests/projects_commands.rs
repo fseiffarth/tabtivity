@@ -5,7 +5,7 @@ use std::sync::{Mutex, OnceLock};
 
 use app_lib::commands::project_transfer::{
     export_project_blocking, import_project_export_blocking, inspect_project_export,
-    preview_project_export, ExportProjectRequest, ImportBundleRequest,
+    preview_project_export, ExportProjectRequest, ImportBundleRequest, MirrorSource,
 };
 use app_lib::commands::projects::{
     archive_project_blocking, create_project_blocking, delete_archived_project, get_projects,
@@ -802,6 +802,7 @@ fn full_export(project_id: &str, dest: &Path) -> ExportProjectRequest {
         include_git: true,
         include_session: true,
         include_mirror: true,
+        mirror_source: MirrorSource::Local,
         skip_rebuildable: true,
         keep_rebuildable: Vec::new(),
         include_agent_history: false,
@@ -1000,11 +1001,53 @@ fn agent_conversations_travel_on_request_and_follow_the_folder() {
         let codex = source_home.join(".codex").join("sessions").join("2026");
         fs::create_dir_all(&codex).unwrap();
         fs::write(codex.join("rollout-1.jsonl"), b"{}\n").unwrap();
+        // Codex's thread store: the thread is kept and re-pointed, the
+        // remote-control enrollment (an account) is not.
+        let codex_db = source_home.join(".codex").join("state_5.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&codex_db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT, rollout_path TEXT);
+                 CREATE TABLE remote_control_enrollments (account_id TEXT);
+                 INSERT INTO remote_control_enrollments VALUES ('acct-1');",
+            )
+            .unwrap();
+            let rollout = codex.join("rollout-1.jsonl").to_string_lossy().to_string();
+            conn.execute("INSERT INTO threads VALUES ('t1', ?1, ?2)", [&old_dir, &rollout]).unwrap();
+        }
+        // OpenCode keeps sessions and account tokens in one database.
+        let opencode = source_home.join(".local").join("share").join("opencode");
+        fs::create_dir_all(&opencode).unwrap();
+        {
+            let conn = rusqlite::Connection::open(opencode.join("opencode.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, permission TEXT);
+                 CREATE TABLE account (id TEXT, access_token TEXT);
+                 INSERT INTO account VALUES ('a1', 'tok-secret');",
+            )
+            .unwrap();
+            conn.execute("INSERT INTO session VALUES ('s1', ?1, 'allow-all')", [&old_dir]).unwrap();
+        }
+        fs::write(opencode.join("auth.json"), b"{\"key\":\"secret\"}").unwrap();
+        // Gemini files a project's chats under the SHA-256 of its path.
+        let sha = |p: &str| -> String {
+            use sha2::Digest;
+            sha2::Sha256::digest(p.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+        };
+        let gemini = source_home.join(".gemini").join("tmp");
+        fs::create_dir_all(gemini.join(sha(&old_dir)).join("chats")).unwrap();
+        fs::write(
+            gemini.join(sha(&old_dir)).join("chats").join("session-1.json"),
+            serde_json::to_vec(&serde_json::json!({ "projectRoot": old_dir.clone() })).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir_all(gemini.join("bin")).unwrap();
+        fs::write(gemini.join("bin").join("rg"), b"#!binary").unwrap();
         // Configuration an agent tab would run: never carried.
         fs::write(source_home.join(".claude").join("settings.json"), b"{\"hooks\":{}}").unwrap();
 
         let preview = preview_project_export(id.clone()).expect("preview");
-        assert_eq!(preview.agent_history_files, 2);
+        assert_eq!(preview.agent_history_files, 5);
 
         // Off by default: the bundle stays format 1 and carries none of it.
         let plain = home.join(concat!("plain.", app_lib::app_slug!(), "proj"));
@@ -1018,7 +1061,8 @@ fn agent_conversations_travel_on_request_and_follow_the_folder() {
         let mut req = full_export(&id, &bundle);
         req.include_agent_history = true;
         let report = export_project_blocking(req, &mut |_, _| {}).expect("export");
-        assert_eq!(report.agent_files, 2);
+        assert_eq!(report.agent_files, 5);
+        assert_eq!(report.skipped_count, 0, "{:?}", report.skipped);
         let info = inspect_project_export(bundle.to_string_lossy().to_string()).expect("inspect");
         assert_eq!(info.format, 2);
         assert!(info.contents.agent_history);
@@ -1026,7 +1070,7 @@ fn agent_conversations_travel_on_request_and_follow_the_folder() {
         let landing = tempdir_in_test_projects("transfer-agents-landing");
         let result = import_project_export_blocking(plain_import(&bundle, landing.path()))
             .expect("import");
-        assert_eq!(result.agent_files, 2);
+        assert_eq!(result.agent_files, 5);
         let new_home = agent_home::scope_home(Some(&result.entry.id));
         assert_ne!(new_home, source_home, "a copy beside the original gets its own home");
         let moved = new_home
@@ -1044,6 +1088,38 @@ fn agent_conversations_travel_on_request_and_follow_the_folder() {
             .join("rollout-1.jsonl")
             .is_file());
         assert!(!new_home.join(".claude").join("settings.json").exists());
+
+        let conn = rusqlite::Connection::open(new_home.join(".codex").join("state_5.sqlite")).unwrap();
+        let (cwd, rollout): (String, String) = conn
+            .query_row("SELECT cwd, rollout_path FROM threads", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(cwd, result.directory);
+        assert!(PathBuf::from(&rollout).starts_with(&new_home), "{rollout}");
+        let enrollments: i64 = conn
+            .query_row("SELECT COUNT(*) FROM remote_control_enrollments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(enrollments, 0);
+
+        let new_opencode = new_home.join(".local").join("share").join("opencode");
+        let conn = rusqlite::Connection::open(new_opencode.join("opencode.db")).unwrap();
+        let (directory, permission): (String, Option<String>) = conn
+            .query_row("SELECT directory, permission FROM session", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(directory, result.directory);
+        assert_eq!(permission, None, "granted permissions stay behind");
+        let accounts: i64 = conn.query_row("SELECT COUNT(*) FROM account", [], |r| r.get(0)).unwrap();
+        assert_eq!(accounts, 0);
+        assert!(!new_opencode.join("auth.json").exists());
+
+        let chat = new_home
+            .join(".gemini")
+            .join("tmp")
+            .join(sha(&result.directory))
+            .join("chats")
+            .join("session-1.json");
+        let chat: serde_json::Value = serde_json::from_slice(&fs::read(&chat).expect("chat under the new hash")).unwrap();
+        assert_eq!(chat["projectRoot"], result.directory.as_str());
+        assert!(!new_home.join(".gemini").join("tmp").join("bin").exists());
     });
 }
 
@@ -1551,5 +1627,65 @@ fn set_project_auto_connect_rejects_local_and_unknown_projects() {
 
         assert!(set_project_auto_connect(entry.id, true).is_err());
         assert!(set_project_auto_connect("no-such-id".to_string(), true).is_err());
+    });
+}
+
+/// A phone's new project (`create_project_for_phone`): always
+/// `<projects root>/<folder>`, scaffolded as the desktop's New project does by
+/// default, and open to the asking phone alone. A blank or unusable name, a
+/// taken folder and a phone that is no longer paired are refused.
+#[test]
+fn a_phone_creates_a_project_only_in_the_projects_folder() {
+    use app_lib::commands::projects::{create_project_for_phone, PhoneProjectRefusal};
+    with_isolated_home("phone-project-home", |_| {
+        let device = "a".repeat(27);
+        let control = app_lib::storage::state_dir().join("mobile-control");
+        fs::create_dir_all(&control).expect("control dir");
+        let devices = control.join("devices.json");
+        let paired = serde_json::json!({
+            "schema": 1,
+            "devices": [{ "id": device, "name": "Phone", "public_key": "k", "created_at": 0 }],
+        });
+        fs::write(&devices, paired.to_string()).expect("devices.json");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&devices, fs::Permissions::from_mode(0o600)).expect("private devices.json");
+        }
+
+        assert_eq!(create_project_for_phone("   ", &device), Err(PhoneProjectRefusal::InvalidName));
+        assert_eq!(create_project_for_phone("!!!", &device), Err(PhoneProjectRefusal::InvalidName));
+        assert_eq!(
+            create_project_for_phone(&"x".repeat(81), &device),
+            Err(PhoneProjectRefusal::InvalidName)
+        );
+        if !app_lib::services::tmux_local::tmux_available() {
+            assert!(matches!(
+                create_project_for_phone("My Paper", &device),
+                Err(PhoneProjectRefusal::Unavailable(_))
+            ));
+            return;
+        }
+        assert!(matches!(
+            create_project_for_phone("My Paper", &"b".repeat(27)),
+            Err(PhoneProjectRefusal::Unavailable(_))
+        ));
+
+        let id = create_project_for_phone("  My Paper ", &device).expect("created");
+        let folder = app_lib::paths::projects_root().join("my-paper");
+        let entry = get_projects()
+            .expect("projects")
+            .into_iter()
+            .find(|p| p.id == id)
+            .expect("registered");
+        assert_eq!(entry.name, "My Paper");
+        assert_eq!(entry.status, "active");
+        assert_eq!(entry.local_file, folder.join("project.json").to_string_lossy());
+        assert!(folder.join("AGENTS.md").is_file());
+        assert_eq!(entry.extra[app_lib::brand::MOBILE_ACCESS_KEY], serde_json::json!(true));
+        assert_eq!(entry.extra[app_lib::brand::MOBILE_DEVICES_KEY], serde_json::json!([device]));
+
+        assert_eq!(create_project_for_phone("my paper", &device), Err(PhoneProjectRefusal::Exists));
+        assert_eq!(get_projects().expect("projects").len(), 1);
     });
 }

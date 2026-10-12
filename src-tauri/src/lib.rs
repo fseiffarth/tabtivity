@@ -1707,6 +1707,7 @@ pub fn run() {
             commands::projects::clear_archive,
             // Full project export / import (docs/context/project_transfer.md)
             commands::project_transfer::preview_project_export,
+            commands::project_transfer::preview_host_export,
             commands::project_transfer::export_project,
             commands::project_transfer::inspect_project_export,
             commands::project_transfer::import_project_export,

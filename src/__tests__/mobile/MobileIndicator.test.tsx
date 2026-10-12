@@ -194,3 +194,40 @@ describe("MobileIndicator reconnect", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
+
+describe("MobileIndicator Add device", () => {
+  beforeEach(() => {
+    useSettingsStore.setState({
+      settings: { [MOBILE_HOST_KEY]: { enabled: true }, mobile_indicator: true } as Settings,
+      loaded: true,
+    });
+    useHeaderHoverMenuStore.setState({ openId: null });
+  });
+
+  afterEach(() => {
+    invokeMock.mockReset();
+    useSettingsStore.setState({ settings: null, loaded: false });
+    useHeaderHoverMenuStore.setState({ openId: null });
+  });
+
+  it("makes a code in one click and shows it with a QR of the private address", async () => {
+    invokeMock.mockImplementation((command: string, args?: unknown) => {
+      if (command === "mobile_host_status") return Promise.resolve(connected);
+      const request = (args as { request?: { type?: string } } | undefined)?.request;
+      if (command === "mobile_admin" && request?.type === "pairing_code") {
+        return Promise.resolve({ status: "pairing_code", code: "12345678", expires_at: Math.floor(Date.now() / 1000) + 300 });
+      }
+      if (command === "mobile_admin") return Promise.resolve({ status: "devices", devices: [] });
+      return Promise.resolve(null);
+    });
+    const user = userEvent.setup();
+    render(<MobileIndicator />);
+
+    await screen.findByLabelText(`${BRAND.display} Mobile connected`);
+    await user.click(screen.getByLabelText(`${BRAND.display} Mobile connected`));
+    await user.click(await screen.findByRole("button", { name: /^Add device/ }));
+
+    expect(await screen.findByText("12345678")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "QR code for pairing a phone" })).toBeTruthy();
+  });
+});

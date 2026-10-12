@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import { claudeModelLabel, screenModelTag, shortModelName, textScreenModelTag, textScreenModeMarks, type AgentModeMarks } from "../../lib/agents/agentModel";
+import { screenModelTag, shortModelName, textScreenModelTag, textScreenModeMarks, transcriptModelTag, type AgentModeMarks } from "../../lib/agents/agentModel";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
+import { envName } from "../../lib/brand";
 import { AGENT_ITEMS } from "../../components/tabs/newTabItems";
 import { adoptTranscriptPrompts, adoptTypedPrompt, type TranscriptPrompt } from "../../lib/agents/prompt/adopt";
 import { lastPromptEcho } from "../../lib/agents/prompt/echo";
@@ -143,6 +144,9 @@ export function agentTabLabel(tab: TabEntry): string {
  * Read at display time rather than stored: the screen can change without a
  * turn, which is precisely the case the transcript misses, and both callers
  * re-render (or re-poll) often enough to follow it.
+ *
+ * A local-model tab whose session names no model says the one it was started
+ * on.
  */
 export function agentTabModelTag(
   scope: string,
@@ -159,7 +163,8 @@ export function agentTabModelTag(
   // Claude's slug is put in the screen's words, so a tag reads the same
   // whichever source answered.
   const read = byTab[ptyId];
-  return read && isClaudeCommand(tab.cmd) ? claudeModelLabel(read) : read;
+  if (read) return transcriptModelTag(read, isClaudeCommand(tab.cmd));
+  return tab.kind === "local_agent" ? tab.env?.[envName("LOCAL_MODEL")] : undefined;
 }
 
 /** Prompts only ever arrive at the end of the tail (and fall off its front),

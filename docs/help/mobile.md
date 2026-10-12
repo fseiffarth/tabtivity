@@ -53,13 +53,13 @@ Tailscale command.
    phones**, including ones you pair later; to limit it, press the
    **All phones ▾** button beside it and pick **Only these phones**, then tick
    the phones. The side panel's phone button opens the same choice.
-6. **Open it on the phone.** Press **Show install QR**: a root terminal checks
-   the Serve mapping again and shows the `https://…ts.net` address as a QR
-   code. Scan it with the phone (Tailscale must be connected there).
-7. **Pair.** Click **New pairing code** on the desktop and type it on the
-   phone. The code is valid for five minutes. Never send it by chat, e-mail or
-   screenshot.
-8. **Optional: install it as an app.** Add the page to the Home Screen
+6. **Add the phone.** Press **Add device** (Settings → Mobile, or the header's
+   phone menu): it makes a one-time pairing code and shows it as a QR code.
+   Scan it with the phone's camera (Tailscale must be connected there); the
+   page opens with the code already filled in. Name the phone and pair. The
+   code can also be typed by hand. It is valid for five minutes. Never send it
+   by chat, e-mail or screenshot.
+7. **Optional: install it as an app.** Add the page to the Home Screen
    (iPhone: Share → Add to Home Screen; Android: browser menu → Install app or
    Add to Home screen). On iPhone this is needed for notifications.
 
@@ -83,6 +83,16 @@ member folders too; a member's list is about the member's own tabs.
 
 At least one phone stays ticked; to reach no phone, turn the project's access
 off.
+
+### A new project from the phone
+
+Tap **＋** beside **Projects** on the start page and give the project a name.
+Tabtivity creates it on your computer as a new, empty folder in its projects
+folder (the folder is named after the project, as **Folder:** shows), set up
+the way the desktop's New project sets one up. It is shared with this phone
+only, starts active, and opens on the phone right away. Nothing is imported,
+and the phone cannot pick another folder; a name whose folder already exists
+is refused. Works with the desktop window closed.
 
 ## Using it
 
@@ -194,12 +204,23 @@ are told it is off when they ask).
 ## Marks the agent has done
 
 The same tabs can tick off the marks they have handled (their `markup_done`
-tool), after making the change a mark asks for. Each ticked mark you sent gets
-a green **✓** at its top-right corner, on the desktop (while **Mark up** is on)
-and on the phone, and a line under the round's status says **n done ·
-Approve all**. Tap (or click) a **✓** to approve that mark: it leaves your
+tool), after making the change a mark asks for. Ticked marks that sit
+together — one remark, however many pen strokes it took — share one green
+**✓** at their top-right corner, on the desktop (while **Mark up** is on) and
+on the phone, and a line under the round's status says **n done · Approve
+all**. Tap (or click) a **✓** to approve that remark: its marks leave your
 marks. **Approve all** approves every ticked one. Nothing is removed without
-that tap — a tick only offers it — and **Undo** brings an approved mark back.
+that tap — a tick only offers it — and **Undo** brings approved marks back.
+
+While you write, the marks that sit together form one remark, and each remark
+gets its own small **Submit** just outside it — never over anything you wrote.
+It sends that remark alone; your other marks stay unsent. A remark you are
+still writing ignores the button for a moment, so the pen cannot send it by
+accident.
+
+To run the next round on another model, tap the model chip (**Opus ▾**) beside
+the agent: in the desktop's markup strip, or in the phone's header while
+marking. It opens that tab's own model list.
 
 - The badges show only while **Show sent marks** is on.
 - On the phone a **✓** that just appeared ignores taps for a moment, so a pen

@@ -5,7 +5,7 @@
  * compile's re-read request, a SyncTeX reveal after a compile — offers Reload
  * instead of repainting under the marks, and still repaints with markup off.
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const io = vi.hoisted(() => ({
@@ -99,6 +99,7 @@ import { _clearMarkupClaimsForTest } from "../../lib/viewers/pdfMarkup";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
 import { EMPTY_LAYER, addMark } from "../../../mobile-web/src/markup/layer";
+import { readPenPrefs } from "../../../mobile-web/src/markup/pen";
 
 const PATH = "/home/u/paper/paper.pdf";
 const MARKED = addMark(EMPTY_LAYER, 1, [600, 800], { kind: "box", color: "yellow", rect: [10, 10, 50, 20] });
@@ -198,6 +199,88 @@ describe("Mark up in the PDF viewer", () => {
     // Escape leaves the mode.
     fireEvent.keyDown(container.querySelector(".file-viewer-pdf-scroll")!, { key: "Escape" });
     expect(container.querySelector(".file-viewer-pdf-markup-layer")).toBeNull();
+  });
+
+  it("steers the pen bar from the keyboard and keeps the choices", async () => {
+    localStorage.clear();
+    const { container } = render(viewer());
+    await loaded();
+    await waitFor(() => expect(markUp()!.disabled).toBe(false));
+    fireEvent.click(markUp()!);
+    const scroll = container.querySelector(".file-viewer-pdf-scroll")!;
+    const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
+    expect(pressed("Pen")).toBe("true");
+    expect(pressed("Plain pen")).toBe("true");
+    // P on the armed pen steps its style; the marker offers yellow as its 4th colour.
+    fireEvent.keyDown(scroll, { key: "p" });
+    expect(pressed("Marker")).toBe("true");
+    fireEvent.keyDown(scroll, { key: "4" });
+    expect(pressed("Colour: Yellow")).toBe("true");
+    fireEvent.keyDown(scroll, { key: "]" });
+    expect(pressed("Bold")).toBe("true");
+    // E arms the eraser, E again its area mode.
+    fireEvent.keyDown(scroll, { key: "e" });
+    fireEvent.keyDown(scroll, { key: "e" });
+    expect(pressed("Erase an area")).toBe("true");
+    expect(container.querySelector(".file-viewer-pdf-markup-layer.is-area")).toBeTruthy();
+    // The box keeps its own colour; the pen's yellow stays the marker's.
+    fireEvent.keyDown(scroll, { key: "b" });
+    expect(pressed("Highlighter")).toBe("true");
+    expect(pressed("Colour: Yellow")).toBe("true");
+    fireEvent.keyDown(scroll, { key: "1" });
+    expect(pressed("Colour: Red")).toBe("true");
+    // The clearing sits in the ⋯ menu.
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.getAllByRole("menuitem").length).toBeGreaterThanOrEqual(2);
+    expect(readPenPrefs()).toMatchObject({ tool: "box", style: "marker", size: 2, eraser: "area", colors: { ink: "yellow", box: "red" } });
+    localStorage.clear();
+  });
+
+  it("arms the new tools, presets and the selection from the keyboard", async () => {
+    localStorage.clear();
+    const { container } = render(viewer());
+    await loaded();
+    await waitFor(() => expect(markUp()!.disabled).toBe(false));
+    fireEvent.click(markUp()!);
+    await waitFor(() => expect(io.loadLayer).toHaveBeenCalled());
+    const scroll = container.querySelector(".file-viewer-pdf-scroll")!;
+    const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
+    // M arms the text marks, M again steps their mode; K the stamp and its symbol.
+    fireEvent.keyDown(scroll, { key: "m" });
+    expect(pressed("Mark text")).toBe("true");
+    expect(pressed("Highlight")).toBe("true");
+    fireEvent.keyDown(scroll, { key: "m" });
+    expect(pressed("Strike through")).toBe("true");
+    fireEvent.keyDown(scroll, { key: "k" });
+    expect(pressed("Stamp")).toBe("true");
+    fireEvent.keyDown(scroll, { key: "k" });
+    expect(pressed("Delete")).toBe("true");
+    // Shift+3 arms the third preset (a blue arrow), by the key's place.
+    fireEvent.keyDown(scroll, { key: "#", code: "Digit3", shiftKey: true });
+    expect(pressed("Pen")).toBe("true");
+    expect(pressed("Arrow")).toBe("true");
+    expect(pressed("Colour: Blue")).toBe("true");
+    // S arms the select tool; a click picks the stored box on page 1.
+    fireEvent.keyDown(scroll, { key: "s" });
+    expect(pressed("Select")).toBe("true");
+    const layer = container.querySelector(".file-viewer-pdf-markup-layer") as HTMLDivElement;
+    layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 800, right: 600, bottom: 800, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    fireEvent.pointerDown(layer, { pointerId: 1, pointerType: "mouse", button: 0, clientX: 30, clientY: 20 });
+    fireEvent.pointerUp(layer, { pointerId: 1, pointerType: "mouse", clientX: 30, clientY: 20 });
+    expect(await screen.findByText("1 selected")).toBeTruthy();
+    // Escape lets the selection go first, and markup stays on.
+    fireEvent.keyDown(scroll, { key: "Escape" });
+    expect(screen.queryByText("1 selected")).toBeNull();
+    expect(container.querySelectorAll(".file-viewer-pdf-markup-layer").length).toBe(2);
+    // Delete deletes a selection.
+    fireEvent.pointerDown(layer, { pointerId: 1, pointerType: "mouse", button: 0, clientX: 30, clientY: 20 });
+    fireEvent.pointerUp(layer, { pointerId: 1, pointerType: "mouse", clientX: 30, clientY: 20 });
+    expect(await screen.findByText("1 selected")).toBeTruthy();
+    fireEvent.keyDown(scroll, { key: "Delete" });
+    expect(screen.queryByText("1 selected")).toBeNull();
+    const bar = within(container.querySelector(".file-viewer-pdf-markup-bar") as HTMLElement);
+    expect((bar.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(false);
+    localStorage.clear();
   });
 
   it("is held back on a document with unsaved edits", async () => {

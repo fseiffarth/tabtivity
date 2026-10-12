@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
-import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
@@ -16,6 +15,7 @@ import { ConnectToServer } from "../server/ConnectToServer";
 import { MobileAccessPicker, phoneReachLabel } from "./MobileAccessPicker";
 import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
 import { isMobileEligible, PairedDeviceAccess } from "./PairedDeviceAccess";
+import { AddDevicePanel, useAddDevice } from "./AddDevice";
 
 /** `translate` at the live language, for code that runs outside a render: the
  *  module-level parser below and the async callbacks, whose `useCallback`
@@ -53,7 +53,6 @@ interface ServeVerification {
 }
 type Device = PairedPhone;
 type AdminResponse =
-  | { status: "pairing_code"; code: string; expires_at: number }
   | { status: "devices"; devices: Device[] }
   | { status: "ok" }
   | { status: "error"; message: string };
@@ -128,6 +127,13 @@ function detectServeSettingsFromJson(value: unknown): DetectedServeSettings {
   throw new Error(tr("mobile.errMultiServeMappings"));
 }
 
+/** A label whose explanation is its hover hint rather than a paragraph under
+ *  it: the section is a list of switches, and each switch's fine print is one
+ *  hover away. */
+function Hint({ help, children }: { help: string; children: ReactNode }) {
+  return <span className="mobile-hint" title={help}>{children}</span>;
+}
+
 export function MobileSettings() {
   const t = useT();
   const settings = useSettingsStore((state) => state.settings);
@@ -135,7 +141,6 @@ export function MobileSettings() {
   const projects = useProjectsStore((state) => state.projects);
   const boxes = useBoxesStore((state) => state.boxes);
   const setBoxMobileAccess = useBoxesStore((state) => state.setBoxMobileAccess);
-  const rootDir = useProjectsStore((state) => state.rootDir);
   const setProjectMobileAccess = useProjectsStore((state) => state.setProjectMobileAccess);
   const stored = settings?.[MOBILE_HOST_KEY];
   // The browser client's sign-in link, shown on request (it carries the token).
@@ -170,15 +175,18 @@ export function MobileSettings() {
   const [phonePicker, setPhonePicker] = useState<
     { kind: "project" | "box"; id: string; x: number; y: number } | null
   >(null);
-  const [pairCode, setPairCode] = useState<string | null>(null);
+  const addDevice = useAddDevice();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [pairingBusy, setPairingBusy] = useState(false);
   const [detectingServe, setDetectingServe] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [serveVerification, setServeVerification] = useState<ServeVerification | null>(null);
   const [projectSearch, setProjectSearch] = useState("");
+  // The setup fold: `null` until someone (or the first status read) opens or
+  // shuts it; `checked` is that first read having landed.
+  const [setupOpen, setSetupOpen] = useState<boolean | null>(null);
+  const [checked, setChecked] = useState(false);
   const initialFieldsHydrated = useRef(false);
   const refreshSequence = useRef(0);
   const originRef = useRef(origin);
@@ -265,6 +273,7 @@ export function MobileSettings() {
 
     setRefreshError(failures.length > 0 ? failures.join(" ") : null);
     setRefreshing(false);
+    setChecked(true);
   }, []);
   useEffect(() => {
     void refresh();
@@ -329,7 +338,7 @@ export function MobileSettings() {
         },
       });
       await invoke("mobile_host_apply", { enabled });
-      setPairCode(null);
+      addDevice.clear();
       refresh();
     } catch (reason) {
       setError(String(reason));
@@ -373,35 +382,6 @@ export function MobileSettings() {
     const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
     if (!window.confirm(tr("mobile.setUpConfirm", { command }))) return;
     runInstallInTab(tr("mobile.guideSummary"), command, "default");
-  };
-
-  const installOnPhone = async () => {
-    setError(null);
-    try {
-      // The backend materializes its embedded source so a packaged Tabtivity has
-      // the same handoff script as a checkout. It answers with the script's
-      // path because the state dir differs per OS (XDG on Linux, Application
-      // Support on macOS) and must not be re-derived here.
-      const scriptPath = await invoke<string>("mobile_prepare_phone_install_script");
-      const tabs = useTabsStore.getState();
-      // The backend hands back a PowerShell script on Windows (no bash/jq in
-      // a Windows root terminal) and a POSIX one elsewhere; run each with its
-      // own interpreter in the OS default shell.
-      tabs.addTabToScope(ROOT_SCOPE, {
-        label: tr("mobile.phoneInstallTab"),
-        cmd: IS_HOST_WINDOWS ? "" : "/bin/bash",
-        cwd: rootDir ?? "",
-        kind: "shell",
-        initialInput: IS_HOST_WINDOWS
-          ? `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`
-          : `bash "${scriptPath.replace(/(["\\$`])/g, "\\$1")}"`,
-      });
-      useProjectsStore.setState({
-        switchToast: tr("mobile.phoneInstallToast"),
-      });
-    } catch (reason) {
-      setError(tr("mobile.phoneInstallError", { reason: String(reason) }));
-    }
   };
 
   const detectServeSettings = async () => {
@@ -448,27 +428,6 @@ export function MobileSettings() {
     }
   };
 
-  const createPairing = async () => {
-    setPairingBusy(true);
-    setError(null);
-    try {
-      const currentStatus = await invoke<RuntimeStatus>("mobile_host_status");
-      setStatus(currentStatus);
-      if (!currentStatus.running) {
-        throw new Error(tr("mobile.errStartHostFirst"));
-      }
-      const response = await invoke<AdminResponse>("mobile_admin", {
-        request: { type: "pairing_code" },
-      });
-      if (response.status !== "pairing_code") throw new Error(response.status === "error" ? response.message : tr("mobile.errPairingUnavailable"));
-      setPairCode(response.code);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setPairingBusy(false);
-    }
-  };
-
   const lockDownNow = async () => {
     if (!window.confirm(tr("mobile.lockdownConfirm"))) return;
     setBusy(true);
@@ -496,7 +455,7 @@ export function MobileSettings() {
         },
       });
       await invoke("mobile_host_apply", { enabled: false });
-      setPairCode(null);
+      addDevice.clear();
       await refresh();
     } catch (reason) {
       setError(tr("mobile.lockdownPartial", { reason: String(reason) }));
@@ -524,52 +483,54 @@ export function MobileSettings() {
         ? { tone: "danger", title: t("mobile.healthServeTitle"), detail: t("mobile.healthServeDetail") }
         : { tone: "good", title: t("mobile.healthGoodTitle"), detail: t("mobile.healthGoodDetail") };
 
+  // Everything a working host needed is in place: the setup fold then stays
+  // shut unless opened, so the section reads as a few switches.
+  const setUpDone = !!stored?.enabled && !!status?.running && !!serveVerification?.verified;
+  const setupShown = setupOpen ?? (checked && !setUpDone);
+  const shownError = error ?? addDevice.error;
+
   return (
     <SettingsCard>
       <ToggleRow
-        label={t("mobile.title")}
+        label={<Hint help={t("mobile.settingsHelp")}>{t("mobile.title")}</Hint>}
         checked={stored?.enabled ?? false}
         disabled={busy}
         onChange={(event) => void apply(event.target.checked)}
       />
-      <p className="settings-help">
-        {t("mobile.settingsHelp")}
-      </p>
-      <div className={`mobile-security-health ${securityHealth.tone}`} role="status">
-        <div>
-          <strong>{securityHealth.title}</strong>
-          <p>{securityHealth.detail}</p>
+      <div className={`mobile-security-health ${securityHealth.tone}`} role="status" title={securityHealth.detail}>
+        <strong>{securityHealth.title}</strong>
+        <div className="mobile-security-health-actions">
+          {stored?.enabled && !status?.running && <button type="button" className="settings-btn sm" disabled={busy} onClick={() => void apply(true)}>{t("mobile.startHost")}</button>}
+          {status?.update_available && <button type="button" className="settings-btn sm" disabled={busy} onClick={() => void apply(true)}>{t("mobile.updateHost")}</button>}
+          <button
+            type="button"
+            className="settings-btn sm primary"
+            disabled={busy || addDevice.busy || !status?.running}
+            title={t("mobile.addDeviceHint")}
+            onClick={() => void addDevice.start()}
+          >
+            {addDevice.busy ? t("mobile.creatingCode") : t("mobile.addDevice")} <UntestedTag id="mobile.addDevice" />
+          </button>
+          <button
+            type="button"
+            className="settings-btn sm danger"
+            disabled={busy || !status?.running}
+            title={status?.running ? t("mobile.lockdownTitle") : t("mobile.lockdownTitleStopped")}
+            onClick={() => void lockDownNow()}
+          >{t("mobile.lockdownNow")}</button>
         </div>
-        <button
-          type="button"
-          className="settings-btn sm danger"
-          disabled={busy || !status?.running}
-          title={status?.running ? t("mobile.lockdownTitle") : t("mobile.lockdownTitleStopped")}
-          onClick={() => void lockDownNow()}
-        >{t("mobile.lockdownNow")}</button>
       </div>
-      <p className="settings-help">
-        {t("mobile.scopeHelp")}
-      </p>
+      {addDevice.pairing && <AddDevicePanel pairing={addDevice.pairing} />}
       {IS_HOST_WINDOWS && (
         <p className="settings-help">
           {t("mobile.windowsTerminalsNote")} <UntestedTag id="mobile.windowsTerminalsNote" />
         </p>
       )}
-      {/* The handoff script has a PowerShell twin on Windows, so the QR flow
-          is offered on every desktop. */}
-      <div className="mobile-phone-install">
-        <div>
-          <strong>{t("mobile.phoneInstallTitle")}</strong>
-          <p>
-            {t("mobile.phoneInstallHelp")}
-          </p>
-        </div>
-        <button type="button" className="settings-btn sm primary mobile-phone-install-button" onClick={() => void installOnPhone()}>
-          {t("mobile.phoneInstallButton")}
-        </button>
-      </div>
-      <details className="mobile-settings-guide" open>
+      <details
+        className="mobile-settings-guide"
+        open={setupShown}
+        onToggle={(event) => setSetupOpen(event.currentTarget.open)}
+      >
         <summary>{t("mobile.guideSummary")}</summary>
         <div className="mobile-settings-guide-body">
           <p>
@@ -596,229 +557,123 @@ export function MobileSettings() {
               {t("mobile.guideStep5")}
             </li>
           </ol>
-          <p>
-            {t("mobile.guideOutro")}
-          </p>
           <div className="mobile-settings-guide-actions">
-            <button type="button" className="settings-btn sm" onClick={setUpInTerminal}>{t("mobile.setUpInTerminal")}</button>
-            <span>{t("mobile.setUpInTerminalHelp")}</span>
+            <button type="button" className="settings-btn sm" title={t("mobile.setUpInTerminalHelp")} onClick={setUpInTerminal}>{t("mobile.setUpInTerminal")}</button>
+            <a href="https://tailscale.com/docs/features/tailscale-serve" target="_blank" rel="noreferrer" title={t("mobile.guideOutro")}>{t("mobile.serveDocs")}</a>
           </div>
-          <a href="https://tailscale.com/docs/features/tailscale-serve" target="_blank" rel="noreferrer">{t("mobile.serveDocs")}</a>
+          <div className="settings-card-row">
+            <label className="settings-card-label" htmlFor="mobile-display-name">{t("mobile.displayName")}</label>
+            <input
+              id="mobile-display-name"
+              value={displayName}
+              maxLength={64}
+              onChange={(event) => setDisplayName(event.target.value)}
+            />
+          </div>
+          <div className="settings-card-row">
+            <label className="settings-card-label" htmlFor="mobile-loopback-port">{t("mobile.loopbackPort")}</label>
+            <input
+              id="mobile-loopback-port"
+              value={port}
+              inputMode="numeric"
+              onChange={(event) => {
+                setPort(event.target.value);
+                setServeVerification(null);
+              }}
+            />
+          </div>
+          <div className="settings-card-row">
+            <label className="settings-card-label" htmlFor="mobile-serve-origin">{t("mobile.serveOrigin")}</label>
+            <input
+              id="mobile-serve-origin"
+              value={origin}
+              placeholder="https://workstation.example.ts.net"
+              onChange={(event) => {
+                setOrigin(event.target.value);
+                setServeVerification(null);
+              }}
+            />
+          </div>
+          <div className="settings-link-row">
+            <button type="button" className="settings-btn sm" disabled={busy || detectingServe} onClick={() => void detectServeSettings()}>
+              {detectingServe ? t("mobile.detecting") : t("mobile.detectServe")}
+            </button>
+            <button type="button" className="settings-btn sm" disabled={busy || refreshing} onClick={() => void refresh()}>
+              {refreshing ? t("mobile.refreshing") : t("mobile.refreshStatus")}
+            </button>
+          </div>
+          <p className="settings-help" aria-live="polite">
+            {status?.running ? t("mobile.statusRunning", { port: status.port ?? "?" }) : t("mobile.statusStopped")}
+            {status?.installed_version ? ` ${t("mobile.statusSidecar", { version: status.installed_version })}` : ""}
+            {serveVerification?.verified
+              ? ` ${t("mobile.statusServeVerified", { port })}`
+              : serveStatus?.installed
+                ? ` ${t("mobile.statusServeReadable")}`
+                : ` ${t("mobile.statusServeUnavailable")}`}
+            {serveStatus?.error ? ` ${serveStatus.error}` : ""}
+            {serveVerification && !serveVerification.verified ? ` ${serveVerification.error}` : ""}
+          </p>
         </div>
       </details>
-      <div className="settings-card-row">
-        <label className="settings-card-label" htmlFor="mobile-display-name">{t("mobile.displayName")}</label>
-        <input
-          id="mobile-display-name"
-          value={displayName}
-          maxLength={64}
-          onChange={(event) => setDisplayName(event.target.value)}
-        />
-      </div>
-      <div className="settings-card-row">
-        <label className="settings-card-label" htmlFor="mobile-loopback-port">{t("mobile.loopbackPort")}</label>
-        <input
-          id="mobile-loopback-port"
-          value={port}
-          inputMode="numeric"
-          onChange={(event) => {
-            setPort(event.target.value);
-            setServeVerification(null);
-          }}
-        />
-      </div>
-      <div className="settings-card-row">
-        <label className="settings-card-label" htmlFor="mobile-serve-origin">{t("mobile.serveOrigin")}</label>
-        <input
-          id="mobile-serve-origin"
-          value={origin}
-          placeholder="https://workstation.example.ts.net"
-          onChange={(event) => {
-            setOrigin(event.target.value);
-            setServeVerification(null);
-          }}
-        />
-      </div>
-      <div className="settings-link-row">
-        <button type="button" className="settings-btn sm" disabled={busy || detectingServe} onClick={() => void detectServeSettings()}>
-          {detectingServe ? t("mobile.detecting") : t("mobile.detectServe")}
-        </button>
-        <button type="button" className="settings-btn sm" disabled={busy || pairingBusy} onClick={() => void createPairing()}>
-          {pairingBusy ? t("mobile.creatingCode") : t("mobile.newPairingCode")}
-        </button>
-        {stored?.enabled && !status?.running && <button type="button" className="settings-btn sm" disabled={busy} onClick={() => void apply(true)}>{t("mobile.startHost")}</button>}
-        {status?.update_available && <button type="button" className="settings-btn sm" disabled={busy} onClick={() => void apply(true)}>{t("mobile.updateHost")}</button>}
-        <button type="button" className="settings-btn sm" disabled={busy || refreshing} onClick={() => void refresh()}>
-          {refreshing ? t("mobile.refreshing") : t("mobile.refreshStatus")}
-        </button>
-      </div>
-      <p className="settings-help" aria-live="polite">
-        {status?.running ? t("mobile.statusRunning", { port: status.port ?? "?" }) : t("mobile.statusStopped")}
-        {status?.installed_version ? ` ${t("mobile.statusSidecar", { version: status.installed_version })}` : ""}
-        {serveVerification?.verified
-          ? ` ${t("mobile.statusServeVerified", { port })}`
-          : serveStatus?.installed
-            ? ` ${t("mobile.statusServeReadable")}`
-            : ` ${t("mobile.statusServeUnavailable")}`}
-        {serveStatus?.error ? ` ${serveStatus.error}` : ""}
-        {serveVerification && !serveVerification.verified ? ` ${serveVerification.error}` : ""}
-        {pairCode ? ` ${t("mobile.statusPairCode", { code: pairCode })}` : ""}
-      </p>
       {refreshError && <ErrorNote className="project-dialog-error" error={refreshError} />}
-      {error && <ErrorNote className="project-dialog-error" error={error} />}
+      {shownError && <ErrorNote className="project-dialog-error" error={shownError} />}
 
-      <div className="settings-subheader">{t("mobile.stayAfterQuitHeader")}</div>
-      <ToggleRow
-        label={<>{t("mobile.stayAfterQuit")} <UntestedTag id="mobile.stayAfterQuit" /></>}
-        checked={stored?.stay_after_quit ?? false}
-        disabled={busy}
-        onChange={(event) => void setMailGate("stay_after_quit", event.target.checked)}
-      />
-      <p className="settings-help">{t("mobile.stayAfterQuitHelp")}</p>
 
-      <div className="settings-subheader">{t("mobile.browserClientHeader")}</div>
+      <div className="settings-subheader">{t("mobile.phoneMay")}</div>
       <ToggleRow
-        label={<>{t("mobile.browserClient")} <UntestedTag id="mobile.browserClient" /></>}
-        checked={stored?.browser_client ?? false}
-        disabled={busy}
-        onChange={(event) => void setMailGate("browser_client", event.target.checked)}
-      />
-      <p className="settings-help">{t("mobile.browserClientHelp")}</p>
-      {stored?.browser_client && (
-        <div className="settings-link-row">
-          <button
-            type="button"
-            className="settings-btn sm"
-            disabled={busy}
-            onClick={() => {
-              setBrowserLinkError(null);
-              setBrowserLinkCopied(false);
-              invoke<string>("mobile_browser_client_link")
-                .then((link) => setBrowserLink(link))
-                .catch((reason) => setBrowserLinkError(String(reason)));
-            }}
-          >
-            {t("mobile.browserClientLink")} <UntestedTag id="mobile.browserClientLink" />
-          </button>
-          <button
-            type="button"
-            className="settings-btn sm"
-            disabled={busy}
-            onClick={() => {
-              setBrowserLinkError(null);
-              setBrowserLinkCopied(false);
-              invoke<string>("mobile_browser_client_rotate")
-                .then((link) => setBrowserLink(link))
-                .catch((reason) => setBrowserLinkError(String(reason)));
-            }}
-          >
-            {t("mobile.browserClientRotate")} <UntestedTag id="mobile.browserClientRotate" />
-          </button>
-          {browserLink && (
-            <>
-              <code className="settings-help" style={{ userSelect: "all" }}>{browserLink}</code>
-              <button
-                type="button"
-                className="settings-btn sm"
-                onClick={() => {
-                  invoke("copy_text_to_clipboard", { text: browserLink })
-                    .then(() => setBrowserLinkCopied(true))
-                    .catch((reason) => setBrowserLinkError(String(reason)));
-                }}
-              >
-                {browserLinkCopied ? t("mobile.browserClientCopied") : t("mobile.browserClientCopy")}
-              </button>
-            </>
-          )}
-        </div>
-      )}
-      {browserLinkError && <ErrorNote className="project-dialog-error" error={browserLinkError} />}
-      {stored?.browser_client && <p className="settings-help">{t("mobile.browserClientLinkHelp")} {t("mobile.browserClientRotateHelp")}</p>}
-      {isServerClient() && (
-        <div className="settings-link-row">
-          <button
-            type="button"
-            className="settings-btn sm"
-            onClick={() => {
-              invoke("desktop_logout")
-                .catch(() => undefined)
-                .then(() => window.location.replace("/desktop/"));
-            }}
-          >
-            {t("mobile.browserClientSignOut")} <UntestedTag id="mobile.browserClientSignOut" />
-          </button>
-          <p className="settings-help">{t("mobile.browserClientSignOutHelp")}</p>
-        </div>
-      )}
-      <ConnectToServer />
-
-      <div className="settings-subheader">{t("mobile.mailWrites")}</div>
-      <ToggleRow
-        label={<>{t("mobile.mailRead")} <UntestedTag id="mobile.mailRead" /></>}
+        label={<><Hint help={t("mobile.mailReadHelp")}>{t("mobile.mailRead")}</Hint> <UntestedTag id="mobile.mailRead" /></>}
         checked={stored?.mail_read !== false}
         disabled={busy}
         onChange={(event) => void setMailGate("mail_read", event.target.checked)}
       />
-      <p className="settings-help">{t("mobile.mailReadHelp")}</p>
       <ToggleRow
-        label={<>{t("mobile.mailActions")} <UntestedTag id="mobile.mailActions" /></>}
+        label={<><Hint help={t("mobile.mailActionsHelp")}>{t("mobile.mailActions")}</Hint> <UntestedTag id="mobile.mailActions" /></>}
         checked={stored?.mail_actions ?? false}
         disabled={busy}
         onChange={(event) => void setMailGate("mail_actions", event.target.checked)}
       />
-      <p className="settings-help">{t("mobile.mailActionsHelp")}</p>
       <ToggleRow
-        label={<>{t("mobile.mailReply")} <UntestedTag id="mobile.mailReply" /></>}
+        label={<><Hint help={t("mobile.mailReplyHelp")}>{t("mobile.mailReply")}</Hint> <UntestedTag id="mobile.mailReply" /></>}
         checked={stored?.mail_reply ?? false}
         disabled={busy}
         onChange={(event) => void setMailGate("mail_reply", event.target.checked)}
       />
-      <p className="settings-help">{t("mobile.mailReplyHelp")}</p>
-
-      <div className="settings-subheader">{t("mobile.rootAccessHeader")}</div>
       <ToggleRow
-        label={<>{t("mobile.rootAccess")} <UntestedTag id="mobile.rootAccess" /></>}
+        label={<><Hint help={t("mobile.rootAccessHelp")}>{t("mobile.rootAccess")}</Hint> <UntestedTag id="mobile.rootAccess" /></>}
         checked={stored?.root_access ?? false}
         disabled={busy}
         onChange={(event) => void setMailGate("root_access", event.target.checked)}
       />
-      <p className="settings-help">{t("mobile.rootAccessHelp")}</p>
       {stored?.root_access && rootGateClosed && (
         <div className="project-dialog-error">{t("mobile.rootAccessClosed")}</div>
       )}
 
-      <div className="settings-subheader">{t("mobile.projectAccess")}</div>
-      <p className="settings-help">
-        {t("mobile.projectAccessHelp")}
-      </p>
       <ToggleRow
-        label={<>{t("mobile.projectFiles")} <UntestedTag id="mobile.projectFiles" /></>}
+        label={<><Hint help={t("mobile.projectFilesHelp")}>{t("mobile.projectFiles")}</Hint> <UntestedTag id="mobile.projectFiles" /></>}
         checked={stored?.project_files ?? false}
         disabled={busy}
         onChange={(event) => void setMailGate("project_files", event.target.checked)}
       />
-      <p className="settings-help">{t("mobile.projectFilesHelp")}</p>
       <ToggleRow
-        label={<>{t("mobile.projectUploads")} <UntestedTag id="mobile.files.upload" /></>}
+        label={<><Hint help={t("mobile.projectUploadsHelp")}>{t("mobile.projectUploads")}</Hint> <UntestedTag id="mobile.files.upload" /></>}
         checked={stored?.project_uploads ?? false}
         disabled={busy || !stored?.project_files}
         onChange={(event) => void setMailGate("project_uploads", event.target.checked)}
       />
-      <p className="settings-help">{t("mobile.projectUploadsHelp")}</p>
       <ToggleRow
-        label={<>{t("mobile.noShells")} <UntestedTag id="mobile.noShells" /></>}
+        label={<><Hint help={t("mobile.noShellsHelp")}>{t("mobile.noShells")}</Hint> <UntestedTag id="mobile.noShells" /></>}
         checked={stored?.shell_tabs !== true}
         disabled={busy}
         onChange={(event) => void setMailGate("shell_tabs", !event.target.checked)}
       />
-      <p className="settings-help">{t("mobile.noShellsHelp")}</p>
       <ToggleRow
-        label={<>{t("mobile.localModelsGate")} <UntestedTag id="mobile.localModelsGate" /></>}
+        label={<><Hint help={t("mobile.localModelsGateHelp")}>{t("mobile.localModelsGate")}</Hint> <UntestedTag id="mobile.localModelsGate" /></>}
         checked={stored?.local_models !== false}
         disabled={busy}
         onChange={(event) => void setMailGate("local_models", event.target.checked)}
       />
-      <p className="settings-help">{t("mobile.localModelsGateHelp")}</p>
+
+      <div className="settings-subheader"><Hint help={t("mobile.projectAccessHelp")}>{t("mobile.projectAccess")}</Hint></div>
       {eligible.length > 0 && <input
         className="mobile-project-access-search"
         value={projectSearch}
@@ -845,8 +700,7 @@ export function MobileSettings() {
       </div>
 
       {boxes.length > 0 && <>
-        <div className="settings-subheader">{t("mobile.boxAccess")} <UntestedTag id="mobile.boxAccess" /></div>
-        <p className="settings-help">{t("mobile.boxAccessHelp")}</p>
+        <div className="settings-subheader"><Hint help={t("mobile.boxAccessHelp")}>{t("mobile.boxAccess")}</Hint> <UntestedTag id="mobile.boxAccess" /></div>
         <div className="mobile-project-access-list">
           {matchingBoxes.map((box) => (
             <ToggleRow
@@ -915,12 +769,91 @@ export function MobileSettings() {
           void invoke<AdminResponse>("mobile_admin", { request: { type: "forget_all" } })
             .then((response) => {
               if (response.status === "error") throw new Error(response.message);
-              setPairCode(null);
+              addDevice.clear();
               refresh();
             })
             .catch((reason) => setError(String(reason)));
         }}
       >{t("mobile.forgetAll")}</button>}
+
+      <div className="settings-subheader">{t("mobile.thisComputer")}</div>
+      <ToggleRow
+        label={<><Hint help={t("mobile.stayAfterQuitHelp")}>{t("mobile.stayAfterQuit")}</Hint> <UntestedTag id="mobile.stayAfterQuit" /></>}
+        checked={stored?.stay_after_quit ?? false}
+        disabled={busy}
+        onChange={(event) => void setMailGate("stay_after_quit", event.target.checked)}
+      />
+      <ToggleRow
+        label={<><Hint help={t("mobile.browserClientHelp")}>{t("mobile.browserClient")}</Hint> <UntestedTag id="mobile.browserClient" /></>}
+        checked={stored?.browser_client ?? false}
+        disabled={busy}
+        onChange={(event) => void setMailGate("browser_client", event.target.checked)}
+      />
+      {stored?.browser_client && (
+        <div className="settings-link-row">
+          <button
+            type="button"
+            className="settings-btn sm"
+            disabled={busy}
+            onClick={() => {
+              setBrowserLinkError(null);
+              setBrowserLinkCopied(false);
+              invoke<string>("mobile_browser_client_link")
+                .then((link) => setBrowserLink(link))
+                .catch((reason) => setBrowserLinkError(String(reason)));
+            }}
+          >
+            <Hint help={t("mobile.browserClientLinkHelp")}>{t("mobile.browserClientLink")}</Hint> <UntestedTag id="mobile.browserClientLink" />
+          </button>
+          <button
+            type="button"
+            className="settings-btn sm"
+            disabled={busy}
+            onClick={() => {
+              setBrowserLinkError(null);
+              setBrowserLinkCopied(false);
+              invoke<string>("mobile_browser_client_rotate")
+                .then((link) => setBrowserLink(link))
+                .catch((reason) => setBrowserLinkError(String(reason)));
+            }}
+          >
+            <Hint help={t("mobile.browserClientRotateHelp")}>{t("mobile.browserClientRotate")}</Hint> <UntestedTag id="mobile.browserClientRotate" />
+          </button>
+          {browserLink && (
+            <>
+              <code className="settings-help" style={{ userSelect: "all" }}>{browserLink}</code>
+              <button
+                type="button"
+                className="settings-btn sm"
+                onClick={() => {
+                  invoke("copy_text_to_clipboard", { text: browserLink })
+                    .then(() => setBrowserLinkCopied(true))
+                    .catch((reason) => setBrowserLinkError(String(reason)));
+                }}
+              >
+                {browserLinkCopied ? t("mobile.browserClientCopied") : t("mobile.browserClientCopy")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {browserLinkError && <ErrorNote className="project-dialog-error" error={browserLinkError} />}
+      {isServerClient() && (
+        <div className="settings-link-row">
+          <button
+            type="button"
+            className="settings-btn sm"
+            onClick={() => {
+              invoke("desktop_logout")
+                .catch(() => undefined)
+                .then(() => window.location.replace("/desktop/"));
+            }}
+          >
+            <Hint help={t("mobile.browserClientSignOutHelp")}>{t("mobile.browserClientSignOut")}</Hint> <UntestedTag id="mobile.browserClientSignOut" />
+          </button>
+        </div>
+      )}
+      <ConnectToServer />
     </SettingsCard>
   );
 }

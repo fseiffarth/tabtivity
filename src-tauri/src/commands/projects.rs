@@ -265,7 +265,7 @@ fn remote_site_key(spec: &RemoteSpec) -> String {
     )
 }
 
-fn entry_remote_spec(entry: &ProjectEntry) -> Option<RemoteSpec> {
+pub(crate) fn entry_remote_spec(entry: &ProjectEntry) -> Option<RemoteSpec> {
     entry
         .extra
         .get("remote")
@@ -2095,6 +2095,21 @@ fn apply_mobile_access(project: &mut ProjectEntry, enabled: bool, devices: Optio
     }
 }
 
+/// What this machine needs before any project can be a phone scope: local
+/// terminals that outlive the window (the phone attaches to their tmux
+/// sessions), and tmux itself.
+fn mobile_access_prerequisites() -> Result<(), String> {
+    let settings: crate::schema::Settings =
+        storage::read_json(&storage::settings_path()).unwrap_or_default();
+    if !settings.persist_local_sessions() {
+        return Err("Enable persistent local terminal sessions before Mobile access".into());
+    }
+    if !crate::services::tmux_local::tmux_available() {
+        return Err("Mobile access requires tmux on this machine".into());
+    }
+    Ok(())
+}
+
 /// Authoritative per-project opt-in for Tabtivity Mobile. This flag lives in the
 /// state-dir `projects.json`, never only in project-writable `project.json`.
 /// `devices` narrows it to some paired phones (see [`mobile_scope_devices`]);
@@ -2126,14 +2141,7 @@ pub fn set_project_mobile_access(
         if runtime_enabled("sandbox") || runtime_enabled("vm") {
             return Err("Mobile access is unavailable for container and VM projects".into());
         }
-        let settings: crate::schema::Settings =
-            storage::read_json(&storage::settings_path()).unwrap_or_default();
-        if !settings.persist_local_sessions() {
-            return Err("Enable persistent local terminal sessions before Mobile access".into());
-        }
-        if !crate::services::tmux_local::tmux_available() {
-            return Err("Mobile access requires tmux on this machine".into());
-        }
+        mobile_access_prerequisites()?;
     }
     let devices = if enabled { mobile_scope_devices(devices)? } else { None };
     patch_project_entry(&project_id, |project| {
@@ -2159,6 +2167,77 @@ pub fn set_project_mobile_access(
     // A phone this leaves out loses what it scheduled or held here.
     crate::commands::agent_tasks::cancel_lost_phone_rules(&ctx, "after a project's Mobile access changed");
     Ok(MobileAccessState { enabled, devices })
+}
+
+/// The longest name a phone may give a new project, in characters.
+pub const PHONE_PROJECT_NAME_MAX: usize = 80;
+
+/// Why [`create_project_for_phone`] made nothing. [`Self::code`] is what the
+/// phone's API answers with.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PhoneProjectRefusal {
+    /// Blank, longer than [`PHONE_PROJECT_NAME_MAX`], or nothing of it is
+    /// left as a folder name.
+    InvalidName,
+    /// `<projects root>/<folder>` is already there, a project or not.
+    Exists,
+    /// This machine cannot open any project to a phone (no persistent local
+    /// sessions, no tmux), or the asking phone is no longer paired.
+    Unavailable(String),
+    /// Creating it failed past the checks.
+    Failed(String),
+}
+
+impl PhoneProjectRefusal {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidName => "invalid_name",
+            Self::Exists => "project_exists",
+            Self::Unavailable(_) => "mobile_unavailable",
+            Self::Failed(_) => "create_failed",
+        }
+    }
+}
+
+/// A new project made from a paired phone. The phone names it and nothing
+/// else: it is always a local folder `<projects root>/<sanitized name>` — no
+/// folder choice, no import, no remote, container or VM. It is created the way
+/// the desktop's New project creates one by default (scaffold, a local git
+/// repository) and opens to the asking phone alone, as switching its Mobile
+/// access on for just that phone would. It starts `active`, so it is on the
+/// phone's project list and open in the desktop's bar. Answers its id.
+pub fn create_project_for_phone(name: &str, device_id: &str) -> Result<String, PhoneProjectRefusal> {
+    let name = name.trim();
+    let folder = sanitize_name(name);
+    if name.is_empty() || name.chars().count() > PHONE_PROJECT_NAME_MAX || folder.is_empty() {
+        return Err(PhoneProjectRefusal::InvalidName);
+    }
+    mobile_access_prerequisites().map_err(PhoneProjectRefusal::Unavailable)?;
+    let devices = mobile_scope_devices(Some(vec![device_id.to_string()]))
+        .map_err(PhoneProjectRefusal::Unavailable)?;
+    let directory = projects_root().join(&folder);
+    if directory.exists() {
+        return Err(PhoneProjectRefusal::Exists);
+    }
+    let entry = create_project_blocking(CreateProjectRequest {
+        name: name.to_string(),
+        directory: directory.to_string_lossy().into_owned(),
+        description: None,
+        git_type: Some("local".to_string()),
+        git_provider: None,
+        skip_scaffold: false,
+        remote: None,
+        mirror_parent: None,
+        vm: None,
+    })
+    .map_err(PhoneProjectRefusal::Failed)?;
+    patch_project_entry(&entry.id, |project| {
+        project.status = "active".to_string();
+        apply_mobile_access(project, true, devices.as_deref());
+        Ok(())
+    })
+    .map_err(PhoneProjectRefusal::Failed)?;
+    Ok(entry.id)
 }
 
 /// Set (or clear) the display name for a **remote** project's primary machine —

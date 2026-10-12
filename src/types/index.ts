@@ -1316,10 +1316,26 @@ export interface BundleContents {
   rebuildableSkipped: boolean;
   /** The project's agent conversations travel (bundle format 2). */
   agentHistory?: boolean;
+  /** `mirror` was packed from the host's own tree, not this machine's mirror. */
+  mirrorFromHost?: boolean;
   files: number;
   bytes: number;
   /** Files the export could not carry (unreadable, a FIFO, too deep). */
   skipped?: number;
+}
+
+/** A remote project's two copies: which one an export packs. */
+export type MirrorSource = "local" | "host";
+
+/** `preview_host_export` — the host's tree measured for the export dialog.
+ *  `files`/`bytes` leave out `.git` and the always-rebuildable folders. */
+export interface HostTally {
+  files: number;
+  bytes: number;
+  gitFiles: number;
+  gitBytes: number;
+  rebuildableFiles: number;
+  rebuildableBytes: number;
 }
 
 /** One rebuildable folder the export preview found, biggest first. */

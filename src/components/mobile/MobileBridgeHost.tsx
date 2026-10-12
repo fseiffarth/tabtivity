@@ -82,7 +82,7 @@ import {
   type ScheduleRule,
   type ScheduledAgentPrompt,
 } from "../../lib/agents/agentSchedule";
-import { BRAND, MOBILE_ACCESS_KEY, MOBILE_HOST_KEY, NAMES, envName } from "../../lib/brand";
+import { BRAND, MOBILE_ACCESS_KEY, MOBILE_HOST_KEY, NAMES } from "../../lib/brand";
 import { localModelMutate, localModelsList, type LocalModelAction, type MobileLocalModelList } from "../../lib/mobileLocalModels";
 
 const MOBILE_DESKTOP_EVENT = NAMES.mobileDesktopEvent;
@@ -548,14 +548,12 @@ function agentTurnSnapshot(): Map<string, MobileAgentState> {
 const AGENT_TURN_SETTLE_MS = 500;
 
 /** The model tag a phone card shows for `tab`, with both of its sources asked
- * to re-read for the next poll. A local-model tab whose session names no model
- * says the one it was started on. */
+ * to re-read for the next poll. */
 function mobileModelTag(projectId: string, tab: TabEntry): string | undefined {
   const models = useAgentModelsStore.getState();
   void models.refresh(projectId, tab);
   void models.refreshScreen(projectId, tab);
-  return agentTabModelTag(projectId, tab, models.byTab, models.screenByTab)
-    ?? (tab.kind === "local_agent" ? tab.env?.[envName("LOCAL_MODEL")] : undefined);
+  return agentTabModelTag(projectId, tab, models.byTab, models.screenByTab);
 }
 
 /** The PLAN / GOAL marks the desktop's tab strip shows for a tab

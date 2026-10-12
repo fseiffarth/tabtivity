@@ -1212,6 +1212,17 @@ label.settings-toggle-card-row {
 .mobile-security-health strong { color: var(--text-primary); font-size: 12px; }
 .mobile-security-health p { margin: 2px 0 0; color: var(--text-secondary); font-size: 11px; }
 .mobile-security-health button { flex: 0 0 auto; }
+.mobile-security-health-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* A label whose fine print is its hover hint (`MobileSettings`' `Hint`). */
+.mobile-hint {
+  cursor: help;
+}
 
 @media (max-width: 560px) {
   .mobile-phone-install {

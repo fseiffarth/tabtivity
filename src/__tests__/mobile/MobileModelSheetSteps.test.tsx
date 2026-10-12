@@ -271,6 +271,16 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     expect(FakeWebSocket.sent).toEqual([UP, UP, "\r"]);
   });
 
+  it("shows a local-model tab's model and opens no picker, not even from the card's tap", async () => {
+    render(<Terminal tab={{ id: "tab", label: "qwen3:8b · OpenCode", agent_label: "OpenCode", kind: "agent", agent_model: "qwen3:8b", local_model: true, available: true, viewer_busy: false }} pickModel back={() => {}} />);
+    await act(async () => {});
+    await paint("┃  Ask anything...\n\n  qwen3:8b · /tmp");
+    await settle(400);
+    expect(screen.queryByRole("button", { name: "qwen3:8b" })).toBeNull();
+    expect(document.querySelector(".session-facts .fact-model")?.textContent).toBe("qwen3:8b");
+    expect(FakeWebSocket.sent).toEqual([]);
+  });
+
   it("sends /clear from Codex's Clear chip at once, without a confirm dialog", async () => {
     const confirm = vi.fn(() => false);
     vi.stubGlobal("confirm", confirm);

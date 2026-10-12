@@ -214,6 +214,10 @@ idna = "1"
 # are stored under `blobs/<sha256>` with no extension, so a sender-supplied
 # filename never reaches a syscall).
 sha2 = "0.10"
+# MD5 only to name a folder the way a CLI does (Cursor and Kimi file a
+# project's conversations under the MD5 of its path), so an exported
+# conversation can be re-pointed at a moved project. Not a security use.
+md-5 = "0.10"
 
 # ── Mail encryption (see docs/mail_encryption_plan.md) ───────────────────────
 # The whole block obeys the same invariant as the TLS one above: **no OpenSSL,

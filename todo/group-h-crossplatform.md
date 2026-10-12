@@ -4268,3 +4268,29 @@ status column, and box-folder file browsing.*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+- [~] **31cf — A new project from the phone, in the projects folder only**
+  (2026-10-12; untested id `mobile.home.newProject`; ✅ automated:
+  `MobileNewProjectSheet.test.tsx`, Rust `a_phone_creates_a_project_by_name_only`
+  (host) + `a_phone_creates_a_project_only_in_the_projects_folder`
+  (`tests/projects_commands.rs`); ⚠️ never live — needs the frozen dev build,
+  the sidecar serves the new route and the PWA is rebuilt). With two phones
+  paired, on phone A tap **＋** beside **Projects**: the sheet names the
+  folder as you type (`My Paper!` → **Folder: my-paper**). **Create** → the
+  new project opens on the phone; back on the start page it is in the list.
+  On the desktop it appears in the bar as active (window open: within a
+  second, no reload), its folder is `~/tabtivity/projects/my-paper` with the
+  usual scaffold and a local git repo, and its Mobile access is on for phone
+  A only — phone B does not list it. ＋ again with `my paper` → "already has a
+  folder named my-paper", nothing created. `!!!` → refused before sending.
+  Close the desktop window and create another one → it is created; opening
+  the window shows it.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

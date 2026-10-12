@@ -113,25 +113,84 @@ Without them the tab layout carries session ids that resume nothing on the far
 side. The "Agent conversations" switch is **off by default**: a transcript holds
 whatever the agents read or printed, secrets included.
 
-Only the allowlist `AGENT_HISTORY_ROOTS` travels — `.claude/projects`
-(transcripts, and Claude's per-folder `memory/`), `.codex/sessions`,
-`.codex/archived_sessions`. Everything else in a home is configuration an
-agent tab runs (hooks, MCP servers, skills, settings) and never travels, in
-either direction. Export reads the home through `home_io` handles (an agent
-may be rewriting it; a link swapped in is refused, and links are never
-carried). Import writes only regular files under those roots, through the same
-handles, never over a file already there, and caps one file at 1 GiB.
+What travels is an allowlist, `services::agent_history::ROOTS`: per CLI, the
+folders and files that hold conversations — Claude's `projects/` (transcripts
+and the per-folder `memory/`), Codex's rollouts, `session_index.jsonl` and
+thread store (`state_<n>.sqlite`), Copilot's `session-state/`,
+`session-store.db` and prompt history, OpenCode's `opencode.db`, old JSON
+`storage/` and prompt history, Gemini's and Qwen's `tmp/<project>/chats` and
+logs (never `tmp/bin`, which holds a downloaded ripgrep), Antigravity's
+conversations, Cursor's `chats/`, Droid's `sessions/` (minus each session's
+`.settings.json`, which holds its autonomy level), and the session folders of
+Pi, CodeBuddy, Kimi, Cline, Continue, Goose, Vibe and Auggie. Everything else
+in a home — logins, settings, hooks, MCP servers, skills — is what an agent
+tab runs or signs in with and never travels, in either direction; the
+allowlist is checked again on import against the bundle's own entry names.
+A root a home does not have contributes nothing. Layouts checked against a
+live home (2026-10-12): Claude, Codex, Copilot, OpenCode, Antigravity; the
+rest follow each CLI's docs and are tagged untested (`transfer.agentHistory`).
 
-Paths are re-pointed twice: inside each `.jsonl` line (project folder, mirror,
-both homes; a line that names none of them stays byte-identical), and in the
-name of each Claude transcript folder, because Claude finds a session to
-resume by the folder named after its cwd (`repoint_claude_folder`; a `-` in the
-name matches any non-alphanumeric character, which covers older Claude
-encodings). The memory in `memory/` is instructions in the same trust class as
-a `CLAUDE.md` in the tree itself, which a bundle carries anyway.
+**Databases are never copied byte for byte.** A CLI writes its store while an
+export runs, with the newest pages in a `-wal` beside it. The file and its WAL
+are copied through `home_io` handles into a private scratch dir under the
+state dir (copied again if they change meanwhile), opened there, emptied of
+every table not listed as conversation (`agent_history::DATABASES`: OpenCode's
+`account`, `credential`, `control_account`, `session_share` and `permission`
+rows, Codex's remote-control enrollments, Copilot's skill proposals), and
+written out with `VACUUM INTO` — one consistent file, no sidecar, no freed
+page still holding a deleted token. Import strips again (a crafted bundle must
+not plant an account the user's agent would then sign in with) and blanks
+OpenCode's per-session permission grants. Every connection to such a file has
+triggers off, the defensive flag on and the schema untrusted, so re-pointing a
+row never runs the file's own SQL. Codex's `thread_history_<n>.sqlite` is left
+behind on purpose: it indexes the rollouts by byte offset, re-pointing a
+rollout moves those offsets, and Codex rebuilds it.
 
-Not carried: Codex's SQLite state and prompt history, `.claude.json` (folder
-trust must be re-granted here), other CLIs' stores.
+Export reads the home through `home_io` handles (an agent may be rewriting it;
+a link swapped in is refused, and links are never carried). Import writes only
+regular files the allowlist names, through the same handles, never over a file
+already there, and caps one file at 1 GiB.
+
+Paths are re-pointed — project folder, mirror, both homes — in three places:
+inside each file (`.jsonl` line by line, a line naming none of them staying
+byte-identical; `.json` whole, object keys included; `.yaml` as text), inside
+every text cell of a database, and in the name of the folder a CLI files a
+project's sessions under (`agent_history::repoint_rel`): a slug of the path
+(Claude, CodeBuddy, Droid — a `-` matches any non-alphanumeric character,
+which covers older Claude encodings), Pi's `--path--`, or a hash of it
+(SHA-256: Gemini, Qwen; MD5: Cursor, Kimi). A path is replaced only where it
+stands whole, so `/a/proj` never rewrites `/a/project`. Binary formats
+(Antigravity's protobufs, Cursor's blobs) travel as they are. The memory in
+`memory/` is instructions in the same trust class as a `CLAUDE.md` in the tree
+itself, which a bundle carries anyway.
+
+Not carried: `.claude.json` (folder trust must be re-granted here), Claude's
+`file-history/` (rewind snapshots), OpenCode's `snapshot/` git store, Codex's
+memories and logs, and the stores of CLIs whose layout is not known here
+(Kilo, Grok, Junie, Amp, OpenClaw, Muse, Plandex, SWE-agent). Aider, Crush and
+mini-SWE-agent keep theirs inside the project folder, which travels anyway.
+
+## The host's copy
+
+A remote project has two copies of its tree: this machine's mirror (what has
+been synced down) and the host's. The dialog's "Pack the files from" picks
+which one becomes `mirror/`; import treats both alike, and the manifest
+records `mirrorFromHost`. The host's copy is offered only while the project is
+connected — an SSH command against a dead session can hang the dialog — and is
+measured only once picked (`preview_host_export`, one `run_remote_script` of
+`du`/`find`: apparent bytes with GNU `du -b`, 1 KiB blocks on BSD/macOS).
+
+Export streams it: one `tar -cf - .` over SSH, read by `services::tar_stream`
+(ustar, GNU long names, pax headers, base-256 sizes; every header's checksum
+checked) straight into the zip, with nothing landing on this machine's disk but
+the bundle. A connection that breaks mid-archive fails the export rather than
+packing a shorter tree; what the host's `tar` says it could not read lands in
+the skip report; a hard link is copied from the member already in the bundle.
+The host is asked to leave out `./.git` and the always-rebuildable names, and
+the same filter runs again on the stream for nested ones. Folders whose
+rebuildability needs a proof (`build`, `dist`, `target`, venvs) travel from
+the host: an archive arrives in no order that could show the tool beside them.
+Both calls are user gestures (`ssh_common::user_dial`).
 
 ## Nothing left out without a word
 
@@ -196,8 +255,11 @@ bundle twice cannot double a total.
 
 - Export is refused for VM projects (above). Carrying a qcow2 overlay is a
   separate feature if it is ever wanted.
-- A remote project's tree on its host is never part of the bundle — only the
-  local mirror is. That is the same rule archive follows.
+- The host's copy of a remote project carries `build`/`dist`/`target`/venv
+  folders even with the skip on (no proof is possible on a stream), and its
+  progress denominator comes from a `find` that ran a moment earlier.
+- A remote project's agents run on the host, in the host's own `$HOME`; their
+  conversations are not in a Tabtivity agent home and do not travel.
 - Progress is emitted per 64 files (`project-export` event); there is no cancel.
 - A file name that is not valid UTF-8 travels under its lossy spelling (the
   zip stores names as text).

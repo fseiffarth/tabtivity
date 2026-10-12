@@ -67,10 +67,13 @@ import { queuePromptForTab } from "../../../stores/agents/agentPrompts";
 import { useTabsStore, type TabEntry } from "../../../stores/tabs";
 import {
   addMark,
-  approveMark,
+  addMarks,
   approveMarks,
+  approveShown,
   canAdd,
+  canAddAll,
   canReplace,
+  clearAll as clearLayerAll,
   clearPage as clearLayerPage,
   clearSent as clearLayerSent,
   commit,
@@ -78,22 +81,54 @@ import {
   hasSent,
   isEmpty,
   markedPages,
+  markGroups,
   markSent,
+  markSentSome,
   mintRound,
+  onlyMarks,
   redo as redoHistory,
+  removeMarks,
   replaceMark,
+  restyleMarks,
+  setComment,
   startHistory,
   tickedMarks,
+  tickGroups,
   undo as undoHistory,
   type History,
   type Layer,
   type Mark,
   type MarkColor,
+  STAMP_SYMBOLS,
+  type StampSymbol,
   type TextMark,
   type TickedMark,
+  type MarkGroup,
+  type TickGroup,
 } from "../../../../mobile-web/src/markup/layer";
+import type { TextRun } from "../../../../mobile-web/src/markup/findText";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { markupPagePicture } from "./markupPage";
+import { pageTextItemBoxes } from "./pageText";
+import { tickCaption, type TickCaption } from "./PdfMarkupTicks";
+import {
+  applyPreset as applyPenPreset,
+  colorOf,
+  nextStyle,
+  PRESSURE_CURVES,
+  readPenPrefs,
+  resetPresets as resetPenPresets,
+  savePreset as savePenPreset,
+  stepSize as stepPenSize,
+  TEXT_MARK_MODES,
+  withColor,
+  writePenPrefs,
+  type EraserMode,
+  type PenPrefs,
+  type PenSize,
+  type PenStyle,
+  type TextMarkMode,
+} from "../../../../mobile-web/src/markup/pen";
 import { layerKey, loadLayer, saveLayer, stale, type Fingerprint } from "../../../../mobile-web/src/markup/store";
 import {
   canApply,
@@ -110,7 +145,7 @@ import {
 /** When a tab's dialog is read a second time after its wait began. */
 const DIALOG_REREAD_MS = 1_000;
 
-export type MarkupTool = "ink" | "box" | "text" | "eraser";
+export type MarkupTool = "ink" | "box" | "text" | "stamp" | "textmark" | "select" | "eraser";
 
 /** A note being typed: where it goes, and which existing note it replaces. */
 export type NoteDraft = {
@@ -123,6 +158,13 @@ export type NoteDraft = {
   color: MarkColor;
   size: number;
 };
+
+/** The select tool's marks: positions in `layer.pages[n].marks`, the unsent
+ *  marks only — so a sent mark is never selected. */
+export type MarkSelection = { n: number; indices: readonly number[] };
+
+/** A comment being typed for the one selected ink, box or stamp mark. */
+export type CommentDraft = { n: number; index: number; text: string };
 
 /** An agent tab of the project a Submit can go to. */
 export type MarkupTarget = { scheduleTargetId: string; label: string; ptyId: string };
@@ -192,11 +234,15 @@ export type MarkupRoundUndo = {
 };
 
 /** The sent marks the agent ticked off (`markup_done`), while marking with
- *  sent marks shown: `approve` removes one (an undoable edit) — `mark` is the
- *  object its badge was drawn for — `approveAll` every one listed. */
+ *  sent marks shown, and the same marks grouped by nearness (`tickGroups`),
+ *  one badge each: `approve` removes a group (an undoable edit) — `marks` are
+ *  the objects its badge was drawn for — `approveAll` every one listed. */
 export type MarkupTicks = {
   marks: TickedMark[];
-  approve: (page: number, index: number, mark: Mark) => void;
+  groups: TickGroup[];
+  /** A group's words at Submit and now, where both are read and differ. */
+  captions: ReadonlyMap<TickGroup, TickCaption>;
+  approve: (page: number, marks: readonly Mark[]) => void;
   approveAll: () => void;
 };
 
@@ -209,17 +255,38 @@ export type MarkupEdit = {
   showSent: boolean;
   tool: MarkupTool;
   color: MarkColor;
+  /** The pen bar's choices: the pen's style and size, the eraser's mode. */
+  pen: PenPrefs;
   /** A Submit is uploading: drawing waits. */
   busy: boolean;
   note: NoteDraft | null;
   /** Adds a finished mark; `false` when the layer is at the backend's ceiling. */
   add: (n: number, size: [number, number], mark: Mark) => boolean;
+  /** Adds several marks as one undo step (a text-mark drag's lines). */
+  addAll: (n: number, size: [number, number], marks: readonly Mark[]) => boolean;
   scratch: (next: Layer | null) => void;
   commit: (next: Layer) => void;
   openNote: (draft: NoteDraft) => void;
   editNote: (text: string) => void;
+  editNoteColor: (color: MarkColor) => void;
   saveNote: (text: string | null) => void;
   cancelNote: () => void;
+  /** Page `n`'s text runs for the text-mark tool: `undefined` until read
+   *  (`wantText` asks), `null` when they could not be, `[]` on a page with
+   *  no text. */
+  text: (n: number) => readonly TextRun[] | null | undefined;
+  wantText: (n: number) => void;
+  /** The select tool's marks, while they stand on the committed layer. */
+  selection: MarkSelection | null;
+  select: (n: number, indices: readonly number[]) => void;
+  clearSelection: () => void;
+  /** Commits a change to the selected marks (a move) and keeps them selected. */
+  commitSelection: (next: Layer) => void;
+  comment: CommentDraft | null;
+  editComment: (text: string) => void;
+  /** `null` removes the comment. */
+  saveComment: (text: string | null) => void;
+  cancelComment: () => void;
 };
 
 export function usePdfMarkup({
@@ -264,8 +331,11 @@ export function usePdfMarkup({
   const [storedFingerprint, setStoredFingerprint] = useState<Fingerprint | null>(null);
   const [changed, setChanged] = useState(false);
   const [fingerprint, setFingerprint] = useState<Fingerprint | null>(null);
-  const [tool, setToolState] = useState<MarkupTool>("ink");
-  const [color, setColor] = useState<MarkColor>("red");
+  /** The pen bar's choices, kept for this window (`markup/pen.ts`). */
+  const [pen, setPen] = useState<PenPrefs>(readPenPrefs);
+  useEffect(() => writePenPrefs(pen), [pen]);
+  const tool = pen.tool;
+  const color = colorOf(pen);
   const [showSent, setShowSent] = useState(true);
   const [note, setNote] = useState<NoteDraft | null>(null);
   const [limitHit, setLimitHit] = useState(false);
@@ -351,7 +421,8 @@ export function usePdfMarkup({
         // Not saved straight back: that would stamp the file's current
         // fingerprint on marks drawn against an older one.
         setStorage("saved");
-        setHistory(startHistory(stored.layer));
+        // The undo steps the record kept come back too (redo never does).
+        setHistory(startHistory(stored.layer, stored.past));
         setStoredFingerprint(stored.fingerprint);
       } else {
         setStorage("saved");
@@ -395,10 +466,12 @@ export function usePdfMarkup({
     pendingSave.current = waiting;
     const layer = history.present;
     const at = fingerprint;
-    void saveLayer(key, layer, at).then((ok) => {
+    void saveLayer(key, layer, at, undefined, history.past).then((ok) => {
       setStorage(ok ? "saved" : "unsaved");
       if (ok) setStoredFingerprint(at);
     });
+    // `history.past` moves with `present`: no dependency of its own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [history.present, fingerprint, loaded, key]);
 
   // ── Targets ───────────────────────────────────────────────────────────────
@@ -422,11 +495,11 @@ export function usePdfMarkup({
   const modelsByTab = useAgentModelsStore((s) => s.byTab);
   const screenModels = useAgentModelsStore((s) => s.screenByTab);
   const targetTab = target && projectId ? tabs?.find((tab) => `${projectId}:${tab.key}` === target.ptyId) : undefined;
+  /** The target's model as the tab bar says it — the strip's model chip. */
+  const targetModelTag = targetTab && projectId ? agentTabModelTag(projectId, targetTab, modelsByTab, screenModels)?.trim() : undefined;
   /** Who the pill says is at work: the target's model by its first word, as
    *  the reader view's working row says it (`Opus is working…`). */
-  const targetModel = targetTab && projectId
-    ? agentTabModelTag(projectId, targetTab, modelsByTab, screenModels)?.trim().split(/\s+/)[0]
-    : undefined;
+  const targetModel = targetModelTag?.split(/\s+/)[0];
 
   // ── The agent's questions (`markup_ask`) ─────────────────────────────────
   const targetId = target?.scheduleTargetId ?? null;
@@ -666,10 +739,113 @@ export function usePdfMarkup({
     setHistory((now) => commit(now, addMark(now.present, n, size, mark)));
     return true;
   }, []);
+  const addAll = useCallback((n: number, size: [number, number], marks: readonly Mark[]) => {
+    if (!marks.length) return false;
+    if (!canAddAll(historyRef.current.present, n, marks)) {
+      setLimitHit(true);
+      return false;
+    }
+    setLimitHit(false);
+    setHistory((now) => commit(now, addMarks(now.present, n, size, marks)));
+    return true;
+  }, []);
   const commitLayer = useCallback((next: Layer) => {
     setScratchLayer(null);
     setHistory((now) => commit(now, next));
   }, []);
+
+  // ── Text runs, read per page as the text-mark tool or a tick's caption
+  // needs them; a new load of the file reads them again.
+  const [runs, setRuns] = useState<{ doc: PDFDocumentProxy | null; pages: Record<number, TextRun[] | null> }>({ doc: null, pages: {} });
+  const runsAsked = useRef<{ doc: PDFDocumentProxy | null; pages: Set<number> }>({ doc: null, pages: new Set() });
+  const wantText = useCallback(
+    (n: number) => {
+      if (!doc || n < 1 || n > doc.numPages) return;
+      if (runsAsked.current.doc !== doc) runsAsked.current = { doc, pages: new Set() };
+      if (runsAsked.current.pages.has(n)) return;
+      runsAsked.current.pages.add(n);
+      void pageTextItemBoxes(doc, n)
+        .then((read): TextRun[] | null => read, () => null)
+        .then((read) => {
+          // A read from a document since replaced is dropped.
+          if (runsAsked.current.doc !== doc) return;
+          setRuns((was) => ({ doc, pages: { ...(was.doc === doc ? was.pages : {}), [n]: read } }));
+        });
+    },
+    [doc],
+  );
+  const runsOf = useCallback(
+    (n: number) => (runs.doc === doc ? runs.pages[n] : undefined),
+    [runs, doc],
+  );
+
+  // ── The select tool's marks: they stand only on the layer they were picked
+  // on — an undo, an erase or a Submit renumbers the marks and drops them.
+  const [selected, setSelected] = useState<{ n: number; indices: readonly number[]; layer: Layer } | null>(null);
+  const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
+  const selection = useMemo<MarkSelection | null>(
+    () =>
+      selected && tool === "select" && selected.layer === history.present && selected.indices.length
+        ? { n: selected.n, indices: selected.indices }
+        : null,
+    [selected, tool, history.present],
+  );
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const select = useCallback((n: number, indices: readonly number[]) => {
+    setCommentDraft(null);
+    setSelected(indices.length ? { n, indices, layer: historyRef.current.present } : null);
+  }, []);
+  const clearSelection = useCallback(() => {
+    setCommentDraft(null);
+    setSelected(null);
+  }, []);
+  const commitSelection = useCallback((next: Layer) => {
+    setScratchLayer(null);
+    setHistory((now) => commit(now, next));
+    setSelected((was) => (was ? { ...was, layer: next } : was));
+  }, []);
+  /** The selection recoloured or restyled — one undo step, still selected. */
+  const restyleSelection = useCallback(
+    (change: { color?: MarkColor; style?: PenStyle }) => {
+      const chosen = selectionRef.current;
+      if (!chosen) return;
+      const next = restyleMarks(historyRef.current.present, chosen.n, chosen.indices, change);
+      if (next !== historyRef.current.present) commitSelection(next);
+    },
+    [commitSelection],
+  );
+  const deleteSelection = useCallback(() => {
+    const chosen = selectionRef.current;
+    if (!chosen) return;
+    setCommentDraft(null);
+    setSelected(null);
+    setHistory((now) => commit(now, removeMarks(now.present, chosen.n, chosen.indices)));
+  }, []);
+  /** A comment card is open only for one selected ink, box or stamp mark. */
+  const comment =
+    commentDraft && selection && selection.n === commentDraft.n && selection.indices.length === 1 && selection.indices[0] === commentDraft.index
+      ? commentDraft
+      : null;
+  const single = selection && selection.indices.length === 1 ? history.present.pages[selection.n]?.marks[selection.indices[0]] : undefined;
+  /** The one selected mark takes a comment (a note says its own words). */
+  const canComment = !!single && single.kind !== "text";
+  const openComment = useCallback(() => {
+    const chosen = selectionRef.current;
+    const mark = chosen && chosen.indices.length === 1 ? historyRef.current.present.pages[chosen.n]?.marks[chosen.indices[0]] : undefined;
+    if (!chosen || !mark || mark.kind === "text") return;
+    setCommentDraft({ n: chosen.n, index: chosen.indices[0], text: mark.comment ?? "" });
+  }, []);
+  const saveComment = useCallback(
+    (text: string | null) => {
+      const draft = commentDraft;
+      setCommentDraft(null);
+      if (!draft) return;
+      const next = setComment(historyRef.current.present, draft.n, draft.index, text);
+      if (next !== historyRef.current.present) commitSelection(next);
+    },
+    [commentDraft, commitSelection],
+  );
   /** `text` null deletes the note being edited. */
   const saveNote = useCallback(
     (text: string | null) => {
@@ -701,21 +877,70 @@ export function usePdfMarkup({
     showSent,
     tool,
     color,
+    pen,
     busy: sending,
     note,
     add,
     scratch: setScratchLayer,
     commit: commitLayer,
+    addAll,
     openNote: setNote,
     editNote: (text) => setNote((draft) => (draft ? { ...draft, text } : draft)),
+    editNoteColor: (next) => setNote((draft) => (draft ? { ...draft, color: next } : draft)),
     saveNote,
     cancelNote: () => setNote(null),
+    text: runsOf,
+    wantText,
+    selection,
+    select,
+    clearSelection,
+    commitSelection,
+    comment,
+    editComment: (text) => setCommentDraft((draft) => (draft ? { ...draft, text } : draft)),
+    saveComment,
+    cancelComment: () => setCommentDraft(null),
   };
 
-  const setTool = useCallback((next: MarkupTool) => {
-    setToolState(next);
-    setColor((was) => (next === "box" && was !== "yellow" ? "yellow" : next === "ink" && was === "yellow" ? "red" : was));
-  }, []);
+  /** Each tool draws in its own remembered colour (`colorOf`). */
+  const setTool = useCallback((next: MarkupTool) => setPen((was) => ({ ...was, tool: next })), []);
+  /** A tool's key pressed: arms it, and pressed again on an armed pen steps
+   *  its style, on an armed eraser switches between rubbing and the area, on
+   *  the text marks steps their mode, on the stamp its symbol. */
+  const pressTool = useCallback(
+    (next: MarkupTool) =>
+      setPen((was) => {
+        if (was.tool !== next) return { ...was, tool: next };
+        if (next === "ink") return { ...was, style: nextStyle(was.style) };
+        if (next === "eraser") return { ...was, eraser: was.eraser === "area" ? "medium" : "area" };
+        if (next === "textmark") return { ...was, textMark: TEXT_MARK_MODES[(TEXT_MARK_MODES.indexOf(was.textMark) + 1) % TEXT_MARK_MODES.length] };
+        if (next === "stamp") return { ...was, stamp: STAMP_SYMBOLS[(STAMP_SYMBOLS.indexOf(was.stamp) + 1) % STAMP_SYMBOLS.length] };
+        return was;
+      }),
+    [],
+  );
+  /** A colour picked: the armed tool's — or, with marks selected, theirs. */
+  const setColor = useCallback(
+    (next: MarkColor) => {
+      if (selectionRef.current) restyleSelection({ color: next });
+      else setPen((was) => withColor(was, next));
+    },
+    [restyleSelection],
+  );
+  const setTextMark = useCallback((mode: TextMarkMode) => setPen((was) => ({ ...was, tool: "textmark", textMark: mode })), []);
+  const setStamp = useCallback((symbol: StampSymbol) => setPen((was) => ({ ...was, tool: "stamp", stamp: symbol })), []);
+  const setSnap = useCallback((snap: boolean) => setPen((was) => ({ ...was, snap })), []);
+  const cyclePressure = useCallback(
+    () => setPen((was) => ({ ...was, pressure: PRESSURE_CURVES[(PRESSURE_CURVES.indexOf(was.pressure) + 1) % PRESSURE_CURVES.length] })),
+    [],
+  );
+  /** Preset `i` (0-based) armed, when there is one. */
+  const applyPreset = useCallback((i: number) => setPen((was) => (was.presets[i] ? applyPenPreset(was, was.presets[i]) : was)), []);
+  const savePreset = useCallback(() => setPen(savePenPreset), []);
+  const resetPresets = useCallback(() => setPen(resetPenPresets), []);
+  const setStyle = useCallback((style: PenStyle) => setPen((was) => ({ ...was, tool: "ink", style })), []);
+  const setSize = useCallback((size: PenSize) => setPen((was) => ({ ...was, size })), []);
+  const setEraser = useCallback((eraser: EraserMode) => setPen((was) => ({ ...was, tool: "eraser", eraser })), []);
+  const stepSize = useCallback((delta: -1 | 1) => setPen((was) => stepPenSize(was, delta)), []);
 
   // ── Submit ────────────────────────────────────────────────────────────────
   /** The marked pages a Submit carries: a page past the end of the PDF (it
@@ -723,14 +948,23 @@ export function usePdfMarkup({
   const marked = markedPages(history.present);
   const sendable = marked.filter((n) => n <= pageCount);
   const leftOut = marked.length - sendable.length;
+  /** The unsent marks by remark, each with a Submit of its own, as they are
+   *  written — the strokes in flight join once they land. */
+  const sendableKey = sendable.join(",");
+  const groups: MarkGroup[] = useMemo(
+    () => markGroups(history.present, sendableKey ? sendableKey.split(",").map(Number) : []),
+    [history.present, sendableKey],
+  );
 
-  const submit = useCallback(async () => {
+  /** Sends every marked page, or with `only` one group of unsent marks
+   *  (`markGroups`: its own Submit button) — the rest stays unsent. */
+  const submit = useCallback(async (only?: { page: number; marks: readonly Mark[] }) => {
     if (!projectId || !target || sending || note) return;
     const reason = (error: unknown) => {
       const code = markupErrorCode(error);
       return t(markupReasonKey(code), { code });
     };
-    const present = history.present;
+    const present = only ? onlyMarks(history.present, only.page, only.marks) : history.present;
     const pages = markedPages(present).filter((n) => n <= pageCount);
     if (!pages.length) return;
     setSending(true);
@@ -739,11 +973,15 @@ export function usePdfMarkup({
     let undo: string | null = null;
     let fellBack: string | null = null;
     const roundId = mintRound();
+    /** Per page, the words under each mark at Submit — the round log keeps
+     *  them for a ✓ group's before/after caption. */
+    const words: Record<number, (string | null)[]> = {};
     try {
       const body: PdfMarkupPage[] = [];
       for (const n of pages) {
         const page = present.pages[n];
         const picture = await markupPagePicture(doc, n, page);
+        if (picture.words) words[n] = picture.words;
         body.push({
           n,
           size: page.size,
@@ -784,8 +1022,14 @@ export function usePdfMarkup({
     // unless a page changed meanwhile (drawing waits, but not every path).
     setScratchLayer(null);
     setHistory((now) => {
+      if (only) {
+        // The group's marks, as long as every one is still on its page.
+        const still = new Set(now.present.pages[only.page]?.marks ?? []);
+        const moving = present.pages[only.page].marks;
+        return startHistory(markSentSome(now.present, only.page, moving, moving.every((mark) => still.has(mark)) ? roundId : undefined, words[only.page]));
+      }
       const asSent = pages.every((n) => now.present.pages[n]?.marks === present.pages[n].marks);
-      return startHistory(markSent(now.present, pages, asSent ? roundId : undefined));
+      return startHistory(markSent(now.present, pages, asSent ? roundId : undefined, words));
     });
     // Only the newest round's undo can run (`holdsUndo`): older ids are dead.
     undoRounds.current.clear();
@@ -941,25 +1185,41 @@ export function usePdfMarkup({
     pendingSave.current = true;
   }, []);
 
-  // ── The agent's ticks: a ✓ on each ticked sent mark, while it shows ──────
+  // ── The agent's ticks: a ✓ on each group of ticked sent marks ───────────
   const ticked = useMemo(
     () => (active && showSent ? tickedMarks(history.present, ticks) : []),
     [active, showSent, history.present, ticks],
   );
-  /** Approves the mark the badge was drawn for, only while it is still that
-   *  mark and still ticked in the layer the change lands on — a second click
-   *  on a gone badge removes nothing else. */
-  const approveTicked = useCallback((page: number, index: number, shown: Mark) => {
-    setHistory((now) => {
-      if (now.present.sent?.pages[page]?.marks[index] !== shown) return now;
-      const still = tickedMarks(now.present, ticksRef.current).some((entry) => entry.page === page && entry.index === index);
-      return still ? commit(now, approveMark(now.present, page, index)) : now;
-    });
+  const tickedGroups = useMemo(() => tickGroups(history.present, ticked), [history.present, ticked]);
+  // Each ✓ group whose words were logged at Submit is compared with the page
+  // as it is now: its text is read for that, on screen only.
+  const captionPages = useMemo(() => {
+    const out = new Set<number>();
+    for (const group of tickedGroups) if (history.present.sent?.log?.some((entry) => entry.words?.[group.page])) out.add(group.page);
+    return [...out];
+  }, [tickedGroups, history.present]);
+  useEffect(() => {
+    if (!visible) return;
+    for (const n of captionPages) wantText(n);
+  }, [visible, captionPages, wantText]);
+  const tickCaptions = useMemo(() => {
+    const out = new Map<TickGroup, TickCaption>();
+    for (const group of tickedGroups) {
+      const caption = tickCaption(history.present, group, runsOf(group.page));
+      if (caption) out.set(group, caption);
+    }
+    return out;
+  }, [tickedGroups, history.present, runsOf]);
+  /** Approves the marks the badge was drawn for, those still on the page and
+   *  still ticked in the layer the change lands on — a second click on a gone
+   *  badge removes nothing else. */
+  const approveTicked = useCallback((page: number, shown: readonly Mark[]) => {
+    setHistory((now) => commit(now, approveShown(now.present, ticksRef.current, page, shown)));
   }, []);
   const approveAllTicked = useCallback(() => {
     setHistory((now) => commit(now, approveMarks(now.present, tickedMarks(now.present, ticksRef.current))));
   }, []);
-  const tickState: MarkupTicks = { marks: ticked, approve: approveTicked, approveAll: approveAllTicked };
+  const tickState: MarkupTicks = { marks: ticked, groups: tickedGroups, captions: tickCaptions, approve: approveTicked, approveAll: approveAllTicked };
 
   const hasMarks = !isEmpty(history.present) || sentShown;
   return {
@@ -970,8 +1230,25 @@ export function usePdfMarkup({
     edit,
     tool,
     setTool,
+    pressTool,
     color,
     setColor,
+    pen,
+    setStyle,
+    setSize,
+    setEraser,
+    stepSize,
+    setTextMark,
+    setStamp,
+    setSnap,
+    cyclePressure,
+    applyPreset,
+    savePreset,
+    resetPresets,
+    restyleSelection,
+    deleteSelection,
+    canComment,
+    openComment,
     showSent,
     setShowSent,
     limitHit,
@@ -981,6 +1258,9 @@ export function usePdfMarkup({
     redo: () => setHistory(redoHistory),
     clearPage: (n: number) => setHistory((now) => commit(now, clearLayerPage(now.present, n, showSent))),
     clearSent: () => setHistory((now) => commit(now, clearLayerSent(now.present))),
+    /** Every page's marks at once — one step, so Undo brings them all back. */
+    clearAll: () => setHistory((now) => commit(now, clearLayerAll(now.present, showSent))),
+    canClearAll: !isEmpty(history.present) || (showSent && hasSent(history.present)),
     /** **Make these changes** fits: the agent is done with a Submit's marks
      *  and asks nothing more. */
     canApply: target !== null && canApply(round) && asks.length === 0,
@@ -992,6 +1272,9 @@ export function usePdfMarkup({
     holdsReload: active && (hasMarks || round !== null),
     targets,
     target,
+    /** The target's tab entry, for its model chip (`PdfMarkupModel`). */
+    targetTab,
+    targetModelTag,
     targetModel,
     chooseTarget: setChosen,
     /** Bring the target agent tab to the front; the tab's prompt strip leads
@@ -1016,6 +1299,7 @@ export function usePdfMarkup({
     failure,
     dismissFailure: () => setFailure(null),
     sendable,
+    groups,
     leftOut,
     submit,
   };

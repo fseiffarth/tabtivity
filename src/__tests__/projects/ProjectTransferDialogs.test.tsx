@@ -31,6 +31,7 @@ import { ProjectImportBundleDialog } from "../../components/projects/ProjectImpo
 import type { BundleInfo, ExportPreview, ProjectEntry } from "../../types";
 import { BRAND, NAMES } from "../../lib/brand";
 import { useBoxesStore } from "../../stores/boxes";
+import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 
 const project: ProjectEntry = {
   id: "p1",
@@ -194,6 +195,7 @@ describe("export dialog", () => {
         includeGit: true,
         includeSession: true,
         includeMirror: true,
+        mirrorSource: "local",
         skipRebuildable: true,
         keepRebuildable: [],
         includeAgentHistory: false,
@@ -267,6 +269,60 @@ describe("export dialog", () => {
     expect(screen.getByText("run/pipe")).toBeTruthy();
     expect(screen.getByText("pipe/socket/device")).toBeTruthy();
     expect(screen.getByText(/3 agent conversation files included/)).toBeTruthy();
+  });
+
+  /** A remote project packs either of its copies; the host is asked only
+   *  once its copy is picked, and only while the project is connected. */
+  it("packs a remote project from the host's copy when picked", async () => {
+    useRemoteStatusStore.setState({ byProject: {}, byHost: {} });
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "preview_project_export") {
+        return Promise.resolve(
+          preview({ remote: true, mirror: "/home/me/mirror", files: 10, bytes: 1024 * 1024 }),
+        );
+      }
+      if (cmd === "preview_host_export") {
+        return Promise.resolve({
+          files: 500,
+          bytes: 50 * 1024 * 1024,
+          gitFiles: 10,
+          gitBytes: 10 * 1024 * 1024,
+          rebuildableFiles: 0,
+          rebuildableBytes: 0,
+        });
+      }
+      return Promise.resolve({
+        path: "/x", bytes: 1, files: 1, payloadBytes: 1, remote: true, notes: [],
+        skipped: [], skippedCount: 0, agentFiles: 0,
+      });
+    });
+    mockSave.mockResolvedValue("/x");
+    await act(async () => {
+      render(<ProjectExportDialog project={project} onClose={() => {}} />);
+    });
+    const host = screen.getByRole("radio", { name: /The host's copy/ }) as HTMLInputElement;
+    expect(host.disabled).toBe(true);
+    expect(screen.getByText(/Connect the project/)).toBeTruthy();
+
+    act(() => useRemoteStatusStore.getState().setSsh("p1", "connected"));
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "preview_host_export")).toBe(false);
+    await act(async () => {
+      await userEvent.click(host);
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("preview_host_export", { projectId: "p1" });
+    expect(screen.getByText(/500 files, 50\.0 MB/)).toBeTruthy();
+    expect(screen.getByText(/About 60\.0 MB before compression/)).toBeTruthy();
+    // The mirror's folder list says nothing about the host's tree.
+    expect(screen.queryByRole("checkbox", { name: "Leave out .venv" })).toBeNull();
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Export…" }));
+    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "export_project",
+      expect.objectContaining({
+        req: expect.objectContaining({ mirrorSource: "host", keepRebuildable: [] }),
+      }),
+    );
   });
 
   it("does nothing when the save dialog is cancelled", async () => {
