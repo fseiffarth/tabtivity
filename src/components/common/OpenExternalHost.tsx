@@ -16,9 +16,11 @@ export function OpenExternalHost() {
   const t = useT();
   if (!pending) return null;
   const { request } = pending;
+  // Keyed per question: a queued one gets a fresh dialog, focus on its
+  // default button, not on the button that answered the previous one.
   if (request.kind === "refused") {
     return (
-      <DialogShell onDismiss={() => answer(false)}>
+      <DialogShell key={pending.id} onDismiss={() => answer(false)}>
         <h2>
           {t("openExternal.refusedTitle", { name: request.name })} <UntestedTag id="openExternalConfirm" />
         </h2>
@@ -33,7 +35,7 @@ export function OpenExternalHost() {
     );
   }
   return (
-    <DialogShell onDismiss={() => answer(false)}>
+    <DialogShell key={pending.id} onDismiss={() => answer(false)}>
       <h2>
         {t("openExternal.title", { name: request.name })} <UntestedTag id="openExternalConfirm" />
       </h2>

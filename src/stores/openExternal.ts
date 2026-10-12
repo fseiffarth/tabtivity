@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 /**
- * The one pending "open this file with the system's default app?" question
+ * The pending "open this file with the system's default app?" questions
  * (threat recheck gap 21, decision C2). A store because the hand-off starts
  * wherever a file has no viewer — the file tree, the file browser, Downloads,
  * terminal path links, Reader change cards, the phone's inbox — and is
@@ -18,23 +18,42 @@ export interface OpenExternalRequest {
   path: string;
 }
 
+interface PendingAsk {
+  /** Distinct per question, so the dialog is built anew for each (its
+   *  default button takes the focus again). */
+  id: number;
+  request: OpenExternalRequest;
+  resolve: (approved: boolean) => void;
+}
+
+let nextAskId = 0;
+
 interface OpenExternalStore {
-  pending: { request: OpenExternalRequest; resolve: (approved: boolean) => void } | null;
+  /** The question on screen. */
+  pending: PendingAsk | null;
+  /** Questions waiting behind it, oldest first. */
+  queue: PendingAsk[];
   ask: (request: OpenExternalRequest) => Promise<boolean>;
   answer: (approved: boolean) => void;
 }
 
 export const useOpenExternalStore = create<OpenExternalStore>((set, get) => ({
   pending: null,
+  queue: [],
   ask: (request) =>
     new Promise<boolean>((resolve) => {
-      // A second question supersedes the first; the first counts as declined.
-      get().pending?.resolve(false);
-      set({ pending: { request, resolve } });
+      // One question per file, in turn: several no-viewer files dropped or
+      // dragged out at once each get theirs. (Superseding the earlier one
+      // declined it unseen, so only the last file of a drop could open.)
+      const entry = { id: ++nextAskId, request, resolve };
+      const { pending, queue } = get();
+      if (pending) set({ queue: [...queue, entry] });
+      else set({ pending: entry });
     }),
   answer: (approved) => {
-    const pending = get().pending;
-    set({ pending: null });
+    const { pending, queue } = get();
+    const [next, ...rest] = queue;
+    set({ pending: next ?? null, queue: rest });
     pending?.resolve(approved);
   },
 }));

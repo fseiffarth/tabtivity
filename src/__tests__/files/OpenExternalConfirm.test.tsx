@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { useWindowsStore, type TrackedWindow } from "../../stores/windows";
 import { useOpenExternalStore } from "../../stores/openExternal";
 import { OpenExternalHost } from "../../components/common/OpenExternalHost";
+import { EmbedPane } from "../../components/embed/EmbedPane";
 import { adaptClientCommand } from "../../lib/transport/clientAdapters";
 import { describeFileErrorKey } from "../../components/embed/fileAccess";
 import type { WsClient } from "../../lib/transport/wsClient";
@@ -41,7 +42,7 @@ function realOpens() {
 afterEach(() => {
   cleanup();
   invokeMock.mockReset();
-  useOpenExternalStore.setState({ pending: null });
+  useOpenExternalStore.setState({ pending: null, queue: [] });
   useWindowsStore.setState({ windows: [] });
 });
 
@@ -112,10 +113,55 @@ describe("openFile asks before the OS opens a file", () => {
     expect(useOpenExternalStore.getState().pending).toBeNull();
   });
 
+  it("asks for each of several files opened at once, in turn", async () => {
+    // A multi-file drop or drag-out opens every no-viewer file together; a
+    // later question used to supersede (decline unseen) the earlier ones.
+    invokeMock.mockImplementation(async (_cmd: string, args?: unknown) => {
+      const { checkOnly, path } = args as { checkOnly?: boolean; path: string };
+      return checkOnly ? null : { ...WIN, id: path, file: path };
+    });
+    render(<OpenExternalHost />);
+    const first = useWindowsStore.getState().openFile("/p/a.xyz");
+    const second = useWindowsStore.getState().openFile("/p/b.xyz");
+    expect(await screen.findByText("Open a.xyz with the system's default app?")).toBeTruthy();
+    const open = screen.getByRole("button", { name: "Open" });
+    open.focus();
+    fireEvent.click(open);
+    expect(await screen.findByText("Open b.xyz with the system's default app?")).toBeTruthy();
+    // The next question starts on Cancel again, not on the Open just pressed.
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect((await first)?.file).toBe("/p/a.xyz");
+    expect((await second)?.file).toBe("/p/b.xyz");
+    expect(realOpens().map(([, args]) => (args as { path: string }).path)).toEqual(["/p/a.xyz", "/p/b.xyz"]);
+    expect(useOpenExternalStore.getState().pending).toBeNull();
+  });
+
   it("other check errors surface as before", async () => {
     invokeMock.mockRejectedValue("/p/gone.xyz: No such file or directory");
     await expect(useWindowsStore.getState().openFile("/p/gone.xyz")).rejects.toBe("/p/gone.xyz: No such file or directory");
     expect(useOpenExternalStore.getState().pending).toBeNull();
+  });
+});
+
+describe("a dropped file's embed tab", () => {
+  it("asks and lets the backend judge instead of running the OS default it resolved", async () => {
+    // `embed_capability` resolves `.js` to WScript.exe on Windows; as a
+    // handler that ran the script unasked, past the launcher refusal.
+    invokeMock.mockRejectedValue("open_refused_launcher");
+    render(
+      <>
+        <EmbedPane path="/p/evil.js" exec="C:\\Windows\\System32\\WScript.exe" projectId="p" visible />
+        <OpenExternalHost />
+      </>,
+    );
+    expect(await screen.findByText("evil.js was not opened")).toBeTruthy();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "open_file",
+      expect.objectContaining({ path: "/p/evil.js", handler: null, checkOnly: true }),
+    );
+    expect(realOpens()).toEqual([]);
   });
 });
 

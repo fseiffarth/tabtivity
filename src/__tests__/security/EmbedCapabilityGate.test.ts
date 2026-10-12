@@ -131,7 +131,9 @@ describe("commitFileDrop — dragged out of the window (detachBounds)", () => {
     commitFileDrop(fileDrag(PASS, g), "p", "/p", bounds);
     expect(openFileMock).toHaveBeenCalledWith(
       "/p/notes.md",
-      "mousepad",
+      // No handler: the capability's `resolved_exec` is the OS default, so the
+      // store asks first and the backend refuses launchers (gap 21, C2).
+      undefined,
       "p",
       "file_drag_out",
       // The external app is placed at the drop rectangle's origin, so it lands
@@ -140,6 +142,18 @@ describe("commitFileDrop — dragged out of the window (detachBounds)", () => {
     );
     // No standalone Tabtivity window was spawned for it.
     expect(useTabsStore.getState().detachedGroupsByScope["p"] ?? []).toHaveLength(0);
+  });
+
+  it("never hands a launcher to the OS default the capability resolved (gap 21, C2)", () => {
+    // Windows resolves `.js` to WScript.exe: passed as an explicit handler it
+    // ran the script with no question and past the launcher refusal.
+    const g = seedGroup();
+    const drag = fileDrag({ os_embeddable: false, app_embeddable: false, resolved_exec: "C:\\Windows\\System32\\WScript.exe" }, g);
+    drag.filePath = "/p/evil.js";
+    drag.fileName = "evil.js";
+    commitFileDrop(drag, "p", "/p", bounds);
+    expect(openFileMock).toHaveBeenCalledTimes(1);
+    expect(openFileMock.mock.calls[0]).toEqual(["/p/evil.js", undefined, "p", "file_drag_out", { x: bounds.x, y: bounds.y }]);
   });
 
   it(`detaches a built-in-viewer file into its own standalone ${BRAND.display} window`, () => {
