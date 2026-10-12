@@ -30,6 +30,41 @@ Tailscale name. To find it, run this on the server and drop the trailing dot:
 tailscale status --json | jq -r .Self.DNSName
 ```
 
+## Optional — Run the server in a virtual machine
+
+If the server would share a machine with your own desktop, put it in a
+virtual machine. The installer then changes the VM, not your computer (the
+`/proc` line, kernel settings, system accounts), the server gets a hard disk
+and memory limit, and you can roll a failed install back. On the host
+machine:
+
+```bash
+sudo apt install virt-manager
+# Download the Ubuntu 24.04 *server* ISO, then:
+sudo virt-install --name tabtivity-server --memory 16384 --vcpus 6 \
+    --disk size=250,format=qcow2 --os-variant ubuntu24.04 \
+    --cdrom ~/Downloads/ubuntu-24.04-live-server-amd64.iso
+sudo virsh autostart tabtivity-server     # start it whenever the host boots
+```
+
+Adjust memory (MB), CPUs and disk (GB) to taste. The disk file grows as it
+fills, up to the size given. Install Ubuntu in the window that opens, then
+take a snapshot:
+
+```bash
+sudo virsh snapshot-create-as tabtivity-server os-installed
+```
+
+Inside the VM, install Tailscale and log in. The VM joins your tailnet as a
+machine of its own, and `HOST.TAILNET.ts.net` below is the VM's name, not
+your computer's. Then follow the steps below inside the VM. Take a second
+snapshot before step 4; `sudo virsh snapshot-revert tabtivity-server <name>`
+goes back to one.
+
+**Limit:** a VM has no GPU unless you set up PCI passthrough, so the shared
+local models run on the CPU only. If local models matter, use a dedicated
+machine instead.
+
 ## Step 1 — Install the packages
 
 ```bash
