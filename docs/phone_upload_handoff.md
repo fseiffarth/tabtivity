@@ -5,8 +5,9 @@ step appends its own section.
 
 ## Step A
 
-Commit: see `git log --oneline -- src-tauri/src/services/mobile_control/uploads.rs`
-(the `feat(mobile): phone uploads service …` commit on `phone-upload`).
+Commit: `a3d10611` (`feat(mobile): phone uploads service — add-only writes
+into a browsed folder`) on `phone-upload`; this handoff's sha line in the
+`docs(mobile)` commit after it.
 
 ### What landed
 
