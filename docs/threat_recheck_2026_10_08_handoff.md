@@ -2999,3 +2999,157 @@ warnings). `scripts/brand-check.sh` ok, `scripts/privacy-check.sh` clean,
   raw `open_refused_launcher` code in their error line.
 - The `ExecTrustHost` store has the same supersede pattern; two gated
   actions at once decline the first unseen (not this step's code).
+
+## Agent step 5 — implementer (gaps 25, 33) — 2026-10-12
+
+**Commit:** `0e98f604` fix(mail,ollama): mail AI and local reads only on a
+local model; keep the taint (gaps 25, 33) · this handoff commit.
+
+**Files:** `src-tauri/src/commands/ollama.rs` (`ollama_http_at` split out of
+`ollama_http_within`; `is_cloud_name`; `is_remote_entry` also honours the tag;
+`MODEL_NOT_RUNNING`, `model_is_local_in` (pure), `LocalityCache` (60 s,
+definite verdicts only), `model_is_local_at`; `#[cfg(test)] test_tags`
+thread-local `/api/tags` stand-in, unset = no server; `sanitize_alias` now
+`pub(crate)`), `services/mail_ai.rs` (`preflight` + `chat_with`;
+`cloud_model_reason`, `unlisted_model_reason`; module doc),
+`services/root_mcp.rs` (`Identity::model`; `local_model_of`; `grant_root`
+records it; `model_read_mail_marker`, `record_read_mail(state, tab, model) ->
+io::Result<()>`, `marker_present`, `model_read_mail`, `spawn_read_mail`;
+`local_model_confirmed` used by `handle_message` for `root_mcp_local_only`
+and `root_mcp_mail_local_only`; test helpers `test_session_model`,
+`TEST_LOCAL_MODEL`), `services/root_mcp_mail.rs` (`LOCAL_READ_CLOUD`,
+`LOCAL_READ_UNRECORDED`; read gate), `services/root_mcp_review.rs` (test call
+site), `src/stores/agents/ollamaActivity.ts` (`LocalModelInfo.remote`),
+`src/components/layout/LocalModelMenu.tsx` (auto-assign skips `remote`),
+`src/components/models/ModelsHubSections.tsx` (cloud model's Mail chip
+disabled unless on, with the reason; `UntestedTag`), `src/lib/untested.ts`
+(`localModelMenu.mailCloud`), `src/lib/i18n.ts` + de/es/fr/it
+(`localModel.mailCloudTitle`), `docs/threat_model.md` (rows 25, 33
+**Fixed, not live-verified.**; the incoming-mail and root-console rows),
+`docs/context/root_console.md` ("Local means the model", per-model taint and
+its trade-off, refusal names), `docs/filemap_backend.md` (`ollama.rs`,
+`root_mcp.rs`, `root_mcp_mail.rs`), `docs/filemap_frontend.md`
+(`LocalModelMenu.tsx`), `docs/help/local-models.md`,
+`docs/help/mail-calendar.md`.
+
+**Tests added:** `ollama.rs`: `cloud_names_are_judged_by_their_tag`,
+`a_model_is_local_only_when_the_list_says_so` (local, `-cloud`, a cloud entry
+copied under a plain name, unlisted, empty body, `{"models":[]}`, read error,
+no server), `locality_verdicts_are_kept_a_minute_and_failures_not_at_all`,
+`the_test_tags_hook_fails_closed_until_set`, plus a tag-only case in
+`remote_entries_name_a_remote`. `mail_ai.rs`:
+`a_cloud_mail_model_is_refused_before_the_chat_request` (`chat_with` answers
+the cloud reason, never reaching capabilities or `/api/chat`; default model
+too; unlisted/unreadable → unlisted reason; no server → `not_running`;
+loopback still first). `root_mcp.rs`:
+`a_local_tab_records_its_model_and_starts_with_the_models_taint` (the
+`local_model_of` table; `grant_root` records model and endpoint; after one
+tab's read, a new tab of the model — raw or alias-only — starts tainted,
+another model does not, a cloud agent records no model),
+`local_only_switches_refuse_a_local_tab_on_a_cloud_model` (cloud, unlisted
+and no-model tabs refused under each switch; the installed model served; no
+server refuses). `root_mcp_mail.rs`:
+`local_reads_refuse_a_cloud_or_unconfirmed_model` (five models × search/read
+→ `LOCAL_READ_CLOUD`, nothing latched in memory or on disk, drafts still
+work; unreadable list / empty body / no server refused; the installed model
+reads and writes both markers),
+`a_read_whose_taint_marker_cannot_be_written_is_refused` (state is a file →
+`LOCAL_READ_UNRECORDED`, in-memory latch set). `LocalModelMenu.test.tsx`: a
+sole resident cloud model gets no roles; a local one beside a cloud one gets
+them; the cloud model's Mail chip is disabled with the reason, the local
+one is not. The existing local-read fixture (`local_reader`) now sets the
+tags stand-in and writes markers into its temp dir.
+
+**Gates (at `0e98f604`):** `npm run build` ok; `npm test` 802 files / 8058
+tests passed; `cargo test --workspace` 4273 passed, 0 failed, 4 ignored;
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`
+3775 + 1 passed, 4 ignored (no flake); `npm run lint` (via `rtk proxy`) 0
+errors, 28 warnings (unchanged); the three clippy gates clean; Windows
+`clippy --target x86_64-pc-windows-msvc --all-targets -D warnings` clean
+(no path/spawn/platform `cfg` code touched, so the `cargo check` and
+`aarch64-apple-darwin` checks were not run); `scripts/brand-check.sh` ok;
+`scripts/privacy-check.sh` clean; `npm run untested -- check` agrees;
+`git diff --check` clean. `npm run backend:stale` not run (main agent at
+landing). The commit hook printed "MOBILE BUNDLE IS STALE" — no
+`mobile-web/` file is in this step; it predates it.
+
+**Choices:**
+- One gate for both paths: `model_is_local_at(addr, model)` asks the
+  endpoint that will run the model — the settings' loopback address for the
+  mail assistant, the spawn-recorded endpoint for a tab (`ollama_http_at`),
+  not today's `ollama_host`. 10 s read timeout. Only `Ok` and
+  `model_not_local` are cached (keyed by endpoint and model), so a server
+  that comes up or a model just pulled is seen at once.
+- `is_cloud_name` (`:cloud` or `…-cloud` tag) is a second opinion beside
+  the list's `remote_*` fields, checked before the list is read; it also
+  feeds `is_remote_entry`, so the phone load and the brain menu's `remote`
+  flag agree. A plain-named copy of a cloud model is caught by the fields.
+- `mail_ai::chat` maps no server to the `not_running` sentinel (the 🧠 UI
+  branches on it), a cloud model to its own reason, anything else to the
+  unlisted reason.
+- `local_model_of`: raw `TABTIVITY_LOCAL_MODEL` wins; a raw/alias pair that
+  disagrees, an alias no chipped model has, or one two models share is
+  `None` (the tab then reads nothing). A local-model token always wears the
+  MCP chip, so mapping the alias through `ollama_mcp_models` covers restored
+  alias-only tabs.
+- Read gate order: switch → loopback endpoint → model confirmed →
+  latch in memory → write markers (refuse on error). A session-less
+  local-model call (none exists outside tests) has no model and is refused.
+- Model marker key: hash of `sanitize_alias(model)` under
+  `root_mcp/read_mail_model/`. `marker_present` treats anything but
+  `NotFound` as present (fail closed), for the tab marker too.
+- Sibling, same hazard, fixed: `root_mcp_local_only` / `root_mcp_mail_local_only`
+  served any `Caller::LocalModel` tab, a Vibe tab on a `-cloud` model
+  included. `handle_message` now asks `local_model_confirmed` (the same
+  gate, spawn endpoint + model): unconfirmed → "MCP access unavailable"
+  under the first, `MAIL_LOCAL_ONLY` for mail tools under the second. Only
+  asked while a switch is on.
+
+**Gotchas:**
+- Any test that drives a local-model mail read now needs
+  `commands::ollama::test_tags::set(Some(body))` on its thread (unset reads
+  as no server) and a writable `Stores::state` (the old fixture's
+  `/nonexistent` now refuses the read with `LOCAL_READ_UNRECORDED`).
+- `test_session_with(Caller::LocalModel, …)` records `TEST_LOCAL_MODEL`
+  (`llama3:latest`); use `test_session_model` for another or none.
+- The cache is skipped entirely under `cfg(test)` (the stand-in answers
+  first), so `LocalityCache` is tested on its own.
+
+**Flagged for user:**
+- Behaviour change: with a Mail role (or default model) set to an Ollama
+  cloud model, every mail AI action — summarise, formalise, event/task
+  extraction, auto-classify — now answers "…is an Ollama cloud model…"
+  instead of running. A model Ollama does not list (typo, deleted) answers
+  the unlisted reason. The Mail chip of a loaded cloud model is greyed out.
+- Behaviour change (gap 33 trade-off, as planned): once any tab of a local
+  model reads mail, every later tab of that model starts tainted — all its
+  calendar/board writes stage and its drafts are reader drafts — until you
+  delete the marker under `<state>/root_mcp/read_mail_model/` by hand. There
+  is no "clear conversations" action to hang it on; say if you want one
+  (e.g. in the brain menu), or a narrower key.
+- Behaviour change (sibling): with "keep the tools local" or "mail only for
+  local models" on, a Vibe tab on a cloud model (or one whose model Ollama
+  does not list, or while Ollama is down) gets no tools / no mail tools.
+- Residuals: a verdict is reused up to a minute (a same-name swap to a cloud
+  copy inside it is missed); the `-cloud` name rule could refuse a
+  hand-named local model with that tag; a remote (non-loopback) endpoint
+  under `root_mcp_local_only` is judged by its own `/api/tags`.
+- Not verified live; the Mail chip has the `localModelMenu.mailCloud`
+  untested pill.
+
+**Live click-through (user only):**
+1. Load a build with this backend, mail client on, a local model loaded and
+   set as Mail: Summarise a mail — works as before.
+2. `ollama pull gpt-oss:120b-cloud` (signed in to Ollama), load it: its Mail
+   chip is greyed with "…is an Ollama cloud model…"; if it is the only
+   loaded model, it is not given the roles.
+3. Set the Mail role to it via `settings.json` (`ollama_roles.mail`):
+   Summarise answers the cloud refusal; nothing reaches ollama.com (watch
+   `ollama serve`'s log).
+4. With "Let local models read mail" on, give the cloud model the MCP chip,
+   open a Mistral Vibe tab on it in the root console and ask it to search
+   mail: refused with "…could not confirm that this tab's model is one…".
+5. On an installed local model's tab, read a mail; open a *new* tab of the
+   same model and add a to-do: it stages (tainted). A tab of another model
+   does not.
+6. Turn "keep the tools local" on; the cloud-model Vibe tab gets no tools.
