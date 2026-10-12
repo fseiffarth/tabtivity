@@ -3236,3 +3236,164 @@ errors, 28 warnings (unchanged); the three clippy gates clean;
    rule on a hand-named local model; remote endpoint judged by its own
    list). With `26be0efe` the taint trade-off widens slightly: an open tab
    of the model also starts staging the moment another tab reads mail.
+
+## Agent step 6 — implementer (gaps 27, 34, E3, CalDAV staging) — 2026-10-12
+
+**Commit:** `58f8f450` fix(root_mcp,mail): mail-derived rows served external;
+CalDAV writes always stage; draft filing binds agent files (gaps 27, 34) ·
+this handoff commit.
+
+**Files:** `src-tauri/src/services/root_mcp.rs` (`foreign_calendar`,
+`event_from_mail`, `event_external`, `task_external`; `event_view` and
+`task_view(task, data)` are the one row view; `task_change` +
+`task_upsert(stores, task)`; `calendar_add_event` and `todo_move` receipts
+through the views; `calendar_list`/`todo_list` descriptions; `refusal_reason`;
+tests), `services/root_mcp_review.rs` (`caldav_calendar_ids`,
+`touches_caldav`; `call`: `off` reads direct, `off` writes take the capture
+path; `automatic` per level `&& !touches_caldav`; `CONFLICT`/`FAILED` now
+`pub(crate)`, new `PENDING_LIMIT`, `OUTSIDE_GRANT`; fixture `mode` forgets the
+log when leaving `off`; tests), `commands/root_mcp.rs` (root lane audits with
+`audit_reason` + `refusal_reason`), `commands/calendar.rs` (`FROM_MAIL_KEY`,
+`keep_from_mail` in `update_event_at` and the CalDAV event merge; tests),
+`commands/caldav.rs` (`accounts_path_in(state)`), `services/mail_store.rs`
+(`file_agent_drafts` compares agent rows; test),
+`src/components/mail/MailAiMessageActions.tsx` (stamp at auto-create and the
+dialog's `saveEvent`), `src/types/index.ts` (`CalendarEvent.from_mail`,
+`EventMailLink`), `src/lib/calendar/calendarClipboard.ts` (copy keeps
+`from_mail`), `src/lib/i18n.ts` + de/es/fr/it (`rootReview.settingHelp`: CalDAV
+changes always wait for review), tests
+`src/__tests__/mail/MailAiEventProvenance.test.tsx` (new),
+`calendar/CalendarEventMove.test.tsx`, `calendar/CalendarCopyPaste.test.tsx`;
+docs `threat_model.md` (rows 27, 34 **Fixed, not live-verified.**; root
+console row), `context/root_console.md` (row view, staged writes / `off`,
+CalDAV staging, audit categories), `context/caldav.md` (how an agent row
+reaches the server; why it stages), `filemap_backend.md` (`root_mcp.rs`,
+`root_mcp_review.rs`, `mail_store.rs`, `commands/calendar.rs`),
+`filemap_frontend.md` (`calendarClipboard.ts`).
+
+**Tests added:** Rust — `root_mcp::mail_derived_rows_read_as_external`
+(`from_mail` event, `mail` card, card of a `from_mail` event, card in a
+read-only calendar: `external`, URLs gone, title/notes kept; own event, card
+of an own event and a plain card untouched; `todo_update`,
+`calendar_update_event` and `todo_move` receipts external; the stamp survives
+an agent edit), `root_mcp::root_lane_refusals_are_audited_under_fixed_categories`
+(every fixed text, a tool's own words → `invalid_or_unavailable`, a narrowed
+tool through `handle_message`), `root_mcp_review::a_caldav_write_stages_at_every_level`
+(`off`/`destructive`/`all`: edit of a `caldav_href` card, card and event into
+an account-synced calendar all stage, store byte-identical, approving pushes
+to the resource), `under_off_a_write_without_a_server_still_lands_at_once`
+(applied, change emitted, a delete too, Undo restores),
+`an_unreadable_accounts_file_stages_the_write` (broken JSON stages; no file
+does not), `mail_store::approving_refuses_a_draft_whose_agent_files_changed`
+(swap/add/drop refused, same filed, a changed chip refused, shown afresh
+files), `commands::calendar::a_mail_stamp_survives_edits_and_merges` (edit
+dropping or nulling it; merge whose server copy sends `from_mail: null`),
+`calendar_json_without_the_mail_stamp_round_trips` (old rows gain no key, a
+stamped row and a `mail` card round-trip). Checked that the staging and
+gap 34 tests fail with the fix disabled. Frontend — both creation points stamp
+`{message_id, account_id}`; a dialog edit plus a store move of a stamped event
+keeps it; a copy carries it and an unstamped copy has no key.
+Existing tests adjusted: four taint tests now expect `staged: false` (not an
+absent key) under `off`; the two synced-move tool tests in `root_mcp.rs` call
+the tool past the review layer (`call_unreviewed`), since through review they
+now stage.
+
+**Gates (at `58f8f450`):** `npm run build` ok; `npm test` 803 files / 8062
+tests passed; `cargo test --workspace` 4283 passed, 0 failed, 4 ignored;
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`
+3785 + 1 passed, 4 ignored (no flake); `npm run lint` (via `rtk proxy`) 0
+errors, 28 warnings (unchanged); the three clippy gates clean;
+`scripts/brand-check.sh` ok; `scripts/privacy-check.sh` clean (staged);
+`npm run untested -- check` agrees; `git diff --check` clean. No path, spawn
+or platform `cfg` code touched: Windows and `aarch64-apple-darwin`
+cross-checks not run. `npm run backend:stale` not run (main agent at
+landing). The commit hook printed "MOBILE BUNDLE IS STALE" — no `mobile-web/`
+file is in this step.
+
+**Choices:**
+- Followed the plan's **Chosen** items: one view for every caller (no
+  cloud/local branch); `off` writes are logged `applied` and undoable, a
+  destructive tool included (they get `undo: true`, unlike `destructive`
+  where only non-destructive tools apply).
+- `off` reads still go straight to the real store (no sandbox), so a tab under
+  `off` does not see its own staged CalDAV writes in `calendar_list` until
+  approved; the write's reply says `staged: true`. Writes rebuild the sandbox,
+  so later writes build on the pending ones.
+- `touches_caldav` reads `accounts.json` only when a row has a calendar id and
+  no `caldav_href` already decided it; a `calendar` row is matched by its own
+  `id`. Any account ref counts (read-only refs and `allow_write: false`
+  included: such a calendar is read-only locally anyway).
+- `from_mail` presence = key present and not `null`. Sticky on the backend
+  (`keep_from_mail`) in `update_event_at` and the CalDAV event merge, where the
+  stored stamp now wins over an incoming key (`carry_extra` alone let a server
+  copy carrying `from_mail: null` shadow it).
+- `refusal_reason` matches only fixed texts by prefix; the root lane's
+  outcome is now "refused" exactly when a reason exists (same set as the old
+  `failed` test).
+- Gap 34: `seen()` still clears the JSON `staged` — the panel's copy carries
+  the table's rows (`mail_agent_drafts`), the JSON a mirror that a user's own
+  pick does not rewrite, which is why it was cleared. The agent rows are
+  compared separately, table vs shown, on `(staged_id, filename, mime, size,
+  source)`, sorted.
+
+**Sibling bugs fixed (same hazard):**
+- A card in a read-only (subscribed) calendar was served as the user's own
+  (`todo_list` checked only `imported`); events already treated read-only as
+  external. Cards now follow the event rule.
+- A card made from an appointment in a read-only/imported calendar now reads
+  external too (its title is that event's).
+- Copy/paste of a mail-made event dropped the stamp (a laundering path);
+  `copyOfOccurrence` now carries it.
+- `calendar_add_event`'s receipt bypassed `event_view` (raw `view`); it and
+  every card receipt now go through the views.
+
+**Gotchas:**
+- `Fixture::mode` in `root_mcp_review` tests now deletes the proposal log when
+  switching away from `off`: an `off` phase is setup, and `off` writes are
+  logged. A test that wants to inspect `off`-logged rows must not call
+  `mode()` afterwards (write `settings.json` directly).
+- `root_mcp` test `Fixture::call` runs with review `off`, so any test that
+  seeds a `caldav_href` row and expects `changes` from a write must use
+  `call_unreviewed`.
+- `build.rs` parses `commands/calendar.rs`: a raw string containing `"#`
+  (a colour) needs `r##"…"##` or the build script panics with "expected `;`".
+
+**Flagged for user:**
+1. Behaviour change (planned): with review `off`, agent calendar/board writes
+   now appear in the review log as applied (with Undo), and a write to a
+   CalDAV-synced calendar waits for ✓ like at the `all` level. The setting's
+   help says so in all five languages.
+2. Behaviour change: `off` writes are now bound by the per-proposal row limit
+   (`MAX_ROWS`) and refused at the pending cap (100 per tab / 500), as
+   `destructive` already was. A huge move under `off` now answers "split it".
+3. Behaviour change (E3, every caller): mail-derived events/cards and cards
+   in read-only calendars lose their URLs in the agent's view (`[link]`),
+   local-model tabs included.
+4. Residuals: the title and notes still reach a cloud agent (marked, not
+   withheld — the decision); a card from a mail-derived event loses the mark
+   once that event is deleted (live link check); events made from mail before
+   this build carry no stamp; `off` reads do not show the tab's own staged
+   CalDAV writes; gap 34 compares metadata, not bytes (an agent cannot reuse
+   a staged id).
+5. The audit view shows the new categories raw (`access_narrowed`, …), like
+   the other lanes' — no i18n.
+
+**Live click-through (user only):**
+1. Mail AI on, a local Mail model: on a message press "Add to calendar
+   (local)" and Save. In a cloud root tab ask "what's on my calendar that
+   day?": the event comes back marked external; a URL in its title shows as
+   `[link]`. Edit the event in the calendar, ask again: still external.
+2. Turn a mail into a card ("card from mail" on the board's mail rail); ask
+   the root agent for the board: the card is external. Make a card from the
+   mail-made event (agenda rail): external too. An ordinary card is not.
+3. Root review level `off`: ask the agent to add a to-do — it lands at once
+   and appears in ✓ Approvals as applied with Undo; Undo removes it.
+4. With a CalDAV account syncing a calendar (push on), level `off` or
+   `destructive`: ask the agent to add an event to that calendar — it waits
+   in ✓ Approvals ("staged"); nothing reaches the server until ✓, then it is
+   pushed. Same for editing an event that came from the server.
+5. Let an agent write a mail draft with an attachment; open ✓ Approvals; have
+   the agent replace the attachment; press ✓ on the draft — refused ("changed
+   since they were shown"); after the panel refreshes, ✓ files it.
+6. Settings → MCP security → audit: a refused call (e.g. a tool you narrowed
+   in session access) shows `access_narrowed` as its reason.
