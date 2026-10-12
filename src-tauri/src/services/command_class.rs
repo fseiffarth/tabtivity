@@ -813,6 +813,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("export_project", Core),
     ("import_project_export", Core),
     ("inspect_project_export", Core),
+    ("preview_host_export", Core),
     ("preview_project_export", Core),
     // commands/python.rs
     ("python_interpreter_for", Core),

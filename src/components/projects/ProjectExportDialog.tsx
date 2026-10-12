@@ -12,8 +12,11 @@ import type {
   ExportPreview,
   ExportProgress,
   ExportReport,
+  HostTally,
+  MirrorSource,
   ProjectEntry,
 } from "../../types";
+import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
 
@@ -54,6 +57,16 @@ export function ProjectExportDialog({
   const [includeAgentHistory, setIncludeAgentHistory] = useState(false);
   /** Rebuildable folders the user unticked: carried despite the skip. */
   const [kept, setKept] = useState<Set<string>>(() => new Set());
+  /** Remote projects: pack this machine's mirror, or the host's own tree. */
+  const [mirrorSource, setMirrorSource] = useState<MirrorSource>("local");
+  const [hostTally, setHostTally] = useState<HostTally | null>(null);
+  const [hostError, setHostError] = useState("");
+  // The host is only ever asked while its connection is up: an SSH command
+  // against a dead session can hang the dialog.
+  const hostConnected = useRemoteStatusStore(
+    (s) => s.byProject[project.id]?.ssh === "connected",
+  );
+  const fromHost = !!preview?.remote && mirrorSource === "host";
 
   const toggleKept = (path: string) =>
     setKept((prev) => {
@@ -79,6 +92,24 @@ export function ProjectExportDialog({
     };
   }, [project.id]);
 
+  // The host's tree is measured only once that copy is picked.
+  useEffect(() => {
+    if (mirrorSource !== "host") return;
+    if (!hostConnected) {
+      setMirrorSource("local");
+      return;
+    }
+    if (hostTally) return;
+    let alive = true;
+    setHostError("");
+    invoke<HostTally>("preview_host_export", { projectId: project.id })
+      .then((tally) => alive && setHostTally(tally))
+      .catch((e) => alive && setHostError(String(e)));
+    return () => {
+      alive = false;
+    };
+  }, [mirrorSource, hostConnected, hostTally, project.id]);
+
   // Progress for a tree that can take minutes: a bundle is written file by
   // file, and a dialog that only says "Exporting…" for three minutes is
   // indistinguishable from one that has hung.
@@ -96,6 +127,15 @@ export function ProjectExportDialog({
   const estimate = useMemo(() => {
     if (!preview) return 0;
     const history = includeAgentHistory ? preview.agentHistoryBytes : 0;
+    if (fromHost) {
+      if (!hostTally || !includeMirror) return history;
+      return (
+        hostTally.bytes +
+        (includeGit ? hostTally.gitBytes : 0) +
+        (skipRebuildable ? 0 : hostTally.rebuildableBytes) +
+        history
+      );
+    }
     const rebuildable = skipRebuildable
       ? preview.rebuildableDirs
           .filter((dir) => kept.has(dir.path))
@@ -104,7 +144,16 @@ export function ProjectExportDialog({
     const tree = preview.bytes + (includeGit ? preview.gitBytes : 0) + rebuildable;
     const carried = preview.remote ? includeMirror : includeFiles;
     return (carried ? tree : 0) + history;
-  }, [preview, includeFiles, includeGit, includeMirror, skipRebuildable, kept, includeAgentHistory]);
+  }, [preview, fromHost, hostTally, includeFiles, includeGit, includeMirror, skipRebuildable, kept, includeAgentHistory]);
+
+  /** The sizes the git and rebuildable switches show: the host's when its
+   *  copy is the one packed. */
+  const gitBytes = fromHost ? (hostTally?.gitBytes ?? 0) : (preview?.gitBytes ?? 0);
+  const hasGit = fromHost ? !hostTally || hostTally.gitFiles > 0 : (preview?.gitFiles ?? 0) > 0;
+  const rebuildableBytes = fromHost
+    ? (hostTally?.rebuildableBytes ?? 0)
+    : (preview?.rebuildableBytes ?? 0);
+  const mirrorUnavailable = !!preview?.mirrorMissing && !fromHost;
 
   const blockedReason = preview?.blocked
     ? t(`transfer.blocked.${preview.blocked}` as TranslationKey)
@@ -131,8 +180,9 @@ export function ProjectExportDialog({
           includeGit,
           includeSession,
           includeMirror,
+          mirrorSource,
           skipRebuildable,
-          keepRebuildable: skipRebuildable ? [...kept] : [],
+          keepRebuildable: skipRebuildable && !fromHost ? [...kept] : [],
           includeAgentHistory,
         },
       });
@@ -176,25 +226,74 @@ export function ProjectExportDialog({
             <p className="settings-help">{t("transfer.exportIntro")}</p>
 
             {preview.remote ? (
-              <label className="container-settings-toggle">
-                <span>
-                  {t("transfer.includeMirror")}
-                  <span className="settings-help">
-                    {preview.mirrorMissing
-                      ? t("transfer.mirrorMissing")
-                      : t("transfer.includeMirrorHelp", {
-                          size: formatBytes(preview.bytes),
-                        })}
+              <>
+                <label className="container-settings-toggle">
+                  <span>
+                    {t("transfer.includeMirror")}
+                    <span className="settings-help">{t("transfer.includeMirrorHelp")}</span>
                   </span>
-                </span>
-                <Toggle
-                  checked={includeMirror && !preview.mirrorMissing}
-                  aria-label={t("transfer.includeMirror")}
-                  disabled={preview.mirrorMissing}
-                  onChange={(e) => setIncludeMirror(e.target.checked)}
-                  size="sm"
-                />
-              </label>
+                  <Toggle
+                    checked={includeMirror && !mirrorUnavailable}
+                    aria-label={t("transfer.includeMirror")}
+                    disabled={mirrorUnavailable && !hostConnected}
+                    onChange={(e) => setIncludeMirror(e.target.checked)}
+                    size="sm"
+                  />
+                </label>
+                {includeMirror && (
+                  <fieldset className="container-scope-fieldset">
+                    <legend>{t("transfer.mirrorSourceLegend")}</legend>
+                    <label className="container-scope-option">
+                      <input
+                        type="radio"
+                        name="mirror-source"
+                        checked={mirrorSource === "local"}
+                        disabled={preview.mirrorMissing}
+                        onChange={() => setMirrorSource("local")}
+                      />
+                      <span>
+                        <strong>{t("transfer.mirrorSourceLocal")}</strong>
+                        <span className="settings-help">
+                          {preview.mirrorMissing
+                            ? t("transfer.mirrorMissing")
+                            : t("transfer.mirrorSourceLocalHelp", {
+                                count: String(preview.files),
+                                size: formatBytes(preview.bytes),
+                              })}
+                        </span>
+                      </span>
+                    </label>
+                    <label className="container-scope-option">
+                      <input
+                        type="radio"
+                        name="mirror-source"
+                        checked={mirrorSource === "host"}
+                        disabled={!hostConnected}
+                        onChange={() => setMirrorSource("host")}
+                      />
+                      <span>
+                        <strong>
+                          {t("transfer.mirrorSourceHost")} <UntestedTag id="transfer.hostCopy" />
+                        </strong>
+                        <span className="settings-help">
+                          {!hostConnected
+                            ? t("transfer.mirrorSourceHostOffline")
+                            : !fromHost
+                              ? t("transfer.mirrorSourceHostIdle")
+                              : hostError
+                                ? hostError
+                                : hostTally
+                                  ? t("transfer.mirrorSourceHostHelp", {
+                                      count: String(hostTally.files),
+                                      size: formatBytes(hostTally.bytes),
+                                    })
+                                  : t("transfer.mirrorSourceHostMeasuring")}
+                        </span>
+                      </span>
+                    </label>
+                  </fieldset>
+                )}
+              </>
             ) : (
               <label className="container-settings-toggle">
                 <span>
@@ -222,17 +321,17 @@ export function ProjectExportDialog({
               <span>
                 {t("transfer.includeGit")}
                 <span className="settings-help">
-                  {preview.gitFiles === 0
+                  {!hasGit
                     ? t("transfer.noGitHistory")
                     : t("transfer.includeGitHelp", {
-                        size: formatBytes(preview.gitBytes),
+                        size: formatBytes(gitBytes),
                       })}
                 </span>
               </span>
               <Toggle
-                checked={includeGit && preview.gitFiles > 0}
+                checked={includeGit && hasGit}
                   aria-label={t("transfer.includeGit")}
-                disabled={preview.gitFiles === 0}
+                disabled={!hasGit}
                 onChange={(e) => setIncludeGit(e.target.checked)}
                 size="sm"
               />
@@ -242,9 +341,13 @@ export function ProjectExportDialog({
               <span>
                 {t("transfer.skipRebuildable")}
                 <span className="settings-help">
-                  {t("transfer.skipRebuildableHelp", {
-                    size: formatBytes(preview.rebuildableBytes),
-                  })}
+                  {fromHost
+                    ? t("transfer.skipRebuildableHostHelp", {
+                        size: formatBytes(rebuildableBytes),
+                      })
+                    : t("transfer.skipRebuildableHelp", {
+                        size: formatBytes(rebuildableBytes),
+                      })}
                 </span>
               </span>
               <Toggle
@@ -254,7 +357,7 @@ export function ProjectExportDialog({
                 size="sm"
               />
             </label>
-            {skipRebuildable && preview.rebuildableDirs.length > 0 && (
+            {skipRebuildable && !fromHost && preview.rebuildableDirs.length > 0 && (
               <>
                 <p className="settings-help">{t("transfer.rebuildableListHelp")}</p>
                 <div className="big-folder-list">
@@ -407,7 +510,13 @@ export function ProjectExportDialog({
             <button
               type="button"
               onClick={() => void runExport()}
-              disabled={busy || loading || !preview || !!preview.blocked}
+              disabled={
+                busy ||
+                loading ||
+                !preview ||
+                !!preview.blocked ||
+                (fromHost && includeMirror && !hostTally)
+              }
             >
               {busy ? t("transfer.exporting") : t("transfer.exportEllipsis")}
             </button>

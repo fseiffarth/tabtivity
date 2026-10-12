@@ -265,7 +265,7 @@ fn remote_site_key(spec: &RemoteSpec) -> String {
     )
 }
 
-fn entry_remote_spec(entry: &ProjectEntry) -> Option<RemoteSpec> {
+pub(crate) fn entry_remote_spec(entry: &ProjectEntry) -> Option<RemoteSpec> {
     entry
         .extra
         .get("remote")

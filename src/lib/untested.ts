@@ -681,7 +681,8 @@ export const UNTESTED = {
   "terminalSignIn.label": { area: "projects", what: "TerminalSignInToggle · Sign in in a terminal" },
   "transfer.export": { area: "projects", what: "ProjectExportDialog · Export project…" },
   "transfer.import": { area: "projects", what: "ProjectImportBundleDialog · Import project file…" },
-  "transfer.agentHistory": { area: "projects", what: "Export/Import project · agent conversations travel (Claude/Codex transcripts, folder re-pointed)" },
+  "transfer.agentHistory": { area: "projects", what: "Export/Import project · agent conversations travel (Claude, Codex, Copilot, OpenCode, Gemini, … stores; databases stripped to conversation tables; folders re-pointed)" },
+  "transfer.hostCopy": { area: "projects", what: "Export project (remote) · pack the files from the host's copy over SSH" },
 
   // --- skills — The skills library ----------------------------------
   "skillsLibrary.overlayTitle": { area: "skills", what: "ModelsOverlay · Skills tab (the machine-level Skills Library)" },

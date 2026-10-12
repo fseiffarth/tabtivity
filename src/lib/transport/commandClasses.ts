@@ -590,6 +590,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["export_project", "core"],
   ["import_project_export", "core"],
   ["inspect_project_export", "core"],
+  ["preview_host_export", "core"],
   ["preview_project_export", "core"],
   ["python_interpreter_for", "core"],
   ["python_interpreters", "core"],
