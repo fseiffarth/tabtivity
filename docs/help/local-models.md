@@ -76,7 +76,9 @@ calling; the Models & agents menu tags models without it "no tools".
 3. Click a loaded model's name to make it the **default** local model.
 4. Optional role chips assign a loaded model to a task: **Autocomplete**,
    **Prose autocomplete**, **Tabs** (the model Local Model tabs use) and
-   **Mail**.
+   **Mail**. An Ollama cloud model (a `-cloud` tag) runs on ollama.com, so
+   its **Mail** chip is greyed out, and a single loaded cloud model is never
+   given the roles on its own.
 5. Optional: under **Load on Tabtivity start** in the Ollama panel, tick models to
    load automatically at launch (not in Energy Saver mode unless you allow it).
 6. From a paired phone, Home → **Local models** loads and unloads installed

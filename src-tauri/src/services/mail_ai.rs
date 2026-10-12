@@ -9,7 +9,11 @@
 //! setting the general `commands::ollama` transport honours — "classify my mail
 //! on someone else's box" defeats the whole point — and it is enforced *before*
 //! any socket is opened, so a remote host is a stated refusal and never a silent
-//! remote call. No prompt here fetches a web page, an image or a link; the only
+//! remote call. A loopback endpoint is not enough on its own: an Ollama cloud
+//! model (`*-cloud`) runs on ollama.com through that same loopback server, so
+//! the model must also be one the local Ollama lists without a remote
+//! ([`commands::ollama::model_is_local_at`](crate::commands::ollama::model_is_local_at),
+//! gap 25), checked before the request and failing closed. No prompt here fetches a web page, an image or a link; the only
 //! input is what the local store already holds.
 //!
 //! `AppHandle`-free and unit-testable: the prompt builders and the defensive
@@ -44,6 +48,26 @@ fn embedding_only_reason(model: &str) -> String {
     format!(
         "the model '{model}' is embedding-only, so it cannot write text — load a local \
          completion model for the mail assistant."
+    )
+}
+
+/// The reason an Ollama cloud model is refused (gap 25): a loopback Ollama
+/// forwards it to ollama.com, so the endpoint check alone would let mail out.
+fn cloud_model_reason(model: &str) -> String {
+    format!(
+        "the model '{model}' is an Ollama cloud model: it runs on ollama.com, not on this \
+         machine, so the mail assistant refuses it — pick a local model for the brain menu's \
+         Mail role. Nothing about your mail left this machine."
+    )
+}
+
+/// The reason a model the local Ollama does not list (or whose list could not
+/// be read) is refused: nothing proves it runs here, so it fails closed.
+fn unlisted_model_reason(model: &str) -> String {
+    format!(
+        "the model '{model}' is not one the local Ollama lists as installed, so the mail \
+         assistant does not use it — pull it, or pick an installed model for the brain menu's \
+         Mail role."
     )
 }
 
@@ -141,23 +165,18 @@ impl ChatOptions {
 /// assistant's text.
 ///
 /// Order matters and is load-bearing: **loopback is enforced before any socket
-/// is opened**, so a remote host never sees a byte. Only then are capabilities
+/// is opened**, so a remote host never sees a byte, and an Ollama cloud model
+/// is refused before the request ([`preflight`]). Only then are capabilities
 /// probed (an embedding-only model is refused; empty/absent capabilities read as
 /// unknown → allow, matching `model_capabilities`), and only then is the request
 /// sent. An unreachable server surfaces as [`NOT_RUNNING`].
 pub fn chat(system: &str, user: &str, opts: ChatOptions) -> Result<String, String> {
-    let settings = read_settings();
-    let model = mail_model_from(&settings).ok_or_else(|| NO_MODEL.to_string())?;
+    chat_with(&read_settings(), system, user, opts)
+}
 
-    // Loopback first — before capabilities, before the request, before anything
-    // reaches the network.
-    resolve_endpoint(ollama::host_setting(&settings).0)?;
-    // On a hosted server, only a model the admin allows may be loaded on the
-    // one shared Ollama — the classifier an inbox sync runs included
-    // (`model_allowlist`, final review A1). Nothing off a server.
-    if crate::services::model_allowlist::check_model(&model).is_err() {
-        return Err(model_not_allowed_reason(&model));
-    }
+/// [`chat`] over a settings snapshot.
+fn chat_with(settings: &Settings, system: &str, user: &str, opts: ChatOptions) -> Result<String, String> {
+    let model = preflight(settings)?;
 
     // Empty capabilities = "could not ask" = unknown → allow. Only a *positive*
     // embedding-without-completion is a refusal.
@@ -200,6 +219,35 @@ pub fn chat(system: &str, user: &str, opts: ChatOptions) -> Result<String, Strin
         return Err("the local model returned an empty response.".to_string());
     }
     Ok(content)
+}
+
+/// Everything [`chat`] settles before it may send a byte of mail: a model is
+/// set, the endpoint is loopback, a hosted server allows the model, and the
+/// model runs on this machine. Returns the model.
+///
+/// The last check is gap 25's: a loopback Ollama runs an Ollama cloud model
+/// (`*-cloud`) on ollama.com, so "the endpoint is loopback" is not "the model
+/// is local". [`ollama::model_is_local_at`] asks that same endpoint's
+/// `/api/tags` (cached a minute — auto-classify calls this for every new
+/// mail) and fails closed on an unreadable list.
+fn preflight(settings: &Settings) -> Result<String, String> {
+    let model = mail_model_from(settings).ok_or_else(|| NO_MODEL.to_string())?;
+
+    // Loopback first — before capabilities, before the request, before anything
+    // reaches the network.
+    let addr = resolve_endpoint(ollama::host_setting(settings).0)?;
+    // On a hosted server, only a model the admin allows may be loaded on the
+    // one shared Ollama — the classifier an inbox sync runs included
+    // (`model_allowlist`, final review A1). Nothing off a server.
+    if crate::services::model_allowlist::check_model(&model).is_err() {
+        return Err(model_not_allowed_reason(&model));
+    }
+    match ollama::model_is_local_at(&addr, &model) {
+        Ok(()) => Ok(model),
+        Err(ollama::MODEL_NOT_RUNNING) => Err(NOT_RUNNING.to_string()),
+        Err("model_not_local") => Err(cloud_model_reason(&model)),
+        Err(_) => Err(unlisted_model_reason(&model)),
+    }
 }
 
 // ── Prompt builders (pure) ──────────────────────────────────────────────────
@@ -532,6 +580,48 @@ mod tests {
     #[test]
     fn an_https_host_is_still_refused_here_too() {
         assert!(resolve_endpoint(Some("https://127.0.0.1:11434")).is_err());
+    }
+
+    // ── Cloud models (gap 25) ───────────────────────────────────────────────
+
+    const TAGS: &str = r#"{"models":[
+        {"name":"llama3:latest","size":1},
+        {"name":"gpt-oss:120b-cloud","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443"},
+        {"name":"mine:latest","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443"}
+    ]}"#;
+
+    fn mail_on(model: &str) -> Settings {
+        let mut roles = HashMap::new();
+        roles.insert("mail".to_string(), model.to_string());
+        Settings { ollama_roles: Some(roles), ..Default::default() }
+    }
+
+    /// A cloud model behind the loopback Ollama is refused before any request:
+    /// `chat_with` answers the cloud reason, never reaching capabilities or
+    /// `/api/chat` (which, with no server in a test, would say `not_running`).
+    #[test]
+    fn a_cloud_mail_model_is_refused_before_the_chat_request() {
+        crate::commands::ollama::test_tags::set(Some(TAGS));
+        for model in ["gpt-oss:120b-cloud", "mine", "qwen3-coder:cloud"] {
+            let err = chat_with(&mail_on(model), "s", "u", ChatOptions::bounded(16)).unwrap_err();
+            assert_eq!(err, cloud_model_reason(model), "{model}");
+        }
+        // The default model is the mail model when no role is set: same rule.
+        let s = Settings { ollama_model: Some("gpt-oss:120b-cloud".into()), ..Default::default() };
+        assert_eq!(preflight(&s).unwrap_err(), cloud_model_reason("gpt-oss:120b-cloud"));
+        assert_eq!(preflight(&mail_on("llama3")).as_deref(), Ok("llama3"));
+        // Unlisted, or a list that cannot be read: fail closed.
+        assert_eq!(preflight(&mail_on("mistral")).unwrap_err(), unlisted_model_reason("mistral"));
+        crate::commands::ollama::test_tags::set(Some("not json"));
+        assert_eq!(preflight(&mail_on("llama3")).unwrap_err(), unlisted_model_reason("llama3"));
+        // Nothing answers: the sentinel every 🧠 surface branches on.
+        crate::commands::ollama::test_tags::set(None);
+        assert_eq!(preflight(&mail_on("llama3")).unwrap_err(), NOT_RUNNING);
+        // Loopback still comes first: a remote host is refused before the list.
+        let mut remote = mail_on("llama3");
+        remote.ollama_host = Some("gpu-box.example:11434".into());
+        remote.ollama_allow_remote_host = Some(true);
+        assert_eq!(preflight(&remote).unwrap_err(), REMOTE_REFUSED);
     }
 
     // ── Model resolution ────────────────────────────────────────────────────

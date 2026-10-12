@@ -837,10 +837,16 @@ export function LocalModelsSection({
                   {MODEL_ROLES.map((r) => {
                     const on = roles[r.key] === m.name;
                     const roleLabel = t(r.labelKey);
-                    const title = t(on ? "localModel.usedForRole" : "localModel.useForRole", {
-                      role: roleLabel.toLowerCase(),
-                      name: m.name,
-                    });
+                    // An Ollama cloud model can't be the Mail model: mail stays
+                    // on this machine (gap 25). Disabled like the MCP chip of a
+                    // model without tools — still clickable to turn it off.
+                    const cloudMail = r.key === "mail" && m.remote === true;
+                    const title = cloudMail
+                      ? t("localModel.mailCloudTitle", { name: m.name })
+                      : t(on ? "localModel.usedForRole" : "localModel.useForRole", {
+                          role: roleLabel.toLowerCase(),
+                          name: m.name,
+                        });
                     return (
                       <button
                         key={r.key}
@@ -849,12 +855,14 @@ export function LocalModelsSection({
                         title={
                           r.pending ? `${title} — ${t("localModel.roleNotWired")}` : title
                         }
+                        disabled={cloudMail && !on}
                         onClick={() => toggleRole(r.key, m.name)}
                       >
                         {roleLabel}
                       </button>
                     );
                   })}
+                  {m.remote && <UntestedTag id="localModelMenu.mailCloud" />}
                   <button
                     type="button"
                     className={`local-model-role-chip${

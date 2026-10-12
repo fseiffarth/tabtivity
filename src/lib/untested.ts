@@ -232,6 +232,7 @@ export const UNTESTED = {
   "localModelMenu.2": { area: "layout", what: "LocalModelMenu · Dismiss this notice" },
   "localModelMenu.3": { area: "layout", what: "LocalModelMenu · Dismiss this notice" },
   "localModelMenu.4": { area: "layout", what: "LocalModelMenu · MCP", tested: "2026-09-20" },
+  "localModelMenu.mailCloud": { area: "layout", what: "LocalModelMenu · an Ollama cloud model's Mail chip is disabled (gap 25)" },
   "mcpSecurity.title": { area: "layout", what: "RootMcpSecurity · MCP session access" },
   "mcpSecurity.audit": { area: "layout", what: "RootMcpSecurity · audit table with reason/target columns, unauthenticated rows, live refresh on session events, tab titles, revoke confirm" },
   "nav.scaffoldRepair.title": { area: "layout", what: "SettingsPanel · Repair Project Scaffold" },

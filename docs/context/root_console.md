@@ -455,6 +455,21 @@ does not exist for it — the same "unknown tool" an invented name gets.
   which it is treated as a reader for writes: always staged, tainted, reader
   drafts. `served` lists the read tools for `LocalModel`; the switch decides
   per request.
+- **"Local" means the model, not the endpoint** (gap 25). A loopback Ollama
+  runs an Ollama cloud model (`*-cloud`) on ollama.com. The tab's model is
+  fixed at spawn in `Identity::model` (`local_model_of`: the raw
+  `TABTIVITY_LOCAL_MODEL`, else the `VIBE_ACTIVE_MODEL` alias mapped back
+  through the "MCP"-chipped models; a disagreeing pair or an ambiguous alias
+  is `None`; never read from the Vibe home, which the tab writes). Each read
+  asks `ollama::model_is_local_at` with the spawn endpoint: the model must be
+  listed by that endpoint's `/api/tags` with no remote and no `cloud` tag
+  (cached a minute; an unreadable list, no server or no recorded model fail
+  closed) — else `LOCAL_READ_CLOUD`. The mail assistant
+  (`services::mail_ai::chat`, auto-classify included) asks the same gate. The
+  two "kept to local models" switches use it too: under
+  `root_mcp_local_only` an unconfirmed local tab gets "MCP access
+  unavailable", under `root_mcp_mail_local_only` its mail tools answer
+  `MAIL_LOCAL_ONLY`, as a cloud agent's do.
 - **A reader** gets the read tools (`mail_folders`, `mail_search`, `mail_read`,
   `mail_thread`) and the draft tools, is served **no cross-project sweep**, and
   its calendar/board writes **always stage** with `tainted: true`, whatever
@@ -621,8 +636,17 @@ after the listener stops accepting and the workers in flight get a short
 drain. The same PTY id on resume finds its proposals (`proposals_list` is per
 tab) and its mail drafts (owned by `sha256(tab)`) with a fresh token, and
 starts tainted if any earlier spawn of it read mail (the marker under
-`root_mcp/read_mail/`). The runtime itself contains only the listener port,
-never a shared secret.
+`root_mcp/read_mail/`). A local-model tab also starts tainted if any tab of
+its model read mail (`root_mcp/read_mail_model/`, keyed by the hash of the
+model's alias, which also names its `VIBE_HOME`), because a new tab can
+continue a Vibe conversation another tab of the model had (gap 33). The
+trade-off: once one tab of a model reads mail, every later tab of that
+model stages all its writes and marks its drafts as reader drafts, until the
+marker is deleted by hand — the app has no "clear conversations" action for
+a model to clear it from. The markers are written before the read, and a
+write that fails refuses the read (`LOCAL_READ_UNRECORDED`), the in-memory
+latch staying set; a marker that cannot be looked at counts as present. The
+runtime itself contains only the listener port, never a shared secret.
 
 An automatic write (`destructive` level) is applied first and logged once, so
 the log never says `pending` for a change that landed; one the store could not
@@ -632,7 +656,10 @@ re-reads a pending automatic row whose rows already hold as `applied`.
 
 Refusals by name: a tool the user took away in *MCP session access* answers
 `ACCESS_NARROWED`; a local-model tab's mail read tool with the local-read
-switch off answers `LOCAL_READ_OFF`; only a tool outside the caller's class
+switch off answers `LOCAL_READ_OFF`, through a non-loopback endpoint
+`LOCAL_READ_REMOTE`, on a model not confirmed local `LOCAL_READ_CLOUD`, and
+with a taint marker that could not be written `LOCAL_READ_UNRECORDED`; only a
+tool outside the caller's class
 answers `unknown tool` (so a cloud tab never learns mail read tools exist).
 Over HTTP, a revoked or re-granted session gets its own 401 text rather than
 the 503 "switched off in Settings"; requests refused before they authenticated

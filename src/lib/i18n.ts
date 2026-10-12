@@ -3477,6 +3477,7 @@ export const enSource = {
   "localModel.setMcpModelTitle": "Give {name} the root console's MCP tools (calendar, board, project list) — turns Root on too; new root tabs only",
   "localModel.isMcpModelTitle": "{name} gets the root console's MCP tools in new root tabs — click to turn tools off",
   "localModel.mcpNoToolsTitle": "{name} can't call tools — Ollama reports no tool support",
+  "localModel.mailCloudTitle": "{name} is an Ollama cloud model — it runs on ollama.com, so it can't be the Mail model: mail stays on this machine",
   "localModel.manageAgents": "Manage CLIs…",
   "localModel.skillsLibrary": "Skills library…",
   "localModel.localModelsGroup": "Local Models",

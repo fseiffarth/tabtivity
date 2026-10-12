@@ -14,7 +14,9 @@ summaries, and encryption for what is stored on this machine. It is
 experimental: switch it on in **Settings → System → Experimental** (Mail
 client). The mail assistant runs only on a local Ollama model that you assign
 to the **Mail** role in the Models & agents menu; nothing about your mail
-leaves the machine. See `local-models`.
+leaves the machine. It refuses an Ollama cloud model (one that runs on
+ollama.com) and any model Ollama does not list as installed. See
+`local-models`.
 
 ### Address book
 

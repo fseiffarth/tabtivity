@@ -63,7 +63,7 @@ import { ModelsOverlayHost } from "../../components/models/ModelsOverlay";
 
 const invokeMock = vi.mocked(invoke);
 
-type Model = { name: string; running: boolean };
+type Model = { name: string; running: boolean; remote?: boolean };
 let models: Model[] = [];
 let patches: Array<Record<string, unknown>> = [];
 let ollamaInstalled = true;
@@ -76,6 +76,7 @@ const modelInfo = (m: Model) => ({
   size_vram: 0,
   size: 4_000_000_000,
   capabilities: ["completion", "tools"],
+  remote: m.remote ?? false,
 });
 
 function backend() {
@@ -254,6 +255,47 @@ describe("LocalModelMenu dropdown", () => {
     fireEvent.click(unload);
     await waitFor(() => expect(patches.filter((p) => "ollama_roles" in p)).toHaveLength(1));
     expect(patches.find((p) => "ollama_roles" in p)?.ollama_model).toBe("qwen:7b");
+  });
+});
+
+describe("LocalModelMenu and Ollama cloud models (gap 25)", () => {
+  it("never gives a sole resident cloud model the roles", async () => {
+    models = [{ name: "gpt-oss:120b-cloud", running: true, remote: true }];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    await screen.findByText("gpt-oss:120b-cloud");
+    await waitFor(() => expect(calls("list_ollama_models_detailed").length).toBeGreaterThan(0));
+    expect(patches.filter((p) => "ollama_roles" in p)).toHaveLength(0);
+  });
+
+  it("gives the one local resident every role beside a cloud model", async () => {
+    models = [
+      { name: "gpt-oss:120b-cloud", running: true, remote: true },
+      { name: "qwen:7b", running: true },
+    ];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    await waitFor(() => expect(patches.filter((p) => "ollama_roles" in p)).toHaveLength(1));
+    const patch = patches.find((p) => "ollama_roles" in p)!;
+    expect(patch.ollama_model).toBe("qwen:7b");
+    expect((patch.ollama_roles as Record<string, string>).mail).toBe("qwen:7b");
+  });
+
+  it("disables a cloud model's Mail chip with the reason, and leaves a local one alone", async () => {
+    models = [
+      { name: "gpt-oss:120b-cloud", running: true, remote: true },
+      { name: "qwen:7b", running: true },
+    ];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    const cloudMail = await screen.findByTitle(/gpt-oss:120b-cloud is an Ollama cloud model/);
+    expect(cloudMail.textContent).toBe("Mail");
+    expect((cloudMail as HTMLButtonElement).disabled).toBe(true);
+    const mailChips = screen.getAllByRole("button", { name: "Mail" }) as HTMLButtonElement[];
+    const localMail = mailChips.filter((b) => b !== cloudMail);
+    expect(localMail).toHaveLength(1);
+    expect(localMail[0].disabled).toBe(false);
+    expect(localMail[0].title).not.toMatch(/cloud/);
   });
 });
 

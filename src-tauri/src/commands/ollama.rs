@@ -290,8 +290,19 @@ fn ollama_http_within(
     json_body: Option<&str>,
     read_timeout: Duration,
 ) -> Result<String, String> {
-    let addr = ollama_addr()?;
-    let mut stream = connect_ollama(&addr)?;
+    ollama_http_at(&ollama_addr()?, method, path, json_body, read_timeout)
+}
+
+/// [`ollama_http_within`] against an endpoint the caller already resolved —
+/// one a tab was spawned with, which today's `ollama_host` may no longer name.
+fn ollama_http_at(
+    addr: &str,
+    method: &str,
+    path: &str,
+    json_body: Option<&str>,
+    read_timeout: Duration,
+) -> Result<String, String> {
+    let mut stream = connect_ollama(addr)?;
     stream
         .set_read_timeout(Some(read_timeout))
         .map_err(|e| format!("set timeout: {e}"))?;
@@ -979,11 +990,123 @@ fn keep_alive_of(
 }
 
 /// Whether an `/api/tags` entry is an Ollama cloud model: one that names the
-/// remote it runs on. Nothing about it is on this machine to load. Pure + tested.
+/// remote it runs on, or whose tag says so ([`is_cloud_name`]). Nothing about
+/// it is on this machine to load. Pure + tested.
 fn is_remote_entry(entry: &serde_json::Value) -> bool {
     ["remote_host", "remote_model"]
         .iter()
         .any(|k| entry[*k].as_str().is_some_and(|s| !s.trim().is_empty()))
+        || entry["name"].as_str().is_some_and(is_cloud_name)
+}
+
+/// Whether a model *name* is one of Ollama's cloud models by its tag
+/// (`gpt-oss:120b-cloud`, `qwen3-coder:cloud`): a second opinion beside the
+/// list's own `remote_*` fields, so a list that ever stops carrying them
+/// still refuses the name. A copy under another name (`ollama cp`) carries
+/// no such tag — the list's fields catch that one. Pure + tested.
+pub(crate) fn is_cloud_name(model: &str) -> bool {
+    let leaf = model.trim().rsplit('/').next().unwrap_or(model);
+    let tag = leaf.split('@').next().unwrap_or(leaf).split_once(':').map_or("", |(_, t)| t);
+    let tag = tag.to_ascii_lowercase();
+    tag == "cloud" || tag.ends_with("-cloud")
+}
+
+/// The verdict of [`model_is_local_in`] when `/api/tags` could not be read for
+/// want of a server: the 🧠 surface's own sentinel.
+pub(crate) const MODEL_NOT_RUNNING: &str = "not_running";
+
+/// Whether `model` runs on this machine, judged from the `/api/tags` answer
+/// of the endpoint that will run it (gap 25): `Ok` only for a listed model
+/// with no remote — [`installed_match`]'s rule, plus [`is_cloud_name`] before
+/// anything is asked. `Err("model_not_local")` for an Ollama cloud model
+/// (a loopback Ollama forwards it to ollama.com), `Err("model_not_installed")`
+/// for an unlisted name or an unreadable list (fail closed),
+/// `Err(MODEL_NOT_RUNNING)` when nothing answered. Pure + tested.
+pub(crate) fn model_is_local_in(
+    tags: Result<&str, &str>,
+    model: &str,
+) -> Result<(), &'static str> {
+    if is_cloud_name(model) {
+        return Err("model_not_local");
+    }
+    match tags {
+        Ok(body) => installed_match(body, model).map(|_| ()),
+        Err(e) if e == MODEL_NOT_RUNNING => Err(MODEL_NOT_RUNNING),
+        Err(_) => Err("model_not_installed"),
+    }
+}
+
+/// How long a [`model_is_local_at`] verdict is reused. Auto-classify asks for
+/// every new mail; a minute keeps that to one `/api/tags` read per burst.
+const LOCALITY_TTL: Duration = Duration::from_secs(60);
+
+/// [`model_is_local_at`]'s answers per `(endpoint, model)`, with when they were
+/// read. Only a definite verdict is kept (`Ok`, `model_not_local`): a failed or
+/// empty read is asked again next time, so a server that comes up is seen at
+/// once. Pure + tested.
+#[derive(Default)]
+struct LocalityCache(std::collections::HashMap<(String, String), (Instant, Locality)>);
+
+/// One [`model_is_local_in`] verdict.
+type Locality = Result<(), &'static str>;
+
+impl LocalityCache {
+    fn get(&self, addr: &str, model: &str, now: Instant) -> Option<Locality> {
+        self.0
+            .get(&(addr.to_owned(), model.to_owned()))
+            .filter(|(at, _)| now.saturating_duration_since(*at) < LOCALITY_TTL)
+            .map(|(_, verdict)| *verdict)
+    }
+    fn put(&mut self, addr: &str, model: &str, now: Instant, verdict: Locality) {
+        if matches!(verdict, Ok(()) | Err("model_not_local")) {
+            self.0.retain(|_, (at, _)| now.saturating_duration_since(*at) < LOCALITY_TTL);
+            self.0.insert((addr.to_owned(), model.to_owned()), (now, verdict));
+        }
+    }
+}
+
+fn locality_cache() -> &'static std::sync::Mutex<LocalityCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<LocalityCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// [`model_is_local_in`] against the live `/api/tags` of `addr` — an endpoint
+/// the caller already resolved and judged loopback — cached for
+/// [`LOCALITY_TTL`]. The one gate between mail text and a model: the mail
+/// assistant (`services::mail_ai::chat`) and a local-model tab's mail reads
+/// (`services::root_mcp_mail`) both ask it before anything is sent.
+pub(crate) fn model_is_local_at(addr: &str, model: &str) -> Result<(), &'static str> {
+    let model = model.trim();
+    #[cfg(test)]
+    if let Some(tags) = test_tags::current() {
+        return model_is_local_in(tags.as_deref().map_err(String::as_str), model);
+    }
+    let now = Instant::now();
+    if let Some(verdict) = locality_cache().lock().unwrap_or_else(|p| p.into_inner()).get(addr, model, now) {
+        return verdict;
+    }
+    let tags = ollama_http_at(addr, "GET", "/api/tags", None, Duration::from_secs(10));
+    let verdict = model_is_local_in(tags.as_deref().map_err(String::as_str), model);
+    locality_cache().lock().unwrap_or_else(|p| p.into_inner()).put(addr, model, now, verdict);
+    verdict
+}
+
+/// What [`model_is_local_at`] reads in place of a live `/api/tags` inside a
+/// test: unset reads as no server (fail closed), so no test ever asks a real
+/// Ollama on the developer's machine. Per thread, like the tests themselves.
+#[cfg(test)]
+pub(crate) mod test_tags {
+    use std::cell::RefCell;
+    thread_local! {
+        static TAGS: RefCell<Option<Result<String, String>>> = const { RefCell::new(None) };
+    }
+    pub(crate) fn current() -> Option<Result<String, String>> {
+        Some(TAGS.with(|t| t.borrow().clone()).unwrap_or_else(|| Err(super::MODEL_NOT_RUNNING.to_owned())))
+    }
+    /// Answer `/api/tags` with `body` on this thread (`None`: nothing answers).
+    pub(crate) fn set(body: Option<&str>) {
+        TAGS.with(|t| *t.borrow_mut() = Some(body.map(str::to_owned).ok_or_else(|| super::MODEL_NOT_RUNNING.to_owned())));
+    }
 }
 
 /// The installed model `wanted` names, as `/api/tags` lists it: an exact match,
@@ -4566,7 +4689,7 @@ fn model_context_length(model: &str) -> Option<u64> {
         .filter(|n| *n > 0)
 }
 
-fn sanitize_alias(model: &str) -> String {
+pub(crate) fn sanitize_alias(model: &str) -> String {
     model.replace(':', "-")
 }
 
@@ -6104,6 +6227,63 @@ mod phone_control_tests {
         assert!(!is_remote_entry(&serde_json::json!({"name":"a"})));
         assert!(!is_remote_entry(&serde_json::json!({"name":"a","remote_host":""})));
         assert!(!is_remote_entry(&serde_json::json!({"name":"a","remote_host":null})));
+        // The tag alone is enough, whatever the list leaves out.
+        assert!(is_remote_entry(&serde_json::json!({"name":"gpt-oss:120b-cloud"})));
+    }
+
+    #[test]
+    fn cloud_names_are_judged_by_their_tag() {
+        for name in ["gpt-oss:120b-cloud", "qwen3-coder:cloud", "ns/m:480B-CLOUD", " deepseek-v3.1:671b-cloud "] {
+            assert!(is_cloud_name(name), "{name}");
+        }
+        for name in ["llama3", "llama3:latest", "cloud", "my-cloud", "cloudy:7b", "reg.example:5000/cloud/m", "m@sha256:abc-cloud"] {
+            assert!(!is_cloud_name(name), "{name}");
+        }
+    }
+
+    /// Gap 25: only a listed model with no remote is local; a cloud model,
+    /// an unlisted one and an unreadable or absent list are refused.
+    #[test]
+    fn a_model_is_local_only_when_the_list_says_so() {
+        assert_eq!(model_is_local_in(Ok(TAGS_BODY), "llama3"), Ok(()));
+        assert_eq!(model_is_local_in(Ok(TAGS_BODY), "qwen3.5:9b"), Ok(()));
+        assert_eq!(model_is_local_in(Ok(TAGS_BODY), "gpt-oss:120b-cloud"), Err("model_not_local"));
+        // A cloud entry copied under a plain name: the list's fields decide.
+        let copied = r#"{"models":[{"name":"mine:latest","remote_host":"https://ollama.com:443","remote_model":"gpt-oss:120b"}]}"#;
+        assert_eq!(model_is_local_in(Ok(copied), "mine"), Err("model_not_local"));
+        // The tag refuses before the list is consulted at all.
+        assert_eq!(model_is_local_in(Err(MODEL_NOT_RUNNING), "kimi-k2:1t-cloud"), Err("model_not_local"));
+        assert_eq!(model_is_local_in(Ok(TAGS_BODY), "mistral"), Err("model_not_installed"));
+        assert_eq!(model_is_local_in(Ok(""), "llama3"), Err("model_not_installed"), "an empty body fails closed");
+        assert_eq!(model_is_local_in(Ok(r#"{"models":[]}"#), "llama3"), Err("model_not_installed"));
+        assert_eq!(model_is_local_in(Err("read: reset"), "llama3"), Err("model_not_installed"));
+        assert_eq!(model_is_local_in(Err(MODEL_NOT_RUNNING), "llama3"), Err(MODEL_NOT_RUNNING));
+    }
+
+    #[test]
+    fn locality_verdicts_are_kept_a_minute_and_failures_not_at_all() {
+        let mut cache = LocalityCache::default();
+        let t0 = Instant::now();
+        cache.put("127.0.0.1:11434", "llama3", t0, Ok(()));
+        cache.put("127.0.0.1:11434", "big:cloud", t0, Err("model_not_local"));
+        cache.put("127.0.0.1:11434", "gone", t0, Err("model_not_installed"));
+        cache.put("127.0.0.1:11434", "down", t0, Err(MODEL_NOT_RUNNING));
+        assert_eq!(cache.get("127.0.0.1:11434", "llama3", t0 + Duration::from_secs(59)), Some(Ok(())));
+        assert_eq!(cache.get("127.0.0.1:11434", "big:cloud", t0), Some(Err("model_not_local")));
+        assert_eq!(cache.get("127.0.0.1:11434", "gone", t0), None);
+        assert_eq!(cache.get("127.0.0.1:11434", "down", t0), None);
+        assert_eq!(cache.get("127.0.0.1:11500", "llama3", t0), None, "per endpoint");
+        assert_eq!(cache.get("127.0.0.1:11434", "llama3", t0 + LOCALITY_TTL), None, "expired");
+    }
+
+    #[test]
+    fn the_test_tags_hook_fails_closed_until_set() {
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "llama3"), Err(MODEL_NOT_RUNNING));
+        test_tags::set(Some(TAGS_BODY));
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "llama3"), Ok(()));
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "gpt-oss:120b-cloud"), Err("model_not_local"));
+        test_tags::set(None);
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "llama3"), Err(MODEL_NOT_RUNNING));
     }
 
     #[test]

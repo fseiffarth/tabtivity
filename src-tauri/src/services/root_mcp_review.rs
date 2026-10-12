@@ -1375,7 +1375,7 @@ mod tests {
         assert!(call(&stores, tab, "todo_add", &json!({"title":"Plain"})).unwrap().0.get("staged").is_none());
         // What the first mail read does: latch in memory and on disk.
         first.mark_read_mail();
-        root_mcp::record_read_mail(f.dir.path(), tab);
+        root_mcp::record_read_mail(f.dir.path(), tab, None).unwrap();
         // A respawn of the same tab (a `--resume`): a fresh token, the old taint.
         let (_, second) = root_mcp::test_session_for_tab(root_mcp::Caller::LocalModel, tab, f.dir.path());
         assert!(first.check().is_err(), "the old spawn's token is gone");

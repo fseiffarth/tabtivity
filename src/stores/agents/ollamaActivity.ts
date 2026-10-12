@@ -36,6 +36,11 @@ export interface LocalModelInfo {
    * an empty list must not mark a model as unable to run agents.
    */
   capabilities?: string[];
+  /**
+   * An Ollama cloud model (`*-cloud`, or a copy of one): Ollama lists it, but
+   * it runs on ollama.com. Never the Mail model, never auto-assigned (gap 25).
+   */
+  remote?: boolean;
 }
 
 /** The update check's own outcome — see `checkResult` below. */

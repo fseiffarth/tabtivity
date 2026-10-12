@@ -3357,6 +3357,7 @@ export const dict: Dict = {
   "localModel.setMcpModelTitle": "Dar a {name} las herramientas MCP de la consola raíz (calendario, tablero, lista de proyectos) — también activa Root; solo pestañas raíz nuevas",
   "localModel.isMcpModelTitle": "{name} recibe las herramientas MCP de la consola root en pestañas root nuevas — haz clic para desactivarlas",
   "localModel.mcpNoToolsTitle": "{name} no puede llamar herramientas — Ollama no indica soporte",
+  "localModel.mailCloudTitle": "{name} es un modelo en la nube de Ollama — se ejecuta en ollama.com, así que no puede ser el modelo de correo: el correo se queda en este equipo",
   "localModel.manageAgents": "Gestionar agentes…",
   "localModel.skillsLibrary": "Biblioteca de skills…",
   "localModel.localModelsGroup": "Modelos locales",

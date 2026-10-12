@@ -218,10 +218,14 @@ export function LocalModelMenu() {
   // setting, not a click, so treating it as "the" pick clobbered whatever
   // default the user had actually chosen — every restart, the moment the
   // autoloaded model finished warming up and was briefly the only one loaded.
+  //
+  // Never an Ollama cloud model (`remote`): it runs on ollama.com, so giving
+  // it every role would make it the Mail model and send mail off the machine
+  // (gap 25; the backend refuses it there too). It does not count as resident.
   const autoAppliedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!settings) return;
-    const resident = models.filter((m) => m.running);
+    const resident = models.filter((m) => m.running && !m.remote);
     if (resident.length !== 1) {
       autoAppliedFor.current = null;
       return;

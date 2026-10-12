@@ -108,6 +108,14 @@ pub struct Identity {
     /// the setting does not move. `root_mcp_mail` reads only while this is
     /// loopback; `None` for every other class.
     pub endpoint: Option<String>,
+    /// A [`Caller::LocalModel`] tab's Ollama model, read from its spawn env
+    /// ([`local_model_of`]) — never from its Vibe home, which the tab writes.
+    /// Its mail reads go ahead only while that endpoint lists this model as
+    /// local, not an Ollama cloud model (gap 25), and its mail taint is also
+    /// kept per model ([`model_read_mail`], gap 33). `None` for every other
+    /// class, and for a local tab whose model could not be told: it reads
+    /// nothing.
+    pub model: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScheduleBinding { pub target: String, pub agent: String }
@@ -273,15 +281,50 @@ pub fn tab_active(tab: &str) -> bool {
 pub fn read_mail_marker(state: &Path, tab: &str) -> std::path::PathBuf {
     state.join("root_mcp").join("read_mail").join(super::root_mcp_review::hash(tab.as_bytes()))
 }
-pub fn record_read_mail(state: &Path, tab: &str) {
-    let path = read_mail_marker(state, tab);
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+/// The per-model half of the taint (gap 33): a local model's Vibe
+/// conversations live in its per-model `VIBE_HOME`, keyed by the model's
+/// alias (`commands::ollama::sanitize_alias`), so a *new* tab can continue a
+/// conversation that read mail in another. Keyed by the same alias, hashed.
+/// Never cleared by the app: once one tab of a model has read mail, every
+/// later tab of that model starts tainted (`docs/context/root_console.md`).
+pub fn model_read_mail_marker(state: &Path, model: &str) -> std::path::PathBuf {
+    let alias = crate::commands::ollama::sanitize_alias(model.trim());
+    state.join("root_mcp").join("read_mail_model").join(super::root_mcp_review::hash(alias.as_bytes()))
+}
+/// Write the taint markers for `tab` and, for a local model, its `model`.
+/// The read that latched the taint goes ahead only when this returns `Ok`
+/// (`root_mcp_mail::call`): a marker that did not land would let the next
+/// spawn — a `--resume` or another tab of the model — start untainted with
+/// the mail still in its context.
+pub fn record_read_mail(state: &Path, tab: &str, model: Option<&str>) -> std::io::Result<()> {
+    let paths = std::iter::once(read_mail_marker(state, tab)).chain(model.map(|m| model_read_mail_marker(state, m)));
+    for path in paths {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&path, b"")?;
     }
-    let _ = std::fs::write(path, b"");
+    Ok(())
+}
+/// Whether a marker is there. Only a definite "not found" is untainted: a
+/// marker that cannot be looked at (a permission or I/O error) counts as
+/// present, so the spawn starts tainted rather than clean.
+fn marker_present(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => true,
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 pub fn tab_read_mail(state: &Path, tab: &str) -> bool {
-    read_mail_marker(state, tab).exists()
+    marker_present(&read_mail_marker(state, tab))
+}
+/// Whether any tab of `model` has read mail ([`model_read_mail_marker`]).
+pub fn model_read_mail(state: &Path, model: &str) -> bool {
+    marker_present(&model_read_mail_marker(state, model))
+}
+/// The taint a spawn starts with: its tab's, or its model's.
+fn spawn_read_mail(state: &Path, tab: &str, model: Option<&str>) -> bool {
+    tab_read_mail(state, tab) || model.is_some_and(|m| model_read_mail(state, m))
 }
 
 #[cfg(test)]
@@ -297,11 +340,23 @@ pub(crate) fn test_session_for_tab(caller: Caller, tab: &str, state: &Path) -> (
     let endpoint = (caller == Caller::LocalModel).then(|| "127.0.0.1:11434".to_string());
     test_session_with(caller, tab, state, endpoint)
 }
-/// A local-model session whose recorded endpoint is `endpoint`.
+/// The model a test local-model session runs ([`test_session_with`]).
+#[cfg(test)]
+pub(crate) const TEST_LOCAL_MODEL: &str = "llama3:latest";
+/// A local-model session whose recorded endpoint is `endpoint`, running
+/// [`TEST_LOCAL_MODEL`].
 #[cfg(test)]
 pub(crate) fn test_session_with(caller: Caller, tab: &str, state: &Path, endpoint: Option<String>) -> (String, Session) {
+    let model = (caller == Caller::LocalModel).then(|| TEST_LOCAL_MODEL.to_string());
+    test_session_model(caller, tab, state, endpoint, model)
+}
+/// A session with a chosen recorded endpoint and model, seeded the way
+/// [`grant_root`] seeds it (tab or model taint).
+#[cfg(test)]
+pub(crate) fn test_session_model(caller: Caller, tab: &str, state: &Path, endpoint: Option<String>, model: Option<String>) -> (String, Session) {
     let token = mint_token().unwrap();
-    register_token(token.clone(), Identity { schedule_target: None, push: None, tab: tab.to_string(), caller, project: None, endpoint }, tab_read_mail(state, tab));
+    let read_mail = spawn_read_mail(state, tab, model.as_deref());
+    register_token(token.clone(), Identity { schedule_target: None, push: None, tab: tab.to_string(), caller, project: None, endpoint, model }, read_mail);
     let session = authenticate(Some(&format!("Bearer {token}"))).unwrap();
     (token, session)
 }
@@ -312,7 +367,7 @@ pub(crate) fn test_session_bound(caller: Caller, tab: &str, project: &str, targe
     let token = mint_token().unwrap();
     register_token(token.clone(), Identity {
         tab: tab.to_string(), caller, project: Some(project.to_string()),
-        schedule_target: Some(ScheduleBinding { target: target.to_string(), agent: "claude".into() }), push: None, endpoint: None,
+        schedule_target: Some(ScheduleBinding { target: target.to_string(), agent: "claude".into() }), push: None, endpoint: None, model: None,
     }, false);
     let session = authenticate(Some(&format!("Bearer {token}"))).unwrap();
     (token, session)
@@ -642,6 +697,29 @@ fn is_local_model(opts: &PtyOptions) -> bool {
 /// model twice (`NewTabMenu`): `TABTIVITY_LOCAL_MODEL` raw, `VIBE_ACTIVE_MODEL`
 /// as the alias `prepare_local_agent` wrote — and a restored tab may carry
 /// only the alias (`CenterPanel` re-hydrates just that pair).
+/// The Ollama model a local-model spawn runs, from the same env pair
+/// [`local_model_has_tools`] reads: `TABTIVITY_LOCAL_MODEL` raw, else the
+/// `VIBE_ACTIVE_MODEL` alias mapped back through the "MCP"-chipped models (a
+/// tab with the tools is one of them). Fails closed — `None`, so the tab reads
+/// no mail — when the two disagree or the alias names no single model. The
+/// env comes from the renderer at spawn; the tab's own Vibe home, which it
+/// writes, is never consulted (gap 25).
+fn local_model_of(opts: &PtyOptions, tool_models: &[String]) -> Option<String> {
+    let raw = opts.env.get(crate::app_env!("LOCAL_MODEL")).map(|m| m.trim()).filter(|m| !m.is_empty());
+    let alias = opts.env.get("VIBE_ACTIVE_MODEL").map(|a| a.trim()).filter(|a| !a.is_empty());
+    let alias_of = crate::commands::ollama::sanitize_alias;
+    match (raw, alias) {
+        (Some(raw), Some(alias)) => (alias_of(raw) == alias).then(|| raw.to_string()),
+        (Some(raw), None) => Some(raw.to_string()),
+        (None, Some(alias)) => {
+            let mut named = tool_models.iter().map(|m| m.trim()).filter(|m| alias_of(m) == alias);
+            let first = named.next()?;
+            named.all(|m| m == first).then(|| first.to_string())
+        }
+        (None, None) => None,
+    }
+}
+
 fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
     let raw = opts.env.get(crate::app_env!("LOCAL_MODEL"));
     let alias = opts.env.get("VIBE_ACTIVE_MODEL");
@@ -828,10 +906,14 @@ fn grant_root(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, trus
     let endpoint = (caller == Caller::LocalModel)
         .then(|| crate::commands::ollama::resolve_ollama_addr(host.as_deref(), true).ok())
         .flatten();
-    apply_to_spawn_with(opts, runtime, &token, &settings.root_mcp_agent_list(), &trusted.tool_models(), settings.root_mcp_local_only());
+    let tool_models = trusted.tool_models();
+    // The model, fixed here with the endpoint: what the read gate judges
+    // local or cloud, and what keys the per-model taint (gaps 25, 33).
+    let model = (caller == Caller::LocalModel).then(|| local_model_of(opts, &tool_models)).flatten();
+    apply_to_spawn_with(opts, runtime, &token, &settings.root_mcp_agent_list(), &tool_models, settings.root_mcp_local_only());
     if opts.env.get(TOKEN_ENV) == Some(&token) {
-        let read_mail = tab_read_mail(&trusted.state, &opts.id);
-        store.register(token, Identity { schedule_target: None, push: None, tab: opts.id.clone(), caller, project: None, endpoint }, read_mail);
+        let read_mail = spawn_read_mail(&trusted.state, &opts.id, model.as_deref());
+        store.register(token, Identity { schedule_target: None, push: None, tab: opts.id.clone(), caller, project: None, endpoint, model }, read_mail);
     }
 }
 
@@ -863,7 +945,7 @@ fn grant_reader(
     let env = reader_wiring(agent_cmd, agent_args, &token)?;
     store.register(
         token,
-        Identity { schedule_target: None, push: None, tab: tab.to_string(), caller: Caller::Reader, project: Some(project.to_string()), endpoint: None },
+        Identity { schedule_target: None, push: None, tab: tab.to_string(), caller: Caller::Reader, project: Some(project.to_string()), endpoint: None, model: None },
         false,
     );
     Some(env)
@@ -895,7 +977,7 @@ pub fn grant_schedule(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenSto
     let agent = basename(&opts.cmd).to_string();
     apply_schedule_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(SCHEDULE_TOKEN_ENV) == Some(&token) {
-        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Scheduler, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Scheduler, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None, model: None }, false);
     }
 }
 
@@ -938,7 +1020,7 @@ pub fn grant_git_push(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenSto
     let Some(token) = mint_token() else { return };
     apply_git_push_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(GIT_TOKEN_ENV) == Some(&token) {
-        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { git_at_spawn: super::git_push_mcp::git_entry_identity(&dir), dir, fence_scope: None }), endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { git_at_spawn: super::git_push_mcp::git_entry_identity(&dir), dir, fence_scope: None }), endpoint: None, model: None }, false);
     }
 }
 
@@ -989,7 +1071,7 @@ pub fn grant_help(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, 
     let Some(token) = mint_token() else { return };
     apply_help_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(HELP_TOKEN_ENV) == Some(&token) {
-        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Helper, project: None, schedule_target: None, push: None, endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Helper, project: None, schedule_target: None, push: None, endpoint: None, model: None }, false);
     }
 }
 
@@ -1038,7 +1120,7 @@ pub fn grant_markup(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore
     let agent = basename(&opts.cmd).to_string();
     apply_markup_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(MARKUP_TOKEN_ENV) == Some(&token) {
-        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Marker, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Marker, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None, model: None }, false);
     }
 }
 
@@ -3344,6 +3426,22 @@ fn oversized_receipt(name: &str, value: &Value) -> (String, bool) {
     }
 }
 
+/// Whether a local-model caller's model is confirmed to run on this machine:
+/// its endpoint, recorded at spawn, lists the model it was spawned on without
+/// a remote ([`crate::commands::ollama::model_is_local_at`]). The two "kept to
+/// local models" switches (`root_mcp_local_only`, `root_mcp_mail_local_only`)
+/// mean the model, not the tab kind: an Ollama cloud model reached through a
+/// loopback Ollama is a hosted model (the gap 25 sibling). Every caller that
+/// is not a local-model tab with a session passes — the switches already
+/// decide those by class.
+fn local_model_confirmed(stores: &Stores) -> bool {
+    let Some(session) = stores.session.filter(|_| stores.caller == Caller::LocalModel) else { return true };
+    match (session.identity.endpoint.as_deref(), session.identity.model.as_deref()) {
+        (Some(endpoint), Some(model)) => crate::commands::ollama::model_is_local_at(endpoint, model).is_ok(),
+        _ => false,
+    }
+}
+
 pub(crate) fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
@@ -3362,7 +3460,8 @@ pub fn handle_message(stores: &Stores, tab: &str, message: &Value) -> (Option<Va
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
     let ok = |result: Value| Some(json!({ "jsonrpc": "2.0", "id": id.clone(), "result": result }));
     if !stores.policy.serves(stores.caller) || stores.check().is_err()
-        || (stores.caller == Caller::Reader && stores.reader_refusal.is_some()) {
+        || (stores.caller == Caller::Reader && stores.reader_refusal.is_some())
+        || (stores.policy.local_only && !local_model_confirmed(stores)) {
         return (Some(rpc_error(id, -32000, "MCP access unavailable")), Effects::default());
     }
     match method {
@@ -3406,6 +3505,10 @@ pub fn handle_message(stores: &Stores, tab: &str, message: &Value) -> (Option<Va
                 // Its own switch, off by default: unlisted, and named when
                 // called anyway so the agent can tell the user what to flip.
                 Err(if stores.policy.mail { MAIL_LOCAL_ONLY } else { MAIL_OFF }.to_string())
+            } else if super::root_mcp_mail::is_mail_tool(name) && stores.policy.mail_local_only && !local_model_confirmed(stores) {
+                // Kept to local models, and this tab's model runs on
+                // ollama.com: answered as a cloud agent is.
+                Err(MAIL_LOCAL_ONLY.to_string())
             } else if super::root_mcp_mail::is_read_tool(name) && !stores.policy.reads_mail(stores.caller) {
                 // Of this class (a local-model tab), behind its own switch.
                 Err(super::root_mcp_mail::LOCAL_READ_OFF.to_string())
@@ -3464,7 +3567,7 @@ mod tests {
     #[test]
     fn only_a_pusher_binding_takes_a_fence_scope() {
         let store = TokenStore::default();
-        let identity = |caller, push| Identity { tab: "stamp:a".into(), caller, project: Some("p".into()), schedule_target: None, push, endpoint: None };
+        let identity = |caller, push| Identity { tab: "stamp:a".into(), caller, project: Some("p".into()), schedule_target: None, push, endpoint: None, model: None };
         let pusher = mint_token().unwrap();
         store.register(pusher.clone(), identity(Caller::Pusher, Some(PushBinding { dir: "/p".into(), fence_scope: None, git_at_spawn: None })), false);
         let helper = mint_token().unwrap();
@@ -3947,6 +4050,58 @@ mod tests {
         assert!(!o.env.contains_key(URL_ENV) && !o.env.contains_key(TOKEN_ENV));
     }
 
+    /// Gaps 25 and 33: a local tab's model is fixed at spawn from its env —
+    /// raw, else the alias mapped back through the chipped models, nothing
+    /// when the pair disagrees or the alias is ambiguous — and a new tab of a
+    /// model that read mail in another tab starts tainted.
+    #[test]
+    fn a_local_tab_records_its_model_and_starts_with_the_models_taint() {
+        let raw = crate::app_env!("LOCAL_MODEL");
+        let tagged = vec!["gemma4:e4b".to_string(), "qwen3:8b".to_string()];
+        let vibe = |env: &[(&str, &str)]| {
+            let mut o = opts("vibe", &[], None);
+            for (k, v) in env {
+                o.env.insert(k.to_string(), v.to_string());
+            }
+            o
+        };
+        let of = |env: &[(&str, &str)], models: &[String]| local_model_of(&vibe(env), models);
+        assert_eq!(of(&[(raw, "gemma4:e4b"), ("VIBE_ACTIVE_MODEL", "gemma4-e4b")], &tagged).as_deref(), Some("gemma4:e4b"));
+        assert_eq!(of(&[(raw, "llama3:latest")], &tagged).as_deref(), Some("llama3:latest"));
+        assert_eq!(of(&[("VIBE_ACTIVE_MODEL", "gemma4-e4b")], &tagged).as_deref(), Some("gemma4:e4b"), "a restored tab: alias only");
+        assert_eq!(of(&[(raw, "gemma4:e4b"), ("VIBE_ACTIVE_MODEL", "gpt-oss-120b-cloud")], &tagged), None, "the pair disagrees");
+        assert_eq!(of(&[("VIBE_ACTIVE_MODEL", "llama3-latest")], &tagged), None, "an alias of no chipped model");
+        let twins = vec!["a:b-c".to_string(), "a-b:c".to_string()];
+        assert_eq!(of(&[("VIBE_ACTIVE_MODEL", "a-b-c")], &twins), None, "an alias two models share");
+        assert_eq!(of(&[(raw, "  ")], &tagged), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("settings.json"), json!({ "ollama_mcp_models": tagged, "root_mcp_agents": ["claude"] }).to_string()).unwrap();
+        let trusted = Trusted::read(dir.path(), None);
+        let store = TokenStore::default();
+        let spawn = |tab: &str, env: &[(&str, &str)]| {
+            let mut o = vibe(env);
+            o.id = tab.to_string();
+            grant_root(&mut o, &rt(), &store, &trusted);
+            store.authenticate(Some(&format!("Bearer {}", o.env[TOKEN_ENV]))).unwrap()
+        };
+        let gemma = [(raw, "gemma4:e4b"), ("VIBE_ACTIVE_MODEL", "gemma4-e4b")];
+        let first = spawn("root:model-a", &gemma);
+        assert_eq!(first.identity.caller, Caller::LocalModel);
+        assert_eq!(first.identity.model.as_deref(), Some("gemma4:e4b"));
+        assert_eq!(first.identity.endpoint.as_deref(), Some("127.0.0.1:11434"));
+        assert!(!first.has_read_mail());
+        // Its first mail read, as `root_mcp_mail::call` records it.
+        record_read_mail(dir.path(), "root:model-a", first.identity.model.as_deref()).unwrap();
+        assert!(spawn("root:model-b", &gemma).has_read_mail(), "a new tab of that model");
+        assert!(spawn("root:model-c", &[("VIBE_ACTIVE_MODEL", "gemma4-e4b")]).has_read_mail(), "alias only, same model");
+        assert!(!spawn("root:model-d", &[(raw, "qwen3:8b")]).has_read_mail(), "another model is untouched");
+        let mut cloud = opts("claude", &[], None);
+        cloud.id = "root:model-e".into();
+        grant_root(&mut cloud, &rt(), &store, &trusted);
+        assert_eq!(store.authenticate(Some(&format!("Bearer {}", cloud.env[TOKEN_ENV]))).unwrap().identity.model, None, "a cloud agent has no model");
+    }
+
     #[test]
     fn local_only_hands_cloud_agents_nothing_and_local_models_their_own_token() {
         for cmd in ["claude", "codex", "gemini", "vibe"] {
@@ -3973,8 +4128,8 @@ mod tests {
     #[test]
     fn stale_spawn_teardown_cannot_revoke_a_replacement_token() {
         let tab = "root:token-generation";
-        register_token("generation-old".into(), Identity { schedule_target: None, push: None, tab: tab.into(), caller: Caller::Agent, project: None, endpoint: None }, false);
-        register_token("generation-new".into(), Identity { schedule_target: None, push: None, tab: tab.into(), caller: Caller::LocalModel, project: None, endpoint: None }, false);
+        register_token("generation-old".into(), Identity { schedule_target: None, push: None, tab: tab.into(), caller: Caller::Agent, project: None, endpoint: None, model: None }, false);
+        register_token("generation-new".into(), Identity { schedule_target: None, push: None, tab: tab.into(), caller: Caller::LocalModel, project: None, endpoint: None, model: None }, false);
         assert!(revoke_token("generation-old").is_none());
         assert_eq!(caller(Some("Bearer generation-new")).unwrap().tab, tab);
         let mut options = opts("vibe", &[], None);
@@ -3985,8 +4140,8 @@ mod tests {
 
     #[test]
     fn the_endpoint_tells_callers_apart_and_local_only_refuses_agents() {
-        register_token("tok".into(), Identity { schedule_target: None, push: None, tab: "root:auth-agent".into(), caller: Caller::Agent, project: None, endpoint: None }, false);
-        register_token("loc".into(), Identity { schedule_target: None, push: None, tab: "root:auth-local".into(), caller: Caller::LocalModel, project: None, endpoint: None }, false);
+        register_token("tok".into(), Identity { schedule_target: None, push: None, tab: "root:auth-agent".into(), caller: Caller::Agent, project: None, endpoint: None, model: None }, false);
+        register_token("loc".into(), Identity { schedule_target: None, push: None, tab: "root:auth-local".into(), caller: Caller::LocalModel, project: None, endpoint: None, model: None }, false);
         assert_eq!(caller(Some("Bearer tok")).unwrap().caller, Caller::Agent);
         assert_eq!(caller(Some("Bearer loc")).unwrap().caller, Caller::LocalModel);
         assert_eq!(caller(Some("Bearer nope")), None);
@@ -4175,6 +4330,53 @@ mod tests {
         assert!(serves(&fx.settings, Caller::Reader));
     }
 
+    /// The gap 25 sibling: "kept to local models" means the model. A
+    /// local-model tab on an Ollama cloud model (or on a model its endpoint
+    /// does not list, or none recorded) is refused the whole endpoint under
+    /// `root_mcp_local_only` and the mail tools under
+    /// `root_mcp_mail_local_only`, as a cloud agent is; an installed model
+    /// keeps both, and with both switches off nothing is asked.
+    #[test]
+    fn local_only_switches_refuse_a_local_tab_on_a_cloud_model() {
+        let fx = Fixture::new();
+        let tags = r#"{"models":[{"name":"llama3:latest"},{"name":"gpt-oss:120b-cloud","remote_host":"https://ollama.com:443"}]}"#;
+        crate::commands::ollama::test_tags::set(Some(tags));
+        let ep = Some("127.0.0.1:11434".to_string());
+        let session_of = |tab: &str, model: Option<&str>| test_session_model(Caller::LocalModel, tab, fx.dir.path(), ep.clone(), model.map(String::from)).1;
+        let local = session_of("root:lo-local", Some("llama3:latest"));
+        let cloud = session_of("root:lo-cloud", Some("gpt-oss:120b-cloud"));
+        let unknown = session_of("root:lo-unknown", Some("mistral:7b"));
+        let none = session_of("root:lo-none", None);
+        let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+        let draft = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "mail_drafts_list", "arguments": {} } });
+        let reply = |session: &Session, msg: &Value| {
+            let stores = Stores { caller: Caller::LocalModel, access: Access::initial(Caller::LocalModel), session: Some(session), ..fx.stores() };
+            handle_message(&stores, &session.identity.tab, msg).0.unwrap()
+        };
+        let text = |session: &Session| reply(session, &draft)["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string();
+
+        // Both switches off: every local tab is served as before.
+        for s in [&local, &cloud, &unknown, &none] {
+            assert!(reply(s, &list)["result"]["tools"].is_array(), "{}", s.identity.tab);
+            assert_ne!(text(s), MAIL_LOCAL_ONLY);
+        }
+        fx.write_state("settings.json", json!({ "root_mcp_mail": true, "root_mcp_local_only": true }));
+        assert!(reply(&local, &list)["result"]["tools"].is_array());
+        for s in [&cloud, &unknown, &none] {
+            assert_eq!(reply(s, &list)["error"]["code"], -32000, "{}", s.identity.tab);
+        }
+        fx.write_state("settings.json", json!({ "root_mcp_mail": true, "root_mcp_mail_local_only": true }));
+        assert_ne!(text(&local), MAIL_LOCAL_ONLY);
+        for s in [&cloud, &unknown, &none] {
+            assert_eq!(text(s), MAIL_LOCAL_ONLY, "{}", s.identity.tab);
+            assert!(reply(s, &list)["result"]["tools"].is_array(), "its other tools stay: {}", s.identity.tab);
+        }
+        // No server to ask: not confirmed, refused.
+        crate::commands::ollama::test_tags::set(None);
+        assert_eq!(text(&local), MAIL_LOCAL_ONLY);
+        for tab in ["root:lo-local", "root:lo-cloud", "root:lo-unknown", "root:lo-none"] { revoke_tab(tab); }
+    }
+
     #[test]
     fn tools_list_matches_the_advertised_names() {
         let f = Fixture::new();
@@ -4265,8 +4467,8 @@ mod tests {
     fn tokens_are_per_tab_and_die_with_it() {
         let (a, b) = (mint_token().unwrap(), mint_token().unwrap());
         assert_ne!(a, b);
-        register_token(a.clone(), Identity { schedule_target: None, push: None, tab: "root:pt-a".into(), caller: Caller::Agent, project: None, endpoint: None }, false);
-        register_token(b.clone(), Identity { schedule_target: None, push: None, tab: "vm:pt-b".into(), caller: Caller::Reader, project: Some("p1".into()), endpoint: None }, false);
+        register_token(a.clone(), Identity { schedule_target: None, push: None, tab: "root:pt-a".into(), caller: Caller::Agent, project: None, endpoint: None, model: None }, false);
+        register_token(b.clone(), Identity { schedule_target: None, push: None, tab: "vm:pt-b".into(), caller: Caller::Reader, project: Some("p1".into()), endpoint: None, model: None }, false);
         let ida = caller(Some(&format!("Bearer {a}"))).unwrap();
         let idb = caller(Some(&format!("Bearer {b}"))).unwrap();
         assert_eq!((ida.tab.as_str(), ida.caller), ("root:pt-a", Caller::Agent));
