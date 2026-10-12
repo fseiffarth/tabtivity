@@ -108,3 +108,74 @@ warnings). Windows tests themselves have not run (CI will).
   identical bytes uploaded twice under one freed name both rows resolve to
   the same file. Harmless (the file is still one this feature wrote,
   unchanged), noted for the reviewer.
+
+### Review A
+
+Reviewed `0c1c995c..1a4b719c` (`uploads.rs`, the `inbox.rs` refactor,
+`files.rs` / `files_windows.rs` visibility, `mod.rs`). Fixes in `bf68dc78`,
+each with a regression test:
+
+- **`create_unique` underflow** (pre-existing in the inbox, now reached by
+  uploads too): `safe_name` keeps a dotted tail past 12 characters whole, so
+  `a.<78 × 𝐀>` reached `create_unique` with a 313-byte "extension";
+  `255 - 5 - ext.len()` underflowed — a panic under overflow checks (tests,
+  debug), an over-long name and `write_failed` in release. A tail that leaves
+  the stem no byte is now cut as part of the stem (no trailing dot left).
+  Test: `inbox::a_long_dotted_tail_in_a_wide_script_still_lands`.
+- **Device names**: `COM¹ COM² COM³ LPT¹ LPT² LPT³` (Win32 reads the
+  superscripts as port digits) and `COM0`/`LPT0` (Microsoft's reserved list)
+  passed `safe_name`. Added to `a_windows_device_name_gets_an_underscore_on_every_os`.
+- **Torn log line blinded the log**: `read_log` used `read_to_string`, so one
+  line cut inside a multi-byte character (a short append on a full disk;
+  `phone` labels are not ASCII-escaped) made the whole log read as empty —
+  the cap counted nothing, `recent`/`find`/`undo` saw nothing, and no
+  compaction ever ran to heal it. Now parsed as bytes per line; the torn line
+  is one garbage line, dropped at the next write. Test:
+  `uploads::a_line_torn_mid_character_does_not_blind_the_log`.
+- **Two desktop rows for one file**: the same bytes uploaded again under the
+  name an undo freed left two intact records; `recent` now lists one row per
+  `(project, rel)`, the newest intact record. Test:
+  `uploads::recent_lists_one_row_per_file`.
+
+Checked and fine: the openat/`O_NOFOLLOW` (Windows `FILE_OPEN_REPARSE_POINT`)
+walk is held from before the cap check to the write; `O_EXCL`/`FILE_CREATE`
+never opens an existing name or link; `accepts` sees only `valid_rel` paths
+from sealed tokens (no forged `GITHUB~1`-style short names); log lines are
+JSON-escaped (no injection); cap check, create and append share `LOG_LOCK`;
+`inbox::store_at` behaves as before apart from the device rename (only its
+`Io` text changed); cfg gating and `/`-joined test rels are cross-OS.
+
+#### Verdicts on flagged items
+
+- *Undo matches any log record of that project + path* (implementer):
+  **harmless, keep.** Whatever record matches, the file is one this feature
+  wrote, byte-for-byte unchanged — decision 7's test. Its one visible effect,
+  two desktop rows for one file, is fixed above.
+
+#### Flagged for user (not changed)
+
+- **Undo race (hash → unlink by name).** `undo` hashes the file, then
+  `unlinkat`s the name. An editor's atomic save (rename over) landing in that
+  window — milliseconds, up to 24 MiB of hashing — is deleted although it
+  changed. Unix has no unlink-if-same-inode; a `(dev, ino)` re-check right
+  before `unlinkat` would narrow it to microseconds. On Windows it can be
+  closed outright: open the leaf once with `DELETE`, hash through it, set the
+  disposition on that handle. Worth doing in step B or a follow-up?
+- **Non-dot files tools run.** Decision 4's dot rule keeps uploads out of
+  `.github`/`.cargo`/…, but a non-dot name in a plain folder can still be
+  picked up by tooling: `tests/conftest.py` (pytest imports it), a root
+  `build.rs` or `Makefile` in a project lacking one (a clash only suffixes).
+  Within the threat notes (the paired phone already has shells); noted only.
+- **The cap counts bytes, not files.** 1-byte uploads are bounded only by the
+  request rate; each adds a log line, and every upload reads the whole log.
+  Fine for a trusted paired phone; a per-day file count would bound it.
+
+#### Gates (after `bf68dc78`, Linux)
+
+`scripts/gates.sh`: brand, whitespace, clippy (tabtivity + app-serverd, all
+targets), clippy daemon lib, clippy app-serverd, `cargo test -p tabtivity -p
+app-serverd`, daemon test — all PASS (frontend gates skipped, no frontend
+change). Lib tests 3878 passed / 4 ignored (+3); `uploads` 17, `inbox` 18.
+Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc
+--all-targets -D warnings` (msvc shims) clean. macOS not re-checked (no
+cfg'd code changed). Windows tests not run (CI). Not run live.
