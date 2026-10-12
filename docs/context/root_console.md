@@ -361,7 +361,9 @@ sticky: `commands::calendar::update_event_at` and the CalDAV merge keep a
 stored `from_mail` over whatever the new row says (`keep_from_mail`), and a
 pasted copy carries it (`calendarClipboard.ts`). A card's mark is checked live
 against its event, so a card from a mail-derived event loses it once that
-event is deleted. The `Change` rows
+event is deleted — except in a scoped session, whose sandbox leaves out the
+calendars it may not see: there a card whose event is not in view reads as
+external, since a hidden event and a deleted one look the same. The `Change` rows
 the window and the review layer use stay complete. `calendar_list` matches an
 event while any of it overlaps the range, and `expand` adds a series'
 occurrences (at most 92 days; `occurrences` in `root_mcp.rs` walks daily /
@@ -604,8 +606,10 @@ sandbox back over the live file.
 
 `services::root_mcp_review` owns the immutable proposal rows and the atomic log
 at `<state_dir>/root_mcp/proposals.json`. It keeps every pending proposal and
-the newest 200 decided entries; unknown future statuses and extra fields
-round-trip. A first board move also records seeded columns, upgrade markers and
+the newest 200 decided entries, fewer when their rows would take the log past
+8 MiB as written (pretty JSON, what `load` measures): the oldest decided go
+first, because a refused save would follow an automatic write that already
+landed. Unknown future statuses and extra fields round-trip. A first board move also records seeded columns, upgrade markers and
 normalized sibling rows, so applying or undoing it does not lose those effects.
 
 Only the Tauri review commands approve, reject, bulk-approve or undo. Approval

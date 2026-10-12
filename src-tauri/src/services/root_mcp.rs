@@ -1799,11 +1799,18 @@ fn event_external(event: &CalendarEvent, data: &crate::schema::calendar::Calenda
 /// A card whose text is not the user's own: in a foreign calendar, converted
 /// from a mail (`mail`), or converted from an appointment that is itself
 /// external — a card from a mail-derived event carries the mail's words on.
-fn task_external(task: &CalendarTask, data: &crate::schema::calendar::CalendarData) -> bool {
+///
+/// A scoped session reads a sandbox without the calendars it may not see, so
+/// a linked appointment missing from `data` may be one hidden there rather
+/// than deleted: such a session reads the card as external (fails closed).
+fn task_external(task: &CalendarTask, data: &crate::schema::calendar::CalendarData, access: &Access) -> bool {
     foreign_calendar(data, &task.calendar_id)
         || task.mail.is_some()
         || task.event.as_ref().is_some_and(|link| {
-            data.events.iter().any(|e| e.id == link.event_id && event_external(e, data))
+            match data.events.iter().find(|e| e.id == link.event_id) {
+                Some(event) => event_external(event, data),
+                None => !access.calendars.all,
+            }
         })
 }
 
@@ -1828,9 +1835,9 @@ fn event_view(event: &CalendarEvent, data: &crate::schema::calendar::CalendarDat
 }
 
 /// A card as a tool shows it, by [`event_view`]'s rules ([`task_external`]).
-fn task_view(task: &CalendarTask, data: &crate::schema::calendar::CalendarData) -> Value {
+fn task_view(task: &CalendarTask, data: &crate::schema::calendar::CalendarData, access: &Access) -> Value {
     let mut out = view(task, TASK_FIELDS);
-    if task_external(task, data) {
+    if task_external(task, data, access) {
         redact_value(&mut out);
         out["external"] = json!(true);
     } else if has_server_copy(&task.extra) {
@@ -2506,7 +2513,7 @@ fn todo_list(stores: &Stores, args: &Value) -> Result<Value, String> {
         .filter(|t| stores.access.calendars.contains(&t.calendar_id) && stores.access.projects.contains(&t.project_id))
         .filter(|t| include_completed || t.completed.is_none())
         .filter(|t| project.as_ref().is_none_or(|p| &t.project_id == p))
-        .map(|t| task_view(t, &data))
+        .map(|t| task_view(t, &data, &stores.access))
         .collect();
     let columns: Vec<Value> = data
         .task_columns
@@ -2565,7 +2572,7 @@ fn task_change(task: &CalendarTask) -> Result<Change, String> {
 /// against the store as the write left it) and as the window is told of it.
 fn task_upsert(stores: &Stores, task: &CalendarTask) -> Result<(Value, Change), String> {
     let data = crate::commands::calendar::read_data(stores.calendar)?;
-    Ok((task_view(task, &data), task_change(task)?))
+    Ok((task_view(task, &data, &stores.access), task_change(task)?))
 }
 
 /// A card's `percent` short of done: 100 is done, which only todo_complete
@@ -2802,7 +2809,7 @@ fn todo_move(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), Stri
         })
         .collect::<Result<Vec<_>, _>>()?;
     let data = crate::commands::calendar::read_data(stores.calendar)?;
-    Ok((task_view(&moved, &data), changes))
+    Ok((task_view(&moved, &data, &stores.access), changes))
 }
 
 fn todo_delete(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
@@ -3500,8 +3507,6 @@ pub(crate) fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// Answer one JSON-RPC message. `None` for a notification (no `id`), which MCP
-/// answers with `202 Accepted` and no body. Blocking: it reads and writes files.
 /// The fixed category an audited refusal of [`handle_message`] is logged under
 /// (`security::audit_reason`), as the other lanes log theirs: `None` for a
 /// served call. Only fixed texts are matched — never a tool's own message, which
@@ -3544,6 +3549,8 @@ pub fn refusal_reason(reply: &Value) -> Option<&'static str> {
     Some(fixed.iter().find(|(prefix, _)| text.starts_with(prefix)).map_or("invalid_or_unavailable", |(_, reason)| reason))
 }
 
+/// Answer one JSON-RPC message. `None` for a notification (no `id`), which MCP
+/// answers with `202 Accepted` and no body. Blocking: it reads and writes files.
 pub fn handle_message(stores: &Stores, tab: &str, message: &Value) -> (Option<Value>, Effects) {
     if message["jsonrpc"] != "2.0" || !message["method"].is_string()
         || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())

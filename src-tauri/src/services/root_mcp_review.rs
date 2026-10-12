@@ -110,15 +110,18 @@ pub fn load(state: &Path) -> Result<Vec<Proposal>, String> {
     storage::read_json(&path).map_err(|e| e.to_string())
 }
 fn save(state: &Path, proposals: &[Proposal]) -> Result<(), String> {
+    // Unknown future statuses are never silently evicted either.
+    let is_decided = |p: &Proposal| {
+        matches!(
+            p.status.as_str(),
+            "applied" | "rejected" | "conflicted" | "undone" | "failed"
+        )
+    };
     let mut keep = proposals.to_vec();
     let mut decided = 0;
     keep.reverse();
     keep.retain(|p| {
-        // Unknown future statuses are never silently evicted either.
-        if matches!(
-            p.status.as_str(),
-            "applied" | "rejected" | "conflicted" | "undone" | "failed"
-        ) {
+        if is_decided(p) {
             decided += 1;
             decided <= 200
         } else {
@@ -126,7 +129,35 @@ fn save(state: &Path, proposals: &[Proposal]) -> Result<(), String> {
         }
     });
     keep.reverse();
-    if serde_json::to_vec(&keep).map_err(|e| e.to_string())?.len() > security::MAX_LOG_BYTES {
+    // History also goes by size, oldest first: every `off` and `destructive`
+    // write is logged as `applied`, and big rows (a column reindex) can fill
+    // the cap with fewer than 200. A save refused here would come after an
+    // automatic write already landed — reported as failed, retried, doubled —
+    // and every later one would land the same way. Sized as written (pretty,
+    // which `load` measures): an entry's own pretty text, two more spaces of
+    // indent per line inside the array, and its separator.
+    let sizes: Vec<usize> = keep
+        .iter()
+        .map(|p| serde_json::to_vec_pretty(p).map(|v| v.len() + 2 * (v.iter().filter(|b| **b == b'\n').count() + 1) + 2))
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut total = sizes.iter().sum::<usize>() + 4;
+    let mut evict = vec![false; keep.len()];
+    for (i, p) in keep.iter().enumerate() {
+        if total <= security::MAX_LOG_BYTES {
+            break;
+        }
+        if is_decided(p) {
+            evict[i] = true;
+            total -= sizes[i];
+        }
+    }
+    let mut evict = evict.into_iter();
+    keep.retain(|_| !evict.next().unwrap_or(false));
+    // What `write_json_atomic` puts on disk (pretty, a trailing newline) and
+    // `load` measures — a compact count let a log through that `load` then
+    // refused, which stopped every later call and the review panel.
+    if serde_json::to_vec_pretty(&keep).map_err(|e| e.to_string())?.len() + 1 > security::MAX_LOG_BYTES {
         return Err("MCP proposal storage limit reached; review pending proposals".into());
     }
     storage::write_json_atomic(&log_path(state), &keep).map_err(|e| e.to_string())
@@ -1562,6 +1593,75 @@ mod tests {
         assert_eq!(f.call("root:a", "todo_add", json!({"title":"x"}))["staged"], true);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(f.call("root:a", "todo_add", json!({"title":"y"}))["staged"], false, "no file is no account");
+    }
+
+    /// Every `off` write is logged as applied. A log whose history has grown
+    /// near its byte cap evicts its oldest decided rows instead of refusing
+    /// the save — which came after the write had landed, so the agent was
+    /// told it failed (and retried it) while the card was already there.
+    #[test]
+    fn a_full_history_makes_room_instead_of_failing_a_landed_write() {
+        let f = Fixture::new();
+        f.mode("off");
+        f.call("root:a", "todo_add", json!({"title":"seed"}));
+        let seed = f.proposals().pop().unwrap();
+        let entry = |i: usize, pad: usize| {
+            let mut p = seed.clone();
+            p.id = format!("old-{i}");
+            p.args = json!({ "pad": "x".repeat(pad) });
+            p
+        };
+        let mut log: Vec<Proposal> = (0..150).map(|i| entry(i, 50_000)).collect();
+        // Measured as written: pretty JSON and a newline, what `load` checks.
+        let used = serde_json::to_vec_pretty(&log).unwrap().len() + 1;
+        log.push(entry(150, security::MAX_LOG_BYTES - used - 40_000));
+        storage::write_json_atomic(&log_path(f.dir.path()), &log).unwrap();
+        assert!(load(f.dir.path()).is_ok(), "the log as it stands still loads");
+
+        let title = "t".repeat(30_000);
+        let (added, effects) = call(&f.stores(), "root:a", "todo_add", &json!({ "title": title })).unwrap();
+        assert_eq!(added["proposal_status"], "applied");
+        assert_eq!(effects.changes.len(), 1, "the window is told");
+        let tasks = data_at(&f.calendar).unwrap()["tasks"].clone();
+        assert_eq!(tasks.as_array().unwrap().iter().filter(|t| t["title"] == title.as_str()).count(), 1);
+        let kept = f.proposals();
+        assert_eq!(kept.last().unwrap().id, added["proposal"].as_str().unwrap(), "the new row is logged");
+        assert!(kept.iter().all(|p| p.id != "old-0"), "the oldest went");
+        assert!(std::fs::metadata(log_path(f.dir.path())).unwrap().len() <= security::MAX_LOG_BYTES as u64);
+        // And the lane keeps working: the next write and the panel's list.
+        let (next, _) = call(&f.stores(), "root:a", "todo_add", &json!({ "title": title })).unwrap();
+        assert_eq!(next["proposal_status"], "applied");
+        assert!(list(&f.stores()).is_ok());
+    }
+
+    /// A scoped session's sandbox leaves out the calendars it may not see, so
+    /// the appointment a card was made from can be missing there. Such a card
+    /// still reads as external when that appointment came from a mail.
+    #[test]
+    fn a_card_from_a_hidden_mail_event_stays_external_in_a_scoped_view() {
+        let f = Fixture::new();
+        f.mode("off");
+        let work = f.call("setup", "calendar_create", json!({"name":"Work"}));
+        let event = f.call("setup", "calendar_add_event", json!({"title":"Kick-off", "calendar":work["id"], "start":"2026-09-20T10:00"}));
+        let card = f.call("setup", "todo_add", json!({"title":"Prepare https://evil.example/a"}));
+        let mut data = calendar::read_data(&f.calendar).unwrap();
+        let e = data.events.iter_mut().find(|e| e.id == event["id"].as_str().unwrap()).unwrap();
+        e.extra.insert(calendar::FROM_MAIL_KEY.into(), json!({"message_id":"INBOX-7"}));
+        let t = data.tasks.iter_mut().find(|t| t.id == card["id"].as_str().unwrap()).unwrap();
+        t.event = Some(crate::schema::calendar::TaskEventLink { event_id: event["id"].as_str().unwrap().into(), ..Default::default() });
+        let own = t.calendar_id.clone();
+        storage::write_json_atomic(&f.calendar, &data).unwrap();
+
+        let mut stores = f.stores();
+        stores.access.calendars = security::Scope { all: false, ids: vec![own] };
+        let listed = call(&stores, "scoped", "todo_list", &json!({})).unwrap().0;
+        let row = listed["cards"].as_array().unwrap().iter().find(|c| c["id"] == card["id"]).unwrap().clone();
+        assert_eq!(row["external"], true, "{row}");
+        assert!(!row.to_string().contains("evil.example"), "{row}");
+        // Unscoped, the event is in view and decides it the same way.
+        let listed = f.call("root:a", "todo_list", json!({}));
+        let row = listed["cards"].as_array().unwrap().iter().find(|c| c["id"] == card["id"]).unwrap().clone();
+        assert_eq!(row["external"], true, "{row}");
     }
 
     /// The first move on a board that has never been dragged on seeds the
