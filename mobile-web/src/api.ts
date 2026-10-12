@@ -1051,11 +1051,14 @@ export async function openOutside(url: string): Promise<void> {
  * first bytes announce, `modified` and `created` are unix seconds — `created`
  * missing where the desktop's filesystem keeps no birth time. */
 export interface ProjectFileEntry { token: string; name: string; kind: string; size: number; modified: number; created?: number; ignored?: boolean }
-export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean }
+/** `uploads`: whether **Upload here** may add files to this folder — the
+ * desktop's "Phone may add files to projects" switch is on and no folder on
+ * the way down starts with a dot. An older desktop omits it (no uploads). */
+export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean }
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>]` — one folder of the
- * project, read-only; no `dir` is the project's root. Answers only while the
- * desktop's "Project files on the phone" switch is on (`files_off` else). */
+ * project; no `dir` is the project's root. Answers only while the desktop's
+ * "Project files on the phone" switch is on (`files_off` else). */
 export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal): Promise<ProjectFileListing> {
   const query = dir ? `?dir=${encodeURIComponent(dir)}` : "";
   return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query}`, { signal });
@@ -1073,6 +1076,27 @@ export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean 
  * listing. */
 export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal): Promise<ProjectFileSearch> {
   return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}`, { signal });
+}
+
+/** `POST /api/v1/projects/{id}/files/upload?name=…[&dir=<token>]` — the
+ * drawer's **Upload here**: the raw file as a new file in the folder `dir`
+ * names (none: the project root). Add-only: the desktop keeps the phone's
+ * name unless it is taken (`name-2.pdf`), and answers the new file's row. */
+export async function uploadProjectFile(projectId: string, dir: string | undefined, file: Blob, name: string): Promise<ProjectFileEntry> {
+  const folder = dir ? `&dir=${encodeURIComponent(dir)}` : "";
+  const [status, body] = await postFile<{ file?: ProjectFileEntry }>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/files/upload?name=${encodeURIComponent(name)}${folder}`,
+    file,
+  );
+  if (!body?.file?.token) throw new ApiError(status, "malformed_response");
+  return body.file;
+}
+
+/** `DELETE /api/v1/projects/{id}/files/upload?f=<token>` — Undo of an
+ * upload: the desktop deletes the file only while it is one this feature
+ * wrote and still unchanged (`file_not_found` else). */
+export async function undoProjectUpload(projectId: string, token: string): Promise<void> {
+  await api<{ undone: boolean }>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/upload?f=${encodeURIComponent(token)}`, { method: "DELETE" });
 }
 
 /** Mark up's Reload for a project file opened by its sealed row rather than
@@ -1127,7 +1151,9 @@ async function postFile<T>(url: string, file: Blob, retried = false): Promise<[n
     body = undefined;
   }
   if (response.status === 401 && !retried && await onUnauthorized?.()) return postFile<T>(url, file, true);
-  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed", body);
+  // A body past the route's limit is refused before the desktop reads it: a
+  // bare 413 with no code (only a phone that skipped the size check sees it).
+  if (!response.ok) throw new ApiError(response.status, body?.error ?? (response.status === 413 ? "file_too_large" : "request_failed"), body);
   return [response.status, body];
 }
 
