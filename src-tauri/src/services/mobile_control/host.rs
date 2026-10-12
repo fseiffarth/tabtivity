@@ -13,7 +13,7 @@ use axum::{
     http::{header, HeaderMap, HeaderValue, Request, Response, StatusCode, Uri},
     middleware::{self, Next},
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
@@ -47,6 +47,7 @@ use super::{
     },
     pty_bridge::{self, TerminalRegistry},
     scheduler,
+    uploads,
     push::{AgentTabRef, PushPrefs},
     sign_in,
     live_pwa, web_client, MOBILE_ASSETS,
@@ -5850,7 +5851,9 @@ fn files_rel(
 
 /// `GET /api/v1/projects/{project_id}/files[?dir=<token>]` — one folder of the
 /// project, read-only: sealed tokens, leaf names, kind, size, mtime. No `dir`
-/// is the project root. No path appears in the answer.
+/// is the project root. No path appears in the answer. `uploads` says whether
+/// **Upload here** may write into this folder (`project_files_upload`): the
+/// switch is on and no segment of the folder starts with a dot.
 async fn project_files_list(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -5870,12 +5873,17 @@ async fn project_files_list(
         Err(error) => return error,
     };
     let key = state.auth.lock_ok().host_key().to_vec();
+    let accepts = uploads::accepts(&rel);
     // A directory walk that opens every kept file to type it: off the executor.
     let listed = tokio::task::spawn_blocking(move || files::list(&root, &rel, &key, &raw_id))
         .await
         .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
     match listed {
-        Ok(listing) => (StatusCode::OK, Json(json!(listing))),
+        Ok(listing) => {
+            let mut answer = json!(listing);
+            answer["uploads"] = json!(accepts && uploads::uploads_open(&state.config.state_dir));
+            (StatusCode::OK, Json(answer))
+        }
         Err(error) => files_error(error),
     }
 }
@@ -5915,7 +5923,8 @@ async fn project_files_search(
 
 /// `GET /api/v1/projects/{project_id}/files/raw?f=<token>[&download=1]` — one
 /// file's bytes, typed by its head as the outbox types them (active formats are
-/// inert text), for the same viewer. Read-only: there is no write route.
+/// inert text), for the same viewer. Read-only; the browser's one write is
+/// `project_files_upload`, which only adds new files.
 async fn project_files_raw(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -5961,6 +5970,130 @@ async fn project_files_raw(
                 api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response()
             }),
         Err(error) => files_error(error).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    /// The folder's sealed token from its listing; none is the project root.
+    #[serde(default)]
+    dir: Option<String>,
+    /// The phone's file name — a query parameter for the reason `InboxQuery`
+    /// gives.
+    #[serde(default)]
+    name: String,
+}
+
+/// An upload's refusal as the phone's status (`uploads::UploadError::code`).
+fn upload_error(error: uploads::UploadError) -> (StatusCode, Json<serde_json::Value>) {
+    api_error(
+        match error {
+            uploads::UploadError::Off | uploads::UploadError::NotFound => StatusCode::NOT_FOUND,
+            uploads::UploadError::Refused => StatusCode::FORBIDDEN,
+            uploads::UploadError::Empty => StatusCode::BAD_REQUEST,
+            uploads::UploadError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            uploads::UploadError::Full => StatusCode::INSUFFICIENT_STORAGE,
+            uploads::UploadError::Unavailable => StatusCode::CONFLICT,
+            uploads::UploadError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        },
+        error.code(),
+    )
+}
+
+/// The project a file-browser write names, after the guards every write
+/// shares: a session, the exact origin, the browser's scope (`files_off`,
+/// a phone outside the project's list reads `project_not_found`), and the
+/// upload switch (`uploads_off`), read per request.
+fn upload_scope(
+    state: &HostState,
+    headers: &HeaderMap,
+    project_id: &str,
+) -> Result<(Phone, PathBuf, String), (StatusCode, Json<serde_json::Value>)> {
+    let phone = authenticate(headers, state)?;
+    if !exact_origin(headers, state) {
+        return Err(api_error(StatusCode::FORBIDDEN, "invalid_origin"));
+    }
+    let (root, raw_id) = files_scope(state, &phone, project_id)?;
+    if !uploads::uploads_open(&state.config.state_dir) {
+        return Err(upload_error(uploads::UploadError::Off));
+    }
+    Ok((phone, root, raw_id))
+}
+
+/// `POST /api/v1/projects/{project_id}/files/upload?name=<leaf>[&dir=<token>]`
+/// — the drawer's **Upload here**: the raw body becomes a new file in the
+/// folder the phone stands in, under the phone's name (a clash takes a
+/// `-2` suffix; nothing is overwritten). Add-only, into an existing folder
+/// with no dot segment, logged for the desktop's notice and both undos
+/// (`uploads.rs`). The answer is the new file's listing row.
+async fn project_files_upload(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<UploadQuery>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let (phone, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let rel_dir = match files_rel(&state, &raw_id, query.dir.as_ref()) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    // The device label for the desktop's notice, and the key the answer's
+    // row is sealed with.
+    let (label, key) = {
+        let auth = state.auth.lock_ok();
+        let label = auth.devices().into_iter().find(|device| device.id == phone.device_id()).map(|device| device.name);
+        (label, auth.host_key().to_vec())
+    };
+    let state_dir = state.config.state_dir.clone();
+    // Up to MAX_INBOX_FILE bytes written and hashed under the sidecar-wide
+    // log lock: off the connection executor.
+    let landed = tokio::task::spawn_blocking(move || {
+        uploads::store(&state_dir, &root, &raw_id, &rel_dir, &query.name, &body, label.as_deref())
+            .map(|landed| files::entry(&root, &landed.rel, &key, &raw_id))
+    })
+    .await
+    .unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string())));
+    match landed {
+        Ok(Some(file)) => (StatusCode::CREATED, Json(json!({ "file": file }))),
+        Ok(None) => upload_error(uploads::UploadError::NotFound),
+        Err(error) => upload_error(error),
+    }
+}
+
+/// `DELETE /api/v1/projects/{project_id}/files/upload?f=<token>` — the landed
+/// row's **Undo**: deletes the file only while the upload log names it and it
+/// is byte-for-byte what the phone sent; anything else is `file_not_found`.
+/// Answers `{ "undone": true }`.
+async fn project_files_upload_undo(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let (_, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let Some(token) = query.get("f") else {
+        return upload_error(uploads::UploadError::NotFound);
+    };
+    let rel = match files_rel(&state, &raw_id, Some(token)) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let state_dir = state.config.state_dir.clone();
+    // Re-hashes the file (up to MAX_INBOX_FILE bytes): off the executor.
+    let undone = tokio::task::spawn_blocking(move || uploads::undo(&state_dir, &root, &raw_id, &rel))
+        .await
+        .unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string())));
+    match undone {
+        // A body, not a 204: the phone's `api()` reads every answer as JSON.
+        Ok(()) => (StatusCode::OK, Json(json!({ "undone": true }))),
+        Err(error) => upload_error(error),
     }
 }
 
@@ -6186,6 +6319,11 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/projects/{project_id}/files", get(project_files_list))
         .route("/api/v1/projects/{project_id}/files/raw", get(project_files_raw))
         .route("/api/v1/projects/{project_id}/files/search", get(project_files_search))
+        .route(
+            "/api/v1/projects/{project_id}/files/upload",
+            delete(project_files_upload_undo)
+                .merge(post(project_files_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
+        )
         .route(
             "/api/v1/projects/{project_id}/outbox",
             get(project_outbox_list).delete(project_outbox_clear),
@@ -9865,6 +10003,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_here_adds_a_new_file_to_a_plain_folder_and_undoes_only_it() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(38)).await.0;
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+        let base = format!("/api/v1/projects/{project_id}/files");
+        std::fs::create_dir_all(host.root.join("docs")).unwrap();
+        std::fs::create_dir_all(host.root.join(".github")).unwrap();
+        let switches = |files: bool, uploads: bool| {
+            std::fs::write(
+                host.state.config.state_dir.join("settings.json"),
+                json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": files, "project_uploads": uploads } }).to_string(),
+            )
+            .unwrap();
+        };
+        let upload = |query: &str, origin: &str, bytes: &[u8]| {
+            Request::builder()
+                .method("POST")
+                .uri(format!("{base}/upload?{query}"))
+                .header(header::ORIGIN, origin)
+                .header(header::COOKIE, cookie_pair(&cookie))
+                .body(Body::from(bytes.to_vec()))
+                .expect("request")
+        };
+        let undo = |token: &str| request_as("DELETE", &format!("{base}/upload?f={token}"), &cookie, None);
+        let refused = |answer: (StatusCode, HeaderMap, String)| (answer.0, json(&answer.2)["error"].clone());
+
+        // Both switches off, then only the browser on: closed either way.
+        switches(false, true);
+        assert_eq!(refused(host.send(upload("name=a.pdf", ORIGIN, b"pdf")).await), (StatusCode::NOT_FOUND, json!("files_off")));
+        switches(true, false);
+        assert_eq!(refused(host.send(upload("name=a.pdf", ORIGIN, b"pdf")).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
+        let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+        assert_eq!(json(&body)["uploads"], false, "{body}");
+        let tokens: HashMap<String, String> = json(&body)["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .map(|entry| (entry["name"].as_str().unwrap().to_string(), entry["token"].as_str().unwrap().to_string()))
+            .collect();
+        let (docs, github) = (&tokens["docs"], &tokens[".github"]);
+
+        switches(true, true);
+        let (_, _, body) = host.send(get_as(&format!("{base}?dir={docs}"), &cookie)).await;
+        assert_eq!(json(&body)["uploads"], true, "{body}");
+        let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+        assert_eq!(json(&body)["uploads"], true, "the root takes uploads: {body}");
+
+        // Wrong origin: refused before anything is written.
+        let answer = host.send(upload(&format!("dir={docs}&name=notes.pdf"), "https://elsewhere.example", b"pdf")).await;
+        assert_eq!(refused(answer), (StatusCode::FORBIDDEN, json!("invalid_origin")));
+        assert!(!host.root.join("docs").join("notes.pdf").exists());
+
+        // A dot folder is listed but takes nothing; a forged folder is not one.
+        let (_, _, body) = host.send(get_as(&format!("{base}?dir={github}"), &cookie)).await;
+        assert_eq!(json(&body)["uploads"], false, "{body}");
+        let answer = host.send(upload(&format!("dir={github}&name=ci.yml"), ORIGIN, b"on: push")).await;
+        assert_eq!(refused(answer), (StatusCode::FORBIDDEN, json!("upload_refused")));
+        assert!(!host.root.join(".github").join("ci.yml").exists());
+        let answer = host.send(upload("dir=AAAA&name=notes.pdf", ORIGIN, b"pdf")).await;
+        assert_eq!(refused(answer), (StatusCode::NOT_FOUND, json!("file_not_found")));
+        assert_eq!(refused(host.send(upload(&format!("dir={docs}&name=e.pdf"), ORIGIN, b"")).await), (StatusCode::BAD_REQUEST, json!("empty_file")));
+
+        // Lands under the phone's own name, answered as its listing row.
+        let (status, _, body) = host.send(upload(&format!("dir={docs}&name=notes.pdf"), ORIGIN, b"%PDF-1.7")).await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        let file = json(&body)["file"].clone();
+        assert_eq!(file["name"], "notes.pdf");
+        assert!(!body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()) && !body.contains("docs/"), "{body}");
+        assert_eq!(std::fs::read(host.root.join("docs").join("notes.pdf")).unwrap(), b"%PDF-1.7");
+        let log = std::fs::read_to_string(host.state.config.state_dir.join("mobile-control").join(uploads::LOG_FILE)).unwrap();
+        let line = json(log.lines().next().expect("one log line"));
+        assert_eq!((line["project"].clone(), line["rel"].clone(), line["phone"].clone()), (json!(RAW_PROJECT), json!("docs/notes.pdf"), json!("Phone")));
+
+        // A clash is never overwritten; no folder means the root.
+        let (_, _, body) = host.send(upload(&format!("dir={docs}&name=notes.pdf"), ORIGIN, b"again")).await;
+        assert_eq!(json(&body)["file"]["name"], "notes-2.pdf", "{body}");
+        assert_eq!(std::fs::read(host.root.join("docs").join("notes.pdf")).unwrap(), b"%PDF-1.7");
+        let (status, _, _) = host.send(upload("name=top.txt", ORIGIN, b"top")).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(host.root.join("top.txt").is_file());
+
+        // Undo deletes the logged file once; an edited one is kept.
+        let token = file["token"].as_str().unwrap();
+        let (status, _, body) = host.send(undo(token)).await;
+        assert_eq!((status, json(&body)["undone"].clone()), (StatusCode::OK, json!(true)), "{body}");
+        assert!(!host.root.join("docs").join("notes.pdf").exists());
+        assert_eq!(refused(host.send(undo(token)).await), (StatusCode::NOT_FOUND, json!("file_not_found")));
+        let (_, _, body) = host.send(get_as(&format!("{base}?dir={docs}"), &cookie)).await;
+        let second = json(&body)["entries"][0].clone();
+        assert_eq!(second["name"], "notes-2.pdf");
+        std::fs::write(host.root.join("docs").join("notes-2.pdf"), b"edited").unwrap();
+        assert_eq!(refused(host.send(undo(second["token"].as_str().unwrap())).await), (StatusCode::NOT_FOUND, json!("file_not_found")));
+        assert!(host.root.join("docs").join("notes-2.pdf").exists());
+        let wrong_origin = Request::builder()
+            .method("DELETE")
+            .uri(format!("{base}/upload?f={token}"))
+            .header(header::ORIGIN, "https://elsewhere.example")
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .body(Body::empty())
+            .expect("request");
+        assert_eq!(refused(host.send(wrong_origin).await), (StatusCode::FORBIDDEN, json!("invalid_origin")));
+
+        // The switch off closes the undo too.
+        switches(true, false);
+        assert_eq!(refused(host.send(undo(token)).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
+    }
+
+    #[tokio::test]
     async fn only_the_pdf_frame_may_be_framed_and_only_by_the_pwa() {
         let host = Fixture::bare();
         let request = Request::builder()
@@ -11046,6 +11293,8 @@ mod tests {
                 ("GET", format!("/api/v1/projects/{project}/files"), None),
                 ("GET", format!("/api/v1/projects/{project}/files/raw?f={token}"), None),
                 ("GET", format!("/api/v1/projects/{project}/files/search?q=paper"), None),
+                ("POST", format!("/api/v1/projects/{project}/files/upload?name=paper.pdf"), None),
+                ("DELETE", format!("/api/v1/projects/{project}/files/upload?f={token}"), None),
                 ("GET", format!("/api/v1/tabs/{tab}/markup/questions"), None),
                 ("POST", format!("/api/v1/tabs/{tab}/schedules"), Some(schedule.clone())),
                 ("POST", format!("/api/v1/projects/{project}/prompts/p-1/send"), Some(json!({ "tab_id": tab }))),

@@ -1589,6 +1589,8 @@ pub fn run() {
             commands::mobile_control::global_inbox_open,
             commands::mobile_control::global_inbox_reveal,
             commands::mobile_control::global_inbox_delete,
+            commands::mobile_control::phone_uploads_list,
+            commands::mobile_control::phone_upload_undo,
             commands::default_apps::get_default_apps,
             commands::default_apps::save_default_apps,
             commands::default_apps::patch_default_apps,

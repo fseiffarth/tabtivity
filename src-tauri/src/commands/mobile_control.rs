@@ -21,6 +21,7 @@ use crate::{
         },
         discovery::opaque_control_id,
         inbox,
+        uploads,
         protocol::{
             AdminDevice, AdminRequest, AdminResponse, DesktopRequest, DesktopResponse,
             MobileInboxAttachment,
@@ -228,6 +229,88 @@ pub fn global_inbox_reveal() -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_inbox_delete(name: String) -> Result<bool, String> {
     inbox::remove_global(&storage::state_dir(), &name).map_err(|e| e.code().to_string())
+}
+
+// ── Phone uploads (phone → Upload here) ─────────────────────────────────────
+// Files the phone added to a project folder (`uploads.rs`). The sidecar logs
+// each one; the header's inbox lists the last day's that are still unchanged
+// on disk and can undo one. Rows name a record by its log id only — no raw
+// project id or root reaches the webview, and the undo re-resolves both.
+
+/// How far back the header lists phone uploads.
+const PHONE_UPLOADS_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// One file the phone added to a project, as the header's inbox lists it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhoneUpload {
+    /// The log record's id — what `phone_upload_undo` takes.
+    pub id: String,
+    pub project_name: String,
+    /// The file's path inside the project, `/`-separated.
+    pub rel: String,
+    pub size: u64,
+    /// Unix seconds it landed.
+    pub at: u64,
+    /// The phone's device label, when the sidecar knew it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+}
+
+/// The folder of a local project by its raw id; `None` for an unknown or
+/// remote one (an upload only ever lands in a local project, so a project
+/// that became remote has nothing here to list or undo).
+fn upload_root(project_id: &str) -> Option<PathBuf> {
+    if crate::services::remote::remote_target_for(project_id).is_some() {
+        return None;
+    }
+    crate::services::remote::project_directory(project_id)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The phone's uploads of the last day whose file is still as it landed,
+/// newest first.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn phone_uploads_list() -> Vec<PhoneUpload> {
+    app_core::rt::spawn_blocking(|| {
+        let names: HashMap<String, String> = crate::commands::projects::read_projects_list()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| (entry.id, entry.name))
+            .collect();
+        uploads::recent(&storage::state_dir(), PHONE_UPLOADS_WINDOW, upload_root)
+            .into_iter()
+            .filter_map(|record| {
+                Some(PhoneUpload {
+                    project_name: names.get(&record.project)?.clone(),
+                    id: record.id,
+                    rel: record.rel,
+                    size: record.size,
+                    at: record.at,
+                    phone: record.phone,
+                })
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Undo one phone upload by its record id: deletes the file only while it is
+/// unchanged since it landed. The error is the upload code (`file_not_found`
+/// for an unknown id, a gone or remote project, or a file edited since).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn phone_upload_undo(id: String) -> Result<(), String> {
+    app_core::rt::spawn_blocking(move || {
+        let state_dir = storage::state_dir();
+        let record = uploads::find(&state_dir, &id).ok_or(uploads::UploadError::NotFound)?;
+        let root = upload_root(&record.project).ok_or(uploads::UploadError::NotFound)?;
+        uploads::undo(&state_dir, &root, &record.project, &record.rel)
+    })
+    .await
+    .map_err(|_| uploads::UploadError::Io(String::new()).code().to_string())?
+    .map_err(|error| error.code().to_string())
 }
 
 /// Materialize the phone-install handoff where the root terminal can run it,
