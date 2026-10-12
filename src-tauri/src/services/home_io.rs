@@ -181,6 +181,13 @@ impl HomeDir {
         self.subdir_in(name, true).ok()
     }
 
+    /// [`HomeDir::subdir`] without creating anything: `None` when missing or
+    /// not a directory (a link included).
+    pub fn open_subdir(&self, name: &str) -> Option<Self> {
+        components(name).filter(|p| p.len() == 1)?;
+        self.subdir_in(name, false).ok()
+    }
+
     /// One name in this directory (a single component).
     pub fn file(&self, name: &str) -> Option<HomeFile> {
         components(name).filter(|p| p.len() == 1)?;

@@ -803,6 +803,8 @@ fn full_export(project_id: &str, dest: &Path) -> ExportProjectRequest {
         include_session: true,
         include_mirror: true,
         skip_rebuildable: true,
+        keep_rebuildable: Vec::new(),
+        include_agent_history: false,
     }
 }
 
@@ -815,6 +817,7 @@ fn plain_import(bundle: &Path, parent: &Path) -> ImportBundleRequest {
         restore_session: true,
         restore_time: true,
         join_boxes: true,
+        restore_agent_history: true,
     }
 }
 
@@ -971,6 +974,109 @@ fn imported_tabs_are_sanitized_and_open_apps_never_return() {
             session.open_apps.is_none(),
             "a bundle never supplies host commands to auto-launch"
         );
+    });
+}
+
+/// Agent conversations travel only when asked, land in the imported project's
+/// own agent home under the folder Claude will look in, with their paths
+/// re-pointed — and nothing of the home's configuration comes along.
+#[test]
+fn agent_conversations_travel_on_request_and_follow_the_folder() {
+    use app_lib::services::agent_home;
+    with_isolated_home("transfer-agents-home", |home| {
+        let target = tempdir_in_test_projects("transfer-agents-source");
+        let entry = new_local_project("agents-project", target.path());
+        let id = entry.id.clone();
+        let old_dir = target.path().to_string_lossy().to_string();
+        let encode = |p: &str| -> String {
+            p.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+        };
+
+        let source_home = agent_home::scope_home(Some(&id));
+        let claude = source_home.join(".claude").join("projects").join(encode(&old_dir));
+        fs::create_dir_all(&claude).unwrap();
+        let line = serde_json::json!({ "sessionId": "s1", "cwd": old_dir.clone() });
+        fs::write(claude.join("s1.jsonl"), format!("{line}\n")).unwrap();
+        let codex = source_home.join(".codex").join("sessions").join("2026");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(codex.join("rollout-1.jsonl"), b"{}\n").unwrap();
+        // Configuration an agent tab would run: never carried.
+        fs::write(source_home.join(".claude").join("settings.json"), b"{\"hooks\":{}}").unwrap();
+
+        let preview = preview_project_export(id.clone()).expect("preview");
+        assert_eq!(preview.agent_history_files, 2);
+
+        // Off by default: the bundle stays format 1 and carries none of it.
+        let plain = home.join(concat!("plain.", app_lib::app_slug!(), "proj"));
+        let report = export_project_blocking(full_export(&id, &plain), &mut |_, _| {}).expect("export");
+        assert_eq!(report.agent_files, 0);
+        let info = inspect_project_export(plain.to_string_lossy().to_string()).expect("inspect");
+        assert_eq!(info.format, 1);
+        assert!(!info.contents.agent_history);
+
+        let bundle = home.join(concat!("agents.", app_lib::app_slug!(), "proj"));
+        let mut req = full_export(&id, &bundle);
+        req.include_agent_history = true;
+        let report = export_project_blocking(req, &mut |_, _| {}).expect("export");
+        assert_eq!(report.agent_files, 2);
+        let info = inspect_project_export(bundle.to_string_lossy().to_string()).expect("inspect");
+        assert_eq!(info.format, 2);
+        assert!(info.contents.agent_history);
+
+        let landing = tempdir_in_test_projects("transfer-agents-landing");
+        let result = import_project_export_blocking(plain_import(&bundle, landing.path()))
+            .expect("import");
+        assert_eq!(result.agent_files, 2);
+        let new_home = agent_home::scope_home(Some(&result.entry.id));
+        assert_ne!(new_home, source_home, "a copy beside the original gets its own home");
+        let moved = new_home
+            .join(".claude")
+            .join("projects")
+            .join(encode(&result.directory))
+            .join("s1.jsonl");
+        let text = fs::read_to_string(&moved).expect("transcript under the new folder's name");
+        let value: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(value["cwd"], result.directory.as_str());
+        assert!(new_home
+            .join(".codex")
+            .join("sessions")
+            .join("2026")
+            .join("rollout-1.jsonl")
+            .is_file());
+        assert!(!new_home.join(".claude").join("settings.json").exists());
+    });
+}
+
+/// What an export cannot carry is named in its report rather than dropped
+/// without a word, and a folder merely *named* like build output travels.
+#[cfg(unix)]
+#[test]
+fn an_export_names_what_it_left_out() {
+    with_isolated_home("transfer-skips-home", |home| {
+        let target = tempdir_in_test_projects("transfer-skips-source");
+        let entry = new_local_project("skips-project", target.path());
+        let id = entry.id.clone();
+        fs::create_dir_all(target.path().join("build")).unwrap();
+        fs::write(target.path().join("build").join("paper.pdf"), b"%PDF").unwrap();
+        let fifo = std::ffi::CString::new(target.path().join("pipe").to_string_lossy().as_bytes()).unwrap();
+        // SAFETY: a valid C string.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+
+        let preview = preview_project_export(id.clone()).expect("preview");
+        assert_eq!(preview.skipped, 1);
+        assert!(preview.rebuildable_dirs.is_empty(), "a bare build/ is the user's");
+
+        let bundle = home.join(concat!("skips.", app_lib::app_slug!(), "proj"));
+        let report = export_project_blocking(full_export(&id, &bundle), &mut |_, _| {}).expect("export");
+        assert_eq!(report.skipped_count, 1);
+        assert_eq!(report.skipped[0].path, "pipe");
+        let info = inspect_project_export(bundle.to_string_lossy().to_string()).expect("inspect");
+        assert_eq!(info.contents.skipped, 1);
+
+        let landing = tempdir_in_test_projects("transfer-skips-landing");
+        let result = import_project_export_blocking(plain_import(&bundle, landing.path()))
+            .expect("import");
+        assert!(PathBuf::from(&result.directory).join("build").join("paper.pdf").is_file());
     });
 }
 

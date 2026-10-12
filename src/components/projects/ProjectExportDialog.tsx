@@ -48,6 +48,18 @@ export function ProjectExportDialog({
   const [skipRebuildable, setSkipRebuildable] = useState(true);
   const [includeSession, setIncludeSession] = useState(true);
   const [includeMirror, setIncludeMirror] = useState(true);
+  // Off unless asked: a transcript holds whatever the agents read or printed.
+  const [includeAgentHistory, setIncludeAgentHistory] = useState(false);
+  /** Rebuildable folders the user unticked: carried despite the skip. */
+  const [kept, setKept] = useState<Set<string>>(() => new Set());
+
+  const toggleKept = (path: string) =>
+    setKept((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
 
   useEffect(() => {
     let alive = true;
@@ -81,20 +93,16 @@ export function ProjectExportDialog({
   /** Bytes the current toggles would carry — the preview's parts, summed. */
   const estimate = useMemo(() => {
     if (!preview) return 0;
-    if (preview.remote) {
-      return includeMirror
-        ? preview.bytes +
-            (includeGit ? preview.gitBytes : 0) +
-            (skipRebuildable ? 0 : preview.rebuildableBytes)
-        : 0;
-    }
-    if (!includeFiles) return 0;
-    return (
-      preview.bytes +
-      (includeGit ? preview.gitBytes : 0) +
-      (skipRebuildable ? 0 : preview.rebuildableBytes)
-    );
-  }, [preview, includeFiles, includeGit, includeMirror, skipRebuildable]);
+    const history = includeAgentHistory ? preview.agentHistoryBytes : 0;
+    const rebuildable = skipRebuildable
+      ? preview.rebuildableDirs
+          .filter((dir) => kept.has(dir.path))
+          .reduce((sum, dir) => sum + dir.bytes, 0)
+      : preview.rebuildableBytes;
+    const tree = preview.bytes + (includeGit ? preview.gitBytes : 0) + rebuildable;
+    const carried = preview.remote ? includeMirror : includeFiles;
+    return (carried ? tree : 0) + history;
+  }, [preview, includeFiles, includeGit, includeMirror, skipRebuildable, kept, includeAgentHistory]);
 
   const blockedReason = preview?.blocked
     ? t(`transfer.blocked.${preview.blocked}` as TranslationKey)
@@ -122,6 +130,8 @@ export function ProjectExportDialog({
           includeSession,
           includeMirror,
           skipRebuildable,
+          keepRebuildable: skipRebuildable ? [...kept] : [],
+          includeAgentHistory,
         },
       });
       setReport(result);
@@ -242,6 +252,27 @@ export function ProjectExportDialog({
                 size="sm"
               />
             </label>
+            {skipRebuildable && preview.rebuildableDirs.length > 0 && (
+              <>
+                <p className="settings-help">{t("transfer.rebuildableListHelp")}</p>
+                <div className="big-folder-list">
+                  {preview.rebuildableDirs.map((dir) => (
+                    <label key={dir.path} className="big-folder-row transfer-rebuildable-row">
+                      <input
+                        type="checkbox"
+                        checked={!kept.has(dir.path)}
+                        aria-label={t("transfer.skipFolder", { path: dir.path })}
+                        onChange={() => toggleKept(dir.path)}
+                      />
+                      <span className="big-folder-path" title={dir.path}>
+                        {dir.path}
+                      </span>
+                      <span className="big-folder-files">{formatBytes(dir.bytes)}</span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
 
             <label className="container-settings-toggle">
               <span>
@@ -259,6 +290,33 @@ export function ProjectExportDialog({
                 size="sm"
               />
             </label>
+
+            <label className="container-settings-toggle">
+              <span>
+                {t("transfer.includeAgentHistory")} <UntestedTag id="transfer.agentHistory" />
+                <span className="settings-help">
+                  {preview.agentHistoryFiles === 0
+                    ? t("transfer.noAgentHistory")
+                    : t("transfer.includeAgentHistoryHelp", {
+                        count: String(preview.agentHistoryFiles),
+                        size: formatBytes(preview.agentHistoryBytes),
+                      })}
+                </span>
+              </span>
+              <Toggle
+                checked={includeAgentHistory && preview.agentHistoryFiles > 0}
+                aria-label={t("transfer.includeAgentHistory")}
+                disabled={preview.agentHistoryFiles === 0}
+                onChange={(e) => setIncludeAgentHistory(e.target.checked)}
+                size="sm"
+              />
+            </label>
+
+            {preview.skipped > 0 && (
+              <p className="settings-help">
+                {t("transfer.previewSkipped", { count: String(preview.skipped) })}
+              </p>
+            )}
 
             <p className="settings-help">{t("transfer.alwaysCarried")}</p>
             {preview.boxNames.length > 0 && (
@@ -292,11 +350,43 @@ export function ProjectExportDialog({
               })}
             </p>
             <p className="project-dialog-path">{report.path}</p>
+            {report.agentFiles > 0 && (
+              <p className="settings-help">
+                {t("transfer.agentFilesExported", { count: String(report.agentFiles) })}
+              </p>
+            )}
             {report.notes.map((note) => (
               <p className="settings-help" key={note}>
                 {t(`transfer.note.${note}` as TranslationKey)}
               </p>
             ))}
+            {report.skippedCount > 0 && (
+              <>
+                <p className="project-dialog-error">
+                  {t("transfer.skippedHeading", { count: String(report.skippedCount) })}
+                </p>
+                <div className="big-folder-list">
+                  {report.skipped.map((entry) => (
+                    <div key={entry.path} className="big-folder-row transfer-rebuildable-row">
+                      <span />
+                      <span className="big-folder-path" title={entry.path}>
+                        {entry.path}
+                      </span>
+                      <span className="big-folder-files">
+                        {t(`transfer.skip.${entry.reason}` as TranslationKey)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {report.skippedCount > report.skipped.length && (
+                  <p className="settings-help">
+                    {t("transfer.skippedMore", {
+                      count: String(report.skippedCount - report.skipped.length),
+                    })}
+                  </p>
+                )}
+              </>
+            )}
             <p className="settings-help">{t("transfer.exportNextStep")}</p>
           </>
         )}

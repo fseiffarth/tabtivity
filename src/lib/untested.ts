@@ -681,6 +681,7 @@ export const UNTESTED = {
   "terminalSignIn.label": { area: "projects", what: "TerminalSignInToggle · Sign in in a terminal" },
   "transfer.export": { area: "projects", what: "ProjectExportDialog · Export project…" },
   "transfer.import": { area: "projects", what: "ProjectImportBundleDialog · Import project file…" },
+  "transfer.agentHistory": { area: "projects", what: "Export/Import project · agent conversations travel (Claude/Codex transcripts, folder re-pointed)" },
 
   // --- skills — The skills library ----------------------------------
   "skillsLibrary.overlayTitle": { area: "skills", what: "ModelsOverlay · Skills tab (the machine-level Skills Library)" },

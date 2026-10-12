@@ -59,6 +59,11 @@
   font-size: 12px;
   cursor: var(--cur-pointer, pointer);
 }
+/* The export dialog's rebuildable-folder and skipped-entry lists: one size
+   column instead of the two-machine pair. */
+.big-folder-row.transfer-rebuildable-row {
+  grid-template-columns: 18px minmax(0, 1fr) 110px;
+}
 .big-folder-row:hover {
   background: var(--bg-hover);
 }
