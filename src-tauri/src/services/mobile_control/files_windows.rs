@@ -1,8 +1,14 @@
 //! Windows counterpart of the Unix `ProjectDir`: no path-based child I/O.
 //! `NtCreateFile` resolves exactly one name relative to a held directory,
-//! opening the reparse point itself; handle metadata then rejects every
-//! reparse type, including junctions. A renamed parent cannot redirect the
-//! rest of a read or listing. Unsupported native operations fail closed.
+//! opening the reparse point itself; its tag then rejects every link-type
+//! (name-surrogate) reparse point: symbolic links, junctions/mount points, WSL
+//! links. Any other reparse point (OneDrive Files On-Demand placeholders,
+//! which tag every file and folder, the project root included; deduplicated
+//! or WOF-compressed files) is opened once more by the same name without
+//! `FILE_OPEN_REPARSE_POINT`, so its filesystem filter can serve (hydrate)
+//! it, and kept only when that second handle is the same file as the first.
+//! A renamed parent cannot redirect the rest of a read or listing.
+//! Unsupported native operations fail closed.
 //!
 //! The phone's drop boxes also create folders and files and delete files
 //! through the same handles: `FILE_CREATE` never opens an existing name (nor a
@@ -20,7 +26,7 @@ use std::{
     fs,
     mem::{offset_of, size_of},
     os::windows::{
-        fs::{MetadataExt, OpenOptionsExt},
+        fs::OpenOptionsExt,
         io::{AsRawHandle, FromRawHandle},
     },
     path::Path,
@@ -43,11 +49,13 @@ use ::windows::{
             UNICODE_STRING,
         },
         Storage::FileSystem::{
-            FileDispositionInfo, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
-            GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE, FILE_ACCESS_RIGHTS,
-            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+            FileAttributeTagInfo, FileDispositionInfo, FileIdBothDirectoryInfo,
+            FileIdBothDirectoryRestartInfo, FileIdInfo, GetFileInformationByHandleEx,
+            SetFileInformationByHandle, DELETE, FILE_ACCESS_RIGHTS, FILE_ATTRIBUTE_DIRECTORY,
+            FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
             FILE_DISPOSITION_INFO, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS,
-            FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO, FILE_ID_INFO,
+            FILE_INFO_BY_HANDLE_CLASS,
             FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE,
             FILE_SHARE_READ, FILE_SHARE_WRITE, SYNCHRONIZE,
         },
@@ -76,15 +84,19 @@ impl ProjectDir {
     /// The project root itself, held open — the one folder opened by path.
     pub(crate) fn open_root(root: &Path) -> Result<Self, FilesError> {
         let root = canonical_root(root)?;
-        // Only the configured root is opened by path. Reparse points in its
-        // project-controlled leaf are refused, including a replacement after
-        // canonicalization. Every operation below it starts from this handle.
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags((FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).0)
-            .open(root)
+        // Only the configured root is opened by path. A link in its
+        // project-controlled leaf is refused, including a replacement after
+        // canonicalization; a OneDrive placeholder folder is opened through
+        // its filter (see the module docs). Every operation below it starts
+        // from this handle.
+        let open = |flags: FILE_FLAGS_AND_ATTRIBUTES| {
+            fs::OpenOptions::new().read(true).custom_flags(flags.0).open(&root)
+        };
+        let first = open(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
             .map_err(|_| FilesError::Unavailable)?;
-        plain_metadata(&file)
+        let file = unlinked(first, || open(FILE_FLAG_BACKUP_SEMANTICS)).map_err(|_| FilesError::Unavailable)?;
+        file.metadata()
+            .ok()
             .filter(fs::Metadata::is_dir)
             .ok_or(FilesError::Unavailable)?;
         Ok(Self(file))
@@ -157,21 +169,35 @@ impl ProjectDir {
         Ok(unsafe { fs::File::from_raw_handle(handle.0) })
     }
 
+    /// The existing `name` here, opened on the reparse point itself first:
+    /// a link (name surrogate) is [`Unlinked::Link`] and never followed; any
+    /// other reparse point is opened again through its filter, see
+    /// [`unlinked`].
+    fn open_unlinked(
+        &self,
+        name: &str,
+        access: FILE_ACCESS_RIGHTS,
+        options: NTCREATEFILE_CREATE_OPTIONS,
+    ) -> Result<fs::File, Unlinked> {
+        let first = self
+            .nt_create(name, access, FILE_OPEN, options | FILE_OPEN_REPARSE_POINT, Default::default())
+            .map_err(Unlinked::Io)?;
+        unlinked(first, || self.nt_create(name, access, FILE_OPEN, options, Default::default()))
+    }
+
     /// The folder `name` in this one: `Ok(None)` when nothing has that name,
-    /// `Err(())` when something does but is not a plain folder (a reparse
-    /// point, a file) — never traversed either way.
+    /// `Err(())` when something does but is not a plain folder (a link, a
+    /// file) — never traversed either way.
     pub(crate) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
-        match self.nt_create(
+        match self.open_unlinked(
             name,
             FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-            FILE_OPEN,
-            FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
-            Default::default(),
+            FILE_DIRECTORY_FILE,
         ) {
-            Ok(file) if plain_metadata(&file).is_some_and(|meta| meta.is_dir()) => Ok(Some(Self(file))),
-            Ok(_) => Err(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(_) => Err(()),
+            Ok(file) if file.metadata().is_ok_and(|meta| meta.is_dir()) => Ok(Some(Self(file))),
+            Ok(_) | Err(Unlinked::Link) => Err(()),
+            Err(Unlinked::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(Unlinked::Io(_)) => Err(()),
         }
     }
 
@@ -182,27 +208,26 @@ impl ProjectDir {
 
     /// The regular file `name` in this one, opened for reading, with its
     /// metadata: `Ok(None)` when nothing has that name, `Err(())` when
-    /// something does but is not a plain file (a reparse point, a folder) —
-    /// never followed either way.
+    /// something does but is not a plain file (a link, a folder) — never
+    /// followed either way.
     pub(crate) fn lookup_file(&self, name: &str) -> Result<Option<(fs::File, fs::Metadata)>, ()> {
-        match self.nt_create(
+        match self.open_unlinked(
             name,
             FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-            FILE_OPEN,
-            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
-            Default::default(),
+            FILE_NON_DIRECTORY_FILE,
         ) {
-            Ok(file) => match plain_metadata(&file) {
-                Some(meta) if meta.is_file() => Ok(Some((file, meta))),
+            Ok(file) => match file.metadata() {
+                Ok(meta) if meta.is_file() => Ok(Some((file, meta))),
                 _ => Err(()),
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(_) => Err(()),
+            Err(Unlinked::Link) => Err(()),
+            Err(Unlinked::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(Unlinked::Io(_)) => Err(()),
         }
     }
 
     /// Creates the folder `name` here unless something already has that name.
-    /// Open it with [`Self::lookup_dir`], which refuses a reparse point there.
+    /// Open it with [`Self::lookup_dir`], which refuses a link there.
     pub(crate) fn create_dir(&self, name: &str) -> std::io::Result<()> {
         match self.nt_create(
             name,
@@ -226,18 +251,15 @@ impl ProjectDir {
     /// The existing regular file `name` here, opened for writing and emptied
     /// — an in-place save that keeps the file's identity and ACL. `Ok(None)`
     /// when nothing has that name. `FILE_OPEN_REPARSE_POINT` opens a symbolic
-    /// link or junction itself, which the handle's attributes then refuse;
-    /// the file is truncated only after its own handle proved it regular.
+    /// link or junction itself, which its reparse tag then refuses (a
+    /// OneDrive placeholder is opened again through its filter, see
+    /// [`unlinked`]); the file is truncated only after its own handle proved
+    /// it regular.
     pub(crate) fn open_existing_for_write(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
-        let file = match self.nt_create(
-            name,
-            FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES,
-            FILE_OPEN,
-            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
-            Default::default(),
-        ) {
+        let file = match self.open_unlinked(name, FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES, FILE_NON_DIRECTORY_FILE) {
             Ok(file) => file,
-            Err(error) => {
+            Err(Unlinked::Link) => return Err(WriteRefusal::Link),
+            Err(Unlinked::Io(error)) => {
                 return match error.kind() {
                     std::io::ErrorKind::NotFound => Ok(None),
                     std::io::ErrorKind::IsADirectory => Err(WriteRefusal::NotFile),
@@ -246,9 +268,6 @@ impl ProjectDir {
             }
         };
         let meta = file.metadata().map_err(WriteRefusal::Io)?;
-        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-            return Err(WriteRefusal::Link);
-        }
         if !meta.is_file() {
             return Err(WriteRefusal::NotFile);
         }
@@ -285,7 +304,7 @@ impl ProjectDir {
     }
 
     pub(super) fn child_dir_meta(&self, name: &str) -> Option<fs::Metadata> {
-        plain_metadata(&self.child_dir(name)?.0)
+        self.child_dir(name)?.0.metadata().ok()
     }
 
     pub(in crate::services::mobile_control) fn open_file(&self, name: &str) -> Option<(fs::File, fs::Metadata)> {
@@ -349,7 +368,11 @@ impl ProjectDir {
                 if !length.is_multiple_of(2) || end > bytes || !offset.is_multiple_of(2) {
                     return Err(invalid());
                 }
-                if record.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0 {
+                // For a reparse point, `EaSize` holds its tag (MS-FSCC
+                // 2.4.17): links are left out, placeholders listed.
+                if record.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0
+                    || !is_name_surrogate(record.EaSize)
+                {
                     // SAFETY: the UTF-16 slice lies within the allocation and
                     // starts at a u16-aligned offset, checked above.
                     let name = unsafe {
@@ -401,8 +424,69 @@ fn nt_error(status: NTSTATUS) -> std::io::Error {
     }
 }
 
-fn plain_metadata(file: &fs::File) -> Option<fs::Metadata> {
-    file.metadata()
-        .ok()
-        .filter(|meta| meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0)
+/// `IsReparseTagNameSurrogate`: the tag makes the entry stand for another
+/// named file or folder — a symbolic link, a junction or mount point, a WSL
+/// link. These are the links decision D1 refuses; every other tag (cloud
+/// placeholders, dedup, WOF compression) marks a file that is itself here.
+pub(super) fn is_name_surrogate(tag: u32) -> bool {
+    tag & 0x2000_0000 != 0
+}
+
+/// Why [`unlinked`] gave no handle.
+#[derive(Debug)]
+pub(super) enum Unlinked {
+    /// A link (name surrogate), or a name that led to another file when
+    /// opened again.
+    Link,
+    Io(std::io::Error),
+}
+
+/// Something a handle can be asked about by `GetFileInformationByHandleEx`.
+fn by_handle<T: Default>(file: &fs::File, class: FILE_INFO_BY_HANDLE_CLASS) -> std::io::Result<T> {
+    let mut info = T::default();
+    // SAFETY: a live handle and a writable, properly sized record of the
+    // type the class fills (callers pair them).
+    unsafe {
+        GetFileInformationByHandleEx(
+            HANDLE(file.as_raw_handle()),
+            class,
+            (&mut info as *mut T).cast(),
+            size_of::<T>() as u32,
+        )
+    }
+    .map_err(|error| std::io::Error::other(error.to_string()))?;
+    Ok(info)
+}
+
+/// The volume and file id of a handle: the same pair is the same file.
+pub(super) fn identity(file: &fs::File) -> std::io::Result<(u64, [u8; 16])> {
+    let info: FILE_ID_INFO = by_handle(file, FileIdInfo)?;
+    Ok((info.VolumeSerialNumber, info.FileId.Identifier))
+}
+
+/// `first` was opened on the name itself (`FILE_OPEN_REPARSE_POINT`). A
+/// plain file or folder is returned as it is; a link (name surrogate) is
+/// refused. Any other reparse point is opened again by `reopen`, without
+/// that flag, so its filter serves it (a OneDrive placeholder hydrates
+/// instead of reading as empty or failing), and that handle is kept only
+/// when it is the same file as `first`: a link swapped in between the two
+/// opens leads to another file and is refused, as is a filter that
+/// redirects to one.
+pub(super) fn unlinked(
+    first: fs::File,
+    reopen: impl FnOnce() -> std::io::Result<fs::File>,
+) -> Result<fs::File, Unlinked> {
+    let tag: FILE_ATTRIBUTE_TAG_INFO = by_handle(&first, FileAttributeTagInfo).map_err(Unlinked::Io)?;
+    if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0 {
+        return Ok(first);
+    }
+    if is_name_surrogate(tag.ReparseTag) {
+        return Err(Unlinked::Link);
+    }
+    let again = reopen().map_err(Unlinked::Io)?;
+    if identity(&first).map_err(Unlinked::Io)? == identity(&again).map_err(Unlinked::Io)? {
+        Ok(again)
+    } else {
+        Err(Unlinked::Link)
+    }
 }

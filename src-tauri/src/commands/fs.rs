@@ -2169,7 +2169,9 @@ enum Confined {
 /// always did, and its real target is what gets opened. A save canonicalizes
 /// only the folder and opens the leaf itself without following it: **a leaf
 /// that is a link — dangling or not, into the project or out of it — or a
-/// Windows reparse point is refused** (decision D1). An existing file is
+/// Windows link-type (name-surrogate) reparse point is refused** (decision
+/// D1). Other Windows reparse points (OneDrive placeholders, dedup) are no
+/// links and are read and saved through their filter. An existing file is
 /// emptied in place (inode, owner and mode kept); a missing one is created
 /// `O_EXCL`. A `..` or `.` component is refused outright.
 fn open_confined(p: &Path, roots: &[PathBuf], mode: Confined) -> Result<fs::File, String> {

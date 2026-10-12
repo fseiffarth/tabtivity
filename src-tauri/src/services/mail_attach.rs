@@ -19,9 +19,10 @@
 //! Windows has no fence (a root tab there runs with the user's rights, so its
 //! grant is everything) but the same walk: the phone's handle-based
 //! `files::ProjectDir` opens one name at a time relative to the held folder
-//! with `NtCreateFile(FILE_OPEN_REPARSE_POINT)`, refuses every reparse point
-//! (junctions included) from the handle's own metadata, and reads the file
-//! through the handle it proved. Names Windows would read as something else —
+//! with `NtCreateFile(FILE_OPEN_REPARSE_POINT)`, refuses every link-type
+//! reparse point (symbolic links, junctions) by its tag, opens any other one
+//! (a OneDrive placeholder) once more through its filter only when that is
+//! the same file, and reads the file through the handle it proved. Names Windows would read as something else —
 //! a `:` (drive or stream), an 8.3 short alias, a trailing dot or space — are
 //! refused before any I/O (`windows_part_refusal`).
 //!
@@ -362,7 +363,7 @@ fn read_under(root: &Path, parts: &[&str], max: u64) -> Result<Vec<u8>, Miss> {
 
 /// The Windows twin of the `openat` walk, through the phone's handle-based
 /// `files::ProjectDir`: the root opened by path (it comes from the trusted
-/// list, and its leaf may not be a reparse point), then one `NtCreateFile`
+/// list, and its leaf may not be a link), then one `NtCreateFile`
 /// per name relative to the held folder with `FILE_OPEN_REPARSE_POINT`, and
 /// the handle's own metadata deciding folder, file or refusal. A junction or
 /// a symbolic link at any component is refused, never followed, and the file

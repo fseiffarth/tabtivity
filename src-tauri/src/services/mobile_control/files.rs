@@ -466,7 +466,8 @@ impl ProjectDir {
 /// ([`ProjectDir::open_existing_for_write`]).
 #[derive(Debug)]
 pub(crate) enum WriteRefusal {
-    /// A symbolic link (dangling or not), a junction or another reparse point.
+    /// A symbolic link (dangling or not), a junction or another link-type
+    /// (name-surrogate) reparse point; a OneDrive placeholder is no link.
     Link,
     /// A folder, FIFO, socket or device — anything but a regular file.
     NotFile,
@@ -1120,6 +1121,61 @@ mod tests {
         });
         assert_eq!(read(dir.path(), "src/main.rs"), Err(FilesError::NotFound));
         assert_eq!(list(dir.path(), "src", KEY, "p1"), Err(FilesError::NotFound));
+    }
+
+    /// Decision D1 is about links: only name-surrogate tags count as one.
+    /// OneDrive placeholders, deduplicated and WOF-compressed files carry
+    /// other tags and must stay readable and saveable.
+    #[cfg(windows)]
+    #[test]
+    fn only_name_surrogate_reparse_tags_count_as_links() {
+        use super::windows::is_name_surrogate;
+        for (tag, link) in [
+            (0xA000_000C_u32, true), // IO_REPARSE_TAG_SYMLINK
+            (0xA000_0003, true),     // IO_REPARSE_TAG_MOUNT_POINT (junction)
+            (0xA000_001D, true),     // IO_REPARSE_TAG_LX_SYMLINK (WSL)
+            (0x9000_001A, false),    // IO_REPARSE_TAG_CLOUD (OneDrive)
+            (0x9000_601A, false),    // IO_REPARSE_TAG_CLOUD_6
+            (0x8000_0013, false),    // IO_REPARSE_TAG_DEDUP
+            (0x8000_0017, false),    // IO_REPARSE_TAG_WOF
+            (0x8000_001B, false),    // IO_REPARSE_TAG_APPEXECLINK
+        ] {
+            assert_eq!(is_name_surrogate(tag), link, "{tag:#010x}");
+        }
+    }
+
+    /// A plain handle is kept without a second open, a junction is refused
+    /// without one; the identity a placeholder's second open is checked
+    /// against tells two files apart and one file opened twice not.
+    #[cfg(windows)]
+    #[test]
+    fn unlinked_keeps_plain_handles_refuses_links_and_tells_files_apart() {
+        use super::windows::{identity, unlinked, Unlinked};
+        use std::os::windows::fs::OpenOptionsExt;
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let dir = tree();
+        let outside = tempfile::tempdir().unwrap();
+        junction(outside.path(), &dir.path().join("away"));
+        let raw = |path: &Path| {
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
+                .open(path)
+                .unwrap()
+        };
+        let never = || -> std::io::Result<fs::File> { panic!("a second open was not needed") };
+        assert!(unlinked(raw(&dir.path().join("src/main.rs")), never).is_ok());
+        assert!(unlinked(raw(&dir.path().join("src")), never).is_ok());
+        assert!(matches!(unlinked(raw(&dir.path().join("away")), never), Err(Unlinked::Link)));
+        let main = dir.path().join("src/main.rs");
+        assert_eq!(identity(&raw(&main)).unwrap(), identity(&fs::File::open(&main).unwrap()).unwrap());
+        assert_ne!(identity(&raw(&main)).unwrap(), identity(&raw(&dir.path().join("src"))).unwrap());
+        // And the walk built on it still refuses the junction, keeps the rest.
+        let held = ProjectDir::open_root(dir.path()).unwrap();
+        assert!(held.lookup_dir("away").is_err());
+        assert!(held.lookup_dir("src").unwrap().is_some());
+        assert!(matches!(held.open_existing_for_write("away"), Err(WriteRefusal::NotFile | WriteRefusal::Link)));
     }
 
     fn hit_paths(found: &Found) -> Vec<String> {
