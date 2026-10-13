@@ -4770,3 +4770,433 @@ overlay `CARGO_HOME=<worktree>/target/cargo-home`. Nothing was run live, and
    the implementer flagged (5). `scripts/assert-embedded-frontend.sh` runs
    from the freeze tree as well.
 4. Implementer flags 1–7 stand unchanged.
+
+## Final review — Run 2026-10-12 (2026-10-13)
+
+**Range:** `5d82c988..eba16dfb` (agent steps 1–8, follow-up steps 9–10, each
+with its review; 55 commits, 143 files), reviewed as a whole on branch
+`threat/1012-final`; per-step reviews not redone. **Fix commit:** this docs
+commit; no code bug found that needed a fix.
+
+### Part A — whole-range findings
+
+- **Confinement vs the deck and the transports (steps 2/3/4).** Viewer I/O
+  goes through `fs::open_confined`, which refuses `..` and symlinked leaves.
+  The deck folds `..` in `resolveRel` before reading (step 2 review), writes
+  figures only through `figureTarget` (no `..`, own folder, no `~`), and every
+  figure write sends `x-no-folder-link: 1` → `Confined::WriteOwnFolder`. The
+  header reaches the backend on all three transports: Tauri IPC
+  (`write_file_bytes` reads it), the browser/web client (`wsInternals`
+  forwards every header of a raw call, `web_client::handle_raw_call` decodes
+  it) and the Connect window (same WS path). `compile_tex`'s
+  `ownFolderUnlinked` goes through the generated `core_dispatch` wrapper.
+  `os_open::check` is not a confinement check (the user may open any file)
+  and does not interact with `open_confined`. The phone file browser keeps its
+  own `ProjectDir` walk; steps 2–4 only widened its visibility and its
+  Windows reparse rule.
+- **Navigation gate vs every link path (steps 3/4/9).** Only five webview
+  builders exist (`main` via `create_main_window`, `subwindow`, `presenter`,
+  `connect`, plus `browser-*` and `print-*` with their own gates); the four
+  app ones carry `app_new_window`, the plugin gates every label but
+  `browser-*`/`print-*`. Markdown hosts all use `onMarkdownLinkClick`; every
+  external-link path in the frontend (`linkTarget.ts`, terminal, mail, update
+  panel, Copilot card, settings) goes through `open_external_url` (http(s)
+  re-checked) or a user-configured `launch_app` with a URL. Every OS file
+  hand-off goes through `windows.openFile` (six callers, none passes a
+  handler but the drag-out's never-set `fileExec` hint) or
+  `global_inbox_open`/`open_in_file_manager`; the blob pane now uses
+  `openFileEntry`. `OpenExternalHost` and `ExecTrustHost` are mounted in
+  `AppShell` (desktop, web client and Connect window all render it) and
+  `DetachedApp`; the `present-*` windows open no files.
+- **Local-model gates vs taint and staging (steps 5/6/9).**
+  `root_mcp::refusal_reason` names every new fixed refusal of the root lane
+  (`LOCAL_READ_CLOUD` — also used for the step 9 shared-alias case —
+  `LOCAL_READ_UNRECORDED`, `PENDING_LIMIT`, `OUTSIDE_GRANT`, …).
+  `local_model_tab_open`/`started` are answers of the window command
+  `clear_local_model_conversations`, not root-lane refusals, so they belong in
+  `useModelsHub`'s wording (they are). `Session::tainted` feeds
+  `root_mcp_review::call` before the level is picked, so a tainted tab is at
+  `all` whatever `off` says. The live-tab registry (`note_vibe_home`) gets the
+  same `VIBE_HOME` string the window built from `app_vibe_local_dir_for`, the
+  path the clear computes; unfenced spawns register too.
+- **`off`-level capture vs the CalDAV push (steps 6/7/10).** A write that
+  touches a CalDAV calendar always stages; approval applies it on the backend
+  and emits the change → `RootOverlay` → `notifyCalendarWrite` → `pushRow` →
+  `caldav_push` marks the row dirty before the PUT (the window-side
+  `markForPush` covers the user's own writes). An http-refused account's
+  calendars are read-only on disk (`applyWritability`), so an agent write
+  there is refused by `calendar_context` ("Calendar is read-only") before
+  staging; an approved row reaching such a calendar some other way is not
+  sent and not marked (`pushRow` → `notWritable`). `update_event_at` keeps
+  `from_mail` (step 6) and `caldav_dirty` (step 7, dropped on a move into a
+  local calendar since step 10) in one place; the step 7 merge rewrite kept
+  step 6's `keep_from_mail`. Clipboard copies carry `from_mail` only, never
+  server identity.
+- **Origin rule (steps 7/10).** Every hop (`dav_reply`), listing filter
+  (`in_origin`/`href_in_origin`), resource listing and
+  `check_account_origin` use `credentials_may_follow`; `https_twin` is
+  deliberately same-host only. Docs (`context/caldav.md`,
+  `help/mail-calendar.md`, `DOCUMENTATION.md`, threat model row 26) all state
+  the registrable-domain rule and the port rule.
+- **Launcher (steps 8/10).** `package-dev.sh` lists the hash and installs the
+  copy (from the commit in `--head`, through `dev_git`); `spawn_relauncher`
+  and the desktop entry run the copy; the hot-reload launcher and
+  `package-dev-auto.sh` only lost the `live_pwa` plumbing. `bash -n` clean on
+  all six changed scripts; the launcher's shell tests run in `cargo test`.
+- **Agent-facing docs (step 1).** The git MCP `CONTRACT`, `INSTRUCTIONS` and
+  each CI tool's description name `ci_repo_unconfirmed` and `repo_changed`;
+  `context/git_push_mcp.md` and threat model row 19 agree.
+- **Persisted state.** `git_ci_repos` (outside the strict policy block;
+  dropped with `confirmed_url` from bundles both ways), `from_mail`,
+  `caldav_dirty`, `caldav_server_deleted` (old JSON round-trips, tested per
+  step), the account http→https rewrite (idempotent), the dev-build
+  `verified` list (new file, host-only). The store fields `answeredAt`/
+  `queued` are memory only.
+- **Commands.** One new command, `clear_local_model_conversations`:
+  `cfg_attr(feature = "desktop", tauri::command)`, `command_class` row
+  (`Core`), `MODEL_ARG` row, `commandClasses.ts` current
+  (`the_generated_command_classes_ts_is_current` passes in the workspace
+  run). Changed signatures (`open_file` `checkOnly` + `Option` return,
+  `global_inbox_open` `check_only`, `compile_tex` `ownFolderUnlinked`,
+  `caldav_fetch.full`, `caldav_apply.discard`, `caldav_push.rev`) are all
+  optional arguments; the browser and Connect transports answer
+  `open_file {checkOnly}` with `null`.
+- **i18n.** 34 added or changed keys (32 new, 2 reworded), the same set in all five dictionaries
+  (`caldav.insecureUrl` removed everywhere, no reference left). No hardcoded
+  display text in new UI (the one English `Error` in `DeckView.rasterizeInto`
+  is an unreachable backstop).
+- **UntestedTag.** Six new register rows, each with its pills;
+  `npm run untested -- check` agrees.
+- **Leftovers.** No `TODO`/`FIXME`/`XXX`/`dbg!`/`console.log`/`.only`/`.skip`
+  added. The `eprintln!`s added are the nav gate's intended stderr log and the
+  existing "git not on PATH — skipping" test pattern.
+- **Docs.** Threat model rows 19–23, 25–27, 31–34, 38 read "**Fixed, not
+  live-verified.**" and match the code and each other. Filemap rows exist for
+  `os_open.rs`, `nav_gate.rs`, `markdownLinks.ts`, `OpenExternalHost` +
+  `lib/openExternal.ts` + `stores/openExternal.ts`, `home_io.rs`; the scripts
+  have no filemap rows by convention (`dev-launcher.sh` is named in the
+  `dev_build.rs` row and in `context/dev_builds.md`). `live_pwa` survives only
+  in "it is gone" comments, `todo/` history and the frozen
+  `docs/filemap_rationale/backend.md` (frozen by rule; left).
+  **Fixed here:** threat model row 22 had a clause moved by an insertion
+  ("…so a link swapped in between is still refused, rewrites an existing file
+  in place…"); put back after the D1 sentence. The plan's status line and
+  "Resume state" are rewritten for landing.
+- **Mobile bundle.** `mobile-dist/` is gitignored and built by `npm run
+  build` (`mobile:build`); nothing under `mobile-web/` changed in the range.
+  The hooks' "MOBILE BUNDLE IS STALE" is `backend-stale.sh`'s mtime rule in a
+  fresh worktree (checked-out sources are newer than an older or missing
+  `mobile-dist/`), not a needed rebuild; there is nothing to commit. Since
+  step 8 the phone gets a new bundle only when the window and its sidecar
+  relaunch.
+
+### Part B — fixes
+
+- Docs commit (this section, threat model row 22, plan status and Resume
+  state). No code bug was confirmed, so no regression test was added.
+
+### Gates (at `eba16dfb` code; the fix commit is docs only)
+
+- `npm run build` ok (only the usual chunk-size notes).
+- `npm test`: 806 files / 8104 tests passed. (Reviewer 10's 807 / 8111
+  included another session's uncommitted pdf/markup test file in that tree.)
+- `cargo test --workspace`: 4341 passed, 0 failed, 4 ignored (lib 3942;
+  reviewer 10's 4342 / 3943 had the same uncommitted file).
+- `cargo test -p tabtivity --no-default-features --lib --test
+  server_secrets`: 3843 + 1 passed, 4 ignored (no flake).
+- `npm run lint` (via `rtk proxy`): 0 errors, 28 warnings (baseline).
+- `cargo clippy --workspace --all-targets -D warnings`, `-p tabtivity
+  --no-default-features --lib`, `-p app-serverd --all-targets`: clean.
+- Windows cross-check (`clippy --target x86_64-pc-windows-msvc --all-targets
+  -D warnings`, `cargo check --workspace --all-targets`): clean.
+  `aarch64-apple-darwin` `cargo check --workspace --all-targets` with the
+  check-only CC/AR stand-ins: clean (the 5 vendored `tauri-runtime-wry`
+  warnings).
+- `cargo build -p app-serverd` + `ldd`: vdso, libgcc_s, libm, libc, ld-linux
+  only.
+- `scripts/brand-check.sh` ok; `scripts/privacy-check.sh 5d82c988 HEAD`
+  clean; `git diff --check 5d82c988..HEAD` clean; `npm run untested --
+  check` agrees; `bash -n` on the six changed scripts. `shellcheck` not
+  installed. Cargo used the overlay `CARGO_HOME` (for `psl`). `npm run
+  backend:stale` not run (at landing). Nothing run live.
+
+### Flagged for user (consolidated, Run 2026-10-12, deduplicated)
+
+**Behaviour changes you will notice**
+1. *Agent CI (gap 19):* in a project whose push URL was never confirmed, an
+   agent's `ci_runs`/`ci_run`/`ci_security_alerts` and `git_release` ask once
+   per repo with an "Allow CI for <owner/repo>" card. A tab started before
+   its repo existed (`git init` later) gets `repo_changed` until restarted. A
+   project moved by bundle asks again for the push URL and CI (its push
+   *level* still travels).
+2. *Viewer saves (D1):* saving onto any symlinked file, an in-project link
+   included, is refused with the link message (reads still work); a viewer
+   path with `..` is refused. Unreadable paths now say "not a file" / "changed
+   while it was opened" instead of "Permission denied", `file_mtime` needs
+   read permission, and Linux needs read permission on each folder of the
+   walk.
+3. *Decks (D3):* a TeX figure whose files are not directly in
+   `<deck>.tex-figures` no longer re-rasters or recompiles (one notice;
+   re-adding fixes it). "Add TeX figure" on a deck with no figure folder now
+   works.
+4. *Markdown (gap 38):* `\\server\share\…` and `file://server/…` links and
+   images no longer render (relative links inside a file on the same share
+   still work).
+5. *OS hand-offs (C2):* every file that goes to the OS asks first — no-viewer
+   files, Shift+double-click, Downloads, terminal path links, Reader change
+   cards, the phone inbox, disk usage, dropped files — even a PDF and even
+   with a default app set. Scripts, launchers, installers and files with an
+   execute bit are refused ("not opened"), executables you build yourself on
+   Linux included; on FAT/exFAT/NTFS/SMB/9p mounts the name alone decides (the
+   question still comes). The project blob pane opens in-app viewers in a
+   tab. A question that waited in the queue (or comes within 400 ms of an
+   answer) ignores its Open/Run button for 400 ms.
+6. *Links (D6):* `target=_blank` and middle-click on a web link always open
+   the system browser, ignoring the in-app-browser setting; `mailto:` and
+   other non-web `_blank` links open nothing; a refused navigation is silent
+   (stderr). The main window is now created by `setup` code — the first
+   suspect if the window misbehaves at start.
+7. *Mail AI and local models (gaps 25/33):* a cloud (or unlisted) Ollama
+   model as the Mail model answers a refusal for every mail AI action; its
+   Mail chip is greyed; with "keep the tools local" / "mail only for local
+   models", a Vibe tab on a cloud or unlisted model (or while Ollama is down)
+   gets no tools; a model whose alias another installed model shares cannot
+   read mail or use tools from a tab (rename one with `ollama cp`). Once a tab
+   of a model reads mail, every tab of that model — open ones too — stages its
+   writes and writes reader drafts until **Clear conversations**, which
+   deletes that model's Vibe sessions (and `/resume` history) irreversibly;
+   per-tab markers stay.
+8. *Root agent writes (gaps 27/34, E3):* at review level `off` writes are
+   logged as applied with Undo and bound by the row limit and pending cap; a
+   write to a CalDAV-synced calendar always waits for ✓; mail-derived events
+   and cards, and cards in read-only calendars, show `[link]` for URLs to every
+   agent, local ones included; an unreadable `proposals.json` now blocks `off`
+   writes too.
+9. *CalDAV (gaps 26/32, E2b):* every `http://` account, `localhost`
+   included, stops syncing and turns read-only (nothing deleted); switching it
+   to `https://` keeps its same-host calendars. The password goes to any
+   https host under the account's registrable domain (origin port or 443). A
+   resource listed off-origin fails that sync visibly. "Decide later" lasts
+   the session; "Keep mine" on a lost-reply create runs a sync first, and a
+   failed "Keep mine" leaves the question up.
+10. *Dev builds (gap 20, B1/C3):* nothing is adopted until one host-side
+    `package-dev.sh` ran (the window's queued build does it; run `npm run
+    package:dev` in a host terminal if auto-builds are off). A binary in
+    `target/release` the host did not list — the old one at first launch, or
+    an agent's fenced release build — is refused with a notification. The
+    phone picks up a new bundle only when the window and its sidecar relaunch.
+
+**Residual risks**
+- Gap 19: `repo_changed` is checked before the lane's git runs, not pinned
+  (an agent looping `git init`/`rm -rf .git` can win; the confirmed-repo gate
+  still holds); `.git` pointer-file contents rely on git_guard's bind; a
+  folder with garbage `HEAD` still counts; Windows records presence only; an
+  allowed CI repo is never revoked (no UI); a Dismiss then a read stages a new
+  card.
+- Gaps 22/31: the allowed root is opened by path; a project nested in a
+  folder an agent can write can be swapped for a link and becomes another root
+  for every confined command (older than this run); the mail download mark is
+  set by path; `sqlite`/`sheets` open by path after confinement. Windows
+  OneDrive handling is per the documented API only (a link swapped in between
+  the two opens is followed once before the identity check refuses it, so a
+  UNC target could be contacted; needs a racing writer, and Windows has no
+  fence).
+- Gaps 23/21: `compile_tex`'s own-folder check and the OS open are by path
+  (a racing swap is not caught); deck "Edit" of a figure `.tex` saves through
+  a linked figure folder (ordinary editor); remote (SFTP) figure writes follow
+  remote links; a configured default app or explicit handler is not judged;
+  candidate launcher extensions not added (see decisions).
+- Gap 38: top-level `about:blank`/`about:srcdoc` are allowed (would blank the
+  app; no trigger found); WebView2 frames are not gated (the CSP bounds them).
+- Gaps 25/33: a locality verdict is reused up to a minute; the `-cloud` tag
+  rule can refuse a hand-named local model; a remote endpoint is judged by its
+  own list; `local_model_of` trusts the env pair (not `VIBE_HOME`); an
+  unconfirmed local tab still lists the mail tools; a read-only folder in the
+  store makes Clear fail (fail-closed, "permission denied").
+- Gaps 27/34: title and notes still reach a cloud agent (marked); events made
+  before this build have no stamp; a scoped session reads a card whose linked
+  event was deleted as external; `off` reads miss the tab's own staged CalDAV
+  writes (an agent may stage the same event twice); board moves next to a
+  synced card over-stage; a save failure after a landed automatic write (IO
+  error, or >8 MiB of pending rows) still reports an error; copy/paste out of
+  a read-only or imported calendar launders it (older); drafts compare
+  metadata, not bytes; audit categories show raw.
+- Gaps 26/32: every https host under the registrable domain is trusted (a
+  provider's other services there included); the public-suffix list is the
+  compiled-in `psl` 2.1.241 snapshot; overlapping syncs can push a dirty row
+  twice (spurious "changed" question, no loss); a server-deleted series with
+  only an override dirty keeps that override alone; a dirty row in a calendar
+  whose push is off waits silently; an approved agent write is unmarked if the
+  app dies before its push; "Keep mine" leaves both rows on disk for a moment
+  (an app quit then shows the duplicate as a server row); an http→https
+  re-read failure empties the in-memory calendar until the next load.
+- Gap 20 (C3, accepted): a committed agent change runs on the host at the
+  next queued dev build and is trusted; the cargo target dir and freeze tree
+  are fence-writable during the build (the list proves "a host
+  `package-dev.sh` hashed it"); a `filter.*` driver or `core.worktree` in
+  `.git/config` still applies to the freeze-tree checkout and
+  `assert-embedded-frontend.sh` runs from it; two simultaneous host builds can
+  lose a list line; NFS idmap / CIFS fixed modes make every adoption fail; a
+  huge planted file is copied at each launch before being refused; the
+  desktop `Icon=` still points into the checkout.
+
+**Need a user decision**
+- Pin allowed roots (or refuse a root resolving outside where it is
+  registered) — the nested-root swap above.
+- Pass the spawn-time git dir (`GIT_DIR`) to every lane git call to close the
+  `repo_changed` race; drop the push *level* on bundle import.
+- Add the candidate launcher extensions (Windows `.ws`, `.wsc`, `.sct`,
+  `.xll`, `.msu`, `.mde`/`.accde`/`.ade`/`.adp`, `.jnlp`, `.appx`/`.msix`,
+  `.theme`/`.themepack`, `.search-ms`, `.iso`/`.vhd(x)`; macOS
+  `.afploc`/`.inetloc`/`.webloc`/`.jnlp`, a bundle-bit folder without `.app`;
+  Linux `.jnlp`, `.flatpakref`, `.deb`/`.rpm`).
+- Serve `off` reads from the sandbox while the tab has pending proposals.
+- UI for: listing/revoking `git_ci_repos`; a CalDAV row waiting to be pushed;
+  a refused navigation; a persistent "Decide later".
+- Clear conversations: make read-only folders writable before deleting?
+  Judge `9p` by name only everywhere, or only under WSL?
+- Make the deck "Edit" of a figure `.tex` use the own-folder save, or extend
+  D1 to every folder below the project root.
+
+### Live click-through (consolidated, not run)
+
+Linux unless named; the frozen dev build of `threat/1012-final` after it
+lands on develop. Steps 1–2 once, first.
+
+*Setup (dev build, step 8)*
+1. In a **host** terminal (not an agent tab): `npm run package:dev`. Check
+   `~/.local/share/tabtivity/dev-builds/verified` gained a line,
+   `~/.local/share/tabtivity/dev-launcher/` exists, and the "Tabtivity (dev)"
+   desktop entry's `Exec=` names that folder's launcher.
+2. Click "Tabtivity (dev)": the window opens maximized as before (macOS: the
+   overlay title bar); popouts, the deck presenter and the Connect window
+   open; with Mobile on, the phone loads and works (the app from the binary).
+
+*Dev builds (steps 8, 10)*
+3. Commit something; when the chip offers it, **Relaunch now**: the
+   notification says "moved forward" with the new commit.
+4. Copy another binary over `target/release/tabtivity` (newer), quit, click
+   the entry: a notification says it was not adopted; the old snapshot opens.
+5. Add an `echo` to the checkout's `start-tabtivity-dev-build.sh` without
+   committing, relaunch: the log does not show it. During a `npm run
+   package:dev -- --head`, edit `target/freeze-tree/start-tabtivity-dev-build.sh`:
+   the installed copy holds the committed launcher.
+6. `npm run backend:stale` with Mobile on: no "published bundle" lines.
+
+*Agent git/CI (step 1)*
+7. In a project with a confirmed push URL, ask the agent for `ci_runs`: runs,
+   no card.
+8. `git remote set-url origin https://github.com/<other>/<repo>`, ask for
+   `ci_runs` twice: `ci_repo_unconfirmed`, one "Allow CI for <other>/<repo>"
+   card; Allow, ask again: runs. Ask for `git_release` there before allowing:
+   refused with the same card. Restore the URL.
+9. In a repo-less folder start an agent tab, have it `git init` and add a
+   github `origin`, ask for `ci_runs` and a push: both `repo_changed`; restart
+   the tab: the lane works.
+
+*Viewer files and decks (steps 2–4)*
+10. Edit and save a Markdown file: saved, same inode (`ls -i`).
+    `ln -s notes.md link.md`, open `link.md`: shows the text; a save fails with
+    the link message.
+11. `ln -s /tmp/planted.png figure.png` (target missing); annotate or "Save
+    as" onto it: refused, `/tmp/planted.png` not created.
+12. A PDF whose `.eldeck.json` holds non-UTF-8 bytes → "Open as deck": the
+    sidecar is opened (reported broken), not overwritten. A deck with no
+    slides and a non-UTF-8 `<deck>.tex` → "Create a starter": file unchanged.
+13. Deck presenter on, on a deck with no figure folder: "Add TeX figure",
+    edit, Compile: the slide updates within ~2 s. Set that figure's `src` to
+    `../elsewhere.png` in the JSON, reopen, recompile: one notice, no
+    `elsewhere.png`. `rm -r talk.tex-figures && ln -s ../other
+    talk.tex-figures`, Recompile: the link notice, nothing in `../other`.
+14. Mail: "Save to project" an attachment twice → `name` and `name (2)` in
+    `tabtivity-emails`; replace that folder with a link to `/tmp`, save again:
+    refused, nothing in `/tmp`.
+
+*Links and the navigation gate (steps 3, 4)*
+15. A Markdown file with `[a](docs/x.md)`, `[b](#h)`, `[c](https://example.com)`,
+    `[d](//example.com/x)`: a opens a tab, b scrolls, c opens the browser, d is
+    text. Same in a notebook cell, the prompt preview, a Skills preview and the
+    dev to-do board: the window never reloads. Middle-click c → system browser;
+    middle-click a → nothing. Ctrl+R still reloads.
+16. Mail HTML, the PDF viewer, the presenter, a popout and the in-app
+    browser's live page: links behave as before.
+
+*Opening files outside the app (steps 4, 9, 10)*
+17. Double-click a `.xyz` file: "Open data.xyz with the system's default
+    app?"; Cancel opens nothing, Open opens it. Same from Downloads, a terminal
+    path link, a Reader change card, the header's phone inbox and a dropped
+    no-viewer file.
+18. `printf '[Desktop Entry]\nType=Application\nExec=xterm\n' > run.desktop`;
+    double-click and Shift+double-click it: "run.desktop was not opened".
+    `ln -s run.desktop notes.txt`, open it: same. `chmod +x` an extensionless
+    file and open it: same. "Open with…" a chosen app: no question.
+19. On a FAT/exFAT stick (or SMB share, WSL `/mnt/c`): an `rwx` `notes.xyz`
+    asks and opens; `run.desktop` there is still refused.
+20. Projects blob: click a PDF → a tab; click a `.xyz` → the question.
+21. Two gated actions at once (two TeX Builds with an untrusted `latexmkrc`,
+    or two dropped no-viewer files): both questions in turn; a double click on
+    the first's Run/Open leaves the second up; a deliberate click a moment
+    later answers it; Don't run / Escape act at once.
+22. macOS: reveal a `Foo.app` in the file browser (and disk usage "Open
+    externally" on its folder): "Foo.app was not opened…", not
+    `open_refused_launcher`.
+
+*Local models and mail (steps 5, 9)*
+23. A local model as the Mail model: Summarise works. `ollama pull
+    gpt-oss:120b-cloud`, load it: its Mail chip is greyed; alone it gets no
+    roles; set `ollama_roles.mail` to it: Summarise answers the cloud refusal,
+    nothing reaches ollama.com. With Ollama stopped: "not running".
+24. "Let local models read mail" on: a Vibe tab on the cloud model (MCP chip)
+    asked to search mail is refused; with "keep the tools local" on it gets no
+    tools.
+25. On a local model's tab read a mail; a new tab of that model (and the
+    already open one) adds a to-do that stages; another model's tab does not.
+26. Local model menu → **Clear** on that model with its tab open: "…Close the
+    tabs of this model first: <tab>". Close it, Clear, confirm (Cancel
+    focused): `vibe_local/<alias>/logs/session` and
+    `root_mcp/read_mail_model/<hash>` are gone, `config.toml` stays; a new tab
+    adds a to-do without staging. (Optional, tight timing: start a tab during
+    the clear → "cleared, but the read-mail mark was kept".)
+
+*Root agent and review (step 6)*
+27. "Add to calendar (local)" on a mail, Save; a cloud root tab asked about
+    that day gets the event marked external, URLs as `[link]`; still after an
+    edit. A card from a mail, and a card from the mail-made event, are external;
+    an ordinary card is not.
+28. Review level `off`: an agent's to-do lands at once and shows in ✓ as
+    applied with Undo; Undo removes it. With a synced CalDAV calendar (push on)
+    at `off` or `destructive`: an agent event there waits in ✓ and is pushed
+    only after ✓.
+29. An agent draft with an attachment; open ✓; the agent replaces the
+    attachment; ✓ on the draft is refused until the panel refreshes.
+30. Settings → MCP security → audit: a narrowed tool's refusal shows
+    `access_narrowed`.
+
+*CalDAV (steps 7, 10; an https server, e.g. Radicale behind TLS, push on)*
+31. Server URL `http://…` (or `http://localhost:5232/`): the amber strip, Find
+    and Save greyed. An account saved as http by an older build: sync mark `!`
+    with the same sentence, calendars read-only, Remove works; change it to
+    `https://` (same host) and Save: its calendars keep syncing, no duplicates.
+32. Offline, edit a synced event; reconnect, click the sync mark: the edit
+    reaches the server and is not overwritten.
+33. Edit one event offline here and on the server: "Changed somewhere else
+    too"; "Use the server's" shows theirs; repeat, "Keep mine" puts yours up.
+34. Edit offline, delete it on the server, sync: "deleted on the server";
+    "Keep mine" re-creates it, "Use the server's" removes it, "Decide later"
+    leaves it until restart.
+35. A recurring event with a moved occurrence, both edited offline, series
+    deleted on the server: "Keep mine" on both → one series with the moved
+    occurrence on the server; no 412 question next sync.
+36. Lost-reply create (pull the network right after Save): when the question
+    appears, "Keep mine" leaves one event here and one on the server.
+37. A synced event whose push failed, moved into a local calendar; sync: no
+    question; turning push on later sends nothing for it.
+38. An iCloud-shaped account (`https://caldav.icloud.com/`, calendars on a
+    sibling host): Find lists them, sync works. Optional: a server naming its
+    principal under another domain is refused with a sentence naming the host,
+    no request reaches it.
+
+*Windows (alpha; steps 2–4)*
+39. A project in OneDrive with online-only files: open, edit and save a
+    Markdown file (it hydrates); "Save to project" a mail attachment; browse
+    the project from the phone. A junction or symlink in it is still refused.

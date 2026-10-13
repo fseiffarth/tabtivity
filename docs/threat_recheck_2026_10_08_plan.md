@@ -1,62 +1,87 @@
 # Threat-model recheck 2026-10-08 — findings and fix plan
 
-Status: **partly done.** Plan steps 1, 2, 3, 6, 8, 13 and 14 are fixed in
-develop (`bdafdf03`, 2026-10-09; not pushed, not live-verified). The rest is
-listed under "Resume state" below.
+Status: **code-complete, landing pending.** Plan steps 1, 2, 3, 6, 8, 13 and
+14 are in develop and main (`bdafdf03`, 2026-10-09). Plan steps 4, 5, 7, 9,
+10, 11 and 12 (the "Run 2026-10-12" section: 8 agent steps, 2 follow-up
+steps, a final review) are done on branch `threat/1012-final` (worktree
+`.claude/worktrees/threat1012-final`), not yet merged into develop. Nothing
+of either run is live-verified.
 
-## Resume state (2026-10-10)
+## Resume state (2026-10-13)
 
-"Continue the threat recheck" means: take the next item below whose decision
-is answered, run it with the plan → implement → review routine (handoff:
-`docs/threat_recheck_2026_10_08_handoff.md`, append new sections there), mark
-its rows in `docs/threat_model.md`, then land on develop. Ask the user only
-the decision an item names. Saying "continue" is the user's go-ahead for the
-subagents that routine spawns (plan reviewer, then a fresh implementer and
-reviewer per step, then a final reviewer), in a worktree under
-`.claude/worktrees/`.
+"Continue the threat recheck" means the open items below, in this order. Ask
+the user only the decision an item names. Saying "continue" is the user's
+go-ahead for the subagents the plan → implement → review routine spawns
+(handoff: `docs/threat_recheck_2026_10_08_handoff.md`, append new sections
+there), in a worktree under `.claude/worktrees/`.
 
-1. **Plan steps whose decisions were answered 2026-10-12** (see "Decisions
-   for the user"); suggested order 4, 5, 7, 11, 9, 10, 12 (7 after 5):
-
-   | Plan step | Gaps | Decision |
-   |---|---|---|
-   | 4 | 19 | A2: only the confirmed repo |
-   | 5 | 22, 31 | D1: refuse every symlinked leaf |
-   | 7 | 23 | D3: keep re-raster, own figure folder only |
-   | 9 | 25, 27, 33, 34 | E3: redact + mark external; CalDAV writes always stage |
-   | 10 | 26, 32 | E2b: refuse http CalDAV entirely |
-   | 11 | 21, 38 | C2: confirm all, refuse launchers; D6: navigation gate |
-   | 12 | 20 | B1: drop `live_pwa`; C3: keep auto-queue (document), launcher verifies a state-dir hash |
-
-   On 2026-10-12 other sessions had uncommitted edits in `commands/fs.rs`,
-   `services/git_ci.rs` and `services/agent_fence.rs` (steps 4 and 5 touch
-   them): branch from a develop that contains them, or edit around them.
-
-2. **Follow-ups that need no decision** (found during the run; details in
-   the handoff's "Final review → Flagged for user"):
-   - Re-survey the logins still shared to every home, the Host home
-     included: Goose `secrets.yaml`, OpenCode `auth.json`, Qoder `.auth`
-     (gap 16 residual).
-   - Spawns still in `launch_prep::prepare` at quit escape `kill_all`, and
-     closing a tab during `prepare` leaves an orphaned PTY (gap 18 notes,
-     older than this run).
-   - Gap 30 residual: bwrap/Seatbelt open the control paths by name after
-     the check (`--ro-bind-fd` would close it).
-   - Background `sync_auto` skips files over 64 MiB with only a log line.
-   - `workspace_sync` serves stored tabs without the load sanitizer; a
-     headless relaunch of an adopted agent tab before a window re-saves it
-     has no `TAB_UID`.
-   - Spreadsheet reader limits: no `RLIMIT_AS` on macOS, no Job object on
-     Windows, `PR_SET_PDEATHSIG` Linux-only.
-   - Reviewer B's lead (`agent_session.rs` transcripts through symlinks):
-     step 4 refuses a link at the leaf only; a linked directory component is
-     still followed.
+1. **Land `threat/1012-final` on develop.** It branched from develop
+   `5d82c988`; another session's uncommitted CodeQL edits (`fs.rs`,
+   `git_ci.rs`, `agent_fence.rs`, `root_mcp.rs`, `mobile_control/*`) will
+   conflict, so merge carefully and rerun every gate. After landing: `npm run
+   backend:stale`, then a host-side `npm run package:dev` once (the dev-build
+   launcher now adopts only host-listed builds; handoff, final review,
+   click-through step 1). The new `psl` crate is fetched normally on the host
+   and in CI. Mark rows 19–23, 25–27, 31–34, 38 (already "Fixed, not
+   live-verified." in `docs/threat_model.md`) live-verified only after the
+   click-through.
+2. **Never run:** the live click-through of both runs — the 2026-10-08 run's
+   12 steps (handoff, "Final review → Live click-through") and the 2026-10-12
+   run's 39 steps (handoff, "Final review — Run 2026-10-12 → Live
+   click-through") — and macOS/Windows at runtime (only cross-compiled). Watch
+   the first CI run on those platforms (main window built in `setup`, the
+   OneDrive reparse handling, the new Windows-only tests).
 3. **Never reviewed:** reviewer F's whole area and the per-reviewer gaps
-   (see "Not reviewed" at the end). That needs a fresh read-only review
-   run first.
-4. **Never run:** the 12-step live click-through (handoff, "Final review →
-   Live click-through"), and macOS/Windows compiling. Watch the first CI run
-   on those platforms.
+   (see "Not reviewed" at the end). That needs a fresh read-only review run
+   first.
+4. **Open follow-ups** (no step built them; details in the handoff's two
+   final reviews, "Flagged for user"). Need a user decision:
+   - Pin allowed roots, or refuse a root that resolves outside where it is
+     registered: a project nested in a folder an agent can write can be
+     swapped for a link and becomes another root for every confined command
+     (older than this run).
+   - Close the gap 19 `repo_changed` check-then-use race by passing the
+     spawn-time git dir (`GIT_DIR`) to every lane git call; drop the push
+     *level* on bundle import too.
+   - Add the candidate launcher extensions the step 4 reviewer listed
+     (Windows `.ws`, `.wsc`, `.sct`, `.xll`, `.msu`, Access types, `.jnlp`,
+     `.appx`/`.msix`, `.theme`/`.themepack`, `.search-ms`, `.iso`/`.vhd(x)`;
+     macOS `.afploc`/`.inetloc`/`.webloc`, bundle-bit folders; Linux
+     `.jnlp`, `.flatpakref`, `.deb`/`.rpm`).
+   - Under review level `off`, serve reads from the sandbox while the tab has
+     pending proposals (today an agent can stage the same CalDAV write twice).
+   - UI gaps: list/revoke `git_ci_repos`; show a CalDAV row waiting to be
+     pushed (push off, or "Decide later", which lasts one session); a
+     refused navigation is stderr-only.
+   - "Clear conversations" fails on a read-only folder in the store (make it
+     writable first?); `9p` is judged "no Unix modes" everywhere, not only
+     WSL.
+   No decision needed:
+   - Deck "Edit" of a figure `.tex` saves through a linked figure folder (the
+     ordinary editor's `Write`); `compile_tex`'s own-folder check is
+     path-based.
+   - `local_model_of` trusts the env pair (also require `VIBE_HOME`'s leaf ==
+     `sanitize_alias(model)`); an unconfirmed local tab still lists the mail
+     tools.
+   - CalDAV: overlapping syncs of one collection can push a dirty row twice
+     (spurious 412 question; an in-flight guard per collection); an approved
+     agent write is unmarked if the app dies before its push starts.
+   - `dev_git` cannot switch off a `filter.*` driver or `core.worktree` in the
+     fence-writable `.git/config` for the freeze-tree checkout;
+     `assert-embedded-frontend.sh` runs from the freeze tree (inside C3).
+   - Root audit categories (`access_narrowed`, …) show raw, untranslated.
+   - From the 2026-10-08 run, still open: re-survey the logins still shared
+     to every home (Goose `secrets.yaml`, OpenCode `auth.json`, Qoder
+     `.auth`; gap 16 residual); spawns in `launch_prep::prepare` at quit
+     escape `kill_all`, and closing a tab during `prepare` orphans its PTY;
+     gap 30 residual (bwrap/Seatbelt open control paths by name after the
+     check; `--ro-bind-fd`); background `sync_auto` skips files over 64 MiB
+     with only a log line; `workspace_sync` serves stored tabs without the
+     load sanitizer, and a headless relaunch of an adopted agent tab before a
+     window re-saves it has no `TAB_UID`; spreadsheet reader limits (no
+     `RLIMIT_AS` on macOS, no Job object on Windows, `PR_SET_PDEATHSIG`
+     Linux-only); `agent_session.rs` transcripts follow a linked directory
+     component (only a leaf link is refused).
 
 Six read-only reviewers went over HEAD `16182b63` on 2026-10-08. Each read
 `docs/threat_model.md` and its area's `docs/context/` files first, then checked
