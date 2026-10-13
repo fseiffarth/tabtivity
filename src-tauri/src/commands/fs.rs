@@ -3855,6 +3855,18 @@ mod tests {
         assert!(confine_abs_within(&root.join("src").join("main.rs"), &roots).is_ok());
     }
 
+    /// `base` with `parts` appended as written. `Path::join` onto a Windows
+    /// verbatim path (what `canonicalize` returns there) resolves `..` as it
+    /// joins, so a joined path would test a plain one instead (ci-cd #389).
+    fn spelled(base: &Path, parts: &[&str]) -> PathBuf {
+        let mut path = base.as_os_str().to_owned();
+        for part in parts {
+            path.push(std::path::MAIN_SEPARATOR_STR);
+            path.push(part);
+        }
+        PathBuf::from(path)
+    }
+
     #[test]
     fn confine_abs_within_refuses_a_dot_dot_through_a_missing_folder() {
         // `root/missing/../..` used to pass the prefix check lexically.
@@ -3862,10 +3874,10 @@ mod tests {
         let root = tmp.path().canonicalize().unwrap().join("p");
         fs::create_dir(&root).unwrap();
         let roots = vec![root.clone()];
-        let escape = root.join("missing").join("..").join("..").join("loot");
+        let escape = spelled(&root, &["missing", "..", "..", "loot"]);
         assert!(confine_abs_within(&escape, &roots).is_err());
         // Even one that would land back inside is refused: `..` is never needed.
-        let back = root.join("missing").join("..").join("x");
+        let back = spelled(&root, &["missing", "..", "x"]);
         assert!(confine_abs_within(&back, &roots).is_err());
     }
 
@@ -4058,7 +4070,7 @@ mod tests {
         let (_p, root, outside) = confined_fixture();
         let roots = vec![root.clone()];
         fs::write(root.join("x"), "x").unwrap();
-        let dotted = root.join("missing").join("..").join("x");
+        let dotted = spelled(&root, &["missing", "..", "x"]);
         for mode in [Confined::Read, Confined::Stat, Confined::Overwrite, Confined::Write] {
             assert!(open_confined(&dotted, &roots, mode).is_err(), "{mode:?}");
             assert!(open_confined(Path::new("x"), &roots, mode).is_err(), "{mode:?}");
