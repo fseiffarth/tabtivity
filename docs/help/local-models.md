@@ -79,9 +79,15 @@ calling; the Models & agents menu tags models without it "no tools".
    **Mail**. An Ollama cloud model (a `-cloud` tag) runs on ollama.com, so
    its **Mail** chip is greyed out, and a single loaded cloud model is never
    given the roles on its own.
-5. Optional: under **Load on Tabtivity start** in the Ollama panel, tick models to
+5. **Clear** on a model deletes its stored Mistral Vibe conversations, after
+   you confirm, so no tab can continue one. Once any tab of a model has read
+   mail, every tab of that model has its calendar and board changes held for
+   your approval; clearing its conversations ends that for new tabs. Close
+   the model's tabs first: the menu names any that are still open. Settings
+   and logins are kept.
+6. Optional: under **Load on Tabtivity start** in the Ollama panel, tick models to
    load automatically at launch (not in Energy Saver mode unless you allow it).
-6. From a paired phone, Home → **Local models** loads and unloads installed
+7. From a paired phone, Home → **Local models** loads and unloads installed
    models too (help topic `mobile`, "Local models from the phone").
 
 ## 5. Open a Local Model tab

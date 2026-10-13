@@ -1152,10 +1152,12 @@ pub fn call(stores: &Stores, name: &str, args: &Value) -> Result<(Value, Effects
         let addr = super::mail_ai::resolve_endpoint(Some(&endpoint)).map_err(|_| LOCAL_READ_REMOTE.to_string())?;
         // A loopback Ollama still runs an Ollama cloud model on ollama.com
         // (gap 25): the model recorded at spawn must be one that endpoint
-        // lists without a remote. No recorded model (or no session) is not
-        // proof of one, and an unreadable list fails closed.
+        // lists without a remote, and no other listed model may share its
+        // alias (the tab's Vibe home and taint are keyed by it). No recorded
+        // model (or no session) is not proof of one, and an unreadable list
+        // fails closed.
         let model = stores.session.and_then(|s| s.identity.model.as_deref()).ok_or_else(|| LOCAL_READ_CLOUD.to_string())?;
-        crate::commands::ollama::model_is_local_at(&addr, model).map_err(|_| LOCAL_READ_CLOUD.to_string())?;
+        crate::commands::ollama::tab_model_is_local_at(&addr, model).map_err(|_| LOCAL_READ_CLOUD.to_string())?;
         // Latched before the read, not after it: a result that fails halfway
         // may already be in the model's context. On disk too, per tab and per
         // model, for the next spawn (`root_mcp::spawn_read_mail`) — and a
@@ -2111,6 +2113,11 @@ mod tests {
             crate::commands::ollama::test_tags::set(unreadable);
             assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_CLOUD, "{unreadable:?}");
         }
+        // Another installed model sharing the tab model's alias (its Vibe home
+        // and taint key): not confirmed either (step 5 review).
+        let twin = r#"{"models":[{"name":"llama3:latest"},{"name":"llama3-latest"}]}"#;
+        crate::commands::ollama::test_tags::set(Some(twin));
+        assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_CLOUD, "shared alias");
         assert!(!session.has_read_mail());
         crate::commands::ollama::test_tags::set(Some(LOCAL_TAGS));
         assert!(call(&s, "mail_read", &json!({ "message_id": "m1" })).is_ok(), "an installed local model reads");

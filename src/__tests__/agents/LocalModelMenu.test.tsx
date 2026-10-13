@@ -60,6 +60,9 @@ import { resetOllamaAutoload, useOllamaAutoloadStore } from "../../stores/agents
 import { __resetOllamaActivityForTests } from "../../stores/agents/ollamaActivity";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { ModelsOverlayHost } from "../../components/models/ModelsOverlay";
+import { useTabsStore } from "../../stores/tabs";
+import { localModelTabLabels } from "../../components/models/useModelsHub";
+import { envName } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -67,6 +70,7 @@ type Model = { name: string; running: boolean; remote?: boolean };
 let models: Model[] = [];
 let patches: Array<Record<string, unknown>> = [];
 let ollamaInstalled = true;
+let clearAnswer: (model: string) => Promise<unknown> = () => Promise.resolve(null);
 
 const modelInfo = (m: Model) => ({
   name: m.name,
@@ -116,6 +120,8 @@ function backend() {
         return Promise.resolve([]);
       case "machine_load_snapshot":
         return Promise.resolve({ supported: false });
+      case "clear_local_model_conversations":
+        return clearAnswer(args?.model as string);
       case "stop_ollama_model":
         models = models.map((m) => (m.name === args?.model ? { ...m, running: false } : m));
         return Promise.resolve(null);
@@ -165,6 +171,8 @@ beforeEach(() => {
   ];
   patches = [];
   ollamaInstalled = true;
+  clearAnswer = () => Promise.resolve(null);
+  useTabsStore.setState({ tabs: [], tabsByScope: {} } as never);
   h.listeners.clear();
   invokeMock.mockReset();
   backend();
@@ -450,5 +458,66 @@ describe("LocalModelMenu button and the Models & agents overlay", () => {
     } finally {
       outside.remove();
     }
+  });
+});
+
+describe("Clear conversations (gap 33 follow-up)", () => {
+  const vibeTab = (key: string, label: string, env: Record<string, string>) =>
+    ({ key, label, cmd: "vibe", cwd: "/", kind: "local_agent", env }) as never;
+
+  it("finds a model's open tabs in every scope, by raw name or alias", () => {
+    const state = {
+      tabs: [vibeTab("a", "qwen here", { [envName("LOCAL_MODEL")]: "qwen:7b" })],
+      tabsByScope: {
+        p1: [vibeTab("a", "qwen here", { [envName("LOCAL_MODEL")]: "qwen:7b" })],
+        p2: [
+          vibeTab("b", "restored qwen", { VIBE_ACTIVE_MODEL: "qwen-7b" }),
+          vibeTab("c", "llama", { [envName("LOCAL_MODEL")]: "llama:8b", VIBE_ACTIVE_MODEL: "llama-8b" }),
+          { key: "d", label: "shell", cmd: "bash", cwd: "/", env: { VIBE_ACTIVE_MODEL: "qwen-7b" } } as never,
+        ],
+      },
+    };
+    expect(localModelTabLabels("qwen:7b", state)).toEqual(["qwen here", "restored qwen"]);
+    expect(localModelTabLabels("mistral", state)).toEqual([]);
+  });
+
+  it("asks, then clears the model's conversations and its mark", async () => {
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    const chip = await screen.findByTitle(/Delete qwen:7b's stored conversations/);
+    fireEvent.click(chip);
+    expect(await screen.findByText("Clear qwen:7b's conversations?")).toBeTruthy();
+    // The dialog outlives the dropdown it was raised from.
+    fireEvent.mouseLeave(wrap);
+    // Cancel is the focused default on a destructive confirm.
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    expect(calls("clear_local_model_conversations")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Clear conversations" }));
+    expect(await screen.findByText("qwen:7b's conversations cleared")).toBeTruthy();
+    expect(calls("clear_local_model_conversations")).toEqual([
+      ["clear_local_model_conversations", { model: "qwen:7b" }],
+    ]);
+  });
+
+  it("refuses while a tab of the model is open, naming it, and never asks the backend", async () => {
+    useTabsStore.setState({
+      tabs: [],
+      tabsByScope: { p1: [vibeTab("t1", "Thesis helper", { [envName("LOCAL_MODEL")]: "qwen:7b" })] },
+    } as never);
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    fireEvent.click(await screen.findByTitle(/Delete qwen:7b's stored conversations/));
+    expect(await screen.findByText("qwen:7b's conversations were not cleared")).toBeTruthy();
+    expect(screen.getByText(/Close the tabs of this model first: Thesis helper\./)).toBeTruthy();
+    expect(calls("clear_local_model_conversations")).toHaveLength(0);
+  });
+
+  it("says so when the backend finds a tab of the model still running", async () => {
+    clearAnswer = () => Promise.reject("local_model_tab_open");
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    fireEvent.click(await screen.findByTitle(/Delete qwen:7b's stored conversations/));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear conversations" }));
+    expect(await screen.findByText(/A tab of this model is still running/)).toBeTruthy();
   });
 });

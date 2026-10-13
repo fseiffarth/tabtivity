@@ -36,12 +36,15 @@
 use serde_json::Value;
 
 /// `(command, the argument that names the model)` for every `core` command
-/// whose body forwards that name to Ollama.
+/// whose body forwards that name to Ollama, or otherwise acts on that model.
 pub const MODEL_ARG: &[(&str, &str)] = &[
     ("complete_text", "model"),
     ("prepare_local_agent", "model"),
     ("prepare_local_launch", "model"),
     ("ensure_vibe_ollama_model", "model"),
+    // Forwards nothing to Ollama, but names a model (AGENTS.md): on a server a
+    // user clears only an allowed model's conversations.
+    ("clear_local_model_conversations", "model"),
 ];
 
 /// Where the allowlist and the installed set come from; a seam so the check

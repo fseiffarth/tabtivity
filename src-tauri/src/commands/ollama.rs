@@ -294,14 +294,19 @@ fn ollama_http_within(
 }
 
 /// [`ollama_http_within`] against an endpoint the caller already resolved —
-/// one a tab was spawned with, which today's `ollama_host` may no longer name.
-fn ollama_http_at(
+/// one a tab was spawned with, which today's `ollama_host` may no longer name,
+/// or the one the mail assistant's local-model check asked (gap 25).
+pub(crate) fn ollama_http_at(
     addr: &str,
     method: &str,
     path: &str,
     json_body: Option<&str>,
     read_timeout: Duration,
 ) -> Result<String, String> {
+    #[cfg(test)]
+    if let Some(answer) = test_http::answer(addr, method, path) {
+        return answer;
+    }
     let mut stream = connect_ollama(addr)?;
     stream
         .set_read_timeout(Some(read_timeout))
@@ -773,6 +778,14 @@ static CAPABILITY_CACHE: std::sync::OnceLock<
 /// would make a transient probe failure silently hide every agent in the
 /// new-tab menu.
 fn model_capabilities(model: &str, digest: &str) -> Vec<String> {
+    match ollama_addr() {
+        Ok(addr) => model_capabilities_at(&addr, model, digest),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// [`model_capabilities`] asked of `addr`, an endpoint the caller resolved.
+fn model_capabilities_at(addr: &str, model: &str, digest: &str) -> Vec<String> {
     let cache = CAPABILITY_CACHE.get_or_init(Default::default);
     if !digest.is_empty() {
         if let Ok(map) = cache.lock() {
@@ -783,7 +796,7 @@ fn model_capabilities(model: &str, digest: &str) -> Vec<String> {
     }
 
     let body = serde_json::json!({ "model": model }).to_string();
-    let caps: Vec<String> = ollama_http("POST", "/api/show", Some(&body))
+    let caps: Vec<String> = ollama_http_at(addr, "POST", "/api/show", Some(&body), Duration::from_secs(600))
         .ok()
         .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
         .and_then(|v| v["capabilities"].as_array().cloned())
@@ -851,8 +864,12 @@ fn model_has_capability(model: &str, cap: &str) -> Option<bool> {
 /// [`model_capabilities`] documents. `services::mail_ai` reads it to refuse an
 /// embedding-only model, and honours the empty-is-unknown contract by allowing
 /// through anything it cannot classify.
-pub(crate) fn capabilities_of(model: &str) -> Vec<String> {
-    let digest = ollama_http("GET", "/api/tags", None)
+///
+/// Asked of `addr`, the endpoint the caller already resolved and judged
+/// (`services::mail_ai` passes the one its local-model check used, so a
+/// settings change in between cannot send the probe elsewhere).
+pub(crate) fn capabilities_of_at(addr: &str, model: &str) -> Vec<String> {
+    let digest = ollama_http_at(addr, "GET", "/api/tags", None, Duration::from_secs(600))
         .ok()
         .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
         .and_then(|v| v["models"].as_array().cloned())
@@ -861,7 +878,7 @@ pub(crate) fn capabilities_of(model: &str) -> Vec<String> {
         .find(|m| m["name"].as_str() == Some(model))
         .and_then(|m| m["digest"].as_str().map(String::from))
         .unwrap_or_default();
-    model_capabilities(model, &digest)
+    model_capabilities_at(addr, model, &digest)
 }
 
 /// Whether `model` can drive tool/function calls.
@@ -1031,36 +1048,82 @@ pub(crate) fn model_is_local_in(
     }
     match tags {
         Ok(body) => installed_match(body, model).map(|_| ()),
-        Err(e) if e == MODEL_NOT_RUNNING => Err(MODEL_NOT_RUNNING),
+        // No answer at all — nothing listening, or the connection failed or
+        // timed out mid-read — is "not running", never "not installed": the
+        // list was not read, so nothing is known about the model (step 5
+        // review). An error the server answered (`HTTP 500`) still is.
+        Err(e) if is_transport_failure(e) => Err(MODEL_NOT_RUNNING),
         Err(_) => Err("model_not_installed"),
     }
+}
+
+/// Whether an [`ollama_http_at`] error is the transport's — nothing answered,
+/// or the exchange broke off (`connect_ollama`'s sentinel, the `write:` /
+/// `read:` / `set timeout:` failures) — rather than an error the server sent.
+fn is_transport_failure(err: &str) -> bool {
+    err == MODEL_NOT_RUNNING || ["read: ", "write: ", "set timeout: "].iter().any(|p| err.starts_with(p))
+}
+
+/// The refusal for a tab's model whose alias another installed model shares.
+pub(crate) const MODEL_ALIAS_SHARED: &str = "model_alias_shared";
+
+/// [`model_is_local_in`] for a local-model **tab** (`services::root_mcp`):
+/// also refuses ([`MODEL_ALIAS_SHARED`]) when another model the endpoint lists
+/// has the same alias ([`sanitize_alias`]; `a:b-c` and `a-b:c` share
+/// `a-b-c`). A tab's Vibe home and its read-mail taint are keyed by the alias,
+/// and the home's `config.toml` names whichever of the two was prepared last,
+/// so the tab could be running the other one (step 5 review). Pure + tested.
+pub(crate) fn tab_model_is_local_in(tags: Result<&str, &str>, model: &str) -> Result<(), &'static str> {
+    model_is_local_in(tags, model)?;
+    match tags {
+        Ok(body) if alias_shared_in(body, model) => Err(MODEL_ALIAS_SHARED),
+        _ => Ok(()),
+    }
+}
+
+/// Whether a listed model other than the one `model` names answers to
+/// `model`'s alias — by its full name, or, for a `:latest` entry, by its bare
+/// name (a tab may name `x:latest` as `x`).
+fn alias_shared_in(tags_body: &str, model: &str) -> bool {
+    let model = model.trim();
+    let Ok(matched) = installed_match(tags_body, model) else { return false };
+    let alias = sanitize_alias(model);
+    let Some(entries) = serde_json::from_str::<serde_json::Value>(tags_body)
+        .ok()
+        .and_then(|v| v["models"].as_array().cloned())
+    else {
+        return false;
+    };
+    entries.iter().filter_map(|m| m["name"].as_str()).filter(|n| *n != matched).any(|name| {
+        sanitize_alias(name) == alias || name.strip_suffix(":latest").is_some_and(|bare| sanitize_alias(bare) == alias)
+    })
 }
 
 /// How long a [`model_is_local_at`] verdict is reused. Auto-classify asks for
 /// every new mail; a minute keeps that to one `/api/tags` read per burst.
 const LOCALITY_TTL: Duration = Duration::from_secs(60);
 
-/// [`model_is_local_at`]'s answers per `(endpoint, model)`, with when they were
-/// read. Only a definite verdict is kept (`Ok`, `model_not_local`): a failed or
-/// empty read is asked again next time, so a server that comes up is seen at
-/// once. Pure + tested.
+/// [`model_is_local_at`]'s (and [`tab_model_is_local_at`]'s: `tab`) answers per
+/// `(endpoint, model)`, with when they were read. Only a definite verdict is
+/// kept (`Ok`, `model_not_local`): a failed or empty read is asked again next
+/// time, so a server that comes up is seen at once. Pure + tested.
 #[derive(Default)]
-struct LocalityCache(std::collections::HashMap<(String, String), (Instant, Locality)>);
+struct LocalityCache(std::collections::HashMap<(String, String, bool), (Instant, Locality)>);
 
 /// One [`model_is_local_in`] verdict.
 type Locality = Result<(), &'static str>;
 
 impl LocalityCache {
-    fn get(&self, addr: &str, model: &str, now: Instant) -> Option<Locality> {
+    fn get(&self, addr: &str, model: &str, tab: bool, now: Instant) -> Option<Locality> {
         self.0
-            .get(&(addr.to_owned(), model.to_owned()))
+            .get(&(addr.to_owned(), model.to_owned(), tab))
             .filter(|(at, _)| now.saturating_duration_since(*at) < LOCALITY_TTL)
             .map(|(_, verdict)| *verdict)
     }
-    fn put(&mut self, addr: &str, model: &str, now: Instant, verdict: Locality) {
+    fn put(&mut self, addr: &str, model: &str, tab: bool, now: Instant, verdict: Locality) {
         if matches!(verdict, Ok(()) | Err("model_not_local")) {
             self.0.retain(|_, (at, _)| now.saturating_duration_since(*at) < LOCALITY_TTL);
-            self.0.insert((addr.to_owned(), model.to_owned()), (now, verdict));
+            self.0.insert((addr.to_owned(), model.to_owned(), tab), (now, verdict));
         }
     }
 }
@@ -1076,18 +1139,30 @@ fn locality_cache() -> &'static std::sync::Mutex<LocalityCache> {
 /// assistant (`services::mail_ai::chat`) and a local-model tab's mail reads
 /// (`services::root_mcp_mail`) both ask it before anything is sent.
 pub(crate) fn model_is_local_at(addr: &str, model: &str) -> Result<(), &'static str> {
+    locality_at(addr, model, false)
+}
+
+/// [`model_is_local_at`] for a local-model tab's recorded model:
+/// [`tab_model_is_local_in`]'s rule (no other installed model shares its
+/// alias), cached the same way.
+pub(crate) fn tab_model_is_local_at(addr: &str, model: &str) -> Result<(), &'static str> {
+    locality_at(addr, model, true)
+}
+
+fn locality_at(addr: &str, model: &str, tab: bool) -> Result<(), &'static str> {
     let model = model.trim();
+    let judge = if tab { tab_model_is_local_in } else { model_is_local_in };
     #[cfg(test)]
     if let Some(tags) = test_tags::current() {
-        return model_is_local_in(tags.as_deref().map_err(String::as_str), model);
+        return judge(tags.as_deref().map_err(String::as_str), model);
     }
     let now = Instant::now();
-    if let Some(verdict) = locality_cache().lock().unwrap_or_else(|p| p.into_inner()).get(addr, model, now) {
+    if let Some(verdict) = locality_cache().lock().unwrap_or_else(|p| p.into_inner()).get(addr, model, tab, now) {
         return verdict;
     }
     let tags = ollama_http_at(addr, "GET", "/api/tags", None, Duration::from_secs(10));
-    let verdict = model_is_local_in(tags.as_deref().map_err(String::as_str), model);
-    locality_cache().lock().unwrap_or_else(|p| p.into_inner()).put(addr, model, now, verdict);
+    let verdict = judge(tags.as_deref().map_err(String::as_str), model);
+    locality_cache().lock().unwrap_or_else(|p| p.into_inner()).put(addr, model, tab, now, verdict);
     verdict
 }
 
@@ -1106,6 +1181,41 @@ pub(crate) mod test_tags {
     /// Answer `/api/tags` with `body` on this thread (`None`: nothing answers).
     pub(crate) fn set(body: Option<&str>) {
         TAGS.with(|t| *t.borrow_mut() = Some(body.map(str::to_owned).ok_or_else(|| super::MODEL_NOT_RUNNING.to_owned())));
+    }
+    /// Fail `/api/tags` with the transport error `err` on this thread.
+    pub(crate) fn fail(err: &str) {
+        TAGS.with(|t| *t.borrow_mut() = Some(Err(err.to_owned())));
+    }
+}
+
+/// A stand-in for the Ollama HTTP transport inside a test: while a handler is
+/// set on the thread, [`ollama_http_at`] asks it instead of dialing, and every
+/// request is recorded with the address it was sent to. Unset: the transport
+/// behaves as it always does.
+#[cfg(test)]
+pub(crate) mod test_http {
+    use std::cell::RefCell;
+    type Handler = Box<dyn Fn(&str, &str, &str) -> Result<String, String>>;
+    thread_local! {
+        static HANDLER: RefCell<Option<Handler>> = const { RefCell::new(None) };
+        static SEEN: RefCell<Vec<(String, String, String)>> = const { RefCell::new(Vec::new()) };
+    }
+    /// Answer `(addr, method, path)` with `handler` on this thread (`None`: stop).
+    pub(crate) fn set(handler: Option<Handler>) {
+        HANDLER.with(|h| *h.borrow_mut() = handler);
+        SEEN.with(|s| s.borrow_mut().clear());
+    }
+    pub(crate) fn answer(addr: &str, method: &str, path: &str) -> Option<Result<String, String>> {
+        HANDLER.with(|h| {
+            let handler = h.borrow();
+            let handler = handler.as_ref()?;
+            SEEN.with(|s| s.borrow_mut().push((addr.to_owned(), method.to_owned(), path.to_owned())));
+            Some(handler(addr, method, path))
+        })
+    }
+    /// The requests answered so far: `(addr, method, path)`.
+    pub(crate) fn seen() -> Vec<(String, String, String)> {
+        SEEN.with(|s| s.borrow().clone())
     }
 }
 
@@ -3963,6 +4073,83 @@ pub async fn prepare_local_agent(model: String) -> Result<LocalAgentPrep, String
     })
 }
 
+/// The refusal [`clear_local_model_conversations`] answers while a tab of the
+/// model runs; the window names the tabs.
+pub(crate) const LOCAL_MODEL_TAB_OPEN: &str = "local_model_tab_open";
+
+/// "Clear conversations" (local model menu): delete `model`'s stored Vibe
+/// conversations — `logs/session/` of its per-model `VIBE_HOME`, where Vibe
+/// keeps every session (the unified store and the older `session_*`
+/// folders) — and then its read-mail taint marker
+/// (`root_mcp::model_read_mail_marker`), together and in that order: the
+/// marker only says that a conversation of the model holds mail, so it goes
+/// only once no conversation can be continued (gap 33). Config, hooks, the
+/// prompt history and logins in the home are left alone. Refused
+/// ([`LOCAL_MODEL_TAB_OPEN`]) while any tab spawned with that home runs: its
+/// context may hold mail, and Vibe is writing the store.
+///
+/// Models whose names share an alias share the home, so their conversations
+/// (and marker) go together.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn clear_local_model_conversations(model: String) -> Result<(), String> {
+    validate_model_name(&model)?;
+    let model = model.trim().to_string();
+    let home = app_vibe_local_dir_for(&sanitize_alias(&model))?;
+    let marker = crate::services::root_mcp::model_read_mail_marker(&crate::storage::state_dir(), &model);
+    tokio::task::spawn_blocking(move || {
+        let live = crate::services::agent_fence::live_tabs_in_vibe_home(&home);
+        clear_conversations_in(&home, &marker, &live)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// [`clear_local_model_conversations`] over its paths: refuse while `live`
+/// names a tab, delete the session store, then the marker. Pure over the
+/// filesystem + tested.
+fn clear_conversations_in(home: &std::path::Path, marker: &std::path::Path, live: &[String]) -> Result<(), String> {
+    if !live.is_empty() {
+        return Err(LOCAL_MODEL_TAB_OPEN.to_string());
+    }
+    remove_vibe_sessions(home)?;
+    match std::fs::remove_file(marker) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove the read-mail marker: {e}")),
+    }
+}
+
+/// Delete `<home>/logs/session`, never through a link: the home is written by
+/// the model's (fenced) tabs, so `logs` or `session` may be a link planted
+/// there. A linked `logs` or `session` is removed as the link itself, which
+/// is all Vibe would read through; the home itself must be a plain folder.
+/// A missing home, `logs` or store is nothing to clear.
+fn remove_vibe_sessions(home: &std::path::Path) -> Result<(), String> {
+    use std::io::ErrorKind::NotFound;
+    match std::fs::symlink_metadata(home) {
+        Err(e) if e.kind() == NotFound => return Ok(()),
+        Err(e) => return Err(format!("read {}: {e}", home.display())),
+        Ok(meta) if !meta.is_dir() => return Err(format!("{} is not a plain folder", home.display())),
+        Ok(_) => {}
+    }
+    let logs = home.join("logs");
+    let target = match std::fs::symlink_metadata(&logs) {
+        Err(e) if e.kind() == NotFound => return Ok(()),
+        Err(e) => return Err(format!("read {}: {e}", logs.display())),
+        Ok(meta) if meta.file_type().is_symlink() => logs,
+        Ok(meta) if !meta.is_dir() => return Ok(()),
+        Ok(_) => logs.join("session"),
+    };
+    let removed = match std::fs::symlink_metadata(&target) {
+        Err(e) if e.kind() == NotFound => return Ok(()),
+        Err(e) => Err(e),
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&target),
+        // A file or a link (on Windows a directory link needs `remove_dir`).
+        Ok(_) => std::fs::remove_file(&target).or_else(|_| std::fs::remove_dir(&target)),
+    };
+    removed.map_err(|e| format!("remove {}: {e}", target.display()))
+}
+
 /// Ensure the Ollama provider and the given model are registered in
 /// `~/.vibe/config.toml` so that `VIBE_ACTIVE_MODEL=<alias>` works.
 /// Returns the alias string to pass as `VIBE_ACTIVE_MODEL`.
@@ -5895,6 +6082,86 @@ mod tests {
         assert_eq!(sanitize_alias("noname"), "noname");
     }
 
+    // ── "Clear conversations" (gap 33 follow-up (c)) ─────────────────────────
+
+    /// A model home as Vibe leaves it: config and logins beside the session
+    /// store (unified and legacy) and the debug log.
+    fn vibe_home_with_sessions(root: &std::path::Path) -> std::path::PathBuf {
+        let home = root.join("vibe_local").join("llama3-latest");
+        let unified = home.join("logs").join("session").join("unified").join("abc");
+        std::fs::create_dir_all(&unified).unwrap();
+        std::fs::write(unified.join("CURRENT"), b"x").unwrap();
+        let legacy = home.join("logs").join("session").join("session_20261013_1");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("meta.json"), b"{}").unwrap();
+        std::fs::write(home.join("logs").join("vibe.log"), b"log").unwrap();
+        for keep in ["config.toml", "hooks.toml", ".env", "vibehistory"] {
+            std::fs::write(home.join(keep), b"keep").unwrap();
+        }
+        home
+    }
+
+    #[test]
+    fn clearing_deletes_the_conversations_then_the_marker_and_nothing_else() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = vibe_home_with_sessions(tmp.path());
+        let marker = tmp.path().join("root_mcp").join("read_mail_model").join("h");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"").unwrap();
+        clear_conversations_in(&home, &marker, &[]).unwrap();
+        assert!(!home.join("logs").join("session").exists());
+        assert!(!marker.exists());
+        for keep in ["config.toml", "hooks.toml", ".env", "vibehistory"] {
+            assert!(home.join(keep).is_file(), "{keep}");
+        }
+        assert!(home.join("logs").join("vibe.log").is_file());
+        // Again: nothing left to clear is not an error; nor is a model never run.
+        clear_conversations_in(&home, &marker, &[]).unwrap();
+        clear_conversations_in(&tmp.path().join("vibe_local").join("never"), &marker, &[]).unwrap();
+    }
+
+    #[test]
+    fn clearing_is_refused_while_a_tab_of_the_model_runs_and_keeps_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = vibe_home_with_sessions(tmp.path());
+        let marker = tmp.path().join("marker");
+        std::fs::write(&marker, b"").unwrap();
+        let err = clear_conversations_in(&home, &marker, &["tab-1".to_string()]).unwrap_err();
+        assert_eq!(err, LOCAL_MODEL_TAB_OPEN);
+        assert!(home.join("logs").join("session").join("unified").is_dir());
+        assert!(marker.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clearing_never_follows_a_planted_link_and_keeps_the_marker_on_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(outside.join("session")).unwrap();
+        std::fs::write(outside.join("session").join("precious"), b"x").unwrap();
+        // `logs` a link out of the home: the link goes, the target stays.
+        let home = tmp.path().join("vibe_local").join("m");
+        std::fs::create_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("logs")).unwrap();
+        let marker = tmp.path().join("marker");
+        std::fs::write(&marker, b"").unwrap();
+        clear_conversations_in(&home, &marker, &[]).unwrap();
+        assert!(std::fs::symlink_metadata(home.join("logs")).is_err());
+        assert!(outside.join("session").join("precious").is_file());
+        // `session` a link: the same.
+        std::fs::create_dir_all(home.join("logs")).unwrap();
+        std::os::unix::fs::symlink(outside.join("session"), home.join("logs").join("session")).unwrap();
+        clear_conversations_in(&home, &marker, &[]).unwrap();
+        assert!(outside.join("session").join("precious").is_file());
+        // A home that is itself a link is refused, and the marker stays.
+        let linked = tmp.path().join("vibe_local").join("linked");
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        std::fs::write(&marker, b"").unwrap();
+        assert!(clear_conversations_in(&linked, &marker, &[]).is_err());
+        assert!(marker.exists());
+        assert!(outside.join("session").join("precious").is_file());
+    }
+
     // ── reload regression: writing the same model twice is idempotent ─────────
 
     #[test]
@@ -6256,24 +6523,58 @@ mod phone_control_tests {
         assert_eq!(model_is_local_in(Ok(TAGS_BODY), "mistral"), Err("model_not_installed"));
         assert_eq!(model_is_local_in(Ok(""), "llama3"), Err("model_not_installed"), "an empty body fails closed");
         assert_eq!(model_is_local_in(Ok(r#"{"models":[]}"#), "llama3"), Err("model_not_installed"));
-        assert_eq!(model_is_local_in(Err("read: reset"), "llama3"), Err("model_not_installed"));
+        // A broken-off or timed-out read is "not running", not "not installed".
+        assert_eq!(model_is_local_in(Err("read: reset"), "llama3"), Err(MODEL_NOT_RUNNING));
+        assert_eq!(model_is_local_in(Err("read: Resource temporarily unavailable (os error 11)"), "llama3"), Err(MODEL_NOT_RUNNING));
+        assert_eq!(model_is_local_in(Err("write: Broken pipe"), "llama3"), Err(MODEL_NOT_RUNNING));
         assert_eq!(model_is_local_in(Err(MODEL_NOT_RUNNING), "llama3"), Err(MODEL_NOT_RUNNING));
+        // An error the server sent is still a list that could not be read.
+        assert_eq!(model_is_local_in(Err("HTTP 500"), "llama3"), Err("model_not_installed"));
+    }
+
+    /// Step 5 review: a tab's model whose alias another installed model shares
+    /// (its Vibe home and taint are keyed by the alias) is refused; the mail
+    /// assistant, which names its model directly, is not affected.
+    #[test]
+    fn a_tab_model_sharing_its_alias_with_another_installed_model_is_refused() {
+        let tags = r#"{"models":[{"name":"a:b-c"},{"name":"a-b:c"},{"name":"solo:7b"},{"name":"x-y:latest"},{"name":"x:y"}]}"#;
+        assert_eq!(tab_model_is_local_in(Ok(tags), "a:b-c"), Err(MODEL_ALIAS_SHARED));
+        assert_eq!(tab_model_is_local_in(Ok(tags), "a-b:c"), Err(MODEL_ALIAS_SHARED));
+        assert_eq!(model_is_local_in(Ok(tags), "a:b-c"), Ok(()));
+        assert_eq!(tab_model_is_local_in(Ok(tags), "solo:7b"), Ok(()));
+        // `x-y:latest` answers to `x-y` as well, which is `x:y`'s alias.
+        assert_eq!(tab_model_is_local_in(Ok(tags), "x:y"), Err(MODEL_ALIAS_SHARED));
+        assert_eq!(tab_model_is_local_in(Ok(tags), "x-y"), Err(MODEL_ALIAS_SHARED));
+        // A local model named like a cloud model's alias: refused.
+        let cloud_twin = r#"{"models":[{"name":"gpt-oss-120b-cloud:latest"},{"name":"gpt-oss:120b-cloud","remote_host":"https://ollama.com:443"}]}"#;
+        assert_eq!(tab_model_is_local_in(Ok(cloud_twin), "gpt-oss-120b-cloud:latest"), Ok(()));
+        assert_eq!(tab_model_is_local_in(Ok(cloud_twin), "gpt-oss-120b-cloud"), Err(MODEL_ALIAS_SHARED));
+        // The base rules still come first.
+        assert_eq!(tab_model_is_local_in(Ok(tags), "mistral"), Err("model_not_installed"));
+        assert_eq!(tab_model_is_local_in(Err("read: timed out"), "solo:7b"), Err(MODEL_NOT_RUNNING));
+        test_tags::set(Some(tags));
+        assert_eq!(tab_model_is_local_at("127.0.0.1:11434", "a:b-c"), Err(MODEL_ALIAS_SHARED));
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "a:b-c"), Ok(()));
+        test_tags::set(None);
     }
 
     #[test]
     fn locality_verdicts_are_kept_a_minute_and_failures_not_at_all() {
         let mut cache = LocalityCache::default();
         let t0 = Instant::now();
-        cache.put("127.0.0.1:11434", "llama3", t0, Ok(()));
-        cache.put("127.0.0.1:11434", "big:cloud", t0, Err("model_not_local"));
-        cache.put("127.0.0.1:11434", "gone", t0, Err("model_not_installed"));
-        cache.put("127.0.0.1:11434", "down", t0, Err(MODEL_NOT_RUNNING));
-        assert_eq!(cache.get("127.0.0.1:11434", "llama3", t0 + Duration::from_secs(59)), Some(Ok(())));
-        assert_eq!(cache.get("127.0.0.1:11434", "big:cloud", t0), Some(Err("model_not_local")));
-        assert_eq!(cache.get("127.0.0.1:11434", "gone", t0), None);
-        assert_eq!(cache.get("127.0.0.1:11434", "down", t0), None);
-        assert_eq!(cache.get("127.0.0.1:11500", "llama3", t0), None, "per endpoint");
-        assert_eq!(cache.get("127.0.0.1:11434", "llama3", t0 + LOCALITY_TTL), None, "expired");
+        cache.put("127.0.0.1:11434", "llama3", false, t0, Ok(()));
+        cache.put("127.0.0.1:11434", "big:cloud", false, t0, Err("model_not_local"));
+        cache.put("127.0.0.1:11434", "gone", false, t0, Err("model_not_installed"));
+        cache.put("127.0.0.1:11434", "down", false, t0, Err(MODEL_NOT_RUNNING));
+        cache.put("127.0.0.1:11434", "twin", true, t0, Err(MODEL_ALIAS_SHARED));
+        assert_eq!(cache.get("127.0.0.1:11434", "llama3", false, t0 + Duration::from_secs(59)), Some(Ok(())));
+        assert_eq!(cache.get("127.0.0.1:11434", "big:cloud", false, t0), Some(Err("model_not_local")));
+        assert_eq!(cache.get("127.0.0.1:11434", "gone", false, t0), None);
+        assert_eq!(cache.get("127.0.0.1:11434", "down", false, t0), None);
+        assert_eq!(cache.get("127.0.0.1:11434", "twin", true, t0), None, "a shared alias is asked again");
+        assert_eq!(cache.get("127.0.0.1:11434", "llama3", true, t0), None, "the tab rule is kept apart");
+        assert_eq!(cache.get("127.0.0.1:11500", "llama3", false, t0), None, "per endpoint");
+        assert_eq!(cache.get("127.0.0.1:11434", "llama3", false, t0 + LOCALITY_TTL), None, "expired");
     }
 
     #[test]

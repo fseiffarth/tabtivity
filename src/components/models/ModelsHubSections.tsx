@@ -481,6 +481,7 @@ export function LocalModelsSection({
     toggleAutoload,
     unloadFromMemory,
     loadIntoMemory,
+    clearConversations,
   } = hub;
 
   // Putting the models back after an upgrade (`stores/agents/ollamaUpgrade`). Reported
@@ -925,6 +926,17 @@ export function LocalModelsSection({
                     >
                       {t("localModel.autostartChip")}
                     </button>
+{/* Delete the model's stored Vibe conversations and its
+                        read-mail mark, after a confirm (gap 33 follow-up). */}
+                    <button
+                      type="button"
+                      className="local-model-role-chip"
+                      title={t("localModel.clearChipTitle", { name: m.name })}
+                      onClick={() => void clearConversations(m.name)}
+                    >
+                      {t("localModel.clearChip")}
+                    </button>
+                    <UntestedTag id="localModelMenu.clearConversations" />
                     {/* Evict this model from memory (keeps it on disk). */}
                     <button
                       type="button"
@@ -1040,6 +1052,17 @@ export function LocalModelsSection({
                           onUpdate={() => updateModel(m.name)}
                           t={t}
                         />
+                        {/* Delete the model's stored Vibe conversations and its
+                            read-mail mark, after a confirm (gap 33 follow-up). */}
+                        <button
+                          type="button"
+                          className="local-model-role-chip"
+                          title={t("localModel.clearChipTitle", { name: m.name })}
+                          onClick={() => void clearConversations(m.name)}
+                        >
+                          {t("localModel.clearChip")}
+                        </button>
+                        <UntestedTag id="localModelMenu.clearConversations" />
                         {/* Arm it for the next launch without loading it now. */}
                         <button
                           type="button"

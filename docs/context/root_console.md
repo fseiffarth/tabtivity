@@ -673,9 +673,19 @@ of the model that is already open looks at that marker live on every write
 and draft (`Session::tainted`): it shares the Vibe home, logs included, so it
 is tainted from the other tab's read on, not only from its next spawn. The
 trade-off: once one tab of a model reads mail, every other tab of that
-model stages all its writes and marks its drafts as reader drafts, until the
-marker is deleted by hand — the app has no "clear conversations" action for
-a model to clear it from. The markers are written before the read, and a
+model stages all its writes and marks its drafts as reader drafts, until
+"Clear conversations" on the model's row in the local model menu (follow-up
+decision (c), `commands::ollama::clear_local_model_conversations`) deletes the
+model's stored Vibe conversations — `logs/session/` of its `VIBE_HOME`, the
+unified store and the older `session_*` folders, never through a planted link
+— and then the model marker, in that order and never the marker alone (the
+marker says a conversation holds mail; with none left to continue it has
+nothing to say). Config, hooks, logins, `vibehistory` and `vibe.log` stay.
+It is refused while a tab of the model is open: the window names its open
+tabs (raw model name or alias, every scope), and the backend refuses
+(`local_model_tab_open`) while a live spawn has that `VIBE_HOME`
+(`agent_fence::live_tabs_in_vibe_home`). Tab markers (`read_mail/`) are not
+touched, so a restored tab that read mail stays tainted. The markers are written before the read, and a
 write that fails refuses the read (`LOCAL_READ_UNRECORDED`), the in-memory
 latch staying set; a marker that cannot be looked at counts as present. The
 runtime itself contains only the listener port, never a shared secret.
@@ -689,7 +699,8 @@ re-reads a pending automatic row whose rows already hold as `applied`.
 Refusals by name: a tool the user took away in *MCP session access* answers
 `ACCESS_NARROWED`; a local-model tab's mail read tool with the local-read
 switch off answers `LOCAL_READ_OFF`, through a non-loopback endpoint
-`LOCAL_READ_REMOTE`, on a model not confirmed local `LOCAL_READ_CLOUD`, and
+`LOCAL_READ_REMOTE`, on a model not confirmed local (or one whose alias
+another installed model shares, `tab_model_is_local_at`) `LOCAL_READ_CLOUD`, and
 with a taint marker that could not be written `LOCAL_READ_UNRECORDED`; only a
 tool outside the caller's class
 answers `unknown tool` (so a cloud tab never learns mail read tools exist).

@@ -565,6 +565,7 @@ function ModelsTab({ active, onManageModels }: { active: boolean; onManageModels
     <div className="dialog-scroll models-overlay-models">
       <LocalModelsSection hub={hub} layout="overlay" onManageModels={onManageModels} />
       <MachineMeters hub={hub} />
+      {hub.dialogs}
     </div>
   );
 }

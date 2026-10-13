@@ -451,6 +451,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["network_host_snapshot", "core"],
   ["network_ssh_link_snapshot", "core"],
   ["cancel_text_completion", "core"],
+  ["clear_local_model_conversations", "core"],
   ["clear_pending_ollama_pull", "core"],
   ["complete_text", "core"],
   ["delete_ollama_model", "admin"],

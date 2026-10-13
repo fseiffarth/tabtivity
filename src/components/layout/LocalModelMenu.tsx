@@ -422,6 +422,9 @@ export function LocalModelMenu() {
           </div>
         </div>
       )}
+      {/* Outside the hover-open block: the dropdown closes while its portaled
+          clear-conversations dialog is up. */}
+      {hub.dialogs}
     </div>
   );
 }

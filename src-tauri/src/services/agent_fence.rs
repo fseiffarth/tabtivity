@@ -1879,6 +1879,9 @@ struct LiveSpawn {
     seq: u64,
     /// The fence scope it runs in; `None` for an unfenced tab.
     scope_id: Option<String>,
+    /// The `VIBE_HOME` it was spawned with ([`note_vibe_home`]): a local
+    /// model's conversations are not cleared while a tab of it runs.
+    vibe_home: Option<PathBuf>,
 }
 
 fn tab_spawns() -> &'static Mutex<HashMap<String, TabSpawns>> {
@@ -1917,11 +1920,35 @@ pub fn begin_spawn(tab_id: &str) -> u64 {
 pub fn register_tab(tab_id: &str, scope_id: Option<&str>, seq: u64) -> bool {
     match tab_spawns().lock().unwrap_or_else(|e| e.into_inner()).get_mut(tab_id) {
         Some(spawns) if spawns.latest == seq => {
-            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string) });
+            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string), vibe_home: None });
             true
         }
         _ => false,
     }
+}
+
+/// Record the `VIBE_HOME` the live spawn `seq` of `tab_id` runs with
+/// (`launch_prep`'s commit, after [`register_tab`]). Nothing when `seq` is not
+/// the live spawn.
+pub fn note_vibe_home(tab_id: &str, seq: u64, home: &Path) {
+    let mut map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(live) = map.get_mut(tab_id).and_then(|s| s.live.as_mut()).filter(|l| l.seq == seq) {
+        live.vibe_home = Some(home.to_path_buf());
+    }
+}
+
+/// The tabs whose live process was spawned with `VIBE_HOME` = `home`: a
+/// local model's tabs, which "Clear conversations"
+/// (`commands::ollama::clear_local_model_conversations`) waits for.
+pub fn live_tabs_in_vibe_home(home: &Path) -> Vec<String> {
+    let map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+    let mut tabs: Vec<String> = map
+        .iter()
+        .filter(|(_, s)| s.live.as_ref().and_then(|l| l.vibe_home.as_deref()) == Some(home))
+        .map(|(id, _)| id.clone())
+        .collect();
+    tabs.sort();
+    tabs
 }
 
 /// Whether spawn `seq` is still the newest one begun for `tab_id` and not torn
@@ -2347,6 +2374,24 @@ mod tests {
         abandon_spawn(tab, only);
         assert!(!crate::services::api_proxy::token_live(&token));
         assert!(!register_tab(tab, None, only));
+    }
+
+    #[test]
+    fn a_live_spawn_names_its_vibe_home_until_it_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("vibe_local").join("llama3");
+        let tab = "gen-p:vibe-home";
+        let seq = begin_spawn(tab);
+        note_vibe_home(tab, seq, &home);
+        assert!(live_tabs_in_vibe_home(&home).is_empty(), "not live before the commit");
+        assert!(register_tab(tab, None, seq));
+        note_vibe_home(tab, seq + 1_000_000, &home);
+        assert!(live_tabs_in_vibe_home(&home).is_empty(), "another spawn's note is ignored");
+        note_vibe_home(tab, seq, &home);
+        assert_eq!(live_tabs_in_vibe_home(&home), vec![tab.to_string()]);
+        assert!(live_tabs_in_vibe_home(&dir.path().join("vibe_local").join("other")).is_empty());
+        assert!(on_tab_gone(tab, seq));
+        assert!(live_tabs_in_vibe_home(&home).is_empty());
     }
 
     #[test]

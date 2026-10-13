@@ -3489,7 +3489,8 @@ fn oversized_receipt(name: &str, value: &Value) -> (String, bool) {
 
 /// Whether a local-model caller's model is confirmed to run on this machine:
 /// its endpoint, recorded at spawn, lists the model it was spawned on without
-/// a remote ([`crate::commands::ollama::model_is_local_at`]). The two "kept to
+/// a remote, and no other listed model shares its alias
+/// ([`crate::commands::ollama::tab_model_is_local_at`]). The two "kept to
 /// local models" switches (`root_mcp_local_only`, `root_mcp_mail_local_only`)
 /// mean the model, not the tab kind: an Ollama cloud model reached through a
 /// loopback Ollama is a hosted model (the gap 25 sibling). Every caller that
@@ -3498,7 +3499,7 @@ fn oversized_receipt(name: &str, value: &Value) -> (String, bool) {
 fn local_model_confirmed(stores: &Stores) -> bool {
     let Some(session) = stores.session.filter(|_| stores.caller == Caller::LocalModel) else { return true };
     match (session.identity.endpoint.as_deref(), session.identity.model.as_deref()) {
-        (Some(endpoint), Some(model)) => crate::commands::ollama::model_is_local_at(endpoint, model).is_ok(),
+        (Some(endpoint), Some(model)) => crate::commands::ollama::tab_model_is_local_at(endpoint, model).is_ok(),
         _ => false,
     }
 }

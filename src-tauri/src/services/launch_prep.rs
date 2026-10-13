@@ -460,6 +460,14 @@ impl PreparedLaunch {
         if !current {
             return;
         }
+        // A local model's tab: its conversations are not cleared while it runs.
+        if let Some(home) = self.opts.env.get("VIBE_HOME") {
+            crate::services::agent_fence::note_vibe_home(
+                &self.spawned_tab_id,
+                self.generation.seq,
+                std::path::Path::new(home),
+            );
+        }
         match self.host_agent_tab.take() {
             Some(tab) => crate::services::agent_fence::track_host_agent_tab(&self.spawned_tab_id, tab),
             None => crate::services::agent_fence::untrack_host_agent_tab(&self.spawned_tab_id),

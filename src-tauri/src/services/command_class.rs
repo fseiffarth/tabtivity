@@ -663,6 +663,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("network_ssh_link_snapshot", Core),
     // commands/ollama.rs
     ("cancel_text_completion", Core),
+    ("clear_local_model_conversations", Core),
     ("clear_pending_ollama_pull", Core),
     ("complete_text", Core),
     ("delete_ollama_model", Admin),

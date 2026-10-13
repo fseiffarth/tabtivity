@@ -2338,6 +2338,7 @@ pub fn run() {
             commands::ollama::list_ollama_models,
             commands::ollama::ensure_vibe_ollama_model,
             commands::ollama::prepare_local_agent,
+            commands::ollama::clear_local_model_conversations,
             commands::ollama::list_local_drivers,
             commands::ollama::prepare_local_launch,
             commands::ollama::ensure_ollama_running,

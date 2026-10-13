@@ -176,11 +176,12 @@ pub fn chat(system: &str, user: &str, opts: ChatOptions) -> Result<String, Strin
 
 /// [`chat`] over a settings snapshot.
 fn chat_with(settings: &Settings, system: &str, user: &str, opts: ChatOptions) -> Result<String, String> {
-    let model = preflight(settings)?;
+    let (model, addr) = preflight(settings)?;
 
     // Empty capabilities = "could not ask" = unknown → allow. Only a *positive*
-    // embedding-without-completion is a refusal.
-    let caps = ollama::capabilities_of(&model);
+    // embedding-without-completion is a refusal. Asked of the endpoint the
+    // checks above judged, like the chat itself.
+    let caps = ollama::capabilities_of_at(&addr, &model);
     if !caps.is_empty()
         && caps.iter().any(|c| c == "embedding")
         && !caps.iter().any(|c| c == "completion")
@@ -202,12 +203,12 @@ fn chat_with(settings: &Settings, system: &str, user: &str, opts: ChatOptions) -
     })
     .to_string();
 
-    // `ollama_http` re-resolves the address with the user's own settings, but a
-    // loopback host resolves identically whatever `ollama_allow_remote_host`
-    // says — and we have already refused every non-loopback host above — so this
-    // can only ever dial the loopback endpoint we just checked. An unreachable
-    // server comes back as `not_running` from here unchanged.
-    let raw = ollama::ollama_http("POST", "/api/chat", Some(&body))?;
+    // Sent to `addr`, the loopback endpoint `preflight` resolved and asked
+    // about the model — never re-resolved from `settings.json`, so a change of
+    // `ollama_host` between the check and the request cannot send the mail
+    // somewhere the check did not look (step 5 review). An unreachable server
+    // comes back as `not_running` from here unchanged.
+    let raw = ollama::ollama_http_at(&addr, "POST", "/api/chat", Some(&body), std::time::Duration::from_secs(600))?;
     let v: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|e| format!("the local model returned malformed JSON: {e}"))?;
     let content = v["message"]["content"]
@@ -223,14 +224,15 @@ fn chat_with(settings: &Settings, system: &str, user: &str, opts: ChatOptions) -
 
 /// Everything [`chat`] settles before it may send a byte of mail: a model is
 /// set, the endpoint is loopback, a hosted server allows the model, and the
-/// model runs on this machine. Returns the model.
+/// model runs on this machine. Returns the model and the endpoint it was
+/// judged on, which every later request of the job uses.
 ///
 /// The last check is gap 25's: a loopback Ollama runs an Ollama cloud model
 /// (`*-cloud`) on ollama.com, so "the endpoint is loopback" is not "the model
 /// is local". [`ollama::model_is_local_at`] asks that same endpoint's
 /// `/api/tags` (cached a minute — auto-classify calls this for every new
 /// mail) and fails closed on an unreadable list.
-fn preflight(settings: &Settings) -> Result<String, String> {
+fn preflight(settings: &Settings) -> Result<(String, String), String> {
     let model = mail_model_from(settings).ok_or_else(|| NO_MODEL.to_string())?;
 
     // Loopback first — before capabilities, before the request, before anything
@@ -243,7 +245,7 @@ fn preflight(settings: &Settings) -> Result<String, String> {
         return Err(model_not_allowed_reason(&model));
     }
     match ollama::model_is_local_at(&addr, &model) {
-        Ok(()) => Ok(model),
+        Ok(()) => Ok((model, addr)),
         Err(ollama::MODEL_NOT_RUNNING) => Err(NOT_RUNNING.to_string()),
         Err("model_not_local") => Err(cloud_model_reason(&model)),
         Err(_) => Err(unlisted_model_reason(&model)),
@@ -609,7 +611,7 @@ mod tests {
         // The default model is the mail model when no role is set: same rule.
         let s = Settings { ollama_model: Some("gpt-oss:120b-cloud".into()), ..Default::default() };
         assert_eq!(preflight(&s).unwrap_err(), cloud_model_reason("gpt-oss:120b-cloud"));
-        assert_eq!(preflight(&mail_on("llama3")).as_deref(), Ok("llama3"));
+        assert_eq!(preflight(&mail_on("llama3")), Ok(("llama3".to_string(), "127.0.0.1:11434".to_string())));
         // Unlisted, or a list that cannot be read: fail closed.
         assert_eq!(preflight(&mail_on("mistral")).unwrap_err(), unlisted_model_reason("mistral"));
         crate::commands::ollama::test_tags::set(Some("not json"));
@@ -622,6 +624,41 @@ mod tests {
         remote.ollama_host = Some("gpu-box.example:11434".into());
         remote.ollama_allow_remote_host = Some(true);
         assert_eq!(preflight(&remote).unwrap_err(), REMOTE_REFUSED);
+    }
+
+    /// Step 5 review: the capability probe and the chat go to the endpoint the
+    /// checks judged — the settings snapshot's — never one re-read from
+    /// `settings.json` in between.
+    #[test]
+    fn the_chat_goes_to_the_endpoint_the_checks_judged() {
+        use crate::commands::ollama::test_http;
+        crate::commands::ollama::test_tags::set(Some(TAGS));
+        test_http::set(Some(Box::new(|_addr: &str, _method: &str, path: &str| match path {
+            "/api/tags" => Ok(r#"{"models":[{"name":"llama3:latest","digest":"sha256:mail-ai-endpoint-test"}]}"#.into()),
+            "/api/show" => Ok(r#"{"capabilities":["completion"]}"#.into()),
+            "/api/chat" => Ok(r#"{"message":{"content":" - one point "}}"#.into()),
+            other => Err(format!("unexpected {other}")),
+        })));
+        let mut settings = mail_on("llama3");
+        settings.ollama_host = Some("127.0.0.2:11555".into());
+        let answer = chat_with(&settings, "s", "u", ChatOptions::bounded(16));
+        let seen = test_http::seen();
+        test_http::set(None);
+        assert_eq!(answer.as_deref(), Ok("- one point"));
+        let paths: Vec<&str> = seen.iter().map(|(_, _, p)| p.as_str()).collect();
+        assert_eq!(paths, ["/api/tags", "/api/show", "/api/chat"]);
+        assert!(seen.iter().all(|(addr, _, _)| addr == "127.0.0.2:11555"), "{seen:?}");
+    }
+
+    /// Step 5 review: an `/api/tags` read that times out or breaks off says the
+    /// server is not running, not that the model is not installed.
+    #[test]
+    fn a_tags_timeout_reads_as_not_running() {
+        for err in ["read: Resource temporarily unavailable (os error 11)", "read: Connection reset by peer (os error 104)", "write: Broken pipe (os error 32)"] {
+            crate::commands::ollama::test_tags::fail(err);
+            assert_eq!(preflight(&mail_on("llama3")).unwrap_err(), NOT_RUNNING, "{err}");
+        }
+        crate::commands::ollama::test_tags::set(None);
     }
 
     // ── Model resolution ────────────────────────────────────────────────────
