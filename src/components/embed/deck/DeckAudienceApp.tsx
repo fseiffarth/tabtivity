@@ -52,6 +52,7 @@ import { useDeckFonts } from "./deckFonts";
 import { dirOf, gifKey, interstitialsOf, resolveRel, useDeckGifs, useDeckImages } from "./deckAssets";
 import { InterstitialView, PresentedSlide } from "./DeckSlideView";
 import { useT } from "../../../lib/i18n";
+import { subscribeTauri, useTauriListener } from "../../../hooks/useTauriListener";
 
 /** How often to re-announce readiness until a seed lands. The presenter window
  *  may still be mounting its listener when this window first asks. */
@@ -84,20 +85,7 @@ export function DeckAudienceApp({ label }: DeckAudienceAppProps) {
     void loadSettings({ skipZoom: true });
   }, [loadSettings]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listen<string>(THEME_CHANGED_EVENT, (e) => applyTheme(e.payload))
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
+  useTauriListener(() => listen<string>(THEME_CHANGED_EVENT, (e) => applyTheme(e.payload)), []);
 
   useEffect(() => {
     let live = true;
@@ -114,23 +102,16 @@ export function DeckAudienceApp({ label }: DeckAudienceAppProps) {
   const seededRef = useRef(false);
 
   useEffect(() => {
-    let unlistenSeed: (() => void) | undefined;
-    let unlistenState: (() => void) | undefined;
-    let cancelled = false;
-
-    void listen<PresentSeed>(presentSeedEvent(label), (e) => {
-      seededRef.current = true;
-      setSeed(e.payload);
-      setState({ index: e.payload.index, blank: e.payload.blank });
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlistenSeed = fn;
-    });
-
-    void listen<PresentState>(presentStateEvent(label), (e) => setState(e.payload)).then((fn) => {
-      if (cancelled) fn();
-      else unlistenState = fn;
-    });
+    const unlistenSeed = subscribeTauri(() =>
+      listen<PresentSeed>(presentSeedEvent(label), (e) => {
+        seededRef.current = true;
+        setSeed(e.payload);
+        setState({ index: e.payload.index, blank: e.payload.blank });
+      }),
+    );
+    const unlistenState = subscribeTauri(() =>
+      listen<PresentState>(presentStateEvent(label), (e) => setState(e.payload)),
+    );
 
     // Ask, and keep asking until answered: this window and the presenter's
     // listener race on open, and a dropped first request would leave a black
@@ -142,10 +123,9 @@ export function DeckAudienceApp({ label }: DeckAudienceAppProps) {
     }, READY_RETRY_MS);
 
     return () => {
-      cancelled = true;
       clearInterval(retryTimer);
-      unlistenSeed?.();
-      unlistenState?.();
+      unlistenSeed();
+      unlistenState();
     };
   }, [label]);
 
@@ -159,22 +139,13 @@ export function DeckAudienceApp({ label }: DeckAudienceAppProps) {
   // decision away from being dropped by the teardown it is racing. Losing it
   // leaves the presenter holding `audience`, streaming state at a dead label and
   // reporting a second display that is gone (TODO V #122).
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void getCurrentWindow()
-      .onCloseRequested(async () => {
+  useTauriListener(
+    () =>
+      getCurrentWindow().onCloseRequested(async () => {
         await emit(PRESENT_CLOSED, { label });
-      })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [label]);
+      }),
+    [label],
+  );
 
   // --- this window's own exits ---------------------------------------------
   //
@@ -191,13 +162,11 @@ export function DeckAudienceApp({ label }: DeckAudienceAppProps) {
   useEffect(() => {
     const win = getCurrentWindow();
     void win.isFullscreen().then(setFullscreen).catch(() => {});
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
     // A monitor unplug moves this window; if it lands on the same monitor as the
     // main window, being fullscreen there is actively in the way. Drop out of it
     // and let the speaker deal with an ordinary window.
-    void win
-      .onResized(() => {
+    return subscribeTauri(() =>
+      win.onResized(() => {
         void (async () => {
           try {
             const fs = await win.isFullscreen();
@@ -211,15 +180,8 @@ export function DeckAudienceApp({ label }: DeckAudienceAppProps) {
             // Nothing to do: the window is where the WM put it either way.
           }
         })();
-      })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+      }),
+    );
   }, []);
 
   const send = useCallback(

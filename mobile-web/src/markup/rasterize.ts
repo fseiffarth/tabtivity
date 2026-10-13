@@ -7,7 +7,7 @@
  * the same curves the desktop writes into the marked PDF (`markup_pdf.rs`).
  */
 
-import { inkWidth, LEADING, type Mark, type MarkColor, type PageLayer } from "./layer";
+import { arrowHead, inkWidth, LEADING, markBox, stampLines, STAMP_WIDTH, type InkMark, type Mark, type MarkColor, type PageLayer } from "./layer";
 
 export const INK: Record<MarkColor, string> = {
   red: "#db2626",
@@ -15,8 +15,11 @@ export const INK: Record<MarkColor, string> = {
   black: "#121212",
   yellow: "#ffd91a",
 };
-/** How strongly a highlighter box covers the page. */
+/** How strongly a highlighter box — and the marker — covers the page. */
 export const HIGHLIGHT_ALPHA = 0.4;
+/** A dashed stroke's dash and gap, in multiples of its width (round caps
+ * close a width of the gap). The desktop's `markup_pdf.rs` dashes alike. */
+export const DASH = [2.5, 3.5] as const;
 /** The layer PNG's width; its height follows the page's aspect. */
 export const LAYER_WIDTH = 1200;
 /** The widest a picture with its marks is composed at. */
@@ -29,6 +32,12 @@ export type Paint = Pick<CanvasRenderingContext2D,
   lineWidth: number; lineCap: CanvasLineCap; lineJoin: CanvasLineJoin; strokeStyle: string | CanvasGradient | CanvasPattern;
   fillStyle: string | CanvasGradient | CanvasPattern; globalAlpha: number; globalCompositeOperation: GlobalCompositeOperation;
   font: string; textBaseline: CanvasTextBaseline;
+  /** Only dashed strokes call it; a recording test context may leave it out. */
+  setLineDash?: (segments: number[]) => void;
+  /** Only a comment badge's tail calls these; without them it is drawn as an
+   * outline instead. */
+  fill?: () => void;
+  closePath?: () => void;
 };
 
 /** The pieces of one stroke: from, curve control and to, and the pressure
@@ -50,9 +59,94 @@ export function strokePieces(points: [number, number, number][]): { from: [numbe
   return pieces;
 }
 
-export function drawMark(ctx: Paint, mark: Mark): void {
+/** A styled stroke (`marker`, `dashed`, `arrow`): one even path through the
+ * same curves as the pen's, so a see-through marker does not darken where its
+ * pieces meet and dashes run on across them; an arrow adds its head. */
+function drawStyled(ctx: Paint, mark: InkMark): void {
+  const style = mark.style ?? "pen";
+  ctx.lineWidth = mark.width;
+  if (style === "marker") {
+    // Times the alpha around it: sent marks are drawn dimmed as a whole.
+    ctx.globalAlpha *= HIGHLIGHT_ALPHA;
+    ctx.globalCompositeOperation = "multiply";
+  }
+  if (style === "dashed") ctx.setLineDash?.([DASH[0] * mark.width, DASH[1] * mark.width]);
+  const pieces = strokePieces(mark.points);
+  ctx.beginPath();
+  ctx.moveTo(pieces[0].from[0], pieces[0].from[1]);
+  for (const piece of pieces) {
+    if (piece.control) ctx.quadraticCurveTo(piece.control[0], piece.control[1], piece.to[0], piece.to[1]);
+    else ctx.lineTo(piece.to[0], piece.to[1]);
+  }
+  ctx.stroke();
+  const head = style === "arrow" ? arrowHead(mark.points, mark.width) : null;
+  if (head) {
+    ctx.beginPath();
+    ctx.moveTo(head[0][0], head[0][1]);
+    ctx.lineTo(head[1][0], head[1][1]);
+    ctx.lineTo(head[2][0], head[2][1]);
+    ctx.stroke();
+  }
+}
+
+/** How large a comment badge is by default, in page units — about 10 pt;
+ * `drawPage` sizes it to the page instead. */
+export const COMMENT_BADGE = 10;
+
+/** A small speech bubble at the top-right corner of a commented mark's box
+ * (`markBox`), `size` page units wide, in the mark's colour with two white
+ * lines of "text" — on screen and in the pictures Submit sends, so the agent
+ * sees which mark the prompt's comment belongs to. */
+export function drawCommentBadge(ctx: Paint, mark: Mark, size = COMMENT_BADGE): void {
+  const [x, y, w] = markBox(mark);
+  const left = x + w - size * 0.3;
+  const top = y - size * 0.85;
+  const height = size * 0.62;
   ctx.save();
-  if (mark.kind === "ink") {
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = INK[mark.color];
+  ctx.strokeStyle = INK[mark.color];
+  ctx.fillRect(left, top, size, height);
+  // The tail, down towards the mark's corner.
+  ctx.beginPath();
+  ctx.moveTo(left + size * 0.15, top + height);
+  ctx.lineTo(left + size * 0.15, top + height + size * 0.28);
+  ctx.lineTo(left + size * 0.45, top + height);
+  if (ctx.fill && ctx.closePath) {
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.lineWidth = size * 0.08;
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(left + size * 0.18, top + height * 0.28, size * 0.64, height * 0.12);
+  ctx.fillRect(left + size * 0.18, top + height * 0.6, size * 0.44, height * 0.12);
+  ctx.restore();
+}
+
+/** Draws one mark; `badge` is the size of the comment badge a commented mark
+ * gets (`drawCommentBadge`). */
+export function drawMark(ctx: Paint, mark: Mark, badge = COMMENT_BADGE): void {
+  ctx.save();
+  if (mark.kind === "stamp") {
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = INK[mark.color];
+    ctx.lineWidth = mark.size * STAMP_WIDTH;
+    for (const line of stampLines(mark)) {
+      ctx.beginPath();
+      ctx.moveTo(line[0][0], line[0][1]);
+      for (const [x, y] of line.slice(1)) ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+  } else if (mark.kind === "ink" && mark.style && mark.style !== "pen" && mark.points.length > 0) {
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = INK[mark.color];
+    drawStyled(ctx, mark);
+  } else if (mark.kind === "ink") {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.strokeStyle = INK[mark.color];
@@ -79,13 +173,20 @@ export function drawMark(ctx: Paint, mark: Mark): void {
     });
   }
   ctx.restore();
+  if (mark.kind !== "text" && mark.comment) drawCommentBadge(ctx, mark, badge);
+}
+
+/** A comment badge's size on a page: about 10 pt on A4, alike on a picture. */
+export function badgeSize(page: PageLayer): number {
+  return Math.max(page.size[0], page.size[1]) / 84;
 }
 
 /** Draws every mark of `page`, `scale` canvas pixels per page unit. */
 export function drawPage(ctx: Paint, page: PageLayer, scale: number): void {
   ctx.save();
   ctx.scale(scale, scale);
-  for (const mark of page.marks) drawMark(ctx, mark);
+  const badge = badgeSize(page);
+  for (const mark of page.marks) drawMark(ctx, mark, badge);
   ctx.restore();
 }
 

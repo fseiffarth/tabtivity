@@ -16,7 +16,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use aes_gcm::{aead::Aead, Aes128Gcm, KeyInit, Nonce};
@@ -30,6 +30,7 @@ use p256::{
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
+use super::auth::random_bytes;
 use super::store;
 
 const PUSH_SCHEMA: u32 = 1;
@@ -57,18 +58,7 @@ const TTL_SECONDS: u32 = 60 * 60;
 /// push vendor in every request, so it must say nothing about who sent it.
 const VAPID_SUBJECT: &str = concat!("https://github.com/", crate::app_repo!());
 
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
-    let mut bytes = [0u8; N];
-    getrandom::fill(&mut bytes).map_err(|e| format!("no system randomness: {e}"))?;
-    Ok(bytes)
-}
+use crate::clock::now_secs as now;
 
 fn random_secret_key() -> Result<SecretKey, String> {
     // A uniformly random 32-byte string is a valid scalar with overwhelming

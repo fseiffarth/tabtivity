@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use app_core::sync::LockExt;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
@@ -72,7 +73,7 @@ const DEFAULT_OLLAMA_PORT: u16 = 11434;
 /// module hears, and the alternative is a stale endpoint that survives until
 /// relaunch. It is one small JSON read against a file the app already keeps hot.
 fn ollama_addr() -> Result<String, String> {
-    let settings = read_settings().unwrap_or_default();
+    let settings = crate::storage::load_settings().unwrap_or_default();
     let (host, allow_remote) = host_setting(&settings);
     resolve_ollama_addr(host, allow_remote)
 }
@@ -91,18 +92,11 @@ pub(crate) fn host_setting(settings: &crate::schema::Settings) -> (Option<&str>,
     (settings.ollama_host.as_deref(), settings.ollama_allow_remote_host.unwrap_or(false))
 }
 
-fn read_settings() -> Option<crate::schema::Settings> {
-    let path = crate::storage::state_dir().join("settings.json");
-    path.exists()
-        .then(|| crate::storage::read_json::<crate::schema::Settings>(&path).ok())
-        .flatten()
-}
-
 /// The user's chosen `OLLAMA_MODELS` directory (`Settings::ollama_models_path`),
 /// trimmed and dropped when empty. Read on every use for `ollama_addr`'s reason:
 /// a settings write is not an event this module hears.
 fn configured_models_dir() -> Option<std::path::PathBuf> {
-    read_settings()
+    crate::storage::load_settings()
         .and_then(|s| s.ollama_models_path)
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
@@ -1708,8 +1702,7 @@ fn phone_loads() -> &'static std::sync::Mutex<std::collections::HashSet<String>>
 /// having no window that tracks loads (`mobile_control::local_models`).
 pub fn phone_loading(listed: &str) -> bool {
     phone_loads()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .lock_ok()
         .contains(listed)
 }
 
@@ -1721,8 +1714,7 @@ impl PhoneLoadClaim {
     /// Claim `model`, or `None` when a phone load of it is already running.
     fn claim(model: &str) -> Option<Self> {
         let mut set = phone_loads()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock_ok();
         set.insert(model.to_owned())
             .then(|| PhoneLoadClaim(model.to_owned()))
     }
@@ -1731,8 +1723,7 @@ impl PhoneLoadClaim {
 impl Drop for PhoneLoadClaim {
     fn drop(&mut self) {
         phone_loads()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .lock_ok()
             .remove(&self.0);
     }
 }
@@ -1761,7 +1752,7 @@ pub async fn load_installed_ollama_model(
     let ctx = ctx.0;
     validate_model_name(&model)?;
     let wanted = model.trim().to_owned();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("load", move || {
         let tags = ollama_http("GET", "/api/tags", None).map_err(|e| {
             if e == "not_running" {
                 "ollama_not_running".to_owned()
@@ -1783,7 +1774,6 @@ pub async fn load_installed_ollama_model(
         Ok(listed)
     })
     .await
-    .map_err(|e| format!("load task failed: {e}"))?
 }
 
 /// Pull (download or update) a model from the Ollama registry, streaming
@@ -1983,9 +1973,7 @@ pub async fn ollama_check_updates(models: Vec<String>) -> Result<Vec<OllamaModel
         .map(|m| (m.name, m.digest))
         .collect();
 
-    tokio::task::spawn_blocking(move || wanted_updates(wanted))
-        .await
-        .map_err(|e| format!("update check failed: {e}"))
+    app_core::rt::blocking("update check failed", move || wanted_updates(wanted)).await
 }
 
 /// The blocking half of [`ollama_check_updates`] — `curl` per model, off the
@@ -2162,7 +2150,7 @@ fn version_is_newer(candidate: &str, current: &str) -> Option<bool> {
 /// costs one unauthenticated GitHub request.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         // Deliberately NOT pointed at `ollama_host`: this reads the version of
         // the **installed binary**, which is what the feature gate above is
         // about (`ollama launch` exists from v0.15), and the whole contract of
@@ -2966,7 +2954,7 @@ fn ollama_under_systemd() -> bool {
 /// so it belongs to a menu opening, never to a poll.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_gpu_status() -> OllamaGpuStatus {
-    tokio::task::spawn_blocking(|| {
+    app_core::rt::spawn_blocking(|| {
         let gpus = crate::gpustat::snapshot();
         let mut status = OllamaGpuStatus {
             gpu_present: !gpus.is_empty(),
@@ -3020,11 +3008,6 @@ fn models_path_is_safe(path: &str) -> bool {
             .any(|c| c.is_control() || matches!(c, '"' | '%' | '\\'))
 }
 
-/// POSIX single-quote a string so it survives as one shell word.
-fn sh_single_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 /// The terminal command that points the **running service** at `path`, plus the
 /// shell it needs. Empty when there is nothing to run — no service (a server
 /// Tabtivity spawns already honours the setting via `ensure_ollama_running`), or a
@@ -3041,7 +3024,7 @@ fn models_dir_service_command(path: &str, systemd: bool) -> (String, String) {
     if !systemd || !models_path_is_safe(path) {
         return (String::new(), String::new());
     }
-    let q = sh_single_quote(path);
+    let q = crate::quote::posix(path);
     (
         format!(
             "svc_user=$(systemctl show -p User --value ollama); \
@@ -3087,7 +3070,7 @@ pub struct OllamaModelsDirPlan {
 /// so it belongs to the Settings panel opening, never to a poll.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_models_dir_plan(path: Option<String>) -> OllamaModelsDirPlan {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let default_dir = crate::paths::home_dir()
             .join(".ollama")
             .join("models")
@@ -3230,9 +3213,7 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
 /// runtime: it can block for 16 s or more.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ensure_ollama_running_unattended() -> Result<(), String> {
-    tokio::task::spawn_blocking(|| ensure_running(false))
-        .await
-        .map_err(|e| format!("start task failed: {e}"))?
+    app_core::rt::try_blocking("start", || ensure_running(false)).await
 }
 
 /// The `systemctl` arguments that start the Ollama unit. Without
@@ -3266,8 +3247,7 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
     let addr = ollama_addr()?;
 
     let _one_start = START_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .lock_ok();
 
     if ollama_listening() {
         return Ok(());
@@ -3953,7 +3933,7 @@ pub async fn complete_text(
     use crate::services::text_completion;
     let event = format!("text-completion-{request_id}");
     text_completion::run(request_id, async move {
-        let settings = read_settings().unwrap_or_default();
+        let settings = crate::storage::load_settings().unwrap_or_default();
         let local_only = project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
             .is_some_and(|policy| policy.local_only);
         let (host, allow_remote) = host_setting(&settings);
@@ -4102,12 +4082,11 @@ pub async fn clear_local_model_conversations(model: String) -> Result<(), String
     let model = model.trim().to_string();
     let home = app_vibe_local_dir_for(&sanitize_alias(&model))?;
     let marker = crate::services::root_mcp::model_read_mail_marker(&crate::storage::state_dir(), &model);
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("ollama", move || {
         let live = || crate::services::agent_fence::live_tabs_in_vibe_home(&home);
         clear_conversations_in(&home, &marker, &live)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// [`clear_local_model_conversations`] over its paths: refuse while `live`
@@ -6335,14 +6314,6 @@ mod tests {
     }
 
     #[test]
-    fn sh_single_quote_wraps_and_escapes() {
-        assert_eq!(sh_single_quote("/plain/path"), "'/plain/path'");
-        assert_eq!(sh_single_quote("/with space"), "'/with space'");
-        // A lone apostrophe closes, escapes, reopens.
-        assert_eq!(sh_single_quote("a'b"), "'a'\\''b'");
-    }
-
-    #[test]
     fn service_command_is_a_drop_in_only_under_systemd() {
         let path = "/data/ollama/models";
         // No service to reconfigure → nothing to run (a Tabtivity-spawned server
@@ -6356,7 +6327,7 @@ mod tests {
         assert_eq!(shell, "bash");
         assert!(cmd.contains(concat!("ollama.service.d/", crate::app_slug!(), "-models.conf")));
         assert!(cmd.contains("OLLAMA_MODELS=%s")); // path arrives as a printf arg
-        assert!(cmd.contains(&sh_single_quote(path)));
+        assert!(cmd.contains(&crate::quote::posix(path)));
         assert!(cmd.contains("systemctl restart ollama"));
         // The dir is created and handed to whoever the unit runs as.
         assert!(cmd.contains("systemctl show -p User"));

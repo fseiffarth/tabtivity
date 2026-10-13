@@ -651,6 +651,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("mobile_prepare_phone_install_script", Core),
     ("mobile_tailscale_serve_status", Admin),
     ("mobile_verify_tailscale_serve", Admin),
+    ("phone_upload_undo", Core),
+    ("phone_uploads_list", Core),
     // commands/monitor.rs
     ("gpu_memory_snapshot", Client),
     ("gpu_process_snapshot", Client),
@@ -814,6 +816,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("export_project", Core),
     ("import_project_export", Core),
     ("inspect_project_export", Core),
+    ("preview_host_export", Core),
     ("preview_project_export", Core),
     // commands/python.rs
     ("python_interpreter_for", Core),

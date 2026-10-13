@@ -1012,8 +1012,7 @@ fn attach_files(mail: &ScopedMail, caller: Caller, args: &Value, before: Option<
         if total > attach::MAX_DRAFT_BYTES {
             return Err(format!("the files come to more than {} MiB for one draft; nothing was attached", attach::MAX_DRAFT_BYTES / (1024 * 1024)));
         }
-        use sha2::Digest;
-        let digest: String = sha2::Sha256::digest(&file.bytes).iter().map(|b| format!("{b:02x}")).collect();
+        let digest = crate::digest::sha256_hex(&file.bytes);
         reply.push(json!({ "filename": file.filename, "size": file.bytes.len(), "sha256": digest }));
         add.push(NewStagedFile { staged_id: mail.new_id(), filename: file.filename, mime: file.mime, source: file.source, bytes: file.bytes });
     }

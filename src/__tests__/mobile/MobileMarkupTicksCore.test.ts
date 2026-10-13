@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   addMark, approveMark, approveMarks, clearAll, clearSent, EMPTY_LAYER, eraseAt, forgetRound, isLayer, LIMITS, markBox, markSent,
-  MAX_LOGGED_ROUNDS, mintRound, tickedMarks,
+  MAX_LOGGED_ROUNDS, mintRound, tickedMarks, tickGroups, approveShown, markGroups, onlyMarks, markSentSome, submitSpot,
   type BoxMark, type InkMark, type Layer, type TextMark,
 } from "../../../mobile-web/src/markup/layer";
 import { loadLayer, saveLayer, type LayerBackend } from "../../../mobile-web/src/markup/store";
@@ -202,5 +202,113 @@ describe("markup ticks · stored records", () => {
     const kept = await loadLayer("k", backend);
     if (!kept || kept === "unavailable") throw new Error("not read");
     expect(kept.layer.sent).toEqual({ pages: layer.sent!.pages, rounds: 1 });
+  });
+});
+
+describe("markup ticks · groups", () => {
+  /** Page 1 holds `marks`, sent as round `r1`; every one ticked. */
+  function allTicked(marks: (InkMark | BoxMark | TextMark)[]): { layer: Layer; ticks: { round: string; page: number; mark: number }[] } {
+    let layer: Layer = EMPTY_LAYER;
+    for (const mark of marks) layer = addMark(layer, 1, SIZE, mark);
+    layer = markSent(layer, undefined, "r1");
+    return { layer, ticks: marks.map((_, i) => ({ round: "r1", page: 1, mark: i + 1 })) };
+  }
+  const stroke = (x: number, y: number): InkMark => ({ kind: "ink", color: "red", width: 1, points: [[x, y, 0.5], [x + 4, y + 6, 0.5]] });
+
+  it("one handwritten word in many strokes is one group with one box", () => {
+    const strokes = Array.from({ length: 30 }, (_, i) => stroke(100 + i * 5, 200));
+    const { layer, ticks } = allTicked(strokes);
+    const groups = tickGroups(layer, tickedMarks(layer, ticks));
+    expect(groups).toHaveLength(1);
+    expect(groups[0].marks).toHaveLength(30);
+    const [x, , w] = groups[0].box;
+    expect(x).toBeLessThan(100);
+    expect(x + w).toBeGreaterThan(100 + 29 * 5 + 4);
+  });
+
+  it("remarks far apart stay apart, in page order", () => {
+    const { layer, ticks } = allTicked([stroke(400, 600), stroke(100, 100), stroke(104, 102)]);
+    const groups = tickGroups(layer, tickedMarks(layer, ticks));
+    expect(groups.map((group) => group.marks.map((entry) => entry.index))).toEqual([[0], [1, 2]]);
+  });
+
+  it("joins through a chain of near marks, and only ticked marks", () => {
+    const { layer } = allTicked([stroke(100, 100), stroke(110, 100), stroke(120, 100)]);
+    // The middle stroke is not ticked: the two ends are 16 apart, too far.
+    const ends = tickedMarks(layer, [{ round: "r1", page: 1, mark: 1 }, { round: "r1", page: 1, mark: 3 }]);
+    expect(tickGroups(layer, ends)).toHaveLength(2);
+    const all = tickedMarks(layer, [1, 2, 3].map((mark) => ({ round: "r1", page: 1, mark })));
+    expect(tickGroups(layer, all)).toHaveLength(1);
+  });
+
+  it("never groups across pages", () => {
+    let layer = addMark(addMark(EMPTY_LAYER, 1, SIZE, stroke(100, 100)), 2, SIZE, stroke(100, 100));
+    layer = markSent(layer, undefined, "r1");
+    const ticked = tickedMarks(layer, [{ round: "r1", page: 1, mark: 1 }, { round: "r1", page: 2, mark: 1 }]);
+    expect(tickGroups(layer, ticked).map((group) => group.page)).toEqual([1, 2]);
+  });
+
+  it("approving a group removes its still-ticked marks only", () => {
+    const { layer, ticks } = allTicked([stroke(100, 100), stroke(104, 100), stroke(400, 600)]);
+    const [group] = tickGroups(layer, tickedMarks(layer, ticks));
+    const shown = group.marks.map((entry) => layer.sent!.pages[1].marks[entry.index]);
+    // The first stroke is no longer ticked by the time the click lands.
+    const after = approveShown(layer, ticks.slice(1), 1, shown);
+    expect(after.sent!.pages[1].marks).toEqual([layer.sent!.pages[1].marks[0], layer.sent!.pages[1].marks[2]]);
+    expect(approveShown(after, ticks.slice(1), 1, shown)).toBe(after);
+  });
+});
+
+describe("markup · a remark's own Submit", () => {
+  const stroke = (x: number, y: number): InkMark => ({ kind: "ink", color: "red", width: 1, points: [[x, y, 0.5], [x + 4, y + 6, 0.5]] });
+  function written(marks: InkMark[], page = 1): Layer {
+    return marks.reduce<Layer>((layer, mark) => addMark(layer, page, SIZE, mark), EMPTY_LAYER);
+  }
+
+  it("groups the unsent marks as they are written", () => {
+    let layer = written([stroke(100, 100), stroke(105, 100)]);
+    expect(markGroups(layer)).toHaveLength(1);
+    layer = addMark(layer, 1, SIZE, stroke(400, 600));
+    expect(markGroups(layer).map((group) => group.marks.length)).toEqual([2, 1]);
+    // A stroke between joins the far one to nothing; one next to the word grows it.
+    layer = addMark(layer, 1, SIZE, stroke(110, 101));
+    expect(markGroups(layer).map((group) => group.marks.length)).toEqual([3, 1]);
+  });
+
+  it("sends one group: its marks go to the sent side under the round, the rest stays unsent", () => {
+    let layer = written([stroke(100, 100), stroke(400, 600), stroke(104, 100)]);
+    layer = addMark(layer, 2, SIZE, stroke(50, 50));
+    const [word] = markGroups(layer, [1]);
+    const only = onlyMarks(layer, 1, word.marks);
+    expect(Object.keys(only.pages)).toEqual(["1"]);
+    expect(only.pages[1].marks).toEqual([layer.pages[1].marks[0], layer.pages[1].marks[2]]);
+    const after = markSentSome(layer, 1, only.pages[1].marks, "r1");
+    expect(after.pages[1].marks).toEqual([layer.pages[1].marks[1]]);
+    expect(after.pages[2]).toBe(layer.pages[2]);
+    expect(after.sent!.pages[1].marks).toEqual(only.pages[1].marks);
+    expect(after.sent!.log).toEqual([{ id: "r1", pages: { 1: only.pages[1].marks } }]);
+    // Every mark of the page sent: the page leaves the unsent side.
+    expect(markSentSome(layer, 1, layer.pages[1].marks).pages[1]).toBeUndefined();
+  });
+
+  it("places the button outside its group and over no mark", () => {
+    const scale = 1;
+    const page: [number, number] = [SIZE[0], SIZE[1]];
+    const button: [number, number] = [58, 20];
+    const overlaps = (spot: [number, number], [x, y, w, h]: [number, number, number, number]) =>
+      spot[0] < x + w && spot[0] + button[0] > x && spot[1] < y + h && spot[1] + button[1] > y;
+    const group = markBox(stroke(200, 200));
+    // A line of writing right above the group: the button goes below instead.
+    const above = markBox({ kind: "ink", color: "red", width: 1, points: [[150, 185, 0.5], [260, 188, 0.5]] });
+    const spot = submitSpot(group, scale, page, button, [group, above]);
+    expect(overlaps(spot, group)).toBe(false);
+    expect(overlaps(spot, above)).toBe(false);
+    expect(spot[1]).toBeGreaterThan(group[1]);
+    // At the page's top edge it still stays on the page.
+    const top = markBox(stroke(5, 2));
+    const [left, y] = submitSpot(top, scale, page, button, [top]);
+    expect(y).toBeGreaterThanOrEqual(0);
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(overlaps([left, y], top)).toBe(false);
   });
 });

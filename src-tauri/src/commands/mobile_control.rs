@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
+use app_core::sync::LockExt;
 
 use tokio::sync::oneshot;
 use app_core::CoreCtx;
@@ -20,6 +21,7 @@ use crate::{
         },
         discovery::opaque_control_id,
         inbox,
+        uploads,
         protocol::{
             AdminDevice, AdminRequest, AdminResponse, DesktopRequest, DesktopResponse,
             MobileInboxAttachment,
@@ -60,8 +62,7 @@ pub fn mobile_desktop_respond(
     let state = ctx.get::<MobileDesktopState>();
     let sender = state
         .pending
-        .lock()
-        .unwrap()
+        .lock_ok()
         .remove(&request_id)
         .ok_or("mobile request expired")?;
     sender
@@ -237,6 +238,110 @@ pub fn global_inbox_delete(name: String) -> Result<bool, String> {
     inbox::remove_global(&storage::state_dir(), &name).map_err(|e| e.code().to_string())
 }
 
+// ── Phone uploads (phone → Upload here) ─────────────────────────────────────
+// Files the phone added to a project folder (`uploads.rs`). The sidecar logs
+// each one; the header's inbox lists the last day's that are still unchanged
+// on disk and can undo one. Rows name a record by its log id only — no raw
+// project id or root reaches the webview, and the undo re-resolves both.
+
+/// How far back the header lists phone uploads.
+const PHONE_UPLOADS_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// One file the phone added to a project, as the header's inbox lists it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhoneUpload {
+    /// The log record's id — what `phone_upload_undo` takes.
+    pub id: String,
+    pub project_name: String,
+    /// The file's path inside the project, `/`-separated.
+    pub rel: String,
+    pub size: u64,
+    /// Unix seconds it landed.
+    pub at: u64,
+    /// The phone's device label, when the sidecar knew it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+}
+
+/// The folder of a local project by its raw id; `None` for an unknown or
+/// remote one (an upload only ever lands in a local project, so a project
+/// that became remote has nothing here to list or undo).
+fn upload_root(project_id: &str) -> Option<PathBuf> {
+    if crate::services::remote::remote_target_for(project_id).is_some() {
+        return None;
+    }
+    crate::services::remote::project_directory(project_id)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The phone's uploads of the last day whose file is still as it landed,
+/// newest first. An unreadable `projects.json` or upload log is an error
+/// (`list_failed`), never an empty list: the header prunes its **Keep** marks
+/// to what a good list names, so a failed read answered as "nothing" would
+/// un-keep every kept row.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn phone_uploads_list() -> Result<Vec<PhoneUpload>, String> {
+    app_core::rt::spawn_blocking(|| {
+        phone_uploads_from(
+            &storage::state_dir(),
+            crate::commands::projects::read_projects_list(),
+            upload_root,
+        )
+    })
+    .await
+    .map_err(|_| PHONE_UPLOADS_LIST_FAILED.to_string())?
+}
+
+/// `phone_uploads_list`'s error code.
+const PHONE_UPLOADS_LIST_FAILED: &str = "list_failed";
+
+/// [`phone_uploads_list`] over a read of the project registry, with
+/// `root_of` resolving a raw project id to its local folder.
+fn phone_uploads_from(
+    state_dir: &Path,
+    projects: Result<crate::schema::projects::ProjectsList, String>,
+    root_of: impl Fn(&str) -> Option<PathBuf>,
+) -> Result<Vec<PhoneUpload>, String> {
+    let names: HashMap<String, String> = projects
+        .map_err(|_| PHONE_UPLOADS_LIST_FAILED.to_string())?
+        .into_iter()
+        .map(|entry| (entry.id, entry.name))
+        .collect();
+    let records = uploads::recent(state_dir, PHONE_UPLOADS_WINDOW, root_of)
+        .map_err(|_| PHONE_UPLOADS_LIST_FAILED.to_string())?;
+    Ok(records
+        .into_iter()
+        .filter_map(|record| {
+            Some(PhoneUpload {
+                project_name: names.get(&record.project)?.clone(),
+                id: record.id,
+                rel: record.rel,
+                size: record.size,
+                at: record.at,
+                phone: record.phone,
+            })
+        })
+        .collect())
+}
+
+/// Undo one phone upload by its record id: deletes the file only while it is
+/// unchanged since it landed. The error is the upload code (`file_not_found`
+/// for an unknown id, a gone or remote project, or a file edited since).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn phone_upload_undo(id: String) -> Result<(), String> {
+    app_core::rt::spawn_blocking(move || {
+        let state_dir = storage::state_dir();
+        let record = uploads::find(&state_dir, &id).ok_or(uploads::UploadError::NotFound)?;
+        let root = upload_root(&record.project).ok_or(uploads::UploadError::NotFound)?;
+        uploads::undo(&state_dir, &root, &record.project, &record.rel)
+    })
+    .await
+    .map_err(|_| uploads::UploadError::Io(String::new()).code().to_string())?
+    .map_err(|error| error.code().to_string())
+}
+
 /// Materialize the phone-install handoff where the root terminal can run it,
 /// returning the script's path — the state dir differs per OS, so the caller
 /// must not re-derive it. Keep the script embedded so this action also works
@@ -268,9 +373,8 @@ pub fn mobile_prepare_phone_install_script() -> Result<String, String> {
 /// host runs).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_paired_devices() -> Result<Vec<AdminDevice>, String> {
-    app_core::rt::spawn_blocking(|| auth::read_paired_devices(&storage::state_dir().join("mobile-control")))
+    app_core::rt::try_blocking("mobile", || auth::read_paired_devices(&storage::state_dir().join("mobile-control")))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1474,7 +1578,7 @@ where
     let response_timeout = request.desktop_timeout();
     let mutation = request.is_mutation();
     let (tx, rx) = oneshot::channel();
-    state.pending.lock().unwrap().insert(id.clone(), tx);
+    state.pending.lock_ok().insert(id.clone(), tx);
     // Delivery is best-effort (`EventSink`); what can still fail is the
     // serialization, so that is the one case answered as unavailable.
     let delivered = match serde_json::to_string(&request) {
@@ -1486,7 +1590,7 @@ where
         Err(_) => false,
     };
     if !delivered {
-        state.pending.lock().unwrap().remove(&id);
+        state.pending.lock_ok().remove(&id);
         let _ = write_frame(
             &mut stream,
             &DesktopResponse::Error {
@@ -1505,7 +1609,7 @@ where
             code: "desktop_unavailable".into(),
             message: "Desktop did not answer".into(),
         });
-    state.pending.lock().unwrap().remove(&id);
+    state.pending.lock_ok().remove(&id);
     // Under the response cap, not the request one; an answer too large even
     // for that is stated to the sidecar rather than dropped — and for a
     // mutation, stated as applied: the window has made the change by now, so
@@ -1751,5 +1855,59 @@ mod install_phone_script_tests {
                 assert_eq!(run(parser, settings, good), (1, String::new(), unset.to_string()), "{parser:?} {settings}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod phone_upload_tests {
+    use super::{phone_uploads_from, uploads, PHONE_UPLOADS_LIST_FAILED};
+    use crate::schema::projects::ProjectEntry;
+
+    fn entry(id: &str, name: &str) -> ProjectEntry {
+        ProjectEntry {
+            id: id.into(),
+            name: name.into(),
+            status: "active".into(),
+            position: 0,
+            local_file: String::new(),
+            extra: Default::default(),
+        }
+    }
+
+    /// The header prunes its Keep marks to the ids a good list names. A
+    /// registry or upload log it cannot read must therefore fail the list,
+    /// not answer an empty one — else every kept row is un-kept and shows
+    /// again on the next good read.
+    #[test]
+    fn an_unreadable_registry_or_log_fails_the_list_instead_of_emptying_it() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let state = temp.path().join("state");
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&state).expect("state dir");
+        std::fs::create_dir_all(&root).expect("project dir");
+        let landed = uploads::store(&state, &root, "p1", "", "note.txt", b"hello", Some("Pixel"))
+            .expect("upload lands");
+        let root_of = |id: &str| (id == "p1").then(|| root.clone());
+
+        let listed = phone_uploads_from(&state, Ok(vec![entry("p1", "Thesis")]), root_of).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, landed.id);
+        assert_eq!(listed[0].project_name, "Thesis");
+
+        assert_eq!(
+            phone_uploads_from(&state, Err("expected value at line 1".into()), root_of),
+            Err(PHONE_UPLOADS_LIST_FAILED.to_string()),
+            "an unreadable projects.json"
+        );
+
+        // The log replaced by something unreadable (a directory, on every OS).
+        let log = state.join("mobile-control").join(uploads::LOG_FILE);
+        std::fs::remove_file(&log).expect("the upload log");
+        std::fs::create_dir(&log).expect("dir in its place");
+        assert_eq!(
+            phone_uploads_from(&state, Ok(vec![entry("p1", "Thesis")]), root_of),
+            Err(PHONE_UPLOADS_LIST_FAILED.to_string()),
+            "an unreadable upload log"
+        );
     }
 }

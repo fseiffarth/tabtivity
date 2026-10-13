@@ -39,6 +39,7 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
 
 import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
 import { PdfTickBadges, tickBadgesByPage } from "../../components/embed/pdf/PdfMarkupTicks";
+import { GROUP_SETTLE_MS, PdfGroupSubmits } from "../../components/embed/pdf/PdfMarkupGroups";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import { useActivityStore } from "../../stores/activity";
 import { useSettingsStore } from "../../stores/settings";
@@ -69,12 +70,12 @@ function Harness({ onReload = () => {} }: { onReload?: () => void }) {
     docSize: 9_000,
     docVersion: 0,
   });
-  const badges = tickBadgesByPage(markup.edit.base, markup.ticks.marks).get(1) ?? [];
+  const badges = tickBadgesByPage(markup.edit.base, markup.ticks.groups).get(1) ?? [];
   return (
     <>
       <PdfMarkupBar markup={markup} page={1} onReload={onReload} onDone={() => {}} />
       <div data-testid="page-1">
-        <PdfTickBadges badges={badges} size={SIZE} scale={1} disabled={markup.sending} onApprove={(index, mark) => markup.ticks.approve(1, index, mark)} />
+        <PdfTickBadges badges={badges} size={SIZE} scale={1} disabled={markup.sending} onApprove={(marks) => markup.ticks.approve(1, marks)} />
       </div>
     </>
   );
@@ -178,8 +179,8 @@ describe("desktop markup ticks", () => {
     expect(badges()[0]).not.toBe(first);
   });
 
-  it("an approve for a mark no longer at its place removes nothing", async () => {
-    let approve: ((page: number, index: number, mark: Mark) => void) | null = null;
+  it("an approve for marks no longer on the page removes nothing", async () => {
+    let approve: ((page: number, marks: readonly Mark[]) => void) | null = null;
     function Grab() {
       const markup = usePdfMarkup({ projectId: "p1", scope: "p1", path: PATH, active: true, visible: true, pageCount: 3, docSize: 9_000, docVersion: 0 });
       approve = markup.ticks.approve;
@@ -191,9 +192,10 @@ describe("desktop markup ticks", () => {
     ring();
     expect(await screen.findByText("2 done")).toBeTruthy();
     const saves = mocks.saveLayer.mock.calls.length;
-    // A badge drawn for the stroke, clicked after the box took its index.
-    act(() => approve!(1, 1, STROKE));
-    act(() => approve!(1, 5, BOX));
+    // A badge drawn for an equal stroke that is gone, and one for the box on
+    // another page.
+    act(() => approve!(1, [{ ...STROKE }]));
+    act(() => approve!(2, [BOX]));
     expect(screen.getByText("2 done")).toBeTruthy();
     expect(mocks.saveLayer.mock.calls.length).toBe(saves);
   });
@@ -221,13 +223,30 @@ describe("desktop markup ticks", () => {
     expect(screen.queryByText(/done$/)).toBeNull();
   });
 
+  it("one remark written in many strokes wears one ✓, and its click approves every stroke", async () => {
+    const strokes: Mark[] = Array.from({ length: 12 }, (_, i) => ({ kind: "ink", color: "red", width: 1, points: [[300 + i * 5, 400, 0.5], [304 + i * 5, 406, 0.5]] }));
+    mocks.loadLayer.mockResolvedValue({ layer: strokes.reduce((layer, mark) => addMark(layer, 1, SIZE, mark), LAYER), fingerprint: { size: 9_000, modified: 1_790_000_000 }, saved: 1 });
+    render(<Harness />);
+    const round = await submitted();
+    // The box (mark 2) and the twelve strokes (marks 3–14); the first stroke is far off.
+    ticks = Array.from({ length: 13 }, (_, i) => ({ round, page: 1, mark: i + 2 }));
+    ring();
+    await waitFor(() => expect(badges()).toHaveLength(2));
+    expect(screen.getByText("2 done")).toBeTruthy();
+    fireEvent.click(badges()[1], { detail: 1 });
+    await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE, BOX]));
+    expect(badges()).toHaveLength(1);
+  });
+
   it("shows no badge while the sent marks are hidden", async () => {
     render(<Harness />);
     const round = await submitted();
     ticks = [{ round, page: 1, mark: 1 }];
     ring();
     await waitFor(() => expect(badges()).toHaveLength(1));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Show sent marks" }));
+    // The switch sits in the strip's ⋯ menu.
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Show sent marks" }));
     expect(badges()).toHaveLength(0);
     expect(screen.queryByText("1 done")).toBeNull();
   });
@@ -261,4 +280,42 @@ describe("desktop markup ticks", () => {
     expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE, BOX]);
     expect(lastSaved()?.sent).not.toHaveProperty("log");
   }, SETTLE_MS + 8_000);
+});
+
+describe("desktop markup · a remark's own Submit", () => {
+  function Groups() {
+    const markup = usePdfMarkup({ projectId: "p1", scope: "p1", path: PATH, active: true, visible: true, pageCount: 3, docSize: 9_000, docVersion: 0 });
+    return (
+      <>
+        <PdfMarkupBar markup={markup} page={1} onReload={() => {}} onDone={() => {}} />
+        <div data-testid="page-1">
+          <PdfGroupSubmits groups={markup.groups.filter((group) => group.page === 1)} page={markup.edit.base.pages[1]} size={SIZE} scale={1}
+            disabled={markup.sending} onSubmit={(marks) => void markup.submit({ page: 1, marks })} />
+        </div>
+      </>
+    );
+  }
+  const groupButtons = () => within(screen.getByTestId("page-1")).queryAllByRole("button", { name: /Send only this remark/ });
+
+  it("sends that group alone, after it settled, and leaves the others unsent", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<Groups />);
+      await waitFor(() => expect(groupButtons()).toHaveLength(2));
+      // Freshly drawn: a click right away does nothing.
+      fireEvent.click(groupButtons()[1], { detail: 1 });
+      expect(calls("pdf_markup_submit")).toHaveLength(0);
+      act(() => { vi.advanceTimersByTime(GROUP_SETTLE_MS + 50); });
+      fireEvent.click(groupButtons()[1], { detail: 1 });
+      await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
+      const pages = calls("pdf_markup_submit")[0][1].pages as { n: number; marks: Mark[] }[];
+      expect(pages.map((page) => page.n)).toEqual([1]);
+      expect(pages[0].marks).toEqual([BOX]);
+      await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([BOX]));
+      expect(lastSaved()?.pages[1].marks).toEqual([STROKE]);
+      await waitFor(() => expect(groupButtons()).toHaveLength(1));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

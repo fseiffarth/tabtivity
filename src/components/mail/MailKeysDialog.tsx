@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 /**
  * The OpenPGP keyring (`docs/mail_encryption_plan.md` §6, phase 4).
  *
@@ -47,6 +48,7 @@ export interface MailKeysDialogProps {
 
 export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [keys, setKeys] = useState<PgpKeyInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +88,8 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="settings-dialog mail-keys-dialog"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"

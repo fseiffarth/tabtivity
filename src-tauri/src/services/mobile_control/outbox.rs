@@ -22,7 +22,6 @@ use std::{
     fs,
     io::{Read, Seek},
     path::Path,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use super::files::ProjectDir;
@@ -255,9 +254,7 @@ fn strip_stamp(name: &str) -> Option<&str> {
         .then(|| &name[16..])
 }
 
-pub fn unix_secs(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
+pub use crate::clock::unix_secs;
 
 /// The files in `root/.tabtivity/outbox/`, newest first, at most `MAX_LISTED`.
 /// A project without an outbox lists nothing. Files that are not servable
@@ -435,7 +432,7 @@ mod tests {
         let path = dir.join(name);
         fs::write(&path, bytes).unwrap();
         let file = fs::File::options().write(true).open(&path).unwrap();
-        file.set_modified(SystemTime::now() - age).unwrap();
+        file.set_modified(std::time::SystemTime::now() - age).unwrap();
     }
 
     #[test]

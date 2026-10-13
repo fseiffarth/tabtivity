@@ -122,11 +122,10 @@ pub async fn remote_connect(
         let boot_id = project_id.clone();
         let name =
             crate::commands::vm::project_name(&project_id).unwrap_or_else(|| "project".to_string());
-        app_core::rt::spawn_blocking(move || {
+        app_core::rt::try_blocking("remote", move || {
             crate::services::vm::ensure_booted(&boot_id, &name)
         })
-        .await
-        .map_err(|e| e.to_string())??;
+        .await?;
     }
     let _dial = remote::remote_target_for_host(&project_id, &host_id).and_then(|t| {
         crate::services::ssh_common::declared_dial(
@@ -486,7 +485,7 @@ pub async fn remote_tmux_list(
     let filter_project_id = project_id.clone();
     let project_root = target.spec.remote_path.clone();
     let include_all = include_all.unwrap_or(false);
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("remote", move || {
         let out = crate::services::ssh_exec::run_remote_script(
             &target.spec,
             crate::services::ssh_exec::tmux_ls_script(),
@@ -524,7 +523,6 @@ pub async fn remote_tmux_list(
         ))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Kill a tmux session on a remote project host (TODO #85) — the destructive
@@ -541,7 +539,7 @@ pub async fn remote_tmux_kill(
     let target = remote::remote_target_for_host(&project_id, &host_id)
         .ok_or_else(|| "not a remote project host".to_string())?;
     let _dial = user_dial_for_host(&project_id, &host_id);
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("remote", move || {
         let output = crate::services::ssh_exec::run_remote_script(
             &target.spec,
             &crate::services::ssh_exec::tmux_kill_session_script(&session),
@@ -557,7 +555,6 @@ pub async fn remote_tmux_kill(
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Rename a tmux session on a remote project host (TODO #85) — the Sessions
@@ -577,7 +574,7 @@ pub async fn remote_tmux_rename(
     let host_id = host_id.unwrap_or_else(|| remote::PRIMARY_HOST.to_string());
     let target = remote::remote_target_for_host(&project_id, &host_id)
         .ok_or_else(|| "not a remote project host".to_string())?;
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("remote", move || {
         crate::services::ssh_exec::run_remote_script(
             &target.spec,
             &crate::services::ssh_exec::tmux_rename_session_script(&session, &new_name),
@@ -585,7 +582,6 @@ pub async fn remote_tmux_rename(
         .map(|_| ())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// On-demand resource check for an already-connected remote project (the
@@ -612,11 +608,10 @@ pub async fn remote_usage_check(
         &target.spec.host,
         target.spec.port,
     );
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("remote", move || {
         crate::services::remote_usage::check_usage(&target.spec)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

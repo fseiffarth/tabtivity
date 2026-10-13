@@ -6106,7 +6106,7 @@ dependencies = [
 
 [[package]]
 name = "tabtivity"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "aes-gcm",
  "ammonia",
@@ -6140,6 +6140,7 @@ dependencies = [
  "mail-builder",
  "mail-parser",
  "mail-send",
+ "md-5",
  "mime_guess",
  "notify",
  "objc2",

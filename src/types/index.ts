@@ -159,6 +159,11 @@ export interface Settings {
     /** A paired phone may browse and read (never change) its Mobile projects'
      * files. Unset is off; read by the sidecar per request. */
     project_files?: boolean;
+    /** A paired phone may add new files to a plain folder of its Mobile
+     * projects ("Upload here"; never overwrites, no dot folders). Unset is off;
+     * only in effect while `project_files` is on too. Read by the sidecar per
+     * request. */
+    project_uploads?: boolean;
     /** Quitting Tabtivity leaves the Mobile host running (headless owner). Unset
      * is off; read by the quit path. */
     stay_after_quit?: boolean;
@@ -1313,8 +1318,45 @@ export interface BundleContents {
   gitHistory: boolean;
   /** `node_modules`, `.venv`, `target`, … were left out of the bundle. */
   rebuildableSkipped: boolean;
+  /** The project's agent conversations travel (bundle format 2). */
+  agentHistory?: boolean;
+  /** `mirror` was packed from the host's own tree, not this machine's mirror. */
+  mirrorFromHost?: boolean;
   files: number;
   bytes: number;
+  /** Files the export could not carry (unreadable, a FIFO, too deep). */
+  skipped?: number;
+}
+
+/** A remote project's two copies: which one an export packs. */
+export type MirrorSource = "local" | "host";
+
+/** `preview_host_export` — the host's tree measured for the export dialog.
+ *  `files`/`bytes` leave out `.git` and the always-rebuildable folders. */
+export interface HostTally {
+  files: number;
+  bytes: number;
+  gitFiles: number;
+  gitBytes: number;
+  rebuildableFiles: number;
+  rebuildableBytes: number;
+}
+
+/** One rebuildable folder the export preview found, biggest first. */
+export interface RebuildableDir {
+  /** Root-relative, `/`-separated — what `keepRebuildable` takes back. */
+  path: string;
+  files: number;
+  bytes: number;
+}
+
+/** Why an export left an entry out. */
+export type ExportSkipReason = "unreadable" | "special" | "tooDeep" | "link";
+
+/** One entry an export left out. */
+export interface SkippedEntry {
+  path: string;
+  reason: ExportSkipReason;
 }
 
 /** `preview_project_export` — what an export would carry, with sizes, so the
@@ -1333,6 +1375,11 @@ export interface ExportPreview {
   gitBytes: number;
   rebuildableFiles: number;
   rebuildableBytes: number;
+  rebuildableDirs: RebuildableDir[];
+  /** Entries no toggle can carry (unreadable, FIFOs, too deep). */
+  skipped: number;
+  agentHistoryFiles: number;
+  agentHistoryBytes: number;
   tabs: number;
   boxNames: string[];
   suggestedFileName: string;
@@ -1349,6 +1396,10 @@ export interface ExportReport {
   payloadBytes: number;
   remote: boolean;
   notes: string[];
+  /** What was left out, named (capped); `skippedCount` counts them all. */
+  skipped: SkippedEntry[];
+  skippedCount: number;
+  agentFiles: number;
 }
 
 /** `project-export` progress event payload. */
@@ -1396,6 +1447,8 @@ export interface ImportBundleResult {
   newId: boolean;
   boxesJoined: string[];
   boxesMissing: string[];
+  /** Agent-conversation files restored into the project's agent homes. */
+  agentFiles: number;
   notes: string[];
 }
 

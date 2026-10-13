@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -467,11 +468,16 @@ export function RemoteUsageWarningDialog() {
       </>
     );
 
+  const modalRef = useModalFocus(close, isOpen);
   if (!isOpen) return null;
 
   return (
     <div className="modal-backdrop" onMouseDown={close}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="project-dialog dialog-framed remote-usage-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

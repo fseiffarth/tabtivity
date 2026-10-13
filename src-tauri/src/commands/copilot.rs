@@ -17,7 +17,7 @@ use app_core::CoreCtx;
 use crate::tauri_host::Ctx;
 
 fn settings_path() -> PathBuf {
-    storage::state_dir().join("settings.json")
+    storage::settings_path()
 }
 
 fn policy_code(error: PolicyError) -> String {

@@ -1,4 +1,5 @@
 use std::fs;
+use app_core::sync::LockExt;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
@@ -24,35 +25,34 @@ where
     write_json_file(path, value, path.starts_with(state_dir()))
 }
 
-/// [`write_json`] with the new-file mode decided by the caller. An existing
-/// file keeps whatever mode it has — the 0700 state dir is the real barrier
-/// (see [`ensure_private_state_dir`]).
+/// [`write_json`] with the privacy decided by the caller.
+///
+/// A private file goes through [`write_private_atomic`]: owner-only on every
+/// write (an existing file too, not just a new one), and replaced whole, so a
+/// crash or a reader never sees it half-written. Each write costs an fsync
+/// and, on Windows, an `icacls` pair for the staged file; state files are
+/// written at human or timer pace, not per message, so that is affordable.
+///
+/// A shared file (a project folder's) is truncated and rewritten in place,
+/// keeping its mode, owner and links: a group-shared project dir stays
+/// readable to its group.
 fn write_json_file<T>(path: &Path, value: &T, private: bool) -> Result<(), Box<dyn std::error::Error>>
 where
     T: serde::Serialize,
 {
+    let json = serde_json::to_string_pretty(value)?;
+    if private {
+        write_private_atomic(path, json.as_bytes())?;
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(value)?;
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    if private {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    // Windows: like the Unix mode, only a file this call creates is
-    // restricted (an `icacls` run per write would cost a spawn each time).
-    #[cfg(windows)]
-    let created = private && !path.exists();
-    #[cfg(not(any(unix, windows)))]
-    let _ = private;
-    let mut file = opts.open(path)?;
-    #[cfg(windows)]
-    if created {
-        crate::services::private_file::restrict_to_owner(path);
-    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)?;
     file.write_all(json.as_bytes())?;
     Ok(())
 }
@@ -61,8 +61,9 @@ where
 /// beside the target and are then `rename`d over it, so a reader (or a crash)
 /// never observes a half-written file.
 ///
-/// [`write_json`] truncates in place, which is fine for a store with one writer
-/// that rewrites it rarely. Prefer this for a store written from several places
+/// [`write_json`] replaces a state file atomically too, but without this
+/// function's process-wide lock, and truncates a project-folder file in place.
+/// Prefer this for a store written from several places
 /// (see `schema::usage_stats`, fed by both the frontend flush and the file
 /// watcher). Same rename trick as `services::agent_session::write_live_session_in`.
 pub fn write_json_atomic<T>(path: &Path, value: &T) -> Result<(), Box<dyn std::error::Error>>
@@ -70,8 +71,7 @@ where
     T: serde::Serialize,
 {
     let _guard = JSON_MUTATION_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .lock_ok();
     write_json_atomic_unlocked(path, value)
 }
 
@@ -91,8 +91,7 @@ where
     T: serde::de::DeserializeOwned + serde::Serialize,
 {
     let _guard = JSON_MUTATION_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .lock_ok();
     // The process-wide lock serialises this process; the file lock serialises
     // a second Tabtivity process patching the same file (#171's lesson applied
     // to every read-modify-write here).
@@ -144,6 +143,56 @@ where
 }
 
 fn write_bytes_atomic_unlocked(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    write_atomic(path, bytes, None, Landing::Replace)?;
+    Ok(())
+}
+
+/// Write `bytes` to `path` **owner-only and atomically**: a reader (or a
+/// crash) sees the old contents or the new ones, never a short file, and the
+/// file never exists with wider permissions than its owner's, not even for an
+/// instant. For keys, tokens and configs that may hold credentials.
+///
+/// The bytes are staged in a uniquely named sibling — `0600` from creation on
+/// Unix; on Windows restricted to its owner (`private_file::restrict_to_owner`)
+/// before a byte is written, an ACL the rename keeps — synced, renamed over
+/// `path`, and the directory synced after. Concurrent writers never share a
+/// staging file; the last rename wins.
+pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    write_private_atomic_mode(path, bytes, 0o600)
+}
+
+/// [`write_private_atomic`] with an explicit Unix mode for the file (its
+/// caller's owner-only spelling, e.g. `0o400`). Unused on Windows, where the
+/// file is restricted to its owner either way.
+pub fn write_private_atomic_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+    write_atomic(path, bytes, Some(mode), Landing::Replace)
+        .map(|_| ())
+        .map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+/// [`write_private_atomic`] that never replaces an existing file: `Ok(false)`
+/// when `path` already exists (its contents are untouched and nothing is
+/// left behind). Two processes minting the same secret at once then agree on
+/// whichever landed first instead of each keeping its own.
+pub fn create_private_atomic(path: &Path, bytes: &[u8]) -> Result<bool, String> {
+    write_atomic(path, bytes, Some(0o600), Landing::NoClobber)
+        .map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+/// How [`write_atomic`] lands its staged file on the target.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Landing {
+    /// Rename over whatever is there.
+    Replace,
+    /// Rename only when nothing is there; `Ok(false)` otherwise.
+    NoClobber,
+}
+
+/// The one staged-write path. `private` is the file's Unix mode and asks for
+/// the Windows owner-only ACL; `None` keeps the staging file's own mode
+/// (`0600` from `tempfile` on Unix) and ACL. `Ok(false)` only for a
+/// [`Landing::NoClobber`] write that found `path` taken.
+fn write_atomic(path: &Path, bytes: &[u8], private: Option<u32>, landing: Landing) -> std::io::Result<bool> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -151,12 +200,38 @@ fn write_bytes_atomic_unlocked(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn 
     // to be atomic, so it goes in the target's own directory rather than /tmp.
     // NamedTempFile also makes the sibling name unique: concurrent writers can
     // never rename or truncate one another's staging file.
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
     let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    if let Some(mode) = private {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            staged.as_file().set_permissions(fs::Permissions::from_mode(mode))?;
+        }
+        #[cfg(windows)]
+        {
+            let _ = mode;
+            crate::services::private_file::restrict_to_owner(staged.path());
+        }
+        #[cfg(not(any(unix, windows)))]
+        let _ = mode;
+    }
     staged.as_file_mut().write_all(bytes)?;
     staged.as_file_mut().sync_all()?;
     durability::record(DurabilityStep::FileSynced, staged.path());
-    staged.persist(path)?;
+    match landing {
+        Landing::Replace => {
+            staged.persist(path).map_err(|e| e.error)?;
+        }
+        Landing::NoClobber => match staged.persist_noclobber(path) {
+            Ok(_) => {}
+            Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+            Err(e) => return Err(e.error),
+        },
+    }
     durability::record(DurabilityStep::Persisted, path);
     // The data is durable, but the directory entry pointing at it is not until
     // the parent directory is flushed too: a crash after the rename can
@@ -166,7 +241,7 @@ fn write_bytes_atomic_unlocked(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn 
     // bytes are already in place.
     sync_parent_dir(parent);
     durability::record(DurabilityStep::DirSynced, parent);
-    Ok(())
+    Ok(true)
 }
 
 /// Flush a directory's entries to disk after a rename into it.
@@ -353,6 +428,23 @@ pub fn state_dir() -> std::path::PathBuf {
     )
 }
 
+/// `<state_dir>/projects.json`, the project registry.
+pub fn projects_path() -> std::path::PathBuf {
+    state_dir().join("projects.json")
+}
+
+/// `<state_dir>/settings.json`, the app-wide settings.
+pub fn settings_path() -> std::path::PathBuf {
+    state_dir().join("settings.json")
+}
+
+/// The app-wide settings, or `None` when the file is missing or unreadable.
+/// A caller that must fail closed on a corrupt file (`commands::copilot`)
+/// reads it itself.
+pub fn load_settings() -> Option<crate::schema::Settings> {
+    read_json(&settings_path()).ok()
+}
+
 /// The folder the environment names as the state dir, if it names one.
 pub fn state_dir_override() -> Option<std::path::PathBuf> {
     crate::brand::env("STATE_DIR").map(std::path::PathBuf::from)
@@ -496,13 +588,7 @@ pub fn rewrite_path_prefix(value: &mut serde_json::Value, old: &str, new: &str) 
     }
 }
 
-fn now_secs() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::clock::now_secs;
 
 /// Current date in UTC as "YYYY-MM-DD".
 pub fn today_utc() -> String {
@@ -821,12 +907,27 @@ mod tests {
         fs::write(&plain, "").unwrap();
         assert_eq!(mode_of(&shared), mode_of(&plain));
 
-        // Rewriting an existing file truncates it and leaves its mode alone.
+        // Rewriting a shared file truncates it in place and leaves its mode
+        // alone.
         fs::set_permissions(&shared, fs::Permissions::from_mode(0o640)).unwrap();
-        write_json_file(&shared, &serde_json::json!({"b": 2}), true).unwrap();
+        write_json_file(&shared, &serde_json::json!({"b": 2}), false).unwrap();
         assert_eq!(mode_of(&shared), 0o640);
         let back: serde_json::Value = read_json(&shared).unwrap();
         assert_eq!(back, serde_json::json!({"b": 2}));
+
+        // Rewriting a private file replaces it whole, owner-only, even one an
+        // older build left wider; no staging file is left beside it.
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o644)).unwrap();
+        write_json_file(&private, &serde_json::json!({"c": 3}), true).unwrap();
+        assert_eq!(mode_of(&private), 0o600);
+        let back: serde_json::Value = read_json(&private).unwrap();
+        assert_eq!(back, serde_json::json!({"c": 3}));
+        let mut left: Vec<_> = fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["plain", "project.json", "settings.json"]);
     }
 
     // ── root_work_dir ─────────────────────────────────────────────────────
@@ -1077,5 +1178,85 @@ mod tests {
         }
 
         assert_eq!(read_json::<u32>(path.as_ref()).unwrap(), 200);
+    }
+
+    /// The owner-only writer: the bytes land whole, the file is `0600` on
+    /// Unix even when it replaces a world-readable one (a new inode, never a
+    /// chmod after the fact), and no staging sibling is left behind.
+    #[test]
+    fn write_private_atomic_lands_owner_only_and_leaves_no_staging_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("nested").join("token");
+        write_private_atomic(&path, b"first").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        write_private_atomic(&path, b"second").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "a replaced shared file comes back owner-only");
+        }
+        let names: Vec<String> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["token".to_string()]);
+    }
+
+    /// A replacement goes through a sibling: the target keeps its old bytes
+    /// until the rename, which comes after the staged bytes are synced.
+    #[test]
+    fn write_private_atomic_replaces_through_a_synced_sibling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().canonicalize().unwrap();
+        let path = dir.join("key");
+        fs::write(&path, b"old").unwrap();
+        write_private_atomic(&path, b"new").unwrap();
+        let steps = durability::steps_under(&dir);
+        let kinds: Vec<DurabilityStep> = steps.iter().map(|(step, _)| *step).collect();
+        assert_eq!(
+            kinds,
+            vec![DurabilityStep::FileSynced, DurabilityStep::Persisted, DurabilityStep::DirSynced],
+            "steps recorded: {steps:?}"
+        );
+        assert_ne!(steps[0].1, path, "the bytes are synced in a sibling, not the target");
+        assert_eq!(steps[0].1.parent(), Some(dir.as_path()));
+        assert_eq!(steps[1].1, path);
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_atomic_mode_applies_the_requested_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("read-only.key");
+        write_private_atomic_mode(&path, b"k", 0o400).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o400);
+        assert_eq!(fs::read(&path).unwrap(), b"k");
+    }
+
+    /// The no-clobber form lands once; a second writer finds the file taken,
+    /// leaves its bytes alone and leaves nothing behind.
+    #[test]
+    fn create_private_atomic_never_replaces_an_existing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("web.token");
+        assert!(create_private_atomic(&path, b"winner").unwrap());
+        assert!(!create_private_atomic(&path, b"loser").unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"winner");
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1, "no staging file left");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
     }
 }

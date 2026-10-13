@@ -1,6 +1,7 @@
 //! Root MCP's backend-owned copies and immutable, row-based write proposals.
 //! Lock order: REVIEW_LOCK, then the calendar RMW lock. No AppHandle or IPC.
 use super::root_mcp::{self, Change, Effects, Stores};
+use app_core::sync::LockExt;
 use super::root_mcp_security::{self as security, Access};
 use crate::{commands::calendar, storage};
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use std::sync::{Mutex, MutexGuard};
 
 static REVIEW_LOCK: Mutex<()> = Mutex::new(());
 pub fn lock() -> MutexGuard<'static, ()> {
-    REVIEW_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    REVIEW_LOCK.lock_ok()
 }
 
 // set_caldav_identity_at writes precisely these two fields. The fetch merge
@@ -182,7 +183,7 @@ pub fn list(stores: &Stores) -> Result<Vec<ReviewEntry>, String> {
     let real_bytes = std::fs::read(stores.calendar).unwrap_or_default();
     let pending: Vec<(&str, &str)> = proposals.iter().filter(|p| p.status == "pending").map(|p| (p.id.as_str(), p.created.as_str())).collect();
     let signature = hash(serde_json::to_string(&json!([hash(&real_bytes), pending])).unwrap().as_bytes());
-    let verified = LIST_SEEN.lock().unwrap_or_else(|p| p.into_inner()).as_deref() == Some(signature.as_str());
+    let verified = LIST_SEEN.lock_ok().as_deref() == Some(signature.as_str());
     if !verified {
         let mut tabs = std::collections::HashSet::new();
         for p in &proposals {
@@ -220,7 +221,7 @@ pub fn list(stores: &Stores) -> Result<Vec<ReviewEntry>, String> {
         if changed {
             save(stores.state, &proposals)?;
         }
-        *LIST_SEEN.lock().unwrap_or_else(|p| p.into_inner()) = Some(signature);
+        *LIST_SEEN.lock_ok() = Some(signature);
     }
     Ok(proposals
         .into_iter()
@@ -662,11 +663,7 @@ pub fn call(
                 tab: tab.into(),
                 tool: name.into(),
                 args: args.clone(),
-                created: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis()
-                    .to_string(),
+                created: crate::clock::now_ms().to_string(),
                 rows,
                 calendars,
                 tainted: reader,

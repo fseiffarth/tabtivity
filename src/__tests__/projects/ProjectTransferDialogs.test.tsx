@@ -31,6 +31,7 @@ import { ProjectImportBundleDialog } from "../../components/projects/ProjectImpo
 import type { BundleInfo, ExportPreview, ProjectEntry } from "../../types";
 import { BRAND, NAMES } from "../../lib/brand";
 import { useBoxesStore } from "../../stores/boxes";
+import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 
 const project: ProjectEntry = {
   id: "p1",
@@ -55,6 +56,13 @@ const preview = (over: Partial<ExportPreview> = {}): ExportPreview => ({
   gitBytes: 200 * 1024 * 1024,
   rebuildableFiles: 9000,
   rebuildableBytes: 1024 * 1024 * 1024,
+  rebuildableDirs: [
+    { path: "node_modules", files: 8000, bytes: 900 * 1024 * 1024 },
+    { path: ".venv", files: 1000, bytes: 124 * 1024 * 1024 },
+  ],
+  skipped: 0,
+  agentHistoryFiles: 0,
+  agentHistoryBytes: 0,
   tabs: 4,
   boxNames: ["Papers"],
   suggestedFileName: `thesis-2026-09-21.${NAMES.exportExtension}`,
@@ -162,6 +170,9 @@ describe("export dialog", () => {
         payloadBytes: 5_000_000,
         remote: false,
         notes: ["rebuildableSkipped"],
+        skipped: [],
+        skippedCount: 0,
+        agentFiles: 0,
       });
     });
     mockSave.mockResolvedValue(`/media/stick/thesis.${NAMES.exportExtension}`);
@@ -184,12 +195,134 @@ describe("export dialog", () => {
         includeGit: true,
         includeSession: true,
         includeMirror: true,
+        mirrorSource: "local",
         skipRebuildable: true,
+        keepRebuildable: [],
+        includeAgentHistory: false,
       },
     });
     expect(screen.getByText(/160 files/)).toBeTruthy();
     // The note the backend returned is worded, not printed as a token.
     expect(screen.getByText(/Rebuildable folders/)).toBeTruthy();
+  });
+
+  /** A folder that only looks like build output must be carryable. */
+  it("carries an unticked rebuildable folder and counts it in the estimate", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "preview_project_export") return Promise.resolve(preview());
+      return Promise.resolve({
+        path: "/x", bytes: 1, files: 1, payloadBytes: 1, remote: false,
+        notes: [], skipped: [], skippedCount: 0, agentFiles: 0,
+      });
+    });
+    mockSave.mockResolvedValue("/x");
+    await act(async () => {
+      render(<ProjectExportDialog project={project} onClose={() => {}} />);
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("checkbox", { name: "Leave out .venv" }));
+    });
+    expect(screen.getByText(/About 329\.0 MB before compression/)).toBeTruthy();
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Export…" }));
+    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "export_project",
+      expect.objectContaining({
+        req: expect.objectContaining({ keepRebuildable: [".venv"], skipRebuildable: true }),
+      }),
+    );
+  });
+
+  it("carries agent conversations only when asked, and names what was left out", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "preview_project_export") {
+        return Promise.resolve(
+          preview({ agentHistoryFiles: 3, agentHistoryBytes: 2 * 1024 * 1024, skipped: 1 }),
+        );
+      }
+      return Promise.resolve({
+        path: "/x", bytes: 1, files: 4, payloadBytes: 1, remote: false, notes: [],
+        skipped: [{ path: "run/pipe", reason: "special" }], skippedCount: 1, agentFiles: 3,
+      });
+    });
+    mockSave.mockResolvedValue("/x");
+    await act(async () => {
+      render(<ProjectExportDialog project={project} onClose={() => {}} />);
+    });
+    const toggle = screen.getByRole("checkbox", { name: "Agent conversations" }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(screen.getByText(/secrets included/)).toBeTruthy();
+    expect(screen.getByText(/1 entries cannot be carried/)).toBeTruthy();
+    await act(async () => {
+      await userEvent.click(toggle);
+    });
+    expect(screen.getByText(/About 207\.0 MB before compression/)).toBeTruthy();
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Export…" }));
+    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "export_project",
+      expect.objectContaining({ req: expect.objectContaining({ includeAgentHistory: true }) }),
+    );
+    expect(screen.getByText(/1 entries were left out/)).toBeTruthy();
+    expect(screen.getByText("run/pipe")).toBeTruthy();
+    expect(screen.getByText("pipe/socket/device")).toBeTruthy();
+    expect(screen.getByText(/3 agent conversation files included/)).toBeTruthy();
+  });
+
+  /** A remote project packs either of its copies; the host is asked only
+   *  once its copy is picked, and only while the project is connected. */
+  it("packs a remote project from the host's copy when picked", async () => {
+    useRemoteStatusStore.setState({ byProject: {}, byHost: {} });
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "preview_project_export") {
+        return Promise.resolve(
+          preview({ remote: true, mirror: "/home/me/mirror", files: 10, bytes: 1024 * 1024 }),
+        );
+      }
+      if (cmd === "preview_host_export") {
+        return Promise.resolve({
+          files: 500,
+          bytes: 50 * 1024 * 1024,
+          gitFiles: 10,
+          gitBytes: 10 * 1024 * 1024,
+          rebuildableFiles: 0,
+          rebuildableBytes: 0,
+        });
+      }
+      return Promise.resolve({
+        path: "/x", bytes: 1, files: 1, payloadBytes: 1, remote: true, notes: [],
+        skipped: [], skippedCount: 0, agentFiles: 0,
+      });
+    });
+    mockSave.mockResolvedValue("/x");
+    await act(async () => {
+      render(<ProjectExportDialog project={project} onClose={() => {}} />);
+    });
+    const host = screen.getByRole("radio", { name: /The host's copy/ }) as HTMLInputElement;
+    expect(host.disabled).toBe(true);
+    expect(screen.getByText(/Connect the project/)).toBeTruthy();
+
+    act(() => useRemoteStatusStore.getState().setSsh("p1", "connected"));
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "preview_host_export")).toBe(false);
+    await act(async () => {
+      await userEvent.click(host);
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("preview_host_export", { projectId: "p1" });
+    expect(screen.getByText(/500 files, 50\.0 MB/)).toBeTruthy();
+    expect(screen.getByText(/About 60\.0 MB before compression/)).toBeTruthy();
+    // The mirror's folder list says nothing about the host's tree.
+    expect(screen.queryByRole("checkbox", { name: "Leave out .venv" })).toBeNull();
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Export…" }));
+    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "export_project",
+      expect.objectContaining({
+        req: expect.objectContaining({ mirrorSource: "host", keepRebuildable: [] }),
+      }),
+    );
   });
 
   it("does nothing when the save dialog is cancelled", async () => {
@@ -235,6 +368,25 @@ describe("import dialog", () => {
     const name = screen.getByDisplayValue("Thesis");
     expect(name).toBeTruthy();
     expect(screen.getByDisplayValue(`/home/me/${BRAND.slug}/projects`)).toBeTruthy();
+  });
+
+  it("offers the bundle's agent conversations and warns about what it is missing", async () => {
+    const info = bundle({
+      format: 2,
+      contents: { ...bundle().contents, agentHistory: true, skipped: 2 },
+    });
+    await chooseBundle(info);
+    expect(screen.getByText(/2 entries could not be read/)).toBeTruthy();
+    const toggle = screen.getByRole("checkbox", { name: "Restore agent conversations" }) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    await act(async () => {
+      await userEvent.click(toggle);
+      await userEvent.click(screen.getByRole("button", { name: "Import" }));
+    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "import_project_export",
+      expect.objectContaining({ req: expect.objectContaining({ restoreAgentHistory: false }) }),
+    );
   });
 
   it("warns that a remote project's credentials stay behind", async () => {
@@ -294,6 +446,7 @@ describe("import dialog", () => {
         restoreSession: true,
         restoreTime: true,
         joinBoxes: true,
+        restoreAgentHistory: true,
       },
     });
     expect(screen.getByText(/Thesis copy imported — 120 files/)).toBeTruthy();

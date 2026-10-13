@@ -17,10 +17,6 @@ pub struct SharedCalendars {
     pub list: Vec<CalInfo>,
 }
 
-async fn off_thread<T: Send + 'static>(job: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
-    tokio::task::spawn_blocking(job).await.map_err(|e| format!("shared calendars: {e}"))?
-}
-
 fn me() -> Result<String, String> {
     if !crate::services::server::is_server() {
         return Err("Sharing a calendar needs the hosted server".into());
@@ -49,7 +45,7 @@ fn service(request: Request) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn shared_calendar_list() -> Result<SharedCalendars, String> {
     let me = me()?;
-    off_thread(move || {
+    app_core::rt::try_blocking("shared calendar", move || {
         let list = shared::global().ok_or("not a server")?.refresh()?;
         Ok(SharedCalendars { me, list })
     })
@@ -61,7 +57,7 @@ pub async fn shared_calendar_list() -> Result<SharedCalendars, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn shared_calendar_share(calendar_id: String) -> Result<CalInfo, String> {
     me()?;
-    off_thread(move || shared::share_in(&crate::commands::calendar::calendar_path(), &crate::storage::state_dir(), &service_socket(), &calendar_id)).await
+    app_core::rt::try_blocking("shared calendar", move || shared::share_in(&crate::commands::calendar::calendar_path(), &crate::storage::state_dir(), &service_socket(), &calendar_id)).await
 }
 
 /// Open (or change, or close: both `""`) the events and the to-do list of
@@ -70,20 +66,20 @@ pub async fn shared_calendar_share(calendar_id: String) -> Result<CalInfo, Strin
 pub async fn shared_calendar_grant(id: String, user: String, events: String, tasks: String) -> Result<(), String> {
     me()?;
     let (events, tasks) = (role(&events)?, role(&tasks)?);
-    off_thread(move || service(Request::Grant { id, user, events, tasks })).await
+    app_core::rt::try_blocking("shared calendar", move || service(Request::Grant { id, user, events, tasks })).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn shared_calendar_revoke(id: String, user: String) -> Result<(), String> {
     me()?;
-    off_thread(move || service(Request::Revoke { id, user })).await
+    app_core::rt::try_blocking("shared calendar", move || service(Request::Revoke { id, user })).await
 }
 
 /// Stop sharing: the calendar moves back into this user's `calendar.json`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn shared_calendar_unshare(id: String) -> Result<(), String> {
     me()?;
-    off_thread(move || shared::unshare_in(&crate::commands::calendar::calendar_path(), &crate::storage::state_dir(), &service_socket(), &id)).await
+    app_core::rt::try_blocking("shared calendar", move || shared::unshare_in(&crate::commands::calendar::calendar_path(), &crate::storage::state_dir(), &service_socket(), &id)).await
 }
 
 /// Long-poll: `true` as soon as a shared calendar this user may see moved
@@ -94,5 +90,5 @@ pub async fn shared_calendar_wait() -> Result<bool, String> {
     if !crate::services::server::is_server() {
         return Ok(false);
     }
-    off_thread(move || shared::global().ok_or("not a server")?.wait()).await
+    app_core::rt::try_blocking("shared calendar", move || shared::global().ok_or("not a server")?.wait()).await
 }

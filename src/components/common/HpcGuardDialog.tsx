@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect } from "react";
 import { useHpcGuardStore, type HpcGuardKind } from "../../stores/remote/hpc/hpcGuardPrompt";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -50,6 +51,7 @@ export function HpcGuardDialog() {
   // (AppShell and DetachedApp), so a request made in a popout has a host too.
   useEffect(() => registerHost(), [registerHost]);
 
+  const modalRef = useModalFocus(cancel, !!pending);
   if (!pending) return null;
   const copy = COPY[pending.kind] ?? COPY["login-node-run"];
 
@@ -58,7 +60,7 @@ export function HpcGuardDialog() {
     // security decision, and "I didn't mean to" is a legitimate answer that
     // should cost one click.
     <div className="modal-backdrop" onClick={cancel}>
-      <div className="project-dialog hpc-guard-dialog" onClick={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog hpc-guard-dialog" onClick={(e) => e.stopPropagation()}>
         <h2 className="hpc-guard-title">
           {t(copy.title)} <UntestedTag id="hpcGuardDialog.1" />
         </h2>

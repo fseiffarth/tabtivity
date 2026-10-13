@@ -11,7 +11,7 @@ vi.mock("../../../mobile-web/src/localLock", () => ({
 
 import { oidcProvider, pair, startOidc } from "../../../mobile-web/src/auth";
 import { configureLocalUnlock } from "../../../mobile-web/src/localLock";
-import { Pair, noteOidcOutcome } from "../../../mobile-web/src/screens/Pair";
+import { Pair, cleanPairingCode, noteOidcOutcome, pairingCodeComplete, takeLinkedPairingCode } from "../../../mobile-web/src/screens/Pair";
 
 const paired = vi.mocked(pair);
 const configured = vi.mocked(configureLocalUnlock);
@@ -64,6 +64,26 @@ describe("phone connection", () => {
   });
 });
 
+describe("pairing codes", () => {
+  it("keeps a server's name:code as typed and the desktop's digits as before", () => {
+    expect(cleanPairingCode("Flo:1234 5678")).toBe("flo:12345678");
+    expect(cleanPairingCode("1234-5678")).toBe("12345678");
+    expect(cleanPairingCode("flo:12a:34")).toBe("flo:1234");
+    expect(pairingCodeComplete("12345678")).toBe(true);
+    expect(pairingCodeComplete("bob_2:12345678")).toBe(true);
+    expect(pairingCodeComplete("1234567")).toBe(false);
+    expect(pairingCodeComplete("flo:")).toBe(false);
+    expect(pairingCodeComplete(":12345678")).toBe(false);
+  });
+
+  it("pairs with a server's routed code", async () => {
+    render(<Pair setupLock={false} onDone={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Pairing code"), { target: { value: "flo:12345678" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect phone" }));
+    await waitFor(() => expect(pair).toHaveBeenCalledWith("flo:12345678", "Mobile device"));
+  });
+});
+
 describe("phone connection through a server's identity provider (hosted P5)", () => {
   it("offers the provider's sign-in beside the code and starts it with the device name", async () => {
     vi.mocked(oidcProvider).mockResolvedValueOnce("Lab SSO");
@@ -82,5 +102,24 @@ describe("phone connection through a server's identity provider (hosted P5)", ()
     render(<Pair setupLock={false} onDone={vi.fn()} />);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button", { name: /Sign in with/ })).toBeNull();
+  });
+});
+
+describe("pairing link", () => {
+  afterEach(() => history.replaceState(null, "", "/"));
+
+  it("takes the code from an Add device QR's fragment and wipes it from the address", () => {
+    history.replaceState(null, "", "/?x=1#pair=1234%205678");
+    expect(takeLinkedPairingCode()).toBe("12345678");
+    expect(location.hash).toBe("");
+    expect(location.search).toBe("?x=1");
+  });
+
+  it("keeps a server's account prefix and ignores other fragments", () => {
+    history.replaceState(null, "", "/#pair=alice%3A12345678");
+    expect(takeLinkedPairingCode()).toBe("alice:12345678");
+    history.replaceState(null, "", "/#inbox");
+    expect(takeLinkedPairingCode()).toBe("");
+    expect(location.hash).toBe("#inbox");
   });
 });

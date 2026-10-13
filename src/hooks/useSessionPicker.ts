@@ -19,6 +19,14 @@ export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max", "auto"] 
 
 export type SessionPickerCommand = "/model" | "/permissions";
 
+/** Whether `tab`'s model can be picked from its own `/model` list. Not on a
+ * local-model tab: its model is the Ollama one it was launched on, and the
+ * driver's list (OpenCode's providers, Claude's or Codex's cloud models) would
+ * only offer to move the tab off it. */
+export function modelPickOffered(tab: Pick<TabEntry, "kind">): boolean {
+  return tab.kind !== "local_agent";
+}
+
 export interface SessionPicker {
   /** The command's picker was asked for and has not gone yet. */
   picking: boolean;

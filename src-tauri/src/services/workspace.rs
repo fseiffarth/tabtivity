@@ -624,7 +624,7 @@ fn set_closed_tabs(session: &mut TerminalSession, closed: Vec<ClosedTab>) {
 fn closed_id() -> String {
     let mut bytes = [0u8; 16];
     let _ = getrandom::fill(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    crate::digest::hex(&bytes)
 }
 
 fn edit_tab_in(

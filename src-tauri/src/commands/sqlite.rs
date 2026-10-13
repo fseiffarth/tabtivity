@@ -145,17 +145,10 @@ fn stringify(value: ValueRef<'_>) -> String {
     }
 }
 
-/// Offload a blocking SQLite read to a worker thread. An arbitrary dropped
-/// `.db` — possibly on a network mount — is opened and queried synchronously,
-/// which run inline on the main thread is the freeze class `commands::git`'s
-/// `run_off_thread` doc describes. The sync bodies stay directly unit-testable.
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("sqlite task failed: {e}"))?
-}
+// Offload a blocking SQLite read to a worker thread. An arbitrary dropped
+// `.db` — possibly on a network mount — is opened and queried synchronously,
+// which run inline on the main thread is the freeze class `commands::git`'s
+// off-thread note describes. The sync bodies stay directly unit-testable.
 
 /// The path must sit in the viewer's project roots, as for every `fs.rs`
 /// reader.
@@ -166,7 +159,7 @@ fn confine(path: &str, project_id: Option<&str>) -> Result<(), String> {
 /// List the user tables (and views) in a SQLite database file, sorted by name.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sqlite_tables(path: String, project_id: Option<String>) -> Result<Vec<String>, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("sqlite", move || {
         confine(&path, project_id.as_deref())?;
         sqlite_tables_blocking(path)
     })
@@ -192,7 +185,7 @@ pub async fn sqlite_page(
     offset: u32,
     project_id: Option<String>,
 ) -> Result<SqlitePage, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("sqlite", move || {
         confine(&path, project_id.as_deref())?;
         sqlite_page_blocking(path, table, limit, offset)
     })

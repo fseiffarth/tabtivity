@@ -448,7 +448,7 @@ fn the_spoofed_sender_is_disclosed_rather_than_resolved() {
 /// produces. Without this the vitest tripwire could keep passing against an
 /// artifact from an older sanitizer.
 ///
-/// Regenerate with `UPDATE_HOSTILE_FIXTURE=1 cargo test --test mail_hostile_message`.
+/// Regenerate with `UPDATE_HOSTILE_FIXTURE=1 cargo test --test it mail_hostile_message`.
 #[test]
 fn the_frontend_fixture_is_this_pipelines_output() {
     let parsed = parse_message(&fixture()).unwrap();
@@ -472,6 +472,6 @@ fn the_frontend_fixture_is_this_pipelines_output() {
     assert_eq!(
         on_disk, out.html,
         "the checked-in frontend fixture is stale; regenerate it with \
-         UPDATE_HOSTILE_FIXTURE=1 cargo test --test mail_hostile_message"
+         UPDATE_HOSTILE_FIXTURE=1 cargo test --test it mail_hostile_message"
     );
 }

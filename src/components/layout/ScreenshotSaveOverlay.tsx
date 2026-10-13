@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -178,21 +179,19 @@ export function ScreenshotSaveOverlay() {
     }
   };
 
-  useEffect(() => {
-    if (!pending) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) void discard();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending, busy]);
+  const modalRef = useModalFocus(() => {
+    if (!busy) void discard();
+  }, !!pending);
 
   if (!pending) return null;
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={() => !busy && void discard()}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="file-delete-dialog screenshot-save-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

@@ -26,7 +26,7 @@
 //! that moved on both sides rather than picking a winner.
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use app_core::sync::LockExt;
 
 use serde::{Deserialize, Serialize};
 
@@ -85,12 +85,7 @@ pub struct LocalLoss {
     pub acked: bool,
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+use crate::clock::now_secs;
 
 /// `~/.local/share/tabtivity/remote-projects/<id>/local_loss.json`. Sits beside
 /// `git_peer.json` in the project's local state dir — the log is about the *local*
@@ -116,7 +111,7 @@ fn load_unlocked(project_id: &str) -> Vec<LocalLoss> {
 }
 
 pub fn load(project_id: &str) -> Vec<LocalLoss> {
-    let _guard = LOG_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = LOG_WRITE_LOCK.lock_ok();
     load_unlocked(project_id)
 }
 
@@ -128,7 +123,7 @@ fn save(project_id: &str, entries: &[LocalLoss]) {
 /// destructive write, and failing to file it must never turn into a second failure on
 /// top of the first — the callers are all `let _ =`-style recovery paths themselves.
 pub fn record(project_id: &str, loss: LocalLoss) {
-    let _guard = LOG_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = LOG_WRITE_LOCK.lock_ok();
     let mut entries = load_unlocked(project_id);
     entries.insert(0, loss);
     entries.truncate(MAX_ENTRIES);
@@ -172,7 +167,7 @@ pub fn record_paths(
 /// of the log is that it outlives the warning, so a user who dismissed a deletion at 3am
 /// can still read it to find out which files it took.
 pub fn ack_all(project_id: &str) {
-    let _guard = LOG_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = LOG_WRITE_LOCK.lock_ok();
     let mut entries = load_unlocked(project_id);
     if entries.iter().all(|e| e.acked) {
         return;

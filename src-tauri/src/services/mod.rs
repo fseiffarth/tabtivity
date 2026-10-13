@@ -61,6 +61,10 @@ pub mod api_usage;
 pub mod agent_global;
 pub mod agent_hint;
 pub mod agent_home;
+// Where each CLI keeps its conversations in an agent home, for export/import.
+pub mod agent_history;
+// Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.
+pub mod tar_stream;
 pub mod agent_install;
 pub mod agent_shim;
 // Copilot CLI sign-in for fenced tabs: Tabtivity keeps the token in its own

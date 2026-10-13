@@ -265,7 +265,7 @@ fn remote_site_key(spec: &RemoteSpec) -> String {
     )
 }
 
-fn entry_remote_spec(entry: &ProjectEntry) -> Option<RemoteSpec> {
+pub(crate) fn entry_remote_spec(entry: &ProjectEntry) -> Option<RemoteSpec> {
     entry
         .extra
         .get("remote")
@@ -353,7 +353,7 @@ pub(crate) fn conflict_message(conflict: &ProjectConflict) -> String {
 }
 
 pub(crate) fn read_projects_list() -> Result<ProjectsList, String> {
-    let path = storage::state_dir().join("projects.json");
+    let path = storage::projects_path();
     if path.exists() {
         storage::read_json(&path).map_err(|e| e.to_string())
     } else {
@@ -367,7 +367,7 @@ pub(crate) fn read_projects_list() -> Result<ProjectsList, String> {
 pub(crate) fn patch_projects_list<R>(
     patch: impl FnOnce(&mut ProjectsList) -> Result<R, String>,
 ) -> Result<R, String> {
-    let path = storage::state_dir().join("projects.json");
+    let path = storage::projects_path();
     storage::patch_json(&path, ProjectsList::new(), |list| {
         // The built-in Trash workspace was removed; every registry read or
         // write drops its leftover entry (its folder stays on disk).
@@ -744,12 +744,9 @@ pub(crate) fn validate_project_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The project's folder — [`ProjectEntry::directory`], owned.
 pub(crate) fn entry_directory(entry: &ProjectEntry) -> Option<String> {
-    entry
-        .extra
-        .get("directory")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    entry.directory().map(str::to_string)
 }
 
 pub(crate) fn entry_mirror(entry: &ProjectEntry) -> Option<String> {
@@ -913,26 +910,19 @@ fn purge_project_time(project_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Offload a blocking project-lifecycle body to a worker thread. Archiving,
-/// restoring, moving a mirror, creating and importing all move whole trees
-/// (and `archive_project` shuts a VM down inline — seconds); run synchronously
-/// on the main thread that froze the window — the freeze class
-/// `commands::git`'s `run_off_thread` doc describes. The sync `*_blocking`
-/// bodies stay directly unit-testable (see `tests/projects_commands.rs`).
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("project task failed: {e}"))?
-}
+// Offload a blocking project-lifecycle body to a worker thread. Archiving,
+// restoring, moving a mirror, creating and importing all move whole trees
+// (and `archive_project` shuts a VM down inline — seconds); run synchronously
+// on the main thread that froze the window — the freeze class
+// `commands::git`'s off-thread note describes. The sync `*_blocking`
+// bodies stay directly unit-testable (see `tests/projects_commands.rs`).
 
 /// Move a project into the archive and drop it from `projects.json`. `archived_at`
 /// is a caller-supplied ISO timestamp (the frontend stamps it). The remote host
 /// tree is never touched — only local folders move.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn archive_project(project_id: String, archived_at: String) -> Result<(), String> {
-    run_off_thread(move || archive_project_blocking(project_id, archived_at)).await
+    app_core::rt::try_blocking("project", move || archive_project_blocking(project_id, archived_at)).await
 }
 
 pub fn archive_project_blocking(project_id: String, archived_at: String) -> Result<(), String> {
@@ -1021,7 +1011,7 @@ pub fn archive_project_blocking(project_id: String, archived_at: String) -> Resu
 /// goes through the archive, which moves the disk with it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn forget_project(project_id: String) -> Result<(), String> {
-    run_off_thread(move || forget_project_blocking(project_id)).await
+    app_core::rt::try_blocking("project", move || forget_project_blocking(project_id)).await
 }
 
 pub fn forget_project_blocking(project_id: String) -> Result<(), String> {
@@ -1116,7 +1106,7 @@ pub fn list_archived_projects() -> Result<Vec<ArchivedProject>, String> {
 /// re-register it in `projects.json` as `inactive`. Returns the restored entry.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn restore_archived_project(project_id: String) -> Result<ProjectEntry, String> {
-    run_off_thread(move || restore_archived_project_blocking(project_id)).await
+    app_core::rt::try_blocking("project", move || restore_archived_project_blocking(project_id)).await
 }
 
 pub fn restore_archived_project_blocking(project_id: String) -> Result<ProjectEntry, String> {
@@ -1597,7 +1587,7 @@ fn rename_dir_no_replace(old: &Path, new: &Path) -> Result<(), String> {
 /// worktrees are re-pointed with `git worktree repair`. Returns the new entry.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn rename_project_dir(project_id: String, leaf: String) -> Result<ProjectEntry, String> {
-    run_off_thread(move || rename_project_dir_blocking(&project_id, &leaf)).await
+    app_core::rt::try_blocking("project", move || rename_project_dir_blocking(&project_id, &leaf)).await
 }
 
 fn rename_project_dir_blocking(project_id: &str, leaf: &str) -> Result<ProjectEntry, String> {
@@ -1800,12 +1790,7 @@ pub fn set_project_sandbox(
     spec.enabled = enabled;
 
     if enabled {
-        if let Some(dir) = entry
-            .extra
-            .get("directory")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(dir) = entry.directory() {
             if let Some(detected) = crate::services::sandbox::detect_spec_source(Path::new(dir)) {
                 if source_needs_decision(&spec, &detected) {
                     match source_decision {
@@ -2110,6 +2095,21 @@ fn apply_mobile_access(project: &mut ProjectEntry, enabled: bool, devices: Optio
     }
 }
 
+/// What this machine needs before any project can be a phone scope: local
+/// terminals that outlive the window (the phone attaches to their tmux
+/// sessions), and tmux itself.
+fn mobile_access_prerequisites() -> Result<(), String> {
+    let settings: crate::schema::Settings =
+        storage::read_json(&storage::settings_path()).unwrap_or_default();
+    if !settings.persist_local_sessions() {
+        return Err("Enable persistent local terminal sessions before Mobile access".into());
+    }
+    if !crate::services::tmux_local::tmux_available() {
+        return Err("Mobile access requires tmux on this machine".into());
+    }
+    Ok(())
+}
+
 /// Authoritative per-project opt-in for Tabtivity Mobile. This flag lives in the
 /// state-dir `projects.json`, never only in project-writable `project.json`.
 /// `devices` narrows it to some paired phones (see [`mobile_scope_devices`]);
@@ -2141,14 +2141,7 @@ pub fn set_project_mobile_access(
         if runtime_enabled("sandbox") || runtime_enabled("vm") {
             return Err("Mobile access is unavailable for container and VM projects".into());
         }
-        let settings: crate::schema::Settings =
-            storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default();
-        if !settings.persist_local_sessions() {
-            return Err("Enable persistent local terminal sessions before Mobile access".into());
-        }
-        if !crate::services::tmux_local::tmux_available() {
-            return Err("Mobile access requires tmux on this machine".into());
-        }
+        mobile_access_prerequisites()?;
     }
     let devices = if enabled { mobile_scope_devices(devices)? } else { None };
     patch_project_entry(&project_id, |project| {
@@ -2174,6 +2167,77 @@ pub fn set_project_mobile_access(
     // A phone this leaves out loses what it scheduled or held here.
     crate::commands::agent_tasks::cancel_lost_phone_rules(&ctx, "after a project's Mobile access changed");
     Ok(MobileAccessState { enabled, devices })
+}
+
+/// The longest name a phone may give a new project, in characters.
+pub const PHONE_PROJECT_NAME_MAX: usize = 80;
+
+/// Why [`create_project_for_phone`] made nothing. [`Self::code`] is what the
+/// phone's API answers with.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PhoneProjectRefusal {
+    /// Blank, longer than [`PHONE_PROJECT_NAME_MAX`], or nothing of it is
+    /// left as a folder name.
+    InvalidName,
+    /// `<projects root>/<folder>` is already there, a project or not.
+    Exists,
+    /// This machine cannot open any project to a phone (no persistent local
+    /// sessions, no tmux), or the asking phone is no longer paired.
+    Unavailable(String),
+    /// Creating it failed past the checks.
+    Failed(String),
+}
+
+impl PhoneProjectRefusal {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidName => "invalid_name",
+            Self::Exists => "project_exists",
+            Self::Unavailable(_) => "mobile_unavailable",
+            Self::Failed(_) => "create_failed",
+        }
+    }
+}
+
+/// A new project made from a paired phone. The phone names it and nothing
+/// else: it is always a local folder `<projects root>/<sanitized name>` — no
+/// folder choice, no import, no remote, container or VM. It is created the way
+/// the desktop's New project creates one by default (scaffold, a local git
+/// repository) and opens to the asking phone alone, as switching its Mobile
+/// access on for just that phone would. It starts `active`, so it is on the
+/// phone's project list and open in the desktop's bar. Answers its id.
+pub fn create_project_for_phone(name: &str, device_id: &str) -> Result<String, PhoneProjectRefusal> {
+    let name = name.trim();
+    let folder = sanitize_name(name);
+    if name.is_empty() || name.chars().count() > PHONE_PROJECT_NAME_MAX || folder.is_empty() {
+        return Err(PhoneProjectRefusal::InvalidName);
+    }
+    mobile_access_prerequisites().map_err(PhoneProjectRefusal::Unavailable)?;
+    let devices = mobile_scope_devices(Some(vec![device_id.to_string()]))
+        .map_err(PhoneProjectRefusal::Unavailable)?;
+    let directory = projects_root().join(&folder);
+    if directory.exists() {
+        return Err(PhoneProjectRefusal::Exists);
+    }
+    let entry = create_project_blocking(CreateProjectRequest {
+        name: name.to_string(),
+        directory: directory.to_string_lossy().into_owned(),
+        description: None,
+        git_type: Some("local".to_string()),
+        git_provider: None,
+        skip_scaffold: false,
+        remote: None,
+        mirror_parent: None,
+        vm: None,
+    })
+    .map_err(PhoneProjectRefusal::Failed)?;
+    patch_project_entry(&entry.id, |project| {
+        project.status = "active".to_string();
+        apply_mobile_access(project, true, devices.as_deref());
+        Ok(())
+    })
+    .map_err(PhoneProjectRefusal::Failed)?;
+    Ok(entry.id)
 }
 
 /// Set (or clear) the display name for a **remote** project's primary machine —
@@ -2566,9 +2630,7 @@ pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<St
         .find(|p| p.id == project_id)
         .ok_or_else(|| format!("project '{project_id}' not found"))?;
     let directory = entry
-        .extra
-        .get("directory")
-        .and_then(Value::as_str)
+        .directory()
         .map(PathBuf::from)
         .ok_or_else(|| "project has no directory".to_string())?;
     if !directory.is_dir() {
@@ -2866,7 +2928,7 @@ pub async fn move_remote_mirror(
     name: String,
     parent_dir: String,
 ) -> Result<String, String> {
-    run_off_thread(move || move_remote_mirror_blocking(project_id, name, parent_dir)).await
+    app_core::rt::try_blocking("project", move || move_remote_mirror_blocking(project_id, name, parent_dir)).await
 }
 
 pub fn move_remote_mirror_blocking(
@@ -3527,7 +3589,7 @@ pub struct ProjectScaffoldRepair {
 /// defaults. Safe to run repeatedly — every step is additive/idempotent.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepair, String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
     let entry = list
         .into_iter()
@@ -3551,7 +3613,7 @@ pub fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepa
 /// Returns only the projects that actually needed a repair.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn repair_all_project_scaffolds() -> Result<Vec<ProjectScaffoldRepair>, String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     if !list_path.exists() {
         return Ok(vec![]);
     }
@@ -3596,7 +3658,7 @@ pub fn repair_all_project_scaffolds() -> Result<Vec<ProjectScaffoldRepair>, Stri
 /// is durable rather than re-derived on every load. Runs best-effort at startup
 /// off the UI thread; every failure is logged and non-fatal.
 pub fn migrate_legacy_projects() {
-    let path = storage::state_dir().join("projects.json");
+    let path = storage::projects_path();
     if !path.exists() {
         return;
     }
@@ -3694,7 +3756,7 @@ pub fn preview_project_scaffold(source_dir: String) -> Result<Vec<ScaffoldPrevie
 /// "missing".
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn project_scaffold_missing(project_id: String) -> Result<bool, String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     if !list_path.exists() {
         return Ok(false);
     }
@@ -3886,7 +3948,7 @@ fn apply_migration_steps_at(
 /// nothing.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn project_migration_plan(project_id: String) -> Result<MigrationPlan, String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
     let entry = list
         .into_iter()
@@ -3937,7 +3999,7 @@ pub fn project_migration_apply(
     }
     // Re-read after the entry step: normalization can backfill the very
     // `directory` the scaffold target resolves from.
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
     let entry = list
         .into_iter()
@@ -3994,7 +4056,7 @@ pub struct CreateProjectRequest {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_project(req: CreateProjectRequest) -> Result<ProjectEntry, String> {
-    run_off_thread(move || create_project_blocking(req)).await
+    app_core::rt::try_blocking("project", move || create_project_blocking(req)).await
 }
 
 pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectEntry, String> {
@@ -4301,7 +4363,7 @@ pub struct ImportProjectRequest {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_project(req: ImportProjectRequest) -> Result<ProjectEntry, String> {
-    run_off_thread(move || import_project_blocking(req)).await
+    app_core::rt::try_blocking("project", move || import_project_blocking(req)).await
 }
 
 pub fn import_project_blocking(req: ImportProjectRequest) -> Result<ProjectEntry, String> {
@@ -4632,11 +4694,7 @@ pub async fn extend_project_to_remote(
     }
 
     // The current local tree becomes the mirror (working copy), unchanged.
-    let old_dir = list[idx]
-        .extra
-        .get("directory")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let old_dir = entry_directory(&list[idx])
         .ok_or_else(|| "Project has no local directory".to_string())?;
 
     // Whether this project carries git — only then is lockstep meaningful. `none`
@@ -5001,7 +5059,7 @@ pub(crate) fn uuid_v4() -> String {
     }
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
-    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    let h: String = crate::digest::hex(&b);
     format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
 }
 

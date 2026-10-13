@@ -5,6 +5,7 @@
 //! (Efficiency #15) have a dedicated, testable home alongside `fs_watch`.
 
 use std::collections::{BTreeSet, HashSet};
+use app_core::sync::LockExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -334,16 +335,14 @@ pub async fn dir_size(
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let remote_dir = join_remote_dir(&target.spec.remote_path, &rel_path);
         let spec = target.spec.clone();
-        return tokio::task::spawn_blocking(move || {
+        return app_core::rt::blocking("fs", move || {
             crate::services::ssh_exec::remote_dir_size(&spec, &remote_dir)
         })
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     }
     let excluded = excluded.unwrap_or_default();
-    tokio::task::spawn_blocking(move || dir_size_local(&project_dir, &rel_path, &excluded))
+    app_core::rt::try_blocking("fs", move || dir_size_local(&project_dir, &rel_path, &excluded))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 /// Local-fs recursive directory size (bytes). Confinement-checked like the local
@@ -449,11 +448,10 @@ pub async fn dir_size_breakdown(
     excluded: Option<Vec<String>>,
 ) -> Result<DirSizeBreakdown, String> {
     let excluded = excluded.unwrap_or_default();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("fs", move || {
         dir_size_breakdown_local(&project_dir, &rel_path, &excluded)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 fn dir_size_breakdown_local(
@@ -788,23 +786,16 @@ async fn remote_metadata(
     }
 }
 
-/// Offload a blocking local-fs body to a worker thread. The full recursive
-/// walks (Ctrl+P/QuickOpen), tree copies/moves, external imports, and archive
-/// extraction below all do work proportional to tree/archive size; run inline
-/// they blocked the main thread — the freeze class `commands::git`'s
-/// `run_off_thread` doc describes. The sync bodies stay directly
-/// unit-testable.
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("fs task failed: {e}"))?
-}
+// Offload a blocking local-fs body to a worker thread. The full recursive
+// walks (Ctrl+P/QuickOpen), tree copies/moves, external imports, and archive
+// extraction below all do work proportional to tree/archive size; run inline
+// they blocked the main thread — the freeze class `commands::git`'s
+// off-thread note describes. The sync bodies stay directly
+// unit-testable.
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_project_endings(project_dir: String) -> Result<Vec<String>, String> {
-    run_off_thread(move || list_project_endings_blocking(project_dir)).await
+    app_core::rt::try_blocking("fs", move || list_project_endings_blocking(project_dir)).await
 }
 
 pub fn list_project_endings_blocking(project_dir: String) -> Result<Vec<String>, String> {
@@ -816,7 +807,7 @@ pub fn list_project_endings_blocking(project_dir: String) -> Result<Vec<String>,
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_project_paths(project_dir: String) -> Result<Vec<ProjectPathEntry>, String> {
-    run_off_thread(move || list_project_paths_blocking(project_dir)).await
+    app_core::rt::try_blocking("fs", move || list_project_paths_blocking(project_dir)).await
 }
 
 pub fn list_project_paths_blocking(project_dir: String) -> Result<Vec<ProjectPathEntry>, String> {
@@ -1105,7 +1096,7 @@ pub async fn copy_path(
     dest_project_dir: String,
     dest_rel: String,
 ) -> Result<(), String> {
-    run_off_thread(move || copy_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
+    app_core::rt::try_blocking("fs", move || copy_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
         .await
 }
 
@@ -1133,7 +1124,7 @@ pub async fn move_path(
     dest_project_dir: String,
     dest_rel: String,
 ) -> Result<(), String> {
-    run_off_thread(move || move_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
+    app_core::rt::try_blocking("fs", move || move_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
         .await
 }
 
@@ -1191,7 +1182,7 @@ pub async fn import_external_file(
     replace: bool,
     dest_name: Option<String>,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("fs", move || {
         import_external_file_blocking(project_dir, source_path, dest_rel, replace, dest_name)
     })
     .await
@@ -1280,7 +1271,7 @@ pub fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool
 /// output is additionally confined to the destination folder before any write.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn extract_archive(project_dir: String, rel_path: String) -> Result<String, String> {
-    run_off_thread(move || extract_archive_blocking(project_dir, rel_path)).await
+    app_core::rt::try_blocking("fs", move || extract_archive_blocking(project_dir, rel_path)).await
 }
 
 pub fn extract_archive_blocking(project_dir: String, rel_path: String) -> Result<String, String> {
@@ -1976,7 +1967,7 @@ where
         let Ok(content) = fs::read_to_string(&path) else {
             return std::sync::Arc::new(T::default());
         };
-        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slot = self.0.lock_ok();
         if let Some((cached_path, cached, value)) = slot.as_ref() {
             if *cached_path == path && *cached == content {
                 return value.clone();
@@ -2084,14 +2075,7 @@ fn compute_allowed_roots(
 /// A project entry's working directory: the canonical `directory` field when
 /// present, otherwise the parent of its `local_file` (which is `<dir>/project.json`).
 fn project_dir(entry: &ProjectEntry) -> Option<PathBuf> {
-    if let Some(Value::String(d)) = entry.extra.get("directory") {
-        if !d.is_empty() {
-            return Some(PathBuf::from(d));
-        }
-    }
-    Path::new(&entry.local_file)
-        .parent()
-        .map(|p| p.to_path_buf())
+    entry.directory().map(PathBuf::from)
 }
 
 /// A remote project's explicit local-mirror override (`extra["mirror"]`), or

@@ -220,7 +220,7 @@ fn walk(
 /// Async + `spawn_blocking` because the walk reads every file ≤ 8 MiB in the
 /// tree — run synchronously that froze the whole window for the duration of
 /// every search on a large project (the main-thread freeze class
-/// `commands::git`'s `run_off_thread` doc describes). The sync body stays
+/// `commands::git`'s off-thread note describes). The sync body stays
 /// directly unit-testable below.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_search(
@@ -229,11 +229,10 @@ pub async fn project_search(
     case_sensitive: bool,
     max_results: Option<usize>,
 ) -> Result<Vec<SearchMatch>, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("search", move || {
         project_search_blocking(project_dir, query, case_sensitive, max_results)
     })
     .await
-    .map_err(|e| format!("search task failed: {e}"))?
 }
 
 pub fn project_search_blocking(

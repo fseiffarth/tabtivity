@@ -84,6 +84,21 @@ pub struct AppMobileHostSettings {
     /// desktop bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_models: Option<bool>,
+    /// May a paired phone add new files to a plain (no dot segment) folder of
+    /// its Mobile projects ("Upload here")? Default off, and only in effect
+    /// while `project_files` is on too. Read by the sidecar per request
+    /// (`mobile_control::uploads::uploads_open`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_uploads: Option<bool>,
+    /// Serve the desktop app to a browser on this machine (Settings → Mobile →
+    /// Browser access, loopback only)? Default off. Read by the sidecar
+    /// (`mobile_control::config::MobileHostSettings`); named here so a
+    /// settings patch does not drop it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_client: Option<bool>,
+    /// Keys a newer build writes into this block survive a patch from this one.
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 /// Cloud completion authority lives in Tabtivity's settings, never project.json.

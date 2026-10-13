@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_settings() -> Result<Settings, String> {
-    let path = storage::state_dir().join("settings.json");
+    let path = storage::settings_path();
     let mut settings = if path.exists() {
         storage::read_json(&path).map_err(|e| e.to_string())?
     } else {
@@ -46,7 +46,7 @@ pub const SETTINGS_STALE: &str =
 /// backend without `patch_settings`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_settings(settings: Settings) -> Result<(), String> {
-    save_settings_at(&storage::state_dir().join("settings.json"), settings)
+    save_settings_at(&storage::settings_path(), settings)
 }
 
 fn save_settings_at(path: &std::path::Path, settings: Settings) -> Result<(), String> {
@@ -77,7 +77,7 @@ fn save_settings_at(path: &std::path::Path, settings: Settings) -> Result<(), St
 /// the exact object that won, so every sender can broadcast the same snapshot.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn patch_settings(patch: Map<String, Value>) -> Result<Settings, String> {
-    patch_settings_at(&storage::state_dir().join("settings.json"), patch)
+    patch_settings_at(&storage::settings_path(), patch)
 }
 
 fn patch_settings_at(path: &std::path::Path, mut patch: Map<String, Value>) -> Result<Settings, String> {
@@ -121,7 +121,7 @@ fn merge_settings_patch(settings: &mut Settings, patch: Map<String, Value>) -> R
 /// user drags or resizes the main window; it must never replace unrelated keys.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_window_state(state: WindowState) -> Result<(), String> {
-    let path = storage::state_dir().join("settings.json");
+    let path = storage::settings_path();
     storage::patch_json(&path, Settings::default(), |settings| {
         settings.window_state = Some(state);
         settings.rev += 1;
@@ -431,5 +431,39 @@ mod tests {
         assert_eq!(loaded.rev, 0);
         save_settings_at(&legacy, loaded).unwrap();
         assert_eq!(storage::read_json::<Settings>(&legacy).unwrap().rev, 1);
+    }
+
+    /// The Mobile host block round-trips every key through a patch: the phone
+    /// upload switch, the browser-access switch, and a key only a newer build
+    /// knows. Before these were named (or caught by `extra`), the patch that
+    /// set one erased it again.
+    #[test]
+    fn mobile_host_switches_and_unknown_keys_survive_a_patch() {
+        let key = crate::brand::MOBILE_HOST_KEY;
+        let host = serde_json::json!({
+            "enabled": true,
+            "project_files": true,
+            "project_uploads": true,
+            "browser_client": true,
+            "some_future_switch": {"a": [1, 2]}
+        });
+        let mut settings = Settings::default();
+        let patch = |json: Value| serde_json::from_value::<Map<String, Value>>(json).unwrap();
+        merge_settings_patch(&mut settings, patch(serde_json::json!({ key: host.clone() }))).unwrap();
+        let typed = settings.app_mobile_host.as_ref().unwrap();
+        assert_eq!(typed.project_uploads, Some(true));
+        assert_eq!(typed.browser_client, Some(true));
+
+        // An unrelated patch, then a write → read through the file shape.
+        merge_settings_patch(&mut settings, patch(serde_json::json!({"language": "de"}))).unwrap();
+        let written = serde_json::to_value(&settings).unwrap();
+        assert_eq!(written[key], host, "the whole block survives");
+        let back: Settings = serde_json::from_value(written).unwrap();
+        assert_eq!(serde_json::to_value(&back).unwrap()[key], host);
+
+        // Unset stays unset (the switch is off by default).
+        merge_settings_patch(&mut settings, patch(serde_json::json!({ key: {"enabled": true} }))).unwrap();
+        let written = serde_json::to_value(&settings).unwrap();
+        assert_eq!(written[key], serde_json::json!({"enabled": true}));
     }
 }

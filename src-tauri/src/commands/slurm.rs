@@ -205,18 +205,10 @@ fn default_out_file(work_dir: &str, job_id: &str) -> String {
 // which can stall up to its ConnectTimeout/ServerAlive window on a dead/degraded
 // host). Tauri runs a synchronous `#[command]` on the MAIN thread, so doing that
 // work inline froze the whole window — the same bug `commands::git` already fixed
-// (see its `run_off_thread` doc comment) but that fix never reached this file.
+// (see its off-thread note) but that fix never reached this file.
 // Each command is now an `async` wrapper that offloads its blocking body via
 // `spawn_blocking`, so the UI thread stays free; the bodies are ordinary sync fns
 // so they stay directly callable from the unit tests below.
-
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("slurm task failed: {e}"))?
-}
 
 /// Is SLURM available on the project's host? Lets the UI hide itself off-HPC.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -224,7 +216,7 @@ pub async fn slurm_available(
     project_dir: String,
     host_id: Option<String>,
 ) -> Result<SlurmInfo, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("slurm", move || {
         let host = host_id.as_deref().unwrap_or(PRIMARY_HOST);
         // Constant script — nothing interpolated.
         let script = "command -v sbatch >/dev/null 2>&1 || exit 0\n\
@@ -248,7 +240,7 @@ pub async fn slurm_submit(
     script_rel: String,
     host_id: Option<String>,
 ) -> Result<SlurmSubmit, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("slurm", move || {
         let host = host_id.as_deref().unwrap_or(PRIMARY_HOST);
         let (dir, base) = split_script_rel(&script_rel);
         if base.is_empty() {
@@ -300,7 +292,7 @@ pub async fn slurm_queue(
     project_dir: String,
     host_id: Option<String>,
 ) -> Result<Vec<SlurmJob>, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("slurm", move || {
         let host = host_id.as_deref().unwrap_or(PRIMARY_HOST);
         let fmt = "%i|%j|%T|%M|%D|%R";
         let script = format!(
@@ -332,7 +324,7 @@ pub async fn slurm_job_out(
     host_id: Option<String>,
     log_dir: Option<String>,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("slurm", move || {
         let host = host_id.as_deref().unwrap_or(PRIMARY_HOST);
         if job_id.is_empty() || !job_id.bytes().all(|b| b.is_ascii_digit()) {
             return Err(format!("invalid job id '{job_id}'"));
@@ -359,7 +351,7 @@ pub async fn slurm_cancel(
     job_id: String,
     host_id: Option<String>,
 ) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("slurm", move || {
         let host = host_id.as_deref().unwrap_or(PRIMARY_HOST);
         if job_id.is_empty() || !job_id.bytes().all(|b| b.is_ascii_digit()) {
             return Err(format!("invalid job id '{job_id}'"));

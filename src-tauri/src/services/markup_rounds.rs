@@ -83,11 +83,12 @@
 //! owner, which every call after [`begin`] checks.
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -362,19 +363,15 @@ fn rounds_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(ROUNDS_DIR)
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
+use crate::clock::now_secs;
 
 fn new_id() -> Option<String> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).ok()?;
-    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Some(crate::digest::hex(&bytes))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
+use crate::digest::sha256_hex;
 
 /// The digest of the regular file at `path`, never through a symlink;
 /// `None` when it is absent, a link or unreadable.
@@ -1286,7 +1283,7 @@ pub struct PdfBefore<'a> {
 /// there is no undo (the round then runs as `list`). `pdf`: a project-file PDF
 /// source, kept as `before.pdf` when at most [`MAX_PDF_BYTES`].
 pub fn begin(state_dir: &Path, root: &Path, owner: Owner, pdf: Option<PdfBefore>) -> Result<String, NoUndo> {
-    let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = LOCK.lock_ok();
     let _budget = Budget::start();
     let located = locate(root)?;
     // `info/attributes` outranks every switch the snapshot sets.
@@ -1405,7 +1402,7 @@ fn settle_record(dir: &Path, record: &mut Record) -> Result<(), RoundError> {
 /// The after-snapshot, taken each time the round's turn finishes (the last
 /// one wins). A round grown past the bounds loses its undo (`Gone`).
 pub fn settle(state_dir: &Path, id: &str, owner: &Owner) -> Result<(), RoundError> {
-    let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = LOCK.lock_ok();
     let _budget = Budget::start();
     let (dir, mut record) = load(state_dir, id, owner)?;
     settle_record(&dir, &mut record)
@@ -1534,7 +1531,7 @@ fn stage_pdf(dir: &Path, record: &Record) -> Option<Staged> {
 /// What an undo would put back. Settles first when the round has not (an
 /// `unconfirmed` round).
 pub fn preview(state_dir: &Path, id: &str, owner: &Owner) -> Result<Changes, RoundError> {
-    let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = LOCK.lock_ok();
     let _budget = Budget::start();
     let (dir, mut record) = load(state_dir, id, owner)?;
     if record.tree_after.is_none() {
@@ -1557,7 +1554,7 @@ pub fn preview(state_dir: &Path, id: &str, owner: &Owner) -> Result<Changes, Rou
 /// through folders reached without following a link ([`walk`]). Submodules
 /// are never touched.
 pub fn undo(state_dir: &Path, id: &str, owner: &Owner) -> Result<Changes, RoundError> {
-    let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = LOCK.lock_ok();
     let _budget = Budget::start();
     let (dir, mut record) = load(state_dir, id, owner)?;
     let after = record.tree_after.clone().ok_or(RoundError::NotReady)?;
@@ -1756,8 +1753,8 @@ mod tests {
 
     /// Every file under `.git` with its length and mtime — read from the file
     /// itself: on Windows a directory entry's copy of them can lag behind.
-    fn git_dir_state(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
-        fn walk(dir: &Path, out: &mut Vec<(PathBuf, u64, SystemTime)>) {
+    fn git_dir_state(root: &Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, u64, std::time::SystemTime)>) {
             for entry in fs::read_dir(dir).unwrap().flatten() {
                 let meta = fs::metadata(entry.path()).unwrap();
                 if meta.is_dir() {

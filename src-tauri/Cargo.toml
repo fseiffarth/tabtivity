@@ -1,19 +1,44 @@
 [package]
 name = "tabtivity"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
 default-run = "tabtivity"
+# Every integration test is a module of tests/it.rs (one binary, the library
+# linked once), so tests/*.rs are not targets of their own: the [[test]] rows
+# below are the whole list. it.rs fails on a tests/*.rs nothing builds.
+autotests = false
 
 [lib]
 name = "app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# rlib only. Tauri's template adds "staticlib" and "cdylib" for its mobile
+# targets (Android/iOS); there is no mobile build here (src-tauri/gen/ holds
+# only schemas/), and each one re-linked or re-archived the whole library on
+# every rebuild (about 1 GB and 3 GB). For Tauri mobile, put them back:
+# crate-type = ["staticlib", "cdylib", "rlib"].
+crate-type = ["rlib"]
 
 [[bin]]
 name = "tabtivity"
 path = "src/main.rs"
 required-features = ["desktop"]
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+# A binary of its own: it points HOME at a temp home per test, which would
+# move every other test's home in it.rs's shared process.
+[[test]]
+name = "projects_commands"
+path = "tests/projects_commands.rs"
+
+# A binary of its own: CI and AGENTS.md build it for the daemon,
+# `--no-default-features --lib --test server_secrets`.
+[[test]]
+name = "server_secrets"
+path = "tests/server_secrets.rs"
 
 # Switches the app from `devUrl` to the frontend embedded at compile time:
 # tauri's build script sets `dev = !custom_protocol`, and a `dev` build embeds
@@ -194,6 +219,10 @@ psl = "2"
 # are stored under `blobs/<sha256>` with no extension, so a sender-supplied
 # filename never reaches a syscall).
 sha2 = "0.10"
+# MD5 only to name a folder the way a CLI does (Cursor and Kimi file a
+# project's conversations under the MD5 of its path), so an exported
+# conversation can be re-pointed at a moved project. Not a security use.
+md-5 = "0.10"
 
 # ── Mail encryption (see docs/mail_encryption_plan.md) ───────────────────────
 # The whole block obeys the same invariant as the TLS one above: **no OpenSSL,

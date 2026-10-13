@@ -22,11 +22,14 @@ pub use app_core::{
     app_env, app_name, app_repo, app_slug, app_tab_command, app_upper, legacy_name, legacy_slug,
     legacy_upper,
 };
+pub mod clock;
 pub mod commands;
+pub mod digest;
 pub mod duscan;
 pub mod gpustat;
 pub mod paths;
 pub mod platform;
+pub mod quote;
 pub mod schema;
 pub mod services;
 pub mod storage;
@@ -37,6 +40,7 @@ pub mod terminal;
 pub(crate) mod test_util;
 
 use commands::apps::{WindowRegistry, WindowRegistryState};
+use app_core::sync::LockExt;
 use commands::terminal::RegistryState;
 use commands::workspace::{WorkspaceState, WorkspaceStateArc};
 use std::sync::{Arc, Mutex};
@@ -113,11 +117,7 @@ fn append_to_log(path: &std::path::Path, msg: &str) {
 
 /// Human-readable ISO 8601 UTC timestamp with no external dependencies.
 pub(crate) fn iso_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let secs = clock::now_secs();
     let (y, mo, d, h, mi, s) = storage::epoch_to_utc(secs);
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
 }
@@ -1066,7 +1066,7 @@ fn restore_main_window(app: &tauri::App) {
     #[cfg(not(target_os = "macos"))]
     let _ = win.set_fullscreen(false);
 
-    let saved = storage::read_json::<schema::Settings>(&storage::state_dir().join("settings.json"))
+    let saved = storage::read_json::<schema::Settings>(&storage::settings_path())
         .ok()
         .and_then(|s| s.window_state);
     let monitors: Vec<services::window_state::MonitorRect> = win
@@ -1432,7 +1432,7 @@ pub fn run() {
             {
                 use tauri::{Emitter, Manager};
                 let handle = _app.handle().clone();
-                _app.state::<WindowRegistryState>().lock().unwrap().notify =
+                _app.state::<WindowRegistryState>().lock_ok().notify =
                     Some(Arc::new(move |project_id: Option<String>| {
                         let _ = handle.emit(
                             "app-windows-changed",
@@ -1458,7 +1458,7 @@ pub fn run() {
                 let workspace = _app.state::<WorkspaceStateArc>().inner().clone();
                 std::thread::spawn(move || {
                     if let Some(id) = platform::x11::find_window_for_title(crate::brand::DISPLAY, 30) {
-                        workspace.lock().unwrap().backend.set_main_window_id(id);
+                        workspace.lock_ok().backend.set_main_window_id(id);
                     }
                 });
             }
@@ -1472,7 +1472,7 @@ pub fn run() {
                 let workspace = _app.state::<WorkspaceStateArc>().inner().clone();
                 if let Some(hwnd) = _app.get_webview_window("main").and_then(|w| w.hwnd().ok()) {
                     let id = hwnd.0 as usize as u64;
-                    workspace.lock().unwrap().backend.set_main_window_id(id);
+                    workspace.lock_ok().backend.set_main_window_id(id);
                     // Add the WS_MAXIMIZEBOX/WS_THICKFRAME styles a borderless wry
                     // window lacks, so dragging the header against a screen edge
                     // triggers the native Aero Snap (top → maximize, sides → half).
@@ -1491,7 +1491,7 @@ pub fn run() {
                     .and_then(|w| w.ns_window().ok())
                     .and_then(platform::macos::ns_window_id)
                 {
-                    workspace.lock().unwrap().backend.set_main_window_id(id);
+                    workspace.lock_ok().backend.set_main_window_id(id);
                 }
             }
             // #240: watch for the display arrangement changing and re-fit every
@@ -1673,6 +1673,8 @@ pub fn run() {
             commands::mobile_control::global_inbox_open,
             commands::mobile_control::global_inbox_reveal,
             commands::mobile_control::global_inbox_delete,
+            commands::mobile_control::phone_uploads_list,
+            commands::mobile_control::phone_upload_undo,
             commands::default_apps::get_default_apps,
             commands::default_apps::save_default_apps,
             commands::default_apps::patch_default_apps,
@@ -1789,6 +1791,7 @@ pub fn run() {
             commands::projects::clear_archive,
             // Full project export / import (docs/context/project_transfer.md)
             commands::project_transfer::preview_project_export,
+            commands::project_transfer::preview_host_export,
             commands::project_transfer::export_project,
             commands::project_transfer::inspect_project_export,
             commands::project_transfer::import_project_export,
@@ -2521,12 +2524,12 @@ pub fn run() {
                         // A Wayland scope-out retire is an intended close whose
                         // record stays for the respawn: released, not reported.
                         let (wid, report) = commands::subwindow::on_detached_destroyed(
-                            &mut reg.lock().unwrap(),
+                            &mut reg.lock_ok(),
                             label,
                         );
                         if let Some(wid) = wid {
                             let ws = _app.state::<commands::workspace::WorkspaceStateArc>();
-                            ws.lock().unwrap().backend.unset_parkable(wid);
+                            ws.lock_ok().backend.unset_parkable(wid);
                         }
                         // Group B #224: tell the frontend a popout died. A
                         // legitimate teardown drops the store record BEFORE the
@@ -2575,7 +2578,7 @@ pub fn run() {
                 // tab's in-container process is TERMed via its still-live
                 // container. Dropping the registry alone would kill only the
                 // shell leaders and orphan everything they spawned.
-                _app.state::<RegistryState>().lock().unwrap().kill_all();
+                _app.state::<RegistryState>().lock_ok().kill_all();
                 // The local tmux servers those PTYs were clients of survive the
                 // clients by design (that is what makes a crash resumable), so a
                 // clean quit ends Tabtivity's own sessions explicitly. The window's

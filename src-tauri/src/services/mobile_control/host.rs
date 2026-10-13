@@ -2,9 +2,10 @@ use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use app_core::sync::LockExt;
 
 use axum::{
     body::{Body, Bytes},
@@ -12,13 +13,14 @@ use axum::{
     http::{header, HeaderMap, HeaderValue, Request, Response, StatusCode, Uri},
     middleware::{self, Next},
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::commands::projects::PhoneProjectRefusal;
 use crate::services::desktop_images;
 use crate::services::markup_rounds;
 use crate::terminal::PtyOptions;
@@ -46,6 +48,7 @@ use super::{
     },
     pty_bridge::{self, TerminalRegistry},
     scheduler,
+    uploads,
     push::{AgentTabRef, PushPrefs},
     sign_in,
     web_client, MOBILE_ASSETS,
@@ -109,12 +112,17 @@ struct HostState {
 /// `tmux_local::spawn_detached_with` on the default tmux server — the same
 /// launch assembly and the same server the window uses, so the window later
 /// attaches to what the sidecar started — and the registry's install probe.
-/// A test swaps in a recorder.
+/// `new_project` makes a phone's new project
+/// (`projects::create_project_for_phone`) from its name and the asking
+/// phone's device id. A test swaps in a recorder.
 #[derive(Clone)]
 struct HeadlessSpawner {
     launch: headless::HeadlessLaunch,
     installed: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    new_project: NewProject,
 }
+
+type NewProject = Arc<dyn Fn(&str, &str) -> Result<String, PhoneProjectRefusal> + Send + Sync>;
 
 impl Default for HeadlessSpawner {
     fn default() -> Self {
@@ -136,6 +144,7 @@ impl Default for HeadlessSpawner {
                 })
             }),
             installed: Arc::new(crate::commands::agents::binary_is_installed),
+            new_project: Arc::new(crate::commands::projects::create_project_for_phone),
         }
     }
 }
@@ -309,8 +318,7 @@ fn authenticate(
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
     state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         // Every authenticated request slides the session (`auth::SESSION_IDLE`).
         .touch(token)
         .map(Phone)
@@ -328,8 +336,7 @@ fn section_guard(
     let phone = authenticate(headers, state)?;
     if state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .hides(phone.device_id(), section)
     {
         return Err(api_error(StatusCode::FORBIDDEN, "section_hidden"));
@@ -359,8 +366,7 @@ fn open_alerts(hidden: &[String], mut alerts: super::protocol::MobileAlertsSnaps
 fn hidden_sections(state: &HostState, phone: &Phone) -> Vec<String> {
     state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .hidden_sections(phone.device_id())
 }
 
@@ -400,8 +406,7 @@ fn authenticate_or_ticket(
     match ticket {
         Some(ticket) => state
             .auth
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_ok()
             .redeem_ticket(ticket, &ticket_target(uri))
             .map(Phone)
             .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required")),
@@ -429,7 +434,7 @@ async fn open_ticket(
         _ => return api_error(StatusCode::BAD_REQUEST, "invalid_url"),
     };
     let target = ticket_target(&uri);
-    match state.auth.lock().unwrap_or_else(PoisonError::into_inner).open_ticket(token, &target) {
+    match state.auth.lock_ok().open_ticket(token, &target) {
         Ok(ticket) => {
             let joiner = if target.contains('?') { '&' } else { '?' };
             (StatusCode::OK, Json(json!({ "url": format!("{target}{joiner}ticket={ticket}") })))
@@ -465,12 +470,11 @@ fn catalog(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCode, Jso
 /// request: only the agent-notice lookup (`agent_tab_ref`), which carries the
 /// scope's list on to the push filter.
 fn catalog_unfiltered(state: &HostState) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     off_worker(|| {
         state
             .catalog
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_ok()
             .load(&state.config.state_dir, &key)
     })
     .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable"))
@@ -479,12 +483,11 @@ fn catalog_unfiltered(state: &HostState) -> Result<Catalog, (StatusCode, Json<se
 /// The create-tab poll is waiting for a tab the desktop has just been asked to
 /// open, so by definition it is not in the cached snapshot yet.
 fn catalog_fresh(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     off_worker(|| {
         state
             .catalog
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_ok()
             .load_fresh(&state.config.state_dir, &key)
     })
     .map(|catalog| catalog.for_device(phone.device_id()))
@@ -494,7 +497,7 @@ fn catalog_fresh(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCod
 /// The host key the desktop mints its opaque ids with — the same
 /// `mobile-control/host.key` — so an id minted here resolves there.
 fn host_key(state: &HostState) -> Vec<u8> {
-    state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec()
+    state.auth.lock_ok().host_key().to_vec()
 }
 
 /// Whether a desktop answer means no window is open: the persisted-state
@@ -514,13 +517,7 @@ fn scope_session_file(state: &HostState, raw_id: &str) -> PathBuf {
     headless::session_file(&state.config.state_dir, raw_id)
 }
 
-/// Milliseconds since the epoch, the desktop's close stamp.
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+use crate::clock::now_ms;
 
 /// A tab edit applied to the session file because no window was open to
 /// apply it to a store (headless owner plan, H3): the catalog is re-read so
@@ -581,7 +578,7 @@ fn poke_window(state: &HostState, raw_id: Option<&str>, slices: &[&str]) {
 fn poke_desktop(control_dir: &std::path::Path, raw_id: Option<&str>, slices: &[&str]) {
     let socket = control_dir.join("desktop-control.sock");
     let request = DesktopRequest::Refresh {
-        request_id: Base64UrlUnpadded::encode_string(&random_16()),
+        request_id: new_request_id(),
         project_id: raw_id.map(str::to_string),
         slices: slices.iter().map(|s| s.to_string()).collect(),
     };
@@ -594,12 +591,12 @@ fn poke_desktop(control_dir: &std::path::Path, raw_id: Option<&str>, slices: &[&
 /// project for `READING_TTL`; the probe runs off the async thread.
 async fn headless_git_dot(state: &HostState, raw_id: &str, root: &std::path::Path) -> Option<&'static str> {
     let now = Instant::now();
-    if let Some(dot) = state.readings.lock().unwrap_or_else(PoisonError::into_inner).git(raw_id, now) {
+    if let Some(dot) = state.readings.lock_ok().git(raw_id, now) {
         return dot;
     }
     let dir = root.to_path_buf();
     let dot = tokio::task::spawn_blocking(move || headless::git_dot_for(&dir)).await.ok().flatten();
-    state.readings.lock().unwrap_or_else(PoisonError::into_inner).set_git(raw_id, dot, Instant::now());
+    state.readings.lock_ok().set_git(raw_id, dot, Instant::now());
     dot
 }
 
@@ -607,8 +604,7 @@ async fn headless_git_dot(state: &HostState, raw_id: &str, root: &std::path::Pat
 fn headless_readings(state: &HostState, project: &super::discovery::ResolvedProject) -> headless::TurnReadings {
     state
         .readings
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .readings(&state.config.state_dir, project, Instant::now())
 }
 
@@ -622,8 +618,7 @@ fn local_today() -> String {
 fn catalog_stale(state: &HostState) {
     state
         .catalog
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .invalidate();
 }
 
@@ -728,20 +723,19 @@ async fn pair(
         // The provider's sign-in instead of a code: this daemon checks the
         // token itself (signature, issuer, audience, its own binding, the
         // nonce bound to this very key) before the store registers it.
-        let control_dir = state.auth.lock().unwrap_or_else(PoisonError::into_inner).control_dir().to_path_buf();
+        let control_dir = state.auth.lock_ok().control_dir().to_path_buf();
         if let Err(reason) = crate::services::server::oidc::check(&control_dir, token, &body.public_key).await {
             eprintln!("pair: identity provider sign-in refused: {reason}");
             return api_error(StatusCode::BAD_REQUEST, "invalid_oidc");
         }
-        return match state.auth.lock().unwrap_or_else(PoisonError::into_inner).pair_verified(&body.device_name, &body.public_key) {
+        return match state.auth.lock_ok().pair_verified(&body.device_name, &body.public_key) {
             Ok(device_id) => (StatusCode::CREATED, Json(json!({ "device_id": device_id }))),
             Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
         };
     }
     match state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .pair(&body.code, &body.device_name, &body.public_key)
     {
         Ok(device_id) => (StatusCode::CREATED, Json(json!({ "device_id": device_id }))),
@@ -757,7 +751,7 @@ async fn challenge(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    match state.auth.lock().unwrap_or_else(PoisonError::into_inner).challenge(&body.device_id) {
+    match state.auth.lock_ok().challenge(&body.device_id) {
         Ok((nonce, payload, expires_at)) => (
             StatusCode::OK,
             Json(json!({ "nonce": nonce, "payload": payload, "expires_at": expires_at })),
@@ -776,8 +770,7 @@ async fn login(
     }
     match state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .login(&body.device_id, &body.nonce, &body.signature)
     {
         Ok((token, expires_at)) => {
@@ -798,7 +791,7 @@ async fn logout(State(state): State<HostState>, headers: HeaderMap) -> Response<
         return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
     }
     if let Some(token) = cookie_token(&headers) {
-        state.auth.lock().unwrap_or_else(PoisonError::into_inner).logout(token);
+        state.auth.lock_ok().logout(token);
     }
     let mut response = Json(json!({ "ok": true })).into_response();
     response.headers_mut().insert(
@@ -900,7 +893,7 @@ async fn projects(
     // project is listed; a closed or older desktop leaves every row without one.
     let git = if listed.iter().any(|p| p.public.kind == ScopeKind::Project) {
         let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        let request_id = new_request_id();
         match admin::desktop_call(&desktop_socket, &DesktopRequest::GitStates { request_id }).await {
             Ok(DesktopResponse::GitStates { states }) => states
                 .into_iter()
@@ -980,7 +973,7 @@ async fn activity_readings(
     catalog_snapshot: &Catalog,
 ) -> (bool, Vec<super::protocol::AgentTabStatus>, Vec<super::protocol::AgentTabPrompts>) {
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     match admin::desktop_call(&desktop_socket, &DesktopRequest::Activity { request_id }).await {
         Ok(DesktopResponse::Activity { statuses, prompts }) => (true, statuses, prompts),
         response if desktop_down(&response) => {
@@ -1052,6 +1045,56 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
     )
 }
 
+/// What a phone sends to make a new project: its name, nothing else.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewProjectBody {
+    name: String,
+}
+
+/// `POST /api/v1/projects` — a new, empty project from the phone, always a
+/// folder in the projects folder and open to this phone alone
+/// (`projects::create_project_for_phone`). No import, and no path crosses:
+/// the phone sends a name and gets the new row back. It works with the window
+/// closed (the registry is a file the owner writes); an open window is told
+/// to re-read it.
+async fn new_project(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(request) = serde_json::from_slice::<NewProjectBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let create = state.spawner.new_project.clone();
+    let device = phone.device_id().to_string();
+    let raw_id = match off_worker(move || create(&request.name, &device)) {
+        Ok(raw_id) => raw_id,
+        Err(refusal) => {
+            if let PhoneProjectRefusal::Failed(why) | PhoneProjectRefusal::Unavailable(why) = &refusal {
+                eprintln!("mobile: a phone's new project was not created ({}): {why}", refusal.code());
+            }
+            let status = match refusal {
+                PhoneProjectRefusal::InvalidName => StatusCode::BAD_REQUEST,
+                PhoneProjectRefusal::Exists => StatusCode::CONFLICT,
+                PhoneProjectRefusal::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+                PhoneProjectRefusal::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            return api_error(status, refusal.code());
+        }
+    };
+    poke_window(&state, None, &["projects"]);
+    for _ in 0..8 {
+        if let Ok(next) = catalog_fresh(&state, &phone) {
+            if let Some(project) = next.projects.iter().find(|p| p.raw_id == raw_id) {
+                return (StatusCode::CREATED, Json(json!({ "project": project.public })));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(125)).await;
+    }
+    api_error(StatusCode::GATEWAY_TIMEOUT, "project_pending")
+}
+
 async fn project(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -1082,7 +1125,7 @@ async fn project(
     // phone was told the desktop was there for as long as it stayed closed —
     // and on Windows the nominal path is never a file, so it was never told.
     // A closed desktop refuses the connect at once, on both.
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let (desktop_available, agents, statuses, schedules, prompts, timings, closed, git) = match admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Catalog {
@@ -1264,10 +1307,15 @@ fn prompt_rows(rows: Vec<super::protocol::AgentTabPrompts>) -> HashMap<String, V
         .collect()
 }
 
-fn random_16() -> [u8; 16] {
-    let mut bytes = [0; 16];
-    let _ = getrandom::fill(&mut bytes);
-    bytes
+/// A fresh id for one desktop round trip — the key the window files the
+/// pending answer under, so two requests must never share one. When the OS RNG
+/// fails it is empty, and [`admin::desktop_call`] refuses an empty id with an
+/// error answer instead of sending it: the request fails, and never takes
+/// another request's reply (as the all-zero id it used to fall back to did).
+fn new_request_id() -> String {
+    super::auth::random_bytes::<16>()
+        .map(|bytes| Base64UrlUnpadded::encode_string(&bytes))
+        .unwrap_or_default()
 }
 
 async fn create_tab(
@@ -1311,7 +1359,7 @@ async fn create_tab(
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     request.project_id = project.raw_id.clone();
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(&desktop_socket, &DesktopRequest::Create { request_id, request: request.clone() }).await;
     if desktop_down(&response) {
@@ -1399,7 +1447,7 @@ async fn create_through_desktop(
     project_id: &str,
     request: CreateTabRequest,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     created_through_desktop(state, phone, project_id, &DesktopRequest::Create { request_id, request }).await
 }
 
@@ -1492,7 +1540,7 @@ async fn reopen_tab(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -1597,16 +1645,14 @@ async fn worktree_spots_for(
     }
     let cached = state
         .worktree_spots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .get(&project.raw_id, Instant::now());
     if let Some(spots) = cached {
         let unplaced: Vec<&str> = elsewhere.iter().copied().filter(|cwd| git_overview::unplaced(&spots, cwd)).collect();
         let retry = !unplaced.is_empty()
             && state
                 .worktree_spots
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                .lock_ok()
                 .first_miss(&project.raw_id, &unplaced);
         if !retry {
             return Some(spots);
@@ -1618,8 +1664,7 @@ async fn worktree_spots_for(
         .unwrap_or_default();
     state
         .worktree_spots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .set(&project.raw_id, spots.clone(), Instant::now());
     Some(spots)
 }
@@ -1650,8 +1695,7 @@ async fn project_git(
     let raw_id = project.raw_id.clone();
     if let Some(cached) = state
         .git_overview
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .get(&raw_id, Instant::now())
     {
         return (StatusCode::OK, Json(json!(cached)));
@@ -1664,8 +1708,7 @@ async fn project_git(
     };
     state
         .git_overview
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .set(&raw_id, overview.clone(), Instant::now());
     (StatusCode::OK, Json(json!(overview)))
 }
@@ -1689,7 +1732,7 @@ async fn launch_options(
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::LaunchOptions {
@@ -1749,7 +1792,7 @@ async fn activate_project(
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Activate {
@@ -1799,7 +1842,7 @@ async fn todo(State(state): State<HostState>, headers: HeaderMap) -> impl IntoRe
         return error;
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(&desktop_socket, &DesktopRequest::Todo { request_id }).await;
     if desktop_down(&response) {
         let key = host_key(&state);
@@ -1834,7 +1877,7 @@ async fn alerts(State(state): State<HostState>, headers: HeaderMap) -> impl Into
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     match admin::desktop_call(&desktop_socket, &DesktopRequest::Alerts { request_id }).await {
         Ok(DesktopResponse::Alerts { alerts }) => {
             let alerts = open_alerts(&hidden_sections(&state, &phone), alerts);
@@ -1881,7 +1924,7 @@ async fn alerts_resolve(
     // kind looked up first: a ✓ on a row it was never shown is refused.
     let hidden = hidden_sections(&state, &phone);
     if !hidden.is_empty() {
-        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        let request_id = new_request_id();
         match admin::desktop_call(&desktop_socket, &DesktopRequest::Alerts { request_id }).await {
             Ok(DesktopResponse::Alerts { alerts }) => {
                 if !open_alerts(&hidden, alerts)
@@ -1895,7 +1938,7 @@ async fn alerts_resolve(
             _ => return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
         }
     }
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     match admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::AlertResolve {
@@ -1931,7 +1974,7 @@ async fn alerts_resolve(
 /// of leaving notices off. A phone bundle that predates the field reads
 /// `subscribed: false` and behaves as it always did.
 fn push_state(state: &HostState, device_id: &str) -> (StatusCode, Json<serde_json::Value>) {
-    let auth = state.auth.lock().unwrap_or_else(PoisonError::into_inner);
+    let auth = state.auth.lock_ok();
     let push = auth.push();
     let subscription = push.subscription(device_id);
     (
@@ -1975,8 +2018,7 @@ async fn push_put(
     };
     let stored = state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .push_subscribe(&device_id, &request.endpoint, &request.p256dh, &request.auth, request.prefs);
     if stored.is_err() {
         return api_error(StatusCode::BAD_REQUEST, "invalid_push_subscription");
@@ -2013,7 +2055,7 @@ async fn secrets_state(State(state): State<HostState>, headers: HeaderMap) -> im
     let Some(vault) = crate::services::server::vault::vault() else {
         return (StatusCode::OK, Json(json!({ "available": false })));
     };
-    let enrolled = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys().iter().any(|k| k.id == device_id);
+    let enrolled = state.auth.lock_ok().secrets_device_keys().iter().any(|k| k.id == device_id);
     let status = vault.status();
     // The identity a device compares with the one it pinned: a mismatch is
     // the cue to re-pin with the recovery code, never to trust it silently.
@@ -2056,7 +2098,7 @@ async fn secrets_challenge(State(state): State<HostState>, headers: HeaderMap, b
     let Ok(request) = serde_json::from_slice::<SecretsChallengeBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    match state.auth.lock().unwrap_or_else(PoisonError::into_inner).action_challenge(&device_id, &request.action) {
+    match state.auth.lock_ok().action_challenge(&device_id, &request.action) {
         Ok((nonce, expires_at)) => (StatusCode::OK, Json(json!({ "nonce": nonce, "expiresAt": expires_at }))),
         Err(code) if code == "rate_limited" => api_error(StatusCode::TOO_MANY_REQUESTS, &code),
         Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
@@ -2081,8 +2123,7 @@ fn check_signed_action(state: &HostState, device_id: &str, action: &str, body: &
     };
     state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .verify_action(device_id, action, &nonce, &signature)
         .map_err(|code| api_error(StatusCode::FORBIDDEN, &code))
 }
@@ -2124,7 +2165,7 @@ async fn secrets_enrol(State(state): State<HostState>, headers: HeaderMap, body:
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let keys = {
-        let mut auth = state.auth.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut auth = state.auth.lock_ok();
         if let Err(code) = auth.enrol_secrets_key(&device_id, &request.ecdh_public_key, &request.signature) {
             return api_error(StatusCode::BAD_REQUEST, &code);
         }
@@ -2164,7 +2205,7 @@ async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap, body:
     if let Err(error) = check_signed_action(&state, &device_id, "secrets-setup", &body) {
         return error.into_response();
     }
-    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    let keys = state.auth.lock_ok().secrets_device_keys();
     match vault.set_up(&keys) {
         Ok(code) => {
             eprintln!("secrets: key set up from device {device_id} ({} device wraps)", keys.len());
@@ -2216,7 +2257,7 @@ async fn secrets_recover(State(state): State<HostState>, headers: HeaderMap, bod
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let code = zeroize::Zeroizing::new(request.code);
-    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    let keys = state.auth.lock_ok().secrets_device_keys();
     match vault.recover(&code, &keys) {
         Ok(()) => (StatusCode::OK, Json(json!({ "state": "unlocked" }))),
         Err(_) => api_error(StatusCode::BAD_REQUEST, "invalid_recovery_code"),
@@ -2254,7 +2295,7 @@ async fn secrets_unlock_finish(State(state): State<HostState>, headers: HeaderMa
     let Ok(request) = serde_json::from_slice::<SecretsFinishBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    let keys = state.auth.lock_ok().secrets_device_keys();
     // The ECDH and the wrap are a few microseconds; the listeners (mail
     // reopening) run on their own threads.
     match vault.finish_unlock(&device_id, &request.id, &request.transport, &request.nonce, &request.sealed, &keys) {
@@ -2273,8 +2314,7 @@ async fn push_delete(State(state): State<HostState>, headers: HeaderMap) -> impl
     }
     if state
         .auth
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .lock_ok()
         .push_unsubscribe(&device_id)
         .is_err()
     {
@@ -2332,7 +2372,7 @@ async fn calendar(
         return api_error(StatusCode::BAD_REQUEST, "invalid_month");
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Calendar { request_id, month: month.clone() },
@@ -2426,7 +2466,7 @@ async fn calendar_mutate(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::CalendarMutate {
@@ -2516,7 +2556,7 @@ async fn todo_mutate(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::TodoMutate { request_id, action: action.clone() },
@@ -2668,7 +2708,7 @@ async fn local_models_list(State(state): State<HostState>, headers: HeaderMap) -
     if local_models_closed(&state, &headers) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     local_models_response(local_models_call(&state, DesktopRequest::LocalModels { request_id }).await, StatusCode::OK)
 }
 
@@ -2699,7 +2739,7 @@ async fn local_models_mutate(
         LocalModelAction::Unload { .. } => StatusCode::OK,
         LocalModelAction::Load { .. } | LocalModelAction::Start => StatusCode::ACCEPTED,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     local_models_response(local_models_call(&state, DesktopRequest::LocalModelMutate { request_id, action }).await, ok)
 }
 
@@ -2711,7 +2751,7 @@ async fn mail_overview(State(state): State<HostState>, headers: HeaderMap) -> im
         return error;
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2735,7 +2775,7 @@ async fn mail_folder(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2763,7 +2803,7 @@ async fn mail_message(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2802,7 +2842,7 @@ async fn mail_mark(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2843,7 +2883,7 @@ async fn mail_reply(
         return api_error(StatusCode::PAYLOAD_TOO_LARGE, "reply_too_long");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     mail_response(
         admin::desktop_call(
             &desktop_socket,
@@ -2926,7 +2966,7 @@ async fn rename_tab(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::RenameTab {
@@ -3009,7 +3049,7 @@ async fn color_tab(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::ColorTab {
@@ -3087,7 +3127,7 @@ async fn sent_prompt(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::TabPrompt {
@@ -3225,7 +3265,7 @@ async fn hold_prompt(
         Ok(target) => target,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let state_dir = state.config.state_dir.clone();
     let (status, body) = held_call(
         &state,
@@ -3269,7 +3309,7 @@ async fn edit_held_prompt(
         Ok(target) => target,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let state_dir = state.config.state_dir.clone();
     held_call(
         &state,
@@ -3428,7 +3468,7 @@ async fn order_tab(
         return api_error(StatusCode::BAD_REQUEST, "tab_scope_mismatch");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let after = matches!(request.place, TabPlace::After);
     let response = admin::desktop_call(
         &desktop_socket,
@@ -3511,7 +3551,7 @@ async fn close_tab(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::CloseTab {
@@ -3658,7 +3698,7 @@ async fn schedules(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Schedules {
@@ -3724,7 +3764,7 @@ async fn agent_status(
     };
     let refresh = matches!(query.refresh.as_deref(), Some("1" | "true"));
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::AgentStatus {
@@ -3803,7 +3843,7 @@ async fn agent_transcript(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::AgentTranscript {
@@ -3902,7 +3942,7 @@ async fn schedule_mutation(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::ScheduleMutate {
@@ -4067,7 +4107,7 @@ async fn prompts(
         Ok(raw) => raw,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -4116,7 +4156,7 @@ async fn prompt_mutation(
         Ok(raw) => raw,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -4307,7 +4347,7 @@ async fn undo_clear(
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::UndoClear {
@@ -4390,7 +4430,7 @@ fn mark_tab_seen(state: &HostState, project_id: Option<String>, tmux_session: St
         // No `exists()` pre-check: a closed desktop refuses the connect at
         // once, and on Windows the nominal socket path is never a file, so the
         // check silently dropped every report there.
-        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        let request_id = new_request_id();
         let _ = admin::desktop_call(
             &socket,
             &DesktopRequest::TabSeen {
@@ -4413,7 +4453,7 @@ fn mark_tab_input(socket: &std::path::Path, project_id: Option<String>, tmux_ses
     };
     let socket = socket.to_path_buf();
     tokio::spawn(async move {
-        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        let request_id = new_request_id();
         let _ = admin::desktop_call(
             &socket,
             &DesktopRequest::TabInput {
@@ -4694,7 +4734,7 @@ async fn desktop_images(
         Ok(raw) => raw,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -4748,7 +4788,7 @@ async fn attach_desktop_image(
         Ok(raw) => raw,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
@@ -4896,7 +4936,7 @@ fn row_seal(state: &HostState, project: &super::discovery::ResolvedProject) -> O
     if project.public.kind != ScopeKind::Project || !files::files_open(&state.config.state_dir) {
         return None;
     }
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     Some((project.raw_id.clone(), key))
 }
 
@@ -5627,7 +5667,7 @@ async fn markup_questions(
         Err(error) => return error,
     };
     let banner = path.is_none();
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let request = DesktopRequest::MarkupQuestions { request_id, project_id: project_id.clone(), tmux_session: tab.tmux_name.clone(), path };
     match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::MarkupQuestions { asks, ticks }) => {
@@ -5673,7 +5713,7 @@ async fn markup_banner_files(state: &HostState, phone: &Phone, tab_id: &str, raw
     }
     let root = project.root.clone();
     let raw_id = raw_id.to_string();
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     tokio::task::spawn_blocking(move || {
         paths
             .into_iter()
@@ -5696,7 +5736,8 @@ fn file_row(root: &std::path::Path, rel: &str, key: &[u8], raw_id: &str) -> Opti
     }
     let entry = files::entry(root, rel, key, raw_id)?;
     let place = rel.rsplit_once('/').map(|(parent, _)| parent.to_string()).unwrap_or_default();
-    let folder = (!place.is_empty()).then(|| files::seal(key, raw_id, &place));
+    // No randomness for the folder token: left out, like the entry itself.
+    let folder = if place.is_empty() { None } else { Some(files::seal(key, raw_id, &place).ok()?) };
     Some(MobileMarkupFile {
         token: entry.token,
         name: entry.name,
@@ -5756,7 +5797,7 @@ async fn markup_answer(
         Ok(target) => target,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let request = DesktopRequest::MarkupAnswer {
         request_id,
         project_id,
@@ -5802,7 +5843,7 @@ async fn markup_dismiss(
         Ok(target) => target,
         Err(error) => return error,
     };
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request_id = new_request_id();
     let request = DesktopRequest::MarkupDismiss { request_id, project_id, tmux_session: tab.tmux_name.clone(), ask_id: request.ask_id };
     match markup_call(&state, request, &tab).await {
         Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "dismissed": true }))),
@@ -5854,13 +5895,15 @@ fn files_rel(
     let Some(token) = token else {
         return Ok(String::new());
     };
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     files::unseal(&key, raw_id, token).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "file_not_found"))
 }
 
 /// `GET /api/v1/projects/{project_id}/files[?dir=<token>]` — one folder of the
 /// project, read-only: sealed tokens, leaf names, kind, size, mtime. No `dir`
-/// is the project root. No path appears in the answer.
+/// is the project root. No path appears in the answer. `uploads` says whether
+/// **Upload here** may write into this folder (`project_files_upload`): the
+/// switch is on and no segment of the folder starts with a dot.
 async fn project_files_list(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -5879,13 +5922,18 @@ async fn project_files_list(
         Ok(rel) => rel,
         Err(error) => return error,
     };
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
+    let accepts = uploads::accepts(&rel);
     // A directory walk that opens every kept file to type it: off the executor.
     let listed = tokio::task::spawn_blocking(move || files::list(&root, &rel, &key, &raw_id))
         .await
         .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
     match listed {
-        Ok(listing) => (StatusCode::OK, Json(json!(listing))),
+        Ok(listing) => {
+            let mut answer = json!(listing);
+            answer["uploads"] = json!(accepts && uploads::uploads_open(&state.config.state_dir));
+            (StatusCode::OK, Json(answer))
+        }
         Err(error) => files_error(error),
     }
 }
@@ -5912,7 +5960,7 @@ async fn project_files_search(
     if q.len() > files::MAX_QUERY {
         return api_error(StatusCode::BAD_REQUEST, "query_too_long");
     }
-    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let key = state.auth.lock_ok().host_key().to_vec();
     // A git listing or a walk of the whole tree: off the executor.
     let found = tokio::task::spawn_blocking(move || files::search(&root, &q, &key, &raw_id))
         .await
@@ -5925,7 +5973,8 @@ async fn project_files_search(
 
 /// `GET /api/v1/projects/{project_id}/files/raw?f=<token>[&download=1]` — one
 /// file's bytes, typed by its head as the outbox types them (active formats are
-/// inert text), for the same viewer. Read-only: there is no write route.
+/// inert text), for the same viewer. Read-only; the browser's one write is
+/// `project_files_upload`, which only adds new files.
 async fn project_files_raw(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -5971,6 +6020,130 @@ async fn project_files_raw(
                 api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response()
             }),
         Err(error) => files_error(error).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    /// The folder's sealed token from its listing; none is the project root.
+    #[serde(default)]
+    dir: Option<String>,
+    /// The phone's file name — a query parameter for the reason `InboxQuery`
+    /// gives.
+    #[serde(default)]
+    name: String,
+}
+
+/// An upload's refusal as the phone's status (`uploads::UploadError::code`).
+fn upload_error(error: uploads::UploadError) -> (StatusCode, Json<serde_json::Value>) {
+    api_error(
+        match error {
+            uploads::UploadError::Off | uploads::UploadError::NotFound => StatusCode::NOT_FOUND,
+            uploads::UploadError::Refused => StatusCode::FORBIDDEN,
+            uploads::UploadError::Empty => StatusCode::BAD_REQUEST,
+            uploads::UploadError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            uploads::UploadError::Full => StatusCode::INSUFFICIENT_STORAGE,
+            uploads::UploadError::Unavailable => StatusCode::CONFLICT,
+            uploads::UploadError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        },
+        error.code(),
+    )
+}
+
+/// The project a file-browser write names, after the guards every write
+/// shares: a session, the exact origin, the browser's scope (`files_off`,
+/// a phone outside the project's list reads `project_not_found`), and the
+/// upload switch (`uploads_off`), read per request.
+fn upload_scope(
+    state: &HostState,
+    headers: &HeaderMap,
+    project_id: &str,
+) -> Result<(Phone, PathBuf, String), (StatusCode, Json<serde_json::Value>)> {
+    let phone = authenticate(headers, state)?;
+    if !exact_origin(headers, state) {
+        return Err(api_error(StatusCode::FORBIDDEN, "invalid_origin"));
+    }
+    let (root, raw_id) = files_scope(state, &phone, project_id)?;
+    if !uploads::uploads_open(&state.config.state_dir) {
+        return Err(upload_error(uploads::UploadError::Off));
+    }
+    Ok((phone, root, raw_id))
+}
+
+/// `POST /api/v1/projects/{project_id}/files/upload?name=<leaf>[&dir=<token>]`
+/// — the drawer's **Upload here**: the raw body becomes a new file in the
+/// folder the phone stands in, under the phone's name (a clash takes a
+/// `-2` suffix; nothing is overwritten). Add-only, into an existing folder
+/// with no dot segment, logged for the desktop's notice and both undos
+/// (`uploads.rs`). The answer is the new file's listing row.
+async fn project_files_upload(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<UploadQuery>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let (phone, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let rel_dir = match files_rel(&state, &raw_id, query.dir.as_ref()) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    // The device label for the desktop's notice, and the key the answer's
+    // row is sealed with.
+    let (label, key) = {
+        let auth = state.auth.lock_ok();
+        let label = auth.devices().into_iter().find(|device| device.id == phone.device_id()).map(|device| device.name);
+        (label, auth.host_key().to_vec())
+    };
+    let state_dir = state.config.state_dir.clone();
+    // Up to MAX_INBOX_FILE bytes written and hashed under the sidecar-wide
+    // log lock: off the connection executor.
+    let landed = tokio::task::spawn_blocking(move || {
+        uploads::store(&state_dir, &root, &raw_id, &rel_dir, &query.name, &body, label.as_deref())
+            .map(|landed| files::entry(&root, &landed.rel, &key, &raw_id))
+    })
+    .await
+    .unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string())));
+    match landed {
+        Ok(Some(file)) => (StatusCode::CREATED, Json(json!({ "file": file }))),
+        Ok(None) => upload_error(uploads::UploadError::NotFound),
+        Err(error) => upload_error(error),
+    }
+}
+
+/// `DELETE /api/v1/projects/{project_id}/files/upload?f=<token>` — the landed
+/// row's **Undo**: deletes the file only while the upload log names it and it
+/// is byte-for-byte what the phone sent; anything else is `file_not_found`.
+/// Answers `{ "undone": true }`.
+async fn project_files_upload_undo(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let (_, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let Some(token) = query.get("f") else {
+        return upload_error(uploads::UploadError::NotFound);
+    };
+    let rel = match files_rel(&state, &raw_id, Some(token)) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let state_dir = state.config.state_dir.clone();
+    // Re-hashes the file (up to MAX_INBOX_FILE bytes): off the executor.
+    let undone = tokio::task::spawn_blocking(move || uploads::undo(&state_dir, &root, &raw_id, &rel))
+        .await
+        .unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string())));
+    match undone {
+        // A body, not a 204: the phone's `api()` reads every answer as JSON.
+        Ok(()) => (StatusCode::OK, Json(json!({ "undone": true }))),
+        Err(error) => upload_error(error),
     }
 }
 
@@ -6097,7 +6270,7 @@ fn router(state: HostState) -> Router {
             post(mail_reply),
         )
         .route("/api/v1/activity", get(activity))
-        .route("/api/v1/projects", get(projects))
+        .route("/api/v1/projects", get(projects).post(new_project))
         .route("/api/v1/projects/{project_id}", get(project))
         .route(
             "/api/v1/projects/{project_id}/activate",
@@ -6195,6 +6368,11 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/projects/{project_id}/files", get(project_files_list))
         .route("/api/v1/projects/{project_id}/files/raw", get(project_files_raw))
         .route("/api/v1/projects/{project_id}/files/search", get(project_files_search))
+        .route(
+            "/api/v1/projects/{project_id}/files/upload",
+            delete(project_files_upload_undo)
+                .merge(post(project_files_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
+        )
         .route(
             "/api/v1/projects/{project_id}/outbox",
             get(project_outbox_list).delete(project_outbox_clear),
@@ -6518,7 +6696,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
             loop {
                 interval.tick().await;
                 if let Err(error) = verify_tailscale_serve(&publisher_origin, port) {
-                    *publisher_failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+                    *publisher_failure.lock_ok() = Some(error);
                     let _ = publisher_shutdown.send(true);
                     break;
                 }
@@ -6566,9 +6744,9 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     // (tmux attach clients, mostly — the sessions live on) go with the
     // process, as the window's do at its exit.
     if let Some(registry) = core_ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
-        registry.lock().unwrap_or_else(PoisonError::into_inner).kill_all();
+        registry.lock_ok().kill_all();
     }
-    if let Some(error) = serve_failure.lock().unwrap_or_else(PoisonError::into_inner).take() {
+    if let Some(error) = serve_failure.lock_ok().take() {
         return Err(format!("Tailscale Serve verification failed: {error}"));
     }
     Ok(())
@@ -7339,7 +7517,7 @@ mod tests {
             serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
         )
         .expect("write settings");
-        host.state.spawner = HeadlessSpawner { launch, installed: Arc::new(|_| true) };
+        host.state.spawner = HeadlessSpawner { launch, installed: Arc::new(|_| true), ..HeadlessSpawner::default() };
         host
     }
 
@@ -7362,6 +7540,75 @@ mod tests {
         let (_, _, project_body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), cookie)).await;
         let tab_id = json(&project_body)["tabs"][0]["id"].as_str().expect("tab id").to_string();
         (project_id, tab_id)
+    }
+
+    /// A phone's new project: the route hands only the name and the asking
+    /// phone's device id to the create seam, answers with the new row as this
+    /// phone's catalog lists it (no raw id, no path), and maps each refusal
+    /// to its own code. Cross-origin and unknown fields are refused before
+    /// anything is created.
+    #[tokio::test]
+    async fn a_phone_creates_a_project_by_name_only() {
+        let mut host = Fixture::bare();
+        let asked: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = asked.clone();
+        let state_dir = host.state.config.state_dir.clone();
+        let folder = host.root.join("my-paper");
+        host.state.spawner.new_project = Arc::new(move |name: &str, device: &str| {
+            sink.lock().unwrap().push((name.to_string(), device.to_string()));
+            match name {
+                "taken" => return Err(PhoneProjectRefusal::Exists),
+                "" => return Err(PhoneProjectRefusal::InvalidName),
+                _ => {}
+            }
+            std::fs::create_dir_all(&folder).expect("project folder");
+            std::fs::write(
+                state_dir.join("projects.json"),
+                serde_json::to_vec(&json!([{
+                    "id": "raw-new-project",
+                    "name": name,
+                    "status": "active",
+                    "directory": folder.to_string_lossy(),
+                    concat!(crate::app_slug!(), "_mobile_access"): true,
+                    concat!(crate::app_slug!(), "_mobile_devices"): [device],
+                }]))
+                .expect("projects"),
+            )
+            .expect("write projects");
+            Ok("raw-new-project".to_string())
+        });
+        let (cookie, device) = host.pair_device(&signing_key(61)).await;
+
+        let mut cross = request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "My Paper" })));
+        cross.headers_mut().insert(header::ORIGIN, "https://elsewhere.example".parse().unwrap());
+        let (status, _, _) = host.send(cross).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _, _) = host
+            .send(request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "x", "directory": "/tmp" }))))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "a folder is never the phone's to choose");
+        assert!(asked.lock().unwrap().is_empty(), "nothing reached the create seam");
+
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "My Paper" }))))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        assert_eq!(json(&body)["project"]["label"], "My Paper");
+        assert!(json(&body)["project"]["id"].as_str().is_some_and(|id| !id.is_empty()));
+        assert!(!body.contains("raw-new-project"), "raw project id leaked: {body}");
+        assert!(!body.contains(&host.root.to_string_lossy().to_string()), "path leaked: {body}");
+        assert_eq!(asked.lock().unwrap()[0], ("My Paper".to_string(), device));
+
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "taken" }))))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(json(&body)["error"], "project_exists");
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/projects", &cookie, Some(json!({ "name": "" }))))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json(&body)["error"], "invalid_name");
     }
 
     /// H3 (headless owner plan §3): with no window open, the phone's tab
@@ -8017,6 +8264,7 @@ mod tests {
                 Box::pin(async { Ok(()) })
             }),
             installed: Arc::new(|_| true),
+            ..HeadlessSpawner::default()
         };
         // The switches the gates read: scheduled prompts on (off by default),
         // and what would give a root or reader spawn its tools.
@@ -9874,6 +10122,146 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_here_adds_a_new_file_to_a_plain_folder_and_undoes_only_it() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(38)).await.0;
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+        let base = format!("/api/v1/projects/{project_id}/files");
+        std::fs::create_dir_all(host.root.join("docs")).unwrap();
+        std::fs::create_dir_all(host.root.join(".github")).unwrap();
+        let switches = |files: bool, uploads: bool| {
+            std::fs::write(
+                host.state.config.state_dir.join("settings.json"),
+                json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": files, "project_uploads": uploads } }).to_string(),
+            )
+            .unwrap();
+        };
+        let upload = |query: &str, origin: &str, bytes: &[u8]| {
+            Request::builder()
+                .method("POST")
+                .uri(format!("{base}/upload?{query}"))
+                .header(header::ORIGIN, origin)
+                .header(header::COOKIE, cookie_pair(&cookie))
+                .body(Body::from(bytes.to_vec()))
+                .expect("request")
+        };
+        let undo = |token: &str| request_as("DELETE", &format!("{base}/upload?f={token}"), &cookie, None);
+        let refused = |answer: (StatusCode, HeaderMap, String)| (answer.0, json(&answer.2)["error"].clone());
+
+        // Both switches off, then only the browser on: closed either way.
+        switches(false, true);
+        assert_eq!(refused(host.send(upload("name=a.pdf", ORIGIN, b"pdf")).await), (StatusCode::NOT_FOUND, json!("files_off")));
+        switches(true, false);
+        assert_eq!(refused(host.send(upload("name=a.pdf", ORIGIN, b"pdf")).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
+        let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+        assert_eq!(json(&body)["uploads"], false, "{body}");
+        let tokens: HashMap<String, String> = json(&body)["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .map(|entry| (entry["name"].as_str().unwrap().to_string(), entry["token"].as_str().unwrap().to_string()))
+            .collect();
+        let (docs, github) = (&tokens["docs"], &tokens[".github"]);
+
+        switches(true, true);
+        let (_, _, body) = host.send(get_as(&format!("{base}?dir={docs}"), &cookie)).await;
+        assert_eq!(json(&body)["uploads"], true, "{body}");
+        let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+        assert_eq!(json(&body)["uploads"], true, "the root takes uploads: {body}");
+
+        // Wrong origin: refused before anything is written.
+        let answer = host.send(upload(&format!("dir={docs}&name=notes.pdf"), "https://elsewhere.example", b"pdf")).await;
+        assert_eq!(refused(answer), (StatusCode::FORBIDDEN, json!("invalid_origin")));
+        assert!(!host.root.join("docs").join("notes.pdf").exists());
+
+        // A dot folder is listed but takes nothing; a forged folder is not one.
+        let (_, _, body) = host.send(get_as(&format!("{base}?dir={github}"), &cookie)).await;
+        assert_eq!(json(&body)["uploads"], false, "{body}");
+        let answer = host.send(upload(&format!("dir={github}&name=ci.yml"), ORIGIN, b"on: push")).await;
+        assert_eq!(refused(answer), (StatusCode::FORBIDDEN, json!("upload_refused")));
+        assert!(!host.root.join(".github").join("ci.yml").exists());
+        let answer = host.send(upload("dir=AAAA&name=notes.pdf", ORIGIN, b"pdf")).await;
+        assert_eq!(refused(answer), (StatusCode::NOT_FOUND, json!("file_not_found")));
+        assert_eq!(refused(host.send(upload(&format!("dir={docs}&name=e.pdf"), ORIGIN, b"")).await), (StatusCode::BAD_REQUEST, json!("empty_file")));
+
+        // Lands under the phone's own name, answered as its listing row.
+        let (status, _, body) = host.send(upload(&format!("dir={docs}&name=notes.pdf"), ORIGIN, b"%PDF-1.7")).await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        let file = json(&body)["file"].clone();
+        assert_eq!(file["name"], "notes.pdf");
+        assert!(!body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()) && !body.contains("docs/"), "{body}");
+        assert_eq!(std::fs::read(host.root.join("docs").join("notes.pdf")).unwrap(), b"%PDF-1.7");
+        let log = std::fs::read_to_string(host.state.config.state_dir.join("mobile-control").join(uploads::LOG_FILE)).unwrap();
+        let line = json(log.lines().next().expect("one log line"));
+        assert_eq!((line["project"].clone(), line["rel"].clone(), line["phone"].clone()), (json!(RAW_PROJECT), json!("docs/notes.pdf"), json!("Phone")));
+
+        // A clash is never overwritten; no folder means the root.
+        let (_, _, body) = host.send(upload(&format!("dir={docs}&name=notes.pdf"), ORIGIN, b"again")).await;
+        assert_eq!(json(&body)["file"]["name"], "notes-2.pdf", "{body}");
+        assert_eq!(std::fs::read(host.root.join("docs").join("notes.pdf")).unwrap(), b"%PDF-1.7");
+        let (status, _, _) = host.send(upload("name=top.txt", ORIGIN, b"top")).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(host.root.join("top.txt").is_file());
+
+        // Undo deletes the logged file once; an edited one is kept.
+        let token = file["token"].as_str().unwrap();
+        let (status, _, body) = host.send(undo(token)).await;
+        assert_eq!((status, json(&body)["undone"].clone()), (StatusCode::OK, json!(true)), "{body}");
+        assert!(!host.root.join("docs").join("notes.pdf").exists());
+        assert_eq!(refused(host.send(undo(token)).await), (StatusCode::NOT_FOUND, json!("file_not_found")));
+        let (_, _, body) = host.send(get_as(&format!("{base}?dir={docs}"), &cookie)).await;
+        let second = json(&body)["entries"][0].clone();
+        assert_eq!(second["name"], "notes-2.pdf");
+        std::fs::write(host.root.join("docs").join("notes-2.pdf"), b"edited").unwrap();
+        assert_eq!(refused(host.send(undo(second["token"].as_str().unwrap())).await), (StatusCode::NOT_FOUND, json!("file_not_found")));
+        assert!(host.root.join("docs").join("notes-2.pdf").exists());
+        let wrong_origin = Request::builder()
+            .method("DELETE")
+            .uri(format!("{base}/upload?f={token}"))
+            .header(header::ORIGIN, "https://elsewhere.example")
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .body(Body::empty())
+            .expect("request");
+        assert_eq!(refused(host.send(wrong_origin).await), (StatusCode::FORBIDDEN, json!("invalid_origin")));
+
+        // The switch off closes the undo too.
+        switches(true, false);
+        assert_eq!(refused(host.send(undo(token)).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
+    }
+
+    /// The route's own body limit outranks the router's control-message one:
+    /// a file past `MAX_CONTROL_MESSAGE` lands, one past `MAX_INBOX_FILE` is
+    /// refused before the handler runs.
+    #[tokio::test]
+    async fn upload_here_takes_a_whole_file_up_to_the_inbox_limit() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(39)).await.0;
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_uploads": true } }).to_string(),
+        )
+        .unwrap();
+        let upload = |name: &str, bytes: Vec<u8>| {
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/projects/{project_id}/files/upload?name={name}"))
+                .header(header::ORIGIN, ORIGIN)
+                .header(header::COOKIE, cookie_pair(&cookie))
+                .body(Body::from(bytes))
+                .expect("request")
+        };
+        let (status, _, body) = host.send(upload("big.bin", vec![7; MAX_CONTROL_MESSAGE + 1])).await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        assert_eq!(std::fs::metadata(host.root.join("big.bin")).unwrap().len(), (MAX_CONTROL_MESSAGE + 1) as u64);
+        let (status, ..) = host.send(upload("huge.bin", vec![7; inbox::MAX_INBOX_FILE + 1])).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(!host.root.join("huge.bin").exists());
+    }
+
+    #[tokio::test]
     async fn only_the_pdf_frame_may_be_framed_and_only_by_the_pwa() {
         let host = Fixture::bare();
         let request = Request::builder()
@@ -9960,7 +10348,7 @@ mod tests {
         let marked = answer["marked"].as_str().unwrap();
         assert!(prompt.starts_with("I marked these changes by hand on `docs/draft.pdf`."), "{prompt}");
         assert!(prompt.contains(&format!("Page 2: @{layer}")), "{prompt}");
-        assert!(prompt.contains("- p2: \"smaller\""), "{prompt}");
+        assert!(prompt.contains("- p2: blue note \"smaller\""), "{prompt}");
         assert!(marked.starts_with(concat!(".", crate::app_slug!(), "/inbox/")) && marked.ends_with("-draft-marked.pdf"), "{marked}");
         assert!(!body.contains(&host.root.to_string_lossy().to_string()), "a filesystem path leaked: {body}");
         let copy = std::fs::read(host.root.join(marked)).unwrap();
@@ -11055,6 +11443,8 @@ mod tests {
                 ("GET", format!("/api/v1/projects/{project}/files"), None),
                 ("GET", format!("/api/v1/projects/{project}/files/raw?f={token}"), None),
                 ("GET", format!("/api/v1/projects/{project}/files/search?q=paper"), None),
+                ("POST", format!("/api/v1/projects/{project}/files/upload?name=paper.pdf"), None),
+                ("DELETE", format!("/api/v1/projects/{project}/files/upload?f={token}"), None),
                 ("GET", format!("/api/v1/tabs/{tab}/markup/questions"), None),
                 ("POST", format!("/api/v1/tabs/{tab}/schedules"), Some(schedule.clone())),
                 ("POST", format!("/api/v1/projects/{project}/prompts/p-1/send"), Some(json!({ "tab_id": tab }))),

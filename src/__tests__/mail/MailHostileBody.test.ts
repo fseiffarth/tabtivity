@@ -13,7 +13,7 @@
  *
  * Regenerate the fixture with:
  *   UPDATE_HOSTILE_FIXTURE=1 cargo test --manifest-path src-tauri/Cargo.toml \
- *     --test mail_hostile_message
+ *     --test it mail_hostile_message
  */
 import { describe, it, expect } from "vitest";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)

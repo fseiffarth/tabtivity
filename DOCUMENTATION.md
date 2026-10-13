@@ -448,6 +448,32 @@ remote ones no local branch tracks — capped, with `+N more`. Worktrees cross a
 the same opaque ids the ＋ sheet's "Agents start in" row uses; no path, lock
 reason or full sha is sent. Boxes and the root console have no Git entry.
 
+**Upload here (phone → a project folder).** The phone's project-files drawer
+(**Settings → Mobile → Project files on the phone**, read-only) gains one write
+behind a second host-wide switch, **Phone may add files to projects**
+(`tabtivity_mobile_host.project_uploads`, default off, greyed out and without
+effect while the files switch is off; both read per request). The folder
+listing then carries `uploads: true` — switch on and no folder on the path
+starting with `.` — and the drawer shows **Upload here** under its trail: the
+picked files go one after another to `POST
+/api/v1/projects/{id}/files/upload?name=…&dir=<sealed folder token>`
+(`mobile_control/uploads.rs`). The route is add-only: the folder must exist
+and is walked from the project root through held folders with no link on the
+way, the name is the inbox's safe name without a stamp (a Windows device name
+gets a `_`), a taken name becomes `name-2.ext`, `-3`, … through an exclusive
+create, nothing is ever overwritten, and no dot folder (`.github`, `.cargo`,
+`.vscode`, …) takes a file. Each file ≤ 24 MiB, at most 1 GiB a day per
+project. The file lands untracked — no add, commit or sync push. Every landed
+file appends a line (project, relative path, size, sha256, time, phone name)
+to the sidecar's `<state_dir>/mobile-control/phone-uploads.jsonl`, kept 7
+days; the disk is the truth, so a line counts only while its file is still
+there, unchanged. **Undo** deletes only such a logged, byte-for-byte unchanged
+file: on the phone from the landed row while the drawer stays in that folder
+(`DELETE …/files/upload?f=<file token>`), on the desktop from the header
+inbox's **Added to projects** section (uploads of the last 24 h, `phone_uploads_list`
+/ `phone_upload_undo`; **Keep** hides a row on that desktop only). Design:
+`docs/phone_upload_plan.md`.
+
 **Mark up a PDF or picture for the agent.** In an agent tab's viewer (the
 files drawer, the 🖼 gallery or a picture/PDF bubble in the chat) a PDF or a
 picture carries **Mark up**: write on the pages with a pen (an Apple Pencil
@@ -518,10 +544,16 @@ instead** closes it unanswered. The phone's chat shows a one-line banner while
 a question is open; on the desktop, with marking off, the **Mark up** button is
 underlined and opens on the asking tab. The same tabs tick off the marks they handled
 with `markup_done` (each Submit carries a round id the prompt names its marks
-under): every ticked sent mark gets a green ✓ at its top-right corner, phone
-and desktop alike, while sent marks show, and the status line says **n done ·
-Approve all**. A tap or click on a ✓ approves that mark — it leaves the layer,
-undoably; nothing removes a mark without it. On the phone a fresh ✓ ignores
+under; a run of strokes that is one remark is listed as one range, `p2 m4–m9`):
+ticked sent marks that sit together share one green ✓ at their top-right
+corner, phone and desktop alike, while sent marks show, and the status line
+says **n done · Approve all** (one per ✓). A tap or click on a ✓ approves that
+group — its marks leave the layer, undoably; nothing removes a mark without it.
+While marking, each remark (marks that sit together, regrouped stroke by stroke)
+has its own Submit pin just outside it, over no mark, which sends it alone.
+The agent tab a Submit goes to has a model chip beside it (desktop strip;
+phone head while marking): it opens that tab's own model list, so the next
+round can run on another model. On the phone a fresh ✓ ignores
 taps for a moment, so a pen mid-stroke cannot approve. Ticks die with the
 agent's session (at most a day) and with an undone apply round; the marks stay.
 

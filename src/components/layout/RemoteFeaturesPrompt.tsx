@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useModalFocus } from "../../hooks/useModalFocus";
+import { useState } from "react";
 import { Toggle } from "../common/Toggle";
 import { useSettingsStore } from "../../stores/settings";
 import { useT } from "../../lib/i18n";
@@ -19,14 +20,9 @@ export function RemoteFeaturesPrompt({ onClose }: { onClose: () => void }) {
   const [vpn, setVpn] = useState(false);
   const [machines, setMachines] = useState(false);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") finish();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Escape saves the switches as they are now, like the backdrop. (The old
+  // mount-time listener saved the ones it was mounted with: both off.)
+  const modalRef = useModalFocus(() => finish());
 
   const finish = () => {
     void updateSettings({ vpn_enabled: vpn, machines_enabled: machines });
@@ -36,6 +32,8 @@ export function RemoteFeaturesPrompt({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop" onMouseDown={finish}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="settings-dialog remote-features-prompt-dialog"
         role="dialog"
         aria-modal="true"

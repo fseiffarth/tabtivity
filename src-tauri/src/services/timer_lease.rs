@@ -90,12 +90,7 @@ pub fn release_in(path: &Path, client: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+use crate::clock::now_secs;
 
 fn lease_path() -> std::path::PathBuf {
     storage::state_dir().join(FILE_NAME)

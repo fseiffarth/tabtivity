@@ -16,7 +16,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::commands::apps::{
-    do_launch, list_installed_apps, run_off_thread, TrackedWindow, WindowRegistryState,
+    do_launch, list_installed_apps, TrackedWindow, WindowRegistryState,
     ORIGIN_PROJECT_IDE,
 };
 use crate::schema::Settings;
@@ -66,7 +66,7 @@ fn project_root(project_id: &str) -> Result<PathBuf, String> {
 }
 
 fn ide_overrides() -> HashMap<String, String> {
-    let path = storage::state_dir().join("settings.json");
+    let path = storage::settings_path();
     storage::read_json::<Settings>(&path)
         .ok()
         .and_then(|s| s.ide_launchers)
@@ -103,7 +103,7 @@ fn candidates(project_id: &str) -> Result<(PathBuf, Vec<Candidate>), String> {
 /// menus call it on open rather than caching.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detect_project_ides(project_id: String) -> Result<Vec<IdeCandidate>, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("app", move || {
         let (dir, found) = candidates(&project_id)?;
         Ok(found
             .into_iter()
@@ -141,7 +141,7 @@ pub async fn open_project_in_ide(
     ide_id: String,
 ) -> Result<TrackedWindow, String> {
     let registry = registry.inner().clone();
-    run_off_thread(move || {
+    app_core::rt::try_blocking("app", move || {
         let ide = IdeId::parse(&ide_id).ok_or_else(|| format!("unknown IDE {ide_id}"))?;
         let (dir, found) = candidates(&project_id)?;
         let Candidate { detected, launcher } = found
@@ -168,7 +168,7 @@ pub async fn open_project_in_ide(
 pub fn set_ide_launcher(ide_id: String, exec: Option<String>) -> Result<(), String> {
     IdeId::parse(&ide_id).ok_or_else(|| format!("unknown IDE {ide_id}"))?;
     let exec = exec.map(|e| e.trim().to_string()).filter(|e| !e.is_empty());
-    let path = storage::state_dir().join("settings.json");
+    let path = storage::settings_path();
     storage::patch_json(&path, Settings::default(), |settings| {
         let mut map = settings.ide_launchers.take().unwrap_or_default();
         match exec {

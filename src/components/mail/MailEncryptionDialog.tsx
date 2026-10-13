@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 /**
  * Everything the user ever says about encrypting the local mail store
  * (`docs/mail_encryption_plan.md` Phase 2), in one dialog with three faces.
@@ -56,6 +57,7 @@ type Mode = "keychain" | "passphrase";
 
 export function MailEncryptionDialog({ state, onChanged, onClose }: MailEncryptionDialogProps) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [mode, setMode] = useState<Mode>(
     // A locked or missing credential store cannot hold the key, so defaulting to
     // the silent option would be defaulting to one that fails on click.
@@ -104,6 +106,8 @@ export function MailEncryptionDialog({ state, onChanged, onClose }: MailEncrypti
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="settings-dialog mail-encryption-dialog"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"

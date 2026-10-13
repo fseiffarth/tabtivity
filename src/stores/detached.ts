@@ -11,7 +11,7 @@
  * and the seed/edit payload builders + appliers. The wiring (listeners) lives in
  * `DetachedApp` / the main shell.
  */
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, listen, type EventCallback } from "@tauri-apps/api/event";
 import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -1055,6 +1055,22 @@ export async function listenDetachedHost(): Promise<() => void> {
   // request its seed after the first listener is live but before the edit/close
   // listeners are; answering then lets it render and speak a protocol the host
   // cannot yet hear. Queue seeds until the complete host is ready.
+  //
+  // Every unlisten is kept as it is made, so a `listen` that rejects half-way
+  // (the IPC gone while the window tears down) disposes the ones before it
+  // instead of leaking them, and the returned cleanup is one loop.
+  const disposers: Array<() => void> = [];
+  const dispose = () => {
+    for (const fn of disposers.splice(0)) fn();
+  };
+  const on = async <T>(event: string, handler: EventCallback<T>): Promise<void> => {
+    try {
+      disposers.push(await listen<T>(event, handler));
+    } catch (err) {
+      dispose();
+      throw err;
+    }
+  };
   let hostReady = false;
   const queuedSeeds: DetachedSeedRequest[] = [];
   let publishStatus = (_force = false) => {};
@@ -1077,7 +1093,7 @@ export async function listenDetachedHost(): Promise<() => void> {
     publishStatus(true);
   };
 
-  const unSeed = await listen<DetachedSeedRequest>(DETACHED_REQUEST_SEED, (ev) => {
+  await on<DetachedSeedRequest>(DETACHED_REQUEST_SEED, (ev) => {
     if (!hostReady) {
       queuedSeeds.push(ev.payload);
       return;
@@ -1085,7 +1101,7 @@ export async function listenDetachedHost(): Promise<() => void> {
     answerSeed(ev.payload);
   });
 
-  const unEdit = await listen<DetachedEditEnvelope>(DETACHED_EDIT, (ev) => {
+  await on<DetachedEditEnvelope>(DETACHED_EDIT, (ev) => {
     const { scope, groupId, edit } = ev.payload;
     const store = useTabsStore.getState();
     if (edit.kind === "add") {
@@ -1114,17 +1130,17 @@ export async function listenDetachedHost(): Promise<() => void> {
     store.applyDetachedEdit(scope, groupId, edit);
   });
 
-  const unBounds = await listen<DetachedBoundsEnvelope>(DETACHED_BOUNDS, (ev) => {
+  await on<DetachedBoundsEnvelope>(DETACHED_BOUNDS, (ev) => {
     const { scope, groupId, bounds } = ev.payload;
     useTabsStore.getState().setDetachedBounds(scope, groupId, bounds);
   });
 
-  const unZoom = await listen<DetachedZoomEnvelope>(DETACHED_ZOOM, (ev) => {
+  await on<DetachedZoomEnvelope>(DETACHED_ZOOM, (ev) => {
     const { scope, groupId, zoom } = ev.payload;
     useTabsStore.getState().setDetachedZoom(scope, groupId, zoom);
   });
 
-  const unDock = await listen<DetachedDockEnvelope>(DETACHED_DOCK, (ev) => {
+  await on<DetachedDockEnvelope>(DETACHED_DOCK, (ev) => {
     const { scope, groupId } = ev.payload;
     // `attachGroup` operates on the ACTIVE scope's live layout, so it can only
     // re-inject a group whose scope is currently active. When the detached
@@ -1144,7 +1160,7 @@ export async function listenDetachedHost(): Promise<() => void> {
     void persistScopeNow(scope);
   });
 
-  const unClose = await listen<DetachedDockEnvelope>(DETACHED_CLOSE, (ev) => {
+  await on<DetachedDockEnvelope>(DETACHED_CLOSE, (ev) => {
     const { scope, groupId, user } = ev.payload;
     const store = useTabsStore.getState();
     if (user) {
@@ -1160,13 +1176,13 @@ export async function listenDetachedHost(): Promise<() => void> {
     void persistScopeNow(scope);
   });
 
-  const unReopen = await listen<DetachedDockEnvelope>(DETACHED_REOPEN, (ev) => {
+  await on<DetachedDockEnvelope>(DETACHED_REOPEN, (ev) => {
     const { scope, groupId } = ev.payload;
     // A parked scope has nothing else to write the new tab (see the close handler).
     if (reopenClosedAgentTab(scope, undefined, groupId)) void persistScopeNow(scope);
   });
 
-  const unHide = await listen<DetachedDockEnvelope>(DETACHED_HIDE, (ev) => {
+  await on<DetachedDockEnvelope>(DETACHED_HIDE, (ev) => {
     const { scope, groupId } = ev.payload;
     const store = useTabsStore.getState();
     // Park the popout in the scope's Hidden list (tabs stay mounted). Works for
@@ -1179,7 +1195,7 @@ export async function listenDetachedHost(): Promise<() => void> {
   });
 
   // #234: a popout's terminal input / tab activation / bell reach the classifier.
-  const unActivity = await listen<DetachedActivityEnvelope>(DETACHED_ACTIVITY, (ev) => {
+  await on<DetachedActivityEnvelope>(DETACHED_ACTIVITY, (ev) => {
     const { ptyId, kind } = ev.payload;
     if (kind === "input") noteUserInput(ptyId);
     else if (kind === "interrupt") noteUserInput(ptyId, true);
@@ -1190,14 +1206,14 @@ export async function listenDetachedHost(): Promise<() => void> {
   });
 
   // #234: a popout's usage counters land in the one accumulator that is flushed.
-  const unUsage = await listen<DetachedUsageEnvelope>(DETACHED_USAGE, (ev) => {
+  await on<DetachedUsageEnvelope>(DETACHED_USAGE, (ev) => {
     const { scope, key, n } = ev.payload;
     bumpUsage(scope, key, n);
   });
 
   // #233: dialogs hosted only here, requested from a popout. Focus the main
   // window so the dialog is not raised behind the popout the click came from.
-  const unDialog = await listen<DetachedOpenDialogEnvelope>(DETACHED_OPEN_DIALOG, (ev) => {
+  await on<DetachedOpenDialogEnvelope>(DETACHED_OPEN_DIALOG, (ev) => {
     const { kind, projectId } = ev.payload;
     if (kind === "remoteMachines") useRemoteMachinesStore.getState().open(projectId);
     else if (kind === "bigFolders") useBigFoldersStore.getState().open(projectId);
@@ -1208,7 +1224,7 @@ export async function listenDetachedHost(): Promise<() => void> {
     }
   });
 
-  const unGaveUp = await listen<DetachedGaveUpEnvelope>(DETACHED_GAVE_UP, (ev) => {
+  await on<DetachedGaveUpEnvelope>(DETACHED_GAVE_UP, (ev) => {
     gaveUpWindows.add(ev.payload.label);
   });
 
@@ -1221,7 +1237,7 @@ export async function listenDetachedHost(): Promise<() => void> {
   // kept giving up on its own (no seed, so it cannot render) for minutes is
   // docked, so its tabs stay reachable. Quit teardown destroys popouts with
   // their records intact, hence the flag.
-  const unDestroyed = await listen<DetachedWindowDestroyedEnvelope>(
+  await on<DetachedWindowDestroyedEnvelope>(
     DETACHED_WINDOW_DESTROYED,
     (ev) => {
       if (shuttingDown) return;
@@ -1363,9 +1379,11 @@ export async function listenDetachedHost(): Promise<() => void> {
       }
     }
   };
-  const unTabsSync = useTabsStore.subscribe(sweep);
-  const unProjectsSync = useProjectsStore.subscribe(sweep);
-  const unRemoteSync = useRemoteStatusStore.subscribe(sweep);
+  disposers.push(
+    useTabsStore.subscribe(sweep),
+    useProjectsStore.subscribe(sweep),
+    useRemoteStatusStore.subscribe(sweep),
+  );
 
   // #234: mirror each popout's tab statuses whenever the classifier moves.
   const lastStatus = new Map<string, string>();
@@ -1394,11 +1412,13 @@ export async function listenDetachedHost(): Promise<() => void> {
       if (!live.has(label)) lastStatus.delete(label);
     }
   };
-  const unActivitySync = useActivityStore.subscribe((s, prev) => {
-    if (s.busyByTab !== prev.busyByTab || s.attentionByTab !== prev.attentionByTab) {
-      publishStatus();
-    }
-  });
+  disposers.push(
+    useActivityStore.subscribe((s, prev) => {
+      if (s.busyByTab !== prev.busyByTab || s.attentionByTab !== prev.attentionByTab) {
+        publishStatus();
+      }
+    }),
+  );
 
   // Prime signatures before the first real change. Without this, the first SSH
   // or project update after an initial seed was mistaken for "first sight" and
@@ -1408,23 +1428,7 @@ export async function listenDetachedHost(): Promise<() => void> {
   for (const request of queuedSeeds.splice(0)) answerSeed(request);
 
   return () => {
-    unSeed();
-    unEdit();
-    unBounds();
-    unZoom();
-    unDock();
-    unClose();
-    unHide();
-    unReopen();
-    unActivity();
-    unUsage();
-    unDialog();
-    unGaveUp();
-    unDestroyed();
-    unTabsSync();
-    unProjectsSync();
-    unRemoteSync();
-    unActivitySync();
+    dispose();
     for (const t of timers.values()) clearTimeout(t);
     timers.clear();
   };

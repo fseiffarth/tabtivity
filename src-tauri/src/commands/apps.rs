@@ -33,6 +33,7 @@
 //!   to build or error at runtime.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -229,8 +230,7 @@ pub fn do_launch(
         origin: origin.to_string(),
     };
     registry
-        .lock()
-        .unwrap()
+        .lock_ok()
         .windows
         .insert(id.clone(), win.clone());
     watch_child_exit(child, registry.clone(), id, before);
@@ -280,7 +280,7 @@ fn watch_child_exit(
 ) {
     std::thread::spawn(move || {
         let _ = child.wait();
-        let entry_window_id = match registry.lock().unwrap().windows.get(&id) {
+        let entry_window_id = match registry.lock_ok().windows.get(&id) {
             // Already closed/untracked while the app ran: nothing to reconcile.
             None => return,
             Some(entry) => entry.window_id,
@@ -295,7 +295,7 @@ fn watch_child_exit(
         };
         let action = launched_exit_action(entry_window_id, &live, adopted);
         let (project_id, notify) = {
-            let mut reg = registry.lock().unwrap();
+            let mut reg = registry.lock_ok();
             let Some(project_id) = reg.windows.get(&id).map(|e| e.project_id.clone()) else {
                 return;
             };
@@ -388,18 +388,9 @@ fn launch_command(exec: &str, args: &[String], file: Option<&str>) -> Command {
 // `open_file` resolve the spawned app's window via `find_window_for_pid` /
 // `find_new_window` — up to 20 × 100 ms sleep-polls each (a fresh xcb
 // connection per poll on X11), i.e. 2–4 s of main-thread stall per launch when
-// run synchronously (the freeze class `commands::git`'s `run_off_thread` doc
+// run synchronously (the freeze class `commands::git`'s off-thread note
 // describes). Single-instance apps, whose spawned pid execs and exits without
 // ever mapping a window, hit the full budget every time.
-
-/// Offload a blocking launch body to a worker thread.
-pub(crate) async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("app task failed: {e}"))?
-}
 
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -413,7 +404,7 @@ pub async fn launch_app(
     origin: Option<String>,
 ) -> Result<TrackedWindow, String> {
     let registry = registry.inner().clone();
-    run_off_thread(move || {
+    app_core::rt::try_blocking("app", move || {
         let origin = origin.unwrap_or_else(|| {
             if role.is_some() {
                 ORIGIN_GLOBAL_APP.to_string()
@@ -441,8 +432,7 @@ static ICON_CACHE: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(N
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn resolve_app_icon(exec: String) -> Option<String> {
     if let Some(cached) = ICON_CACHE
-        .lock()
-        .unwrap()
+        .lock_ok()
         .get_or_insert_with(HashMap::new)
         .get(&exec)
     {
@@ -450,8 +440,7 @@ pub fn resolve_app_icon(exec: String) -> Option<String> {
     }
     let icon = resolve_app_icon_uncached(&exec);
     ICON_CACHE
-        .lock()
-        .unwrap()
+        .lock_ok()
         .get_or_insert_with(HashMap::new)
         .insert(exec, icon.clone());
     icon
@@ -547,7 +536,7 @@ pub async fn open_file(
     let workspace = workspace.inner().clone();
     // Worst case (X11) chains `find_window_for_pid` AND `find_new_window` → ~4 s;
     // under Wayland both answer at once (`platform::x11::session_is_wayland`).
-    run_off_thread(move || {
+    app_core::rt::try_blocking("app", move || {
         let effective = effective_handler(handler, &path, project_id.as_deref());
         if !open_goes_ahead(effective.as_deref(), &path, check_only.unwrap_or(false))? {
             return Ok(None);
@@ -610,8 +599,7 @@ fn open_file_blocking(
     let place = |window_id: Option<u64>| {
         if let (Some(wid), Some(px), Some(py)) = (window_id, x, y) {
             if let Err(e) = workspace
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .backend
                 .position_window(wid, px, py)
             {
@@ -1228,7 +1216,7 @@ pub fn embed_capability(
     project_id: Option<String>,
 ) -> EmbedCapability {
     let os_embeddable = {
-        let ws = workspace.lock().unwrap();
+        let ws = workspace.lock_ok();
         ws.backend.supports_embedding()
     } && !crate::platform::session_is_wayland();
 
@@ -1256,7 +1244,7 @@ pub(crate) fn project_apps_for_id(project_id: Option<&str>) -> HashMap<String, S
     let Some(id) = project_id else {
         return HashMap::new();
     };
-    let list_path = crate::storage::state_dir().join("projects.json");
+    let list_path = crate::storage::projects_path();
     let list: Vec<crate::schema::ProjectEntry> =
         crate::storage::read_json(&list_path).unwrap_or_default();
     list.iter()
@@ -2102,7 +2090,7 @@ pub fn list_tracked_windows(
     registry: State<'_, WindowRegistryState>,
     project_id: Option<String>,
 ) -> Vec<TrackedWindow> {
-    let reg = registry.lock().unwrap();
+    let reg = registry.lock_ok();
     reg.windows
         .values()
         .filter(|w| {
@@ -2117,7 +2105,7 @@ pub fn list_tracked_windows(
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn untrack_window(registry: State<'_, WindowRegistryState>, id: String) -> bool {
-    registry.lock().unwrap().windows.remove(&id).is_some()
+    registry.lock_ok().windows.remove(&id).is_some()
 }
 
 /// Close a tracked app from the Apps view: SIGTERM its whole process subtree
@@ -2138,7 +2126,7 @@ pub fn close_tracked_window(
     id: String,
 ) -> Result<(), String> {
     let (entry, notify) = {
-        let reg = registry.lock().unwrap();
+        let reg = registry.lock_ok();
         (reg.windows.get(&id).cloned(), reg.notify.clone())
     };
     let Some(entry) = entry else {
@@ -2151,7 +2139,7 @@ pub fn close_tracked_window(
         return Err("not closeable: no tracked pid".into());
     }
     crate::terminal::reap_child_subtree(entry.pid, crate::terminal::ReapMode::Graceful);
-    registry.lock().unwrap().windows.remove(&id);
+    registry.lock_ok().windows.remove(&id);
     if let Some(notify) = notify {
         notify(entry.project_id.clone());
     }
@@ -2264,7 +2252,7 @@ pub async fn restore_open_apps(
     project_id: String,
 ) -> Result<Vec<TrackedWindow>, String> {
     let registry = registry.inner().clone();
-    run_off_thread(move || {
+    app_core::rt::try_blocking("app", move || {
         let mut launched = Vec::new();
         for app in open_apps {
             if app.mode.as_deref() == Some("embedded") {
@@ -2272,7 +2260,7 @@ pub async fn restore_open_apps(
             }
             // Skip if already running for this project.
             {
-                let reg = registry.lock().unwrap();
+                let reg = registry.lock_ok();
                 if reg
                     .windows
                     .values()
@@ -2324,7 +2312,7 @@ fn track_opened_file(
         window_id,
         origin,
     };
-    registry.lock().unwrap().windows.insert(id, win.clone());
+    registry.lock_ok().windows.insert(id, win.clone());
     Ok(win)
 }
 

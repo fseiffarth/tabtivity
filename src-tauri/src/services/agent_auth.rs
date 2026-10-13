@@ -44,6 +44,7 @@
 //! and unfenced in the Host session. AppHandle-free and unit-testable.
 
 use std::collections::BTreeSet;
+use app_core::sync::LockExt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -489,14 +490,14 @@ fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &
     let key = (copy.path(), store.to_path_buf(), step);
     let before = pair_stamp(store_dir, store, leaf, home, copy);
     {
-        let settled = settled_pairs().lock().unwrap_or_else(|p| p.into_inner());
+        let settled = settled_pairs().lock_ok();
         if settled.get(&key) == Some(&before) {
             return;
         }
     }
     let settled_now = reconcile_file_now(cli, store_dir, store, leaf, home, copy, step);
     let after = pair_stamp(store_dir, store, leaf, home, copy);
-    let mut settled = settled_pairs().lock().unwrap_or_else(|p| p.into_inner());
+    let mut settled = settled_pairs().lock_ok();
     // `after == before`: nothing was written under the full pass, by it or by
     // a tab, so `after` is the stamp of exactly the bytes it compared.
     if settled_now && after == before && stamp_is_trustworthy(&after, std::time::SystemTime::now()) {
@@ -1143,7 +1144,7 @@ fn keeper_lock() -> &'static Mutex<()> {
 
 /// Reconcile now (a tab just ended, which is when a login lands).
 pub fn reconcile_now() {
-    let _guard = keeper_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = keeper_lock().lock_ok();
     reconcile_all_in(&storage::state_dir());
 }
 

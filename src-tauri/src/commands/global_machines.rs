@@ -345,7 +345,7 @@ pub async fn global_machine_monitor_snapshot(
     careful: Option<bool>,
     background: Option<bool>,
 ) -> Result<crate::sysstat::SystemSnapshot, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("system monitor probe", move || {
         use crate::services::remote_credentials as creds;
         // `background` per `ssh_common`'s second shape: opening the monitor is a
         // gesture, its repeat poll is not, and both land here.
@@ -377,7 +377,6 @@ pub async fn global_machine_monitor_snapshot(
         Ok(snap)
     })
     .await
-    .map_err(|e| format!("system monitor probe task failed: {e}"))?
 }
 
 /// The tmux sessions running on one global machine — the "is someone actually
@@ -406,7 +405,7 @@ pub async fn global_machine_tmux_list(
     port: Option<u16>,
     background: Option<bool>,
 ) -> Result<Vec<crate::services::ssh_exec::TmuxSession>, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("tmux probe", move || {
         use crate::services::remote_credentials as creds;
         // `background` per `ssh_common`'s second shape. The doc above already
         // says this fires "only while the menu is open" — but a menu that opens
@@ -425,7 +424,6 @@ pub async fn global_machine_tmux_list(
         Ok(crate::services::ssh_exec::parse_tmux_ls(&stdout))
     })
     .await
-    .map_err(|e| format!("tmux probe task failed: {e}"))?
 }
 
 /// Usage report (who's logged in, CPU/load/memory/GPU, top processes) for one
@@ -450,7 +448,7 @@ pub async fn global_machine_usage_check(
     port: Option<u16>,
     background: Option<bool>,
 ) -> Result<crate::services::remote_usage::RemoteUsageReport, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("usage probe", move || {
         use crate::services::remote_credentials as creds;
         // `background` per `ssh_common`'s second shape — the project-scoped twin
         // `remote::remote_usage_check` takes the same parameter with the same
@@ -472,7 +470,6 @@ pub async fn global_machine_usage_check(
         Ok(crate::services::remote_usage::parse_report(&stdout))
     })
     .await
-    .map_err(|e| format!("usage probe task failed: {e}"))?
 }
 
 #[cfg(test)]

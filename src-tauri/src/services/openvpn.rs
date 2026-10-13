@@ -35,13 +35,10 @@
 //! argv item.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::io::Write;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::io::{BufRead, BufReader};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::process::Command;
@@ -145,7 +142,7 @@ enum Interactive {
 
 /// Classify (and reap) the interactive entry for `config`.
 fn interactive_state(config: &str) -> Interactive {
-    let pidfile = match interactive_registry().lock().unwrap().get(config) {
+    let pidfile = match interactive_registry().lock_ok().get(config) {
         Some(p) => p.clone(),
         None => return Interactive::None,
     };
@@ -154,7 +151,7 @@ fn interactive_state(config: &str) -> Interactive {
         Some(_) => {
             // The pid was written and is now gone: the tunnel died (or the user
             // closed its terminal). Reap the entry and its stale pidfile.
-            interactive_registry().lock().unwrap().remove(config);
+            interactive_registry().lock_ok().remove(config);
             let _ = std::fs::remove_file(&pidfile);
             Interactive::None
         }
@@ -177,7 +174,7 @@ fn disconnect_interactive(config: &str) {
         Interactive::Pending => None,
         Interactive::None => return,
     };
-    let pidfile = interactive_registry().lock().unwrap().remove(config);
+    let pidfile = interactive_registry().lock_ok().remove(config);
     if let Some(pid) = alive {
         kill_root_pid(pid);
     }
@@ -212,7 +209,7 @@ fn signalled_pids() -> &'static Mutex<std::collections::HashSet<i32>> {
 /// password prompt re-confirming it.
 #[cfg(any(target_os = "linux", test))]
 fn kill_already_handled(pid: i32) -> bool {
-    if signalled_pids().lock().unwrap().contains(&pid) {
+    if signalled_pids().lock_ok().contains(&pid) {
         return true;
     }
     !pid_alive(pid)
@@ -221,7 +218,7 @@ fn kill_already_handled(pid: i32) -> bool {
 /// Record that `pid` has been sent a TERM, so no later teardown pass re-elevates for it.
 #[cfg(any(target_os = "linux", test))]
 fn mark_signalled(pid: i32) {
-    signalled_pids().lock().unwrap().insert(pid);
+    signalled_pids().lock_ok().insert(pid);
 }
 
 /// Configs whose elevated teardown was explicitly **refused** (a dismissed polkit
@@ -242,14 +239,13 @@ fn declined_configs() -> &'static Mutex<std::collections::HashSet<String>> {
 #[cfg(target_os = "linux")]
 fn mark_declined(config: &str) {
     declined_configs()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .insert(config.to_string());
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn is_declined(config: &str) -> bool {
-    declined_configs().lock().unwrap().contains(config)
+    declined_configs().lock_ok().contains(config)
 }
 
 /// `kill -TERM` a **root-owned** pid, escalating the same way the platform's
@@ -357,9 +353,11 @@ pub fn store_config(src: &str) -> Result<String, String> {
         .and_then(|n| n.to_str())
         .unwrap_or("config.ovpn");
     let dest = dir.join(format!("{}__{file_name}", safe_stem(src)));
-    std::fs::copy(src_path, &dest).map_err(|e| format!("copy config: {e}"))?;
-    #[cfg(unix)]
-    let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600));
+    // Read and written whole rather than `fs::copy`, which keeps the source's
+    // (often world-readable) mode on a file that may inline a private key: the
+    // stored copy is owner-only from the moment it exists.
+    let bytes = std::fs::read(src_path).map_err(|e| format!("copy config: {e}"))?;
+    crate::storage::write_private_atomic(&dest, &bytes).map_err(|e| format!("copy config: {e}"))?;
     Ok(dest.to_string_lossy().into_owned())
 }
 
@@ -514,8 +512,7 @@ fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
     prepare_root_pidfile(&pidfile)?;
     let _ = std::fs::remove_file(&pidfile);
     interactive_registry()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .insert(config.to_string(), pidfile.clone());
     // A terminal-started tunnel gets the same management socket a headless one does,
     // so stopping it costs no second elevation either. Best-effort: if no endpoint
@@ -967,22 +964,17 @@ fn safe_stem(config: &str) -> String {
     format!("{tail}_{h:016x}")
 }
 
-/// Write `password` to an owner-only (0600) askpass file and return its path.
-/// On Windows the 0600 mode is skipped (no `mode()`); the file lives under the
-/// per-user `%APPDATA%\tabtivity\openvpn` dir, which is already user-scoped, and is
-/// deleted as soon as OpenVPN has read it.
+/// Write `password` to an owner-only askpass file (`0600`; on Windows
+/// restricted to its owner) and return its path. Written whole through
+/// `storage::write_private_atomic`, so a file left from an earlier run never
+/// lends it a wider mode. It is deleted as soon as OpenVPN has read it.
 fn write_askpass(stem: &str, password: &str) -> Result<PathBuf, String> {
     let dir = runtime_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create openvpn dir: {e}"))?;
     let path = dir.join(format!("{stem}.pass"));
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    opts.mode(0o600);
-    let mut f = opts
-        .open(&path)
-        .map_err(|e| format!("create askpass file: {e}"))?;
-    writeln!(f, "{password}").map_err(|e| format!("write askpass file: {e}"))?;
+    let body = zeroize::Zeroizing::new(format!("{password}\n"));
+    crate::storage::write_private_atomic(&path, body.as_bytes())
+        .map_err(|e| format!("write askpass file: {e}"))?;
     Ok(path)
 }
 
@@ -999,14 +991,9 @@ fn write_userpass(stem: &str, username: &str, password: &str) -> Result<PathBuf,
     let dir = runtime_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create openvpn dir: {e}"))?;
     let path = dir.join(format!("{stem}.auth"));
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    opts.mode(0o600);
-    let mut f = opts
-        .open(&path)
-        .map_err(|e| format!("create auth-user-pass file: {e}"))?;
-    writeln!(f, "{username}\n{password}").map_err(|e| format!("write auth-user-pass file: {e}"))?;
+    let body = zeroize::Zeroizing::new(format!("{username}\n{password}\n"));
+    crate::storage::write_private_atomic(&path, body.as_bytes())
+        .map_err(|e| format!("write auth-user-pass file: {e}"))?;
     Ok(path)
 }
 
@@ -1086,7 +1073,7 @@ fn random_hex(bytes: usize) -> Option<String> {
         .ok()?
         .read_exact(&mut buf)
         .ok()?;
-    Some(buf.iter().map(|b| format!("{b:02x}")).collect())
+    Some(crate::digest::hex(&buf))
 }
 
 /// Forget any endpoint recorded for `config`. Called before arming a new one (a
@@ -1134,12 +1121,7 @@ fn arm_management(config: &str) -> Option<Vec<String>> {
         .port();
     let password = random_hex(32)?;
     let pwfile = management_pwfile(config);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    opts.mode(0o600);
-    let mut f = opts.open(&pwfile).ok()?;
-    writeln!(f, "{password}").ok()?;
-    drop(f);
+    crate::storage::write_private_atomic(&pwfile, format!("{password}\n").as_bytes()).ok()?;
     std::fs::write(management_portfile(config), format!("{port}\n")).ok()?;
     Some(management_args(port, &pwfile))
 }
@@ -1259,7 +1241,7 @@ fn management_shutdown(config: &str) -> bool {
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn is_connected(config: &str) -> bool {
     {
-        let mut reg = registry().lock().unwrap();
+        let mut reg = registry().lock_ok();
         let headless = match reg.get_mut(config) {
             Some(proc) => match proc.child.try_wait() {
                 Ok(Some(_)) => {
@@ -1297,7 +1279,7 @@ pub fn is_connected(config: &str) -> bool {
 #[cfg(target_os = "macos")]
 pub fn is_connected(config: &str) -> bool {
     {
-        let mut reg = mac_registry().lock().unwrap();
+        let mut reg = mac_registry().lock_ok();
         let headless = match reg.get(config) {
             Some(proc) => match pidfile_pid(&proc.pidfile) {
                 Some(pid) if pid_alive(pid) => true,
@@ -1333,10 +1315,10 @@ pub fn is_connected(config: &str) -> bool {
 /// deadlock.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn active_configs() -> Vec<String> {
-    let mut keys: Vec<String> = registry().lock().unwrap().keys().cloned().collect();
-    keys.extend(interactive_registry().lock().unwrap().keys().cloned());
+    let mut keys: Vec<String> = registry().lock_ok().keys().cloned().collect();
+    keys.extend(interactive_registry().lock_ok().keys().cloned());
     #[cfg(target_os = "windows")]
-    keys.extend(svc_registry().lock().unwrap().keys().cloned());
+    keys.extend(svc_registry().lock_ok().keys().cloned());
     keys.sort();
     keys.dedup();
     keys.into_iter().filter(|c| is_connected(c)).collect()
@@ -1346,8 +1328,8 @@ pub fn active_configs() -> Vec<String> {
 /// way — by config path).
 #[cfg(target_os = "macos")]
 pub fn active_configs() -> Vec<String> {
-    let mut keys: Vec<String> = mac_registry().lock().unwrap().keys().cloned().collect();
-    keys.extend(interactive_registry().lock().unwrap().keys().cloned());
+    let mut keys: Vec<String> = mac_registry().lock_ok().keys().cloned().collect();
+    keys.extend(interactive_registry().lock_ok().keys().cloned());
     keys.sort();
     keys.dedup();
     keys.into_iter().filter(|c| is_connected(c)).collect()
@@ -1410,8 +1392,7 @@ fn adopt_config(config: &str) -> bool {
         match pidfile_pid(&pidfile) {
             Some(pid) if pid_alive(pid) => {
                 interactive_registry()
-                    .lock()
-                    .unwrap()
+                    .lock_ok()
                     .insert(config.to_string(), pidfile);
                 return true;
             }
@@ -1522,8 +1503,7 @@ pub fn connect_streaming(
     match ready {
         Ok(()) => {
             registry()
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .insert(config.to_string(), VpnProc { child, pidfile });
             Ok(())
         }
@@ -1640,7 +1620,7 @@ pub fn disconnect(config: &str) -> Result<(), String> {
     management_shutdown(config);
     // An interactive tunnel has no child of ours — kill it by the pid it wrote.
     disconnect_interactive(config);
-    let proc = registry().lock().unwrap().remove(config);
+    let proc = registry().lock_ok().remove(config);
     let Some(mut proc) = proc else {
         return Ok(());
     };
@@ -1662,14 +1642,14 @@ fn disconnect_interactive_checked(config: &str) -> bool {
             if !kill_root_pid_checked(pid) {
                 return false;
             }
-            if let Some(pidfile) = interactive_registry().lock().unwrap().remove(config) {
+            if let Some(pidfile) = interactive_registry().lock_ok().remove(config) {
                 let _ = std::fs::remove_file(&pidfile);
             }
             true
         }
         // Never authenticated — nothing root-owned to kill; drop the stale claim.
         Interactive::Pending => {
-            interactive_registry().lock().unwrap().remove(config);
+            interactive_registry().lock_ok().remove(config);
             true
         }
         Interactive::None => true,
@@ -1724,8 +1704,7 @@ pub fn disconnect_checked(config: &str) -> Result<(), String> {
     // Headless tunnel: peek the pidfile without removing, so a refused kill leaves
     // the entry in place.
     let pidfile = registry()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .get(config)
         .map(|p| p.pidfile.clone());
     let Some(pidfile) = pidfile else {
@@ -1736,7 +1715,7 @@ pub fn disconnect_checked(config: &str) -> Result<(), String> {
         return Err("openvpn teardown was not authorized".into());
     }
     // TERM delivered — now reap our child and forget it.
-    if let Some(mut proc) = registry().lock().unwrap().remove(config) {
+    if let Some(mut proc) = registry().lock_ok().remove(config) {
         let _ = proc.child.kill();
         let _ = proc.child.wait();
         let _ = std::fs::remove_file(&proc.pidfile);
@@ -1799,10 +1778,10 @@ pub fn disconnect_all() {
     // Interactive tunnels included: they are the ones that used to survive the app
     // and leave the machine's routing rewritten with nothing left to undo it.
     let keys: Vec<String> = {
-        let reg = registry().lock().unwrap();
-        let interactive = interactive_registry().lock().unwrap();
+        let reg = registry().lock_ok();
+        let interactive = interactive_registry().lock_ok();
         #[cfg(target_os = "windows")]
-        let svc = svc_registry().lock().unwrap();
+        let svc = svc_registry().lock_ok();
         let keys = reg.keys().chain(interactive.keys());
         #[cfg(target_os = "windows")]
         let keys = keys.chain(svc.keys());
@@ -1830,10 +1809,10 @@ pub fn disconnect_all() {
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn disconnect_all_checked() -> Result<(), String> {
     let keys: Vec<String> = {
-        let reg = registry().lock().unwrap();
-        let interactive = interactive_registry().lock().unwrap();
+        let reg = registry().lock_ok();
+        let interactive = interactive_registry().lock_ok();
         #[cfg(target_os = "windows")]
-        let svc = svc_registry().lock().unwrap();
+        let svc = svc_registry().lock_ok();
         let keys = reg.keys().chain(interactive.keys());
         #[cfg(target_os = "windows")]
         let keys = keys.chain(svc.keys());
@@ -2197,7 +2176,7 @@ fn svc_connect_streaming(
     );
     match ready {
         Ok(()) => {
-            svc_registry().lock().unwrap().insert(
+            svc_registry().lock_ok().insert(
                 config.to_string(),
                 SvcVpn {
                     pipe,
@@ -2222,7 +2201,7 @@ fn svc_connect_streaming(
 /// (service closed the pipe: its openvpn exited) is reaped with its files.
 #[cfg(target_os = "windows")]
 fn svc_connected(config: &str) -> bool {
-    let mut reg = svc_registry().lock().unwrap();
+    let mut reg = svc_registry().lock_ok();
     match reg.get(config) {
         Some(svc) if pipe_alive(&svc.pipe) => true,
         Some(_) => {
@@ -2353,8 +2332,7 @@ pub fn connect_streaming(
     match ready {
         Ok(()) => {
             registry()
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .insert(config.to_string(), VpnProc { child, pidfile });
             Ok(())
         }
@@ -2388,14 +2366,14 @@ pub fn disconnect(config: &str) -> Result<(), String> {
     // An interactive tunnel has no child of ours — kill it by the pid it wrote
     // (this was missing on Windows; Linux/macOS have always done it).
     disconnect_interactive(config);
-    let svc = svc_registry().lock().unwrap().remove(config);
+    let svc = svc_registry().lock_ok().remove(config);
     if let Some(svc) = svc {
         kill_root_pid(svc.pid as i32);
         drop(svc.pipe);
         let _ = std::fs::remove_file(&svc.pidfile);
         let _ = std::fs::remove_file(&svc.logfile);
     }
-    let proc = registry().lock().unwrap().remove(config);
+    let proc = registry().lock_ok().remove(config);
     let Some(mut proc) = proc else {
         return Ok(());
     };
@@ -2675,8 +2653,7 @@ pub fn connect_streaming(
     match ready {
         Ok(()) => {
             mac_registry()
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .insert(config.to_string(), MacVpn { pidfile, logfile });
             Ok(())
         }
@@ -2697,7 +2674,7 @@ pub fn disconnect(config: &str) -> Result<(), String> {
     management_shutdown(config);
     // An interactive tunnel has no entry in `mac_registry` — kill it by its pid.
     disconnect_interactive(config);
-    let proc = mac_registry().lock().unwrap().remove(config);
+    let proc = mac_registry().lock_ok().remove(config);
     let Some(proc) = proc else {
         return Ok(());
     };
@@ -2717,8 +2694,8 @@ pub fn disconnect(config: &str) -> Result<(), String> {
 pub fn disconnect_all() {
     // Interactive tunnels included — see the Linux/Windows twin.
     let keys: Vec<String> = {
-        let reg = mac_registry().lock().unwrap();
-        let interactive = interactive_registry().lock().unwrap();
+        let reg = mac_registry().lock_ok();
+        let interactive = interactive_registry().lock_ok();
         reg.keys().chain(interactive.keys()).cloned().collect()
     };
     for k in keys {
@@ -2730,8 +2707,8 @@ pub fn disconnect_all() {
 #[cfg(target_os = "macos")]
 pub fn disconnect_all_checked() -> Result<(), String> {
     let keys: Vec<String> = {
-        let reg = mac_registry().lock().unwrap();
-        let interactive = interactive_registry().lock().unwrap();
+        let reg = mac_registry().lock_ok();
+        let interactive = interactive_registry().lock_ok();
         reg.keys().chain(interactive.keys()).cloned().collect()
     };
     for k in keys {
@@ -3072,11 +3049,39 @@ mod tests {
         );
     }
 
+    /// The credential files OpenVPN reads keep their exact line layout and are
+    /// owner-only even over a leftover, wider-moded file of the same name.
+    #[test]
+    fn credential_files_are_written_whole_and_owner_only() {
+        let stem = format!("cred-files-{}", std::process::id());
+        let auth = runtime_dir().join(format!("{stem}.auth"));
+        std::fs::create_dir_all(runtime_dir()).unwrap();
+        std::fs::write(&auth, b"leftover from an earlier run, much longer than the new one").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&auth, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        assert_eq!(write_userpass(&stem, "alice", "pw").unwrap(), auth);
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "alice\npw\n");
+        let pass = write_askpass(&stem, "secret").unwrap();
+        assert_eq!(std::fs::read_to_string(&pass).unwrap(), "secret\n");
+        #[cfg(unix)]
+        for path in [&auth, &pass] {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{}", path.display());
+        }
+        let _ = std::fs::remove_file(&auth);
+        let _ = std::fs::remove_file(&pass);
+    }
+
     /// An armed endpoint round-trips, and its password file is owner-only — it is the
     /// only thing standing between a local process and control of the tunnel.
     #[cfg(unix)]
     #[test]
     fn arm_management_records_an_owner_only_endpoint() {
+        use std::os::unix::fs::PermissionsExt;
         // Skipped while the A/B kill switch is on (no endpoint is armed by design).
         if MANAGEMENT_SOCKET_DISABLED {
             return;

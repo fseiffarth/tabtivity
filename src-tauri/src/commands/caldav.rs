@@ -268,9 +268,7 @@ fn blank_save_error(already_saved: bool, store_readable: bool) -> Option<String>
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_accounts_list() -> Result<Vec<CalDavAccount>, String> {
-    tokio::task::spawn_blocking(|| Ok(read_accounts(&accounts_path())?.accounts))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("caldav", || Ok(read_accounts(&accounts_path())?.accounts)).await
 }
 
 /// Create or update an account, and apply the opt-in keychain write.
@@ -291,7 +289,7 @@ pub async fn caldav_account_upsert(
     let state = ctx.get::<CalDavState>();
     let rt = state.clone();
     let remember = remember_arg(remember);
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("caldav", move || {
         let prev = read_accounts(&accounts_path())?
             .accounts
             .into_iter()
@@ -358,7 +356,6 @@ pub async fn caldav_account_upsert(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Remove the account. **The keychain entry is left alone** — it is keyed by
@@ -377,19 +374,18 @@ pub async fn caldav_account_delete(
 ) -> Result<(), String> {
     let state = ctx.get::<CalDavState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("caldav", move || {
         if let Ok(mut guard) = rt.lock() {
             guard.passwords.remove(&account_id);
         }
         delete_account_at(&accounts_path(), &account_id)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_password_state(account_id: String) -> Result<CalDavPasswordState, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("caldav", move || {
         let account = account_by_id(&accounts_path(), &account_id)?;
         let keyring = remote_credentials::keyring_state();
         // A locked keyring must read as "locked", never as "nothing saved" — the
@@ -401,7 +397,6 @@ pub async fn caldav_password_state(account_id: String) -> Result<CalDavPasswordS
         Ok(CalDavPasswordState { has_saved, keyring })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// The **only** path that deletes a saved CalDAV password.
@@ -412,7 +407,7 @@ pub async fn caldav_forget_password(
 ) -> Result<(), String> {
     let state = ctx.get::<CalDavState>();
     let rt = state.clone();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("caldav", move || {
         let mut account = account_by_id(&accounts_path(), &account_id)?;
         // `remember_secret(Some(false), …)` refuses to clear an entry it could
         // not first read, so a locked keyring cannot destroy a password the user
@@ -430,7 +425,6 @@ pub async fn caldav_forget_password(
         }
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 // ── Commands: discovery ─────────────────────────────────────────────────────
@@ -465,9 +459,7 @@ pub async fn caldav_discover(
                 ..Default::default()
             };
             let rt2 = rt.clone();
-            tokio::task::spawn_blocking(move || resolve_password(&rt2, &account))
-                .await
-                .map_err(|e| e.to_string())?
+            app_core::rt::blocking("caldav", move || resolve_password(&rt2, &account)).await?
         }
     };
     let Some(password) = secret else {
@@ -507,13 +499,12 @@ pub async fn caldav_fetch(
     let (account, cred) = {
         let rt2 = rt.clone();
         let account_id = account_id.clone();
-        tokio::task::spawn_blocking(move || {
+        app_core::rt::try_blocking("caldav", move || {
             let account = account_by_id(&accounts_path(), &account_id)?;
             let cred = credentials(&rt2, &account)?;
             Ok::<_, String>((account, cred))
         })
-        .await
-        .map_err(|e| e.to_string())??
+        .await?
     };
 
     let stored = account
@@ -572,7 +563,7 @@ pub async fn caldav_apply(
     last_sync: String,
     discard: Option<Vec<String>>,
 ) -> Result<CalDavApplied, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("caldav", move || {
         let mut account = account_by_id(&accounts_path(), &account_id)?;
         let calendar_id = account
             .calendars
@@ -607,7 +598,6 @@ pub async fn caldav_apply(
         Ok(CalDavApplied { data, caldav_kept })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 // ── Commands: push (Phase 3) ────────────────────────────────────────────────
@@ -692,7 +682,7 @@ pub async fn caldav_push(
         let rt2 = rt.clone();
         let account_id = account_id.clone();
         let (href, kind, row_id) = (href.clone(), kind.clone(), row_id.clone());
-        tokio::task::spawn_blocking(move || {
+        app_core::rt::try_blocking("caldav", move || {
             let account = account_by_id(&accounts_path(), &account_id)?;
             // The local gate first: a push it refuses is no unpushed edit.
             writable(&account, &href)?;
@@ -705,8 +695,7 @@ pub async fn caldav_push(
             let current = rev.is_none_or(|r| r == before);
             Ok::<_, String>((cred, current.then_some(after)))
         })
-        .await
-        .map_err(|e| e.to_string())??
+        .await?
     };
 
     let existing = resource_href.unwrap_or_default();
@@ -736,7 +725,7 @@ pub async fn caldav_push(
         outcome.etag.clone(),
         existing.to_string(),
     );
-    outcome.dirty = tokio::task::spawn_blocking(move || {
+    outcome.dirty = app_core::rt::try_blocking("caldav", move || {
         crate::commands::calendar::set_caldav_identity_sent_at(
             &crate::commands::calendar::calendar_path(),
             &kind,
@@ -747,8 +736,7 @@ pub async fn caldav_push(
             &sent_to,
         )
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
 
     Ok(outcome)
 }
@@ -772,13 +760,12 @@ pub async fn caldav_delete(
     let (account, cred) = {
         let rt2 = rt.clone();
         let account_id = account_id.clone();
-        tokio::task::spawn_blocking(move || {
+        app_core::rt::try_blocking("caldav", move || {
             let account = account_by_id(&accounts_path(), &account_id)?;
             let cred = credentials(&rt2, &account)?;
             Ok::<_, String>((account, cred))
         })
-        .await
-        .map_err(|e| e.to_string())??
+        .await?
     };
     writable(&account, &href)?;
     caldav::delete_resource(&resource_href, &cred, &etag).await
@@ -799,12 +786,11 @@ pub async fn caldav_resource_etag(
 ) -> Result<String, String> {
     let state = ctx.get::<CalDavState>();
     let rt = state.clone();
-    let cred = tokio::task::spawn_blocking(move || {
+    let cred = app_core::rt::try_blocking("caldav", move || {
         let account = account_by_id(&accounts_path(), &account_id)?;
         credentials(&rt, &account)
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     caldav::current_etag(&resource_href, &cred).await
 }
 
@@ -825,16 +811,15 @@ pub async fn caldav_refresh_access(
     let cred = {
         let rt2 = rt.clone();
         let account_id = account_id.clone();
-        tokio::task::spawn_blocking(move || {
+        app_core::rt::try_blocking("caldav", move || {
             let account = account_by_id(&accounts_path(), &account_id)?;
             credentials(&rt2, &account)
         })
-        .await
-        .map_err(|e| e.to_string())??
+        .await?
     };
 
     let read_only = caldav::collection_read_only(&href, &cred).await?;
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("caldav", move || {
         let mut account = account_by_id(&accounts_path(), &account_id)?;
         match account.calendars.iter_mut().find(|c| c.href == href) {
             Some(slot) => slot.read_only = read_only,
@@ -843,8 +828,7 @@ pub async fn caldav_refresh_access(
         upsert_account_at(&accounts_path(), account)?;
         Ok::<_, String>(())
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     Ok(read_only)
 }
 

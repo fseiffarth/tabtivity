@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 /**
  * The **per-account Mail AI (local)** settings, raised from the mail toolbar (or,
  * on creating a new account, from `MailPane`'s save handler).
@@ -26,9 +27,12 @@ export interface MailAiSettingsDialogProps {
 
 export function MailAiSettingsDialog({ account, onClose }: MailAiSettingsDialogProps) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="settings-dialog mail-ai-dialog"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"

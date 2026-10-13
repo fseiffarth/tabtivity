@@ -12,13 +12,67 @@
 export type MarkColor = "red" | "blue" | "black" | "yellow";
 export const MARK_COLORS: readonly MarkColor[] = ["red", "blue", "black", "yellow"];
 
-/** A pen stroke: `[x, y, pressure]` samples and its base width. */
-export type InkMark = { kind: "ink"; color: MarkColor; width: number; points: [number, number, number][] };
+/** How a pen stroke is drawn: `pen` follows the stylus's pressure; `marker`
+ * is a wide see-through highlighter; `dashed` a broken line; `arrow` an even
+ * line with an open head at its end. The other styles draw at the base width. */
+export type PenStyle = "pen" | "marker" | "dashed" | "arrow";
+export const PEN_STYLES: readonly PenStyle[] = ["pen", "marker", "dashed", "arrow"];
+
+/** A pen stroke: `[x, y, pressure]` samples and its base width. `style` is
+ * left out for the plain pen — what every stroke was before styles, and what
+ * an older desktop (`markup::Mark` refuses unknown fields) still takes.
+ * `comment`, the reader's words about the mark (`setComment`), is left out
+ * when there is none, for the same reason. */
+export type InkMark = { kind: "ink"; color: MarkColor; width: number; points: [number, number, number][]; style?: PenStyle; comment?: string };
 /** A highlighter box: `[x, y, width, height]`. */
-export type BoxMark = { kind: "box"; color: MarkColor; rect: [number, number, number, number] };
-/** A typed note, anchored at its top-left corner; `\n` breaks lines. */
+export type BoxMark = { kind: "box"; color: MarkColor; rect: [number, number, number, number]; comment?: string };
+/** A typed note, anchored at its top-left corner; `\n` breaks lines. It says
+ * what it wants in its own words, so it takes no comment. */
 export type TextMark = { kind: "text"; color: MarkColor; at: [number, number]; size: number; text: string };
-export type Mark = InkMark | BoxMark | TextMark;
+
+/** The proofreader's symbols a stamp places with one tap: a caret (insert
+ * here), a cross (delete this), a pilcrow (new paragraph) and a pair of
+ * arrows (swap these). */
+export type StampSymbol = "insert" | "delete" | "paragraph" | "swap";
+export const STAMP_SYMBOLS: readonly StampSymbol[] = ["insert", "delete", "paragraph", "swap"];
+/** A stamp's line width, as a share of its size. */
+export const STAMP_WIDTH = 0.09;
+/** Each symbol as unit polylines — x and y in −0.5…0.5 around the stamp's
+ * `at`, y down — drawn at `size` units with lines `size × STAMP_WIDTH` wide
+ * and round caps. The desktop bakes the same polylines into the marked PDF
+ * (`markup_pdf::stamp_shape`), so keep the two in step. */
+export const STAMP_SHAPES: Record<StampSymbol, [number, number][][]> = {
+  insert: [[[-0.35, 0.4], [0, -0.3], [0.35, 0.4]]],
+  delete: [[[-0.4, -0.4], [0.4, 0.4]], [[0.4, -0.4], [-0.4, 0.4]]],
+  paragraph: [
+    [[0.35, -0.45], [-0.15, -0.45], [-0.32, -0.38], [-0.4, -0.25], [-0.4, -0.15], [-0.32, -0.02], [-0.15, 0.05], [0.05, 0.05]],
+    [[0.05, -0.45], [0.05, 0.45]],
+    [[0.3, -0.45], [0.3, 0.45]],
+  ],
+  swap: [
+    [[-0.4, -0.2], [0.4, -0.2]],
+    [[0.2, -0.38], [0.4, -0.2], [0.2, -0.02]],
+    [[0.4, 0.2], [-0.4, 0.2]],
+    [[-0.2, 0.02], [-0.4, 0.2], [-0.2, 0.38]],
+  ],
+};
+/** A proofreading stamp, centred on `at`, `size` units across. */
+export type StampMark = { kind: "stamp"; color: MarkColor; at: [number, number]; size: number; symbol: StampSymbol; comment?: string };
+export type Mark = InkMark | BoxMark | TextMark | StampMark;
+
+/** The longest comment a mark takes, in characters (`markup::MAX_COMMENT`). */
+export const MAX_COMMENT = 500;
+
+/** A new stamp's size on a page `pageWidth` units wide: about a line and a
+ * half of body text on A4, within the desktop's bound. */
+export function stampSize(pageWidth: number): number {
+  return Math.min(200, Math.max(4, Math.round(pageWidth / 30)));
+}
+
+/** A stamp's polylines in page units. */
+export function stampLines(mark: StampMark): [number, number][][] {
+  return STAMP_SHAPES[mark.symbol].map((line) => line.map(([x, y]): [number, number] => [mark.at[0] + x * mark.size, mark.at[1] + y * mark.size]));
+}
 
 /** One page's marks and the size they are measured in. */
 export type PageLayer = { size: [number, number]; marks: Mark[] };
@@ -26,8 +80,11 @@ export type PageLayer = { size: [number, number]; marks: Mark[] };
  * that page's `marks` in the request — what the agent's ticks
  * (`markup_done`: round id, page, 1-based mark) index into
  * (`docs/markup_tick_approve_plan.md` §3). The marks are the sent side's own
- * objects, shared, not copies. */
-export type SentRound = { id: string; pages: Record<number, Mark[]> };
+ * objects, shared, not copies. `words`: per page, by index in that page's
+ * logged marks, the page's words under each mark at Submit (`null` where
+ * none were read) — what a ✓ group's "was … now …" caption compares the
+ * reloaded page against. Absent from records written before it. */
+export type SentRound = { id: string; pages: Record<number, Mark[]>; words?: Record<number, (string | null)[]> };
 /** The marks earlier Submits sent, drawn dimmed and never sent again
  * (`docs/pdf_markup_rounds_plan.md` §2.1), and how many rounds went out.
  * Only the reader removes them (eraser, Clear page, Clear all marks, Clear
@@ -56,6 +113,36 @@ export const CHAR_WIDTH = 0.72;
  * the base width. The desktop's `markup::ink_width` is the same formula. */
 export function inkWidth(base: number, pressure: number): number {
   return base * (0.3 + 1.4 * Math.min(1, Math.max(0, pressure)));
+}
+
+/** How long an arrow's head is, in multiples of its width, and how far each
+ * side opens from the shaft (radians). The desktop's `markup_pdf::arrow_head`
+ * draws the same head. */
+export const ARROW_HEAD = 5;
+export const ARROW_SPREAD = 0.5;
+
+/** An arrow's open head, `[wing, tip, wing]`: at the stroke's last sample,
+ * pointing the way the stroke ran over its last head's length. `null` for a
+ * stroke that never moved. */
+export function arrowHead(points: readonly (readonly number[])[], width: number): [number, number][] | null {
+  if (points.length < 2) return null;
+  const tip = points[points.length - 1];
+  const length = Math.max(1, width * ARROW_HEAD);
+  let back = points[points.length - 2];
+  for (let i = points.length - 2; i >= 0; i--) {
+    back = points[i];
+    if (Math.hypot(tip[0] - back[0], tip[1] - back[1]) >= length) break;
+  }
+  const dx = tip[0] - back[0];
+  const dy = tip[1] - back[1];
+  const run = Math.hypot(dx, dy);
+  if (run === 0) return null;
+  const angle = Math.atan2(dy, dx);
+  const wing = (side: number): [number, number] => [
+    tip[0] - length * Math.cos(angle + side * ARROW_SPREAD),
+    tip[1] - length * Math.sin(angle + side * ARROW_SPREAD),
+  ];
+  return [wing(1), [tip[0], tip[1]], wing(-1)];
 }
 
 /** A coordinate as stored: a tenth of a unit is finer than any pen. */
@@ -176,6 +263,24 @@ export function addMark(layer: Layer, n: number, size: [number, number], mark: M
   return { ...layer, pages: { ...layer.pages, [n]: { size: page.size, marks: [...page.marks, mark] } } };
 }
 
+/** Several marks added to page `n` at once — the marks one text-mark drag
+ * makes, a line each — as one step. */
+export function addMarks(layer: Layer, n: number, size: [number, number], marks: readonly Mark[]): Layer {
+  if (!marks.length) return layer;
+  const page = layer.pages[n] ?? { size, marks: [] };
+  return { ...layer, pages: { ...layer.pages, [n]: { size: page.size, marks: [...page.marks, ...marks] } } };
+}
+
+/** Whether all of `marks` still fit under the desktop's ceilings together. */
+export function canAddAll(layer: Layer, n: number, marks: readonly Mark[]): boolean {
+  const { marks: count, points } = markCount(layer);
+  if (count + marks.length > LIMITS.marks) return false;
+  const added = marks.reduce((sum, mark) => sum + (mark.kind === "ink" ? mark.points.length : 0), 0);
+  if (points + added > LIMITS.points) return false;
+  const text = marks.reduce((sum, mark) => sum + (mark.kind === "text" ? [...mark.text].length : 0), 0);
+  return text === 0 || pageText(layer.pages[n]) + text <= LIMITS.pageText;
+}
+
 /** Replaces the mark at `index` on page `n` — an edited note. An empty
  * replacement removes it. */
 export function replaceMark(layer: Layer, n: number, index: number, mark: Mark | null): Layer {
@@ -206,7 +311,8 @@ export function touches(mark: Mark, x: number, y: number, radius: number): boole
     }
     return false;
   }
-  const [bx, by, bw, bh] = mark.kind === "box" ? mark.rect : textBox(mark);
+  // A box, a note or a stamp is touched anywhere over its box.
+  const [bx, by, bw, bh] = markBox(mark);
   return x >= bx - radius && x <= bx + bw + radius && y >= by - radius && y <= by + bh + radius;
 }
 
@@ -234,42 +340,97 @@ function sampleAt(a: [number, number, number], b: [number, number, number], t: n
   return [round(a[0] + (b[0] - a[0]) * t), round(a[1] + (b[1] - a[1]) * t), Math.round((a[2] + (b[2] - a[2]) * t) * 100) / 100];
 }
 
-/** The eraser rubbed across a pen stroke: the runs of it left outside its
- * reach, each cut end on the reach's edge so the ink stops where the eraser
- * began. `null` when the eraser misses it; `[]` when it took all of it. */
-export function cutStroke(mark: InkMark, x: number, y: number, radius: number): InkMark[] | null {
-  const reach = radius + inkWidth(mark.width, 1) / 2;
+/** Where the segment `a`→`b` runs inside `rect` (`[x0, y0, x1, y1]`), as the
+ * span of its parameter in [0, 1] — Liang–Barsky; `null` when it stays
+ * outside or only touches an edge. */
+function spanInRect(a: [number, number, number], b: [number, number, number], rect: [number, number, number, number]): [number, number] | null {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  let t0 = 0;
+  let t1 = 1;
+  for (const [p, q] of [[-dx, a[0] - rect[0]], [dx, rect[2] - a[0]], [-dy, a[1] - rect[1]], [dy, rect[3] - a[1]]]) {
+    if (p === 0) {
+      if (q < 0) return null;
+      continue;
+    }
+    const t = q / p;
+    if (p < 0) t0 = Math.max(t0, t);
+    else t1 = Math.min(t1, t);
+    if (t0 >= t1) return null;
+  }
+  return [t0, t1];
+}
+
+function inRect(p: [number, number, number], rect: [number, number, number, number]): boolean {
+  return p[0] >= rect[0] && p[0] <= rect[2] && p[1] >= rect[1] && p[1] <= rect[3];
+}
+
+/** A stroke cut wherever `span` says a segment runs under the eraser: the
+ * runs left outside it, each cut end on the eraser's edge. `null` when the
+ * eraser misses it; `[]` when it took all of it. An arrow keeps its head only
+ * on the run that still ends where the arrow did; the others are plain lines
+ * (an arrow's samples are even, so they look the same). */
+function cutWith(
+  mark: InkMark,
+  outside: (p: [number, number, number]) => boolean,
+  span: (a: [number, number, number], b: [number, number, number]) => [number, number] | null,
+): InkMark[] | null {
   const points = mark.points;
-  if (points.length === 1) return Math.hypot(points[0][0] - x, points[0][1] - y) <= reach ? [] : null;
+  if (points.length === 1) return outside(points[0]) ? null : [];
   const runs: [number, number, number][][] = [];
-  let run: [number, number, number][] | null = Math.hypot(points[0][0] - x, points[0][1] - y) > reach ? [points[0]] : null;
+  let run: [number, number, number][] | null = outside(points[0]) ? [points[0]] : null;
   let cut = run === null;
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1];
     const b = points[i];
-    const span = spanWithin(a, b, x, y, reach);
-    if (!span) {
+    const within = span(a, b);
+    if (!within) {
       (run ??= [a]).push(b);
       continue;
     }
     cut = true;
     if (run) {
-      if (span[0] > 0) run.push(sampleAt(a, b, span[0]));
+      if (within[0] > 0) run.push(sampleAt(a, b, within[0]));
       runs.push(run);
       run = null;
     }
-    if (span[1] < 1) run = [sampleAt(a, b, span[1]), b];
+    if (within[1] < 1) run = [sampleAt(a, b, within[1]), b];
   }
   if (run) runs.push(run);
   if (!cut) return null;
-  // A run the cut left a single point long is no ink to keep.
+  const tip = points[points.length - 1];
+  // A run the cut left a single point long is no ink to keep. A comment stays
+  // with the first run only, so the prompt does not repeat it per piece.
+  const { comment: _comment, ...uncommented } = mark;
   return runs
     .filter((kept) => kept.some((p) => p[0] !== kept[0][0] || p[1] !== kept[0][1]))
-    .map((kept) => ({ ...mark, points: kept }));
+    .map((kept, i) => {
+      const base: InkMark = i === 0 ? mark : uncommented;
+      if (mark.style !== "arrow" || kept[kept.length - 1] === tip) return { ...base, points: kept };
+      const { style: _arrow, ...line } = base;
+      return { ...line, points: kept };
+    });
+}
+
+/** The eraser rubbed across a pen stroke: the runs of it left outside its
+ * reach, each cut end on the reach's edge so the ink stops where the eraser
+ * began. `null` when the eraser misses it; `[]` when it took all of it. */
+export function cutStroke(mark: InkMark, x: number, y: number, radius: number): InkMark[] | null {
+  const reach = radius + inkWidth(mark.width, 1) / 2;
+  return cutWith(mark, (p) => Math.hypot(p[0] - x, p[1] - y) > reach, (a, b) => spanWithin(a, b, x, y, reach));
+}
+
+/** The area eraser over a pen stroke: the runs of it outside `rect`
+ * (`[x0, y0, x1, y1]`), grown by half the stroke's width so no edge of ink
+ * stays standing inside. */
+export function cutStrokeByRect(mark: InkMark, rect: [number, number, number, number]): InkMark[] | null {
+  const half = inkWidth(mark.width, 1) / 2;
+  const grown: [number, number, number, number] = [rect[0] - half, rect[1] - half, rect[2] + half, rect[3] + half];
+  return cutWith(mark, (p) => !inRect(p, grown), (a, b) => spanInRect(a, b, grown));
 }
 
 /** One page's marks after the eraser at `(x, y)`: pen strokes lose the part
- * under it (with `whole`, the whole stroke), boxes and notes go whole.
+ * under it (with `whole`, the whole stroke), boxes, notes and stamps go whole.
  * `null` when it touched none. */
 function eraseMarks(marks: Mark[], x: number, y: number, radius: number, whole: boolean): Mark[] | null {
   let changed = false;
@@ -294,8 +455,8 @@ function within(pages: Record<number, PageLayer>, limits: { marks: number; point
 }
 
 /** The eraser at `(x, y)` on page `n`: it takes the part of every pen stroke
- * it rubs over — a stroke cut in the middle becomes two — and every box and
- * note it touches whole. A cut that would pass the ceilings takes the whole
+ * it rubs over — a stroke cut in the middle becomes two — and every box,
+ * note and stamp it touches whole. A cut that would pass the ceilings takes the whole
  * stroke instead. With `sent`, the sent marks shown there too: they stay
  * until the reader has checked the agent's changes and erases them by hand,
  * never automatically. */
@@ -319,6 +480,40 @@ export function eraseAlong(layer: Layer, n: number, from: [number, number], to: 
     next = eraseAt(next, n, from[0] + ((to[0] - from[0]) * i) / steps, from[1] + ((to[1] - from[1]) * i) / steps, radius, sent);
   }
   return next;
+}
+
+/** The area eraser: everything inside the rectangle from `from` to `to` on
+ * page `n` goes — the part of each pen stroke within it, and every box,
+ * note and stamp it overlaps, whole. A cut that would pass the ceilings takes the whole
+ * stroke instead. With `sent`, the shown sent marks too, as `eraseAt`. */
+export function eraseRect(layer: Layer, n: number, from: [number, number], to: [number, number], sent = false): Layer {
+  const rect: [number, number, number, number] = [Math.min(from[0], to[0]), Math.min(from[1], to[1]), Math.max(from[0], to[0]), Math.max(from[1], to[1])];
+  const overlaps = (box: [number, number, number, number]) =>
+    box[0] <= rect[2] && box[0] + box[2] >= rect[0] && box[1] <= rect[3] && box[1] + box[3] >= rect[1];
+  const erase = (marks: Mark[], whole: boolean): Mark[] | null => {
+    let changed = false;
+    const kept: Mark[] = [];
+    for (const mark of marks) {
+      if (mark.kind === "ink") {
+        const runs = cutStrokeByRect(mark, rect);
+        if (!runs) kept.push(mark);
+        else {
+          changed = true;
+          if (!whole) kept.push(...runs);
+        }
+      } else if (overlaps(markBox(mark))) changed = true;
+      else kept.push(mark);
+    }
+    return changed ? kept : null;
+  };
+  const page = layer.pages[n];
+  let next = layer;
+  const cut = page && erase(page.marks, false);
+  if (page && cut) {
+    next = withPage(layer, n, { ...page, marks: cut });
+    if (!within(next.pages, LIMITS)) next = withPage(layer, n, { ...page, marks: erase(page.marks, true) ?? page.marks });
+  }
+  return sent ? eraseSent(next, n, erase) : next;
 }
 
 /** Whether a pointer is a pen's eraser end — Windows Ink and Wacom report it
@@ -353,6 +548,7 @@ export type MarkAnchor = { page: number; y: number };
 function markTop(mark: Mark): number {
   if (mark.kind === "ink") return mark.points.reduce((top, [, y]) => Math.min(top, y), Infinity);
   if (mark.kind === "box") return Math.min(mark.rect[1], mark.rect[1] + mark.rect[3]);
+  if (mark.kind === "stamp") return mark.at[1] - mark.size / 2;
   return mark.at[1];
 }
 
@@ -425,8 +621,10 @@ export const MAX_LOGGED_ROUNDS = 6;
  * scaled to the new size — and the log's marks of that page with them, the
  * same objects where the sent side still holds them, so a tick still finds
  * its mark. With `roundId` the round is logged: each moved page's `marks`
- * as they are here, which must be the order the Submit sent them in. */
-export function markSent(layer: Layer, only?: readonly number[], roundId?: string): Layer {
+ * as they are here, which must be the order the Submit sent them in — and,
+ * with `words`, the page's words under each of them at Submit, by the same
+ * index (`SentRound.words`), for the moved pages. */
+export function markSent(layer: Layer, only?: readonly number[], roundId?: string, words?: Record<number, (string | null)[]>): Layer {
   const moving = (only ?? markedPages(layer)).filter((n) => (layer.pages[n]?.marks.length ?? 0) > 0);
   if (!moving.length) return layer;
   const rest = { ...layer.pages };
@@ -447,7 +645,14 @@ export function markSent(layer: Layer, only?: readonly number[], roundId?: strin
   if (roundId) {
     const pages: Record<number, Mark[]> = {};
     for (const n of moving) pages[n] = layer.pages[n].marks;
-    log = trimLog([...log.filter((entry) => entry.id !== roundId), { id: roundId, pages }]);
+    const entry: SentRound = { id: roundId, pages };
+    const read: Record<number, (string | null)[]> = {};
+    for (const n of moving) {
+      const said = words?.[n];
+      if (Array.isArray(said)) read[n] = said.slice(0, layer.pages[n].marks.length).map((w) => (typeof w === "string" ? w : null));
+    }
+    if (Object.keys(read).length) entry.words = read;
+    log = trimLog([...log.filter((logged) => logged.id !== roundId), entry]);
   }
   const sent: SentLayer = { pages: merged, rounds: (layer.sent?.rounds ?? 0) + 1 };
   if (log.length) sent.log = log;
@@ -537,9 +742,14 @@ export type TickedMark = { page: number; index: number; round: string };
 
 function sameMark(a: Mark, b: Mark): boolean {
   if (a.kind !== b.kind || a.color !== b.color) return false;
+  if (a.kind !== "text" && b.kind !== "text" && (a.comment ?? "") !== (b.comment ?? "")) return false;
+  if (a.kind === "stamp") {
+    const other = b as StampMark;
+    return a.symbol === other.symbol && a.size === other.size && a.at[0] === other.at[0] && a.at[1] === other.at[1];
+  }
   if (a.kind === "ink") {
     const other = b as InkMark;
-    return a.width === other.width && a.points.length === other.points.length
+    return a.width === other.width && (a.style ?? "pen") === (other.style ?? "pen") && a.points.length === other.points.length
       && a.points.every((p, i) => p[0] === other.points[i][0] && p[1] === other.points[i][1] && p[2] === other.points[i][2]);
   }
   if (a.kind === "box") return a.rect.every((v, i) => v === (b as BoxMark).rect[i]);
@@ -629,6 +839,132 @@ export function approveMark(layer: Layer, page: number, index: number): Layer {
   return approveMarks(layer, [{ page, index }]);
 }
 
+/** How close two ticked marks may sit and still be one remark, as a share of
+ * their page's longer side (about 8 pt on A4): the strokes of one handwritten
+ * word or a line through and the word written over it join; marks a line of
+ * text apart mostly do not. Scaled to the page, so a picture's pixels group
+ * alike. The prompt joins a run of strokes with the same gap (`markup.rs`
+ * `RUN_GAP`). */
+export const TICK_GROUP_GAP = 0.01;
+
+/** Ticked marks of one page that sit together — one remark, often written in
+ * many strokes — badged and approved as one (`tickGroups`). `box` is their
+ * marks' boxes together, `marks` in page order. */
+export type TickGroup = { page: number; marks: TickedMark[]; box: [number, number, number, number] };
+
+/** Which of one page's marks sit together: any two whose boxes come within
+ * `TICK_GROUP_GAP` of each other are in one group, and so is what either is
+ * near. Each group as positions into `boxes`, ascending, with the boxes
+ * together; groups by their first position. */
+function nearGroups(size: [number, number], boxes: readonly [number, number, number, number][]): { at: number[]; box: [number, number, number, number] }[] {
+  const gap = TICK_GROUP_GAP * Math.max(size[0], size[1]);
+  const parent = boxes.map((_, i) => i);
+  const root = (i: number): number => {
+    while (parent[i] !== i) i = parent[i] = parent[parent[i]];
+    return i;
+  };
+  const near = (a: [number, number, number, number], b: [number, number, number, number]) =>
+    Math.max(a[0], b[0]) - Math.min(a[0] + a[2], b[0] + b[2]) <= gap
+    && Math.max(a[1], b[1]) - Math.min(a[1] + a[3], b[1] + b[3]) <= gap;
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      if (near(boxes[i], boxes[j])) parent[root(j)] = root(i);
+    }
+  }
+  const groups = new Map<number, { at: number[]; box: [number, number, number, number] }>();
+  for (let i = 0; i < boxes.length; i++) {
+    const box = boxes[i];
+    const r = root(i);
+    const group = groups.get(r);
+    if (!group) {
+      groups.set(r, { at: [i], box: [...box] });
+      continue;
+    }
+    group.at.push(i);
+    const [x, y, w, h] = group.box;
+    const x0 = Math.min(x, box[0]);
+    const y0 = Math.min(y, box[1]);
+    group.box = [x0, y0, Math.max(x + w, box[0] + box[2]) - x0, Math.max(y + h, box[1] + box[3]) - y0];
+  }
+  return [...groups.values()];
+}
+
+/** The ticked marks grouped by page and nearness (`nearGroups`). Groups in
+ * page order, then by their first mark. */
+export function tickGroups(layer: Layer, ticked: readonly TickedMark[]): TickGroup[] {
+  const byPage = new Map<number, TickedMark[]>();
+  for (const entry of ticked) {
+    if (!layer.sent?.pages[entry.page]?.marks[entry.index]) continue;
+    const list = byPage.get(entry.page) ?? [];
+    list.push(entry);
+    byPage.set(entry.page, list);
+  }
+  const out: TickGroup[] = [];
+  for (const [page, entries] of byPage) {
+    const sent = layer.sent!.pages[page];
+    const boxes = entries.map((entry) => markBox(sent.marks[entry.index]));
+    for (const { at, box } of nearGroups(sent.size, boxes)) {
+      out.push({ page, marks: at.map((i) => entries[i]).sort((a, b) => a.index - b.index), box });
+    }
+  }
+  return out.sort((a, b) => a.page - b.page || a.marks[0].index - b.marks[0].index);
+}
+
+/** Unsent marks of one page that sit together — one remark as it is being
+ * written — which a Submit of its own can send alone (`onlyMarks`,
+ * `markSentSome`). `marks` are the layer's objects in page order. */
+export type MarkGroup = { page: number; marks: Mark[]; box: [number, number, number, number] };
+
+/** The unsent marks grouped by page and nearness (`nearGroups`), on `pages`
+ * (every marked page when left out). Groups in page order, then by their
+ * first mark. */
+export function markGroups(layer: Layer, pages?: readonly number[]): MarkGroup[] {
+  const out: MarkGroup[] = [];
+  for (const page of pages ?? markedPages(layer)) {
+    const now = layer.pages[page];
+    if (!now?.marks.length) continue;
+    for (const { at, box } of nearGroups(now.size, now.marks.map(markBox))) {
+      out.push({ page, marks: at.map((i) => now.marks[i]), box });
+    }
+  }
+  // Stable: within a page, groups stay in order of their first mark.
+  return out.sort((a, b) => a.page - b.page);
+}
+
+/** What a group's Submit carries: the layer with only `shown` of page `page`
+ * left unsent, in their page order — no other page, no other mark. */
+export function onlyMarks(layer: Layer, page: number, shown: readonly Mark[]): Layer {
+  const now = layer.pages[page];
+  const want = new Set(shown);
+  const marks = now ? now.marks.filter((mark) => want.has(mark)) : [];
+  return { ...layer, pages: marks.length ? { [page]: { size: now!.size, marks } } : {} };
+}
+
+/** A group's Submit went out: of page `page`, only `shown` go to the sent
+ * side (logged under `roundId` as `markSent` logs a page, with `words` the
+ * words under each of `shown` in page order); the page's other marks and
+ * every other page stay unsent. */
+export function markSentSome(layer: Layer, page: number, shown: readonly Mark[], roundId?: string, words?: (string | null)[]): Layer {
+  const now = layer.pages[page];
+  if (!now) return layer;
+  const want = new Set(shown);
+  const moving = now.marks.filter((mark) => want.has(mark));
+  if (!moving.length) return layer;
+  const rest = now.marks.filter((mark) => !want.has(mark));
+  const sent = markSent({ ...layer, pages: { ...layer.pages, [page]: { size: now.size, marks: moving } } }, [page], roundId, words ? { [page]: words } : undefined);
+  return rest.length ? { ...sent, pages: { ...sent.pages, [page]: { size: now.size, marks: rest } } } : sent;
+}
+
+/** The reader approved a badge's group: of the sent marks it was drawn for
+ * (`shown`, the objects), those still on page `page` and still ticked in
+ * `layer` go — a mark erased, approved or unticked since stays as it is. */
+export function approveShown(layer: Layer, ticks: readonly MarkTick[], page: number, shown: readonly Mark[]): Layer {
+  const marks = layer.sent?.pages[page]?.marks;
+  if (!marks) return layer;
+  const want = new Set(shown);
+  return approveMarks(layer, tickedMarks(layer, ticks).filter((entry) => entry.page === page && want.has(marks[entry.index])));
+}
+
 /** A mark's bounding box `[x, y, width, height]` in its page's units — a
  * stroke's with half its widest line around it. */
 export function markBox(mark: Mark): [number, number, number, number] {
@@ -637,12 +973,52 @@ export function markBox(mark: Mark): [number, number, number, number] {
     return [Math.min(x, x + w), Math.min(y, y + h), Math.abs(w), Math.abs(h)];
   }
   if (mark.kind === "text") return textBox(mark);
+  if (mark.kind === "stamp") {
+    const reach = mark.size * (1 + STAMP_WIDTH) / 2;
+    return [mark.at[0] - reach, mark.at[1] - reach, 2 * reach, 2 * reach];
+  }
   const half = inkWidth(mark.width, 1) / 2;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const [x, y] of mark.points) {
+  const head = mark.style === "arrow" ? arrowHead(mark.points, mark.width) ?? [] : [];
+  for (const [x, y] of [...mark.points, ...head]) {
     x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
   }
   return [x0 - half, y0 - half, x1 - x0 + 2 * half, y1 - y0 + 2 * half];
+}
+
+/** Where a group's own Submit button goes — its top-left corner in CSS px,
+ * given the group's box, the page's scale, the page and the button in CSS
+ * px, and every unsent mark's box on the page (page units): just outside the
+ * group, never over its marks or any other's, so it hides nothing the reader
+ * wrote. Tried in turn: above its right end (where writing does not go on),
+ * above its left end, below either end, beside it on the right or left; the
+ * first spot on the page clear of every mark wins, else the first on the
+ * page, else the first clamped onto it. */
+export function submitSpot(
+  box: [number, number, number, number],
+  scale: number,
+  page: [number, number],
+  button: [number, number],
+  marks: readonly [number, number, number, number][],
+): [number, number] {
+  const GAP = 3;
+  const [bw, bh] = button;
+  const [x, y, w, h] = box.map((v) => v * scale);
+  const spots: [number, number][] = [
+    [x + w - bw, y - GAP - bh],
+    [x, y - GAP - bh],
+    [x + w - bw, y + h + GAP],
+    [x, y + h + GAP],
+    [x + w + GAP, y],
+    [x - GAP - bw, y],
+  ];
+  const onPage = ([l, t]: [number, number]) => l >= 0 && t >= 0 && l + bw <= page[0] && t + bh <= page[1];
+  const clear = ([l, t]: [number, number]) => marks.every(([mx, my, mw, mh]) =>
+    l >= (mx + mw) * scale || l + bw <= mx * scale || t >= (my + mh) * scale || t + bh <= my * scale);
+  const pick = spots.find((spot) => onPage(spot) && clear(spot)) ?? spots.find(onPage);
+  if (pick) return pick;
+  const clamp = (v: number, max: number) => Math.min(Math.max(0, max), Math.max(0, v));
+  return [clamp(spots[0][0], page[0] - bw), clamp(spots[0][1], page[1] - bh)];
 }
 
 /** Where a tick's ✓ badge goes — its top-left corner in CSS px, given the
@@ -673,13 +1049,201 @@ export function clearSent(layer: Layer): Layer {
   return layer.sent ? { pages: layer.pages } : layer;
 }
 
+/** How much wider the marker draws than the pen — about a line of text
+ * (`pen.ts` sizes new strokes by it; a restyled stroke changes by it). */
+export const MARKER_FACTOR = 5;
+
+/** Whether a mark may wear `color`: yellow only where it highlights — a box
+ * or the marker — as the pen bar offers it (`pen.ts` `colorsFor`). */
+function wears(mark: Mark, color: MarkColor): boolean {
+  return color !== "yellow" || mark.kind === "box" || (mark.kind === "ink" && mark.style === "marker");
+}
+
+/** The select tool's click: the topmost unsent mark of `page` within
+ * `radius` of `(x, y)` — drawn last, so the one the reader sees on top — or
+ * -1. `page` is `layer.pages[n]`, so sent marks are never picked. */
+export function markAt(page: PageLayer | undefined, x: number, y: number, radius: number): number {
+  const marks = page?.marks ?? [];
+  for (let i = marks.length - 1; i >= 0; i--) if (touches(marks[i], x, y, radius)) return i;
+  return -1;
+}
+
+/** The select tool's dragged rectangle (`[x0, y0, x1, y1]`, either way
+ * round): every unsent mark it reaches, ascending — a stroke where its ink
+ * runs into the rectangle, anything else where its box overlaps it. */
+export function marksIn(page: PageLayer | undefined, rect: [number, number, number, number]): number[] {
+  const r: [number, number, number, number] = [Math.min(rect[0], rect[2]), Math.min(rect[1], rect[3]), Math.max(rect[0], rect[2]), Math.max(rect[1], rect[3])];
+  const out: number[] = [];
+  (page?.marks ?? []).forEach((mark, i) => {
+    if (mark.kind === "ink") {
+      const p = mark.points;
+      if (p.some((point) => inRect(point, r)) || p.some((point, j) => j > 0 && spanInRect(p[j - 1], point, r) !== null)) out.push(i);
+      return;
+    }
+    const [x, y, w, h] = markBox(mark);
+    if (x <= r[2] && x + w >= r[0] && y <= r[3] && y + h >= r[1]) out.push(i);
+  });
+  return out;
+}
+
+/** The valid, distinct positions of `indices` on `page`. */
+function picked(page: PageLayer, indices: readonly number[]): Set<number> {
+  return new Set(indices.filter((i) => Number.isInteger(i) && i >= 0 && i < page.marks.length));
+}
+
+/** A mark moved by `(dx, dy)` page units, rounded as stored. */
+function shifted(mark: Mark, dx: number, dy: number): Mark {
+  if (mark.kind === "ink") return { ...mark, points: mark.points.map(([x, y, p]): [number, number, number] => [round(x + dx), round(y + dy), p]) };
+  if (mark.kind === "box") return { ...mark, rect: [round(mark.rect[0] + dx), round(mark.rect[1] + dy), mark.rect[2], mark.rect[3]] };
+  return { ...mark, at: [round(mark.at[0] + dx), round(mark.at[1] + dy)] };
+}
+
+/** The selection dragged by `(dx, dy)`: the marks at `indices` on page `n`
+ * move together, held back where one would leave the page — their boxes
+ * together stay on it (a box already over an edge is not pushed back, only
+ * kept from going further). The layer itself when nothing moves, so the
+ * history takes no empty step. */
+export function moveMarks(layer: Layer, n: number, indices: readonly number[], dx: number, dy: number): Layer {
+  const page = layer.pages[n];
+  if (!page) return layer;
+  const chosen = picked(page, indices);
+  if (!chosen.size) return layer;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const i of chosen) {
+    const [x, y, w, h] = markBox(page.marks[i]);
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
+  }
+  const clamp = (d: number, low: number, high: number) => Math.min(Math.max(d, Math.min(0, low)), Math.max(0, high));
+  const mx = round(clamp(dx, -x0, page.size[0] - x1));
+  const my = round(clamp(dy, -y0, page.size[1] - y1));
+  if (!mx && !my) return layer;
+  return withPage(layer, n, { ...page, marks: page.marks.map((mark, i) => (chosen.has(i) ? shifted(mark, mx, my) : mark)) });
+}
+
+/** One mark with `change` applied: a style on a pen stroke only (its
+ * samples' pressure kept; the plain pen drops the field, and the stroke
+ * widens or narrows by `MARKER_FACTOR` into or out of the marker), then a
+ * colour only where the mark may wear it (`wears`) — a stroke that leaves the
+ * marker gives up its yellow for red. */
+function restyled(mark: Mark, change: { color?: MarkColor; style?: PenStyle }): Mark {
+  let next: Mark = mark;
+  if (change.style && mark.kind === "ink" && (mark.style ?? "pen") !== change.style) {
+    const was = mark.style ?? "pen";
+    const factor = was === "marker" ? 1 / MARKER_FACTOR : change.style === "marker" ? MARKER_FACTOR : 1;
+    const { style: _style, ...plain } = mark;
+    const width = Math.round(Math.min(100, Math.max(0.1, mark.width * factor)) * 10) / 10;
+    next = { ...plain, width, ...(change.style === "pen" ? {} : { style: change.style }) };
+  }
+  const wanted = change.color && wears(next, change.color) ? change.color : next.color;
+  const color = wears(next, wanted) ? wanted : "red";
+  return color === next.color ? next : { ...next, color };
+}
+
+/** The selection recoloured or restyled (`restyled`). The layer itself when
+ * no mark changes. */
+export function restyleMarks(layer: Layer, n: number, indices: readonly number[], change: { color?: MarkColor; style?: PenStyle }): Layer {
+  const page = layer.pages[n];
+  if (!page) return layer;
+  const chosen = picked(page, indices);
+  let changed = false;
+  const marks = page.marks.map((mark, i) => {
+    if (!chosen.has(i)) return mark;
+    const next = restyled(mark, change);
+    if (next !== mark) changed = true;
+    return next;
+  });
+  return changed ? withPage(layer, n, { ...page, marks }) : layer;
+}
+
+/** The selection deleted. */
+export function removeMarks(layer: Layer, n: number, indices: readonly number[]): Layer {
+  const page = layer.pages[n];
+  if (!page) return layer;
+  const chosen = picked(page, indices);
+  if (!chosen.size) return layer;
+  return withPage(layer, n, { ...page, marks: page.marks.filter((_, i) => !chosen.has(i)) });
+}
+
+/** A comment as stored: one plain line — control characters (line breaks
+ * among them) become spaces, the ends trimmed — cut to `MAX_COMMENT`
+ * characters. The desktop refuses anything else (`markup::validate_body`). */
+export function cleanComment(comment: string): string {
+  return [...comment.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim()].slice(0, MAX_COMMENT).join("").trim();
+}
+
+/** The reader's comment on the mark at `index` of page `n` (`cleanComment`);
+ * `null` or nothing left after cleaning removes it. A typed note takes none —
+ * it says what it wants itself — and is left as it is. */
+export function setComment(layer: Layer, n: number, index: number, comment: string | null): Layer {
+  const page = layer.pages[n];
+  const mark = page?.marks[index];
+  if (!page || !mark || mark.kind === "text") return layer;
+  const text = comment === null ? "" : cleanComment(comment);
+  if (text === (mark.comment ?? "")) return layer;
+  const { comment: _old, ...bare } = mark;
+  return replaceMark(layer, n, index, text ? { ...bare, comment: text } : bare);
+}
+
+/** How many samples a snapped ellipse is drawn with. */
+const ELLIPSE_SAMPLES = 48;
+
+/** A held stroke straightened into the shape it almost is (`SNAP_HOLD_MS`
+ * in `pen.ts`): an almost-straight one becomes the line from its first to its
+ * last sample, an almost-closed round one the ellipse its samples span; an
+ * arrow always becomes straight. `null` when it is neither — handwriting, a
+ * tick, a scribble — or too small to tell. A pen stroke keeps its mean
+ * pressure, evenly; the other styles draw evenly anyway. */
+export function snapStroke(mark: InkMark): InkMark | null {
+  const points = mark.points;
+  if (points.length < 2) return null;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const pressure = (mark.style ?? "pen") === "pen"
+    ? Math.round((points.reduce((sum, p) => sum + p[2], 0) / points.length) * 100) / 100
+    : 0.5;
+  const chord = Math.hypot(last[0] - first[0], last[1] - first[1]);
+  const line = (): InkMark => ({ ...mark, points: [[round(first[0]), round(first[1]), pressure], [round(last[0]), round(last[1]), pressure]] });
+  if (mark.style === "arrow") return chord > 0 ? line() : null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, length = 0;
+  points.forEach((p, i) => {
+    x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]);
+    if (i > 0) length += Math.hypot(p[0] - points[i - 1][0], p[1] - points[i - 1][1]);
+  });
+  const span = Math.max(x1 - x0, y1 - y0);
+  // Below a few widths of its own line a stroke is a dot or a dash, no shape.
+  const smallest = Math.max(4, 3 * mark.width);
+  if (span < smallest) return null;
+  if (chord <= 0.2 * span) {
+    // Closed: round enough when its samples sit near the ellipse they span.
+    const rx = (x1 - x0) / 2;
+    const ry = (y1 - y0) / 2;
+    if (points.length < 6 || length < 2.2 * span || Math.min(rx, ry) * 2 < smallest / 2) return null;
+    const cx = x0 + rx;
+    const cy = y0 + ry;
+    const off = points.reduce((sum, p) => sum + Math.abs(Math.hypot((p[0] - cx) / rx, (p[1] - cy) / ry) - 1), 0) / points.length;
+    if (off > 0.2) return null;
+    const start = Math.atan2((first[1] - cy) / ry, (first[0] - cx) / rx);
+    const ring: [number, number, number][] = [];
+    for (let i = 0; i <= ELLIPSE_SAMPLES; i++) {
+      const angle = start + (2 * Math.PI * i) / ELLIPSE_SAMPLES;
+      ring.push([round(cx + rx * Math.cos(angle)), round(cy + ry * Math.sin(angle)), pressure]);
+    }
+    return { ...mark, points: ring };
+  }
+  const worst = points.reduce((most, p) => Math.max(most, distanceToSegment([p[0], p[1]], [first[0], first[1]], [last[0], last[1]])), 0);
+  return worst <= Math.max(1, 0.07 * chord) ? line() : null;
+}
+
 /** Undo and redo over whole layers: each change keeps the one before it. The
  * marks themselves are shared between snapshots, never copied. */
 export type History = { past: Layer[]; present: Layer; future: Layer[] };
 const MAX_UNDO = 200;
 
-export function startHistory(layer: Layer = EMPTY_LAYER): History {
-  return { past: [], present: layer, future: [] };
+/** A fresh history over `layer` — with `past`, the undo steps a stored
+ * record kept (`store.ts`, the last `MAX_STORED_UNDO`), oldest first. Redo is
+ * never kept. */
+export function startHistory(layer: Layer = EMPTY_LAYER, past?: readonly Layer[]): History {
+  return { past: past ? past.slice(-MAX_UNDO) : [], present: layer, future: [] };
 }
 
 export function commit(history: History, next: Layer): History {
@@ -721,10 +1285,18 @@ function validLog(log: unknown): boolean {
   if (!Array.isArray(log)) return false;
   return log.every((entry: unknown) => {
     if (!entry || typeof entry !== "object") return false;
-    const { id, pages } = entry as { id?: unknown; pages?: unknown };
+    const { id, pages, words } = entry as { id?: unknown; pages?: unknown; words?: unknown };
     if (typeof id !== "string" || !ROUND_ID.test(id) || !pages || typeof pages !== "object") return false;
+    // A round logged before before/after captions has no `words`.
+    if (words !== undefined && !validWords(words)) return false;
     return Object.entries(pages as Record<string, unknown>).every(([n, marks]) => /^[1-9]\d*$/.test(n) && Array.isArray(marks) && marks.every(validMark));
   });
+}
+
+function validWords(words: unknown): boolean {
+  if (!words || typeof words !== "object" || Array.isArray(words)) return false;
+  return Object.entries(words as Record<string, unknown>).every(([n, said]) =>
+    /^[1-9]\d*$/.test(n) && Array.isArray(said) && said.every((w: unknown) => w === null || typeof w === "string"));
 }
 
 function validPages(pages: unknown): boolean {
@@ -743,7 +1315,10 @@ function validMark(mark: unknown): boolean {
   if (!mark || typeof mark !== "object") return false;
   const m = mark as Record<string, unknown>;
   if (!MARK_COLORS.includes(m.color as MarkColor)) return false;
-  if (m.kind === "ink") return num(m.width) && Array.isArray(m.points) && m.points.length > 0
+  // Marks from before comments have none; a note never takes one.
+  if (m.comment !== undefined && (m.kind === "text" || typeof m.comment !== "string" || [...m.comment].length > MAX_COMMENT)) return false;
+  if (m.kind === "stamp") return Array.isArray(m.at) && m.at.length === 2 && m.at.every(num) && num(m.size) && STAMP_SYMBOLS.includes(m.symbol as StampSymbol);
+  if (m.kind === "ink") return num(m.width) && (m.style === undefined || PEN_STYLES.includes(m.style as PenStyle)) && Array.isArray(m.points) && m.points.length > 0
     && m.points.every((p: unknown) => Array.isArray(p) && p.length === 3 && p.every(num));
   if (m.kind === "box") return Array.isArray(m.rect) && m.rect.length === 4 && m.rect.every(num);
   if (m.kind === "text") return Array.isArray(m.at) && m.at.length === 2 && m.at.every(num) && num(m.size) && typeof m.text === "string";

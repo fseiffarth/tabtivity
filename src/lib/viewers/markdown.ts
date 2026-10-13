@@ -152,6 +152,21 @@ export function slugify(raw: string): string {
     .replace(/\s+/g, "-");
 }
 
+/** Hands out the ids for one document's headings, in document order: the
+ *  heading's `slugify` slug, with GitHub's `-1`, `-2`, … suffix on a repeat so
+ *  two "Usage" sections get `usage` and `usage-1`. The renderer and the
+ *  table-of-contents generator (`markdownEdit.generateToc`) both draw from one
+ *  of these, so a TOC entry always names an id the preview actually has. */
+export function headingIdAllocator(): (text: string) => string {
+  const seen = new Map<string, number>();
+  return (text) => {
+    const base = slugify(text);
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return n === 0 ? base : `${base}-${n}`;
+  };
+}
+
 /** The rendered-heading id a link fragment names, or null when none matches.
  *  `ids` are the `[id]` values present in the rendered preview (in document
  *  order); `fragment` is the raw text after `#` in the authored href. Tried in
@@ -527,12 +542,47 @@ function renderList(items: ListItem[]): string {
 /** `breaks`: a single line break inside a paragraph stays a break (`<br>`),
  * as in a chat message, instead of joining the lines into one. */
 export function renderMarkdown(src: string, { breaks = false }: { breaks?: boolean } = {}): string {
+  return renderBlocks(src, breaks);
+}
+
+/** One heading of a document as the renderer sees it: `text` is the raw
+ *  Markdown of its title (closing `#`s dropped), `id` the id it renders with
+ *  ("" when the title has no slug, which renders without an id). */
+export interface MarkdownHeading {
+  level: number;
+  text: string;
+  id: string;
+}
+
+/** Every ATX and setext heading of `src`, in order, exactly as `renderMarkdown`
+ *  parses and ids them — derived from the same pass, so a consumer (the TOC
+ *  generator) can never disagree with the preview about which lines are
+ *  headings or how a repeat is numbered. */
+export function markdownHeadings(src: string): MarkdownHeading[] {
+  const out: MarkdownHeading[] = [];
+  renderBlocks(src, false, (h) => out.push(h));
+  return out;
+}
+
+function renderBlocks(
+  src: string,
+  breaks: boolean,
+  onHeading?: (heading: MarkdownHeading) => void,
+): string {
   // Drop NUL up front — it is the inline placeholder delimiter (`mark`), and
   // stripping it here is what makes a marker impossible to forge from document
   // text. A NUL in a file being viewed as markdown has nothing to render anyway.
   const lines = src.replace(/\u0000/g, "").replace(/\r\n?/g, "\n").split("\n");
   const out: string[] = [];
   let i = 0;
+
+  const headingId = headingIdAllocator();
+  const pushHeading = (level: number, text: string) => {
+    const id = headingId(text);
+    onHeading?.({ level, text, id });
+    const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
+    out.push(`<h${level}${idAttr}>${renderInline(text)}</h${level}>`);
+  };
 
   let paragraph: string[] = [];
   const flushParagraph = () => {
@@ -571,13 +621,12 @@ export function renderMarkdown(src: string, { breaks = false }: { breaks?: boole
     }
 
     // ATX heading.
-    const heading = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+    // The optional closing `#` run needs whitespace before it (CommonMark), so
+    // a title that ends in `#` — "C#", "F#" — keeps it.
+    const heading = line.match(/^(#{1,6})\s+(.*?)\s*(?:(?<=\s)#+)?\s*$/);
     if (heading) {
       flushParagraph();
-      const level = heading[1].length;
-      const id = slugify(heading[2]);
-      const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
-      out.push(`<h${level}${idAttr}>${renderInline(heading[2])}</h${level}>`);
+      pushHeading(heading[1].length, heading[2]);
       i++;
       continue;
     }
@@ -594,9 +643,7 @@ export function renderMarkdown(src: string, { breaks = false }: { breaks?: boole
       const level = line.trim().startsWith("=") ? 1 : 2;
       const textRaw = paragraph[0];
       paragraph = [];
-      const id = slugify(textRaw);
-      const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
-      out.push(`<h${level}${idAttr}>${renderInline(textRaw)}</h${level}>`);
+      pushHeading(level, textRaw);
       i++;
       continue;
     }

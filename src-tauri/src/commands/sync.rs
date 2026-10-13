@@ -413,9 +413,7 @@ pub async fn sync_big_folders(
 
     // Local mirror walk (blocking fs work — off the UI thread).
     let mirror = remote_sync::mirror_dir(&project_id);
-    let local = tokio::task::spawn_blocking(move || big_folders::scan_local(&mirror))
-        .await
-        .map_err(|e| e.to_string())?;
+    let local = app_core::rt::blocking("sync", move || big_folders::scan_local(&mirror)).await?;
 
     // A confirmed census is the user asking for this machine by name, so it also
     // clears the dial policy that would otherwise refuse the `du`'s own ssh one
@@ -438,11 +436,10 @@ pub async fn sync_big_folders(
     let host = if connected {
         let spec = target.spec.clone();
         let root = spec.remote_path.clone();
-        match tokio::task::spawn_blocking(move || {
+        match app_core::rt::blocking("sync", move || {
             crate::services::ssh_exec::remote_du_raw(&spec, &root)
         })
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         {
             Ok(out) => big_folders::scan_host(&target.spec.remote_path, &out),
             Err(e) => {
@@ -573,7 +570,7 @@ pub async fn sync_status(
     // withholds them). Resolve the set once, off the async thread (git spawns).
     let lockstep_tracked: HashSet<String> = {
         let pid = project_id.clone();
-        tokio::task::spawn_blocking(move || {
+        app_core::rt::spawn_blocking(move || {
             if crate::services::git_peer::load_state(&pid).enabled {
                 crate::services::git_peer::tracked_paths(&pid)
             } else {
@@ -837,7 +834,7 @@ pub async fn sync_status(
     {
         let pid = project_id.clone();
         let snapshot_for_new = snapshot.clone();
-        let new_rows = tokio::task::spawn_blocking(move || {
+        let new_rows = app_core::rt::spawn_blocking(move || {
             let all: Vec<String> = match crate::services::git_peer::non_ignored_paths(&pid) {
                 Some(set) => set.into_iter().collect(),
                 None => remote_sync::walk_mirror_files(&pid, "").unwrap_or_default(),
@@ -1635,9 +1632,8 @@ pub async fn sync_diff(
     // host bytes are already in memory). Off the async thread: git spawns a
     // subprocess.
     let rel = rel_path.clone();
-    tokio::task::spawn_blocking(move || diff_mirror_vs_host(&mirror_path, &host_bytes, &rel))
+    app_core::rt::try_blocking("sync_diff", move || diff_mirror_vs_host(&mirror_path, &host_bytes, &rel))
         .await
-        .map_err(|e| format!("sync_diff task failed: {e}"))?
 }
 
 // ── Internals ──────────────────────────────────────────────────────────────
@@ -1855,7 +1851,7 @@ async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::
     else {
         return false;
     };
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         if !remote_sync::rsync_available_host(&spec) {
             return false;
         }

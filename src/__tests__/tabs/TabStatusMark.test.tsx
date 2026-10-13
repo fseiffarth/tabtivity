@@ -15,7 +15,7 @@ const PLAY = "svg";
 
 function marks(stateClass: string) {
   const { container } = render(<TabStatusMark stateClass={stateClass} />);
-  return [...container.querySelectorAll(".tab-status-mark")].map((el) => ({
+  return [...container.querySelectorAll(".tab-status-mark:not(.reserved)")].map((el) => ({
     glyph: el.querySelector("svg") ? (el.textContent ? `svg+${el.textContent}` : "svg") : el.textContent,
     shell: el.classList.contains("shell"),
   }));
@@ -35,6 +35,14 @@ describe("TabStatusMark", () => {
       { glyph: PLAY, shell: false },
       { glyph: PLAY, shell: true },
     ]);
+  });
+
+  it("holds the command mark's slot while an agent works, so the mark coming and going keeps the tab's width", () => {
+    const slots = (stateClass: string) =>
+      render(<TabStatusMark stateClass={stateClass} />).container.querySelectorAll(".tab-status-mark").length;
+    expect(slots(" working")).toBe(slots(" working job"));
+    const { container } = render(<TabStatusMark stateClass=" working" />);
+    expect(container.querySelector(".tab-status-mark.reserved")?.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("keeps the other two states one mark each", () => {

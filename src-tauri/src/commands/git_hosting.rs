@@ -11,7 +11,6 @@
 use serde_json::Value;
 
 use crate::schema::projects::ProjectsList;
-use crate::schema::settings::Settings;
 use crate::services::git_credentials;
 use crate::storage;
 
@@ -35,7 +34,7 @@ pub struct GitHostingInfo {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_project_git_hosting(project_id: String) -> Result<GitHostingInfo, String> {
     let profile_url = project_profile_url(&project_id)?;
-    let settings = read_settings();
+    let settings = crate::storage::load_settings();
     Ok(GitHostingInfo {
         profile_url,
         has_token: git_credentials::has_token(&project_id),
@@ -101,7 +100,7 @@ pub fn set_project_git_hosting(
 /// override if present, otherwise the global `settings.json` value. Returns
 /// `(profile_url, token)`. Used by `git::git_push` and `git_publish::publish_project`.
 pub fn effective_git_creds(project_id: &str) -> (Option<String>, Option<String>) {
-    let settings = read_settings();
+    let settings = crate::storage::load_settings();
 
     let profile_url = project_profile_url(project_id)
         .ok()
@@ -128,18 +127,9 @@ pub fn effective_git_creds(project_id: &str) -> (Option<String>, Option<String>)
 /// work that has no project to key a per-project override off yet — `git_clone`
 /// runs *before* the project exists — so only the global connection applies.
 pub fn global_git_token() -> Option<String> {
-    read_settings()
+    crate::storage::load_settings()
         .and_then(|s| s.git_token)
         .filter(|t| !t.trim().is_empty())
-}
-
-fn read_settings() -> Option<Settings> {
-    let path = storage::state_dir().join("settings.json");
-    if path.exists() {
-        storage::read_json::<Settings>(&path).ok()
-    } else {
-        None
-    }
 }
 
 /// The per-project profile URL override, from the trusted `projects.json` entry.
@@ -186,7 +176,7 @@ fn url_origin(url: &str) -> Option<String> {
 /// clone URL — gets no token. `provider` overrides the recorded one (a first
 /// publish runs before the provider is recorded).
 pub fn token_origins(project_id: Option<&str>, provider: Option<&str>) -> Vec<String> {
-    let settings = read_settings();
+    let settings = crate::storage::load_settings();
     let profile = project_id
         .and_then(|id| project_profile_url(id).ok().flatten())
         .or_else(|| settings.as_ref().and_then(|s| s.git_profile_url.clone()));
@@ -214,7 +204,7 @@ fn token_origins_for(profile_url: Option<&str>, provider: Option<&str>) -> Vec<S
 /// Find a project entry by id, returning its index and the owned list so the
 /// caller can mutate + persist it. (Mirrors the helper in `commands::git_publish`.)
 fn find_entry(project_id: &str) -> Result<(usize, ProjectsList), String> {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let list: ProjectsList = if list_path.exists() {
         storage::read_json(&list_path).map_err(|e| e.to_string())?
     } else {

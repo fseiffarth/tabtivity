@@ -84,10 +84,39 @@ impl InboxError {
     }
 }
 
+/// Whether `head` (a name's part before its first dot) is one of Windows'
+/// reserved device names: `CON PRN AUX NUL`, and `COM`/`LPT` followed by one
+/// of `0`–`9`, `¹`, `²`, `³` (Win32 reads the superscripts as digits). A file
+/// named one (any case, any extension: `CON.txt`, `nul`, `com1.tar.gz`) can be
+/// created handle-relative, but Explorer can neither open nor delete it.
+fn is_device_name(head: &str) -> bool {
+    let upper = head.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    let (Some(prefix), Some(port)) = (upper.get(..3), upper.get(3..)) else {
+        return false;
+    };
+    matches!(prefix, "COM" | "LPT")
+        && matches!(port, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+}
+
 /// A file name rebuilt from the phone's: the last path component only, drawn
 /// from letters, digits, `.`, `-` and `_`, never starting with a dot, bounded
-/// in length with its extension kept. Empty in, `attachment` out.
+/// in length with its extension kept. Empty in, `attachment` out. A Windows
+/// device name gets a `_` after it (`CON.txt` → `CON_.txt`) on every OS, so
+/// a project synced to Windows never carries one.
 pub fn safe_name(raw: &str) -> String {
+    let name = safe_name_unchecked(raw);
+    // Windows reads the part before the first dot as the device.
+    let head = name.split('.').next().unwrap_or("");
+    if is_device_name(head) {
+        return format!("{head}_{}", &name[head.len()..]);
+    }
+    name
+}
+
+fn safe_name_unchecked(raw: &str) -> String {
     let leaf = raw
         .rsplit(['/', '\\'])
         .next()
@@ -215,15 +244,30 @@ fn store_at(
         return Err(InboxError::Full);
     }
     let base = format!("{}-{}", stamp(now), safe_name(raw_name));
-    let (mut stem, ext) = match base.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
-        _ => (base.clone(), String::new()),
-    };
+    let name = create_unique(&dir, &base, bytes).map_err(|error| InboxError::Io(error.to_string()))?;
+    Ok(Stored { reference: format!("{rel_dir}/{name}"), name, size: bytes.len() as u64 })
+}
+
+/// Writes `bytes` to a new file in the held `dir` named `base`, or — when
+/// that name is taken — `stem-2.ext`, `stem-3.ext`, …; never an existing file
+/// (`create_file` is `O_EXCL`). Returns the name written. A file whose write
+/// fails is removed again. `base` is a [`safe_name`] (stamped or not).
+pub(super) fn create_unique(dir: &ProjectDir, base: &str, bytes: &[u8]) -> std::io::Result<String> {
     // `safe_name` bounds characters; one file name holds 255 bytes (Linux,
-    // `files::plain_segment`). Cut the stem at a character so the stamp, the
-    // extension and a `-1000` suffix still fit.
-    let room = 255 - "-1000".len() - ext.len();
-    while stem.len() > room {
+    // `files::plain_segment`). Cut the stem at a character so a stamp, the
+    // extension and a `-1000` suffix still fit. A dotted tail too long to
+    // leave the stem a byte (`a.<80 wide letters>`, which `safe_name` keeps
+    // whole) is part of the stem and is cut with it.
+    const ROOM: usize = 255 - "-1000".len();
+    let (mut stem, ext) = match base.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && ext.len() + 1 < ROOM => (stem.to_string(), format!(".{ext}")),
+        _ => (base.to_string(), String::new()),
+    };
+    while stem.len() > ROOM - ext.len() {
+        stem.pop();
+    }
+    // A cut never leaves a trailing dot (Windows drops it from the name).
+    while ext.is_empty() && stem.ends_with('.') {
         stem.pop();
     }
     let base = format!("{stem}{ext}");
@@ -238,19 +282,15 @@ fn store_at(
                 if let Err(error) = file.write_all(bytes).and_then(|()| file.flush()) {
                     drop(file);
                     let _ = dir.remove_file(&name);
-                    return Err(InboxError::Io(error.to_string()));
+                    return Err(error);
                 }
-                return Ok(Stored {
-                    reference: format!("{rel_dir}/{name}"),
-                    name,
-                    size: bytes.len() as u64,
-                });
+                return Ok(name);
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(InboxError::Io(error.to_string())),
+            Err(error) => return Err(error),
         }
     }
-    Err(InboxError::Io("no free name in the inbox".into()))
+    Err(std::io::Error::other("no free name in the folder"))
 }
 
 /// The longest project-inbox leaf the read side admits: a stamp, an
@@ -414,6 +454,43 @@ mod tests {
         assert_eq!(safe_name(""), "attachment");
         assert_eq!(safe_name("Größe.pdf"), "Größe.pdf");
         assert_eq!(safe_name("a\0b\n.txt"), "a_b.txt");
+    }
+
+    #[test]
+    fn a_windows_device_name_gets_an_underscore_on_every_os() {
+        assert_eq!(safe_name("CON.txt"), "CON_.txt");
+        assert_eq!(safe_name("nul"), "nul_");
+        assert_eq!(safe_name("Com1.tar.gz"), "Com1_.tar.gz");
+        assert_eq!(safe_name("lpt9.log"), "lpt9_.log");
+        assert_eq!(safe_name("aux/../prn"), "prn_");
+        // Only the whole head before the first dot is a device.
+        assert_eq!(safe_name("CONSOLE.txt"), "CONSOLE.txt");
+        assert_eq!(safe_name("COM10.txt"), "COM10.txt");
+        assert_eq!(safe_name("my-con.txt"), "my-con.txt");
+        assert_eq!(safe_name("notes.con"), "notes.con");
+        // Win32 reads a superscript port number as a digit, and lists COM0/LPT0.
+        assert_eq!(safe_name("COM¹.txt"), "COM¹_.txt");
+        assert_eq!(safe_name("lpt³"), "lpt³_");
+        assert_eq!(safe_name("com0.log"), "com0_.log");
+        assert_eq!(safe_name("COM⁴.txt"), "COM⁴.txt");
+    }
+
+    /// A dotted tail `safe_name` keeps whole (past its 12-character
+    /// extension) can be more bytes than a name holds: it is cut as part of
+    /// the stem instead of underflowing the room left for the stem.
+    #[test]
+    fn a_long_dotted_tail_in_a_wide_script_still_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = format!("a.{}", "𝐀".repeat(78));
+        assert_eq!(safe_name(&raw), raw);
+        let stored = store_at(dir.path(), INBOX_DIR, &raw, b"x", at(T0)).unwrap();
+        assert!(stored.name.len() <= 255 - "-1000".len(), "{}", stored.name);
+        assert!(stored.name.starts_with("20260831-120000-a."));
+        assert!(!stored.name.ends_with('.'));
+        assert_eq!(fs::read(dir.path().join(&stored.reference)).unwrap(), b"x");
+        let again = store_at(dir.path(), INBOX_DIR, &raw, b"y", at(T0)).unwrap();
+        assert!(again.name.ends_with("-2"), "{}", again.name);
+        assert!(valid_stored_name(&again.name));
     }
 
     #[test]

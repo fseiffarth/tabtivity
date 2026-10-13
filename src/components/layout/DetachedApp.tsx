@@ -4,6 +4,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { detachedWindowVisible } from "../../lib/window/detachedVisibility";
 import { answerRetireRequests } from "../../lib/window/unsavedWork";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import {
   useSettingsStore,
   applyTheme,
@@ -417,7 +418,6 @@ export function DetachedApp({ param }: Props) {
   // trailing re-fire so a monitor switch measures the settled geometry rather
   // than mid-transition.
   useEffect(() => {
-    const unlisteners: Array<() => void> = [];
     let raf = 0;
     let trailing: ReturnType<typeof setTimeout> | undefined;
     const fire = () => {
@@ -434,8 +434,10 @@ export function DetachedApp({ param }: Props) {
       }, 250);
     };
     const win = getCurrentWindow();
-    win.onResized(fire).then((fn) => unlisteners.push(fn)).catch(() => {});
-    win.onScaleChanged(fire).then((fn) => unlisteners.push(fn)).catch(() => {});
+    const unlisteners = [
+      subscribeTauri(() => win.onResized(fire)),
+      subscribeTauri(() => win.onScaleChanged(fire)),
+    ];
     return () => {
       if (raf) cancelAnimationFrame(raf);
       if (trailing) clearTimeout(trailing);

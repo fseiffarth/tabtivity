@@ -44,6 +44,7 @@
 //! rather than implying more.
 
 use std::path::{Path, PathBuf};
+use app_core::sync::LockExt;
 
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -626,28 +627,27 @@ fn write_key_file(dir: &Path, file: &MailKeyFile) -> Result<(), String> {
     write_bytes_atomic(&path, &json)
 }
 
-/// Write via a sibling temp file and rename, then `0600` (on Windows: the
-/// temp file is restricted to its owner, and the rename keeps that ACL).
-///
-/// The mail store's own `write_json_atomic` analogue, kept here because this
-/// module must not depend on `storage` for one function and because what it
-/// writes is a key file — a half-written one is an unopenable mailbox.
+/// Write owner-only and atomically (`storage::write_private_atomic`): the
+/// bytes are staged in a uniquely named sibling that is `0600` (on Windows:
+/// restricted to its owner) before a byte lands in it, synced, renamed over
+/// `path`, and the directory synced after. What it writes is a key file or a
+/// sealed store — a half-written one is an unopenable mailbox, and a re-key
+/// drops the old key only once the re-sealed copy is on disk, not in a page
+/// cache.
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-    harden(&tmp, 0o600);
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    harden(path, 0o600);
-    Ok(())
+    crate::storage::write_private_atomic(path, bytes)
 }
 
 /// Owner-only: `mode` on Unix, `private_file::restrict_to_owner` on Windows
-/// (which logs a failure; the file keeps the profile folder's ACL then).
-fn harden(path: &Path, mode: u32) {
+/// (which logs a failure; the file keeps the profile folder's ACL then). For a
+/// file written in place; a new file written whole goes through
+/// [`write_bytes_atomic`] instead, which is never wider than owner-only.
+///
+/// A folder keeps its ACL on Windows: `restrict_to_owner`'s grant carries no
+/// inheritance flags, so dropping a folder's inherited entries would leave the
+/// files already inside it with no grant at all. The store's own folder is
+/// made owner-only once, inheritably, by [`harden_store_dir`].
+pub(crate) fn harden(path: &Path, mode: u32) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -656,7 +656,9 @@ fn harden(path: &Path, mode: u32) {
     #[cfg(windows)]
     {
         let _ = mode;
-        crate::services::private_file::restrict_to_owner(path);
+        if !path.is_dir() {
+            crate::services::private_file::restrict_to_owner(path);
+        }
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -664,27 +666,22 @@ fn harden(path: &Path, mode: u32) {
     }
 }
 
-/// [`write_bytes_atomic`], synced: the file before the rename, the directory
-/// after. What a re-key writes, because dropping the old key afterwards
-/// relies on the re-sealed copy being on disk, not in a page cache.
-pub fn write_bytes_durable(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    use std::io::Write as _;
-    let parent = path.parent().ok_or("no parent directory")?;
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let mut name = path.file_name().ok_or("no file name")?.to_os_string();
-    name.push(".rekey");
-    let tmp = parent.join(name);
-    {
-        let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-        harden(&tmp, 0o600);
-        file.write_all(bytes).map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-    }
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
-    if let Ok(dir) = std::fs::File::open(parent) {
-        let _ = dir.sync_all();
-    }
-    Ok(())
+/// The mail store's own folder, owner-only for everything in it: `0700` on
+/// Unix; on Windows an owner-only ACL that files and subfolders inherit
+/// (`private_file::restrict_dir_to_owner_inheritable`), skipped when the folder
+/// already has it.
+///
+/// That is what lets a blob or a staged outbox file be written with no
+/// `icacls` run of its own: a mail sync writes one per message, and two
+/// process spawns each was the cost of restricting them one by one. They are
+/// created owner-only on Unix (mode `0600`) and inherit the folder's ACL on
+/// Windows. The database and the key file still get their own owner-only
+/// restriction ([`harden`], [`write_bytes_atomic`]); they are written rarely.
+pub(crate) fn harden_store_dir(dir: &Path) {
+    #[cfg(windows)]
+    crate::services::private_file::restrict_dir_to_owner_inheritable(dir);
+    #[cfg(not(windows))]
+    harden(dir, 0o700);
 }
 
 /// The lock every write of a sealed file *beside* the database takes (the
@@ -696,7 +693,7 @@ pub fn write_bytes_durable(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// never see again.
 pub fn side_files() -> std::sync::MutexGuard<'static, u64> {
     static SIDE_FILES: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
-    SIDE_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    SIDE_FILES.lock_ok()
 }
 
 const B64: base64::engine::general_purpose::GeneralPurpose =
@@ -832,7 +829,7 @@ pub fn retire_previous_with(dir: &Path, k: &crate::services::server::secrets::Ma
     }
     file.previous.clear();
     let json = serde_json::to_vec_pretty(&file).map_err(|e| e.to_string())?;
-    write_bytes_durable(&key_file_path(dir), &json)?;
+    write_bytes_atomic(&key_file_path(dir), &json)?;
     Ok(true)
 }
 

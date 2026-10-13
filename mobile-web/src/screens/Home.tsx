@@ -16,6 +16,7 @@ import { ThemeRow, ThemeSheet } from "../components/ThemePicker";
 import { LanguageRow, LanguageSheet } from "../components/LanguagePicker";
 import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
+import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
 import { GitMark } from "../components/GitMark";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
@@ -197,6 +198,9 @@ export function Home({ open, openTab, todo, mail }: {
   const [pushSheet, setPushSheet] = useState(false);
   /** The header gear's sheet: the phone's own settings, kept off the page. */
   const [deviceSheet, setDeviceSheet] = useState(false);
+  /** The Projects heading's ＋: a new project, made by name in the desktop's
+   * projects folder (`NewProjectSheet`). */
+  const [newProject, setNewProject] = useState(false);
   const rowSheetOpen = languageSheet || themeSheet || speechLangSheet || pushSheet || markupInstructionSheet || markupOpenSheet;
   const [push, setPush] = useState<HostPushState | null>(null);
   useEffect(() => {
@@ -319,6 +323,14 @@ export function Home({ open, openTab, todo, mail }: {
     </header>
     <div className="projects-row">
       <h1>{view === "agents" ? t("mobile.home.agentsTitle") : t("mobile.home.projectsTitle")}</h1>
+      {view !== "agents" && <button
+        className="primary new-tab"
+        onClick={() => setNewProject(true)}
+        aria-haspopup="dialog"
+        aria-expanded={newProject}
+        aria-label={t("mobile.newProject.title")}
+        title={t("mobile.newProject.title")}
+      ><span aria-hidden="true">＋</span></button>}
     </div>
     <nav>{HOME_VIEWS.map(([id, label]) => <button
       key={id}
@@ -339,7 +351,6 @@ export function Home({ open, openTab, todo, mail }: {
       {loaded && rows.length === 0 && <p className="projects-empty">{view === "search"
         ? query.trim() ? t("mobile.home.noMatch") : t("mobile.home.typeToSearch")
         : t("mobile.home.noneActive")}</p>}
-      {canReorder && <p className="reorder-hint"><GripHint text={t("mobile.home.reorderHint")} /> {isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       {/* A box row says it is one where a project row says its status: a box
           has no status of its own (listing it is what its switch means), and
           a "Paper" box beside a "Paper" project must be tellable apart.
@@ -348,13 +359,14 @@ export function Home({ open, openTab, todo, mail }: {
           to sit beside the opener rather than on it (a press anywhere else
           opens the project, and the two must not be one gesture), which is the
           same shape — and so the same classes — the tab list already wears. */}
-      <section className="cards">{listed.map((project) => <div
+      <section className="cards">{listed.map((project, index) => <div
         className={`tab-card one-row home-project-card${drag.rowClass(project.id)}`}
         key={project.id}
         ref={drag.rowRef(project.id)}
       >
         <div className="tab-card-head">
           <button className="card" onClick={() => open(project.id)}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.git && <GitMark state={project.git} />}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
+          {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && <button
             className="tab-card-grip"
             aria-label={t("mobile.home.move", { label: project.label })}
@@ -396,6 +408,7 @@ export function Home({ open, openTab, todo, mail }: {
         </ul>
       </section>
     </div>}
+    {newProject && <NewProjectSheet onClose={() => setNewProject(false)} onCreated={(project) => { setNewProject(false); open(project.id); }} />}
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}

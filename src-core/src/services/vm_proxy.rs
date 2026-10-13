@@ -28,6 +28,7 @@
 //! module free of any runtime handle (bootable from `spawn_blocking`).
 
 use crate::brand::SLUG;
+use crate::sync::LockExt;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -229,11 +230,11 @@ pub fn ensure_proxy(project_id: &str, allow: Vec<String>, token: &str) -> Result
     if !token.is_empty() && (token.len() < 16 || !token.bytes().all(|b| b.is_ascii_alphanumeric())) {
         return Err("VM egress proxy: the token must be at least 16 letters or digits".into());
     }
-    let mut map = proxies().lock().unwrap();
+    let mut map = proxies().lock_ok();
     if let Some(handle) = map.get(project_id) {
         if !handle.shared.stop.load(Ordering::SeqCst) {
-            *handle.shared.allow.lock().unwrap() = allow;
-            *handle.shared.credentials.lock().unwrap() = credentials_for(token);
+            *handle.shared.allow.lock_ok() = allow;
+            *handle.shared.credentials.lock_ok() = credentials_for(token);
             return Ok(handle.port);
         }
         map.remove(project_id);
@@ -271,7 +272,7 @@ pub fn ensure_proxy(project_id: &str, allow: Vec<String>, token: &str) -> Result
 /// Stop a project's proxy (VM shutdown). Live tunnels are left to drain — the
 /// VM going down closes their guest side anyway.
 pub fn stop_proxy(project_id: &str) {
-    let mut map = proxies().lock().unwrap();
+    let mut map = proxies().lock_ok();
     if let Some(handle) = map.remove(project_id) {
         handle.shared.stop.store(true, Ordering::SeqCst);
         // Wake the blocking accept() so the loop observes the flag.
@@ -282,16 +283,16 @@ pub fn stop_proxy(project_id: &str) {
 /// Replace a live proxy's standing allowlist (VM settings save). No-op when no
 /// proxy is running — the next boot builds the list from the saved spec.
 pub fn set_allowlist(project_id: &str, allow: Vec<String>) {
-    let map = proxies().lock().unwrap();
+    let map = proxies().lock_ok();
     if let Some(handle) = map.get(project_id) {
-        *handle.shared.allow.lock().unwrap() = allow;
+        *handle.shared.allow.lock_ok() = allow;
     }
 }
 
 /// Temporarily allow one extra host (e.g. the git host of a clone URL during
 /// project creation). Expires by wall-clock; never persisted.
 pub fn allow_temporarily(project_id: &str, host: &str, duration: Duration) {
-    let map = proxies().lock().unwrap();
+    let map = proxies().lock_ok();
     if let Some(handle) = map.get(project_id) {
         let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
         if host.is_empty() {
@@ -300,8 +301,7 @@ pub fn allow_temporarily(project_id: &str, host: &str, duration: Duration) {
         handle
             .shared
             .temp_allow
-            .lock()
-            .unwrap()
+            .lock_ok()
             .push((host, Instant::now() + duration));
     }
 }
@@ -310,25 +310,24 @@ pub fn allow_temporarily(project_id: &str, host: &str, duration: Duration) {
 /// in force — what `services::mail_reader` checks per mail call. `None` when no
 /// proxy runs for the project.
 pub fn live_state(project_id: &str) -> Option<(Vec<String>, usize)> {
-    let map = proxies().lock().unwrap();
+    let map = proxies().lock_ok();
     let handle = map.get(project_id)?;
-    let allow = handle.shared.allow.lock().unwrap().clone();
+    let allow = handle.shared.allow.lock_ok().clone();
     let now = Instant::now();
-    let temp = handle.shared.temp_allow.lock().unwrap().iter().filter(|(_, until)| *until > now).count();
+    let temp = handle.shared.temp_allow.lock_ok().iter().filter(|(_, until)| *until > now).count();
     Some((allow, temp))
 }
 
 /// The blocked-connections report for the pill / settings dialog.
 pub fn blocked_report(project_id: &str) -> BlockedReport {
-    let map = proxies().lock().unwrap();
+    let map = proxies().lock_ok();
     match map.get(project_id) {
         Some(handle) => BlockedReport {
             total: handle.shared.blocked_total.load(Ordering::SeqCst),
             recent: handle
                 .shared
                 .blocked
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .iter()
                 .cloned()
                 .collect(),
@@ -360,7 +359,7 @@ fn accept_loop(listener: TcpListener, shared: Arc<ProxyShared>) {
 
 fn record_blocked(shared: &ProxyShared, target: String) {
     shared.blocked_total.fetch_add(1, Ordering::SeqCst);
-    let mut log = shared.blocked.lock().unwrap();
+    let mut log = shared.blocked.lock_ok();
     if log.len() >= BLOCKED_LOG_CAP {
         log.pop_front();
     }
@@ -428,7 +427,7 @@ fn handle_conn(mut stream: TcpStream, shared: Arc<ProxyShared>) {
 
     // The VM's own credentials, or nothing: the listener is on loopback,
     // which every local account (every user of a server) can reach.
-    let expected = shared.credentials.lock().unwrap().clone();
+    let expected = shared.credentials.lock_ok().clone();
     let authorized = expected.is_empty() || head
         .split(|&b| b == b'\n')
         .skip(1)
@@ -447,12 +446,12 @@ fn handle_conn(mut stream: TcpStream, shared: Arc<ProxyShared>) {
     // the tunnel to HTTPS prevents an allowlisted hostname from becoming an SSH
     // or arbitrary-service escape hatch (for example `allowed-host:22`).
     let allowed = port == 443 && {
-        let standing = shared.allow.lock().unwrap();
+        let standing = shared.allow.lock_ok();
         if host_allowed(&host, &standing) {
             true
         } else {
             drop(standing);
-            let mut temp = shared.temp_allow.lock().unwrap();
+            let mut temp = shared.temp_allow.lock_ok();
             let now = Instant::now();
             temp.retain(|(_, deadline)| *deadline > now);
             temp.iter()

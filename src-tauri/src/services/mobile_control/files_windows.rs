@@ -13,7 +13,9 @@
 //! The phone's drop boxes also create folders and files and delete files
 //! through the same handles: `FILE_CREATE` never opens an existing name (nor a
 //! reparse point standing there), and a delete marks the one handle-relative
-//! name it opened, reparse point included, never a link's target.
+//! name it opened, reparse point included, never a link's target. The
+//! phone's uploads into a browsed folder (`uploads.rs`) do the same from
+//! [`ProjectDir::open`].
 //!
 //! A root agent's mail `attach` (`services::mail_attach`) reads through the
 //! same walk ([`ProjectDir::open_root`], [`ProjectDir::lookup_dir`],
@@ -68,7 +70,7 @@ use super::{canonical_root, plain_segment, valid_rel, FilesError, WriteRefusal};
 pub(crate) struct ProjectDir(fs::File);
 
 impl ProjectDir {
-    pub(super) fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
+    pub(in crate::services::mobile_control) fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
         let mut dir = Self::open_root(root)?;
         if !valid_rel(rel) {
             return Err(FilesError::NotFound);

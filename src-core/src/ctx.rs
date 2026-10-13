@@ -8,6 +8,7 @@
 //! what a window is.
 
 use std::any::{type_name, Any, TypeId};
+use crate::sync::LockExt;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -152,14 +153,13 @@ impl RecordingEvents {
 
     /// Everything recorded so far, oldest first.
     pub fn take(&self) -> Vec<RecordedEvent> {
-        std::mem::take(&mut *self.events.lock().unwrap())
+        std::mem::take(&mut *self.events.lock_ok())
     }
 
     /// The payloads of every recorded `event`, parsed.
     pub fn payloads(&self, event: &str) -> Vec<serde_json::Value> {
         self.events
-            .lock()
-            .unwrap()
+            .lock_ok()
             .iter()
             .filter(|e| e.event == event)
             .filter_map(|e| serde_json::from_str(&e.payload).ok())
@@ -169,7 +169,7 @@ impl RecordingEvents {
 
 impl EventSink for RecordingEvents {
     fn emit_json(&self, event: &str, payload: String) {
-        self.events.lock().unwrap().push(RecordedEvent {
+        self.events.lock_ok().push(RecordedEvent {
             client: None,
             event: event.to_string(),
             payload,
@@ -177,7 +177,7 @@ impl EventSink for RecordingEvents {
     }
 
     fn emit_json_to(&self, client: &ClientId, event: &str, payload: String) {
-        self.events.lock().unwrap().push(RecordedEvent {
+        self.events.lock_ok().push(RecordedEvent {
             client: Some(client.clone()),
             event: event.to_string(),
             payload,

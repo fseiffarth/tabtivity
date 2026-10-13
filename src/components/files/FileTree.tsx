@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { confirm as dialogConfirm, open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -3708,6 +3709,17 @@ export function FileTree({
     }
   }
 
+  // The tree's own prompts own the keyboard while they are up (Escape, Tab,
+  // and no app shortcuts underneath). A busy one ignores Escape like its
+  // backdrop does.
+  const deleteModalRef = useModalFocus(() => setDeleteConfirm(null), !!deleteConfirm);
+  const autoModalRef = useModalFocus(() => setAutoConfirm(null), !!autoConfirm);
+  const pushModalRef = useModalFocus(
+    () => { if (!pushBusy) void resolvePushConflict("skip"); },
+    pushConflicts.length > 0,
+  );
+  const pasteModalRef = useModalFocus(() => { if (!pasteBusy) setPastePrompt(null); }, !!pastePrompt);
+
   if (!projectDir) {
     return (
       <div className="file-tree-empty">{t("common.noProjectSelected")}</div>
@@ -4893,7 +4905,7 @@ export function FileTree({
       )}
       {deleteConfirm && createPortal(
         <div className="modal-backdrop" onMouseDown={() => setDeleteConfirm(null)}>
-          <div className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
+          <div ref={deleteModalRef} tabIndex={-1} role="dialog" aria-modal="true" className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
             {deleteConfirm.entries.length === 1 ? (
               <>
                 <h2>{t(deleteConfirm.entries[0].is_dir ? "fileTree.deleteFolderTitle" : "fileTree.deleteFileTitle")}</h2>
@@ -4924,7 +4936,7 @@ export function FileTree({
       )}
       {autoConfirm && createPortal(
         <div className="modal-backdrop" onMouseDown={() => setAutoConfirm(null)}>
-          <div className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
+          <div ref={autoModalRef} tabIndex={-1} role="dialog" aria-modal="true" className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
             <h2>{t("fileTree.autoSyncConfirmTitle")}</h2>
             <p>
               {t("fileTree.autoSyncConfirmPre")} <strong>{autoConfirm.entry.name}</strong>{" "}
@@ -4953,7 +4965,7 @@ export function FileTree({
       )}
       {pushConflicts.length > 0 && createPortal(
         <div className="modal-backdrop" onMouseDown={() => !pushBusy && resolvePushConflict("skip")}>
-          <div className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
+          <div ref={pushModalRef} tabIndex={-1} role="dialog" aria-modal="true" className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
             <h2>{t("fileTree.hostChangedTitle")}</h2>
             <p>
               <strong>{basename(pushConflicts[0]) || pushConflicts[0]}</strong>{" "}
@@ -5006,7 +5018,7 @@ export function FileTree({
       )}
       {pastePrompt && createPortal(
         <div className="modal-backdrop" onMouseDown={() => !pasteBusy && setPastePrompt(null)}>
-          <div className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
+          <div ref={pasteModalRef} tabIndex={-1} role="dialog" aria-modal="true" className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
             <h2>
               {pastePrompt.kind === "image"
                 ? t("fileTree.pasteScreenshotTitle")
@@ -5033,7 +5045,6 @@ export function FileTree({
               onChange={(e) => setPastePrompt({ ...pastePrompt, name: e.target.value, error: null })}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void confirmPaste();
-                if (e.key === "Escape") setPastePrompt(null);
               }}
             />
             {pastePrompt.error && <ErrorNote className="file-delete-path file-delete-error" error={pastePrompt.error} />}

@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect } from "react";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
@@ -28,6 +29,7 @@ export function DetachedCloseChoice({
   onCancel: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onCancel);
 
   // Escape cancels. Bound here rather than on the panel so it works with focus
   // anywhere in the window, including inside a terminal.
@@ -46,6 +48,10 @@ export function DetachedCloseChoice({
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="project-dialog detached-close-choice"
         onClick={(e) => e.stopPropagation()}
       >

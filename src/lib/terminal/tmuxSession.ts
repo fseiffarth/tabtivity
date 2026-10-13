@@ -15,7 +15,7 @@ import { tmuxSessionRest } from "../brandMigration";
 
 /**
  * A project id can appear verbatim in a tmux session name (it's practice a uuid),
- * but is not schema-guaranteed to be — mirrors the backend's `sandbox::sanitize_key`
+ * but is not schema-guaranteed to be — mirrors the backend's `storage::project_key`
  * so an oddly-shaped id can never produce an invalid session name.
  */
 function sanitizeForTmuxName(id: string): string {

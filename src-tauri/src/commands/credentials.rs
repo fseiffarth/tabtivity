@@ -15,6 +15,7 @@
 //! freeze the window in the very state it is trying to explain.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::sync::{Mutex, OnceLock};
 
 use crate::commands::terminal::RegistryState;
@@ -89,8 +90,7 @@ pub fn note_minted_login(command: &str, target: LoginTarget) {
         return;
     }
     minted_logins()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .insert(command.to_string(), target);
 }
 
@@ -102,7 +102,7 @@ pub fn note_minted_login(command: &str, target: LoginTarget) {
 /// write. Cheap — the map holds at most a handful of entries and only writes long
 /// enough to be a command line are scanned at all.
 pub fn note_pty_input(pty: &str, data: &[u8]) {
-    let map = minted_logins().lock().unwrap();
+    let map = minted_logins().lock_ok();
     if map.is_empty() || data.len() < 8 {
         return;
     }
@@ -110,8 +110,7 @@ pub fn note_pty_input(pty: &str, data: &[u8]) {
     for (command, target) in map.iter() {
         if text.contains(command.as_str()) {
             login_ptys()
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .insert(pty.to_string(), target.clone());
             return;
         }
@@ -120,15 +119,14 @@ pub fn note_pty_input(pty: &str, data: &[u8]) {
 
 /// Forget a PTY's login marking (its terminal is gone). Called from `pty_kill`.
 pub fn forget_login_pty(pty: &str) {
-    login_ptys().lock().unwrap().remove(pty);
+    login_ptys().lock_ok().remove(pty);
 }
 
 /// Whether `account` may be typed into `pty` — i.e. `pty` is running a login whose
 /// own credentials include that account.
 fn paste_allowed(pty: &str, account: &str) -> bool {
     login_ptys()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .get(pty)
         .is_some_and(|t| t.accounts().iter().any(|a| a == account))
 }
@@ -136,7 +134,7 @@ fn paste_allowed(pty: &str, account: &str) -> bool {
 /// Whether the OS credential store is readable right now (see [`KeyringState`]).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn keyring_state() -> KeyringState {
-    tokio::task::spawn_blocking(creds::keyring_state)
+    app_core::rt::spawn_blocking(creds::keyring_state)
         .await
         // A worker that died tells us nothing about the store; "locked" is the answer
         // with a remedy attached, and a wrong "unlocked" would send the caller back
@@ -150,9 +148,7 @@ pub async fn keyring_state() -> KeyringState {
 /// dialog) — never from a launch path, which promises not to prompt.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn keyring_unlock() -> Result<(), String> {
-    tokio::task::spawn_blocking(creds::unlock_keyring)
-        .await
-        .map_err(|e| format!("keyring unlock task failed: {e}"))?
+    app_core::rt::try_blocking("keyring unlock", creds::unlock_keyring).await
 }
 
 /// Which saved credential a paste targets. Tagged by `kind` so the frontend names
@@ -234,9 +230,8 @@ pub async fn credential_paste_to_pty(
                 .to_string(),
         );
     }
-    let Some(secret) = tokio::task::spawn_blocking(move || creds::get(&account))
-        .await
-        .map_err(|e| format!("credential read task failed: {e}"))?
+    let Some(secret) = app_core::rt::blocking("credential read", move || creds::get(&account))
+        .await?
     else {
         return Ok(false);
     };
@@ -245,8 +240,7 @@ pub async fn credential_paste_to_pty(
         bytes.push(b'\r');
     }
     let sender = registry
-        .lock()
-        .unwrap()
+        .lock_ok()
         .input_sender(&pty)
         .ok_or_else(|| "the login terminal is no longer running".to_string())?;
     sender

@@ -37,6 +37,7 @@
 //! what lets the phone poll while the agent is answering.
 
 use serde::{Deserialize, Serialize};
+use app_core::sync::LockExt;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -358,7 +359,7 @@ pub fn running_subagents(cmd: &str, project_id: Option<&str>, launch_id: &str) -
     if cmd != "claude" {
         return 0;
     }
-    let counted = || RUNNING_COUNTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let counted = || RUNNING_COUNTED.lock_ok();
     let known = counted().get(launch_id).cloned();
     let read = agent_session_transcript(cmd, project_id, None, None, launch_id, None, known.as_ref().map(|(version, _)| version.as_str()), 1);
     if read.unchanged {
@@ -405,7 +406,7 @@ pub fn live_folders(cmd: &str, project_id: Option<&str>, launch_id: &str) -> Liv
     if !matches!(cmd, "claude" | "codex") {
         return LiveFolders::default();
     }
-    let read_folders = || FOLDERS_READ.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let read_folders = || FOLDERS_READ.lock_ok();
     let known = read_folders().get(launch_id).cloned();
     let now = std::time::Instant::now();
     if let Some((_, at, folders)) = &known {
@@ -957,7 +958,7 @@ const BACKGROUND_SEEN_MAX: usize = 64;
 /// Whether `path`'s background shells, at `version`, run as they did when
 /// last answered.
 fn background_unchanged(path: &Path, version: &str) -> bool {
-    let seen = BACKGROUND_SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let seen = BACKGROUND_SEEN.lock_ok();
     let Some((at, outputs, running)) = seen.get(path) else {
         return true;
     };
@@ -974,7 +975,7 @@ fn background_unchanged(path: &Path, version: &str) -> bool {
 fn running_shells(path: &Path, version: &str, calls: ShellCalls) -> Vec<RunningShell> {
     let outputs: Vec<&str> = calls.background.iter().map(|(_, output)| output.as_str()).collect();
     let running = running_outputs(&outputs);
-    let mut seen = BACKGROUND_SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut seen = BACKGROUND_SEEN.lock_ok();
     if outputs.is_empty() {
         seen.remove(path);
     } else {

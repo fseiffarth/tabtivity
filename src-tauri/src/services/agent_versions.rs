@@ -34,7 +34,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use crate::services::agent_usage::strip_ansi;
 
@@ -439,12 +439,7 @@ pub fn store_path() -> PathBuf {
     crate::storage::state_dir().join("agent_versions.json")
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::clock::now_secs;
 
 /// Read the store at `path`. A missing or unreadable file is an empty store —
 /// this is a cache, and refusing to report anything because it is corrupt would

@@ -114,6 +114,7 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { flushUsage } from "../../stores/usage";
 import { useKeyboard } from "../../hooks/useKeyboard";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { useT, useI18nStore, translate, type TranslationKey } from "../../lib/i18n";
 import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePanelView";
 import type { FilesPanelView } from "../../types";
@@ -463,7 +464,6 @@ export function AppShell() {
   // window geometry a few frames after the event, so a single immediate fire can
   // measure mid-transition.
   useEffect(() => {
-    const unlisteners: Array<() => void> = [];
     let raf = 0;
     let trailing: ReturnType<typeof setTimeout> | undefined;
     const fire = () => {
@@ -480,8 +480,10 @@ export function AppShell() {
       }, 250);
     };
     const win = getCurrentWindow();
-    win.onResized(fire).then((fn) => unlisteners.push(fn)).catch(() => {});
-    win.onScaleChanged(fire).then((fn) => unlisteners.push(fn)).catch(() => {});
+    const unlisteners = [
+      subscribeTauri(() => win.onResized(fire)),
+      subscribeTauri(() => win.onScaleChanged(fire)),
+    ];
     return () => {
       if (raf) cancelAnimationFrame(raf);
       if (trailing) clearTimeout(trailing);
@@ -497,7 +499,6 @@ export function AppShell() {
   useEffect(() => {
     if (!settingsLoaded) return;
     const win = getCurrentWindow();
-    const unlisteners: Array<() => void> = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = () => {
       if (timer) clearTimeout(timer);
@@ -506,8 +507,10 @@ export function AppShell() {
         void saveWindowGeometry().catch(() => {});
       }, 300);
     };
-    win.onMoved(schedule).then((fn) => unlisteners.push(fn)).catch(() => {});
-    win.onResized(schedule).then((fn) => unlisteners.push(fn)).catch(() => {});
+    const unlisteners = [
+      subscribeTauri(() => win.onMoved(schedule)),
+      subscribeTauri(() => win.onResized(schedule)),
+    ];
     return () => {
       if (timer) clearTimeout(timer);
       unlisteners.forEach((fn) => fn());

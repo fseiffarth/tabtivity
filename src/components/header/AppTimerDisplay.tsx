@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
@@ -16,6 +17,7 @@ function formatTime(t: (key: TranslationKey) => string, secs: number): string {
 
 function GlobalActivityWindow({ onClose }: { onClose: () => void }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [data, setData] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
@@ -28,7 +30,7 @@ function GlobalActivityWindow({ onClose }: { onClose: () => void }) {
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="activity-window" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="activity-window" onMouseDown={(e) => e.stopPropagation()}>
         <div className="activity-window-header">
           <span className="activity-window-title">{t("appTimer.globalActivityTitle")}</span>
           <button className="dialog-close-btn" onClick={onClose}>×</button>

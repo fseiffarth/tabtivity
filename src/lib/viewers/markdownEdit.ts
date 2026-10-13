@@ -3,9 +3,12 @@
  * heading/link/list) and the "Insert table of contents" action. Each transform
  * takes the buffer plus a selection `[start, end)` and returns the new buffer
  * with an updated selection, so the editor can apply it through its normal
- * set-value path (keeping undo/redo and highlighting consistent). Dependency-
- * free and exported for unit testing.
+ * set-value path (keeping undo/redo and highlighting consistent). Exported
+ * for unit testing; the only dependency is the renderer's heading pass, which
+ * the TOC must agree with.
  */
+
+import { markdownHeadings, slugify } from "./markdown";
 
 export interface EditResult {
   value: string;
@@ -125,64 +128,26 @@ export function makeLink(value: string, start: number, end: number): EditResult 
   return { value: before + inserted + after, selStart: start + 1, selEnd: start + 5 };
 }
 
-/** GitHub-style heading slug: lowercase, drop punctuation, spaces → dashes. */
-export function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, "")
-    .replace(/\s+/g, "-");
-}
-
-interface Heading {
-  level: number;
-  title: string;
-}
-
-/** Collect ATX (`#`) headings in document order, skipping fenced code blocks. */
-function collectHeadings(markdown: string): Heading[] {
-  const out: Heading[] = [];
-  let inFence = false;
-  let fence = "";
-  for (const raw of markdown.split("\n")) {
-    const line = raw.trimEnd();
-    const fenceMatch = line.match(/^\s*(```+|~~~+)/);
-    if (fenceMatch) {
-      if (!inFence) {
-        inFence = true;
-        fence = fenceMatch[1][0];
-      } else if (line.trimStart().startsWith(fence)) {
-        inFence = false;
-      }
-      continue;
-    }
-    if (inFence) continue;
-    const m = line.match(/^(#{1,6})\s+(.*)$/);
-    if (m && m[2].trim()) out.push({ level: m[1].length, title: m[2].trim() });
-  }
-  return out;
-}
+/** The heading slug lives with the renderer, which ids the headings a TOC
+ *  links to; re-exported for callers that already import it from here. */
+export { slugify };
 
 /**
- * Generate a Markdown table-of-contents list from the document's ATX headings,
+ * Generate a Markdown table-of-contents list from the document's headings,
  * nested by level (relative to the shallowest heading) and linking to each
- * heading's GitHub-style anchor. Returns an empty string when there are no
- * headings.
+ * heading's GitHub-style anchor. The headings and their anchors come from the
+ * renderer's own pass (`markdownHeadings`), so every link names an id the
+ * preview has — punctuation, setext headings and repeats (`-1`, `-2`, …)
+ * included. Returns an empty string when there are no headings.
  */
 export function generateToc(markdown: string): string {
-  const headings = collectHeadings(markdown);
+  const headings = markdownHeadings(markdown).filter((h) => h.text.trim());
   if (headings.length === 0) return "";
   const min = Math.min(...headings.map((h) => h.level));
-  const seen = new Map<string, number>();
   return headings
     .map((h) => {
-      const base = slugify(h.title);
-      // De-dupe repeated headings the way GitHub does: append -1, -2, …
-      const n = seen.get(base) ?? 0;
-      seen.set(base, n + 1);
-      const anchor = n === 0 ? base : `${base}-${n}`;
       const indent = "  ".repeat(h.level - min);
-      return `${indent}- [${h.title}](#${anchor})`;
+      return `${indent}- [${h.text.trim()}](#${h.id})`;
     })
     .join("\n");
 }

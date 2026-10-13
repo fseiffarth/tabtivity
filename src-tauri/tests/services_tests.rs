@@ -23,27 +23,16 @@ use app_lib::schema::TerminalSession;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-/// Point `storage::state_dir()` at a per-run temp directory, once for the whole
-/// test binary.
+/// Point `storage::state_dir()` at a per-run temp directory, the one the whole
+/// test binary shares (`it.rs`'s `isolated_state_dir`).
 ///
 /// Needed since `docs/sandbox_hardening_plan.md` Phase 1: per-project session
 /// state (tab layout, `open_apps`, host-bound markers) moved OUT of the project
 /// tree and INTO the state dir, so these tests write there now — and a suite that
 /// writes into the developer's real `~/.local/share/tabtivity/` would clobber their
-/// running workspace. Set once and never changed, so the parallel test threads
-/// all agree on the value.
+/// running workspace.
 fn isolated_state_dir() -> &'static std::path::Path {
-    use std::sync::OnceLock;
-    static DIR: OnceLock<TempDir> = OnceLock::new();
-    let dir = DIR.get_or_init(|| {
-        let tmp = TempDir::new().unwrap();
-        std::env::set_var(app_lib::app_env!("STATE_DIR"), tmp.path());
-        tmp
-    });
-    // Re-assert on every call: another test in this binary may legitimately have
-    // set the variable for its own fixture, and reads are lazy.
-    std::env::set_var(app_lib::app_env!("STATE_DIR"), dir.path());
-    dir.path()
+    crate::isolated_state_dir()
 }
 
 /// A project registered for session tests: writes its `project.json` into `tmp`,

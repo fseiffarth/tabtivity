@@ -29,6 +29,7 @@
 //! in `<live_sessions>/<project>/`; the watch is recursive for that reason.
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -121,10 +122,11 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
     // One PTY, one uid: a respawn under a new uid must not leave the old key
     // pointing at this PTY, nor its turn state and job flag behind it.
     on_tab_gone(pty_id);
-    bindings().lock().unwrap().insert(uid.to_string(), pty_id.to_string());
-    states().lock().unwrap().remove(uid);
-    jobs().lock().unwrap().remove(uid);
-    settled().lock().unwrap().remove(uid);
+    bindings().lock_ok().insert(uid.to_string(), pty_id.to_string());
+    states().lock_ok().remove(uid);
+    jobs().lock_ok().remove(uid);
+    settled().lock_ok().remove(uid);
+    turn_ends().lock_ok().remove(uid);
     let paths = record_paths(uid, project_id);
     let cut_off = records_hold_turn_in_flight(&paths);
     let resting = !cut_off && records_hold_finished_turn(&paths);
@@ -154,24 +156,26 @@ fn records_hold_finished_turn(paths: &[PathBuf]) -> bool {
 /// Drop the binding(s) of a PTY that is gone, and whatever was recorded about
 /// its turn: a key reused by a later tab must start blank.
 pub fn on_tab_gone(pty_id: &str) {
-    let mut b = bindings().lock().unwrap();
+    let mut b = bindings().lock_ok();
     let gone: Vec<String> =
         b.iter().filter(|(_, v)| v.as_str() == pty_id).map(|(k, _)| k.clone()).collect();
     b.retain(|_, v| v != pty_id);
     drop(b);
-    let mut states = states().lock().unwrap();
-    let mut jobs = jobs().lock().unwrap();
-    let mut settled = settled().lock().unwrap();
+    let mut states = states().lock_ok();
+    let mut jobs = jobs().lock_ok();
+    let mut settled = settled().lock_ok();
+    let mut ends = turn_ends().lock_ok();
     for uid in gone {
         states.remove(&uid);
         jobs.remove(&uid);
         settled.remove(&uid);
+        ends.remove(&uid);
     }
 }
 
 /// The PTY id bound to `uid`, if any.
 pub fn pty_for(uid: &str) -> Option<String> {
-    bindings().lock().unwrap().get(uid).cloned()
+    bindings().lock_ok().get(uid).cloned()
 }
 
 fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
@@ -289,10 +293,10 @@ fn settled() -> &'static Mutex<HashSet<String>> {
 /// Whether the timer-driven scan has anything to find: some tab whose hooks
 /// have spoken is not [`settled`], or the backstop interval is up.
 fn job_poll_due() -> bool {
-    let last = *last_scan().lock().unwrap();
-    let bound: Vec<String> = bindings().lock().unwrap().keys().cloned().collect();
-    let states = states().lock().unwrap();
-    let settled = settled().lock().unwrap();
+    let last = *last_scan().lock_ok();
+    let bound: Vec<String> = bindings().lock_ok().keys().cloned().collect();
+    let states = states().lock_ok();
+    let settled = settled().lock_ok();
     poll_due(
         last,
         bound.iter().filter(|uid| states.contains_key(*uid)).map(|uid| settled.contains(uid)),
@@ -321,6 +325,39 @@ fn states() -> &'static Mutex<HashMap<String, TurnState>> {
     S.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// uid → when its agent's turn ended (the first `done` after anything else),
+/// in clock ticks since boot — the unit of a process's start time
+/// (`proc_table::Proc::start`) — so a shell running after the Stop can be told
+/// apart: started before it, it outlived the turn; started after, it is not the
+/// turn's (see [`is_background_job`]). Absent mid-turn, and where the clock
+/// cannot be read (no `/proc`), which keeps the plain `done` reading.
+fn turn_ends() -> &'static Mutex<HashMap<String, u64>> {
+    static E: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    E.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The time since boot in clock ticks (`/proc/uptime` × `CLK_TCK`): the clock
+/// a process's `stat` start time is read on.
+#[cfg(target_os = "linux")]
+fn boot_ticks_now() -> Option<u64> {
+    let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
+    let secs: f64 = uptime.split_whitespace().next()?.parse().ok()?;
+    Some((secs * crate::sysstat::clk_tck() as f64) as u64)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn boot_ticks_now() -> Option<u64> {
+    None
+}
+
+/// Whether a shell that started at `start` (ticks since boot, `0` = unknown)
+/// was already running when the turn ended at `ended`. Unknown on either side
+/// reads as yes: the plain `done` reading, as before the start was compared.
+#[cfg(any(target_os = "linux", test))]
+fn outlived_turn(start: u64, ended: Option<u64>) -> bool {
+    start == 0 || ended.is_none_or(|end| start <= end)
+}
+
 /// When [`refresh_jobs`] last walked `/proc`.
 fn last_scan() -> &'static Mutex<Option<Instant>> {
     static L: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
@@ -331,18 +368,31 @@ fn last_scan() -> &'static Mutex<Option<Instant>> {
 /// its state and job flag go with it.
 fn note_state(uid: &str, state: TurnState) {
     // Whatever the agent just did, the next timer tick must look again.
-    settled().lock().unwrap().remove(uid);
+    settled().lock_ok().remove(uid);
     if state == TurnState::Idle {
-        states().lock().unwrap().remove(uid);
-        jobs().lock().unwrap().remove(uid);
+        states().lock_ok().remove(uid);
+        jobs().lock_ok().remove(uid);
+        turn_ends().lock_ok().remove(uid);
         return;
     }
-    states().lock().unwrap().insert(uid.to_string(), state);
+    let mut states = states().lock_ok();
+    let prev = states.insert(uid.to_string(), state);
+    let mut ends = turn_ends().lock_ok();
+    // The turn ends at its first `done`: a later one (Claude's idle notice, a
+    // job's end re-reported) is the same finished turn, not a new end.
+    if state != TurnState::Done {
+        ends.remove(uid);
+    } else if prev != Some(TurnState::Done) {
+        match boot_ticks_now() {
+            Some(now) => ends.insert(uid.to_string(), now),
+            None => ends.remove(uid),
+        };
+    }
 }
 
 /// Whether a shell of `uid`'s agent was running at the last scan.
 fn job_flag(uid: &str) -> bool {
-    jobs().lock().unwrap().get(uid).copied().unwrap_or(false)
+    jobs().lock_ok().get(uid).copied().unwrap_or(false)
 }
 
 /// One scan of the tool shells the bound tabs are running, and what the change
@@ -353,19 +403,18 @@ fn job_flag(uid: &str) -> bool {
 /// flag on. A scan younger than [`JOB_SCAN_MAX_AGE`] is reused as it stands.
 fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
     {
-        let mut last = last_scan().lock().unwrap();
+        let mut last = last_scan().lock_ok();
         if last.is_some_and(|at| at.elapsed() < JOB_SCAN_MAX_AGE) {
             return Vec::new();
         }
         *last = Some(Instant::now());
     }
     let bound: Vec<(String, String)> = bindings()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .iter()
         .map(|(uid, pty)| (uid.clone(), pty.clone()))
         .collect();
-    let states = states().lock().unwrap();
+    let states = states().lock_ok();
     // Only a tab whose hooks have spoken can be asked about: the state is what
     // tells a backgrounded shell from the tool call the agent is waiting on, and
     // a tab with no state has no event to carry a flag on either.
@@ -380,7 +429,7 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
     // `JOB_POLL_SETTLED` backstop. Other scans reuse a recent walk (a job on
     // record is re-checked alive either way).
     let unsettled_done: Vec<&str> = {
-        let settled = settled().lock().unwrap();
+        let settled = settled().lock_ok();
         want.iter()
             .filter(|(uid, state)| {
                 matches!(state, TurnState::Done | TurnState::Decision) && !settled.contains(**uid)
@@ -389,12 +438,13 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
             .collect()
     };
     let may_settle = {
-        let jobs = jobs().lock().unwrap();
+        let jobs = jobs().lock_ok();
         unsettled_done.iter().any(|uid| !jobs.get(*uid).copied().unwrap_or(false))
     };
     let max_age = if may_settle { Duration::ZERO } else { JOB_SCAN_MAX_AGE };
-    let live = tool_shell_uids(&want, max_age);
-    let mut jobs = jobs().lock().unwrap();
+    let ends = turn_ends().lock_ok().clone();
+    let live = tool_shell_uids(&want, &ends, max_age);
+    let mut jobs = jobs().lock_ok();
     let mut out = Vec::new();
     for (uid, pty) in &bound {
         let running = live.contains(uid.as_str());
@@ -414,7 +464,7 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
     // Settle every tab this scan cleared whose agent is not mid-turn. Taken
     // while `states` is still held, so a record noted after the walk (which
     // unsettles) cannot be overwritten by this scan's stale verdict.
-    let mut settled = settled().lock().unwrap();
+    let mut settled = settled().lock_ok();
     settled.retain(|uid| want.contains_key(uid.as_str()));
     for (uid, state) in &want {
         if !live.contains(*uid) && matches!(state, TurnState::Done | TurnState::Decision) {
@@ -456,9 +506,14 @@ const CLAUDE_BACKGROUND_SEAM: &str = "' < /dev/null && pwd -P >|";
 /// — the thing worth its own mark — rather than the tool call it is sitting and
 /// waiting on. Two readings, and either is enough:
 ///
-///  - the turn is over (`done`): whatever is still running outlived it, which is
+///  - the turn is over (`done`) and the shell was already running when it
+///    ended (`outlived`, see [`outlived_turn`]): it outlived the turn, which is
 ///    the definition of a background job and the reading this started as. It is
-///    also the net under the other one: no wrapper spelling can betray it.
+///    also the net under the other one: no wrapper spelling can betray it. A
+///    shell started AFTER the Stop is not the turn's: it is a tool call a
+///    background subagent (or the agent, woken by a task notification) is
+///    waiting on, and counting it lit the tab's command mark for each such
+///    call and dropped it a moment later.
 ///  - Claude's wrapper says so ([`CLAUDE_BACKGROUND_SEAM`]) — the only reading
 ///    that can tell the two apart WHILE a turn runs, which is what makes the
 ///    "agent and a command at once" mark possible.
@@ -466,8 +521,8 @@ const CLAUDE_BACKGROUND_SEAM: &str = "' < /dev/null && pwd -P >|";
 /// Codex has no such seam, so a background exec of its own is only seen once its
 /// turn ends. Better that than every `bash -lc` it waits on reading as a job.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
-fn is_background_job(cmdline: &str, state: TurnState) -> bool {
-    state == TurnState::Done || cmdline.contains(CLAUDE_BACKGROUND_SEAM)
+fn is_background_job(cmdline: &str, state: TurnState, outlived: bool) -> bool {
+    (state == TurnState::Done && outlived) || cmdline.contains(CLAUDE_BACKGROUND_SEAM)
 }
 
 /// The tab uid a NUL-separated environment block belongs to, if it sets one.
@@ -497,6 +552,7 @@ fn environ_uid(environ: &[u8]) -> Option<String> {
 #[cfg(target_os = "linux")]
 fn tool_shell_uids(
     want: &HashMap<&str, TurnState>,
+    ends: &HashMap<String, u64>,
     max_age: Duration,
 ) -> std::collections::HashSet<String> {
     use crate::services::proc_table;
@@ -519,7 +575,7 @@ fn tool_shell_uids(
         let cmdline = crate::sysstat::cmdline(proc_.pid).unwrap_or_default();
         let parent_comm = table.get(proc_.ppid).map(|p| p.comm.as_str()).unwrap_or_default();
         if is_agent_tool_shell(&proc_.comm, &cmdline, parent_comm)
-            && is_background_job(&cmdline, *state)
+            && is_background_job(&cmdline, *state, outlived_turn(proc_.start, ends.get(&uid).copied()))
             && proc_table::alive(proc_)
         {
             out.insert(uid);
@@ -565,7 +621,9 @@ fn background_job_uids(
         }
         let cmdline = probe.cmdline(pid).unwrap_or_default();
         let parent_comm = probe.comm_ppid(ppid).map(|(c, _)| c).unwrap_or_default();
-        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state) {
+        // No start time is read here: a shell still running after the Stop
+        // counts, as it did before Linux compared the two.
+        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state, true) {
             out.insert(uid);
         }
     }
@@ -583,6 +641,7 @@ fn background_job_uids(
 #[cfg(target_os = "macos")]
 fn tool_shell_uids(
     want: &HashMap<&str, TurnState>,
+    _ends: &HashMap<String, u64>,
     _max_age: Duration,
 ) -> std::collections::HashSet<String> {
     struct Proc(HashMap<u32, u32>);
@@ -612,6 +671,7 @@ fn tool_shell_uids(
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn tool_shell_uids(
     _want: &HashMap<&str, TurnState>,
+    _ends: &HashMap<String, u64>,
     _max_age: Duration,
 ) -> std::collections::HashSet<String> {
     std::collections::HashSet::new()
@@ -835,17 +895,31 @@ mod tests {
         // (measured 2026-09-20); the `< /dev/null` seam is the whole difference.
         let fg = "/bin/bash -c source /home/u/.claude/shell-snapshots/snapshot-bash-1-x.sh 2>/dev/null || true && eval 'npm test' && pwd -P >| /tmp/claude-e9e6-cwd";
         let bg = "/bin/bash -c source /home/u/.claude/shell-snapshots/snapshot-bash-1-x.sh 2>/dev/null || true && eval 'sleep 300; echo done' < /dev/null && pwd -P >| /tmp/claude-89e8-cwd";
-        assert!(!is_background_job(fg, TurnState::Working));
-        assert!(is_background_job(bg, TurnState::Working));
+        assert!(!is_background_job(fg, TurnState::Working, true));
+        assert!(is_background_job(bg, TurnState::Working, true));
         // A `< /dev/null` the USER wrote lands inside the eval'd string, before
         // its closing quote, so it is not the seam.
         let inner = "/bin/bash -c source /home/u/.claude/shell-snapshots/snapshot-bash-1-x.sh 2>/dev/null || true && eval 'npm test < /dev/null' && pwd -P >| /tmp/claude-1111-cwd";
-        assert!(!is_background_job(inner, TurnState::Working));
+        assert!(!is_background_job(inner, TurnState::Working, true));
         // Once the turn is over, anything still running outlived it — the
         // reading that needs no wrapper spelling, and Codex's only one.
-        assert!(is_background_job(fg, TurnState::Done));
-        assert!(is_background_job("bash -lc cargo build", TurnState::Done));
-        assert!(!is_background_job("bash -lc cargo build", TurnState::Decision));
+        assert!(is_background_job(fg, TurnState::Done, true));
+        assert!(is_background_job("bash -lc cargo build", TurnState::Done, true));
+        assert!(!is_background_job("bash -lc cargo build", TurnState::Decision, true));
+        // One started after the Stop is not the turn's: a background subagent's
+        // tool call, or the woken agent's. A backgrounded one still is a job.
+        assert!(!is_background_job(fg, TurnState::Done, false));
+        assert!(is_background_job(bg, TurnState::Done, false));
+    }
+
+    #[test]
+    fn a_shell_outlived_the_turn_only_if_it_started_before_its_end() {
+        assert!(outlived_turn(100, Some(200)));
+        assert!(outlived_turn(200, Some(200)));
+        assert!(!outlived_turn(201, Some(200)));
+        // Unknown on either side: the plain `done` reading.
+        assert!(outlived_turn(0, Some(200)));
+        assert!(outlived_turn(300, None));
     }
 
     #[test]
@@ -1016,6 +1090,69 @@ mod tests {
         assert!(!job_flag(&bg_uid));
         on_tab_gone(bg_pty);
         on_tab_gone(fg_pty);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// After the Stop, a tool call a background subagent runs (or the agent,
+    /// woken by a task notification) is not a job: it started after the turn
+    /// ended, and reading it as one lit the command mark for each such call
+    /// and dropped it a moment later. A backgrounded one started then still is.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_tool_call_started_after_the_stop_is_not_a_job() {
+        let _guard = scan_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let fg_uid = format!("job-after-fg-{}", std::process::id());
+        let bg_uid = format!("job-after-bg-{}", std::process::id());
+        let fg_pty = "proj-j:agent-after-fg";
+        let bg_pty = "proj-j:agent-after-bg";
+        let tmp = std::env::temp_dir()
+            .join(format!(concat!(crate::app_slug!(), "-job-after-{}"), std::process::id()));
+        let snap = tmp.join("shell-snapshots");
+        std::fs::create_dir_all(&snap).unwrap();
+        let snapshot = snap.join("snapshot-bash-test.sh");
+        std::fs::write(&snapshot, "").unwrap();
+        bind_tab(&fg_uid, fg_pty, None);
+        bind_tab(&bg_uid, bg_pty, None);
+        note_state(&fg_uid, TurnState::Working);
+        note_state(&bg_uid, TurnState::Working);
+        note_state(&fg_uid, TurnState::Done);
+        note_state(&bg_uid, TurnState::Done);
+        // Start times are in clock ticks: step past the tick the Stop landed in.
+        std::thread::sleep(Duration::from_millis(50));
+        let cwd_file = tmp.join("cwd");
+        let spawn = |uid: &str, redirect: &str| {
+            std::process::Command::new("bash")
+                .arg("-c")
+                .arg(format!(
+                    "source {} 2>/dev/null || true && eval 'sleep 30'{redirect} && pwd -P >| {}",
+                    snapshot.display(),
+                    cwd_file.display(),
+                ))
+                .env(crate::app_env!("TAB_UID"), uid)
+                .spawn()
+                .unwrap()
+        };
+        let mut foreground = spawn(&fg_uid, "");
+        let mut backgrounded = spawn(&bg_uid, " < /dev/null");
+        let raised = (0..50).any(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            rescan();
+            refresh_jobs(None);
+            job_flag(&bg_uid)
+        });
+        assert!(raised, "the scan never found the backgrounded shell");
+        assert!(!job_flag(&fg_uid), "a tool call started after the Stop was read as a job");
+        // A second `done` (Claude's idle notice) does not move the turn's end.
+        note_state(&fg_uid, TurnState::Done);
+        rescan();
+        refresh_jobs(None);
+        assert!(!job_flag(&fg_uid));
+        let _ = foreground.kill();
+        let _ = foreground.wait();
+        let _ = backgrounded.kill();
+        let _ = backgrounded.wait();
+        on_tab_gone(fg_pty);
+        on_tab_gone(bg_pty);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

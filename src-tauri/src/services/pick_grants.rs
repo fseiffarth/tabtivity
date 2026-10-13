@@ -15,6 +15,7 @@
 //! mints, so in the desktop window the table stays empty.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -72,8 +73,7 @@ impl PickGrants {
 /// Redeem `id` from the managed table, with the error the mail commands show.
 pub fn redeem(state: &PickGrantsState, id: &str) -> Result<PathBuf, String> {
     state
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_ok()
         .take(id)
         .ok_or_else(|| "that file pick has expired; choose the file again".to_string())
 }

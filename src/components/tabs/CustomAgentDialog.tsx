@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -42,6 +43,7 @@ function mintId(): string {
  */
 export function CustomAgentDialog({ onClose }: Props) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const settings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const agents = useMemo(() => settings?.custom_agents ?? [], [settings]);
@@ -120,6 +122,10 @@ export function CustomAgentDialog({ onClose }: Props) {
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="settings-dialog custom-agent-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

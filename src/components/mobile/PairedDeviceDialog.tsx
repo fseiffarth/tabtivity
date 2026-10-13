@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect } from "react";
 import { useT } from "../../lib/i18n";
 import { useProjectsStore } from "../../stores/projects";
@@ -21,13 +22,7 @@ export function PairedDeviceDialog({ deviceId, onClose }: { deviceId: string; on
   const { phones, refresh } = usePairedPhones();
   const device = phones?.find((phone) => phone.id === deviceId);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const modalRef = useModalFocus(onClose, !!phones && !!device);
 
   // Revoked meanwhile (here, in Settings, or by Lock down): nothing left to show.
   useEffect(() => {
@@ -40,6 +35,8 @@ export function PairedDeviceDialog({ deviceId, onClose }: { deviceId: string; on
   return (
     <div className="modal-backdrop how-to-start-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="settings-dialog"
         role="dialog"
         aria-modal="true"

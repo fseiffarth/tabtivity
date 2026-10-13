@@ -60,6 +60,14 @@ describe("readSignIn", () => {
     expect(readSignIn(rows(CLAUDE_URL, "Login successful. Press Enter to continue"))).toBeNull();
   });
 
+  it("reads a link by the desktop's sign-in rule", () => {
+    // Microsoft's device page: the desktop knew it, the phone did not.
+    expect(readSignIn(rows("To sign in, open https://microsoft.com/devicelogin and enter the code WDJB-MJHT")))
+      .toMatchObject({ flow: "device", userCode: "WDJB-MJHT", site: "microsoft.com" });
+    // A `client_id` with nothing that makes it an authorization request.
+    expect(readSignIn(rows("Docs: https://example.com/apps?client_id=x"))).toBeNull();
+  });
+
   it("keeps a sentence's punctuation and the next line's words out of the URL", () => {
     const signIn = readSignIn(rows("Go to https://example.com/device.", "Then come back"));
     expect(signIn?.url).toBe("https://example.com/device");

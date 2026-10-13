@@ -3,6 +3,7 @@
 //! instead of a process. Tokens and protocol payloads never leave this module:
 //! callers see opaque candidate ids, a device code and coarse error codes.
 use super::documents::{DocumentTicket, Documents, Position};
+use app_core::sync::LockExt;
 use super::process::ManagedProcess;
 use super::rpc::{RpcClient, RpcError};
 use serde::Serialize;
@@ -151,7 +152,7 @@ impl Session {
                 if method == "didChangeStatus" {
                     account_changed.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                     let text = |key: &str| params.and_then(|p| p.get(key)).and_then(Value::as_str);
-                    *seen.lock().unwrap() = Status {
+                    *seen.lock_ok() = Status {
                         kind: text("kind").unwrap_or("").chars().take(32).collect(),
                         message: text("message").map(|m| m.chars().take(500).collect()),
                     };
@@ -169,7 +170,7 @@ impl Session {
                             message: params.get("message").and_then(Value::as_str).unwrap_or("").chars().take(2000).collect(),
                             actions: actions.iter().map(|a| a["title"].as_str().unwrap().chars().take(200).collect()).collect() };
                         let evicted = {
-                            let mut queue = server_messages.lock().unwrap();
+                            let mut queue = server_messages.lock_ok();
                             let evicted = if queue.len() >= 16 { queue.pop_front() } else { None };
                             queue.push_back(MessageRequest { public, rpc_id: id, actions });
                             evicted
@@ -257,7 +258,7 @@ impl Session {
     }
 
     pub fn status(&self) -> Status {
-        self.status.lock().unwrap().clone()
+        self.status.lock_ok().clone()
     }
 
     /// Returns `{id, insertText, range}` per candidate. The untouched server
@@ -292,11 +293,11 @@ impl Session {
         if super::requests::is_cancelled(&signal) {
             return Err("copilot_cancelled".into());
         }
-        let previous = self.inflight.lock().unwrap().insert(request.editor.to_owned(), id);
+        let previous = self.inflight.lock_ok().insert(request.editor.to_owned(), id);
         if let Some(previous) = previous {
             let _ = self.rpc.cancel(previous).await;
         }
-        self.offers.lock().unwrap().retain(|_, offer| offer.editor != request.editor);
+        self.offers.lock_ok().retain(|_, offer| offer.editor != request.editor);
         let params = json!({
             "textDocument": {"uri": ticket.uri, "version": ticket.server_version},
             "position": request.position,
@@ -317,7 +318,7 @@ impl Session {
             }
         };
         {
-            let mut inflight = self.inflight.lock().unwrap();
+            let mut inflight = self.inflight.lock_ok();
             if inflight.get(request.editor) == Some(&id) {
                 inflight.remove(request.editor);
             }
@@ -327,7 +328,7 @@ impl Session {
             return Err("copilot_stale_document".into());
         }
         let items = reply.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
-        let mut offers = self.offers.lock().unwrap();
+        let mut offers = self.offers.lock_ok();
         Ok(items.into_iter().take(MAX_ITEMS).enumerate().filter_map(|(index, item)| {
             let text = item.get("insertText")?.as_str()?.to_owned();
             let candidate = format!("{}:{id}:{index}", self.id);
@@ -339,7 +340,7 @@ impl Session {
     }
 
     pub async fn cancel(&self, editor: &str) {
-        let id = self.inflight.lock().unwrap().remove(editor);
+        let id = self.inflight.lock_ok().remove(editor);
         if let Some(id) = id {
             let _ = self.rpc.cancel(id).await;
         }
@@ -348,7 +349,7 @@ impl Session {
     /// Hidden pane, closed tab, provider change: the server forgets the text.
     pub async fn close_editor(&self, editor: &str) {
         self.cancel(editor).await;
-        self.offers.lock().unwrap().retain(|_, offer| offer.editor != editor);
+        self.offers.lock_ok().retain(|_, offer| offer.editor != editor);
         let closed = self.documents.lock().await.close_editor(editor);
         for params in closed {
             let _ = self.notify("textDocument/didClose", params).await;
@@ -357,7 +358,7 @@ impl Session {
 
     async fn offered(&self, editor: &str, candidate: &str) -> Option<Value> {
         let (ticket, item) = {
-            let offers = self.offers.lock().unwrap();
+            let offers = self.offers.lock_ok();
             let offer = offers.get(candidate).filter(|offer| offer.editor == editor)?;
             (offer.ticket.clone(), offer.item.clone())
         };
@@ -367,7 +368,7 @@ impl Session {
     pub async fn shown(&self, editor: &str, candidate: &str) -> Result<(), String> {
         let Some(item) = self.offered(editor, candidate).await else { return Ok(()); };
         {
-            let mut offers = self.offers.lock().unwrap();
+            let mut offers = self.offers.lock_ok();
             let Some(offer) = offers.get_mut(candidate) else { return Ok(()); };
             if offer.shown || offer.accepted { return Ok(()); }
             offer.shown = true;
@@ -380,7 +381,7 @@ impl Session {
     pub async fn accepted(&self, editor: &str, candidate: &str, accepted_length: Option<u32>) -> Result<(), String> {
         let Some(item) = self.offered(editor, candidate).await else { return Ok(()); };
         {
-            let mut offers = self.offers.lock().unwrap();
+            let mut offers = self.offers.lock_ok();
             let Some(offer) = offers.get_mut(candidate) else { return Ok(()); };
             if offer.accepted { return Ok(()); }
             if let Some(length) = accepted_length {
@@ -395,7 +396,7 @@ impl Session {
             return self.notify("textDocument/didPartiallyAcceptCompletion",
                 json!({"item": item, "acceptedLength": accepted_length})).await;
         }
-        self.offers.lock().unwrap().remove(candidate);
+        self.offers.lock_ok().remove(candidate);
         let Some(command) = item.get("command") else { return Ok(()); };
         self.request("workspace/executeCommand", json!({
             "command": command.get("command"), "arguments": command.get("arguments"),
@@ -404,14 +405,14 @@ impl Session {
 
     pub async fn account(&self) -> Result<Value, String> {
         let generation = self.account_generation.load(std::sync::atomic::Ordering::Acquire);
-        if let Some((_, account)) = self.account.lock().unwrap().as_ref().filter(|(seen, _)| *seen == generation) {
+        if let Some((_, account)) = self.account.lock_ok().as_ref().filter(|(seen, _)| *seen == generation) {
             return Ok(account.clone());
         }
         let reply = self.request("checkStatus", json!({}), ACCOUNT_TIMEOUT).await?;
         let account = json!({"status": reply.get("status"), "user": reply.get("user")});
         // Filed under the generation it was asked in: a change that raced the
         // reply makes the next poll ask again.
-        *self.account.lock().unwrap() = Some((generation, account.clone()));
+        *self.account.lock_ok() = Some((generation, account.clone()));
         Ok(account)
     }
 
@@ -422,7 +423,7 @@ impl Session {
     /// Step one of the device flow. The finishing command stays in the backend.
     pub async fn sign_in(&self) -> Result<Option<DeviceCode>, String> {
         self.browser_sign_in.store(false, std::sync::atomic::Ordering::Release);
-        *self.pending_sign_in.lock().unwrap() = None;
+        *self.pending_sign_in.lock_ok() = None;
         let reply = self.request("signIn", json!({}), ACCOUNT_TIMEOUT).await?;
         let text = |key: &str| reply.get(key).and_then(Value::as_str).map(str::to_owned);
         let Some(user_code) = text("userCode") else {
@@ -436,13 +437,13 @@ impl Session {
             || reply.pointer("/command/command").and_then(Value::as_str) != Some("github.copilot.finishDeviceFlow") {
             return Err("copilot_server_error".into());
         }
-        *self.pending_sign_in.lock().unwrap() = reply.get("command").cloned();
+        *self.pending_sign_in.lock_ok() = reply.get("command").cloned();
         Ok(Some(DeviceCode { user_code, verification_uri }))
     }
 
     /// Step two: resolves once the user approved the code in their browser.
     pub async fn finish_sign_in(&self) -> Result<(), String> {
-        let command = self.pending_sign_in.lock().unwrap().take().ok_or("copilot_no_sign_in")?;
+        let command = self.pending_sign_in.lock_ok().take().ok_or("copilot_no_sign_in")?;
         self.browser_sign_in.store(true, std::sync::atomic::Ordering::Release);
         let result = self.request("workspace/executeCommand", json!({
             "command": command.get("command"), "arguments": command.get("arguments"),
@@ -459,12 +460,12 @@ impl Session {
     }
 
     pub fn account_messages(&self) -> Vec<AccountMessage> {
-        self.messages.lock().unwrap().iter().map(|message| message.public.clone()).collect()
+        self.messages.lock_ok().iter().map(|message| message.public.clone()).collect()
     }
 
     pub async fn answer_message(&self, id: u64, action: Option<usize>) -> Result<(), String> {
         let message = {
-            let mut messages = self.messages.lock().unwrap();
+            let mut messages = self.messages.lock_ok();
             let Some(index) = messages.iter().position(|m| m.public.id == id) else { return Ok(()); };
             messages.remove(index).unwrap()
         };
@@ -514,7 +515,7 @@ pub fn sessions() -> &'static Sessions {
 
 impl Sessions {
     fn allow_start(&self, project_id: &str, now: Instant) -> bool {
-        let mut starts = self.starts.lock().unwrap();
+        let mut starts = self.starts.lock_ok();
         let recent = starts.entry(project_id.to_owned()).or_default();
         while recent.front().is_some_and(|at| now.duration_since(*at) > START_WINDOW) {
             recent.pop_front();
@@ -537,7 +538,7 @@ impl Sessions {
     }
 
     fn running(&self, project_id: &str, root: &Path) -> Option<Arc<Session>> {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock_ok();
         let session = entries.get(project_id)?;
         if session.alive() && session.root() == root {
             return Some(session.clone());
@@ -573,7 +574,7 @@ impl Sessions {
             session = Session::start(output, input, Some(process), root) => Arc::new(session?),
         };
         // The settings command may invalidate just as initialization finishes.
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock_ok();
         if self.epoch(project_id) != epoch {
             session.stop();
             return Err("copilot_cancelled".into());
@@ -583,17 +584,17 @@ impl Sessions {
     }
 
     pub async fn existing(&self, project_id: &str) -> Option<Arc<Session>> {
-        self.entries.lock().unwrap().get(project_id).cloned()
+        self.entries.lock_ok().get(project_id).cloned()
     }
 
     /// Consent withdrawn, provider changed, project closed or made remote.
     pub async fn stop(&self, project_id: &str) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock_ok();
         self.invalidated.send_modify(|seen| *seen.projects.entry(project_id.to_owned()).or_default() += 1);
         if let Some(session) = entries.remove(project_id) {
             session.stop();
         }
-        self.starts.lock().unwrap().remove(project_id);
+        self.starts.lock_ok().remove(project_id);
     }
 
     pub async fn stop_all(&self) {
@@ -603,7 +604,7 @@ impl Sessions {
     /// Called synchronously after a settings commit. No initialization lock or
     /// server reply can delay revocation; pending launches are cancelled too.
     pub fn stop_all_now(&self) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock_ok();
         self.invalidated.send_modify(|seen| seen.all += 1);
         super::requests::cancel_all();
         for (_, session) in entries.drain() {

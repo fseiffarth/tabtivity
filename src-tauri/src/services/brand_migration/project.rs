@@ -434,7 +434,7 @@ pub fn sweep_at_launch() {
     }
     std::thread::spawn(|| {
         let list: crate::schema::projects::ProjectsList =
-            crate::storage::read_json(&crate::storage::state_dir().join("projects.json")).unwrap_or_default();
+            crate::storage::read_json(&crate::storage::projects_path()).unwrap_or_default();
         for project in &list {
             on_project_open(&project.id);
         }

@@ -123,6 +123,18 @@ it (`retire_previous`). Because every step re-checks each value under the
 current key, a crash anywhere costs time, never data; why and the lock order:
 [`server_gateway.md`](server_gateway.md) § Secrets.
 
+**Owner-only is set per folder, not per file.** A sync writes one blob per
+message. On Unix each blob and staged outbox file is created with mode `0600`
+(`write_store_file`), so it is never world-readable, not even between the write
+and a chmod. On Windows, restricting each file meant two `icacls` spawns per
+message. So the store's folder gets an owner-only ACL once, at open, with an
+inheritable `(OI)(CI)` grant (`mail_crypt::harden_store_dir` →
+`private_file::restrict_dir_to_owner_inheritable`). That call is skipped when the
+folder already has this ACL, because changing a folder's ACL walks everything
+under it. The files in `blobs/` and `outbox/` inherit the ACL and need no
+`icacls` run of their own. `mail.db` and `key.json` are still restricted one by
+one, because they are written rarely.
+
 **What stays readable on disk**, by design: message counts, folder structure,
 arrival dates, sizes, read/starred/priority flags — they are what paging,
 ordering and unread counts run on. One item is sharper than "folder structure"

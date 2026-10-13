@@ -42,8 +42,9 @@
 //! device or the recovery code.
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -105,14 +106,14 @@ pub struct MemoryHold(Mutex<Option<MasterKey>>);
 
 impl KeyHold for MemoryHold {
     fn put(&self, key: &MasterKey) -> Result<(), String> {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(key.clone());
+        *self.0.lock_ok() = Some(key.clone());
         Ok(())
     }
     fn get(&self) -> Result<Option<MasterKey>, String> {
-        Ok(self.0.lock().unwrap_or_else(PoisonError::into_inner).clone())
+        Ok(self.0.lock_ok().clone())
     }
     fn clear(&self) -> Result<(), String> {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *self.0.lock_ok() = None;
         Ok(())
     }
 }
@@ -211,9 +212,7 @@ pub struct Vault {
     revoked: Mutex<HashSet<String>>,
 }
 
-fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
+use crate::clock::now_secs as now;
 
 fn b64(bytes: &[u8]) -> String {
     Base64UrlUnpadded::encode_string(bytes)
@@ -267,17 +266,17 @@ impl Vault {
     }
 
     fn files(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.files.lock().unwrap_or_else(PoisonError::into_inner)
+        self.files.lock_ok()
     }
 
     /// `devices` without any this vault saw revoked.
     fn live(&self, devices: &[DeviceKey]) -> Vec<DeviceKey> {
-        let revoked = self.revoked.lock().unwrap_or_else(PoisonError::into_inner);
+        let revoked = self.revoked.lock_ok();
         devices.iter().filter(|d| !revoked.contains(&d.id)).cloned().collect()
     }
 
     fn is_revoked(&self, device_id: &str) -> bool {
-        self.revoked.lock().unwrap_or_else(PoisonError::into_inner).contains(device_id)
+        self.revoked.lock_ok().contains(device_id)
     }
 
     /// K, while unlocked.
@@ -321,7 +320,7 @@ impl Vault {
     pub fn on_unlock(&self, name: &'static str, f: impl Fn() + Send + Sync + 'static) {
         let listener: Listener = Arc::new(f);
         {
-            let mut listeners = self.listeners.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut listeners = self.listeners.lock_ok();
             listeners.retain(|(n, _)| *n != name);
             listeners.push((name, listener.clone()));
         }
@@ -361,7 +360,7 @@ impl Vault {
 
     /// Run every unlock listener (K is in the hold).
     fn notify(&self) {
-        let listeners: Vec<Listener> = self.listeners.lock().unwrap_or_else(PoisonError::into_inner).iter().map(|(_, l)| l.clone()).collect();
+        let listeners: Vec<Listener> = self.listeners.lock_ok().iter().map(|(_, l)| l.clone()).collect();
         for listener in listeners {
             listener();
         }
@@ -372,13 +371,13 @@ impl Vault {
     /// released: the mail store switches to the fresh master key the
     /// rotation put into its `key.json` and re-keys. One listener per `name`.
     pub fn on_rotate(&self, name: &'static str, f: impl Fn() + Send + Sync + 'static) {
-        let mut listeners = self.rotate_listeners.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut listeners = self.rotate_listeners.lock_ok();
         listeners.retain(|(n, _)| *n != name);
         listeners.push((name, Arc::new(f)));
     }
 
     fn notify_rotated(&self) {
-        let listeners: Vec<Listener> = self.rotate_listeners.lock().unwrap_or_else(PoisonError::into_inner).iter().map(|(_, l)| l.clone()).collect();
+        let listeners: Vec<Listener> = self.rotate_listeners.lock_ok().iter().map(|(_, l)| l.clone()).collect();
         for listener in listeners {
             listener();
         }
@@ -489,7 +488,7 @@ impl Vault {
     /// so a copy of the old `wraps.json` and the device's key open nothing
     /// sealed from then on. `remaining`: every other enrolled device.
     pub fn revoke(&self, device_id: &str, remaining: &[DeviceKey]) -> Result<(), String> {
-        self.revoked.lock().unwrap_or_else(PoisonError::into_inner).insert(device_id.to_string());
+        self.revoked.lock_ok().insert(device_id.to_string());
         let remaining: Vec<DeviceKey> = remaining.iter().filter(|d| d.id != device_id).cloned().collect();
         self.revoke_where(|w| w.device_id == device_id, &remaining)
     }
@@ -499,7 +498,7 @@ impl Vault {
     /// the new K.
     pub fn forget_devices(&self, device_ids: &[String]) -> Result<(), String> {
         {
-            let mut revoked = self.revoked.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut revoked = self.revoked.lock_ok();
             revoked.extend(device_ids.iter().cloned());
             if let Ok(file) = WrapFile::load(&self.state_dir) {
                 revoked.extend(file.devices.iter().map(|w| w.device_id.clone()));
@@ -583,7 +582,7 @@ impl Vault {
         let payload = format!("{}\n{origin}\n{device_id}\n{id}\n{}\n{}", secrets::context("unlock"), wrap.ephemeral, b64(&transport));
         let signature: Signature = identity.sign(payload.as_bytes());
         let t = now();
-        let mut exchanges = self.exchanges.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut exchanges = self.exchanges.lock_ok();
         exchanges.retain(|_, e| e.expires_at >= t);
         if exchanges.len() >= MAX_EXCHANGES {
             return Err("rate_limited".into());
@@ -596,7 +595,7 @@ impl Vault {
     /// `HKDF(salt = E ‖ T, ikm = ECDH(E, T), info = context("transport") ‖ id)`,
     /// AAD `device id ‖ "\n" ‖ id`. Single use: the exchange is spent first.
     pub fn finish_unlock(&self, device_id: &str, id: &str, device_transport: &str, nonce: &str, sealed: &str, devices: &[DeviceKey]) -> Result<(), String> {
-        let exchange = self.exchanges.lock().unwrap_or_else(PoisonError::into_inner).remove(id).ok_or("invalid_exchange")?;
+        let exchange = self.exchanges.lock_ok().remove(id).ok_or("invalid_exchange")?;
         if exchange.device_id != device_id || exchange.expires_at < now() {
             return Err("invalid_exchange".into());
         }

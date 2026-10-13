@@ -101,7 +101,5 @@ pub async fn download_app_update(ctx: Ctx) -> Result<StagedInfo, String> {
 /// platform — none of the branches restart Tabtivity themselves.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_app_update() -> Result<InstallOutcome, String> {
-    app_core::rt::spawn_blocking(app_update::install)
-        .await
-        .map_err(|e| format!("install task: {e}"))?
+    app_core::rt::try_blocking("install", app_update::install).await
 }

@@ -27,6 +27,7 @@
 //! AppHandle-free and unit-tested against fixtures.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use app_core::sync::LockExt;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -989,14 +990,6 @@ fn seed_cutoff(cache: &mut Cache, home: &Path, name: &str) -> Option<i64> {
     earliest
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_millis()).ok())
-        .unwrap_or(0)
-}
-
 static SCAN_LOCK: Mutex<()> = Mutex::new(());
 
 /// Bring the cache up to date with every agent home under `state_dir` and
@@ -1007,13 +1000,13 @@ static SCAN_LOCK: Mutex<()> = Mutex::new(());
 /// ([`agent_home::local_model_home_in`]). A home of no known scope (a
 /// removed project) and the Host session's home count as the root scope.
 pub fn scan(state_dir: &Path, scopes: &[String]) -> TokenStats {
-    scan_with(state_dir, scopes, Limits::default(), now_ms())
+    scan_with(state_dir, scopes, Limits::default(), crate::clock::now_ms() as i64)
 }
 
 /// [`scan`] with explicit limits and clock.
 pub fn scan_with(state_dir: &Path, scopes: &[String], limits: Limits, now_ms: i64) -> TokenStats {
     // Two recap windows opening at once must not interleave their cursors.
-    let _guard = SCAN_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SCAN_LOCK.lock_ok();
     let path = state_dir.join(CACHE_FILE);
     let mut cache = load_cache(&path);
     // A scope's local-model home counts toward the scope, like its own.

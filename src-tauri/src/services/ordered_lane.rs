@@ -7,6 +7,7 @@
 //! the main thread, still first in, first out.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use app_core::sync::LockExt;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -31,7 +32,7 @@ impl OrderedLane {
     /// caller's thread: slower, but nothing is dropped and the order holds.
     pub fn run(&self, job: impl FnOnce() + Send + 'static) {
         let mut job: Job = Box::new(job);
-        let mut sender = self.sender.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut sender = self.sender.lock_ok();
         for _ in 0..2 {
             if sender.is_none() {
                 *sender = spawn_worker(self.name);
@@ -53,7 +54,7 @@ impl OrderedLane {
     /// whether the lane emptied in time. Called at exit so a save the window
     /// sent just before quitting is on disk before the process goes.
     pub fn drain(&self, timeout: Duration) -> bool {
-        if self.sender.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_none() {
+        if self.sender.lock_ok().is_none() {
             return true;
         }
         let (done_tx, done_rx) = channel();

@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
@@ -191,6 +192,7 @@ export function EventDialog({
   onDelete,
 }: Props) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const lang = useI18nStore((s) => s.lang);
   const [form, setForm] = useState<Form>(() =>
     initialForm(target, defaultCalendarId, defaultReminderMinutes),
@@ -386,6 +388,10 @@ export function EventDialog({
       }}
     >
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="settings-dialog cal-event-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

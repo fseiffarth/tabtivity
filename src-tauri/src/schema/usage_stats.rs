@@ -20,6 +20,7 @@
 //! the one unit convention in this file.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -315,8 +316,7 @@ pub fn record(project_id: &str, counters: &Counters) -> Result<(), String> {
         return Ok(());
     }
     let _guard = USAGE_STATS_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .lock_ok();
     let mut stats = load_strict()?;
     stats.add_many(project_id, &storage::hour_utc(), counters);
     save(&mut stats)

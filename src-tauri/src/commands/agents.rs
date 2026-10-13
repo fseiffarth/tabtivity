@@ -550,7 +550,7 @@ fn remote_install_script(spec: &AgentSpec) -> String {
 /// the remote account's login shell, where npm/nvm and user install paths live.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_agent_remote(agent_id: String, machine_id: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("remote agent installer", move || {
         let spec = find_spec(&agent_id).ok_or_else(|| format!("unknown agent: {agent_id}"))?;
         let machine = crate::commands::global_machines::find_by_id(&machine_id)
             .ok_or_else(|| "remote machine is no longer configured".to_string())?;
@@ -576,7 +576,6 @@ pub async fn install_agent_remote(agent_id: String, machine_id: String) -> Resul
         )
     })
     .await
-    .map_err(|e| format!("remote agent installer task failed: {e}"))?
 }
 
 /// The same install, as a command line for a **visible terminal tab** instead of
@@ -2121,9 +2120,7 @@ pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
 /// (`services::agent_api_keys`), for Manage CLIs. Never a key.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_api_keys_status() -> Result<crate::services::agent_api_keys::ApiKeyStatus, String> {
-    app_core::rt::spawn_blocking(crate::services::agent_api_keys::status)
-        .await
-        .map_err(|e| e.to_string())
+    app_core::rt::blocking("agent", crate::services::agent_api_keys::status).await
 }
 
 fn api_key_provider(provider: &str) -> Result<crate::services::agent_api_keys::Provider, String> {
@@ -2138,21 +2135,19 @@ fn api_key_provider(provider: &str) -> Result<crate::services::agent_api_keys::P
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_api_key_set(provider: String, key: String) -> Result<(), String> {
     let provider = api_key_provider(&provider)?;
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("agent", move || {
         crate::services::agent_api_keys::require_limit(provider)?;
         crate::services::agent_api_keys::set_key(provider, Some(key.trim()))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Remove `provider`'s API key from the OS keychain.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_api_key_clear(provider: String) -> Result<(), String> {
     let provider = api_key_provider(&provider)?;
-    app_core::rt::spawn_blocking(move || crate::services::agent_api_keys::set_key(provider, None))
+    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::set_key(provider, None))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 /// Copy this computer's login files for `id` into Tabtivity's store — the one
@@ -2160,17 +2155,14 @@ pub async fn agent_api_key_clear(provider: String) -> Result<(), String> {
 /// files were taken.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_login_import(id: String) -> Result<usize, String> {
-    app_core::rt::spawn_blocking(move || crate::services::agent_auth::import_from_user_home(&id))
+    app_core::rt::try_blocking("agent", move || crate::services::agent_auth::import_from_user_home(&id))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 /// Forget the shared login of `id` everywhere.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
-    app_core::rt::spawn_blocking(move || crate::services::agent_auth::sign_out(&id))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("agent", move || crate::services::agent_auth::sign_out(&id)).await
 }
 
 /// On a hosted server: run `id`'s agents on the administrator's API key
@@ -2179,27 +2171,22 @@ pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
 /// environment, and (switching on) when no key is on offer.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_login_use_admin_key(id: String, on: bool) -> Result<(), String> {
-    app_core::rt::spawn_blocking(move || crate::services::server::agent_keys::choose(&id, on))
+    app_core::rt::try_blocking("agent", move || crate::services::server::agent_keys::choose(&id, on))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 /// The Tabtivity-wide agent config layer (`services::agent_global`): where it is
 /// and how many files it holds.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_status() -> Result<crate::services::agent_global::LayerStatus, String> {
-    app_core::rt::spawn_blocking(crate::services::agent_global::status)
-        .await
-        .map_err(|e| e.to_string())
+    app_core::rt::blocking("agent", crate::services::agent_global::status).await
 }
 
 /// Fill the Tabtivity-wide layer from the user's own `~/.claude`, `~/.codex` and
 /// `~/.gemini`; every agent home picks it up at its next tab start.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_import() -> Result<crate::services::agent_global::ImportReport, String> {
-    app_core::rt::spawn_blocking(crate::services::agent_global::import_from_user_home)
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::blocking("agent", crate::services::agent_global::import_from_user_home).await?
         .map_err(|e| e.to_string())
 }
 
@@ -2207,21 +2194,19 @@ pub async fn agent_global_import() -> Result<crate::services::agent_global::Impo
 /// every Codex tab picks it up at its next start.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_set_codex_auto_review(enabled: bool) -> Result<(), String> {
-    app_core::rt::spawn_blocking(move || crate::services::agent_global::set_codex_auto_review(enabled))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::blocking("agent", move || crate::services::agent_global::set_codex_auto_review(enabled))
+        .await?
         .map_err(|e| e.to_string())
 }
 
 /// Open the Tabtivity-wide layer's folder in the file manager, creating it first.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_open() -> Result<(), String> {
-    app_core::rt::spawn_blocking(|| {
+    app_core::rt::try_blocking("agent", || {
         let dir = crate::services::agent_global::ensure_dir().map_err(|e| e.to_string())?;
         opener::open(&dir).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
