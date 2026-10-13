@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The local mirror of .github/workflows/ci-cd.yml: before a push, run what its
-# Linux jobs run (privacy, brand, secrets, lint, test), fail-fast, plus the
+# Linux jobs run (privacy, brand, secrets, lint, test-ubuntu), fail-fast, plus the
 # Windows and macOS cross-checks AGENTS.md asks for — the jobs on those
 # runners cannot run here, but their compile errors can be caught.
 #
@@ -70,21 +70,21 @@ STEPS=(
   "drift|lint|ci-local.sh mirrors this workflow|ci|always"
   "privacy|privacy|Scan pushed changes for secrets / personal data|local:privacy@4197511463-1112|always"
   "gitleaks|secrets|Scan history for secrets|local:gitleaks@2296324494-115|always"
-  "npm-deps|lint,test,package|Install frontend dependencies|local:npm_deps@980916841-64|always"
+  "npm-deps|lint,test-ubuntu,package|Install frontend dependencies|local:npm_deps@4016385107-81|always"
   "lint-frontend|lint|Lint frontend|ci|always"
   "lint-backend|lint|Lint backend|ci|always"
   "lint-core|lint|Lint core crate|ci|always"
   "lint-gateway|lint|Lint gateway crate|ci|always"
   "lint-daemon-lib|lint|Lint the daemon's build of the library|ci|always"
   "lint-daemon|lint|Lint daemon crate|ci|always"
-  "failed-first|test|Re-run the last run's failed tests first|ci|always"
-  "build-frontend|test|Build frontend|ci|fe"
-  "test-frontend|test|Run frontend tests|ci|fe:vitest_changed"
-  "test-backend|test|Run backend tests|ci|backend"
-  "test-core|test|Run core crate tests|ci|core"
-  "test-gateway|test|Run gateway crate tests|ci|gateway"
-  "test-daemon-lib|test|Run the daemon build's library tests|ci|backend"
-  "daemon-ldd|test|Daemon links no desktop libraries|sub:target_dir|rs"
+  "failed-first|test-ubuntu|Re-run the last run's failed tests first|ci|always"
+  "build-frontend|test-ubuntu|Build frontend|ci|fe"
+  "test-frontend|test-ubuntu|Run frontend tests|ci|fe:vitest_changed"
+  "test-backend|test-ubuntu|Run backend tests|ci|backend"
+  "test-core|test-ubuntu|Run core crate tests|ci|core"
+  "test-gateway|test-ubuntu|Run gateway crate tests|ci|gateway"
+  "test-daemon-lib|test-ubuntu|Run the daemon build's library tests|ci|backend"
+  "daemon-ldd|test-ubuntu|Daemon links no desktop libraries|sub:target_dir|rs"
   "windows-clippy|local|Windows cross-check: clippy (src-tauri, all targets)|local:windows_clippy|rs"
   "windows-check|local|Windows cross-check: cargo check (workspace, all targets)|local:windows_check|rs"
   "macos-check|local|macOS cross-check: cargo check (workspace, all targets)|local:macos_check|rs"
@@ -99,8 +99,8 @@ ALLOW=(
   "*|Setup Rust|rust-toolchain.toml selects the same pinned Rust"
   "*|Rust cache|CI's target-dir cache; the local target dir persists"
   "secrets|Install gitleaks|an installed gitleaks is used, else the scan is SKIPPED"
-  "test|Restore the last run's failed tests|the list persists in the git dir"
-  "test|Save this run's failed tests|the list persists in the git dir"
+  "test-ubuntu|Restore the last run's failed tests|the list persists in the git dir"
+  "test-ubuntu|Save this run's failed tests|the list persists in the git dir"
   "package|Build release bundles|release packaging (npm run tauri:bundle), not a code gate"
   "package|Upload AppImage|artifact upload"
   "package|Upload DEB|artifact upload"
@@ -140,8 +140,9 @@ skip_gitleaks() {
 }
 run_gitleaks() { gitleaks git . --redact --no-banner --verbose; }
 
-# CI runs `npm ci`, which would delete and reinstall node_modules under
-# everything else using this tree. Check what npm ci would refuse or change.
+# CI runs `npm ci --ignore-scripts`, which would delete and reinstall
+# node_modules under everything else using this tree. Check what npm ci would
+# refuse or change.
 run_npm_deps() {
   echo "+ npm ls --package-lock-only --depth=0   # the lock satisfies package.json (npm ci refuses otherwise)"
   npm ls --package-lock-only --depth=0 >/dev/null

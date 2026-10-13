@@ -3,9 +3,11 @@ name: ci-cd
 # Branch pushes only: a v* tag is not built again here. Releases are cut by
 # release.yml from a commit this workflow already passed on its branch push,
 # out of the bundles that very run built (the package jobs' artifacts).
+# Dependabot's branches run as their pull request only: a push run of one
+# would also build every package for a branch nothing releases.
 on:
   push:
-    branches: ['**']
+    branches: ['**', '!dependabot/**']
   pull_request:
   workflow_dispatch:
 
@@ -26,6 +28,16 @@ env:
   # lint job checks the two agree). Bump both together.
   RUST_TOOLCHAIN: "1.99.0"
 
+# Every job's timeout-minutes is about one and a half to two times its longest
+# green run (2026-10), so a hung test fails the job instead of holding the
+# runner for GitHub's six-hour default (and release.yml's two-hour wait).
+#
+# `npm ci --ignore-scripts`: no dependency's install script runs here, where
+# a compromised package's postinstall would execute with the job's token and
+# secrets. The lock's only install scripts are esbuild's (a binary check and
+# a startup optimisation; it finds its binary through its @esbuild/<platform>
+# optional package without it) and fsevents' (a rebuild of a prebuilt
+# binary). A new dependency that truly needs its script fails loudly here.
 jobs:
   # The pre-push hook runs this same scan, but the hook needs
   # `git config core.hooksPath .githooks` per clone and a fresh clone has it
@@ -33,11 +45,13 @@ jobs:
   privacy:
     name: privacy
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0   # the scan needs the base commit, not just the tip
 
       - name: Scan pushed changes for secrets / personal data
@@ -90,10 +104,13 @@ jobs:
   brand:
     name: brand
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check that only the brand modules spell the app's name
         run: scripts/brand-check.sh
@@ -107,11 +124,13 @@ jobs:
   secrets:
     name: secrets (gitleaks)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0   # scan every commit, not just the tip
 
       # The release binary, not gitleaks-action: the action needs a paid
@@ -143,10 +162,13 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Linux dependencies
         run: |
@@ -178,7 +200,7 @@ jobs:
           workspaces: . -> target
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: CI's Rust is the pinned one
         shell: bash
@@ -216,13 +238,16 @@ jobs:
       - name: Lint daemon crate
         run: cargo clippy -p app-serverd -- -D warnings
 
-  test:
-    name: test
+  test-ubuntu:
+    name: test-ubuntu
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Linux dependencies
         run: |
@@ -253,7 +278,7 @@ jobs:
           workspaces: . -> target
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # Fail fast: what failed in this branch's last run on this OS runs
       # before anything else (scripts/ci-failed-first.sh), and the full
@@ -314,13 +339,19 @@ jobs:
             exit 1
           fi
 
+  # windows-2025 and macos-26, not the -latest aliases, for the reason the
+  # package job's comment gives for ubuntu-24.04: the runner image is an input
+  # to the shipped .exe and .dmg. They are what -latest named in 2026-10.
   test-windows:
     name: test-windows
-    runs-on: windows-latest
+    runs-on: windows-2025
+    timeout-minutes: 100
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -340,7 +371,7 @@ jobs:
           workspaces: . -> target
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # Fail fast: what failed in this branch's last run on this OS runs
       # before anything else (scripts/ci-failed-first.sh), and the full
@@ -393,11 +424,14 @@ jobs:
 
   test-macos:
     name: test-macos
-    runs-on: macos-latest
+    runs-on: macos-26
+    timeout-minutes: 100
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -417,7 +451,7 @@ jobs:
           workspaces: . -> target
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # Fail fast: what failed in this branch's last run on this OS runs
       # before anything else (scripts/ci-failed-first.sh), and the full
@@ -470,7 +504,8 @@ jobs:
 
   package-windows:
     name: package-windows
-    runs-on: windows-latest
+    runs-on: windows-2025
+    timeout-minutes: 50
     if: github.event_name == 'push'
     # `privacy` gates every package job: a build that leaks must never become a
     # downloadable artifact, let alone a release asset.
@@ -479,6 +514,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -497,7 +534,7 @@ jobs:
           workspaces: . -> target
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build release bundles
         run: npm run tauri:build -- --bundles nsis
@@ -525,12 +562,15 @@ jobs:
   package:
     name: package
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     if: github.event_name == 'push'
-    needs: [test, privacy, brand]
+    needs: [test-ubuntu, privacy, brand]
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Linux dependencies
         run: |
@@ -561,7 +601,7 @@ jobs:
           workspaces: . -> target
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build release bundles
         env:
@@ -593,13 +633,16 @@ jobs:
 
   package-macos:
     name: package-macos
-    runs-on: macos-latest
+    runs-on: macos-26
+    timeout-minutes: 60
     if: github.event_name == 'push'
     needs: [test-macos, privacy, brand]
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -619,7 +662,7 @@ jobs:
           workspaces: . -> target
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build release bundles
         # Unsigned alpha .dmg (matches the unsigned Windows NSIS today). macOS
