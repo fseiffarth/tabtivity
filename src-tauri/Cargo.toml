@@ -1,9 +1,10 @@
 [package]
 name = "tabtivity"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
+publish = false
 default-run = "tabtivity"
 # Every integration test is a module of tests/it.rs (one binary, the library
 # linked once), so tests/*.rs are not targets of their own: the [[test]] rows
