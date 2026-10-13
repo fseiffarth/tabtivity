@@ -24,6 +24,11 @@ interface PendingAsk {
   id: number;
   request: OpenExternalRequest;
   resolve: (approved: boolean) => void;
+  /** It waited behind another question: shown the moment that one was
+   *  answered, so its host arms the confirm button only after a short delay
+   *  (`useConfirmArmed`) — the second click of a fast double click must not
+   *  answer it unseen. */
+  queued: boolean;
 }
 
 let nextAskId = 0;
@@ -45,8 +50,8 @@ export const useOpenExternalStore = create<OpenExternalStore>((set, get) => ({
       // One question per file, in turn: several no-viewer files dropped or
       // dragged out at once each get theirs. (Superseding the earlier one
       // declined it unseen, so only the last file of a drop could open.)
-      const entry = { id: ++nextAskId, request, resolve };
       const { pending, queue } = get();
+      const entry = { id: ++nextAskId, request, resolve, queued: pending !== null };
       if (pending) set({ queue: [...queue, entry] });
       else set({ pending: entry });
     }),

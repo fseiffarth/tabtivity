@@ -1,4 +1,4 @@
-import { DialogShell } from "./PromptDialogs";
+import { DialogShell, useConfirmArmed } from "./PromptDialogs";
 import { UntestedTag } from "./UntestedTag";
 import { useT } from "../../lib/i18n";
 import { useOpenExternalStore } from "../../stores/openExternal";
@@ -14,6 +14,7 @@ export function OpenExternalHost() {
   const pending = useOpenExternalStore((s) => s.pending);
   const answer = useOpenExternalStore((s) => s.answer);
   const t = useT();
+  const armed = useConfirmArmed(pending?.id ?? null, pending?.queued ?? false);
   if (!pending) return null;
   const { request } = pending;
   // Keyed per question: a queued one gets a fresh dialog, focus on its
@@ -45,7 +46,7 @@ export function OpenExternalHost() {
         <button type="button" autoFocus onClick={() => answer(false)}>
           {t("openExternal.cancel")}
         </button>
-        <button type="button" className="btn-primary" onClick={() => answer(true)}>
+        <button type="button" className="btn-primary" onClick={() => armed && answer(true)}>
           {t("openExternal.open")}
         </button>
       </div>

@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { useWindowsStore, type TrackedWindow } from "../../stores/windows";
 import { useOpenExternalStore } from "../../stores/openExternal";
 import { OpenExternalHost } from "../../components/common/OpenExternalHost";
+import { QUEUED_CONFIRM_DELAY_MS } from "../../components/common/PromptDialogs";
 import { EmbedPane } from "../../components/embed/EmbedPane";
 import { adaptClientCommand } from "../../lib/transport/clientAdapters";
 import { describeFileErrorKey } from "../../components/embed/fileAccess";
@@ -131,6 +132,9 @@ describe("openFile asks before the OS opens a file", () => {
     expect(await screen.findByText("Open b.xyz with the system's default app?")).toBeTruthy();
     // The next question starts on Cancel again, not on the Open just pressed.
     expect(document.activeElement?.textContent).toBe("Cancel");
+    // A queued question's Open arms only after a short delay (a double
+    // click's second click must not answer it unseen).
+    await act(() => new Promise((r) => setTimeout(r, QUEUED_CONFIRM_DELAY_MS + 20)));
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect((await first)?.file).toBe("/p/a.xyz");
     expect((await second)?.file).toBe("/p/b.xyz");

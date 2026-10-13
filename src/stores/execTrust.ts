@@ -14,6 +14,11 @@ interface PendingAsk {
   id: number;
   request: TrustRequest;
   resolve: (approved: boolean) => void;
+  /** It waited behind another question: shown the moment that one was
+   *  answered, so its host arms the confirm button only after a short delay
+   *  (`useConfirmArmed`) — the second click of a fast double click must not
+   *  answer it unseen. */
+  queued: boolean;
 }
 
 let nextAskId = 0;
@@ -35,8 +40,8 @@ export const useExecTrustStore = create<ExecTrustStore>((set, get) => ({
       // One question per gated action, in turn (the open-external store's
       // rule). Superseding the earlier one declined it unseen, so of two
       // gated actions started together only the last could run.
-      const entry = { id: ++nextAskId, request, resolve };
       const { pending, queue } = get();
+      const entry = { id: ++nextAskId, request, resolve, queued: pending !== null };
       if (pending) set({ queue: [...queue, entry] });
       else set({ pending: entry });
     }),

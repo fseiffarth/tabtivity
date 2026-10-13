@@ -1,4 +1,4 @@
-import { DialogShell } from "./PromptDialogs";
+import { DialogShell, useConfirmArmed } from "./PromptDialogs";
 import { UntestedTag } from "./UntestedTag";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import type { TrustKind } from "../../lib/execTrust";
@@ -22,6 +22,7 @@ export function ExecTrustHost() {
   const pending = useExecTrustStore((s) => s.pending);
   const answer = useExecTrustStore((s) => s.answer);
   const t = useT();
+  const armed = useConfirmArmed(pending?.id ?? null, pending?.queued ?? false);
   if (!pending) return null;
   const { request } = pending;
   // Keyed per question: a queued one gets a fresh dialog, focus on its
@@ -53,7 +54,7 @@ export function ExecTrustHost() {
         <button type="button" autoFocus onClick={() => answer(false)}>
           {t("execTrust.dontRun")}
         </button>
-        <button type="button" className="danger" onClick={() => answer(true)}>
+        <button type="button" className="danger" onClick={() => armed && answer(true)}>
           {t("execTrust.run")}
         </button>
       </div>

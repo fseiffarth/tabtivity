@@ -1,5 +1,5 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
-import { type ReactNode, useCallback, useId, useLayoutEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useState } from "react";
 import { UntestedTag } from "./UntestedTag";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
@@ -94,6 +94,29 @@ export type MessageSpec = {
 
 /** The dialog frame every one of these wears — portaled, backdrop-dismissed.
  *  Exported for a question too specific for the helpers below. */
+/** How long a queued question's confirm button ignores activation after the
+ *  dialog appears. */
+export const QUEUED_CONFIRM_DELAY_MS = 400;
+
+/**
+ * Whether question `id`'s confirm button may act yet. A question that waited in
+ * a queue appears the instant the one before it is answered, often under the
+ * same pointer: the second click of a fast double click on "Run" or "Open"
+ * would answer it unseen. So for a `queued` question the confirm button
+ * ignores clicks (and Enter, which reaches a button as a click) for
+ * [`QUEUED_CONFIRM_DELAY_MS`] after it appears; Cancel and Escape act at once.
+ * A question shown on its own is armed from the start.
+ */
+export function useConfirmArmed(id: number | null, queued: boolean): boolean {
+  const [armed, setArmed] = useState<number | null>(null);
+  useEffect(() => {
+    if (id === null || !queued) return;
+    const timer = setTimeout(() => setArmed(id), QUEUED_CONFIRM_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [id, queued]);
+  return id !== null && (!queued || armed === id);
+}
+
 export function DialogShell({
   onDismiss,
   children,
