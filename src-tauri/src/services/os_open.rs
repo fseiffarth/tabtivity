@@ -153,10 +153,11 @@ pub fn fs_name_lacks_unix_modes(name: &str) -> bool {
 }
 
 /// Linux `statfs.f_type` magic numbers of filesystems without Unix modes:
-/// MSDOS/vfat, exFAT, NTFS (`ntfs`/`ntfs3`), CIFS, SMB2/3, SMB, 9p.
+/// MSDOS/vfat, exFAT, the old `ntfs` driver (`NTFS_SB_MAGIC`), `ntfs3` (its
+/// own `"ntfs"` magic, not in `magic.h`), CIFS, SMB2/3, SMB, 9p.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const NO_MODE_FS_MAGIC: &[u32] = &[
-    0x4d44, 0x2011_bab0, 0x5346_544e, 0xff53_4d42, 0xfe53_4d42, 0x517b, 0x0102_1997,
+    0x4d44, 0x2011_bab0, 0x5346_544e, 0x7366_746e, 0xff53_4d42, 0xfe53_4d42, 0x517b, 0x0102_1997,
 ];
 
 /// Linux: judge by the `statfs` magic first, then by the type name of the
@@ -432,8 +433,9 @@ mod tests {
         for name in ["ext4", "btrfs", "xfs", "tmpfs", "apfs", "hfs", "nfs", "nfs4", "fuse.sshfs", "fuse", "overlay", ""] {
             assert!(!fs_name_lacks_unix_modes(name), "{name}");
         }
-        // statfs magics: vfat, exFAT, NTFS, CIFS, SMB2, 9p.
-        for magic in [0x4d44, 0x2011_bab0, 0x5346_544e, 0xff53_4d42, 0xfe53_4d42, 0x0102_1997] {
+        // statfs magics: vfat, exFAT, NTFS (old driver and ntfs3, whose
+        // `ntfs_fill_super` sets `0x7366746e`), CIFS, SMB2, 9p.
+        for magic in [0x4d44, 0x2011_bab0, 0x5346_544e, 0x7366_746e, 0xff53_4d42, 0xfe53_4d42, 0x0102_1997] {
             assert_eq!(linux_unix_modes(Some(magic), Some("whatever")), UnixModes::None, "{magic:x}");
         }
         // ext4 and tmpfs keep modes; a FUSE mount is told by its type name.

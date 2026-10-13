@@ -4097,7 +4097,7 @@ pub async fn clear_local_model_conversations(model: String) -> Result<(), String
     let home = app_vibe_local_dir_for(&sanitize_alias(&model))?;
     let marker = crate::services::root_mcp::model_read_mail_marker(&crate::storage::state_dir(), &model);
     tokio::task::spawn_blocking(move || {
-        let live = crate::services::agent_fence::live_tabs_in_vibe_home(&home);
+        let live = || crate::services::agent_fence::live_tabs_in_vibe_home(&home);
         clear_conversations_in(&home, &marker, &live)
     })
     .await
@@ -4105,13 +4105,23 @@ pub async fn clear_local_model_conversations(model: String) -> Result<(), String
 }
 
 /// [`clear_local_model_conversations`] over its paths: refuse while `live`
-/// names a tab, delete the session store, then the marker. Pure over the
-/// filesystem + tested.
-fn clear_conversations_in(home: &std::path::Path, marker: &std::path::Path, live: &[String]) -> Result<(), String> {
-    if !live.is_empty() {
+/// names a tab, delete the session store, then the marker. `live` is asked
+/// again just before the marker goes: a tab of the model that started while
+/// the store was being deleted may already hold a conversation (one it
+/// resumed, or a new one that reads mail), so the marker stays and the clear
+/// is refused. Pure over the filesystem + tested.
+fn clear_conversations_in(
+    home: &std::path::Path,
+    marker: &std::path::Path,
+    live: &dyn Fn() -> Vec<String>,
+) -> Result<(), String> {
+    if !live().is_empty() {
         return Err(LOCAL_MODEL_TAB_OPEN.to_string());
     }
     remove_vibe_sessions(home)?;
+    if !live().is_empty() {
+        return Err(LOCAL_MODEL_TAB_OPEN.to_string());
+    }
     match std::fs::remove_file(marker) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -4887,6 +4897,14 @@ pub(crate) fn sanitize_alias(model: &str) -> String {
 /// also illegal in TOML basic strings. We allow only the characters that appear
 /// in real Ollama model refs (`<namespace>/<name>:<tag>`): ASCII alphanumerics
 /// and `. _ - : /` plus `@` (digest refs). Empty names are rejected too.
+///
+/// The name also becomes a path: the model's Vibe home is
+/// `vibe_local/<alias>` ([`app_vibe_local_dir_for`]), which
+/// `prepare_local_agent` writes and "Clear conversations" deletes from. So
+/// every `/`-separated part must be a real name — no empty part (a leading
+/// `/` would make the home absolute, and `Path::join` would drop
+/// `vibe_local` altogether), no `.` and no `..`. No Ollama ref has one; a
+/// listed name that does (a remote Ollama names its own models) is refused.
 fn validate_model_name(model: &str) -> Result<(), String> {
     let model = model.trim();
     if model.is_empty() {
@@ -4897,6 +4915,9 @@ fn validate_model_name(model: &str) -> Result<(), String> {
         .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/' | '@')))
     {
         return Err(format!("invalid character {bad:?} in model name '{model}'"));
+    }
+    if model.split('/').any(|part| matches!(part, "" | "." | "..")) {
+        return Err(format!("invalid path part in model name '{model}'"));
     }
     Ok(())
 }
@@ -5167,6 +5188,28 @@ mod tests {
                 validate_model_name(bad).is_err(),
                 "{bad:?} should be rejected"
             );
+        }
+    }
+
+    /// Step 9 review: the name is also the Vibe home's folder, which "Clear
+    /// conversations" deletes from and `prepare_local_agent` writes. A name
+    /// that is absolute or climbs out (`/home/u/.vibe`, `../../.vibe`) would
+    /// point both at a folder outside `vibe_local` — the user's own Vibe's.
+    #[test]
+    fn validate_model_name_rejects_path_escapes() {
+        for bad in ["/home/u/.vibe", "../../../.vibe", "a/../../b", "./x", "a//b", "a/", "..", "."] {
+            assert!(validate_model_name(bad).is_err(), "{bad:?} should be rejected");
+        }
+        for ok in ["hf.co/user/repo:Q4_K_M", "a..b:c", ".hidden-ish:1", "x/y.z:latest"] {
+            assert!(validate_model_name(ok).is_ok(), "{ok:?} should be accepted");
+        }
+        // Refused before anything is read or deleted (`prepare_local_agent`
+        // validates first too; not called here, as a regression would write
+        // into the real share dir's neighbourhood). Neither path exists, so
+        // the old code answered `Ok` here.
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        for bad in ["/nonexistent-vibe-home-for-a-test", "../../../nonexistent-vibe-home-for-a-test"] {
+            assert!(rt.block_on(clear_local_model_conversations(bad.to_string())).is_err(), "{bad}");
         }
     }
 
@@ -6101,6 +6144,28 @@ mod tests {
         home
     }
 
+    fn none_live() -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Step 9 review: a tab of the model that starts while the store is being
+    /// deleted keeps the marker — its conversation may hold mail.
+    #[test]
+    fn a_tab_starting_during_the_clear_keeps_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = vibe_home_with_sessions(tmp.path());
+        let marker = tmp.path().join("marker");
+        std::fs::write(&marker, b"").unwrap();
+        let asked = std::cell::Cell::new(0);
+        let live = || {
+            asked.set(asked.get() + 1);
+            if asked.get() == 1 { Vec::new() } else { vec!["late-tab".to_string()] }
+        };
+        assert_eq!(clear_conversations_in(&home, &marker, &live).unwrap_err(), LOCAL_MODEL_TAB_OPEN);
+        assert_eq!(asked.get(), 2);
+        assert!(marker.exists(), "the marker outlives a clear a new tab overlapped");
+    }
+
     #[test]
     fn clearing_deletes_the_conversations_then_the_marker_and_nothing_else() {
         let tmp = tempfile::tempdir().unwrap();
@@ -6108,7 +6173,7 @@ mod tests {
         let marker = tmp.path().join("root_mcp").join("read_mail_model").join("h");
         std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
         std::fs::write(&marker, b"").unwrap();
-        clear_conversations_in(&home, &marker, &[]).unwrap();
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
         assert!(!home.join("logs").join("session").exists());
         assert!(!marker.exists());
         for keep in ["config.toml", "hooks.toml", ".env", "vibehistory"] {
@@ -6116,8 +6181,8 @@ mod tests {
         }
         assert!(home.join("logs").join("vibe.log").is_file());
         // Again: nothing left to clear is not an error; nor is a model never run.
-        clear_conversations_in(&home, &marker, &[]).unwrap();
-        clear_conversations_in(&tmp.path().join("vibe_local").join("never"), &marker, &[]).unwrap();
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
+        clear_conversations_in(&tmp.path().join("vibe_local").join("never"), &marker, &none_live).unwrap();
     }
 
     #[test]
@@ -6126,7 +6191,7 @@ mod tests {
         let home = vibe_home_with_sessions(tmp.path());
         let marker = tmp.path().join("marker");
         std::fs::write(&marker, b"").unwrap();
-        let err = clear_conversations_in(&home, &marker, &["tab-1".to_string()]).unwrap_err();
+        let err = clear_conversations_in(&home, &marker, &|| vec!["tab-1".to_string()]).unwrap_err();
         assert_eq!(err, LOCAL_MODEL_TAB_OPEN);
         assert!(home.join("logs").join("session").join("unified").is_dir());
         assert!(marker.exists());
@@ -6145,19 +6210,19 @@ mod tests {
         std::os::unix::fs::symlink(&outside, home.join("logs")).unwrap();
         let marker = tmp.path().join("marker");
         std::fs::write(&marker, b"").unwrap();
-        clear_conversations_in(&home, &marker, &[]).unwrap();
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
         assert!(std::fs::symlink_metadata(home.join("logs")).is_err());
         assert!(outside.join("session").join("precious").is_file());
         // `session` a link: the same.
         std::fs::create_dir_all(home.join("logs")).unwrap();
         std::os::unix::fs::symlink(outside.join("session"), home.join("logs").join("session")).unwrap();
-        clear_conversations_in(&home, &marker, &[]).unwrap();
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
         assert!(outside.join("session").join("precious").is_file());
         // A home that is itself a link is refused, and the marker stays.
         let linked = tmp.path().join("vibe_local").join("linked");
         std::os::unix::fs::symlink(&outside, &linked).unwrap();
         std::fs::write(&marker, b"").unwrap();
-        assert!(clear_conversations_in(&linked, &marker, &[]).is_err());
+        assert!(clear_conversations_in(&linked, &marker, &none_live).is_err());
         assert!(marker.exists());
         assert!(outside.join("session").join("precious").is_file());
     }

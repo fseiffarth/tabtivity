@@ -684,7 +684,10 @@ nothing to say). Config, hooks, logins, `vibehistory` and `vibe.log` stay.
 It is refused while a tab of the model is open: the window names its open
 tabs (raw model name or alias, every scope), and the backend refuses
 (`local_model_tab_open`) while a live spawn has that `VIBE_HOME`
-(`agent_fence::live_tabs_in_vibe_home`). Tab markers (`read_mail/`) are not
+(`agent_fence::live_tabs_in_vibe_home`), asked again after the store is gone
+and before the marker goes, so a tab that started meanwhile keeps the marker.
+A model name that is absolute or has an empty, `.` or `..` part is refused
+(`validate_model_name`): the name is the home's folder. Tab markers (`read_mail/`) are not
 touched, so a restored tab that read mail stays tainted. The markers are written before the read, and a
 write that fails refuses the read (`LOCAL_READ_UNRECORDED`), the in-memory
 latch staying set; a marker that cannot be looked at counts as present. The
