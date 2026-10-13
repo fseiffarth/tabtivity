@@ -109,7 +109,7 @@ export function ProjectFilesTab({
   const project =
     projects.find((p) => p.id === scope) ??
     (scope.startsWith(BOX_SCOPE_PREFIX)
-      ? projects.find((p) => resolveProjectDirectory(p) === cwd) ?? null
+      ? projects.find((p) => resolveProjectDirectory(p) === cwd)
       : null) ??
     injectedProject ??
     null;
