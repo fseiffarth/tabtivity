@@ -4311,3 +4311,97 @@ as the read gate.
    of the model adds a to-do without staging.
 6. Mail assistant: summarise works as before; with Ollama stopped mid-way (or
    swamped), the answer is "not running", not "pull it".
+
+## Follow-up agent step 9 — reviewer — 2026-10-13
+
+**Reviewed:** `a9936303..82f78278` and the handoff `51295c0a`, against the
+fixed decisions (a)–(c) and the step 4/5 reviewer items.
+
+**Checked:**
+- (c) Clear conversations: home and marker are both keyed by
+  `sanitize_alias(model.trim())`, so they always pair (models sharing an
+  alias share both). Order sessions → marker; any failure keeps the marker; a
+  `logs` that is a file means no store, so the marker going then is right.
+  Planted links at `logs`/`session` are unlinked, never followed (`std`'s
+  `remove_dir_all` does not follow links inside); a linked home is refused;
+  Windows junctions read as links and go through `remove_dir`. Live-tab
+  registry: noted at `commit` for window and phone spawns
+  (`commands/terminal.rs`, `mobile_control/host.rs`), cleared by
+  `agent_fence::on_tab_gone`; local agents never run under tmux
+  (`docs/context/tmux_sessions.md`), so no detached session keeps one alive
+  unregistered. Window check covers every scope, raw name or alias.
+  `cfg_attr`, `command_class` (`Core`), `MODEL_ARG` row and the regenerated
+  `commandClasses.ts` are all there; 11 keys in all five dictionaries;
+  `untested.ts` row present.
+- (a) statfs magics against `magic.h` (vfat `0x4d44`, exFAT, CIFS, SMB2, SMB,
+  9p, FUSE all right); mountinfo field 5 and the ` - ` separator, `\040`
+  unescaping, component-wise longest prefix with the later mount winning;
+  detection on the canonical path; `statfs` failing is `Unknown` (strict);
+  macOS `f_fstypename` names.
+- (b) blob pane: `openFileEntry` with the tab scope and viewer opt-outs; a
+  double click re-focuses the same viewer tab (same-file dedupe), as before
+  the OS path opened twice; no remote-only path existed here (the pane lists
+  the local directory).
+- ExecTrust queue: each ask resolves exactly once (answered head, the rest in
+  order); `withExecTrust` is the only caller. Mail: preflight, capability
+  probe and `/api/chat` all on the checked `addr`; the alias rule leaves
+  ordinary single models alone; only transport errors read as not running.
+
+**Bugs found and fixed** (`fa9c2171`):
+1. **A model name could point the Vibe home outside `vibe_local`.**
+   `validate_model_name` allowed a leading `/` and `..` parts, and
+   `Path::join` with an absolute part drops the base. A remote Ollama (which
+   names its own models) listing `/home/u/.vibe` or `../../../.vibe` made
+   **Clear** delete `<that>/logs/session` (the user's own Vibe sessions), and
+   the sibling `prepare_local_agent` write `config.toml` and the hook file
+   there. Now an empty, `.` or `..` part is refused (no Ollama ref has one).
+   Test `validate_model_name_rejects_path_escapes` (the clear call answered
+   `Ok` on the old code).
+2. **Race between the live-tab check and the marker removal.** A tab of the
+   model that started while the store was being deleted (it may resume a
+   conversation or read mail) lost the marker anyway. `clear_conversations_in`
+   now asks for live tabs again just before the marker goes and refuses
+   (`local_model_tab_open`), keeping the marker. Test
+   `a_tab_starting_during_the_clear_keeps_the_marker`.
+3. **ntfs3's statfs magic was missing** (sibling, same table): ntfs3 sets
+   `0x7366746e` (checked in this kernel's `ntfs3.ko`: `ntfs_fill_super`
+   stores it), not `NTFS_SB_MAGIC`; only the mountinfo name caught it, so an
+   unreadable mountinfo kept the bit. Added to the table and to
+   `filesystems_without_unix_modes_are_known_by_name_and_magic`.
+Docs: `docs/context/root_console.md` (re-check, name rule).
+
+**Gates (at `fa9c2171`):** `npm run build` ok. `npm test`: 805 files / 8088
+tests passed. `cargo test --workspace`: 4327 passed, 0 failed, 4 ignored (lib
+3928). `cargo test -p tabtivity --no-default-features --lib --test
+server_secrets`: 3829 + 1 passed, 4 ignored (no flake). `npm run lint` (via
+`rtk proxy`): 0 errors, 28 warnings (unchanged). The three clippy gates
+clean. Windows cross-check (`clippy --target x86_64-pc-windows-msvc
+--all-targets -D warnings`, `cargo check --workspace --all-targets`) clean.
+`aarch64-apple-darwin` `cargo check --workspace --all-targets` with the
+check-only CC/AR stand-ins clean (the 5 vendored `tauri-runtime-wry`
+warnings). `scripts/brand-check.sh` ok; `scripts/privacy-check.sh` (staged)
+clean; `git diff --check` clean; `npm run untested -- check` agrees.
+`npm run backend:stale` not run (main agent at landing). Nothing run live.
+
+**Flagged for user:**
+- ExecTrust (and the open-external store it copies): with a queue, a fast
+  double click on **Run** answers the first question and can land on the
+  next dialog's **Run** when the two dialogs lay out alike (same kind, similar
+  item list). Before the queue, the second question replaced the first, so
+  this could not happen. A short arming delay on the danger button of a
+  freshly shown queued dialog would close it; not built (UI choice).
+- (c) Deletion is path-based below the home: `remove_dir_all(home/logs/session)`
+  follows `logs` if a running agent swaps it for a link between the check and
+  the delete. Only an agent running in that home can do it, and the live-tab
+  check refuses then; the remaining window is a spawn that has started but
+  not yet committed (milliseconds, Vibe still booting). Handle-relative
+  removal (`home_io`) would close it fully.
+- (c) If the second live-tab check refuses, the store is already gone but the
+  title still says "conversations were not cleared" (the marker stays, which
+  is the safe half).
+- (a) `9p` counts as "no Unix modes" everywhere, not only WSL's `/mnt/*`:
+  QEMU virtfs or Lima shares with real modes also get name-only judging (the
+  confirm still asks). The mount match picks the longest mount point by name;
+  a mount later hidden by one over its parent would still be matched (a
+  `major:minor` vs `st_dev` match would be exact). Both lenient directions
+  still end at the confirm.
