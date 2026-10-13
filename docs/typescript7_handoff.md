@@ -100,3 +100,81 @@ similar load, minutes apart.
   `ci-local.sh --fast`, then T3 (push, CI on three OSes, frozen dev build).
 - Optional, from the plan: report the TS2871 false positive upstream
   (microsoft/typescript-go).
+
+## Reviewer (2026-10-14)
+
+Reviewed `dafecadd..1b7a248e` in the same worktree.
+
+### Checked
+
+- **Bare `tsc` consumers.** `rg` over the whole tree (package.json — the only
+  one —, `scripts/**`, `.githooks/**`, `.github/**`, vite/vitest/eslint
+  configs, `src-tauri/tauri.conf.json`, AGENTS.md, `docs/context/`,
+  DOCUMENTATION.md, README.md): only the two package.json scripts run a
+  compiler, both by path. `beforeBuildCommand` is `npm run build`; CodeQL
+  ships its own TS extractor; no `.vscode/` tsdk. The only live instructions
+  naming a bare `tsc` were TODO.md:41/262 (`npx tsc --noEmit`) — fixed below.
+  Older plan/handoff docs mention it as history; left alone.
+- **`.bin/tsc`**, reproduced in a scratch copy: `npm ci` from the lock → 5.9.3
+  (twice), and a no-op `npm install` after it keeps 5.9.3. An install that
+  *adds* the alias to a dafecadd tree (the landing case) → 7.0.2, and it stays
+  so across later installs. `npm rebuild typescript --ignore-scripts` relinks
+  it to 5.9.3 without touching the lock — added as a landing step (below).
+- **Lock:** vs dafecadd, adds exactly `typescript-native` + 20
+  `@typescript/typescript-*` (all with `resolved` + sha512 `integrity`,
+  `optional`, `os`/`cpu`, no `libc`; linux-x64, win32-x64, darwin-arm64,
+  darwin-x64 present); the only changed entry is the root's
+  `devDependencies`; nothing removed; `typescript` still 5.9.3; libc count
+  34 = 34. `npx -y npm@11.21.0 ci --ignore-scripts` in scratch reproduced
+  with the lock byte-identical and the native tsc at 7.0.2.
+- **tsconfigs:** 5.9.3 and 7.0.2 both exit 0 on both files. With `types: []`
+  every test file is in the program (bar one, see Flagged) and the
+  vitest-globals config doesn't matter: the tests import from `vitest`
+  explicitly, so dropped auto-`@types` would surface as errors, not silently.
+- **ProjectFilesTab:** `find` gives `undefined` where the old code gave
+  `null`; the outer `??` treats both alike. Behaviour-preserving.
+- **dependabot.yml** parses (PyYAML); the npm `ignore` entries match T2.
+  AGENTS.md wording accurate and short.
+- **Windows:** npm runs scripts under `cmd.exe`; `&&` chains and
+  `node node_modules/…/bin/tsc` (forward slashes) work there. The launcher
+  adds `.exe` on win32; `.nvmrc` 24 has `import.meta.resolve`.
+
+### Fixed
+
+- `bfe957c9` docs(ts): TODO.md's two type-check instructions point at
+  `npm run build`; plan decision 1's "5.9 won under both install and ci"
+  corrected; T2 landing gets `npx -y npm@11.21.0 rebuild typescript
+  --ignore-scripts` after the additive install (check: `readlink
+  node_modules/.bin/tsc` = `../typescript/bin/tsc`). No code regression test:
+  nothing in the build reads `.bin/tsc`.
+
+### Gates (worktree)
+
+- `npm test -- --reporter=dot`: 817 files, 8293 tests, all passed.
+- `npm run lint`: 0 errors, 28 warnings (unchanged).
+- `scripts/gates.sh --base develop`: all passed (brand, whitespace, lint,
+  build 49 s, related vitest, and — because develop moved, see Flagged —
+  clippy ×3 and cargo test ×2 over dafecadd's Rust).
+- `scripts/brand-check.sh`, `git diff --check dafecadd..HEAD`,
+  `scripts/privacy-check.sh dafecadd HEAD` (4 commits, noreply identities):
+  pass.
+- `scripts/ci-local.sh --fast` (runs inside the worktree: own git dir and
+  target dir; base = merge-base with origin/develop, 11 commits): 22/23 ok,
+  gitleaks SKIPPED (not installed); includes the Windows clippy/check and
+  macOS check cross-checks and daemon-ldd. 756 s.
+
+### Flagged for user
+
+- **develop moved under the branch:** `d40529e9` (Tauri 2.12 bump) changes
+  `package.json` and `package-lock.json`. Per T0, this lands second: rebase
+  onto develop and regenerate the lock from that HEAD
+  (`npx -y npm@11.21.0 install --ignore-scripts --before=…`), then re-run the
+  lock checks above, before copying anything to the main tree.
+- The main checkout has an untracked `docs/typescript7_plan.md`, identical to
+  `40ae3b37`'s; remove it before landing the commits or the checkout
+  refuses to overwrite it. (The reviewer's `bfe957c9` edits that file.)
+- A later additive install that adds or re-adds either TypeScript package can
+  flip `.bin/tsc` again; nothing in the gates cares, so no guard was added.
+- Pre-existing, not from this change: `src/__tests__/shell/KeyboardNav.test.ts`
+  and `KeyboardNav.test.tsx` share a basename, so neither 5.9 nor 7 puts the
+  `.tsx` one in the program — it is never type-checked (vitest still runs it).
