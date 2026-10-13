@@ -4644,3 +4644,129 @@ stale ETag on disk).
 8. Host terminal: `npm run package:dev -- --head` (or let the window queue a
    build) with an uncommitted edit in `target/freeze-tree/start-tabtivity-dev-build.sh`:
    `~/.local/share/tabtivity/dev-launcher/` holds the committed launcher.
+
+## Follow-up agent step 10 — reviewer — 2026-10-13
+
+**Reviewed:** `79c4b5db..34d0c224` plus the handoff `fa77d85a`, against
+the plan's "CalDAV credential host" decision and C3.
+
+**What I checked:**
+- **Registrable-domain rule:** `psl::domain_str` includes the private
+  section (`alice.github.io` vs `bob.github.io` tested). The compiled list
+  holds punycode labels (460 `xn--` rules), and `url` hands punycode
+  lowercased hosts, so IDN suffixes match. Trailing dot, single-label hosts,
+  IPv4/IPv6 and a host that is itself a suffix all fall back to exact match.
+  An unknown TLD uses the `*` rule. Another host must be on the origin's port
+  or 443; the same host stays same-origin. Every hop (`dav_reply`), the
+  listing filter (`href_in_origin` in discovery and `check_account_origin`)
+  and the home-set check use the same function. http to another host is
+  refused. `psl` 2.1.241 + `psl-types`: MIT/Apache-2.0, `build = false`, no
+  dependencies, no network at build time. `Cargo.lock` was unchanged by the
+  builds. The daemon builds.
+- **http→https:** only same-host `http://` refs are rewritten (record, rows,
+  server-deleted address). The rows are written after the origin check
+  passes and before the account write, and a retry is idempotent. The
+  `reload()` that empties the window on a `calendar_load` error was already
+  there. No whole-store save exists that could persist the empty state:
+  `applyWritability` skips calendars it can't find, and row writes are per row.
+- **Keep mine without an address:** the dialog's forced sync skips the open
+  question in its dirty pass. The merge matches by href only, so the
+  lost-reply server copy comes in as its own row. The push is an update with
+  `If-Match` on the ETag read just before it. The duplicate is deleted
+  locally through raw `delete_event`, with no push hook (a hook would DELETE
+  the resource it just wrote). On a conflict or error the question stays up.
+  Answering again is the only way to retry, so there's no loop. One race was
+  found and fixed (below).
+- **Launcher from commit:** `ls-tree` mode/type/path check (symlink 120000,
+  submodule `commit` and tree refused; the paths are a fixed list with no
+  quoting issues), `cat-file blob` (no filters/textconv), replace refs and
+  lazy fetch off, hooks and fsmonitor off. The launcher and
+  `retain-dev-build.sh` are `chmod 755`'d after the copy. The rest of git's
+  exec hooks (sshCommand, pager, askpass, credential) need network or a tty,
+  and none of these calls uses either. A filter driver still runs on the
+  freeze-tree checkout (implementer flag 5, inside C3). One bare git call was
+  left (below).
+- **Queued-dialog delay:** Enter becomes a click, so it is covered. Cancel and
+  Escape act at once. The timer is keyed by question id and cleaned up in the
+  effect. A related gap was fixed (below).
+- **`remove_tree`:** `fstatat(NOFOLLOW)`, `openat(O_DIRECTORY|O_NOFOLLOW)`
+  and `unlinkat` at every level; one fd per level with a depth cap of 64. A
+  read-only directory or a concurrent writer fails the clear and keeps the
+  marker, the same as the old `remove_dir_all`. Windows uses the std
+  `remove_dir_all`, which doesn't follow junctions. Windows and macOS checks
+  pass. One fail-open bug was found in its caller (below).
+
+**Bugs found and fixed:**
+1. `bdd06af1`: **Clear conversations could delete the read-mail marker while
+   the conversations stayed.** `remove_vibe_sessions` read `logs` through
+   `HomeFile::metadata`, which returns `None` on *any* error, and took
+   `None` to mean "nothing to clear". If the model's tab removed the home's
+   search permission (`chmod 600`), the clear reported success and deleted
+   the marker. The old path code returned an error here, so this was a
+   regression. New `HomeFile::lstat` keeps the error, and only `NotFound`
+   counts as nothing to clear. Test
+   `a_store_that_cannot_be_looked_at_keeps_the_marker` (skipped as root),
+   checked to fail without the fix.
+2. `3ff45fb2`: **A question asked right after an answer was armed at once.**
+   `withExecTrust` asks again right after an approval (a second gate, or a
+   file that changed). Nothing waited in the queue, so `queued` was false and
+   the second click of a double click answered it unseen. The stores now
+   record `answeredAt`, and a question asked within
+   `QUEUED_CONFIRM_DELAY_MS` of an answer is also `queued`. Two tests in
+   `QueuedConfirmDelay.test.tsx` cover the chained trust gate and an
+   open-external ask well after the last answer (armed at once). The five
+   test files that reset the stores now reset `answeredAt` as well.
+   DialogShell's doc comment, which had become attached to the new constant,
+   is back on DialogShell.
+3. `f7ec0c78`: **"Keep mine" without an address, with a sync landing during
+   the push:** the sync re-reads the store from disk, so the duplicate comes
+   back into the window. On a conflict, the restore then appended it a second
+   time (two rows with one id). On success, the re-read duplicate stayed in
+   the window although it was deleted on disk. Now only missing rows are
+   restored, and the deleted duplicates are filtered out of the window after
+   the local delete. Two tests in `CalDavDirtyAndHttp.test.tsx`, checked to
+   fail without the fix.
+4. `70996040`: **`package-dev.sh` still had two bare `git -C` calls.** One is
+   `diff --quiet HEAD` on `$ROOT` (--tree mode): it compares the working tree,
+   so it starts the repo's `core.fsmonitor` on the host. The other is the
+   short-commit lookup. Both now go through `dev_git`, and
+   `package_dev_reads_the_head_launcher_from_the_commit` now fails on any
+   bare `git -C` in the script (checked to fail on the old script).
+
+**Gates (at `70996040`; the other session's uncommitted pdf/markup files
+were in the tree and did not affect any gate):** `npm run build` ok.
+`npm test`: 807 files / 8111 tests passed. `cargo test --workspace`: 4342
+passed, 0 failed, 4 ignored (lib 3943). `cargo test -p tabtivity
+--no-default-features --lib --test server_secrets`: 3844 + 1 passed, 4
+ignored (no flake). `npm run lint` (via `rtk proxy`): 0 errors, 28
+warnings (unchanged). The three clippy gates are clean. Windows cross-check
+(`clippy --target x86_64-pc-windows-msvc --all-targets -D warnings`, `cargo
+check --workspace --all-targets`) is clean. `aarch64-apple-darwin` `cargo check
+--workspace --all-targets` with the ci-local check-only CC/AR stand-ins is
+clean (the 5 vendored `tauri-runtime-wry` warnings). `scripts/brand-check.sh` ok;
+`scripts/privacy-check.sh fa77d85a HEAD` clean; `git diff --check` clean;
+`npm run untested -- check` agrees; `bash -n` on both scripts. Cargo used the
+overlay `CARGO_HOME=<worktree>/target/cargo-home`. Nothing was run live, and
+`npm run backend:stale` was not run.
+
+**Flagged for user:**
+1. **Read-only folders block the clear:** a model tab can make
+   `logs/session` (or anything below it) read-only. Then "Clear
+   conversations" fails and keeps the marker. That fails closed, and the old
+   code behaved the same, but the user only sees an error saying permission
+   was denied. Making directories writable before deleting them would fix
+   it; this is a design choice, so I left it.
+2. **A sync that lands during "Keep mine":** before its push, a timer sync
+   can merge the duplicate back from disk while the row's on-disk address is
+   still empty. The fix above keeps the window consistent. On disk, the
+   duplicate is deleted only after the push lands, so in the narrow window
+   between them both rows exist on disk. If the app quits in that moment, the
+   next sync shows the duplicate as an ordinary server row with the user's
+   text, and the user can delete it by hand.
+3. **`dev_git` hardening is still partial:** a `filter.<x>.smudge/process`
+   driver or a `core.worktree` redirect in the fence-writable `.git/config`
+   still applies to `worktree add`/`checkout`/`clean` on the host. Neither
+   can be switched off generically with `-c`. This is the same C3 residual
+   the implementer flagged (5). `scripts/assert-embedded-frontend.sh` runs
+   from the freeze tree as well.
+4. Implementer flags 1–7 stand unchanged.
