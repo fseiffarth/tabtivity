@@ -15,16 +15,16 @@ go-ahead for the subagents the plan → implement → review routine spawns
 (handoff: `docs/threat_recheck_2026_10_08_handoff.md`, append new sections
 there), in a worktree under `.claude/worktrees/`.
 
-1. **Land `threat/1012-final` on develop.** It branched from develop
-   `5d82c988`; another session's uncommitted CodeQL edits (`fs.rs`,
-   `git_ci.rs`, `agent_fence.rs`, `root_mcp.rs`, `mobile_control/*`) will
-   conflict, so merge carefully and rerun every gate. After landing: `npm run
-   backend:stale`, then a host-side `npm run package:dev` once (the dev-build
+1. **Landed on develop `eacfa41a` (2026-10-13, not pushed).** Merge with
+   develop: `df4c5874` (handoff, "Merge with develop (2026-10-13)"). Still
+   owed by the user: a host-side `npm run package:dev` once (the dev-build
    launcher now adopts only host-listed builds; handoff, final review,
    click-through step 1). The new `psl` crate is fetched normally on the host
    and in CI. Mark rows 19–23, 25–27, 31–34, 38 (already "Fixed, not
    live-verified." in `docs/threat_model.md`) live-verified only after the
-   click-through.
+   click-through. Open decision from the merge: develop's project-bundle
+   import can bring a local model's Vibe conversations without the gap 33
+   read-mail marker.
 2. **Never run:** the live click-through of both runs — the 2026-10-08 run's
    12 steps (handoff, "Final review → Live click-through") and the 2026-10-12
    run's 39 steps (handoff, "Final review — Run 2026-10-12 → Live
