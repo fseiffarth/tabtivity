@@ -359,13 +359,14 @@ export function Home({ open, openTab, todo, mail }: {
           to sit beside the opener rather than on it (a press anywhere else
           opens the project, and the two must not be one gesture), which is the
           same shape — and so the same classes — the tab list already wears. */}
-      <section className="cards">{listed.map((project) => <div
+      <section className="cards">{listed.map((project, index) => <div
         className={`tab-card one-row home-project-card${drag.rowClass(project.id)}`}
         key={project.id}
         ref={drag.rowRef(project.id)}
       >
         <div className="tab-card-head">
           <button className="card" onClick={() => open(project.id)}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.git && <GitMark state={project.git} />}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
+          {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && <button
             className="tab-card-grip"
             aria-label={t("mobile.home.move", { label: project.label })}
