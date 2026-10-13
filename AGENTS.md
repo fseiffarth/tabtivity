@@ -40,6 +40,10 @@ cargo clippy -p app-serverd --all-targets -- -D warnings
 scripts/brand-check.sh   # the app's name is spelled only in the brand modules
 ```
 
+`npm run build`'s `tsc` is TS 7 (`typescript-native`, called by path); the
+`typescript` 5.9 package is only for typescript-eslint and editors — never
+bump it to 7.
+
 Before pushing, run `scripts/gates.sh --all`, then `scripts/ci-local.sh`
 (`--fast` for a small change): every Linux step of `ci-cd.yml` plus the
 cross-checks below; CI fails if they drift.

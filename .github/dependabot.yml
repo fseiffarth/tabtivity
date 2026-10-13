@@ -66,6 +66,12 @@ updates:
     open-pull-requests-limit: 5
     ignore:
       - dependency-name: "@tauri-apps/*"
+      # `typescript` is the typescript-eslint parser's copy (peer <6.1) and
+      # stays on 5.x; `typescript-native` is the TS 7 alias the build's
+      # type-check runs, bumped by hand (that name is unregistered on npm).
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript-native"
     groups:
       npm:
         update-types: [minor, patch]

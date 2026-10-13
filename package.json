@@ -9,8 +9,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && npm run mobile:build && npm run web:bundle",
-    "mobile:build": "tsc -p tsconfig.mobile.json && npm run mobile:bundle",
+    "build": "node node_modules/typescript-native/bin/tsc && vite build && npm run mobile:build && npm run web:bundle",
+    "mobile:build": "node node_modules/typescript-native/bin/tsc -p tsconfig.mobile.json && npm run mobile:bundle",
     "mobile:bundle": "vite build --config vite.mobile.config.ts && vite build --config vite.pdf-frame.config.ts",
     "mobile:dev": "vite --config vite.mobile.config.ts",
     "web:bundle": "vite build --config vite.web.config.ts",
@@ -69,6 +69,7 @@
     "react-scan": "^0.5.7",
     "tailwindcss": "^3",
     "typescript": "^5",
+    "typescript-native": "npm:typescript@7.0.2",
     "typescript-eslint": "^8.71.1",
     "vite": "^6.4.4",
     "vitest": "^4.1.8"
