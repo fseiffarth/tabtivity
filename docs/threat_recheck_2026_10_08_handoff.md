@@ -3816,3 +3816,171 @@ tests passed; `cargo test --workspace` 4309 passed, 4 ignored;
    mark on a move). The doc comment says a move "drops it". This is harmless
    unless the row later lands in a calendar whose push was off, where it would
    be sent once push is turned on.
+
+## Agent step 8 — implementer (gap 20, B1, C3) — 2026-10-13
+
+**Commit:** `68e8b9da` fix(dev-build): phone app only from the binary;
+launcher trusts host-recorded hashes and runs from its own copy (gap 20) ·
+this handoff commit.
+
+**Files:** `src-tauri/src/services/mobile_control/live_pwa.rs` (deleted),
+`mobile_control/mod.rs` (module + comment), `mobile_control/host.rs`
+(`pdf_frame` / `asset_response` serve `MOBILE_ASSETS` only through the new
+`embedded_asset`; test module `embedded_bundle_tests`), `src-tauri/build.rs`
+(`newest_mtime`, `MOBILE_ASSETS_BUILT_AT`, `MOBILE_LIVE_DIR` and its
+rerun-if-env line gone), `commands/mobile_control.rs` (comment),
+`services/dev_build.rs` (`verified_list`, `launcher_script`;
+`adoptable_snapshot` needs the record's sha in the verified list;
+`spawn_relauncher` runs the copy; log fixture line; tests incl. the new
+`launcher_tests` module), `scripts/lib/dev-launcher.sh` (new, sourced:
+`dev_on_host`, `dev_verified_list/add/lookup`, `dev_launcher_files/dir/install`,
+`dev_desktop_exec`), `scripts/package-dev.sh` (live PWA gone; records the
+hash and installs the launcher copy on the host, repoints `Exec=`; the
+fence guard uses `dev_on_host` and no longer promises adoption; install is
+staged + re-hashed; installed `.frozen` written from its own values;
+`LAUNCHER` is the copy), `start-tabtivity-dev-build.sh` (`HERE` vs `ROOT`
+from `source-root`; sources `dev-launcher.sh`; adoption rewritten; no
+`assert-embedded-frontend.sh` fallback; "behind" check reads only the
+installed record or the list), `start-tabtivity-tauri-hotreload.sh`,
+`scripts/package-dev-auto.sh`, `scripts/backend-stale.sh` (overlay
+comparison gone, `expected_entry` → `built_entry`); docs `threat_model.md`
+(row 20 **Fixed, not live-verified.** + C3 residual), `context/dev_builds.md`
+(live-PWA paragraph replaced, adoption rewritten, launcher copy, C3
+residual), `context/mobile_access.md` (binary-only phone app),
+`filemap_backend.md` (`dev_build.rs` row), `todo/group-h-crossplatform.md`
+(31ah marked removed). No help doc described live phone updates.
+
+**Tests added:** Rust `mobile_control::host::embedded_bundle_tests::the_phone_app_is_served_from_the_binary_only`
+(generated table declares only `MOBILE_ASSETS`; `/`, `/index.html`, an app
+route serve the embedded shell; `/assets/…` miss is 404; `pdf-frame.html`
+is the embedded copy or 404). `dev_build`:
+`a_snapshot_is_adoptable_only_when_newer_and_recorded` (now also: unlisted
+or other-hash list → not adoptable), `a_relaunch_runs_the_installed_launcher_copy_not_the_checkouts`.
+`dev_build::launcher_tests` (Linux only; bash against temp dirs, fake
+binaries and a stub `notify-send` on PATH, `$HOME` a temp dir, fence vars
+removed; the real launcher is never run against real state):
+`the_copy_holds_every_file_the_launcher_reads_and_names_the_checkout`,
+`an_unlisted_build_in_the_tree_is_not_adopted_and_nothing_from_the_checkout_runs`
+(a matching `.frozen` beside it changes nothing — the old code adopted it;
+planted checkout `brand.sh`/`dev-launcher.sh`/`retain-dev-build.sh` never
+run), `a_listed_build_is_adopted_with_the_lists_label` (hostile tree record
+ignored; installed `.frozen`, desktop Comment and retained copy from the
+list), `a_binary_swapped_after_listing_is_refused`,
+`the_list_is_trusted_only_when_private_and_sanitises_its_fields` (field
+sanitising, mode 600, bad sha, group/other-writable or symlinked list
+refused, last 20 kept), `only_a_host_session_writes_what_the_launcher_trusts`
+(either fence variable → fenced; package-dev.sh's writes sit under the
+guard), `the_desktop_entry_is_pointed_at_the_copy`.
+
+**Gates (at `68e8b9da`):** `npm run build` ok; `npm test` 804 files / 8080
+tests passed; `cargo test --workspace` 4313 passed, 0 failed, 4 ignored;
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`
+3815 + 1 passed, 4 ignored (no flake); `npm run lint` (via `rtk proxy`) 0
+errors, 28 warnings (unchanged); the three clippy gates clean; Windows
+cross-check (`clippy --target x86_64-pc-windows-msvc --all-targets -D
+warnings`, `cargo check --workspace --all-targets`) clean;
+`aarch64-apple-darwin` `cargo check --workspace --all-targets` with the
+check-only CC/AR stand-ins clean (the 5 vendored `tauri-runtime-wry`
+warnings); `scripts/brand-check.sh` ok; `scripts/privacy-check.sh` clean
+(staged); `git diff --check` clean; `bash -n` on every changed script.
+**`shellcheck` is not installed here** — not run. `npm run backend:stale`
+not run (main agent at landing). No Tauri command added.
+
+**Choices:**
+- The verified list holds `<sha256> <commit> <version> <built>` per line
+  (the plan said one sha per line): the launcher needs a label and the
+  installed `.frozen` from somewhere no fence writes. Fields are cut to
+  `[A-Za-z0-9.+:_-]` when written; the list is mode 600 and refused when it
+  is a link, someone else's, or group/other-writable.
+- The launcher copies `target/release/<bin>` to `<bin>.adopt.<pid>` beside
+  the installed binary (keeping the mtime, for apport), hashes the copy and
+  renames it into place, so nothing can swap the file between check and
+  install.
+- `dev_on_host` = no fence variable (current or legacy name, any value —
+  `package-dev.sh` used to test `= "1"`) **and** the app dir is not a tmpfs.
+- The copy holds the launcher, `scripts/lib/brand.sh`,
+  `scripts/lib/dev-launcher.sh`, `scripts/retain-dev-build.sh`, and the two
+  data files `brand.sh` reads names from (`src-core/src/brand.rs`,
+  `src-tauri/Cargo.toml`), plus `source-root`. It is copied from `$SRC`: the
+  freeze tree (exactly HEAD) in `--head` mode, the working tree in `--tree`
+  mode (a hand-run `npm run package:dev`, which freezes uncommitted code
+  anyway). Swapped in whole; a missing or symlinked file aborts the copy
+  and fails `package-dev.sh`.
+- The trust writes happen right after the build record, before the
+  "running window" early exit, so a freeze held back under a running window
+  is still listed and the desktop entry is still repointed.
+- `agent_fence` bind list checked: no fence binds `<app_dir>/dev-builds`,
+  `<app_dir>/dev-launcher` or a parent read-write. The state dir (= the app
+  dir by default on Linux) is masked by `mask_private_state`; the only
+  support mounts that pierce it are the live-session slice, hooks/bin/install
+  dirs (read-only) and the local-model home. Inside a fence `$HOME` is the
+  scope's agent home, so `~/.local/share/<slug>` there is a different folder.
+- `adoptable_snapshot` checks only the record's sha against the list (no
+  75 MB hash per chip poll); the launcher's own hash check is the real gate.
+
+**Sibling bugs fixed (same hazard):**
+- `spawn_relauncher` ("Relaunch now") ran the checkout's launcher unfenced;
+  it runs `<app_dir>/dev-launcher/`'s copy (the checkout's only while none
+  exists).
+- The launcher copied the tree's `.frozen` beside the installed binary and
+  fed its `version`/`commit` into `sed -i "s|…|Comment=… $label …|"` on the
+  desktop entry — a `|`-bearing record could inject GNU sed commands (`e`
+  runs a shell). The label and installed record now come from the list.
+- The "behind" notice passed the tree record's `commit` to `git rev-parse` /
+  `rev-list`; it now reads only the installed record or the list, validated
+  to hex(+local).
+- `package-dev.sh` hashed `target/release/<bin>` and then `install`ed
+  whatever was there; it now installs a staged copy whose hash matches.
+- Pre-existing: with no installed `.frozen` at all, the `frozen_commit=$(sed
+  …)` assignment failed under `set -e` and the launcher exited before the
+  window opened (found by the tests).
+
+**Gotchas:**
+- The new shell tests run real `bash`, `sha256sum`, `stat -c`, `install`,
+  `pgrep` (Linux only, `cfg(target_os = "linux")`). They put a stub
+  `notify-send` first on PATH — without it a test run would pop desktop
+  notifications.
+- The launcher still uses the checkout's `.frozen` nowhere now; the chip
+  (`dev_build`) still reads it for the short commit.
+- The desktop entry's `Icon=` still points into the checkout (a PNG, read
+  by the desktop shell; not code). Left as is.
+
+**Flagged for user:**
+1. **One-time, outside the fence:** nothing is listed and no launcher copy
+   exists until a `package-dev.sh` runs on the host. The window's own queued
+   build of the next commit does that by itself (it runs unfenced). If
+   auto-builds are paused or off (`tabtivity.autoDevBuild false`), run
+   `npm run package:dev` (or `scripts/package-dev.sh --head`) once in a host
+   terminal. Until then the desktop entry still runs the checkout's
+   launcher (new code, but read from the checkout).
+2. **First launch after this lands:** a binary already sitting in
+   `target/release/` from before (built without a list entry) is **not**
+   adopted; the launcher notifies "no build outside an agent fence made it"
+   and opens the installed snapshot. The next host build fixes that.
+3. A build an agent runs inside its fence (`npm run package:dev` in an agent
+   tab) is never adopted any more; only the window's queued build of the
+   committed tree is. To try uncommitted edits in the frozen window, run
+   `npm run package:dev` in a host terminal.
+4. The phone no longer picks up a new bundle with a pull-to-refresh after a
+   commit: it gets the new phone app when the window (and with it the
+   sidecar, via Reconnect / Update host) is relaunched. A leftover
+   `target/mobile-pwa/` is harmless and can be deleted by hand.
+5. Residual (C3, documented in row 20): a committed agent change still runs
+   on the host at the next queued dev build, and that build is trusted.
+
+**Live click-through (user only; never run by the agent):**
+1. In a host terminal: `npm run package:dev`. Check
+   `~/.local/share/tabtivity/dev-builds/verified` gained a line,
+   `~/.local/share/tabtivity/dev-launcher/` exists, and the
+   "Tabtivity (dev)" desktop entry's `Exec=` names that folder's launcher.
+2. Click "Tabtivity (dev)": the window opens; the phone (Mobile on) loads and
+   works — the app now comes from the binary.
+3. With the dev window running, commit something (or let the window queue a
+   build); when the chip offers it, click **Relaunch now**: the notification
+   says "moved forward" with the new commit.
+4. Plant test: copy any other binary over `target/release/tabtivity` (touch
+   it newer), quit the window, click the entry: a notification says the
+   newer build was not adopted, and the old snapshot opens.
+5. Edit `start-tabtivity-dev-build.sh` in the checkout (e.g. add an `echo`
+   to the log) without committing, relaunch: the log does not show it.
+6. `npm run backend:stale` with Mobile on: no "published bundle" lines.
