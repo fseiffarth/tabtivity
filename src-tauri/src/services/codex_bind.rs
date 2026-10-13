@@ -743,7 +743,12 @@ mod tests {
         }
         assert!(!pass_due(&mut w, &root, t0 + Duration::from_secs(2)), "nothing changed");
 
-        std::fs::write(root.join("2026/10/01/rollout-x.jsonl"), b"{}\n").unwrap();
+        // Written outside the tree and renamed in: one event. A write in place
+        // is a create and then a modify, and a modify landing after the pass
+        // below made the quiet check that follows it flaky.
+        let staged = root.with_extension("staged");
+        std::fs::write(&staged, b"{}\n").unwrap();
+        std::fs::rename(&staged, root.join("2026/10/01/rollout-x.jsonl")).unwrap();
         // Generous: the notify thread can be starved under a loaded test run;
         // the loop ends as soon as the change lands.
         let deadline = Instant::now() + Duration::from_secs(30);
