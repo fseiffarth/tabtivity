@@ -126,7 +126,12 @@ pub fn ask_at(socket: &Path, request: &Request) -> Result<Reply, String> {
 #[cfg(unix)]
 fn ask_once(socket: &Path, request: &Request) -> Result<Reply, Failure> {
     use std::io::{ErrorKind, Write};
-    let unanswered = |e: &std::io::Error| matches!(e.kind(), ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted);
+    // macOS can fail a write to a socket its peer is tearing down with
+    // EPROTOTYPE rather than EPIPE: closed unanswered all the same (ci-cd #391).
+    let unanswered = |e: &std::io::Error| {
+        matches!(e.kind(), ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted)
+            || e.raw_os_error() == Some(libc::EPROTOTYPE)
+    };
     let mut stream = std::os::unix::net::UnixStream::connect(socket).map_err(|e| Failure::Other(format!("{}: {e}", socket.display())))?;
     stream.set_read_timeout(Some(DEADLINE)).map_err(|e| Failure::Other(e.to_string()))?;
     stream.set_write_timeout(Some(DEADLINE)).map_err(|e| Failure::Other(e.to_string()))?;
