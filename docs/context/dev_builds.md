@@ -3,8 +3,8 @@
 Why Tabtivity's run/rebuild pipeline works the way it does. `AGENTS.md` § Running
 holds the rules an agent must follow; this file holds the mechanics and the
 history behind them. Read it when touching `package-dev*.sh`,
-`start-tabtivity-*.sh`, `backend-stale.sh`, the `post-commit` hook, or
-`services::mobile_control::live_pwa` — or when asked why a build is stale.
+`start-tabtivity-*.sh`, `scripts/lib/dev-launcher.sh`, `backend-stale.sh`, the
+`post-commit` hook — or when asked why a build is stale.
 
 
 **Agents must never start Tabtivity** (user, 2026-07-29) — not via
@@ -35,19 +35,16 @@ change was not run live.
   window says so. `beforeDevCommand` re-bundles it on every dev start, and a
   `post-commit` hook reports the seam when it drifts anyway; `npm run
   mobile:bundle` rebuilds it without the type-check, `mobile:build` with.
-  **A commit now reaches the phone without a relaunch** (2026-09-17):
-  `package-dev.sh` publishes the bundle it just built into `target/mobile-pwa/`
-  with a `.stamp`, and `services::mobile_control::live_pwa` serves that in place
-  of the embedded copy, so a pull-to-refresh is the whole update path. In
-  `--head` mode it publishes *before* cargo starts — the bundle takes two
-  seconds, the compile takes two minutes. It is opt-in at compile time
-  (`TABTIVITY_MOBILE_LIVE_DIR`, set only by `package-dev.sh` and the hot-reload
-  launcher, so a released binary reads nothing off the disk), never serves an
-  overlay older than the bundle compiled in, and refuses a bundle missing its
-  shell or its stamped entry rather than mixing two. The overlay carries the
-  PWA, **not** the sidecar's HTTP API: a mobile feature whose backend half is
-  not in the running window will render and then fail its request, which
-  `backend:stale` reports rather than hides.
+  **The phone app always comes from the binary** (2026-10-13). From
+  2026-09-17 a dev build served a newer bundle `package-dev.sh` published into
+  `target/mobile-pwa/` (`live_pwa`), so a commit reached the phone with a
+  pull-to-refresh and no relaunch. `target/` is inside the project, which
+  every agent fence binds read-write, so any agent could plant a bundle there
+  that ran as the paired phone and installed a lasting service worker (threat
+  recheck 2026-10-08, gap 20). The overlay, its stamp, its build-time
+  constants and the env export are gone; a leftover `target/mobile-pwa/` is
+  never read. A new phone bundle reaches the phone with the window's (and
+  the sidecar's) next relaunch, like every other part of the binary.
 - Double-starts are blocked by `scripts/guard-single-instance.sh` (wired into
   the launcher and the `pretauri:dev` hook). It also refuses when port 1420 is
   held by an orphaned vite — a second `tauri dev` would otherwise attach to the
@@ -93,13 +90,41 @@ change was not run live.
   gives an agent a tmpfs `$HOME`, so the install wrote 75 MB into a directory
   that died with the tab and the notification had no session bus to reach —
   every commit reporting success while the desktop icon stayed two days behind.
-  The build is real (`target/` is inside the bound project), so
-  `start-tabtivity-dev-build.sh` adopts `target/release/tabtivity` at launch instead,
-  in the user's own session, trusting the `.frozen` record `package-dev.sh`
-  leaves beside a binary that passed `scripts/assert-embedded-frontend.sh` —
-  not a re-run of that check, since `dist/` moves on with every gate an agent
-  runs and a launch-time re-check refused four days of good builds
-  (2026-09-14). The launcher notifies either way: what it adopted, or why not.
+  The build is real (`target/` is inside the bound project), and
+  `start-tabtivity-dev-build.sh` adopts `target/release/tabtivity` at launch
+  instead, in the user's own session — but **only a build the host made**
+  (2026-10-13, gap 20). The `.frozen` record beside the artifact used to be
+  the evidence (a launch-time re-run of `scripts/assert-embedded-frontend.sh`
+  refused four days of good builds, 2026-09-14, since `dist/` moves on with
+  every gate an agent runs), and the re-check stayed as a fallback; both sit
+  in, or check against, the fence-writable tree, so an agent could plant a
+  binary and a matching record and the next click ran it unfenced. Now
+  `package-dev.sh`, when it runs outside a fence (`dev_on_host`: no fence
+  variable, app dir not a tmpfs), appends `<sha256> <commit> <version>
+  <built>` to `~/.local/share/tabtivity/dev-builds/verified` (last 20 kept,
+  mode 600). No fence binds the state dir (it is masked, and inside a fence
+  `$HOME` is the agent's own home), so no agent can write it. The launcher
+  copies the artifact next to the installed binary, hashes the copy, adopts it
+  only when that hash is listed (and the list is a private regular file the
+  user owns), takes the label and the installed `.frozen` from the list, and
+  otherwise notifies why and opens the snapshot it has. There is no fallback.
+  A build made inside a fence (an agent running `npm run package:dev`) is
+  never adopted; the window's own queued build of the same commit is.
+  **The launcher runs from a copy** (2026-10-13, gap 20 follow-up): the desktop
+  entry used to run the checkout's `start-tabtivity-dev-build.sh`, which
+  sources `scripts/lib/brand.sh` and runs `scripts/retain-dev-build.sh` from
+  the checkout too, so an agent's uncommitted edit to any of them ran
+  unfenced at the next click, whatever the hash said. The same host-side
+  `package-dev.sh` now installs the launcher, every helper it sources or runs
+  and the two files `brand.sh` reads names from (`dev_launcher_files`) into
+  `~/.local/share/tabtivity/dev-launcher/` — from the tree it just built, so
+  the commit itself in `--head` mode — swapped in whole, with `source-root`
+  naming the checkout, and points the desktop entry's `Exec=` there (also when
+  the install itself is held back under a running window). From the copy the
+  checkout is data only: the binary it built and HEAD for the "behind"
+  notice. The chip's **Relaunch now** runs the copy too (the checkout's only
+  while none exists yet). A *committed* launcher edit still reaches the user,
+  through the next queued build (the residual below).
   **Since 2026-09-25 a fenced commit does not build at all**: that path never
   moved `package-dev-auto.stamp` in the real home, so the header chip sat at
   "27 behind" and never showed a build for an agent's commit. The script now
@@ -107,7 +132,15 @@ change was not run live.
   only) queues it from the chip's poll: `dev_build::queue_if_behind` runs
   `--queue` when HEAD is past the stamp with no build alive or pending, not the
   last failed commit, and not already asked for by this process. The adopt path
-  above still covers a snapshot built by hand in `target/release/`.
+  above covers a freeze held back under a running window.
+  **Residual, accepted (C3, 2026-10-12):** this queue runs the checkout's
+  `scripts/package-dev-auto.sh` unfenced whenever HEAD moves, and the build it
+  starts runs the checkout's `package-dev.sh`, `npm run build`, `build.rs` and
+  whatever else the commit holds, on the host; the result is recorded as
+  verified and adopted. So an agent's commit runs on the host at the next dev
+  build. That is what building agent-written code means; a click-to-build gate
+  was considered and declined. Dev builds only: a released binary has no
+  source root, no chip and no queue.
   **A failed pass does not end the queue** (2026-09-15): a commit that landed
   mid-build is a different tree — usually the one that fixes it, since a
   change split over two commits compiles only as a pair — so the loop goes on

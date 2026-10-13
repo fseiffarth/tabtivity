@@ -2285,6 +2285,10 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   until the user relaunched: on 2026-09-17 the sidecar was serving
   `index-BxC6mmm7.js` while the installed binary held `index-B6ra4vC5.js` and the
   tree held a third.
+  - **Removed 2026-10-13** (threat recheck 2026-10-08, gap 20, decision B1):
+    `target/mobile-pwa/` is writable from every agent fence, so a planted bundle
+    ran as the paired phone. The phone app always comes from the binary again;
+    the manual QA below is moot. `docs/context/dev_builds.md`.
   - `scripts/package-dev.sh` now publishes the bundle it just built into
     `target/mobile-pwa/` with a `.stamp` (`built`, `commit`, `entry`), and
     `services::mobile_control::live_pwa` serves that instead of the embedded copy.

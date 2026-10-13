@@ -16,7 +16,6 @@ pub mod headless;
 pub mod headless_board;
 pub mod host;
 pub mod inbox;
-pub mod live_pwa;
 pub mod local_models;
 pub mod markup;
 pub mod markup_pdf;
@@ -32,9 +31,7 @@ pub mod store;
 // The browser desktop client's transport (hosted plan §3.5, §10 P2).
 pub mod web_client;
 
-// The bundle baked in at compile time, when it was built, and the directory a
-// dev build may serve a newer one from. Included here rather than in `host`
-// because `live_pwa` needs the timestamp and the path, and `host` needs the
-// assets; a shared parent is the one place neither has to reach into the
-// other.
+// The bundle baked in at compile time: the only phone app any build serves
+// (the dev-only `live_pwa` overlay read a fence-writable folder and is gone,
+// threat recheck 2026-10-08 gap 20).
 include!(concat!(env!("OUT_DIR"), "/mobile_assets.rs"));

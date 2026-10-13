@@ -8,7 +8,11 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
 ## The layers, outermost first
 
 1. **The host** — `tabtivity_mobile_host.enabled` in `settings.json`, plus a
-   running sidecar. Nothing below matters while it is off.
+   running sidecar. Nothing below matters while it is off. The phone app it
+   serves is always the bundle compiled into that binary (`MOBILE_ASSETS`),
+   dev builds included: the dev-only overlay from `target/mobile-pwa/` let any
+   agent plant the app every paired phone runs, and is gone (threat recheck
+   2026-10-08, gap 20; `dev_builds.md`).
 2. **Trust tiers** — only a *local* project that is neither a container nor a
    VM is ever a phone scope (`discovery::mobile_local`, and its desktop twin
    `MobileBridgeHost` `mobileProject`). No switch can widen this.

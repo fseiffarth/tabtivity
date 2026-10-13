@@ -14,16 +14,27 @@
 # it corrupt it. So this refuses (with a desktop notification) while any
 # hot-reload session is up, sandboxed or not, and the hot-reload launcher
 # refuses while this one is up.
+#
+# The desktop entry runs the COPY of this script that package-dev.sh installs
+# into <app_dir>/dev-launcher/ (with every helper it sources or runs, and
+# `source-root` naming the checkout), not the checkout's own: every agent
+# fence that binds the project can edit the checkout, and this runs unfenced
+# (threat recheck 2026-10-08, gap 20). From the copy, the checkout is only
+# data: the binary it built, and HEAD for the "behind" notice.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The app's names (scripts/lib/brand.sh): $APP_DISPLAY, $APP_SLUG, $APP_BIN_NAME, …
-. "$ROOT/scripts/lib/brand.sh" || {
+. "$HERE/scripts/lib/brand.sh" && . "$HERE/scripts/lib/dev-launcher.sh" || {
   # Nothing is logged yet (the log's path needs the name), and a desktop entry
   # has no terminal: say it where it is seen.
-  notify-send -u critical 'The frozen dev build was not started' "scripts/lib/brand.sh could not read the app's name in $ROOT." 2>/dev/null || true
+  notify-send -u critical 'The frozen dev build was not started' "scripts/lib/brand.sh could not read the app's name in $HERE." 2>/dev/null || true
   exit 1
 }
+ROOT="$HERE"
+if [ -f "$HERE/source-root" ]; then
+  ROOT="$(head -n 1 "$HERE/source-root")"
+fi
 BINARY="$APP_SHARE_DIR/$APP_DEV_BIN_NAME"
 LOG_DIR="$APP_SHARE_DIR"
 LOG_FILE="$LOG_DIR/$APP_DEV_BIN_NAME.log"
@@ -64,72 +75,74 @@ fi
 # Adopt the tree's newest snapshot, if there is one.
 #
 # `npm run package:dev` builds the binary and installs it here, and since
-# 2026-09-03 the post-commit hook does that on every commit. But that hook
-# almost always fires inside an agent tab, and `services::agent_fence` gives an
-# agent a tmpfs $HOME with only the project (and two state paths) bound in: the
-# BUILD is real -- target/ lives inside the bound project -- while the INSTALL
-# writes 75 MB into a directory that dies with the tab, having printed
-# "Installed frozen binary". That is how this launcher kept opening a two-day-old
-# window through a dozen commits that each reported success (2026-09-04).
+# 2026-09-03 the post-commit hook does that on every commit. A freeze that
+# lands under a running window leaves the binary in target/release/ instead
+# (replacing the path under the window costs its core dump), and launch is the
+# only safe moment to install it -- a running instance holds the old inode
+# until then, which is exactly why the checks above come first.
 #
-# So do the install here instead, where no fence can reach: this script runs
-# from the desktop entry, in the user's own session. Launch is also the only
-# safe moment for it -- a running instance holds the old inode until then, which
-# is exactly why the checks above come first.
-#
-# Conservative by construction: the artifact must be newer than what is
-# installed and must be a verified prod binary, and any failure keeps the
-# installed binary. The window opens either way.
-#
-# "Verified" means package-dev.sh checked it against the dist/ it was built
-# from and left `<binary>.frozen` (sha256 + version + commit) beside it. That
-# record is what is trusted here — NOT a fresh run of the check against dist/:
-# dist/ keeps moving after a build (every `npm run build` an agent runs as a
-# gate rewrites it with new hashes, uncommitted edits included), and checking a
-# finished binary against whatever dist/ holds at launch time refused four days
-# of correct builds as "stale" while the icon kept opening the old one
-# (2026-09-14). The check itself stays as the fallback for an artifact that
-# predates the record. Whatever happens is said out loud: a notification names
-# the snapshot adopted, or why the older one is still running.
+# target/ is inside the project, which every agent fence binds read-write, so
+# neither the binary nor the `.frozen` record beside it is evidence of
+# anything (threat recheck 2026-10-08, gap 20). The binary is adopted only when
+# its sha256 is in <app_dir>/dev-builds/verified, which only a package-dev.sh
+# running on the host writes (scripts/lib/dev-launcher.sh), and its label comes
+# from that list too. It is copied next to the installed binary first and the
+# COPY is hashed, so the file cannot be swapped between check and install.
+# There is no fallback (the old "carries the current dist/ frontend" re-check
+# would adopt any binary an agent built). Any failure keeps the installed
+# binary; the window opens either way, and a notification says which.
 BUILT="$ROOT/target/release/$APP_BIN_NAME"
-FROZEN="$BUILT.frozen"
+VERIFIED="$(dev_verified_list "$APP_SHARE_DIR")"
 if [ -f "$BUILT" ] && [ "$BUILT" -nt "$BINARY" ]; then
   printf 'newer snapshot in the tree: %s\n' "$BUILT"
-  verdict=""
-  label="$(node -p "require('$ROOT/package.json').version" 2>/dev/null || echo '?') @ $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
-  if [ -f "$FROZEN" ] &&
-     [ "$(sed -n 's/^sha256=//p' "$FROZEN")" = "$(sha256sum "$BUILT" | cut -d' ' -f1)" ]; then
-    label="$(sed -n 's/^version=//p' "$FROZEN") @ $(sed -n 's/^commit=//p' "$FROZEN")"
-    verdict="verified when it was built ($(sed -n 's/^built=//p' "$FROZEN"))"
-  elif "$ROOT/scripts/assert-embedded-frontend.sh" "$BUILT"; then
-    verdict="carries the current dist/ frontend"
-  fi
-  if [ -z "$verdict" ]; then
-    printf 'not adopting it: no build-time record and it does not carry the current dist/ frontend\n'
-    notify-send -u normal -a "$APP_DISPLAY" "$APP_DISPLAY (dev) is running an older snapshot" \
-      "target/release/$APP_BIN_NAME is newer but unverified; run npm run package:dev and relaunch." 2>/dev/null || true
+  staged="$BINARY.adopt.$$"
+  record=""
+  sha=""
   # `-p` keeps the build's mtime, and apport needs it: this shell exec()s the
   # binary under its own pid, whose /proc/<pid>/cmdline the pgrep above has
   # already stamped with the launch time. A binary installed after that stamp
   # reads to apport as "executable was modified after program start", and the
   # core is thrown away — 2026-09-29's heap-corruption crash left none that way.
-  elif install -p -Dm755 "$BUILT" "$BINARY"; then
-    printf 'adopted it as %s (%s; %s)\n' "$BINARY" "$label" "$verdict"
-    # Keep the build-time record beside what was installed, so the next launch
-    # can say which commit it is opening without hashing anything.
-    if [ -f "$FROZEN" ]; then install -m644 "$FROZEN" "$BINARY.frozen" 2>/dev/null || true; else rm -f "$BINARY.frozen"; fi
+  if install -p -Dm755 "$BUILT" "$staged" 2>/dev/null; then
+    sha="$(sha256sum "$staged" | cut -d' ' -f1)"
+    record="$(dev_verified_lookup "$VERIFIED" "$sha")" || record=""
+  fi
+  if [ -z "$sha" ]; then
+    rm -f "$staged"
+    printf 'could not copy it; launching the binary that is already there\n'
+    notify-send -u normal -a "$APP_DISPLAY" "$APP_DISPLAY (dev) is running an older snapshot" \
+      "Could not install the newer build into $BINARY; see $APP_DEV_BIN_NAME.log." 2>/dev/null || true
+  elif [ -z "$record" ]; then
+    rm -f "$staged"
+    printf 'not adopting it: its sha256 %s is not in %s, so no build outside an agent fence made it\n' "$sha" "$VERIFIED"
+    notify-send -u normal -a "$APP_DISPLAY" "$APP_DISPLAY (dev) is running an older snapshot" \
+      "target/release/$APP_BIN_NAME is newer, but no build outside an agent fence made it (an agent's build, or a planted file). Run npm run package:dev outside the fence and relaunch." 2>/dev/null || true
+  elif mv -f "$staged" "$BINARY"; then
+    read -r rec_commit rec_version rec_built <<<"$record"
+    label="$rec_version @ $rec_commit"
+    printf 'adopted it as %s (%s; built outside a fence %s)\n' "$BINARY" "$label" "$rec_built"
+    # The record beside the installed binary says which commit the next
+    # launch opens. Written from the verified list, never copied out of
+    # target/.
+    {
+      printf 'sha256=%s\n' "$sha"
+      printf 'version=%s\n' "$rec_version"
+      printf 'commit=%s\n' "$rec_commit"
+      printf 'source=adopted\n'
+      printf 'built=%s\n' "$rec_built"
+    } >"$BINARY.frozen" 2>/dev/null || true
     # Keep the adopted build under dev-builds/tabtivity-<commit> for
     # scripts/crash-symbolize.sh; the next adopt replaces the path.
-    if [ -f "$FROZEN" ]; then
-      "$ROOT/scripts/retain-dev-build.sh" "$BINARY" "$(sed -n 's/^commit=//p' "$FROZEN")" 2>/dev/null || true
-    fi
+    "$HERE/scripts/retain-dev-build.sh" "$BINARY" "$rec_commit" 2>/dev/null || true
     # The desktop entry's Comment names the frozen snapshot; keep it honest.
+    # (The label's characters are limited to [A-Za-z0-9.+:_-?] by the list.)
     desktop="$HOME/.local/share/applications/${APP_DISPLAY}Dev.desktop"
     if [ -f "$desktop" ]; then
       sed -i "s|^Comment=.*|Comment=Frozen build $label ($(date +%Y-%m-%d)) — no hot reload|" "$desktop" 2>/dev/null || true
     fi
     notify-send -u low -a "$APP_DISPLAY" "$APP_DISPLAY (dev) moved forward" "Now running $label." 2>/dev/null || true
   else
+    rm -f "$staged"
     printf 'could not install it; launching the binary that is already there\n'
     notify-send -u normal -a "$APP_DISPLAY" "$APP_DISPLAY (dev) is running an older snapshot" \
       "Could not install the newer build into $BINARY; see $APP_DEV_BIN_NAME.log." 2>/dev/null || true
@@ -146,14 +159,20 @@ fi
 # — left the icon opening yesterday's build with every commit reporting green
 # (2026-09-15). The launcher runs in the user's session: this notice does.
 APP_DIR="$(dirname "$BINARY")"
-FROZEN_INSTALLED="$BINARY.frozen"
+# (`|| true`: with no record at all, a failing sed under `set -e` and
+# `pipefail` used to end the launcher here, before the window opened.)
+frozen_commit="$(sed -n 's/^commit=//p' "$BINARY.frozen" 2>/dev/null | head -n 1 || true)"
 # No record beside the installed binary (adopted before records were kept
-# there): the tree's record speaks for it only if it IS that build.
-if [ ! -f "$FROZEN_INSTALLED" ] && [ -f "$FROZEN" ] &&
-   [ "$(sed -n 's/^sha256=//p' "$FROZEN")" = "$(sha256sum "$BINARY" 2>/dev/null | cut -d' ' -f1)" ]; then
-  FROZEN_INSTALLED="$FROZEN"
+# there): the verified list speaks for it if it holds that build's hash. The
+# tree's own record no longer does — anything can be written there.
+if [ -z "$frozen_commit" ] && [ -f "$BINARY" ]; then
+  installed_record="$(dev_verified_lookup "$VERIFIED" "$(sha256sum "$BINARY" 2>/dev/null | cut -d' ' -f1)")" || installed_record=""
+  frozen_commit="${installed_record%% *}"
 fi
-frozen_commit="$(sed -n 's/^commit=//p' "$FROZEN_INSTALLED" 2>/dev/null)"
+# A short sha, maybe "+local": nothing else reaches git's command line.
+case "$frozen_commit" in
+  ''|*[!0-9a-f+local]*|-*) frozen_commit="" ;;
+esac
 if [ -n "$frozen_commit" ] && git -C "$ROOT" rev-parse --verify --quiet "$frozen_commit^{commit}" >/dev/null 2>&1; then
   behind="$(git -C "$ROOT" rev-list --count "$frozen_commit..HEAD" 2>/dev/null || echo 0)"
   if [ "$behind" -gt 0 ] 2>/dev/null; then

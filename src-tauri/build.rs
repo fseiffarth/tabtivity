@@ -22,38 +22,6 @@ fn rust_bytes(bytes: &[u8]) -> String {
     out
 }
 
-/// The newest mtime under `mobile-dist/`, in epoch seconds, or 0 when the
-/// directory is missing or unreadable.
-///
-/// This is the binary's own answer to "how old is the PWA baked into me?", and
-/// the only thing that lets `live_pwa` refuse an overlay that is *older* than
-/// what it would shadow. Without it a stale `target/mobile-pwa/` left behind by
-/// an abandoned branch would keep serving itself to the phone after the user
-/// upgraded to a newer Tabtivity — the exact staleness this whole mechanism exists
-/// to end, only harder to see.
-fn newest_mtime(dir: &Path) -> i64 {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return 0;
-    };
-    let mut newest = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let seen = if path.is_dir() {
-            newest_mtime(&path)
-        } else {
-            entry
-                .metadata()
-                .ok()
-                .and_then(|meta| meta.modified().ok())
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|age| age.as_secs() as i64)
-                .unwrap_or(0)
-        };
-        newest = newest.max(seen);
-    }
-    newest
-}
-
 fn collect(dir: &Path, root: &Path, out: &mut Vec<(String, Vec<u8>)>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -99,21 +67,10 @@ fn generate_mobile_assets() {
         })
         .collect::<Vec<_>>()
         .join(",\n");
-    let built_at = newest_mtime(&dist);
-    // Set only by the two dev shapes (`scripts/package-dev.sh`, `npm run
-    // tauri:dev`); unset in CI and in every release build, where the constant
-    // below is `None` and `live_pwa` compiles down to "there is no overlay".
-    // That is deliberate: a shipped binary must never read a PWA off the disk.
-    println!(concat!("cargo:rerun-if-env-changed=", crate::app_upper!(), "_MOBILE_LIVE_DIR"));
-    let live_dir = match env::var(crate::app_env!("MOBILE_LIVE_DIR")) {
-        Ok(dir) if !dir.trim().is_empty() => format!("Some({:?})", dir.trim()),
-        _ => "None".to_string(),
-    };
-    let generated = format!(
-        "pub static MOBILE_ASSETS: &[(&str, &[u8], &str)] = &[{rows}];\n\
-         pub const MOBILE_ASSETS_BUILT_AT: i64 = {built_at};\n\
-         pub static MOBILE_LIVE_DIR: Option<&str> = {live_dir};\n"
-    );
+    // The only phone app the binary serves, dev builds included: nothing read
+    // off the disk at run time can stand in for it (threat recheck 2026-10-08,
+    // gap 20 — the dev-only overlay from `target/mobile-pwa/` is gone).
+    let generated = format!("pub static MOBILE_ASSETS: &[(&str, &[u8], &str)] = &[{rows}];\n");
     let out = PathBuf::from(env::var("OUT_DIR").expect("out dir")).join("mobile_assets.rs");
     fs::write(out, generated).expect("write mobile assets");
 }

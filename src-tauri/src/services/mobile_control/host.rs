@@ -48,7 +48,7 @@ use super::{
     scheduler,
     push::{AgentTabRef, PushPrefs},
     sign_in,
-    live_pwa, web_client, MOBILE_ASSETS,
+    web_client, MOBILE_ASSETS,
 };
 
 
@@ -699,14 +699,7 @@ fn pdf_frame_policy(host: Option<&HeaderValue>) -> String {
 /// framing rules. Only the frame's own bytes: a bundle without it is a 404,
 /// never the app shell under a framable policy.
 async fn pdf_frame(headers: HeaderMap) -> Response<Body> {
-    let found = match live_pwa::current() {
-        Some(live) => live.get(PDF_FRAME_PATH),
-        None => MOBILE_ASSETS
-            .iter()
-            .find(|(asset, _, _)| *asset == PDF_FRAME_PATH)
-            .map(|(_, bytes, mime)| (bytes::Bytes::from_static(bytes), *mime)),
-    };
-    let Some((bytes, mime)) = found else {
+    let Some((bytes, mime)) = embedded_asset(PDF_FRAME_PATH) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     Response::builder()
@@ -6009,18 +6002,17 @@ async fn index() -> Response<Body> {
 
 fn asset_response(path: &str) -> Response<Body> {
     let requested = if path == "/" { "/index.html" } else { path };
-    // A dev build may have a newer bundle published beside it than the one it
-    // was compiled with (`live_pwa`). It answers everything or nothing — the
-    // two bundles are never mixed, because each names its own hashed entry.
-    match live_pwa::current() {
-        Some(live) => serve_asset(requested, |name| live.get(name)),
-        None => serve_asset(requested, |name| {
-            MOBILE_ASSETS
-                .iter()
-                .find(|(asset, _, _)| *asset == name)
-                .map(|(_, bytes, mime)| (bytes::Bytes::from_static(bytes), *mime))
-        }),
-    }
+    serve_asset(requested, embedded_asset)
+}
+
+/// One file of the bundle compiled into this binary. Every build, dev builds
+/// included, serves the phone app from here alone: nothing on disk can stand
+/// in for it (threat recheck 2026-10-08, gap 20).
+fn embedded_asset(name: &str) -> Option<(bytes::Bytes, &'static str)> {
+    MOBILE_ASSETS
+        .iter()
+        .find(|(asset, _, _)| *asset == name)
+        .map(|(_, bytes, mime)| (bytes::Bytes::from_static(bytes), *mime))
 }
 
 /// The serving rules, over whichever bundle is in play.
@@ -11201,5 +11193,40 @@ mod validator_tests {
         assert!(!valid_mail_id("id with space"));
         assert!(!valid_mail_id("id.json"));
         assert!(!valid_mail_id("ünïcode"));
+    }
+}
+
+#[cfg(test)]
+mod embedded_bundle_tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    /// Threat recheck 2026-10-08, gap 20: the phone app comes from the bundle
+    /// compiled into the binary and nowhere else. The dev-only overlay that
+    /// served `target/mobile-pwa/` (any agent could write there) is gone, and
+    /// the generated asset table names no folder to read one from.
+    #[tokio::test]
+    async fn the_phone_app_is_served_from_the_binary_only() {
+        let generated = include_str!(concat!(env!("OUT_DIR"), "/mobile_assets.rs"));
+        assert_eq!(generated.matches("pub ").count(), 1, "only MOBILE_ASSETS is generated");
+        assert!(generated.starts_with("pub static MOBILE_ASSETS:"));
+
+        let embedded = |name: &str| {
+            MOBILE_ASSETS.iter().find(|(asset, _, _)| *asset == name).map(|(_, bytes, _)| bytes.to_vec())
+        };
+        let body = |response: Response<Body>| async move {
+            let status = response.status();
+            (status, to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec())
+        };
+        let shell = embedded("/index.html").expect("an index is always embedded");
+        for path in ["/", "/index.html", "/some/app/route"] {
+            assert_eq!(body(asset_response(path)).await, (StatusCode::OK, shell.clone()), "{path}");
+        }
+        assert_eq!(body(asset_response("/assets/index-planted.js")).await.0, StatusCode::NOT_FOUND);
+        let frame = body(pdf_frame(HeaderMap::new()).await).await;
+        match embedded(PDF_FRAME_PATH) {
+            Some(bytes) => assert_eq!(frame, (StatusCode::OK, bytes)),
+            None => assert_eq!(frame.0, StatusCode::NOT_FOUND),
+        }
     }
 }

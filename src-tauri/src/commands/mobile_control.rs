@@ -319,10 +319,9 @@ const HOST_BINARY_NAME: &str = crate::brand::MOBILE_HOST_BIN;
 /// is keyed by that same string, so two builds of one version share the
 /// directory and the copy answering the phone is whichever build installed
 /// first. Between two pushes that is every dev build, and the gap is not
-/// cosmetic: the phone's bundle can run ahead through the live overlay
-/// (`live_pwa`), but the HTTP API answering it is the installed sidecar's own,
-/// so a route added after that copy was made 404s and the feature renders as
-/// "the desktop sent nothing" — which is how the project screen's outbox shelf
+/// cosmetic: the phone's bundle and the HTTP API answering it are both the
+/// installed sidecar's own, so a route added after that copy was made 404s and
+/// the feature renders as "the desktop sent nothing" — which is how the project screen's outbox shelf
 /// stayed invisible with its code plainly in the window (2026-09-20). Nothing
 /// offered the update, because the versions matched.
 ///
