@@ -87,6 +87,7 @@ import {
   findGroup,
   findGroupOfTab,
   isPtyTabKind,
+  localTabCwd,
   type DetachedDockTarget,
   type DropEdge,
   type GroupNode,
@@ -96,6 +97,7 @@ import {
   type TabLocation,
 } from "../../stores/tabs";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
+import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
 import { detachedNewTabCwd, type DetachedRemoteInfo } from "../../stores/detached";
 import {
   TabAgentModeMarks,
@@ -1754,9 +1756,10 @@ export function DetachedCenterPanel({
                   {/* The shared per-tab render switch (`components/tabs/TabPane`),
                       the SAME one the main window uses. A popout is attach-only (the
                       main window owns the PTY), so it passes no `onConnect`/mirror
-                      props — the cwd is just the tab's, since the projects store the
-                      mirror-swap needs isn't here. Tab-state writes DO happen here
-                      and are forwarded by the store seam (#231). See TabPane. */}
+                      props. The terminal's cwd is resolved like the main window's
+                      (`localTabCwd`, from the streamed project entry), so the Reader
+                      names the folder the agent runs in. Tab-state writes DO happen
+                      here and are forwarded by the store seam (#231). See TabPane. */}
                   <TabPane
                     tab={tab}
                     scope={scope}
@@ -1764,7 +1767,12 @@ export function DetachedCenterPanel({
                     focused={visible && isFocused}
                     attachOnly
                     filesProjectDir={tab.cwd}
-                    terminalCwd={tab.cwd}
+                    terminalCwd={localTabCwd(tab, {
+                      isRemoteProject: isRemote,
+                      projectDirectory: resolveProjectDirectory(remoteInfo?.project ?? null),
+                      mirror: resolveLocalMirror(remoteInfo?.project),
+                      fallback: tab.cwd,
+                    })}
                   />
                 </div>
               );

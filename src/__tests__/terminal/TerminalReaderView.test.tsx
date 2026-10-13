@@ -66,9 +66,9 @@ const transcript = {
   ],
 };
 
-function reader(host: HTMLElement) {
+function reader(host: HTMLElement, cwd = "/p") {
   return render(
-    <TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />,
+    <TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd={cwd} visible focused />,
   );
 }
 
@@ -654,11 +654,12 @@ describe("the Reader's live rows", () => {
   });
 
   it("shows the mode, the effort the busy row named, the folder and its worktree", async () => {
-    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cwd: `/home/u/p/${NAMES.worktreesDir}/feat-x` }] } }));
+    const worktree = `/home/u/p/${NAMES.worktreesDir}/feat-x`;
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cwd: worktree }] } }));
     const rows = ["> fix it", "", "✻ Pondering… (9s · ↓ 1.2k tokens · thinking with high effort)", ">", "⏵⏵ accept edits on (shift+tab to cycle)"];
     term = fakeTerminal(rows);
     registerTerminal("p:agent-1", term);
-    reader(host);
+    reader(host, worktree);
     expect(await screen.findByRole("button", { name: "Accept edits" })).toBeTruthy();
     const facts = host.querySelector(".terminal-reader-facts")!;
     expect(facts.textContent).toContain("high effort");
@@ -668,6 +669,17 @@ describe("the Reader's live rows", () => {
     rows.splice(0, rows.length, "Done.", ">", "⏵⏵ accept edits on (shift+tab to cycle)");
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(facts.textContent).toContain("high effort");
+  });
+
+  it("names the folder the agent runs in, not the stored cwd of a remote project's local tab", async () => {
+    // A local tab of a remote project stores the project's state folder as
+    // its cwd; it runs in the local copy the pane resolved (`localTabCwd`).
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cwd: "/state/remote-projects/abc123" }] } }));
+    term = fakeTerminal(["Done.", ">"]);
+    registerTerminal("p:agent-1", term);
+    reader(host, "/home/u/projects-ssh/simple-gnn");
+    await waitFor(() => expect(host.querySelector(".terminal-reader-facts")?.textContent).toContain("simple-gnn"));
+    expect(host.querySelector(".terminal-reader-facts")!.textContent).not.toContain("remote-projects");
   });
 
   it("shows the effort the transcript records and changes it with /effort, or Codex's /model", async () => {
