@@ -1470,12 +1470,24 @@ fn call_ci(name: &str, target: &super::git_ci::CiRepo, project: &str, args: Valu
 /// check: the lane's git runs with `safe.bareRepository=explicit`. Windows
 /// has no fence and no stable inode in std, so there it records presence
 /// only.
-pub(crate) fn git_entry_identity(dir: &Path) -> Option<(u64, u64)> {
-    let meta = dir.ancestors().find_map(|d| git_entry_at(&d.join(".git")))?;
+pub(crate) fn git_entry_identity(dir: &Path) -> Option<(u64, u128)> {
+    let (dot_git, meta) = dir.ancestors().find_map(|d| {
+        let dot_git = d.join(".git");
+        git_entry_at(&dot_git).map(|meta| (dot_git, meta))
+    })?;
     #[cfg(unix)]
-    { use std::os::unix::fs::MetadataExt; Some((meta.dev(), meta.ino())) }
-    #[cfg(not(unix))]
-    { let _ = meta; Some((0, 0)) }
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = dot_git;
+        Some((meta.dev(), u128::from(meta.ino())))
+    }
+    // Volume and file id: every repo used to read as the same `(0, 0)` here,
+    // so a repo made after spawn passed (ci-cd #389). Unreadable: none, refused.
+    #[cfg(windows)]
+    {
+        let _ = meta;
+        super::mobile_control::files::file_identity(&dot_git).ok()
+    }
 }
 
 /// `dot_git` as git discovery counts it. A pointer file always stops git

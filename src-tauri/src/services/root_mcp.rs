@@ -134,7 +134,7 @@ pub struct PushBinding {
     /// Pushes, releases and CI reads refuse (`repo_changed`) when there was
     /// none, or it is another one now: a repo the agent made after spawn has
     /// no guarded control files (gap 19).
-    pub git_at_spawn: Option<(u64, u64)>,
+    pub git_at_spawn: Option<(u64, u128)>,
 }
 /// The lane a caller class occupies on its tab: a tab holds at most one
 /// session per lane, and a respawn replaces only the session of its own lane.

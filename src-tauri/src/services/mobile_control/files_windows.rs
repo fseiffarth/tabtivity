@@ -482,6 +482,20 @@ pub(super) fn identity(file: &fs::File) -> std::io::Result<(u64, [u8; 16])> {
     Ok((info.VolumeSerialNumber, info.FileId.Identifier))
 }
 
+/// [`identity`] of what `path` names, a link followed: opened for its
+/// attributes only, with backup semantics so a folder opens too.
+pub(super) fn path_identity(path: &Path) -> std::io::Result<(u64, [u8; 16])> {
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const SHARE_ALL: u32 = 0x7;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    let file = fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(SHARE_ALL)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    identity(&file)
+}
+
 /// Like [`unlinked`], for a `first` handle opened on the name itself with
 /// attribute access only: the handle kept is always a second open,
 /// `reopen(plain)`. `plain` (no reparse point): opened on the name itself

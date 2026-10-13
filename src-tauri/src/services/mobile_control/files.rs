@@ -496,6 +496,13 @@ mod windows;
 #[cfg(windows)]
 pub(crate) use windows::ProjectDir;
 
+/// The volume and file id of what `path` names, a link followed: Windows'
+/// `(dev, ino)`, the same pair is the same file.
+#[cfg(windows)]
+pub(crate) fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
+    windows::path_identity(path).map(|(volume, id)| (volume, u128::from_le_bytes(id)))
+}
+
 fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }
 }
