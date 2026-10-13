@@ -4405,3 +4405,242 @@ clean; `git diff --check` clean; `npm run untested -- check` agrees.
   a mount later hidden by one over its parent would still be matched (a
   `major:minor` vs `st_dev` match would be exact). Both lenient directions
   still end at the confirm.
+
+## Follow-up agent step 10 — implementer — 2026-10-13
+
+**Commits:** `81073653` fix(caldav): credentials follow https hosts under the
+account's registrable domain; http->https keeps calendars; keep mine without
+an address; moves into local calendars drop the mark · `dba459c4`
+fix(dev-build): a --head freeze installs the launcher copy from the commit,
+not the freeze tree; hardened git on the freeze tree · `b85aa50b`
+fix(dialogs): a queued trust or open-external question arms its confirm
+button after 400 ms · `34d0c224` fix(local-models): clear conversations
+through no-follow directory handles; say when the read-mail mark was kept ·
+this handoff commit.
+
+**Files:**
+- (1) CalDAV credential host: `src-tauri/Cargo.toml` + `Cargo.lock` (new
+  dependency `psl = "2"`, resolved 2.1.241 + `psl-types` 2.0.11; no further
+  deps; it reaches the daemon build), `services/caldav.rs`
+  (`credentials_may_follow` rewritten, new `registrable_domain`,
+  `https_twin`; both refusal sentences reworded), `commands/caldav.rs`
+  (upsert message reworded).
+- (2a) http→https: `commands/caldav.rs` (`upgrade_http_refs` in
+  `caldav_account_upsert`, before `check_account_origin`; rows first, then
+  the account), `commands/calendar.rs` (`upgrade_caldav_hrefs_at`),
+  `src/stores/calendar/caldav.ts` (`upsert` re-reads the calendar store when
+  a ref came back moved, before `applyWritability` writes calendar records).
+- (2b) Keep mine without an address: `src/stores/calendar/caldav.ts`
+  (`keepMineUnaddressed`, branch at the top of `resolveKeepMine`),
+  `commands/calendar.rs` (`set_caldav_identity_sent_at`; the old
+  `set_caldav_identity_at` is a `#[cfg(test)]` wrapper with `sent_to = ""`),
+  `commands/caldav.rs` (`caldav_push` passes the update target).
+- (2c) `commands/calendar.rs` (`is_caldav_calendar`; `keep_caldav_dirty`
+  takes `into_caldav`).
+- (3) `scripts/lib/dev-launcher.sh` (`dev_git`, `_dev_launcher_from_commit`,
+  `dev_launcher_install SRC DEST ROOT [COMMIT]`), `scripts/package-dev.sh`
+  (`--head` installs from `"$ROOT" … "$HEAD_SHA"`; `HEAD_SHA` via
+  `rev-parse --verify HEAD^{commit}`; worktree prune/list/add, checkout,
+  clean through `dev_git`).
+- (4) `components/common/PromptDialogs.tsx` (`QUEUED_CONFIRM_DELAY_MS`,
+  `useConfirmArmed`), `ExecTrustHost.tsx`, `OpenExternalHost.tsx`,
+  `stores/execTrust.ts` + `stores/openExternal.ts` (`queued` on each ask).
+- (5) `services/home_io.rs` (`HomeDir::subdir_existing`, `remove_tree`,
+  `remove_tree_in`, `entries`), `commands/ollama.rs` (`remove_vibe_sessions`
+  via handles, `LOCAL_MODEL_TAB_STARTED`),
+  `components/models/useModelsHub.ts`, two `localModel.clearMarkKept*` keys
+  in all five dictionaries.
+- Docs: `threat_model.md` rows 20, 21, 26, 32, 33 and the Calendar-sync
+  surface row; `context/caldav.md`, `context/dev_builds.md`,
+  `context/root_console.md`, `help/mail-calendar.md`, `DOCUMENTATION.md`
+  (CalDAV paragraph); filemap rows `commands/caldav.rs`, `services/caldav.rs`,
+  `home_io.rs`, `stores/calendar/caldav.ts`, `ExecTrustHost`,
+  `OpenExternalHost`.
+
+**Tests added:**
+- Rust `services::caldav`:
+  `credentials_ride_to_a_sibling_host_under_the_same_registrable_domain`
+  (iCloud shape `caldav.example.com` → `p42-caldav.example.com`; other
+  registrable domain, `.evil.test` suffix trick, http, port rules),
+  `the_registrable_domain_comes_from_the_public_suffix_list` (`example.co.uk`
+  vs `evil.co.uk`/`co.uk`, `alice.github.io` vs `bob.github.io`, suffix host
+  exact only, `*.ck`/`!www.ck`, unknown TLD), `single_label_and_ip_hosts_match_only_exactly`
+  (`nas`, `localhost`, IPv4, IPv6, domain↔IP, trailing dot),
+  `an_http_ref_on_the_same_host_has_an_https_twin_and_nothing_else_does`,
+  `an_icloud_shaped_principal_on_a_sibling_host_signs_in` (fake transport:
+  principal, home set and listing on the sibling, every request
+  authenticated); `credentials_never_ride_a_hop_to_another_host` updated.
+  `commands::caldav`: `an_account_switched_to_https_takes_its_same_host_calendars_along`;
+  `a_picked_calendar_outside_the_origin_is_refused` updated (parent and
+  sibling now allowed; sibling on another port, look-alike suffix refused).
+  `commands::calendar`: `a_row_moved_into_a_local_calendar_drops_its_push_bookkeeping`
+  (events + tasks; a move into another CalDAV calendar keeps the window's
+  mark), `an_account_moved_to_https_rewrites_its_rows_same_host_addresses`
+  (record, rows, server-deleted address; other host and other calendar
+  untouched), `a_row_put_back_into_its_masters_resource_gives_the_master_the_new_etag`.
+  `services::home_io`: `a_tree_is_removed_through_handles_and_no_link_is_followed`
+  (`logs` swapped for a link after the handle opened: the delete stays in the
+  held folder; links inside unlinked, targets intact). `commands::ollama`:
+  `a_tab_starting_during_the_clear_keeps_the_marker` now expects
+  `local_model_tab_started` and the store gone;
+  `clearing_never_follows_a_planted_link_…` gains a link deeper in the store.
+  `dev_build::launcher_tests`: `a_head_freeze_copies_the_launcher_from_the_commit_not_the_tree`
+  (uncommitted planted files, a `refs/replace` swap of the committed
+  `brand.sh`, a repo `core.fsmonitor` and `post-checkout` that would leave a
+  file: copy equals the commit, nothing ran; `--tree` still copies the tree),
+  `a_commit_whose_launcher_file_is_a_link_or_missing_installs_nothing`
+  (symlink entry, missing file, bad rev; old copy kept, no staging left),
+  `package_dev_reads_the_head_launcher_from_the_commit`. Checked: without
+  `GIT_NO_REPLACE_OBJECTS` the first fails on `brand.sh`.
+- Frontend: `calendar/CalDavDirtyAndHttp.test.tsx` +6 (lost-reply create
+  overwrites its own server copy and drops the imported duplicate locally,
+  no `caldav_delete`; series override joins the master's resource, body has
+  both components, master takes the new ETag; nothing known → create; a
+  repeated 412 keeps the question and restores the duplicate; http→https
+  save re-reads the calendar; an ordinary save does not). New
+  `security/QueuedConfirmDelay.test.tsx` (5, fake timers: double click's
+  second click ignored on a queued trust question; Don't run / Escape at
+  once; Enter→click inert until exactly 400 ms; open-external the same; a
+  lone question armed at once). `files/OpenExternalConfirm.test.tsx` "asks
+  for each of several files…" waits out the delay. `agents/LocalModelMenu.test.tsx`
+  +1 (mark-kept wording).
+
+**Gates (at `34d0c224`):** `npm run build` ok. `npm test`: 806 files / 8100
+tests passed. `cargo test --workspace`: 4340 passed, 0 failed, 4 ignored (lib
+3941). `cargo test -p tabtivity --no-default-features --lib --test
+server_secrets`: 3842 + 1 passed, 4 ignored (no flake). `npm run lint` (via
+`rtk proxy`): 0 errors, 28 warnings (unchanged). The three clippy gates
+clean. Windows cross-check (`clippy --target x86_64-pc-windows-msvc
+--all-targets -D warnings`, `cargo check --workspace --all-targets`) clean.
+`aarch64-apple-darwin` `cargo check --workspace --all-targets` with
+check-only CC/AR stand-ins clean (the 5 vendored `tauri-runtime-wry`
+warnings). `cargo build -p app-serverd`: `ldd target/debug/tabtivity-serverd`
+→ vdso, libgcc_s, libm, libc, ld-linux only (psl reaches the daemon; it is
+`no_std` and pure Rust). `scripts/brand-check.sh` ok;
+`scripts/privacy-check.sh 79c4b5db HEAD` clean; `git diff --check` clean;
+`npm run untested -- check` agrees; `bash -n` on both changed scripts.
+`shellcheck` not installed. `npm run backend:stale` not run (main agent at
+landing). Nothing run live.
+
+**Choices:**
+- Registrable domain from `psl::domain_str` (private section included). An
+  IP literal (`url::Host::Ipv4/Ipv6`), a single-label host, a host that is
+  itself a suffix and a trailing-dot spelling have none → exact match only.
+  The same host keeps the same-origin rule (another port refused, as
+  before). Another host must be on the origin's port **or 443**: this also
+  closes the step 7 reviewer's flag 6 (a subdomain on any port).
+- http→https: rewrite rule is state-independent (any `http://` ref on the
+  account's https host → https on the account's port), so a save that failed
+  halfway is repaired by the next save. Only the moved calendars' rows are
+  touched; refs on another host are left to the origin check (which then
+  refuses the save if one was newly added, as before).
+- Keep mine without an address joins the object the server already holds
+  under the row's UID (CalDAV: one object per UID per collection) instead of
+  minting a new resource name — a new name would leave the server copy as a
+  server-side duplicate. The address comes from a local row of the same UID;
+  for a lost-reply create the store first runs a forced sync (the dirty pass
+  skips the open question) to import the server copy. A local row of the same
+  UID **and** occurrence is the server's copy of this component: removed from
+  the body before the push and deleted locally (plain `delete_event`/
+  `delete_task`, no push hook) only after the push lands; restored on a
+  conflict or error. On an error the question now stays (it used to be
+  dismissed).
+- Move into a local calendar: "local" = the calendar record carries no
+  `caldav_href` (what `subscribe` stamps). The window copy's mark is dropped
+  in the backend, so every client gets it.
+- Launcher copy: `ls-tree` (mode must be 100644/100755, type blob, path
+  echoed back) + `cat-file blob` — plumbing, no textconv or filters. `dev_git`
+  = `GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git -c core.fsmonitor=false
+  -c core.hooksPath=/dev/null -c protocol.ext.allow=never`. The commit is
+  resolved once to a full id so every file comes from the same commit.
+- Arming delay only for a question that waited in a queue (`queued` set at
+  `ask` time); state + `setTimeout` keyed by the question id (works with fake
+  timers); the click handler ignores, the button is not visibly disabled (no
+  flicker).
+- `remove_tree`: `fstatat(AT_SYMLINK_NOFOLLOW)` → non-directory `unlinkat`;
+  directory `openat(O_DIRECTORY|O_NOFOLLOW)`, entries read through a
+  `F_DUPFD_CLOEXEC` duplicate (`fdopendir` + `rewinddir`), recurse (depth cap
+  64), `unlinkat(AT_REMOVEDIR)`. A directory swapped for a link mid-walk
+  fails the clear (marker kept). Windows keeps the path-based fallback
+  behind the same API.
+
+**Sibling fixes (same hazard):** `package-dev.sh`'s other host-side git calls
+on the fence-writable freeze tree (`worktree prune/list/add`, `checkout
+--force`, `clean`) now go through `dev_git` (a checkout fired the repo's
+`post-checkout` unfenced). `set_caldav_identity_sent_at` stamps siblings
+when the body went to their address (otherwise a joined series master kept a
+stale ETag on disk).
+
+**Gotchas:**
+- **`~/.cargo` is read-only inside the fence**, so the new crate could not be
+  fetched into the real registry. This worktree uses an overlay
+  `CARGO_HOME=<worktree>/target/cargo-home` (index copied, every cached
+  `.crate` and extracted source symlinked to `~/.cargo/registry`, plus
+  `psl`/`psl-types` downloaded there). The reviewer should export the same
+  `CARGO_HOME` (it changes source paths, so the first build rebuilds every
+  dependency, ~4 min). On the host (the queued dev build, CI) cargo fetches
+  `psl` normally.
+- `rtk` mangles output of some commands; read Rust and shell source through
+  `rtk proxy`.
+- `set_caldav_identity_at` is test-only now; production calls
+  `set_caldav_identity_sent_at`.
+- `BrowserTripwire.test.ts` records that the browser declined `psl`; that
+  stays true (only `services::caldav` uses it; `web_safety::registrable` is
+  untouched, so mail's cached decisions hold).
+
+**Flagged for user:**
+1. **Wider trust, by decision:** every https host under the account's
+   registrable domain gets the CalDAV password — for an iCloud account any
+   `*.icloud.com` host, for a Google-hosted one any `*.google.com` host the
+   server names. Hosts on a shared private suffix (`*.github.io`, …) stay
+   separate thanks to the list.
+2. The public-suffix list is a compiled-in snapshot (`psl` 2.1.241, fetched
+   2026-10-13); new suffixes arrive only with a crate bump. The version was
+   not checked for age against a two-week rule.
+3. "Keep mine" on a lost-reply create runs a sync of that calendar first (a
+   network round trip from the dialog) and deletes the imported duplicate
+   locally — if the user had edited that duplicate copy, that edit goes
+   (they chose "mine").
+4. "Keep mine" whose push fails now leaves the question up (with the error
+   line) instead of dismissing it.
+5. Launcher copy: the commit's objects live in the fence-writable `.git`; an
+   agent able to rewrite loose objects can change what a commit holds, which
+   is equivalent to committing (C3). A filter driver configured in
+   `.git/config` still runs on the freeze tree's checkout (inside C3, like an
+   uncommitted edit to `package-dev.sh` itself).
+6. If `calendar_load` fails during the http→https re-read, the existing
+   `reload` empties the in-memory calendar until the next load (disk is
+   untouched).
+7. Step 7 reviewer flags 3–5 (overlapping syncs → spurious 412 question;
+   override-only dirty series; …) are unchanged.
+
+**Live click-through (user only; never run by the agent):**
+1. iCloud-shaped account (or any provider answering on a sibling host): add
+   it with the host it documents (e.g. `https://caldav.icloud.com/`); Find
+   lists the calendars, subscribe, sync works. A server naming a host under a
+   different domain still gets the "outside the address" sentence.
+2. Old `http://` account with subscriptions: open its dialog, change the
+   server URL to `https://` (same host), Save: the calendars keep syncing
+   (no "stored address is not https"), events are not duplicated, an edit
+   pushes.
+3. Lost-reply create (hard to stage: create an event while the server's
+   reply is dropped, e.g. pull the network right after Save): when "Changed
+   somewhere else too" appears for the new event, "Keep mine" leaves one
+   event here and one on the server, with your text.
+4. A recurring event with a moved occurrence, both edited offline, series
+   deleted on the server: "Keep mine" on the series, then on the occurrence
+   → the server holds one series with the moved occurrence; no 412 question
+   comes back on the next sync.
+5. Move a synced event whose push failed (offline) into a local calendar,
+   reconnect, sync: no question about it; turning a calendar's push on later
+   sends nothing for it.
+6. Start two gated actions at once (two TeX Builds with untrusted
+   `latexmkrc`, or drop two no-viewer files): double-click "Run it"/"Open"
+   on the first — the second dialog stays up; a deliberate click a moment
+   later answers it; "Don't run"/Escape work at once.
+7. Local model menu → Clear on a model while starting a tab of it during
+   the clear (tight timing): the message says the conversations were cleared
+   but the read-mail mark was kept.
+8. Host terminal: `npm run package:dev -- --head` (or let the window queue a
+   build) with an uncommitted edit in `target/freeze-tree/start-tabtivity-dev-build.sh`:
+   `~/.local/share/tabtivity/dev-launcher/` holds the committed launcher.
