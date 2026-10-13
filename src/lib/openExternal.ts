@@ -1,4 +1,5 @@
 import { basename } from "./paths";
+import { translate, useI18nStore } from "./i18n";
 import { useOpenExternalStore } from "../stores/openExternal";
 
 /**
@@ -14,6 +15,18 @@ export const OPEN_REFUSED_LAUNCHER = "open_refused_launcher";
 export function isLauncherRefusal(err: unknown): boolean {
   const text = typeof err === "string" ? err : err instanceof Error ? err.message : "";
   return text === OPEN_REFUSED_LAUNCHER;
+}
+
+/**
+ * The error-line text for a failed open or reveal: the launcher refusal in
+ * words (a macOS `X.app` folder refused by `open_in_file_manager`), any other
+ * error as it came.
+ */
+export function openErrorText(err: unknown, path: string): string {
+  if (!isLauncherRefusal(err)) return String(err);
+  const lang = useI18nStore.getState().lang;
+  const title = translate(lang, "openExternal.refusedTitle", { name: basename(path) || path });
+  return `${title}. ${translate(lang, "openExternal.refusedBody")}`;
 }
 
 /** Show the "not opened, it can run a program" note for `path`. */

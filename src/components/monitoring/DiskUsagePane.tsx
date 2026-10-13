@@ -27,6 +27,7 @@ import { OrbitSpinner } from "../common/OrbitSpinner";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { basename, dirname } from "../../lib/paths";
+import { openErrorText } from "../../lib/openExternal";
 
 interface Props {
   /** Owning project, or `null` in the root scope. */
@@ -241,7 +242,7 @@ export function DiskUsagePane({ projectId, projectCwd, tabKey, visible }: Props)
     const opened = node.is_dir
       ? invoke("open_in_file_manager", { path: node.path })
       : useWindowsStore.getState().openFile(node.path, undefined, projectId, "disk_usage");
-    void opened.catch((e) => setError(String(e)));
+    void opened.catch((e) => setError(openErrorText(e, node.path)));
   }
 
   function revealInFiles(node: DuNode) {

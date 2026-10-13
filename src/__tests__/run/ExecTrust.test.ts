@@ -29,7 +29,7 @@ function answerNext(approved: boolean) {
 describe("exec trust", () => {
   beforeEach(() => {
     invoke.mockReset();
-    useExecTrustStore.setState({ pending: null });
+    useExecTrustStore.setState({ pending: null, queue: [] });
   });
 
   it("parses only the gate's own error", () => {
@@ -68,5 +68,23 @@ describe("exec trust", () => {
     const action = vi.fn<() => Promise<string>>().mockRejectedValue("push rejected");
     await expect(withExecTrust(action)).rejects.toBe("push rejected");
     expect(useExecTrustStore.getState().pending).toBeNull();
+  });
+
+  it("queues a second question instead of declining the first unseen", async () => {
+    const store = useExecTrustStore.getState();
+    const first = store.ask(request);
+    const second = store.ask({ ...request, kind: "prettier", fingerprint: "def" });
+    const firstId = useExecTrustStore.getState().pending?.id;
+    expect(useExecTrustStore.getState().pending?.request.fingerprint).toBe("abc");
+    expect(useExecTrustStore.getState().queue).toHaveLength(1);
+    useExecTrustStore.getState().answer(true);
+    await expect(first).resolves.toBe(true);
+    // The next question gets its own dialog (a new id keys it).
+    expect(useExecTrustStore.getState().pending?.request.fingerprint).toBe("def");
+    expect(useExecTrustStore.getState().pending?.id).not.toBe(firstId);
+    useExecTrustStore.getState().answer(false);
+    await expect(second).resolves.toBe(false);
+    expect(useExecTrustStore.getState().pending).toBeNull();
+    expect(useExecTrustStore.getState().queue).toEqual([]);
   });
 });

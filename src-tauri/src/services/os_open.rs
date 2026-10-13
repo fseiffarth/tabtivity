@@ -15,6 +15,13 @@
 //! The check runs only where the OS picks the program. A default app the
 //! user configured for the extension, or an explicit handler, is the user's
 //! own choice and is not judged here.
+//!
+//! On a filesystem without real Unix permissions (FAT/exFAT, NTFS through
+//! `ntfs3` or ntfs-3g, CIFS/SMB, WSL's 9p/drvfs `/mnt/*`) every file shows the
+//! mount's fixed mode, usually with `x` set, so the execute bit says nothing
+//! there: such a file is judged by its name only (follow-up decision (a)),
+//! and still gets the window's question like any other. When the filesystem
+//! cannot be told, the execute bit counts ([`UnixModes::Unknown`]).
 
 use std::path::Path;
 
@@ -110,14 +117,173 @@ pub fn is_launcher_name(name: &str, os: Os, pathext: Option<&str>) -> bool {
 /// when the name as given **or** the file it resolves to is a launcher type,
 /// so neither `notes.txt -> run.desktop` nor `run.desktop -> notes.txt`
 /// passes (file managers judge a file by the name they are given), and on
-/// Unix a regular file with any execute bit. A folder passes (it opens in
+/// Unix a regular file with any execute bit, unless its filesystem has no
+/// Unix modes ([`UnixModes::None`]). A folder passes (it opens in
 /// the file manager) unless it is a macOS bundle. A path that does not
 /// resolve is an error too: the OS could not open it either.
 pub fn check(path: &Path) -> Result<(), String> {
-    check_for(path, Os::current(), std::env::var("PATHEXT").ok().as_deref())
+    check_with(path, Os::current(), std::env::var("PATHEXT").ok().as_deref(), &unix_modes_of)
 }
 
+/// Does the filesystem a file lives on keep real Unix permissions?
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnixModes {
+    /// A Unix filesystem (ext4, btrfs, xfs, tmpfs, APFS, NFS, sshfs, …): the
+    /// execute bit is the file's own.
+    Real,
+    /// FAT/exFAT, NTFS, CIFS/SMB, 9p/drvfs: the mode is the mount's, the same
+    /// for every file, so the execute bit is ignored.
+    None,
+    /// Could not tell: the execute bit counts (the stricter rule).
+    Unknown,
+}
+
+/// Filesystem type names (Linux `/proc/self/mountinfo`, macOS
+/// `statfs.f_fstypename`) whose files carry no Unix mode of their own.
+/// `fuseblk` is the block-device FUSE type ntfs-3g and exfat-fuse mount as.
+const NO_MODE_FS_NAMES: &[&str] = &[
+    "vfat", "msdos", "fat", "exfat", "ntfs", "ntfs3", "fuseblk", "fuse.ntfs-3g", "fuse.exfat",
+    "fuse.exfat-fuse", "cifs", "smb3", "smbfs", "9p", "drvfs",
+];
+
+/// Is a filesystem of type `name` one whose files carry no Unix mode?
+pub fn fs_name_lacks_unix_modes(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    NO_MODE_FS_NAMES.contains(&name.as_str())
+}
+
+/// Linux `statfs.f_type` magic numbers of filesystems without Unix modes:
+/// MSDOS/vfat, exFAT, NTFS (`ntfs`/`ntfs3`), CIFS, SMB2/3, SMB, 9p.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const NO_MODE_FS_MAGIC: &[u32] = &[
+    0x4d44, 0x2011_bab0, 0x5346_544e, 0xff53_4d42, 0xfe53_4d42, 0x517b, 0x0102_1997,
+];
+
+/// Linux: judge by the `statfs` magic first, then by the type name of the
+/// mount the file is on (`fuseblk` ntfs-3g and WSL's `drvfs` share their
+/// magic with filesystems that do have modes).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_unix_modes(magic: Option<u32>, mount_fstype: Option<&str>) -> UnixModes {
+    let Some(magic) = magic else {
+        return UnixModes::Unknown;
+    };
+    if NO_MODE_FS_MAGIC.contains(&magic) || mount_fstype.is_some_and(fs_name_lacks_unix_modes) {
+        UnixModes::None
+    } else {
+        UnixModes::Real
+    }
+}
+
+/// The filesystem type of the mount `path` (absolute, canonical) is on, per
+/// a `/proc/self/mountinfo` text: the longest matching mount point, the last
+/// one listed among equals (a later mount over the same point hides the
+/// earlier). Mount points are octal-escaped (`\040` for a space).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn mount_fstype_for(mountinfo: &str, path: &Path) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for line in mountinfo.lines() {
+        let Some((pre, post)) = line.split_once(" - ") else {
+            continue;
+        };
+        let (Some(point), Some(fstype)) = (pre.split(' ').nth(4), post.split(' ').next()) else {
+            continue;
+        };
+        let point = unescape_mount(point);
+        let point = Path::new(&point);
+        if !path.starts_with(point) {
+            continue;
+        }
+        let depth = point.components().count();
+        if best.as_ref().is_none_or(|(d, _)| depth >= *d) {
+            best = Some((depth, fstype.to_string()));
+        }
+    }
+    best.map(|(_, fstype)| fstype)
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn unescape_mount(field: &str) -> String {
+    let bytes = field.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && i + 3 < bytes.len()
+            && bytes[i + 1..i + 4].iter().all(|b| (b'0'..=b'7').contains(b))
+        {
+            out.push((bytes[i + 1] - b'0') * 64 + (bytes[i + 2] - b'0') * 8 + (bytes[i + 3] - b'0'));
+            i += 4;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// What the filesystem holding `path` (resolved) says about Unix modes.
+#[cfg(target_os = "linux")]
+fn unix_modes_of(path: &Path) -> UnixModes {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return UnixModes::Unknown;
+    };
+    // SAFETY: `c_path` is NUL-terminated and outlives the call; `st` is a
+    // plain C struct the call fills in.
+    let magic = unsafe {
+        let mut st: libc::statfs = std::mem::zeroed();
+        if libc::statfs(c_path.as_ptr(), &mut st) == 0 {
+            // The kernel's `f_type` is an unsigned long; magics fit 32 bits.
+            Some(st.f_type as u32)
+        } else {
+            None
+        }
+    };
+    let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").ok();
+    let fstype = mountinfo.as_deref().and_then(|m| mount_fstype_for(m, path));
+    linux_unix_modes(magic, fstype.as_deref())
+}
+
+/// What the filesystem holding `path` (resolved) says about Unix modes.
+#[cfg(target_os = "macos")]
+fn unix_modes_of(path: &Path) -> UnixModes {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return UnixModes::Unknown;
+    };
+    // SAFETY: as above; `f_fstypename` is a NUL-terminated C string array.
+    let name = unsafe {
+        let mut st: libc::statfs = std::mem::zeroed();
+        if libc::statfs(c_path.as_ptr(), &mut st) != 0 {
+            return UnixModes::Unknown;
+        }
+        std::ffi::CStr::from_ptr(st.f_fstypename.as_ptr()).to_string_lossy().into_owned()
+    };
+    if fs_name_lacks_unix_modes(&name) {
+        UnixModes::None
+    } else {
+        UnixModes::Real
+    }
+}
+
+/// Other Unixes: not told apart, so the execute bit counts. Windows has no
+/// execute bit to judge.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn unix_modes_of(_path: &Path) -> UnixModes {
+    UnixModes::Unknown
+}
+
+#[cfg(test)]
 fn check_for(path: &Path, os: Os, pathext: Option<&str>) -> Result<(), String> {
+    check_with(path, os, pathext, &unix_modes_of)
+}
+
+fn check_with(
+    path: &Path,
+    os: Os,
+    pathext: Option<&str>,
+    modes_of: &dyn Fn(&Path) -> UnixModes,
+) -> Result<(), String> {
     let real = std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let launcher = |p: &Path| {
         p.file_name()
@@ -140,10 +306,14 @@ fn check_for(path: &Path, os: Os, pathext: Option<&str>) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if meta.permissions().mode() & 0o111 != 0 {
+        // Asked only for an executable file: a mount without Unix modes
+        // shows `x` on everything, so there the name alone decides.
+        if meta.permissions().mode() & 0o111 != 0 && modes_of(&real) != UnixModes::None {
             return Err(REFUSED_LAUNCHER.to_string());
         }
     }
+    #[cfg(not(unix))]
+    let _ = modes_of;
     Ok(())
 }
 
@@ -252,5 +422,88 @@ mod tests {
         assert_eq!(check_for(&plain, Os::Linux, None), Ok(()));
         assert_eq!(check_for(&dir.path().join("Evil.app"), Os::Windows, None), Ok(()));
         assert_eq!(check_for(dir.path(), Os::MacOs, None), Ok(()));
+    }
+
+    #[test]
+    fn filesystems_without_unix_modes_are_known_by_name_and_magic() {
+        for name in ["vfat", "MSDOS", "exfat", "ntfs", "ntfs3", "fuseblk", "cifs", "smb3", "smbfs", "9p", "drvfs"] {
+            assert!(fs_name_lacks_unix_modes(name), "{name}");
+        }
+        for name in ["ext4", "btrfs", "xfs", "tmpfs", "apfs", "hfs", "nfs", "nfs4", "fuse.sshfs", "fuse", "overlay", ""] {
+            assert!(!fs_name_lacks_unix_modes(name), "{name}");
+        }
+        // statfs magics: vfat, exFAT, NTFS, CIFS, SMB2, 9p.
+        for magic in [0x4d44, 0x2011_bab0, 0x5346_544e, 0xff53_4d42, 0xfe53_4d42, 0x0102_1997] {
+            assert_eq!(linux_unix_modes(Some(magic), Some("whatever")), UnixModes::None, "{magic:x}");
+        }
+        // ext4 and tmpfs keep modes; a FUSE mount is told by its type name.
+        assert_eq!(linux_unix_modes(Some(0xef53), Some("ext4")), UnixModes::Real);
+        assert_eq!(linux_unix_modes(Some(0x0102_1994), None), UnixModes::Real);
+        assert_eq!(linux_unix_modes(Some(0x6573_5546), Some("fuseblk")), UnixModes::None);
+        assert_eq!(linux_unix_modes(Some(0x6573_5546), Some("fuse.sshfs")), UnixModes::Real);
+        // WSL1's drvfs has its own magic; its mount type gives it away.
+        assert_eq!(linux_unix_modes(Some(0x5346_4846), Some("drvfs")), UnixModes::None);
+        // statfs failed: the stricter rule.
+        assert_eq!(linux_unix_modes(None, Some("vfat")), UnixModes::Unknown);
+    }
+
+    #[test]
+    fn the_mount_a_path_is_on_is_the_longest_and_latest_match() {
+        let mountinfo = "\
+22 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw
+30 22 0:40 / /mnt/c rw,noatime - 9p drvfs rw,aname=drvfs
+31 22 8:17 / /media/u/MY\\040STICK rw,nosuid shared:5 - vfat /dev/sdb1 rw,fmask=0022
+32 22 0:41 / /data rw - ext4 /dev/sdc1 rw
+33 22 0:42 / /data rw - fuseblk /dev/sdd1 rw
+broken line without separator
+";
+        let at = |p: &str| mount_fstype_for(mountinfo, Path::new(p));
+        assert_eq!(at("/home/u/notes.txt").as_deref(), Some("ext4"));
+        assert_eq!(at("/mnt/c/Users/x/run.txt").as_deref(), Some("9p"));
+        assert_eq!(at("/mnt/cd/file").as_deref(), Some("ext4"));
+        assert_eq!(at("/media/u/MY STICK/a.txt").as_deref(), Some("vfat"));
+        assert_eq!(at("/data/x").as_deref(), Some("fuseblk"));
+        assert_eq!(mount_fstype_for("", Path::new("/x")), None);
+        assert_eq!(unescape_mount("a\\040b\\134c\\04"), "a b\\c\\04");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_execute_bit_is_ignored_only_where_the_filesystem_has_no_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("notes.txt");
+        std::fs::write(&doc, b"hi").unwrap();
+        std::fs::set_permissions(&doc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let launcher = dir.path().join("run.desktop");
+        std::fs::write(&launcher, b"[Desktop Entry]").unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let none = |_: &Path| UnixModes::None;
+        let real = |_: &Path| UnixModes::Real;
+        let unknown = |_: &Path| UnixModes::Unknown;
+        // A USB stick / SMB share / WSL `/mnt/c`: name only (the window still asks).
+        assert_eq!(check_with(&doc, Os::Linux, None, &none), Ok(()));
+        assert_eq!(check_with(&doc, Os::MacOs, None, &none), Ok(()));
+        assert_eq!(check_with(&launcher, Os::Linux, None, &none).unwrap_err(), REFUSED_LAUNCHER);
+        // A Unix filesystem, or one that could not be told: the bit counts.
+        assert_eq!(check_with(&doc, Os::Linux, None, &real).unwrap_err(), REFUSED_LAUNCHER);
+        assert_eq!(check_with(&doc, Os::Linux, None, &unknown).unwrap_err(), REFUSED_LAUNCHER);
+        // The filesystem is asked about only for an executable file.
+        std::fs::set_permissions(&doc, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let asked = std::cell::Cell::new(false);
+        let probe = |_: &Path| {
+            asked.set(true);
+            UnixModes::Real
+        };
+        assert_eq!(check_with(&doc, Os::Linux, None, &probe), Ok(()));
+        assert!(!asked.get());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_temp_folder_is_on_a_filesystem_with_unix_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(unix_modes_of(&real), UnixModes::Real);
     }
 }

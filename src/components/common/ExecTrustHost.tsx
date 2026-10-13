@@ -24,8 +24,10 @@ export function ExecTrustHost() {
   const t = useT();
   if (!pending) return null;
   const { request } = pending;
+  // Keyed per question: a queued one gets a fresh dialog, focus on its
+  // default button, not on the button that answered the previous one.
   return (
-    <DialogShell onDismiss={() => answer(false)}>
+    <DialogShell key={pending.id} onDismiss={() => answer(false)}>
       <h2>
         {t(TITLES[request.kind] ?? "execTrust.title.gitHooks")} <UntestedTag id="execTrustHost.1" />
       </h2>

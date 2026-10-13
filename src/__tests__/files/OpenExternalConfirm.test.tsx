@@ -17,6 +17,7 @@ import { OpenExternalHost } from "../../components/common/OpenExternalHost";
 import { EmbedPane } from "../../components/embed/EmbedPane";
 import { adaptClientCommand } from "../../lib/transport/clientAdapters";
 import { describeFileErrorKey } from "../../components/embed/fileAccess";
+import { openErrorText } from "../../lib/openExternal";
 import type { WsClient } from "../../lib/transport/wsClient";
 
 const invokeMock = vi.mocked(invoke);
@@ -179,5 +180,14 @@ describe("browser and deck plumbing", () => {
     expect(describeFileErrorKey("'/p/talk.tex-figures/a.tex' or its folder is a link; the figure was not compiled")).toBe(
       "fileError.link",
     );
+  });
+});
+
+describe("reveal error line", () => {
+  it("names a refused macOS bundle in words, not the backend code", () => {
+    const text = openErrorText("open_refused_launcher", "/p/Evil.app");
+    expect(text).toContain("Evil.app was not opened");
+    expect(text).not.toContain("open_refused_launcher");
+    expect(openErrorText("Not a directory: /p/x", "/p/x")).toBe("Not a directory: /p/x");
   });
 });

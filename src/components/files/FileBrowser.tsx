@@ -18,6 +18,7 @@ import {
   visibleEntries,
 } from "../../lib/viewers/fileUtils";
 import { basename, dirname, isAbsolute } from "../../lib/paths";
+import { openErrorText } from "../../lib/openExternal";
 import { closeTabsForDeletedPath, retargetTabsForRenamedPath } from "./fileTabSync";
 import { openFileEntry } from "./openFileEntry";
 import { useExperimental } from "../../lib/experimental";
@@ -363,7 +364,8 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
     if (!target) return;
     const path = target.is_dir ? target.path : dirname(target.path);
     // A folder: the file manager, no "open this file?" question.
-    invoke("open_in_file_manager", { path }).catch((e) => setError(String(e)));
+    // A macOS bundle (`X.app`) is refused; say so in words, not the code.
+    invoke("open_in_file_manager", { path }).catch((e) => setError(openErrorText(e, path)));
   }
 
   function showProperties() {

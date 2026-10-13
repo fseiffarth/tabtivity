@@ -3,7 +3,9 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
-import { useWindowsStore } from "../../stores/windows";
+import { useSettingsStore } from "../../stores/settings";
+import { openFileEntry } from "../files/openFileEntry";
+import { useTabScope } from "../tabs/tabScopeContext";
 import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { ActivityCalendar } from "../projects/ActivityCalendar";
 import { CategoryEditor } from "../projects/CategoryEditor";
@@ -11,6 +13,7 @@ import { categoryColor, primaryCategoryColor, projectCategories } from "../../li
 import { quiesceActive } from "../../stores/power";
 import {
   type FileEntry,
+  disabledViewers,
   fmtSize,
   fmtModified,
 } from "../../lib/viewers/fileUtils";
@@ -148,7 +151,9 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
   const deactivateProject = useProjectsStore((s) => s.deactivateProject);
   const boxes = useBoxesStore((s) => s.boxes);
   const openBox = useBoxesStore((s) => s.openBox);
-  const openFile = useWindowsStore((s) => s.openFile);
+  const viewerPrefs = useSettingsStore((s) => s.settings?.viewer_prefs);
+  const disabledViewerSet = useMemo(() => disabledViewers(viewerPrefs), [viewerPrefs]);
+  const tabScope = useTabScope();
 
   // A project can belong to several boxes. Keep this derived from the boxes'
   // canonical member lists, so the cloud never needs a second membership field
@@ -644,7 +649,20 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
           setHover(null);
           setFocus((f) => (f ? { ...f, rel: f.rel ? `${f.rel}/${node.entry.name}` : node.entry.name } : f));
         } else {
-          void openFile(node.entry.path, undefined, focus?.project.id ?? null, "blob_file_viewer");
+          // The shared open-a-file policy: an in-app viewer opens in a tab
+          // like everywhere else; only a file without one goes to the OS,
+          // which asks first (threat recheck follow-up (b)).
+          if (focus) {
+            openFileEntry({
+              entry: node.entry,
+              projectDir: focus.dir,
+              projectId: focus.project.id,
+              origin: "blob_file_viewer",
+              external: false,
+              disabled: disabledViewerSet,
+              scope: tabScope,
+            });
+          }
         }
         return;
       }
@@ -658,7 +676,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
         enterFocus(project);
       }, DBL_CLICK_MS);
     },
-    [clearClickTimer, ascend, openFile, focus, openNode, enterFocus],
+    [clearClickTimer, ascend, focus, openNode, enterFocus, disabledViewerSet, tabScope],
   );
 
   const onNodeDoubleClick = useCallback(
