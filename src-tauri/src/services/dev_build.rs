@@ -1014,6 +1014,153 @@ dev_verified_lookup "$LIST" "$SHA" >/dev/null && echo kept"#,
         assert_eq!(fs::metadata(&list).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
+    /// The launcher's files as they are in this repo, committed into a fresh
+    /// repository at `dir`. Returns the commit.
+    fn commit_launcher_files(dir: &Path) -> String {
+        fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q"]);
+        for file in [
+            DEV_LAUNCHER_SCRIPT,
+            "scripts/lib/brand.sh",
+            "scripts/lib/dev-launcher.sh",
+            "scripts/retain-dev-build.sh",
+            "src-core/src/brand.rs",
+            "src-tauri/Cargo.toml",
+        ] {
+            fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+            fs::copy(repo().join(file), dir.join(file)).unwrap();
+        }
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "launcher"]);
+        git(dir, &["rev-parse", "HEAD"])
+    }
+
+    #[test]
+    fn a_head_freeze_copies_the_launcher_from_the_commit_not_the_tree() {
+        // Step 8 review flag 1: in --head mode the copy was read from
+        // target/freeze-tree, which a fence can edit during the build. Now each
+        // file is read out of the commit with hardened git.
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let tree = dir.path().join("tree");
+        let dest = dir.path().join("dev-launcher");
+        fs::create_dir_all(&home).unwrap();
+        let head = commit_launcher_files(&tree);
+        let pwned = home.join("pwned");
+        let planted = format!("#!/bin/sh\ntouch '{}'\n", pwned.display());
+        // Uncommitted edits in the tree, a replace ref swapping the committed
+        // brand.sh for the planted one, and repo config naming programs.
+        for file in [DEV_LAUNCHER_SCRIPT, "scripts/lib/brand.sh", "scripts/lib/dev-launcher.sh"] {
+            write_exec(&tree.join(file), &planted);
+        }
+        let committed = git(&tree, &["rev-parse", "HEAD:scripts/lib/brand.sh"]);
+        let swapped = git(&tree, &["hash-object", "-w", "scripts/lib/brand.sh"]);
+        git(&tree, &["replace", &committed, &swapped]);
+        write_exec(&tree.join("hook.sh"), &planted);
+        let hook = tree.join("hook.sh");
+        git(&tree, &["config", "core.fsmonitor", hook.to_str().unwrap()]);
+        write_exec(&tree.join(".git/hooks/post-checkout"), &planted);
+
+        let (ok, out) = lib(
+            &home,
+            r#"dev_launcher_install "$TREE" "$DEST" "$TREE" "$HEAD""#,
+            &[
+                ("TREE", tree.to_str().unwrap()),
+                ("DEST", dest.to_str().unwrap()),
+                ("HEAD", &head[..12]),
+            ],
+        );
+        assert!(ok, "{out}");
+        for file in [
+            DEV_LAUNCHER_SCRIPT,
+            "scripts/lib/brand.sh",
+            "scripts/lib/dev-launcher.sh",
+            "scripts/retain-dev-build.sh",
+            "src-core/src/brand.rs",
+            "src-tauri/Cargo.toml",
+        ] {
+            assert_eq!(fs::read(dest.join(file)).unwrap(), fs::read(repo().join(file)).unwrap(), "{file}");
+            let mode = fs::metadata(dest.join(file)).unwrap().permissions().mode();
+            assert_eq!(mode & 0o022, 0, "{file} is group/other-writable");
+        }
+        assert_eq!(
+            fs::metadata(dest.join(DEV_LAUNCHER_SCRIPT)).unwrap().permissions().mode() & 0o111,
+            0o111,
+            "the launcher stays runnable"
+        );
+        assert_eq!(fs::read_to_string(dest.join("source-root")).unwrap().trim(), tree.to_str().unwrap());
+        assert!(!pwned.exists(), "a repo-configured program ran");
+
+        // Without a commit (the --tree mode) the tree is copied as it is.
+        let (ok, out) = lib(
+            &home,
+            r#"dev_launcher_install "$TREE" "$DEST" "$TREE""#,
+            &[("TREE", tree.to_str().unwrap()), ("DEST", dest.to_str().unwrap())],
+        );
+        assert!(ok, "{out}");
+        assert_eq!(fs::read_to_string(dest.join("scripts/lib/brand.sh")).unwrap(), planted);
+    }
+
+    #[test]
+    fn a_commit_whose_launcher_file_is_a_link_or_missing_installs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let tree = dir.path().join("tree");
+        let dest = dir.path().join("dev-launcher");
+        fs::create_dir_all(&home).unwrap();
+        let good = commit_launcher_files(&tree);
+        let run = |commit: &str| {
+            lib(
+                &home,
+                r#"dev_launcher_install "$TREE" "$DEST" "$TREE" "$COMMIT""#,
+                &[("TREE", tree.to_str().unwrap()), ("DEST", dest.to_str().unwrap()), ("COMMIT", commit)],
+            )
+        };
+        assert!(run(&good).0);
+        let before = fs::read(dest.join("scripts/lib/brand.sh")).unwrap();
+
+        // A symlink entry in the commit (to a file outside the repo).
+        fs::remove_file(tree.join("scripts/retain-dev-build.sh")).unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", tree.join("scripts/retain-dev-build.sh")).unwrap();
+        git(&tree, &["add", "-A"]);
+        git(&tree, &["commit", "-q", "-m", "link"]);
+        let (ok, out) = run("HEAD");
+        assert!(!ok && out.contains("not a regular file"), "{out}");
+
+        // A commit without one of the files.
+        git(&tree, &["rm", "-q", "scripts/retain-dev-build.sh"]);
+        git(&tree, &["commit", "-q", "-m", "gone"]);
+        assert!(!run("HEAD").0);
+        // Not a commit at all.
+        let (ok, out) = run("no-such-rev");
+        assert!(!ok && out.contains("not a commit"), "{out}");
+
+        // The installed copy is the good one, untouched, and no staging left.
+        assert_eq!(fs::read(dest.join("scripts/lib/brand.sh")).unwrap(), before);
+        let stray: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(stray.is_empty(), "{stray:?}");
+    }
+
+    #[test]
+    fn package_dev_reads_the_head_launcher_from_the_commit() {
+        let package_dev = fs::read_to_string(repo().join("scripts/package-dev.sh")).unwrap();
+        assert!(
+            package_dev.contains(r#"LAUNCHER_FROM=("$ROOT" "$LAUNCHER_DIR" "$ROOT" "$HEAD_SHA")"#),
+            "--head installs from the commit"
+        );
+        assert!(!package_dev.contains(r#"dev_launcher_install "$SRC""#), "never from the freeze tree");
+        // Every git call that changes the freeze tree on the host is hardened.
+        for verb in ["worktree add", "checkout --quiet", "clean -fdq", "worktree prune"] {
+            let hardened = package_dev.lines().any(|l| l.contains("dev_git -C") && l.contains(verb));
+            let bare = package_dev.lines().any(|l| l.trim_start().starts_with("git -C") && l.contains(verb));
+            assert!(hardened && !bare, "{verb}");
+        }
+    }
+
     #[test]
     fn only_a_host_session_writes_what_the_launcher_trusts() {
         let dir = repo();

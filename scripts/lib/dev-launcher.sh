@@ -34,9 +34,16 @@
 #                                   by group/other)
 #   dev_launcher_files              the launcher's files, relative to a checkout
 #   dev_launcher_dir APP_DIR        print the installed copy's directory
-#   dev_launcher_install SRC DEST ROOT
+#   dev_launcher_install SRC DEST ROOT [COMMIT]
 #                                   copy the launcher files from checkout SRC
-#                                   into DEST (swapped in whole), recording ROOT
+#                                   into DEST (swapped in whole), recording ROOT;
+#                                   with COMMIT, read each file out of that
+#                                   commit in SRC's repository instead of SRC's
+#                                   files (`dev_git`), so the copy is exactly
+#                                   the commit whatever the tree holds
+#   dev_git ARGS...                 git that runs no repo-configured program
+#                                   (hooks, fsmonitor), follows no replace ref
+#                                   and fetches nothing
 #   dev_desktop_quote PATH          PATH as one argument of a desktop entry's
 #                                   Exec= (quoted and escaped when it needs it)
 #   dev_desktop_exec FILE EXEC      point the [Desktop Entry] group's Exec= in
@@ -116,22 +123,59 @@ dev_launcher_files() {
     src-tauri/Cargo.toml
 }
 
+# The repository's config and hooks are as writable as the checkout, so git run
+# here unfenced must not start anything they name: no hooks, no fsmonitor, no
+# `ext::` transport. Replace refs (`refs/replace/`) could swap the objects a
+# commit names for others, and a partial clone could fetch from a configured
+# promisor; both are off.
+dev_git() {
+  GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 git \
+    -c core.fsmonitor=false -c core.hooksPath=/dev/null -c protocol.ext.allow=never "$@"
+}
+
+# Write FILE as it is in COMMIT of the repository at SRC to OUT. Only a regular
+# file entry (mode 100644 or 100755) is copied: a symlink entry, a submodule or
+# a missing path is refused, like a link or a missing file in the tree.
+_dev_launcher_from_commit() {
+  local src="$1" commit="$2" file="$3" out="$4" mode type object rest
+  read -r mode type object rest < <(dev_git -C "$src" ls-tree "$commit" -- "$file" 2>/dev/null) || return 1
+  [ "$type" = blob ] && [ "${rest}" = "$file" ] || return 1
+  case "$mode" in 100644|100755) ;; *) return 1 ;; esac
+  dev_git -C "$src" cat-file blob "$object" >"$out"
+}
+
 dev_launcher_dir() {
   printf '%s\n' "$1/dev-launcher"
 }
 
 dev_launcher_install() {
-  local src="$1" dest="$2" root="$3" tmp file
+  local src="$1" dest="$2" root="$3" commit="${4:-}" tmp file
   tmp="$dest.tmp.$$"
+  if [ -n "$commit" ]; then
+    # A full commit id, resolved once: every file comes from the same commit.
+    commit="$(dev_git -C "$src" rev-parse --verify --quiet "$commit^{commit}")" || {
+      echo "dev-launcher: $4 is not a commit in $src; the launcher copy was not updated" >&2
+      return 1
+    }
+  fi
   rm -rf "$tmp"
   mkdir -p "$tmp" || return 1
   while IFS= read -r file; do
+    mkdir -p "$tmp/$(dirname "$file")" || { rm -rf "$tmp"; return 1; }
+    if [ -n "$commit" ]; then
+      if ! _dev_launcher_from_commit "$src" "$commit" "$file" "$tmp/$file"; then
+        echo "dev-launcher: $file is missing from commit $commit or not a regular file there; the launcher copy was not updated" >&2
+        rm -rf "$tmp"
+        return 1
+      fi
+      continue
+    fi
     if [ ! -f "$src/$file" ] || [ -L "$src/$file" ]; then
       echo "dev-launcher: $src/$file is missing or a link; the launcher copy was not updated" >&2
       rm -rf "$tmp"
       return 1
     fi
-    mkdir -p "$tmp/$(dirname "$file")" && cp "$src/$file" "$tmp/$file" || { rm -rf "$tmp"; return 1; }
+    cp "$src/$file" "$tmp/$file" || { rm -rf "$tmp"; return 1; }
   done < <(dev_launcher_files)
   printf '%s\n' "$root" >"$tmp/source-root"
   chmod -R u+rwX,go-w "$tmp"

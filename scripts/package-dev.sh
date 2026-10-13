@@ -73,26 +73,28 @@ export CARGO_TARGET_DIR="$ROOT/target"
 
 if [ "$MODE" = head ]; then
   SRC="$FREEZE_TREE"
-  HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
+  HEAD_SHA="$(dev_git -C "$ROOT" rev-parse --verify "HEAD^{commit}")"
 
   # The worktree lives under target/, which `cargo clean` (or a hand) can wipe
   # while git still lists it, or leave a directory that git no longer knows.
   # Reconcile both ways before touching it; the rm is on one fixed path only.
-  git -C "$ROOT" worktree prune
-  if [ -e "$SRC" ] && ! git -C "$ROOT" worktree list --porcelain | grep -qxF "worktree $SRC"; then
+  # `dev_git`: the repo's hooks and fsmonitor are fence-writable and this runs
+  # on the host (a checkout would fire `post-checkout`).
+  dev_git -C "$ROOT" worktree prune
+  if [ -e "$SRC" ] && ! dev_git -C "$ROOT" worktree list --porcelain | grep -qxF "worktree $SRC"; then
     echo "package-dev: $SRC is not a registered worktree; recreating it" >&2
     rm -rf "$FREEZE_TREE"
   fi
   if [ ! -e "$SRC" ]; then
-    git -C "$ROOT" worktree add --detach "$SRC" "$HEAD_SHA"
+    dev_git -C "$ROOT" worktree add --detach "$SRC" "$HEAD_SHA"
   else
-    git -C "$SRC" checkout --quiet --detach --force "$HEAD_SHA"
+    dev_git -C "$SRC" checkout --quiet --detach --force "$HEAD_SHA"
     # Files a newer commit deleted are gone with the checkout; this clears
     # anything untracked and unignored that an older one left behind. dist/
     # and mobile-dist/ are ignored and stay; the node_modules symlink is not
     # (`node_modules/` in .gitignore matches a directory, not a link), so it is
     # excluded by name rather than deleted and re-linked on every freeze.
-    git -C "$SRC" clean -fdq -e node_modules
+    dev_git -C "$SRC" clean -fdq -e node_modules
   fi
   ln -sfn "$ROOT/node_modules" "$SRC/node_modules"
 
@@ -186,14 +188,22 @@ BUILT_AT="$(date -Is)"
 # That record sits in target/, which every agent fence binding this project can
 # write, so the launcher no longer trusts it. What it trusts is written here,
 # on the host only: the hash goes into the per-user verified list, and the
-# launcher (with every helper it sources) is copied out of the tree it was
-# built from — the commit itself in --head mode — into <app_dir>/dev-launcher/.
+# launcher (with every helper it sources) is copied into
+# <app_dir>/dev-launcher/ — in --head mode read out of the commit itself
+# (`dev_git cat-file`), never from target/freeze-tree, which a fence binding
+# the project can edit while the build runs; in --tree mode from the working
+# tree, uncommitted edits included, as that mode freezes them anyway.
 # Inside a fence $HOME is the agent's own, so neither write could reach the
 # real ones anyway; skipping them there just says so. The desktop entry is
 # pointed at that copy at once, even when the install below is held back.
 if dev_on_host "$APP_DIR"; then
   dev_verified_add "$(dev_verified_list "$APP_DIR")" "$RAW_SHA" "$COMMIT$DIRTY" "$VERSION" "$BUILT_AT"
-  if dev_launcher_install "$SRC" "$LAUNCHER_DIR" "$ROOT"; then
+  if [ "$MODE" = head ]; then
+    LAUNCHER_FROM=("$ROOT" "$LAUNCHER_DIR" "$ROOT" "$HEAD_SHA")
+  else
+    LAUNCHER_FROM=("$ROOT" "$LAUNCHER_DIR" "$ROOT")
+  fi
+  if dev_launcher_install "${LAUNCHER_FROM[@]}"; then
     dev_desktop_exec "$DESKTOP_DEST" "$LAUNCHER"
   else
     echo "package-dev: could not install the launcher copy into $LAUNCHER_DIR" >&2

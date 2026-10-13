@@ -117,8 +117,12 @@ change was not run live.
   unfenced at the next click, whatever the hash said. The same host-side
   `package-dev.sh` now installs the launcher, every helper it sources or runs
   and the two files `brand.sh` reads names from (`dev_launcher_files`) into
-  `~/.local/share/tabtivity/dev-launcher/` — from the tree it just built, so
-  the commit itself in `--head` mode — swapped in whole, with `source-root`
+  `~/.local/share/tabtivity/dev-launcher/` — in `--head` mode read out of the
+  commit itself (`dev_git ls-tree` + `cat-file blob` on `HEAD_SHA`: regular
+  file entries only, no replace refs, no lazy fetch, no hooks or fsmonitor),
+  never from `target/freeze-tree`, which a fence binding the project can edit
+  during the build; in `--tree` mode from the working tree, which that mode
+  freezes uncommitted anyway — swapped in whole, with `source-root`
   naming the checkout, and points the desktop entry's `Exec=` there (also when
   the install itself is held back under a running window). From the copy the
   checkout is data only: the binary it built and HEAD for the "behind"
@@ -139,7 +143,14 @@ change was not run live.
   whatever else the commit holds, on the host; the result is recorded as
   verified and adopted. So an agent's commit runs on the host at the next dev
   build. That is what building agent-written code means; a click-to-build gate
-  was considered and declined. Dev builds only: a released binary has no
+  was considered and declined. The cargo target dir and the freeze tree stay
+  fence-writable while the build runs, so the list proves "a host
+  `package-dev.sh` hashed this binary", not "it was built from the commit"; the
+  launcher copy is read from the commit's objects. The git calls
+  `package-dev.sh` makes on the freeze tree (`worktree`, `checkout`, `clean`)
+  go through `dev_git`, so the repo's hooks and fsmonitor do not run there; a
+  filter driver in `.git/config` still would (inside C3: an uncommitted edit
+  to `package-dev.sh` itself runs too). Dev builds only: a released binary has no
   source root, no chip and no queue.
   **A failed pass does not end the queue** (2026-09-15): a commit that landed
   mid-build is a different tree — usually the one that fixes it, since a
