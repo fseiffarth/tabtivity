@@ -493,6 +493,66 @@ describe("'Keep mine' on a row with no resource address (step 7 review)", () => 
   });
 });
 
+describe("'Keep mine' with a sync landing while its push is out", () => {
+  // A timer sync re-reads the whole store from disk mid-push; the duplicate
+  // the dialog took out of the window comes back with it.
+  const MINTED = `${HREF}n-uid.ics`;
+  const NEW: CalendarEvent = {
+    id: "n1",
+    calendar_id: "cal-1",
+    uid: "n-uid",
+    start: "2026-08-04T09:00",
+    end: "2026-08-04T10:00",
+    all_day: false,
+    title: "planning (mine)",
+    caldav_dirty: true,
+    rev: 2,
+  };
+  const DUP: CalendarEvent = { ...NEW, id: "n2", title: "planning", caldav_dirty: undefined, caldav_href: MINTED, caldav_etag: '"3"' };
+  const question = {
+    rowId: "n1",
+    kind: "event" as const,
+    accountId: "acc-1",
+    href: HREF,
+    resourceHref: "",
+    title: "planning (mine)",
+    op: "upsert" as const,
+    at: "2026-08-04T09:00",
+  };
+  const syncFromDisk = () => useCalendarStore.setState({ events: [NEW, DUP] });
+
+  it("a conflicting push never leaves the duplicate in the window twice", async () => {
+    seed(account(), [NEW, DUP]);
+    useCalDavStore.setState({ conflicts: [question] });
+    backend({
+      caldav_resource_etag: () => '"3"',
+      caldav_push: () => {
+        syncFromDisk();
+        return { href: MINTED, etag: "", conflict: true, gone: false, dirty: true };
+      },
+    });
+    await useCalDavStore.getState().resolveKeepMine(question);
+    const ids = useCalendarStore.getState().events.map((e) => e.id);
+    expect(ids.sort()).toEqual(["n1", "n2"]);
+    expect(useCalDavStore.getState().conflicts.map((c) => c.rowId)).toEqual(["n1"]);
+  });
+
+  it("a landed push takes the re-read duplicate out of the window too", async () => {
+    seed(account(), [NEW, DUP]);
+    useCalDavStore.setState({ conflicts: [question] });
+    backend({
+      caldav_resource_etag: () => '"3"',
+      caldav_push: () => {
+        syncFromDisk();
+        return { href: MINTED, etag: '"4"', conflict: false, gone: false, dirty: false };
+      },
+    });
+    await useCalDavStore.getState().resolveKeepMine(question);
+    expect(invoke.mock.calls.filter((c) => c[0] === "delete_event").map((c) => c[1])).toEqual([{ id: "n2" }]);
+    expect(useCalendarStore.getState().events.map((e) => e.id)).toEqual(["n1"]);
+  });
+});
+
 describe("an account switched from http to https (step 7 review)", () => {
   it("re-reads the calendar when the backend moved its addresses to https", async () => {
     const httpRef = "http://dav.example.org/dav/me/personal/";

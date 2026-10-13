@@ -357,29 +357,27 @@ async function keepMineUnaddressed(
     for (const id of gone) {
       await invoke<void>(kind === "event" ? "delete_event" : "delete_task", { id });
     }
+    // A sync that landed while the push was out re-read the store from disk,
+    // duplicates included: they are gone there now, so here too.
+    useCalendarStore.setState((s) =>
+      kind === "event"
+        ? { events: s.events.filter((e) => !gone.has(e.id)) }
+        : { tasks: s.tasks.filter((t) => !gone.has(t.id)) },
+    );
     return outcome;
   }
-  // Not on the server: the duplicates come back, and the row keeps no address
-  // it never earned (the backend stamped none).
-  useCalendarStore.setState((s) =>
-    kind === "event"
-      ? {
-          events: [
-            ...s.events.map((e) =>
-              e.id === row.id ? { ...e, caldav_href: undefined, caldav_etag: undefined } : e,
-            ),
-            ...(dupes as CalendarEvent[]),
-          ],
-        }
-      : {
-          tasks: [
-            ...s.tasks.map((t) =>
-              t.id === row.id ? { ...t, caldav_href: undefined, caldav_etag: undefined } : t,
-            ),
-            ...(dupes as CalendarTask[]),
-          ],
-        },
-  );
+  // Not on the server: the duplicates come back (unless a sync in between
+  // already put them back from disk — never twice), and the row keeps no
+  // address it never earned (the backend stamped none).
+  useCalendarStore.setState((s) => {
+    const back = <R extends { id: string }>(rows: R[], removed: R[]): R[] => [
+      ...rows.map((r) => (r.id === row.id ? { ...r, caldav_href: undefined, caldav_etag: undefined } : r)),
+      ...removed.filter((d) => !rows.some((r) => r.id === d.id)),
+    ];
+    return kind === "event"
+      ? { events: back(s.events, dupes as CalendarEvent[]) }
+      : { tasks: back(s.tasks, dupes as CalendarTask[]) };
+  });
   return outcome;
 }
 
