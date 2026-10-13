@@ -43,7 +43,9 @@ Nothing shipped changes: both tsconfigs set `noEmit`; vite bundles.
    6.1, and it needs the JS API that 7 no longer exports), react-doctor's
    dependency and the codemods. With the alias every peer stays satisfied and
    nothing warns. Both packages claim the `tsc` bin and npm guarantees no
-   winner (5.9 won under both `install` and `ci`, verified), so **the
+   winner (5.9 wins under `npm ci`; an install that *adds* the alias to an
+   existing tree links TS 7, and it stays so until the next `ci` — reviewer,
+   2026-10-14), so **the
    scripts call the native one by path**:
    `node node_modules/typescript-native/bin/tsc`. Verified layout: `bin/tsc`
    is a 2-line ESM shim (package `"type": "module"`; npm's Windows `.bin`
@@ -206,6 +208,9 @@ day − 7 days>`.
   reviewed `package.json` + lock to the main tree → at once
   `npx -y npm@11.21.0 install --ignore-scripts` there (never `npm ci`: the
   user's window runs on it), leaving the lock byte-identical →
+  `npx -y npm@11.21.0 rebuild typescript --ignore-scripts` (relinks
+  `.bin/tsc` to 5.9.3, as a fresh `npm ci` has it; `readlink
+  node_modules/.bin/tsc` = `../typescript/bin/tsc`) →
   `npm ls --depth=0` → commit.
 - **Done when:**
   - `git diff package-lock.json` adds only `node_modules/typescript-native`
