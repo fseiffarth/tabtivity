@@ -3,11 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { ExecTrustDeclinedError, parseTrustRequest, withExecTrust } from "../../lib/execTrust";
+import { ExecTrustDeclinedError, parseTrustRequest, withExecTrust, type TrustRequest } from "../../lib/execTrust";
 import { useExecTrustStore } from "../../stores/execTrust";
 import { BRAND } from "../../lib/brand";
 
-const request = {
+const request: TrustRequest = {
   kind: "latexmkrc",
   dir: "/p",
   fingerprint: "abc",
