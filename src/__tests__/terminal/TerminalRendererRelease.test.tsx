@@ -1,11 +1,15 @@
 /**
  * Renderer hibernation: an OPEN terminal pane that stays hidden for
- * RENDERER_RELEASE_MS gives its renderer addon back (the canvas renderer's four
- * full-pane canvases keep their backing stores under `display: none`; WebGL
- * holds a context), and re-loads it the moment it is shown again. Every tab of
- * every open project stays mounted, so this is what a background project's
- * terminals cost. Nothing else about the terminal may change: the xterm itself
- * (buffer, scrollback) is never disposed and the PTY is never touched.
+ * RENDERER_RELEASE_MS gives its WebGL renderer addon back (it holds a GL
+ * context, a glyph atlas and a full-pane canvas under `display: none`), and
+ * re-loads it the moment it is shown again. Every tab of every open project
+ * stays mounted, so this is what a background project's terminals cost.
+ * Nothing else about the terminal may change: the xterm itself (buffer,
+ * scrollback) is never disposed and the PTY is never touched.
+ *
+ * And the renderer choice itself (xterm 6 has no canvas renderer): WebGL only
+ * with the `terminal_webgl` flag, and every WebGL failure — at load or by a
+ * context lost later — leaves xterm's own DOM renderer, never a dead pane.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
@@ -17,10 +21,14 @@ class ResizeObserverStub {
 }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
 
-const { invoke, addons, terminals } = vi.hoisted(() => ({
+const { invoke, addons, terminals, webgl } = vi.hoisted(() => ({
   invoke: vi.fn((..._a: unknown[]) => Promise.resolve(undefined)),
   addons: [] as { kind: string; disposed: boolean }[],
   terminals: [] as { opened: boolean; disposed: boolean }[],
+  // `loadThrows`: the next WebGL addons fail in `term.loadAddon`, the way a
+  // webview with no usable WebGL2 context makes them fail. `lose` fires the
+  // context-loss listener of the newest one.
+  webgl: { loadThrows: false, lose: null as null | (() => void) },
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
@@ -34,7 +42,9 @@ vi.mock("@xterm/xterm", () => ({
     constructor() {
       terminals.push(this.state);
     }
-    loadAddon() {}
+    loadAddon(addon: { state?: { kind: string } }) {
+      if (addon.state?.kind === "webgl" && webgl.loadThrows) throw new Error("no WebGL2 context");
+    }
     open() {
       this.state.opened = true;
     }
@@ -58,24 +68,15 @@ vi.mock("@xterm/xterm", () => ({
     parser = { registerOscHandler: () => ({ dispose() {} }), registerCsiHandler: () => ({ dispose() {} }) };
   },
 }));
-vi.mock("@xterm/addon-canvas", () => ({
-  CanvasAddon: class {
-    state = { kind: "canvas", disposed: false };
-    constructor() {
-      addons.push(this.state);
-    }
-    dispose() {
-      this.state.disposed = true;
-    }
-  },
-}));
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: class {
     state = { kind: "webgl", disposed: false };
     constructor() {
       addons.push(this.state);
     }
-    onContextLoss() {}
+    onContextLoss(listener: () => void) {
+      webgl.lose = listener;
+    }
     dispose() {
       this.state.disposed = true;
     }
@@ -112,14 +113,14 @@ function giveLayout(on: boolean) {
 
 const live = (kind: string) => addons.filter((a) => a.kind === kind && !a.disposed);
 
-async function mountOpen(id: string) {
+async function mountOpen(id: string, renderer = "webgl") {
   let rerender: (ui: React.ReactElement) => void = () => {};
   await act(async () => {
     const r = render(<TerminalView id={id} cmd="bash" cwd="/p" visible focused={false} />);
     rerender = r.rerender;
   });
   expect(terminals[0]?.opened).toBe(true);
-  expect(live("canvas")).toHaveLength(1);
+  expect(live(renderer)).toHaveLength(renderer === "webgl" ? 1 : 0);
   const show = async (visible: boolean) => {
     await act(async () => {
       rerender(<TerminalView id={id} cmd="bash" cwd="/p" visible={visible} focused={false} />);
@@ -134,33 +135,35 @@ describe("TerminalView — renderer hibernation of long-hidden panes", () => {
     invoke.mockClear();
     addons.length = 0;
     terminals.length = 0;
-    terminalWebgl = undefined;
+    terminalWebgl = true;
+    webgl.loadThrows = false;
+    webgl.lose = null;
     giveLayout(true);
   });
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("releases the canvas renderer after the hidden delay and re-loads it on show", async () => {
+  it("releases the WebGL renderer after the hidden delay and re-loads it on show", async () => {
     const show = await mountOpen("p:a");
     await show(false);
 
     await act(async () => {
       vi.advanceTimersByTime(RENDERER_RELEASE_MS - 1);
     });
-    expect(live("canvas")).toHaveLength(1);
+    expect(live("webgl")).toHaveLength(1);
 
     await act(async () => {
       vi.advanceTimersByTime(1);
     });
-    expect(live("canvas")).toHaveLength(0);
+    expect(live("webgl")).toHaveLength(0);
     // The terminal itself — buffer, scrollback — is never disposed, and the
     // PTY is never killed by a hibernation.
     expect(terminals[0].disposed).toBe(false);
     expect(invoke.mock.calls.some(([cmd]) => cmd === "pty_kill")).toBe(false);
 
     await show(true);
-    expect(live("canvas")).toHaveLength(1);
+    expect(live("webgl")).toHaveLength(1);
     expect(addons).toHaveLength(2);
     expect(terminals).toHaveLength(1);
   });
@@ -176,7 +179,7 @@ describe("TerminalView — renderer hibernation of long-hidden panes", () => {
       vi.advanceTimersByTime(RENDERER_RELEASE_MS * 2);
     });
     expect(addons).toHaveLength(1);
-    expect(live("canvas")).toHaveLength(1);
+    expect(live("webgl")).toHaveLength(1);
   });
 
   it("does not re-load a released renderer when the WebGL flag moves while hidden", async () => {
@@ -187,13 +190,68 @@ describe("TerminalView — renderer hibernation of long-hidden panes", () => {
     });
     expect(addons.filter((a) => !a.disposed)).toHaveLength(0);
 
+    terminalWebgl = false;
+    await show(false);
     terminalWebgl = true;
     await show(false);
     expect(addons.filter((a) => !a.disposed)).toHaveLength(0);
+    expect(addons).toHaveLength(1);
 
     // Shown again: the CURRENT choice is what comes back.
     await show(true);
     expect(live("webgl")).toHaveLength(1);
-    expect(live("canvas")).toHaveLength(0);
+    expect(addons).toHaveLength(2);
+  });
+
+  it("brings a released pane back on the DOM renderer when the flag went off meanwhile", async () => {
+    const show = await mountOpen("p:d");
+    await show(false);
+    await act(async () => {
+      vi.advanceTimersByTime(RENDERER_RELEASE_MS);
+    });
+    terminalWebgl = false;
+    await show(true);
+    expect(addons).toHaveLength(1);
+    expect(live("webgl")).toHaveLength(0);
+    expect(terminals[0].disposed).toBe(false);
+  });
+});
+
+describe("TerminalView — renderer choice (WebGL, else xterm's DOM renderer)", () => {
+  beforeEach(() => {
+    invoke.mockClear();
+    addons.length = 0;
+    terminals.length = 0;
+    terminalWebgl = true;
+    webgl.loadThrows = false;
+    webgl.lose = null;
+    giveLayout(true);
+  });
+
+  it("loads no renderer addon without the WebGL flag: the DOM renderer paints", async () => {
+    terminalWebgl = undefined;
+    await mountOpen("p:dom", "dom");
+    expect(addons).toHaveLength(0);
+  });
+
+  it("a WebGL addon that fails to load leaves the DOM renderer, terminal intact", async () => {
+    webgl.loadThrows = true;
+    await mountOpen("p:noctx", "dom");
+    expect(addons).toHaveLength(1);
+    expect(live("webgl")).toHaveLength(0);
+    expect(terminals[0].disposed).toBe(false);
+  });
+
+  it("a lost WebGL context drops the addon and leaves the DOM renderer", async () => {
+    await mountOpen("p:lost");
+    expect(webgl.lose).not.toBeNull();
+    await act(async () => {
+      webgl.lose?.();
+    });
+    expect(live("webgl")).toHaveLength(0);
+    // Nothing reloads in its place, and the terminal (buffer, PTY) is untouched.
+    expect(addons).toHaveLength(1);
+    expect(terminals[0].disposed).toBe(false);
+    expect(invoke.mock.calls.some(([cmd]) => cmd === "pty_kill")).toBe(false);
   });
 });

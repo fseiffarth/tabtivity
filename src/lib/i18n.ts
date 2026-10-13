@@ -1464,7 +1464,7 @@ export const enSource = {
   "settings.deckPresenterHelp": "Editable slides over a PDF (*.eldeck.json): the PDF toolbar's Present button, New Presentation in the file tree, the deck editor and its fullscreen presenter.",
   "settings.experimental": "Experimental",
   "settings.terminalWebgl": "WebGL terminal renderer",
-  "settings.terminalWebglHelp": "Draws terminals on the GPU, which is faster. Turn it off if you see flicker, missing text or crashes — some GPU drivers are broken. Falls back to the canvas renderer by itself if WebGL fails; applies at once.",
+  "settings.terminalWebglHelp": "Draws terminals on the GPU, which is faster. Turn it off if you see flicker, missing text or crashes — some GPU drivers are broken. Falls back to the standard renderer by itself if WebGL fails; applies at once.",
   "settings.mdGraph": "Markdown link graph",
   "settings.mdGraphHelp": "Adds a Graph mode to the markdown viewer: a clickable map of the files this document links to, followed link by link. Click a node to open that file.",
   "settings.projectRemarks": "Project file remarks",

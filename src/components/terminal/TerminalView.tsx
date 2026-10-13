@@ -1,7 +1,6 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
-import { CanvasAddon } from "@xterm/addon-canvas";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -28,7 +27,7 @@ import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
 import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
-import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
+import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { deliverDrop, insertIntoReader } from "../../lib/terminal/terminalDrop";
 import { isExternalFileDrag, parseDroppedFilePaths } from "../files/importDrop";
@@ -203,17 +202,15 @@ const PENDING_OUTPUT_CAP = 1_000_000;
 const PTY_RESIZE_DEBOUNCE_MS = 80;
 
 /** How long an OPEN pane must stay hidden before its renderer addon is
- *  released. The canvas renderer keeps four full-pane canvases (text,
- *  selection, link, cursor) whose backing stores stay allocated under
- *  `display: none` — ~4 × width × height × 4 bytes at device pixels, about
- *  30 MB for a 1800×1100 pane — and the WebGL renderer holds a GL context the
- *  browser evicts once too many are live. Every tab of every open project
- *  stays mounted, so a session with several projects carried that for every
- *  terminal ever shown. Releasing the addon leaves xterm's paused DOM renderer
- *  in place; the buffer, scrollback, selection and PTY are untouched, and the
- *  addon is re-loaded the moment the pane is shown again (the same swap a
- *  WebGL context loss or the renderer flag already performs). The delay keeps
- *  ordinary tab flipping from paying the re-load. */
+ *  released. The WebGL renderer holds a GL context (plus its glyph atlas and
+ *  full-pane canvas) that the browser evicts once too many are live, and every
+ *  tab of every open project stays mounted, so a session with several
+ *  projects carried that for every terminal ever shown. Releasing the addon
+ *  leaves xterm's paused DOM renderer in place; the buffer, scrollback,
+ *  selection and PTY are untouched, and the addon is re-loaded the moment the
+ *  pane is shown again (the same swap a WebGL context loss or the renderer
+ *  flag already performs). The delay keeps ordinary tab flipping from paying
+ *  the re-load. A pane on the DOM renderer has no addon to release. */
 export const RENDERER_RELEASE_MS = 60_000;
 
 // Agent-terminal zoom. Agent TUIs (Claude, Codex, …) render dense layouts, so
@@ -611,34 +608,22 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     openedRef.current = false;
     pendingOutput.current = "";
 
-    // Which renderer paints this terminal — the scroll-performance ladder.
-    // xterm's default DOM renderer rebuilds styled spans for every visible row
-    // on each scroll step, which under WebKitGTK with GPU compositing disabled
-    // (WEBKIT_DISABLE_DMABUF_RENDERER=1) makes scrolling densely colored agent
-    // output very slow — so every terminal gets the canvas renderer (glyph
-    // cache, no DOM/layout work, still on the safe software path). WebGL is
-    // the faster tier but rides the same GPU/driver territory the DMABUF
-    // re-test failed on (docs/typing_latency_plan.md Step 4), so it is opt-in
-    // via the `terminal_webgl` experimental flag and demotes itself: a
-    // construction/load failure falls back to canvas in the same call, and a
-    // context lost at runtime (driver reset, or the browser evicting the
-    // oldest of too many live contexts — every open pane holds one) disposes
-    // the addon and reloads canvas. A renderer must never take the terminal
-    // down; canvas failing too (jsdom has no canvas at all) leaves the DOM
-    // renderer. term.dispose() in the cleanup disposes whichever addon is
-    // loaded, so no teardown is kept here.
-    let canvasAddon: CanvasAddon | null = null;
+    // Which renderer paints this terminal. xterm 6 has two: its built-in DOM
+    // renderer (styled spans per visible row, on the safe software path) and
+    // WebGL (GPU glyph atlas, faster). The canvas renderer that used to sit
+    // between them — the default here, because the DOM renderer's per-row
+    // rebuild made scrolling densely colored agent output slow under WebKitGTK
+    // with GPU compositing disabled (WEBKIT_DISABLE_DMABUF_RENDERER=1) — was
+    // removed upstream in xterm 6. WebGL rides the GPU/driver territory the
+    // DMABUF re-test failed on (docs/typing_latency_plan.md Step 4), so it
+    // stays opt-in via the `terminal_webgl` experimental flag and demotes
+    // itself: a construction/load failure falls back to the DOM renderer in
+    // the same call, and a context lost at runtime (driver reset, or the
+    // browser evicting the oldest of too many live contexts — every open pane
+    // holds one) disposes the addon, which leaves the DOM renderer. A renderer
+    // must never take the terminal down. term.dispose() in the cleanup
+    // disposes the addon if one is loaded, so no teardown is kept here.
     let webglAddon: WebglAddon | null = null;
-    const dropCanvas = () => {
-      if (!canvasAddon) return;
-      const addon = canvasAddon;
-      canvasAddon = null;
-      try {
-        addon.dispose();
-      } catch {
-        /* already torn down */
-      }
-    };
     const dropWebgl = () => {
       if (!webglAddon) return;
       const addon = webglAddon;
@@ -647,15 +632,6 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         addon.dispose();
       } catch {
         /* already torn down */
-      }
-    };
-    const loadCanvas = () => {
-      if (canvasAddon || !term) return;
-      try {
-        canvasAddon = new CanvasAddon();
-        term.loadAddon(canvasAddon);
-      } catch {
-        dropCanvas();
       }
     };
     // Hibernation state: true while a long-hidden pane has had its renderer
@@ -668,30 +644,23 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       if (cancelled || !openedRef.current || rendererReleased || !term) return;
       if (wantWebgl) {
         if (webglAddon) return;
-        dropCanvas();
         try {
           webglAddon = new WebglAddon();
-          webglAddon.onContextLoss(() => {
-            dropWebgl();
-            loadCanvas();
-          });
+          webglAddon.onContextLoss(dropWebgl);
           term.loadAddon(webglAddon);
         } catch {
           dropWebgl();
-          loadCanvas();
         }
       } else {
         dropWebgl();
-        loadCanvas();
       }
     };
     applyRendererRef.current = applyRenderer;
     const releaseRenderer = () => {
       releaseTimer = null;
       if (cancelled || !openedRef.current || visibleRef.current) return;
-      if (!canvasAddon && !webglAddon) return;
+      if (!webglAddon) return;
       dropWebgl();
-      dropCanvas();
       rendererReleased = true;
     };
     const restoreRenderer = () => {
@@ -1290,6 +1259,17 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         } else {
           enterKeySelect();
         }
+        return false;
+      }
+      // Alt+arrow keeps the word-jump encoding xterm 5 gave it (xterm 6 sends
+      // the plain Alt form — see altArrowWordJump). Sent through `term.input`
+      // so it leaves by the same `onData` path a keystroke does, and cancelled
+      // the way xterm cancels a key it has sent.
+      const wordJump = altArrowWordJump(e);
+      if (wordJump) {
+        e.preventDefault();
+        e.stopPropagation();
+        term.input(wordJump, true);
         return false;
       }
       return true;
@@ -2069,9 +2049,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   // Re-pick the renderer of a LIVE, OPEN terminal when the WebGL flag moves —
   // which includes settings simply arriving: they load a few seconds after the
   // restored tabs mount, so a pane opened before that read the flag as off and
-  // would otherwise stay on canvas for the whole session. The ref is null (or
-  // its closure self-guards on openedRef) outside the open()..dispose() window,
-  // so a closed terminal is skipped exactly as the theme effect skips it.
+  // would otherwise stay on the DOM renderer for the whole session. The ref is
+  // null (or its closure self-guards on openedRef) outside the open()..dispose()
+  // window, so a closed terminal is skipped exactly as the theme effect skips it.
   useEffect(() => {
     applyRendererRef.current?.(webglWanted);
   }, [webglWanted]);

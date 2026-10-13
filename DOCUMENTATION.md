@@ -276,7 +276,7 @@ Toolbar behavior:
 
 `TerminalView.tsx`:
 - Creates an xterm.js `Terminal` instance with the fit, web-links, and
-  canvas/webgl addons (WebGL behind `terminal_webgl`). An open-watchdog guards
+  webgl addons (WebGL behind `terminal_webgl`, else xterm's DOM renderer). An open-watchdog guards
   the case where xterm never `open()`s — on Windows, WebView2 can drop the
   ResizeObserver callback, which showed up as a black, dead agent tab.
 - On mount, invokes `spawn_pty` on the backend; backend emits

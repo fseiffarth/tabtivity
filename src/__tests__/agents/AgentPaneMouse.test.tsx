@@ -43,6 +43,8 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() =
 const { termSpy } = vi.hoisted(() => ({
   termSpy: {
     paste: vi.fn(),
+    // What the pane handed xterm's `input` (it leaves through `onData`).
+    input: vi.fn(),
     focus: vi.fn(),
     // The live mode the running program sets; flipped per test.
     mouseTrackingMode: "none" as "none" | "any",
@@ -116,6 +118,7 @@ vi.mock("@xterm/xterm", () => ({
     getSelectionPosition() { return undefined; }
     focus() { termSpy.focus(); }
     paste(text: string) { termSpy.paste(text); }
+    input(data: string, wasUserInput?: boolean) { termSpy.input(data, wasUserInput); }
     dispose() {}
     options = {};
     get modes() { return { mouseTrackingMode: termSpy.mouseTrackingMode }; }
@@ -182,6 +185,7 @@ function press(pane: HTMLElement, detail: number, init: MouseEventInit = {}): Mo
 function resetPaneStubs() {
   termSpy.paste.mockClear();
   termSpy.focus.mockClear();
+  termSpy.input.mockClear();
   termSpy.seen.length = 0;
   termSpy.mouseTrackingMode = "none";
   termSpy.selection = "";
@@ -384,6 +388,28 @@ describe("agent pane mouse gestures", () => {
     // Without this WebKitGTK runs its own paste command too, whose native
     // `paste` event xterm's textarea turns into a second copy of the text.
     expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it("Alt+Left still jumps a word: xterm 5's encoding, sent as typed input", async () => {
+    await agentPane("p:altleft");
+    const ev = new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, cancelable: true, bubbles: true });
+    let handled: boolean | undefined;
+    act(() => {
+      handled = termSpy.keyHandler?.(ev);
+    });
+    expect(handled).toBe(false);
+    expect(ev.defaultPrevented).toBe(true);
+    // jsdom's navigator is not a Mac's: the Ctrl+Left form.
+    expect(termSpy.input).toHaveBeenCalledWith("\x1b[1;5D", true);
+
+    // A plain arrow is xterm's own business.
+    termSpy.input.mockClear();
+    let plain: boolean | undefined;
+    act(() => {
+      plain = termSpy.keyHandler?.(new KeyboardEvent("keydown", { key: "ArrowLeft", cancelable: true }));
+    });
+    expect(plain).toBe(true);
+    expect(termSpy.input).not.toHaveBeenCalled();
   });
 
   it("does not paste when a modifier is held", async () => {

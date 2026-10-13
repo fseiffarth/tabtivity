@@ -230,6 +230,32 @@ export function shiftTabForAgent(cmd: string | null | undefined): string {
   return isCodexCommand(cmd) ? CSI_U_SHIFT_TAB : LEGACY_SHIFT_TAB;
 }
 
+/** The CSI final byte of each arrow key. */
+const ARROW_FINAL: Record<string, string> = { ArrowUp: "A", ArrowDown: "B", ArrowRight: "C", ArrowLeft: "D" };
+
+/** What a bare Alt+arrow must send, or null for every other key.
+ *
+ *  xterm.js up to 5.x rewrote Alt+arrow into a word jump: Ctrl+arrow's
+ *  `ESC [ 1 ; 5 <dir>` off macOS (all four arrows), and on macOS the
+ *  readline/emacs `ESC b` / `ESC f` for ←/→ (↑/↓ left alone) — the way
+ *  Option+← moves a word in Terminal.app. xterm 6 removed that rewrite
+ *  (xtermjs/xterm.js#5346) and sends the plain Alt form `ESC [ 1 ; 3 <dir>`,
+ *  which bash and zsh do not bind by default, so Alt+← in a shell tab would
+ *  stop moving by words. This restores the old encoding exactly; it applies
+ *  only with Alt alone held, as xterm's did. */
+export function altArrowWordJump(
+  ev: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "shiftKey" | "metaKey">,
+  isMac: boolean = IS_MAC,
+): string | null {
+  if (!ev.altKey || ev.ctrlKey || ev.shiftKey || ev.metaKey) return null;
+  const dir: string | undefined = ARROW_FINAL[ev.key];
+  if (!dir) return null;
+  if (!isMac) return `${CSI}1;5${dir}`;
+  if (dir === "D") return "\x1bb";
+  if (dir === "C") return "\x1bf";
+  return null;
+}
+
 /** Whether `cmd` launches Codex — matched on the binary's leaf name, so an
  *  absolute path or a versioned wrapper still counts. */
 export function isCodexCommand(cmd: string | null | undefined): boolean {

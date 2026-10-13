@@ -340,6 +340,26 @@ html, body, #root {
   overflow-y: auto !important;
 }
 
+/* xterm 6 no longer scrolls `.xterm-viewport` natively: it draws VS Code's
+   scrollable element instead, its own bar in the 14px gutter FitAddon reserves,
+   so `customScrollbar.ts` finds nothing to paint a thumb on. Its slider gets
+   that module's look here — a 4px accent bar 2px in from the right edge (the
+   transparent borders inset it within the inline 14px width). One class more
+   than the rules xterm injects at runtime, hover/active included, so these win
+   regardless of order. */
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  box-sizing: border-box;
+  border: 2px solid transparent;
+  border-left-width: 8px;
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider:hover,
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider.active {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
 /* ── Custom (square) scrollbars ─────────────────────────────────────────
    The thumbs `lib/theme/customScrollbar.ts` paints. Read that module's header for
    why the app draws its own bars at all; the short of it is that WebKitGTK

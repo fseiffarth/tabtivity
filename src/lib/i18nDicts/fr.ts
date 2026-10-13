@@ -1532,7 +1532,7 @@ export const dict: Dict = {
   "settings.deckPresenterHelp": "Diapositives modifiables au-dessus d'un PDF (*.eldeck.json) : le bouton Présenter de la barre PDF, Nouvelle présentation dans l'arborescence, l'éditeur de deck et son présentateur plein écran.",
   "settings.experimental": "Expérimental",
   "settings.terminalWebgl": "Rendu WebGL du terminal",
-  "settings.terminalWebglHelp": "Dessine les terminaux sur le GPU, ce qui est plus rapide. Désactivez-le en cas de scintillement, de texte manquant ou de plantages — certains pilotes GPU sont défaillants. Revient seul au rendu canvas si WebGL échoue ; s'applique immédiatement.",
+  "settings.terminalWebglHelp": "Dessine les terminaux sur le GPU, ce qui est plus rapide. Désactivez-le en cas de scintillement, de texte manquant ou de plantages — certains pilotes GPU sont défaillants. Revient seul au rendu standard si WebGL échoue ; s'applique immédiatement.",
   "settings.mdGraph": "Graphe de liens Markdown",
   "settings.mdGraphHelp": "Ajoute un mode Graphe à la visionneuse markdown : une carte cliquable des fichiers liés par ce document, suivie lien par lien. Cliquez sur un nœud pour ouvrir ce fichier.",
   "settings.pythonRunDebug": "Exécuter/Déboguer Python dans la visionneuse de code",

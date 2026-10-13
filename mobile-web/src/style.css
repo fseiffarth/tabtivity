@@ -771,10 +771,13 @@ body.terminal-open { min-height:0; overflow:hidden; }
    scroll, and keeps the themed viewport background under the panned-to
    columns instead of ending a screenful in. */
 .terminal .xterm { width:max-content; min-width:100%; }
-.terminal .xterm-viewport { scrollbar-color:#454b62 #0b0d13; scrollbar-width:thin; }
-.terminal .xterm-viewport::-webkit-scrollbar { width:7px; }
-.terminal .xterm-viewport::-webkit-scrollbar-track { background:#0b0d13; }
-.terminal .xterm-viewport::-webkit-scrollbar-thumb { border-radius:0; background:#454b62; }
+/* xterm 6 draws its own bar (VS Code's scrollable element, 14px wide inline)
+   instead of a native one on `.xterm-viewport`; its slider keeps the old 7px
+   square thumb, inset by a transparent border. A class more than the slider
+   rules xterm injects, hover/active included, so these win in any order. */
+.terminal .xterm-scrollable-element > .scrollbar.vertical > .slider,
+.terminal .xterm-scrollable-element > .scrollbar.vertical > .slider:hover,
+.terminal .xterm-scrollable-element > .scrollbar.vertical > .slider.active { box-sizing:border-box; border-left:7px solid transparent; background:#454b62 padding-box; }
 /* Which edge still hides output. A phone shows no scrollbar until it is
    already moving, so the fade is the only standing cue that the line runs
    on. Hidden in Focus view, which re-wraps and never pans. */

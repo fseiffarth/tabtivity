@@ -74,7 +74,6 @@ vi.mock("@xterm/xterm", () => ({
     parser = { registerOscHandler: () => ({ dispose() {} }), registerCsiHandler: () => ({ dispose() {} }) };
   },
 }));
-vi.mock("@xterm/addon-canvas", () => ({ CanvasAddon: class { dispose() {} } }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: class { onContextLoss() {} dispose() {} } }));
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
