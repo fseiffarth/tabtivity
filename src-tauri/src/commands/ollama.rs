@@ -4155,8 +4155,15 @@ fn remove_vibe_sessions(home: &std::path::Path) -> Result<(), String> {
         Ok(_) => {}
     }
     let root = HomeDir::open_existing(home, "").ok_or_else(|| format!("open {}", home.display()))?;
-    let Some(logs) = root.file("logs").and_then(|f| f.metadata()) else {
-        return Ok(());
+    // Only a `logs` that is not there is nothing to clear: one that cannot be
+    // looked at (the home's search permission taken away, say) fails the
+    // clear, or the marker would go while the conversations stay.
+    let logs_path = home.join("logs");
+    let logs = match root.file("logs").ok_or(()).map(|f| f.lstat()) {
+        Ok(Ok(meta)) => meta,
+        Ok(Err(e)) if e.kind() == NotFound => return Ok(()),
+        Ok(Err(e)) => return Err(format!("read {}: {e}", logs_path.display())),
+        Err(()) => return Err(format!("open {}", home.display())),
     };
     let gone = |result: std::io::Result<()>, what: &std::path::Path| match result {
         Ok(()) => Ok(()),
@@ -4164,15 +4171,15 @@ fn remove_vibe_sessions(home: &std::path::Path) -> Result<(), String> {
         Err(e) => Err(format!("remove {}: {e}", what.display())),
     };
     if logs.is_symlink {
-        return gone(root.remove_tree("logs"), &home.join("logs"));
+        return gone(root.remove_tree("logs"), &logs_path);
     }
     if !logs.is_dir {
         return Ok(());
     }
     let dir = root
         .subdir_existing("logs")
-        .ok_or_else(|| format!("{} changed while it was being cleared", home.join("logs").display()))?;
-    gone(dir.remove_tree("session"), &home.join("logs").join("session"))
+        .ok_or_else(|| format!("{} changed while it was being cleared", logs_path.display()))?;
+    gone(dir.remove_tree("session"), &logs_path.join("session"))
 }
 
 /// Ensure the Ollama provider and the given model are registered in
@@ -6249,6 +6256,34 @@ mod tests {
         assert!(clear_conversations_in(&linked, &marker, &none_live).is_err());
         assert!(marker.exists());
         assert!(outside.join("session").join("precious").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_store_that_cannot_be_looked_at_keeps_the_marker() {
+        // A home the model's tab took the search permission from: `logs`
+        // cannot be stat'ed. That is not "nothing to clear" — the clear fails
+        // and the marker stays with the conversations it guards.
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root ignores the permission bits
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("vibe_local").join("m");
+        std::fs::create_dir_all(home.join("logs").join("session")).unwrap();
+        std::fs::write(home.join("logs").join("session").join("s.json"), b"{}").unwrap();
+        let marker = tmp.path().join("marker");
+        std::fs::write(&marker, b"").unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let result = clear_conversations_in(&home, &marker, &none_live);
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err(), "{result:?}");
+        assert!(marker.exists(), "the marker went while the conversations stayed");
+        assert!(home.join("logs").join("session").join("s.json").is_file());
+        // Put right, the same clear goes through.
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
+        assert!(!marker.exists());
+        assert!(!home.join("logs").join("session").exists());
     }
 
     // ── reload regression: writing the same model twice is idempotent ─────────

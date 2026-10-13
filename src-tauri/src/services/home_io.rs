@@ -400,17 +400,24 @@ impl HomeFile {
 
     /// `lstat` of the name, never following a link.
     pub fn metadata(&self) -> Option<Meta> {
+        self.lstat().ok()
+    }
+
+    /// [`HomeFile::metadata`] with the error kept, for a caller that must tell
+    /// "not there" (`NotFound`) from "could not look" (a folder without search
+    /// permission, say) — treating the second as the first fails open.
+    pub fn lstat(&self) -> io::Result<Meta> {
         #[cfg(unix)]
         {
-            let c = cstr(&self.name).ok()?;
+            let c = cstr(&self.name)?;
             let mut st: libc::stat = unsafe { std::mem::zeroed() };
             // SAFETY: valid C string, descriptor and out-pointer.
             let r = unsafe { libc::fstatat(self.dir.fd.as_raw_fd(), c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
             if r != 0 {
-                return None;
+                return Err(io::Error::last_os_error());
             }
             let kind = st.st_mode & libc::S_IFMT;
-            Some(Meta {
+            Ok(Meta {
                 is_file: kind == libc::S_IFREG,
                 is_dir: kind == libc::S_IFDIR,
                 is_symlink: kind == libc::S_IFLNK,
@@ -421,8 +428,8 @@ impl HomeFile {
         }
         #[cfg(not(unix))]
         {
-            let meta = std::fs::symlink_metadata(self.path()).ok()?;
-            Some(Meta {
+            let meta = std::fs::symlink_metadata(self.path())?;
+            Ok(Meta {
                 is_file: meta.is_file(),
                 is_dir: meta.is_dir(),
                 is_symlink: meta.file_type().is_symlink(),
