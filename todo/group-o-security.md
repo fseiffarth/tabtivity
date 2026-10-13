@@ -1029,6 +1029,10 @@ table). Code-read findings; only #862 was reproduced (scratch repo, git 2.53).
       new state files created 0600 (`storage::ensure_private_state_dir`,
       `write_json`; project-folder files keep the umask); every workflow
       action pinned by commit SHA (bump them by hand — no Dependabot).
+    - **pdf.js item moot 2026-10-13:** pdf.js 6.3 removed `isEvalSupported`
+      along with its last `new Function` (none in `build/` or `legacy/build/`
+      workers), so there is no eval path to switch off. Re-check on a pdf.js
+      bump.
 
 870. **Any fenced agent could plant code the next local-model tab runs.**
     Threat model gap 7. `agent_fence::local_model_mounts` bound all of
