@@ -3984,3 +3984,134 @@ not run (main agent at landing). No Tauri command added.
 5. Edit `start-tabtivity-dev-build.sh` in the checkout (e.g. add an `echo`
    to the log) without committing, relaunch: the log does not show it.
 6. `npm run backend:stale` with Mobile on: no "published bundle" lines.
+
+## Agent step 8 — reviewer — 2026-10-13
+
+**Reviewed:** `ae15d9bb..68e8b9da` + handoff `abca6d06`. **Fix commit:**
+`738c736d` fix(dev-build): quote the desktop Exec=, survive an empty failure
+record, keep untrusted list lines out (step 8 review) · this handoff commit.
+
+**Checked (the daily loop, step by step):**
+- *First launch after landing* (no list, no copy, an old unlisted binary in
+  `target/release`, installed snapshot with or without `.frozen`): the
+  desktop entry still runs the checkout's launcher (new code; no
+  `source-root`, so `ROOT=HERE`); the unlisted binary is copied, hashed,
+  refused with a notification, the staged copy removed, the installed one
+  opens. No `.frozen` → the list lookup (fails quietly) → no behind notice.
+  Every `set -e` site walked; one more exit-before-window found (bug 2).
+  Nothing installed at all → `bail` with a notification (as before).
+- *Queued build:* the window (no fence variable in its env: only fences and
+  tmux fence tabs set it, `launch_prep` strips it from persisted tab env)
+  runs the checkout's `package-dev-auto.sh --queue` → `npm --prefix ROOT run
+  package:dev -- --head` → the checkout's `package-dev.sh`, which lists the
+  hash, copies the launcher out of the freeze tree, repoints `Exec=` and
+  exits under the running window; STAMP = HEAD. The chip's
+  `adoptable_snapshot` (record sha in the list) offers Relaunch; an *old*
+  running window (pre-landing chip) runs the checkout's launcher, which is the
+  new code and adopts by list — fine. `spawn_relauncher` picks the copy.
+  `install -p` keeps the mtime, so after adoption neither `-nt` nor the chip
+  fires again; `package-dev.sh`'s own install (no `-p`) is newer than the
+  build. The post-commit hook in a fence declines on the variable; in a
+  linked worktree on `linked worktree` (this commit's hook confirmed it).
+- *The copy:* the launcher, `brand.sh` (its `_brand_sh_root` is the copy, and
+  both files it reads are copied), `dev-launcher.sh`,
+  `retain-dev-build.sh` (sources the copy's `brand.sh`); nothing else is
+  sourced or run. `package-dev-auto.sh` / `backend-stale.sh` never run from
+  the copy. Swapped by rename, so a launcher bash mid-read keeps its inode.
+  `source-root` is `package-dev.sh`'s `ROOT` (the checkout, not the freeze
+  tree). `retain-dev-build.sh`'s prune glob (`dev-builds/<slug>-*`) cannot
+  hit `verified`.
+- *Fence detection:* a fence that unsets the variable (and whose `$HOME` is
+  not a tmpfs) only writes its own agent home — the real app dir is masked
+  when it is the state dir, and the real `$HOME` is never bound otherwise
+  (`DEFAULT_AGENT_FENCE_PATHS` are read-only tool paths). No host-side false
+  "fenced": shell tabs, the root Host session and the window carry no fence
+  variable; `stat -f` on ext4/btrfs/xfs/nfs/zfs/ecryptfs/overlay is not
+  `tmpfs`.
+- *List:* fields sanitised on write; `NF == 4` on read (truncated lines never
+  match), a CRLF line only leaks `\r` into the log; the mode check holds for
+  umask 002 (explicit `chmod 600`), ACLs (chmod sets the mask) and NFS with
+  matching uids. Copy → hash → rename has no window: the staged copy lives
+  in the app dir.
+- *`live_pwa` removal:* no `live_pwa`, `MOBILE_LIVE_DIR`,
+  `MOBILE_ASSETS_BUILT_AT`, `publish_live_pwa` left in code, scripts, tests,
+  `.github/workflows` or `ci-local.sh`; `mobile-pwa` only in comments/docs
+  saying it is gone. One dead branch left: `parse_log`'s "published the phone
+  bundle" phase marker (removed, its test step now uses cargo's
+  `Compiling` line).
+- macOS/Windows: the scripts are Linux-only (`stat -c`); `launcher_tests` is
+  `cfg(target_os = "linux")`; `spawn_relauncher` refuses off Linux first.
+
+**Bugs found and fixed (`738c736d`):**
+1. **A launcher path with a space made the desktop click dead.**
+   `dev_desktop_exec` and `package-dev.sh`'s entry wrote `Exec=` bare; the
+   spec splits Exec on spaces (and expands `%`), so a home like `/home/a b`
+   ran `/home/a`. The implementer's own test asserted that broken line. New
+   `dev_desktop_quote` quotes and escapes per the spec (`"` `` ` `` `$` `\`,
+   string-level backslashes, `%%`); a plain path stays bare, so the user's
+   entry is byte-identical. The rewrite now touches only the
+   `[Desktop Entry]` group's `Exec=` (a `[Desktop Action]` keeps its own;
+   CRLF group headers tolerated). Test:
+   `the_desktop_entry_is_pointed_at_the_copy` (quoted, idempotent, action
+   group untouched, escaping).
+2. **An empty failure record ended the launcher before the window opened.**
+   The "behind" notice did a bare `read … <package-dev-auto.failed` under
+   `set -e`; an empty or unterminated record (a write cut short) failed it.
+   Now `|| true` with defaults. Test (new):
+   `a_snapshot_behind_head_still_opens_whatever_the_failure_record_holds`
+   (git checkout in a temp dir, installed record one commit behind).
+3. **Recording laundered an untrusted list.** `dev_verified_add` carried
+   every line of the old list into the fresh mode-600 file even when the
+   lookup would refuse that list (group/other-writable, foreign, a link). It
+   now carries lines over only from a list `_dev_list_trusted` accepts (the
+   lookup's own check, factored out). Test: appended to
+   `the_list_is_trusted_only_when_private_and_sanitises_its_fields`.
+All three tests (and the updated `only_a_host_session_writes_what_the_launcher_trusts`
+assertion) fail against `68e8b9da`'s scripts and pass with the fix.
+
+**Gates (at `738c736d`):** `npm run build` ok; `npm test` 804 files / 8080
+tests passed; `cargo test --workspace` 4314 passed, 0 failed, 4 ignored;
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`
+3816 + 1 passed, 4 ignored (no flake); `npm run lint` (via `rtk proxy`) 0
+errors, 28 warnings (unchanged); the three clippy gates clean; Windows
+cross-check (`clippy --target x86_64-pc-windows-msvc --all-targets -D
+warnings`, `cargo check --workspace --all-targets`) clean;
+`aarch64-apple-darwin` `cargo check --workspace --all-targets` with the
+check-only CC/AR stand-ins clean (the 5 vendored `tauri-runtime-wry`
+warnings); `scripts/brand-check.sh` ok; `scripts/privacy-check.sh` clean;
+`git diff --check` clean; `bash -n` on every changed script. `shellcheck` not
+installed — not run. `npm run backend:stale` not run (main agent at landing).
+Not run live.
+
+**Flagged for user (not changed):**
+1. **The launcher copy is filled from the fence-writable freeze tree.** In
+   `--head` mode `dev_launcher_install` copies from `target/freeze-tree/`,
+   which every fence binding the project can write during the 3–4 minute
+   build; an agent that edits the freeze tree's launcher mid-build gets its
+   uncommitted edit into the copy. Same class as the accepted C3 residual
+   (the queued build already runs the checkout's *on-disk*, uncommitted
+   `package-dev-auto.sh` / `package-dev.sh` / `package.json`, so an
+   uncommitted edit to those runs on the host at the next HEAD move), but
+   `dev_builds.md` says "the commit itself in `--head` mode". If wanted:
+   copy with `GIT_NO_REPLACE_OBJECTS=1 git show <HEAD_SHA>:<file>` instead.
+2. **The cargo target dir is fence-writable during the build**, so a host
+   build can link agent-planted intermediates (or have its output swapped
+   between the cargo link and `sha256sum`), and that hash is then listed.
+   Again inside C3 ("that build is trusted"), but worth knowing: the list
+   proves "a host `package-dev.sh` hashed it", not "it was built from the
+   commit".
+3. **A fenced release build after the host build displaces it.** An agent's
+   `cargo build --release` / `npm run package:dev` in a fence overwrites
+   `target/release/<bin>`; the launcher then refuses it (correctly), and the
+   queue does not rebuild that HEAD because STAMP already says it is built.
+   The user stays on the old snapshot until the next commit or a host
+   `npm run package:dev`. No gate builds release, so rare.
+4. Two host `package-dev.sh` runs finishing at the same moment (a hand run
+   and a queued one) can lose one list line (read-modify-rename, no lock):
+   that build is then refused with the usual notification. Not worth a lock.
+5. A home whose filesystem reports foreign uids (NFSv4 idmap to `nobody`) or
+   fixed modes (CIFS `file_mode=0777`) makes every lookup fail: nothing is
+   ever adopted, and the notification blames an agent build.
+6. A huge file planted at `target/release/<bin>` (newer than the snapshot)
+   is copied in full at every launch before being refused — a slow click,
+   not a compromise.
