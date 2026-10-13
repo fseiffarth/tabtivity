@@ -239,6 +239,22 @@ describe("the browser transport", () => {
     expect(metadata.currentWebview.label).toBe("main");
   });
 
+  it("answers the notification plugin's list calls under the names the installed plugin sends", async () => {
+    const { internals, socket } = connected();
+    const w = window as unknown as Record<string, unknown>;
+    const saved = w.__TAURI_INTERNALS__;
+    w.__TAURI_INTERNALS__ = internals.internals();
+    try {
+      const { active, channels, pending } = await import("@tauri-apps/plugin-notification");
+      await expect(channels()).resolves.toEqual([]);
+      await expect(pending()).resolves.toEqual([]);
+      await expect(active()).resolves.toEqual([]);
+    } finally {
+      w.__TAURI_INTERNALS__ = saved;
+    }
+    expect(socket.textFrames()).toEqual([]);
+  });
+
   it("derives the socket URL from the page it was served from", () => {
     expect(socketUrl({ protocol: "http:", host: "127.0.0.1:8742" })).toBe("ws://127.0.0.1:8742/api/v1/desktop/ws");
     expect(socketUrl({ protocol: "https:", host: "desk.example.ts.net" })).toBe("wss://desk.example.ts.net/api/v1/desktop/ws");

@@ -3,7 +3,7 @@ members = ["src-core", "src-tauri", "src-gateway", "src-serverd"]
 exclude = ["src-tauri/patches"]
 resolver = "2"
 
-# tauri-runtime-wry 2.11.3 with one fix (search "TABTIVITY PATCH"): its `Context`
+# tauri-runtime-wry 2.12.1 with one fix (search "TABTIVITY PATCH"): its `Context`
 # clones an `Rc` inside tao's Linux `EventLoopWindowTarget` on whatever thread
 # clones an `AppHandle`, which corrupted the main process's heap. Drop this
 # once upstream stops cloning it off the main thread; keep the version in step

@@ -10,10 +10,10 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2021"
-rust-version = "1.77.2"
+edition = "2024"
+rust-version = "1.90"
 name = "tauri-runtime-wry"
-version = "2.11.3"
+version = "2.12.1"
 authors = ["Tauri Programme within The Commons Conservancy"]
 build = "build.rs"
 exclude = [
@@ -36,7 +36,10 @@ license = "Apache-2.0 OR MIT"
 repository = "https://github.com/tauri-apps/tauri"
 
 [features]
-common-controls-v6 = []
+common-controls-v6 = [
+    "windows/Win32_UI_Controls",
+    "windows/Win32_UI_Shell",
+]
 dbus = ["tao/dbus"]
 default = [
     "x11",
@@ -46,11 +49,7 @@ devtools = [
     "wry/devtools",
     "tauri-runtime/devtools",
 ]
-macos-private-api = [
-    "wry/fullscreen",
-    "wry/transparent",
-    "tauri-runtime/macos-private-api",
-]
+macos-private-api = ["tauri-runtime/macos-private-api"]
 macos-proxy = ["wry/mac-proxy"]
 objc-exception = []
 tracing = [
@@ -77,15 +76,15 @@ version = "0.4.21"
 version = "0.6"
 
 [dependencies.tao]
-version = "0.35.0"
+version = "0.37.0"
 features = ["rwh_06"]
 default-features = false
 
 [dependencies.tauri-runtime]
-version = "2.11.3"
+version = "~2.12.1"
 
 [dependencies.tauri-utils]
-version = "2.9.3"
+version = "~2.10.1"
 
 [dependencies.tracing]
 version = "0.1"
@@ -95,9 +94,8 @@ optional = true
 version = "2"
 
 [dependencies.wry]
-version = "0.55.0"
+version = "0.57.0"
 features = [
-    "protocol",
     "os-webview",
     "linux-body",
 ]
@@ -118,7 +116,7 @@ features = ["v2_40"]
 version = "0.21"
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
-version = "0.3"
+version = "0.3.2"
 features = [
     "block2",
     "NSApplication",
@@ -141,11 +139,18 @@ version = "0.4"
 default-features = false
 
 [target."cfg(windows)".dependencies.webview2-com]
-version = "0.38"
+version = "0.39"
 
 [target."cfg(windows)".dependencies.windows]
-version = "0.61"
+version = "0.62"
 features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    "Win32_UI_WindowsAndMessaging",
 ]
+
+[lints.clippy]
+assigning_clones = "warn"
+collapsible_if = "allow"
+or_fun_call = "warn"
+redundant_clone = "warn"
