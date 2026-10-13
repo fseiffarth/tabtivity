@@ -4115,3 +4115,199 @@ Not run live.
 6. A huge file planted at `target/release/<bin>` (newer than the snapshot)
    is copied in full at every launch before being refused — a slow click,
    not a compromise.
+
+## Follow-up agent step 9 — implementer — 2026-10-13
+
+**Commits:** `46ca270f` fix(open): exec bit ignored on mounts without Unix
+modes; blob pane opens viewers in tabs; queue exec-trust questions; word the
+.app reveal refusal · `88c0270e` feat(local-models): clear a model's
+conversations with its read-mail mark; mail chat on the checked endpoint;
+shared alias refused; tags timeout says not running · `82f78278`
+test(exec-trust): type the queued-question fixture · this handoff commit.
+
+**Files:**
+- (a) `services/os_open.rs`: `UnixModes` (`Real`/`None`/`Unknown`),
+  `fs_name_lacks_unix_modes`, Linux `statfs` magic table + `/proc/self/mountinfo`
+  type (`mount_fstype_for`, `unescape_mount`, `linux_unix_modes`), macOS
+  `statfs.f_fstypename`, other Unixes `Unknown`; `check_with` takes the
+  detector (injected in tests); the exec bit counts unless the resolved
+  file's filesystem is `None`.
+- (b) `components/common/ProjectBlobPane.tsx`: a file click goes through
+  `openFileEntry` (viewer prefs, tab scope) instead of `openFile`.
+- ExecTrust queue: `stores/execTrust.ts` (pending + queue + per-question id,
+  the `openExternal` store's shape), `common/ExecTrustHost.tsx` (dialog keyed
+  per question).
+- `.app` reveal: `lib/openExternal.ts` `openErrorText` (the existing
+  `openExternal.refusedTitle` + `refusedBody`), used by
+  `files/FileBrowser.tsx` reveal and `monitoring/DiskUsagePane.tsx`'s folder
+  "Open externally".
+- (c) `commands/ollama.rs` `clear_local_model_conversations` (+
+  `clear_conversations_in`, `remove_vibe_sessions`, `LOCAL_MODEL_TAB_OPEN`);
+  `services/agent_fence.rs` (`LiveSpawn.vibe_home`, `note_vibe_home`,
+  `live_tabs_in_vibe_home`); `services/launch_prep.rs` (commit notes the
+  spawn's `VIBE_HOME`); `lib.rs` handler; `command_class` row (`Core`);
+  `model_allowlist::MODEL_ARG` row (doc widened: "or otherwise acts on that
+  model"); regenerated `src/lib/transport/commandClasses.ts`;
+  `models/useModelsHub.ts` (`localModelTabLabels`, `clearConversations`,
+  `dialogs`), `models/ModelsHubSections.tsx` (a **Clear** chip on running and
+  on-disk rows), `layout/LocalModelMenu.tsx` and `models/ModelsOverlay.tsx`
+  render `hub.dialogs` outside the hover-open block; 11 `localModel.clear*`
+  keys in all five dictionaries; `untested.ts` row
+  `localModelMenu.clearConversations`.
+- Mail hardening: `commands/ollama.rs` (`ollama_http_at` `pub(crate)` with a
+  `#[cfg(test)] test_http` seam that records the address; `capabilities_of_at`,
+  `model_capabilities_at`; `is_transport_failure` → `not_running`;
+  `tab_model_is_local_in`/`tab_model_is_local_at`, `alias_shared_in`,
+  `MODEL_ALIAS_SHARED`; `LocalityCache` keyed by the tab flag too;
+  `test_tags::fail`); `services/mail_ai.rs` (`preflight` returns `(model,
+  addr)`; capabilities and `/api/chat` go to `addr`); `services/root_mcp.rs`
+  (`local_model_confirmed`) and `services/root_mcp_mail.rs` (read gate) use
+  the tab rule.
+- Docs: `docs/threat_model.md` rows 21, 25, 33; `docs/context/root_console.md`
+  (clear action, alias rule in the refusal list); `docs/help/local-models.md`
+  (Clear), `docs/help/tabs-and-panels.md` (the ask, refused launchers, name-only
+  mounts, blob pane); filemap rows `ollama.rs`, `agent_fence.rs`,
+  `os_open.rs`, `useModelsHub.ts`, `ExecTrustHost`.
+
+**Tests added:**
+- Rust: `os_open.rs`
+  `filesystems_without_unix_modes_are_known_by_name_and_magic`,
+  `the_mount_a_path_is_on_is_the_longest_and_latest_match`,
+  `an_execute_bit_is_ignored_only_where_the_filesystem_has_no_modes`
+  (injected `None`/`Real`/`Unknown`; launcher names still refused; the
+  detector is not asked for a non-executable file),
+  `a_temp_folder_is_on_a_filesystem_with_unix_modes` (real detection, Linux and
+  macOS); `ollama.rs`
+  `clearing_deletes_the_conversations_then_the_marker_and_nothing_else`,
+  `clearing_is_refused_while_a_tab_of_the_model_runs_and_keeps_the_marker`,
+  `clearing_never_follows_a_planted_link_and_keeps_the_marker_on_failure`
+  (Unix), `a_tab_model_sharing_its_alias_with_another_installed_model_is_refused`,
+  timeout cases in `a_model_is_local_only_when_the_list_says_so`, tab flag in
+  the cache test; `agent_fence.rs`
+  `a_live_spawn_names_its_vibe_home_until_it_is_gone`; `mail_ai.rs`
+  `the_chat_goes_to_the_endpoint_the_checks_judged` (tags, show, chat all to
+  the snapshot's `127.0.0.2:11555`; fails on the old `ollama_http`),
+  `a_tags_timeout_reads_as_not_running`; `root_mcp_mail.rs` shared-alias case
+  in `local_reads_refuse_a_cloud_or_unconfirmed_model`.
+- Frontend: `run/ExecTrust.test.ts` "queues a second question instead of
+  declining the first unseen"; `files/OpenExternalConfirm.test.tsx` "reveal
+  error line"; new `files/BlobPaneOpen.test.tsx` (a PDF opens an embed tab,
+  no `open_file`; a `.xyz` goes through `checkOnly` and the question);
+  `agents/LocalModelMenu.test.tsx` "Clear conversations" (4: tab lookup across
+  scopes by raw name or alias; confirm then clear, the dialog outliving the
+  dropdown, Cancel focused; refused naming an open tab without asking the
+  backend; the backend's `local_model_tab_open` worded).
+
+**Gates (at `82f78278`):** `npm run build` ok. `npm test`: 805 files / 8088
+tests passed. `cargo test --workspace`: 4325 passed, 0 failed, 4 ignored
+(lib 3926). `cargo test -p tabtivity --no-default-features --lib --test
+server_secrets`: 3827 + 1 passed, 4 ignored (no flake). `npm run lint` (via
+`rtk proxy`): 0 errors, 28 warnings (unchanged). The three clippy gates
+clean. Windows cross-check (`clippy --target x86_64-pc-windows-msvc
+--all-targets -D warnings`, `cargo check --workspace --all-targets`) clean.
+`aarch64-apple-darwin` `cargo check --workspace --all-targets` with the
+check-only CC/AR stand-ins clean (the 5 vendored `tauri-runtime-wry`
+warnings). `scripts/brand-check.sh` ok; `scripts/privacy-check.sh` (staged,
+and `a9936303 HEAD`) clean; `git diff --check` clean; `npm run untested --
+check` agrees. `npm run backend:stale` not run (main agent at landing); the
+daemon crate was not touched beyond the shared library (no `ldd` run).
+Nothing run live.
+
+**Choices:**
+- (a) Linux judges by the `statfs` magic (vfat/msdos `0x4d44`, exFAT,
+  NTFS/ntfs3 `0x5346544e`, CIFS, SMB2/3, SMB, 9p) **or** the mountinfo type
+  of the longest matching mount (`fuseblk`, `fuse.ntfs-3g`, `fuse.exfat*`,
+  `drvfs`, `cifs`, `smb3`, …), so ntfs-3g and WSL1 drvfs (whose magic other
+  filesystems share or which has its own) are caught by name. `statfs`
+  failing is `Unknown` (bit counts); an unreadable mountinfo leaves the magic
+  to decide (an unknown FUSE mount keeps the bit). macOS: `msdos`, `exfat`,
+  `smbfs`, `ntfs`. Asked only for a regular file with an `x` bit, on its
+  resolved path. sshfs, NFS, virtiofs, iso9660 and gvfs FUSE keep the bit
+  rule.
+- (b) `external: false`, the user's viewer opt-outs (`disabledViewers`) and
+  the tab scope, like the file browser; the blob pane has no Shift path.
+- (c) What is deleted: `<VIBE_HOME>/logs/session` only — the unified store
+  and the legacy `session_*` folders (`agent_session::vibe_session_exists`
+  reads both). Kept: config/hooks/`.env`/`AGENTS.md`/`tools`… (the fence's
+  `LOCAL_MODEL_CONTROL`), `vibehistory` (typed prompts), `logs/vibe.log`,
+  `trusted_folders.toml`, and the per-tab markers (`read_mail/`): a restored
+  tab that read mail stays tainted. Order: sessions, then marker; a failure
+  keeps the marker. A linked `logs` or `session` is removed as the link (its
+  target untouched); a home that is not a plain folder is refused.
+- Refusal while open: the window checks every scope's tabs (`cmd ===
+  "vibe"`, raw `LOCAL_MODEL` or `VIBE_ACTIVE_MODEL` alias — models sharing an
+  alias share the home) and names them, never calling the backend; the
+  backend refuses on its own while any live spawn was started with that
+  `VIBE_HOME` (recorded on the fence's per-tab spawn registry at commit,
+  cleared by `on_tab_gone`). An open tab whose process already exited only
+  blocks in the window.
+- `MODEL_ARG` row added as AGENTS.md asks, although nothing is forwarded to
+  Ollama: on a server a user can clear only an allowed model's conversations.
+- Alias rule only for tabs (`tab_model_is_local_at`): the mail assistant names
+  its model directly and keeps `model_is_local_at`. A `:latest` entry also
+  answers to its bare name (`x-y:latest` collides with `x:y`). The refusal
+  reuses `LOCAL_READ_CLOUD` ("could not confirm …").
+- "Not running": `connect_ollama`'s sentinel and the transport's own `read:`
+  / `write:` / `set timeout:` errors; an HTTP error the server sent still
+  reads as an unreadable list (unlisted reason).
+
+**Sibling fixes (same hazard, in touched code):** `capabilities_of`'s
+`/api/show` probe (`model_capabilities`) also re-resolved the address; the
+mail path now uses `model_capabilities_at` with the checked endpoint (the
+other callers keep `ollama_addr()`, unchanged behaviour). The root MCP's
+"kept local" switches (`local_model_confirmed`) take the alias rule as well
+as the read gate.
+
+**Gotchas:**
+- The blob pane's animation loop skips frames while `offsetParent` is null
+  (always, in jsdom); the test stubs `HTMLElement.prototype.offsetParent` and
+  drives the converge with fake timers.
+- `FileEntry.extension` carries the dot (`".pdf"`).
+- `useDialogs` lives in the hub so its `dialogs` can be rendered where the
+  surface stays mounted: the hover dropdown unmounts when the pointer moves
+  to the portaled dialog.
+- `test_http::set` is per thread and clears its record; unset, the transport
+  dials as before (no existing test depends on it).
+
+**Flagged for user:**
+- (a) On FAT/exFAT sticks, NTFS drives, SMB shares and WSL `/mnt/*`, a file
+  with a document-looking name now reaches the "Open … with the system's
+  default app?" question even when it really is a program (its `x` bit is
+  meaningless there); Open hands it to the OS, which on Linux usually
+  shows it rather than running it, but a desktop's file-manager settings
+  may differ. Launcher extensions are still refused there.
+- (c) "Clear conversations" deletes Vibe sessions irreversibly and also
+  removes `/resume` history for that model; prompt history (`vibehistory`)
+  and `vibe.log` stay. Per-tab taint markers are not cleared, so a
+  restored tab that itself read mail stays staged.
+- A local model whose alias another installed model shares (e.g. `a:b-c`
+  and `a-b:c`) can no longer read mail or use tools under the "kept local"
+  switches from a tab; rename one (`ollama cp`) to lift it.
+- The project blob now opens PDFs, images, Markdown etc. in a tab instead of
+  the OS app (asked for).
+- Residuals unchanged from steps 4/5; the window may briefly re-reveal the
+  hover dropdown behind the Clear dialog (React synthesises the wrapper's
+  mouseenter through the portal); cosmetic.
+
+**Live click-through (user only):**
+1. Plug in a FAT/exFAT USB stick (or open an SMB share / WSL `/mnt/c`): a
+   no-viewer file (`notes.xyz`, shown as `rwx`) asks and opens on Open; a
+   `run.desktop` there is still "not opened". On ext4, `chmod +x notes.xyz`
+   is still refused.
+2. Projects blob: enter a project, click a PDF → it opens in a tab; click a
+   `.xyz` → the "Open … with the system's default app?" question.
+3. Start two gated actions at once (e.g. Build on two TeX files with
+   untrusted `latexmkrc`): both questions appear in turn; approving the first
+   does not decline the second.
+4. macOS: file browser on a folder holding `Foo.app`, select it, Reveal →
+   the error line reads "Foo.app was not opened. This file can start a
+   program…", not `open_refused_launcher`. Same from disk usage "Open
+   externally" on the folder.
+5. Local model menu: with a Mistral Vibe tab of `llama3` open, **Clear** on
+   llama3 → "…were not cleared — Close the tabs of this model first: <tab>".
+   Close it, **Clear** → confirm (Cancel focused) → "conversations cleared";
+   `<share>/vibe_local/llama3-latest/logs/session` is gone, `config.toml`
+   stays, and `<state>/root_mcp/read_mail_model/<hash>` is gone; a new tab
+   of the model adds a to-do without staging.
+6. Mail assistant: summarise works as before; with Ollama stopped mid-way (or
+   swamped), the answer is "not running", not "pull it".
