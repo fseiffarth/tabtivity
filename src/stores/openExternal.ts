@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { QUEUED_CONFIRM_DELAY_MS } from "../components/common/PromptDialogs";
 
 /**
  * The pending "open this file with the system's default app?" questions
@@ -24,10 +25,11 @@ interface PendingAsk {
   id: number;
   request: OpenExternalRequest;
   resolve: (approved: boolean) => void;
-  /** It waited behind another question: shown the moment that one was
-   *  answered, so its host arms the confirm button only after a short delay
-   *  (`useConfirmArmed`) — the second click of a fast double click must not
-   *  answer it unseen. */
+  /** It waited behind another question, or was asked within
+   *  `QUEUED_CONFIRM_DELAY_MS` of an answer (the next gate of the same
+   *  action): shown the moment that one was answered, so its host arms the
+   *  confirm button only after a short delay (`useConfirmArmed`) — the second
+   *  click of a fast double click must not answer it unseen. */
   queued: boolean;
 }
 
@@ -38,6 +40,8 @@ interface OpenExternalStore {
   pending: PendingAsk | null;
   /** Questions waiting behind it, oldest first. */
   queue: PendingAsk[];
+  /** When the last question was answered (`Date.now()`; 0 before any). */
+  answeredAt: number;
   ask: (request: OpenExternalRequest) => Promise<boolean>;
   answer: (approved: boolean) => void;
 }
@@ -45,20 +49,23 @@ interface OpenExternalStore {
 export const useOpenExternalStore = create<OpenExternalStore>((set, get) => ({
   pending: null,
   queue: [],
+  answeredAt: 0,
   ask: (request) =>
     new Promise<boolean>((resolve) => {
       // One question per file, in turn: several no-viewer files dropped or
       // dragged out at once each get theirs. (Superseding the earlier one
       // declined it unseen, so only the last file of a drop could open.)
-      const { pending, queue } = get();
-      const entry = { id: ++nextAskId, request, resolve, queued: pending !== null };
+      const { pending, queue, answeredAt } = get();
+      const since = Date.now() - answeredAt;
+      const queued = pending !== null || (since >= 0 && since < QUEUED_CONFIRM_DELAY_MS);
+      const entry = { id: ++nextAskId, request, resolve, queued };
       if (pending) set({ queue: [...queue, entry] });
       else set({ pending: entry });
     }),
   answer: (approved) => {
     const { pending, queue } = get();
     const [next, ...rest] = queue;
-    set({ pending: next ?? null, queue: rest });
+    set({ pending: next ?? null, queue: rest, answeredAt: Date.now() });
     pending?.resolve(approved);
   },
 }));

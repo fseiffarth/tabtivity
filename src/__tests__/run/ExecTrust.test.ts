@@ -29,7 +29,7 @@ function answerNext(approved: boolean) {
 describe("exec trust", () => {
   beforeEach(() => {
     invoke.mockReset();
-    useExecTrustStore.setState({ pending: null, queue: [] });
+    useExecTrustStore.setState({ pending: null, queue: [], answeredAt: 0 });
   });
 
   it("parses only the gate's own error", () => {

@@ -44,7 +44,7 @@ function realOpens() {
 afterEach(() => {
   cleanup();
   invokeMock.mockReset();
-  useOpenExternalStore.setState({ pending: null, queue: [] });
+  useOpenExternalStore.setState({ pending: null, queue: [], answeredAt: 0 });
   useWindowsStore.setState({ windows: [] });
 });
 

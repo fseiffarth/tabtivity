@@ -30,8 +30,8 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
-  useExecTrustStore.setState({ pending: null, queue: [] });
-  useOpenExternalStore.setState({ pending: null, queue: [] });
+  useExecTrustStore.setState({ pending: null, queue: [], answeredAt: 0 });
+  useOpenExternalStore.setState({ pending: null, queue: [], answeredAt: 0 });
 });
 
 describe("a queued trust question arms its Run button after a delay", () => {
@@ -100,6 +100,63 @@ describe("a queued trust question arms its Run button after a delay", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run it" }));
     await act(async () => {});
     expect(answers).toEqual([false, true]);
+  });
+});
+
+describe("a question asked right after an answer counts as queued", () => {
+  it("the next gate of the same action does not take the double click's second click", async () => {
+    // `withExecTrust` asks again right after an approval when the action
+    // passes a second gate (or the file changed): nothing waited in the queue,
+    // but the new question appears under the same pointer all the same.
+    render(<ExecTrustHost />);
+    const answers: boolean[] = [];
+    act(() => {
+      void useExecTrustStore.getState().ask(request("/p/hooks")).then((a) => answers.push(a));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run it" }));
+    await act(async () => {});
+    expect(answers).toEqual([true]);
+    act(() => {
+      void useExecTrustStore.getState().ask(request("/p/prettier")).then((a) => answers.push(a));
+    });
+    expect(useExecTrustStore.getState().pending?.queued).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Run it" }));
+    await act(async () => {});
+    expect(answers).toEqual([true]);
+    act(() => vi.advanceTimersByTime(QUEUED_CONFIRM_DELAY_MS));
+    fireEvent.click(screen.getByRole("button", { name: "Run it" }));
+    await act(async () => {});
+    expect(answers).toEqual([true, true]);
+  });
+
+  it("an open-external question asked well after the last answer is armed at once", async () => {
+    render(<OpenExternalHost />);
+    const answers: boolean[] = [];
+    const ask = (name: string) =>
+      act(() => {
+        void useOpenExternalStore
+          .getState()
+          .ask({ kind: "confirm", name, path: `/p/${name}` })
+          .then((a) => answers.push(a));
+      });
+    ask("a.xyz");
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    await act(async () => {});
+    ask("b.xyz");
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    await act(async () => {});
+    expect(answers).toEqual([true]);
+    act(() => vi.advanceTimersByTime(QUEUED_CONFIRM_DELAY_MS));
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    await act(async () => {});
+    expect(answers).toEqual([true, true]);
+    // Long after: a question on its own again.
+    act(() => vi.advanceTimersByTime(QUEUED_CONFIRM_DELAY_MS));
+    ask("c.xyz");
+    expect(useOpenExternalStore.getState().pending?.queued).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    await act(async () => {});
+    expect(answers).toEqual([true, true, true]);
   });
 });
 

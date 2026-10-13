@@ -57,7 +57,7 @@ afterEach(() => {
   if (offsetParent) Object.defineProperty(HTMLElement.prototype, "offsetParent", offsetParent);
   vi.useRealTimers();
   invokeMock.mockReset();
-  useOpenExternalStore.setState({ pending: null, queue: [] });
+  useOpenExternalStore.setState({ pending: null, queue: [], answeredAt: 0 });
 });
 
 async function focusProject() {

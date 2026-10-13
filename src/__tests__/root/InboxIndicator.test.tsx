@@ -24,7 +24,7 @@ describe("InboxIndicator", () => {
   afterEach(() => {
     cleanup();
     invokeMock.mockReset();
-    useOpenExternalStore.setState({ pending: null, queue: [] });
+    useOpenExternalStore.setState({ pending: null, queue: [], answeredAt: 0 });
     useHeaderHoverMenuStore.setState({ openId: null });
   });
 
