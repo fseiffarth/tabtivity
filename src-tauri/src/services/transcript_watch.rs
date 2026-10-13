@@ -598,6 +598,10 @@ mod tests {
         let sink_log = log.clone();
         let watch = TranscriptWatch::start(move |id| sink_log.lock().unwrap().push(id.to_string()));
         assert!(watch.arm("oc", vec![Target { dir: dir.path().to_path_buf(), rule: Rule::Prefix("opencode.db".into()) }]));
+        // FSEvents can deliver the setup's `-wal` creation after the arm, its
+        // sticky created flag on it (ci-cd #385): let it settle, then forget it.
+        std::thread::sleep(SETTLE + Duration::from_millis(400));
+        log.lock().unwrap().clear();
         for _ in 0..3 {
             read();
         }
