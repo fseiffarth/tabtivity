@@ -66,18 +66,18 @@
 //!   [`MailStore::rekey_digest_columns`].
 
 use std::path::{Path, PathBuf};
+use app_core::sync::LockExt;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, ToSql};
-use sha2::{Digest, Sha256};
 
 use crate::schema::mail::{
     MailAddress, MailAttachmentMeta, MailDraft, MailFlag, MailFolder, MailFolderKind, MailHeader,
     MailHeaderPage, MailPriority, MailPriorityCounts, MailPrioritySource, MailSort,
     NewStagedFile, StagedAttachment,
 };
-use crate::services::mail_crypt::{self, MailKeys};
+use crate::services::mail_crypt::{self, harden, MailKeys};
 
 /// One staged file of a send: its row and the decrypted outbox copy.
 pub type OutgoingFile = (StagedAttachment, Vec<u8>);
@@ -262,7 +262,7 @@ impl MailStore {
     pub fn open_with_keys(dir: &Path, keys: Option<Arc<MailKeys>>) -> Result<Self, String> {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("could not create the mail store: {e}"))?;
-        harden(dir, 0o700);
+        mail_crypt::harden_store_dir(dir);
         let db = dir.join("mail.db");
         let conn = Connection::open(&db).map_err(|e| e.to_string())?;
         harden(&db, 0o600);
@@ -347,7 +347,7 @@ impl MailStore {
     /// rather than plaintext attachments in `/tmp`.
     pub fn open_ephemeral() -> Result<Self, String> {
         let scratch = tempfile::tempdir().map_err(|e| e.to_string())?;
-        harden(scratch.path(), 0o700);
+        mail_crypt::harden_store_dir(scratch.path());
         let keys = Arc::new(MailKeys::derive(mail_crypt::Key::random()?));
         let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
         configure(&conn);
@@ -369,7 +369,7 @@ impl MailStore {
 
     /// The keys right now. A writer calls this while holding `conn`.
     pub fn keys(&self) -> Option<Arc<MailKeys>> {
-        self.keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.keys.lock_ok().clone()
     }
 
     /// Whether this is the memory-only stand-in ([`MailStore::open_ephemeral`]).
@@ -385,7 +385,7 @@ impl MailStore {
     /// memory-only store: neither has a key file to follow.
     pub fn switch_keys(&self, keys: Arc<MailKeys>) -> Result<(), String> {
         let _conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
-        let mut slot = self.keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut slot = self.keys.lock_ok();
         if slot.is_none() || self.is_ephemeral() {
             return Err("this mail store has no key file to follow".into());
         }
@@ -633,33 +633,18 @@ impl MailStore {
         .map_err(|e| e.to_string())?;
         // Additive column for a store created before it existed. `CREATE TABLE
         // IF NOT EXISTS` is a no-op on an existing table, so a dev database from
-        // an earlier run would otherwise keep the old shape forever; a duplicate
-        // -column error here just means the column is already there.
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN rfc_message_id TEXT NOT NULL DEFAULT ''",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN authres_json TEXT NOT NULL DEFAULT ''",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN priority TEXT NOT NULL DEFAULT ''",
-            [],
-        );
+        // an earlier run would otherwise keep the old shape forever. A column
+        // already there is skipped ([`add_column_if_missing`]); any other
+        // failure stops the open rather than leaving the store half-migrated.
+        add_column_if_missing(&conn, "messages", "rfc_message_id", "TEXT NOT NULL DEFAULT ''")?;
+        add_column_if_missing(&conn, "messages", "authres_json", "TEXT NOT NULL DEFAULT ''")?;
+        add_column_if_missing(&conn, "messages", "priority", "TEXT NOT NULL DEFAULT ''")?;
         // #205 provenance. Sealable (a model's reason quotes the message), so
         // they are read through `open_text` like every other value column — but
         // additive, for the reason the `priority` ALTER above documents: a dev
-        // database from before they existed keeps its old shape otherwise, and a
-        // duplicate-column error here just means they are already there.
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN priority_source TEXT NOT NULL DEFAULT ''",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN priority_reason TEXT NOT NULL DEFAULT ''",
-            [],
-        );
+        // database from before they existed keeps its old shape otherwise.
+        add_column_if_missing(&conn, "messages", "priority_source", "TEXT NOT NULL DEFAULT ''")?;
+        add_column_if_missing(&conn, "messages", "priority_reason", "TEXT NOT NULL DEFAULT ''")?;
         // The Important/Urgent lists span every account and folder, so their only
         // WHERE is this column; unindexed, that is a full scan of the whole
         // mailbox on every page and every badge refresh.
@@ -676,10 +661,7 @@ impl MailStore {
         .map_err(|e| e.to_string())?;
         // "Your replies to this message" looks a message's answers up by this
         // key. Additive and indexed after its ALTER, for the reasons above.
-        let _ = conn.execute(
-            "ALTER TABLE messages ADD COLUMN reply_key TEXT NOT NULL DEFAULT ''",
-            [],
-        );
+        add_column_if_missing(&conn, "messages", "reply_key", "TEXT NOT NULL DEFAULT ''")?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS messages_by_reply_key ON messages (reply_key)
              WHERE reply_key != ''",
@@ -690,8 +672,8 @@ impl MailStore {
         // (`<project name>/<relative path>`, sealable). Additive for the reason
         // the `priority` ALTER documents; `''` reads as unset, so every row
         // staged before these existed is the user's own pick.
-        let _ = conn.execute("ALTER TABLE staged ADD COLUMN origin TEXT NOT NULL DEFAULT ''", []);
-        let _ = conn.execute("ALTER TABLE staged ADD COLUMN source TEXT NOT NULL DEFAULT ''", []);
+        add_column_if_missing(&conn, "staged", "origin", "TEXT NOT NULL DEFAULT ''")?;
+        add_column_if_missing(&conn, "staged", "source", "TEXT NOT NULL DEFAULT ''")?;
         // v1 → v2. Both of these moved a `UNIQUE`/`PRIMARY KEY` off a column that
         // became sealable and onto a keyed digest beside it, which SQLite cannot
         // express as an `ALTER` — a constraint change is a table rebuild. The
@@ -704,10 +686,7 @@ impl MailStore {
         // database can be in any half-state, and "does the column exist" is a
         // question with one true answer where "what does `meta` claim" is a
         // question about a row that may have been written before a crash.
-        if conn
-            .prepare("SELECT path_key FROM folders LIMIT 0")
-            .is_err()
-        {
+        if !column_exists(&conn, "folders", "path_key")? {
             let old: Vec<(String, String, String, String, String, i64, i64)> = {
                 let mut stmt = conn
                     .prepare("SELECT id, account_id, path, name, kind, unread, total FROM folders")
@@ -770,10 +749,7 @@ impl MailStore {
             conn.execute_batch("DROP TABLE folders_v1;")
                 .map_err(|e| e.to_string())?;
         }
-        if conn
-            .prepare("SELECT addr_key FROM mail_remote_allow LIMIT 0")
-            .is_err()
-        {
+        if !column_exists(&conn, "mail_remote_allow", "addr_key")? {
             let old: Vec<String> = {
                 let mut stmt = conn
                     .prepare("SELECT address FROM mail_remote_allow")
@@ -805,15 +781,9 @@ impl MailStore {
                 .map_err(|e| e.to_string())?;
         }
         // Additive, and after the v1 → v2 folders rebuild above, whose new table
-        // does not carry them: a duplicate-column error just means they are there.
-        let _ = conn.execute(
-            "ALTER TABLE folders ADD COLUMN unread_unindexed INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE folders ADD COLUMN total_unindexed INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
+        // does not carry them.
+        add_column_if_missing(&conn, "folders", "unread_unindexed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&conn, "folders", "total_unindexed", "INTEGER NOT NULL DEFAULT 0")?;
         // Rows written before `upsert_header` normalized `date` to UTC still
         // carry the sender's offset and sort out of order (see there). Only mail
         // a sync fetches again would be rewritten, so they are converted here.
@@ -851,7 +821,7 @@ impl MailStore {
     fn blob_name(keys: Option<&MailKeys>, bytes: &[u8]) -> String {
         match keys {
             Some(k) => mail_crypt::blob_id(&k.addr, bytes),
-            None => hex_digest(bytes),
+            None => crate::digest::sha256_hex(bytes),
         }
     }
 
@@ -873,8 +843,7 @@ impl MailStore {
                 Some(k) => mail_crypt::seal(&k.blob, &mail_crypt::blob_aad(&hex), bytes),
                 None => bytes.to_vec(),
             };
-            std::fs::write(&path, &payload).map_err(|e| e.to_string())?;
-            harden(&path, 0o600);
+            write_store_file(&path, &payload)?;
         }
         Ok(hex)
     }
@@ -2547,10 +2516,8 @@ impl MailStore {
             }
             for file in &add {
                 let path = dir.join(sanitize_id(&file.staged_id));
-                std::fs::write(&path, self.seal_staged(&after.id, &file.staged_id, &file.bytes))
-                    .map_err(|e| e.to_string())?;
+                write_store_file(&path, &self.seal_staged(&after.id, &file.staged_id, &file.bytes))?;
                 written.push(path.clone());
-                harden(&path, 0o600);
                 let row = staged_row(&after.id, &file.staged_id);
                 tx.execute(
                     "INSERT INTO staged (draft_id, staged_id, filename, mime, size, origin, source)
@@ -2760,20 +2727,45 @@ impl MailStore {
     /// ✓ Approvals' approve on agent drafts: each goes into the "Drafted by
     /// agents" folder (`filed`). Bound to what the panel showed — a draft an
     /// agent changed since, or the user took over in the composer, is left
-    /// for the panel's next look. Files the user picked into it are not part
-    /// of that comparison: they are the user's own. Returns how many were
+    /// for the panel's next look. The files an agent staged are part of that
+    /// comparison, read from the table Send reads (gap 34); files the user
+    /// picked into it are not: they are the user's own. Returns how many were
     /// filed; an error names how many changed under the panel.
+    ///
+    /// The draft JSON's own `staged` is left out of the text comparison: the
+    /// panel's copy carries the table's rows (`mail_agent_drafts`), the JSON a
+    /// mirror that a user's pick does not rewrite, so the two differ whenever
+    /// the user added a file.
     pub fn file_agent_drafts(&self, shown: &[MailDraft]) -> Result<usize, String> {
         fn seen(d: &MailDraft) -> Result<serde_json::Value, String> {
             let mut d = d.clone();
             d.staged.clear();
             serde_json::to_value(d).map_err(|e| e.to_string())
         }
+        /// An agent's rows, in a stable order, as the comparison sees them.
+        fn agent_rows(rows: &[StagedAttachment]) -> Vec<(&str, &str, &str, u64, Option<&str>)> {
+            let mut out: Vec<_> = rows
+                .iter()
+                .filter(|r| r.origin.as_deref() == Some("agent"))
+                .map(|r| (r.staged_id.as_str(), r.filename.as_str(), r.mime.as_str(), r.size, r.source.as_deref()))
+                .collect();
+            out.sort_unstable();
+            out
+        }
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
         let (mut filed, mut changed) = (0, 0);
         for draft in shown {
-            match self.draft_in(&conn, &draft.id)? {
-                Some(mut current) if current.origin.is_some() && seen(&current)? == seen(draft)? => {
+            let current = self.draft_in(&conn, &draft.id)?;
+            let rows = match &current {
+                Some(_) => self.staged_rows(&conn, &draft.id)?,
+                None => Vec::new(),
+            };
+            match current {
+                Some(mut current)
+                    if current.origin.is_some()
+                        && seen(&current)? == seen(draft)?
+                        && agent_rows(&rows) == agent_rows(&draft.staged) =>
+                {
                     if !current.filed {
                         current.filed = true;
                         self.put_draft(&conn, &current)?;
@@ -2828,9 +2820,7 @@ impl MailStore {
         // clear, outside the database, for as long as the draft exists. It is
         // consumed in memory by `build_outgoing` and never handed back as a
         // path.
-        std::fs::write(&path, self.seal_staged(draft_id, staged_id, bytes))
-            .map_err(|e| e.to_string())?;
-        harden(&path, 0o600);
+        write_store_file(&path, &self.seal_staged(draft_id, staged_id, bytes))?;
 
         let staged = StagedAttachment {
             staged_id: staged_id.to_string(),
@@ -3363,8 +3353,7 @@ impl MailStore {
             let new_id = mail_crypt::blob_id(&keys.addr, &bytes);
             let sealed = mail_crypt::seal(&keys.blob, &mail_crypt::blob_aad(&new_id), &bytes);
             let new_path = dir.join(&new_id);
-            std::fs::write(&new_path, &sealed).map_err(|e| e.to_string())?;
-            harden(&new_path, 0o600);
+            write_store_file(&new_path, &sealed)?;
             if new_id != old_id {
                 let _ = std::fs::remove_file(&path);
                 let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
@@ -3414,9 +3403,7 @@ impl MailStore {
                 if mail_crypt::looks_sealed(&bytes) {
                     continue;
                 }
-                std::fs::write(&path, self.seal_staged(&draft_id, &staged_id, &bytes))
-                    .map_err(|e| e.to_string())?;
-                harden(&path, 0o600);
+                write_store_file(&path, &self.seal_staged(&draft_id, &staged_id, &bytes))?;
                 changed += 1;
             }
         }
@@ -3641,7 +3628,7 @@ impl MailStore {
                     let Ok(raw) = std::fs::read(&path) else { continue };
                     let aad = Self::staged_aad(&draft_id, &staged_id);
                     if let Ok((plain, false)) = keys.open_any(|k| &k.blob, &aad, &raw) {
-                        mail_crypt::write_bytes_durable(&path, &mail_crypt::seal(&keys.blob, &aad, &plain))?;
+                        mail_crypt::write_bytes_atomic(&path, &mail_crypt::seal(&keys.blob, &aad, &plain))?;
                         moved += 1;
                     }
                 }
@@ -3694,7 +3681,7 @@ impl MailStore {
                     // Opened for writing: `FlushFileBuffers` on Windows needs it.
                     std::fs::OpenOptions::new().read(true).write(true).open(&new_path).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
                 } else {
-                    mail_crypt::write_bytes_durable(&new_path, &mail_crypt::seal(&keys.blob, &new_aad, &plain))?;
+                    mail_crypt::write_bytes_atomic(&new_path, &mail_crypt::seal(&keys.blob, &new_aad, &plain))?;
                 }
                 moves.push((name.clone(), new_id));
                 plains.push(plain);
@@ -3707,7 +3694,7 @@ impl MailStore {
             return Err(REKEY_CRASHED.into());
         }
         if !moves.is_empty() {
-            // The adopted files' names, too (`write_bytes_durable` synced its own).
+            // The adopted files' names, too (`write_bytes_atomic` synced its own).
             if let Ok(handle) = std::fs::File::open(&dir) {
                 let _ = handle.sync_all();
             }
@@ -3743,7 +3730,7 @@ impl MailStore {
             };
             for ((old, _), plain) in moves.iter().zip(&plains) {
                 if !referenced.contains(old) {
-                    mail_crypt::write_bytes_durable(&dir.join(old), &mail_crypt::seal(&keys.blob, &mail_crypt::blob_aad(old), plain))?;
+                    mail_crypt::write_bytes_atomic(&dir.join(old), &mail_crypt::seal(&keys.blob, &mail_crypt::blob_aad(old), plain))?;
                 }
             }
             moves.retain(|(old, _)| referenced.contains(old));
@@ -3983,6 +3970,34 @@ impl MailStore {
     }
 }
 
+/// Write a payload file into the store's own folders (`blobs/`, `outbox/`),
+/// owner-only from its first byte: created with mode `0600` on Unix (and an
+/// existing file narrowed before the new bytes go in), so it is never
+/// world-readable for the moment a write-then-chmod would leave. On Windows
+/// it inherits the store folder's owner-only ACL
+/// ([`mail_crypt::harden_store_dir`]), with no `icacls` run per file. Not
+/// synced, as the plain `fs::write` it replaces was not.
+fn write_store_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // The mode above applies to a file this call creates; one that was
+        // already there (a re-seal in place) is narrowed here. Best effort,
+        // like `harden`.
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    file.write_all(bytes).map_err(|e| e.to_string())
+}
+
 /// The pragmas every connection to this store runs with.
 ///
 /// `temp_store = MEMORY` is the one that belongs to the encryption work: it was
@@ -4025,30 +4040,32 @@ fn sanitize_id(id: &str) -> String {
     }
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let out = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for b in out {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{b:02x}");
-    }
-    hex
+
+/// Whether `table` has a column named `column`. A table that does not exist
+/// has none.
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+        params![table, column],
+        |r| r.get::<_, bool>(0),
+    )
+    .map_err(|e| format!("inspect {table}.{column}: {e}"))
 }
 
-/// `0700` on a directory, `0600` on a file (Unix). On Windows the per-user
-/// profile ACL already scopes `%APPDATA%`, so this is a no-op there.
-fn harden(path: &Path, mode: u32) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+/// Add `column` (declared `decl`) to `table` unless it is already there — the
+/// additive half of [`MailStore::migrate`]. Only "already there" is skipped:
+/// a missing table, a read-only or locked database, a bad declaration come
+/// back as errors instead of a store that silently keeps its old shape.
+///
+/// `table`, `column` and `decl` are literals from `migrate`, never input: an
+/// identifier cannot be a bound parameter.
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), String> {
+    if column_exists(conn, table, column)? {
+        return Ok(());
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, mode);
-    }
+    conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])
+        .map(|_| ())
+        .map_err(|e| format!("add column {table}.{column}: {e}"))
 }
 
 #[cfg(test)]
@@ -4183,6 +4200,41 @@ mod tests {
         assert!(!store.draft("c").unwrap().unwrap().filed);
         assert_eq!(store.file_agent_drafts(&[b2]).unwrap(), 1);
         assert!(store.draft("b").unwrap().unwrap().filed);
+    }
+
+    /// Gap 34: the agent's staged files are part of what approving binds to.
+    /// A draft whose agent attachment was replaced, added or dropped since the
+    /// panel showed it is not filed; the same files as shown (with a user's
+    /// own pick beside them) still are.
+    #[test]
+    fn approving_refuses_a_draft_whose_agent_files_changed() {
+        let (_dir, store) = store();
+        for id in ["swap", "add", "drop", "same"] {
+            store.change_draft_files(None, &agent_draft(id), vec![agent_file(&format!("{id}1"), b"one")], &[]).unwrap();
+        }
+        // What the panel holds: the draft as listed, its rows from the table.
+        let shown = |id: &str| {
+            let mut d = store.draft(id).unwrap().unwrap();
+            d.staged = store.staged(id).unwrap();
+            d
+        };
+        let (swap, add, drop, same) = (shown("swap"), shown("add"), shown("drop"), shown("same"));
+        store.change_draft_files(Some(&swap), &swap, vec![agent_file("swap2", b"other")], &["swap1".into()]).unwrap();
+        store.change_draft_files(Some(&add), &add, vec![agent_file("add2", b"more")], &[]).unwrap();
+        store.change_draft_files(Some(&drop), &drop, vec![], &["drop1".into()]).unwrap();
+        let err = store.file_agent_drafts(&[swap.clone(), add.clone(), drop.clone(), same.clone()]).unwrap_err();
+        assert!(err.starts_with("3 draft(s) changed"), "{err}");
+        for id in ["swap", "add", "drop"] {
+            assert!(!store.draft(id).unwrap().unwrap().filed, "{id}");
+        }
+        assert!(store.draft("same").unwrap().unwrap().filed);
+
+        // A row whose shown copy differs in what the chip says is a change too.
+        let mut renamed = shown("swap");
+        renamed.staged[0].filename = "other.pdf".into();
+        assert!(store.file_agent_drafts(&[renamed]).is_err());
+        // Shown afresh, the swapped draft files.
+        assert_eq!(store.file_agent_drafts(&[shown("swap")]).unwrap(), 1);
     }
 
     /// A file the user picked into an agent draft takes the draft out of the
@@ -4526,6 +4578,29 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(db, 0o600, "mail.db must be 0600, got {db:o}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blobs_and_staged_files_are_owner_only_from_creation() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let (dir, store) = store();
+        let hex = store.put_blob(b"payload").unwrap();
+        assert_eq!(mode(&store.blobs_dir().join(&hex)), 0o600);
+        store
+            .stage_attachment("d1", "s1", "a.txt", "text/plain", b"hi")
+            .unwrap();
+        assert_eq!(mode(&store.outbox_dir("d1").join("s1")), 0o600);
+
+        // A file rewritten in place (a re-seal) is narrowed too, not left at
+        // whatever mode it had.
+        let loose = dir.path().join("loose");
+        std::fs::write(&loose, b"old").unwrap();
+        std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_store_file(&loose, b"new").unwrap();
+        assert_eq!(mode(&loose), 0o600);
+        assert_eq!(std::fs::read(&loose).unwrap(), b"new");
     }
 
     #[test]
@@ -6696,5 +6771,53 @@ mod tests {
                 "the scratch directory goes with the store"
             );
         }
+    }
+
+    /// The additive migration: a missing column is added once, a present one
+    /// is a no-op, and a real failure is an error rather than a silent skip.
+    #[test]
+    fn add_column_if_missing_adds_once_and_reports_real_errors() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (a TEXT NOT NULL); INSERT INTO t (a) VALUES ('x');").unwrap();
+        assert!(!column_exists(&conn, "t", "b").unwrap());
+
+        add_column_if_missing(&conn, "t", "b", "TEXT NOT NULL DEFAULT ''").unwrap();
+        assert!(column_exists(&conn, "t", "b").unwrap());
+        let b: String = conn.query_row("SELECT b FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(b, "", "existing rows take the default");
+
+        add_column_if_missing(&conn, "t", "b", "TEXT NOT NULL DEFAULT ''").expect("second call is a no-op");
+        let columns: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('t')", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(columns, 2);
+
+        assert!(!column_exists(&conn, "nope", "b").unwrap(), "an unknown table has no columns");
+        let err = add_column_if_missing(&conn, "nope", "b", "TEXT").unwrap_err();
+        assert!(err.contains("nope.b"), "{err}");
+        // NOT NULL without a default cannot be added to a table with rows.
+        assert!(add_column_if_missing(&conn, "t", "c", "TEXT NOT NULL").is_err());
+    }
+
+    /// `migrate` on a store that already has every column changes nothing and
+    /// does not fail (every existing install takes this path at each open).
+    #[test]
+    fn migrate_twice_is_a_no_op() {
+        let (_dir, store) = store();
+        let shape = |store: &MailStore| -> Vec<(String, String)> {
+            let conn = store.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT m.name, p.name FROM sqlite_master m, pragma_table_info(m.name) p
+                     WHERE m.type = 'table' ORDER BY m.name, p.cid",
+                )
+                .unwrap();
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+            rows.collect::<Result<Vec<_>, _>>().unwrap()
+        };
+        let before = shape(&store);
+        assert!(before.iter().any(|(t, c)| t == "folders" && c == "total_unindexed"));
+        store.migrate().unwrap();
+        assert_eq!(shape(&store), before);
     }
 }

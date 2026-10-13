@@ -80,6 +80,12 @@ describe("copying a calendar entry", () => {
     expect(carried.overrides).toBeUndefined();
   });
 
+  it("carries a mail-made event's provenance on, so a paste cannot launder it", () => {
+    const fromMail = { message_id: "m1", account_id: "a1" };
+    expect(copyOfOccurrence({ ...SERIES, from_mail: fromMail }, OCC).draft.from_mail).toEqual(fromMail);
+    expect("from_mail" in copyOfOccurrence(SERIES, OCC).draft).toBe(false);
+  });
+
   it("copies the occurrence that was clicked, not the master", () => {
     const { draft, fromSeries } = copyOfOccurrence(SERIES, {
       ...OCC,

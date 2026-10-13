@@ -1,6 +1,7 @@
 //! Bounded LSP framing and concurrent request correlation. Server logs are
 //! discarded; callers explicitly handle status and server-to-client requests.
 use serde_json::{json, Value};
+use app_core::sync::LockExt;
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -111,7 +112,7 @@ impl RpcClient {
     pub fn close(&self) {
         self.closed.store(true, Ordering::Release);
         self.reader.abort();
-        for (_, sender) in self.pending.lock().unwrap().drain() {
+        for (_, sender) in self.pending.lock_ok().drain() {
             let _ = sender.send(Err(RpcError::Closed));
         }
     }
@@ -143,7 +144,7 @@ impl RpcClient {
                         break RpcError::Closed;
                     }
                 } else if let Some(id) = message.get("id").and_then(Value::as_u64) {
-                    if let Some(sender) = requests.lock().unwrap().remove(&id) {
+                    if let Some(sender) = requests.lock_ok().remove(&id) {
                         let reply = if let Some(error) = message.get("error") {
                             Err(RpcError::Server(
                                 error.get("code").and_then(Value::as_i64).unwrap_or(-32603),
@@ -158,7 +159,7 @@ impl RpcClient {
                 }
             };
             reader_closed.store(true, Ordering::Release);
-            for (_, sender) in requests.lock().unwrap().drain() {
+            for (_, sender) in requests.lock_ok().drain() {
                 let _ = sender.send(Err(failure.clone()));
             }
         });
@@ -207,7 +208,7 @@ impl RpcClient {
     pub async fn request(&self, id: u64, method: &str, params: Value, timeout: Duration) -> Reply {
         let (send, receive) = oneshot::channel();
         {
-            let mut pending = self.pending.lock().unwrap();
+            let mut pending = self.pending.lock_ok();
             if pending.contains_key(&id) {
                 return Err(RpcError::InvalidFrame);
             }
@@ -235,7 +236,7 @@ impl RpcClient {
     }
 
     pub async fn cancel(&self, id: u64) -> Result<(), RpcError> {
-        if let Some(sender) = self.pending.lock().unwrap().remove(&id) {
+        if let Some(sender) = self.pending.lock_ok().remove(&id) {
             let _ = sender.send(Err(RpcError::Cancelled));
         }
         self.notify("$/cancelRequest", json!({"id":id})).await
@@ -248,7 +249,7 @@ struct PendingGuard {
 }
 impl Drop for PendingGuard {
     fn drop(&mut self) {
-        self.pending.lock().unwrap().remove(&self.id);
+        self.pending.lock_ok().remove(&self.id);
     }
 }
 
@@ -263,7 +264,7 @@ impl Drop for WriteGuard<'_> {
         if !self.complete {
             self.client.closed.store(true, Ordering::Release);
             self.client.reader.abort();
-            for (_, sender) in self.client.pending.lock().unwrap().drain() {
+            for (_, sender) in self.client.pending.lock_ok().drain() {
                 let _ = sender.send(Err(RpcError::Closed));
             }
         }

@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { useDialogs } from "../common/PromptDialogs";
+import { envName } from "../../lib/brand";
 import { useSettingsStore } from "../../stores/settings";
 import { useQuiesce, saverInterval } from "../../stores/power";
 import { useOllamaAutoloadStore } from "../../stores/agents/ollamaAutoload";
@@ -18,6 +21,35 @@ import {
 import { runInstallInTab, type InstallShellKind } from "../../lib/installCommand";
 import type { GpuSample } from "../../lib/gpu";
 import { useT } from "../../lib/i18n";
+
+/** What `clear_local_model_conversations` answers while a tab of the model runs. */
+const LOCAL_MODEL_TAB_OPEN = "local_model_tab_open";
+/** …when a tab of the model started while the conversations were being
+ *  deleted: they are gone, the read-mail mark stays. */
+const LOCAL_MODEL_TAB_STARTED = "local_model_tab_started";
+
+/**
+ * The open tabs (every scope) of a local model's Mistral Vibe home: a `vibe`
+ * tab naming `model` raw, or its alias — the backend's `sanitize_alias`, the
+ * home's folder name, which models sharing it share.
+ */
+export function localModelTabLabels(
+  model: string,
+  s: { tabs: TabEntry[]; tabsByScope: Record<string, TabEntry[]> } = useTabsStore.getState(),
+): string[] {
+  const alias = model.replace(/:/g, "-");
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const tab of [...s.tabs, ...Object.values(s.tabsByScope).flat()]) {
+    if (seen.has(tab.key) || tab.cmd !== "vibe") continue;
+    const env = tab.env ?? {};
+    if (env[envName("LOCAL_MODEL")] === model || env.VIBE_ACTIVE_MODEL === alias) {
+      seen.add(tab.key);
+      labels.push(tab.label);
+    }
+  }
+  return labels;
+}
 
 /** The header hover-menu id `LocalModelMenu` registers under. */
 export const LOCAL_MODEL_MENU_ID = "local-model";
@@ -220,6 +252,45 @@ export function useModelsHub(active: boolean) {
         useOllamaActivityStore.getState().markLoad(model, "error");
         setError(typeof e === "string" && e === "not_running" ? t("localModel.notRunning") : t("localModel.failedToLoadModel"));
       });
+  };
+
+  // "Clear conversations": the model's stored Vibe conversations and its
+  // read-mail mark, together (gap 33 follow-up (c)). Refused while a tab of the
+  // model is open — its context may hold mail — naming those tabs; the
+  // backend refuses on its own while one still runs.
+  const { confirmAction, showMessage, dialogs } = useDialogs();
+  const clearConversations = async (model: string) => {
+    const open = localModelTabLabels(model);
+    const busyTitle = t("localModel.clearBusyTitle", { name: model });
+    if (open.length > 0) {
+      await showMessage({ title: busyTitle, body: t("localModel.clearBusyBody", { tabs: open.join(", ") }) });
+      return;
+    }
+    const ok = await confirmAction({
+      title: t("localModel.clearTitle", { name: model }),
+      body: t("localModel.clearBody"),
+      confirmLabel: t("localModel.clearConfirm"),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await invoke("clear_local_model_conversations", { model });
+      await showMessage({
+        title: t("localModel.clearDoneTitle", { name: model }),
+        body: t("localModel.clearDoneBody"),
+      });
+    } catch (e) {
+      await showMessage(
+        e === LOCAL_MODEL_TAB_OPEN
+          ? { title: busyTitle, body: t("localModel.clearBusyRunning") }
+          : e === LOCAL_MODEL_TAB_STARTED
+            ? {
+                title: t("localModel.clearMarkKeptTitle", { name: model }),
+                body: t("localModel.clearMarkKeptBody"),
+              }
+            : { title: t("localModel.clearFailedTitle", { name: model }), body: String(e), error: true },
+      );
+    }
   };
 
   // Evict a resident model from memory (keep_alive=0) without deleting it from
@@ -437,6 +508,10 @@ export function useModelsHub(active: boolean) {
     select,
     loadIntoMemory,
     unloadFromMemory,
+    clearConversations,
+    /** The clear-conversations dialogs: render where the surface stays
+     *  mounted (the hover dropdown closes under a portaled dialog). */
+    dialogs,
     checkUpdates,
     upgradeOllama,
     updateModel,

@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Toggle } from "../common/Toggle";
@@ -1711,6 +1712,7 @@ interface CommitWindowProps {
 
 function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onReworded }: CommitWindowProps) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1748,7 +1750,7 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
 
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="commit-window" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="commit-window" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("gitHistory.commitTitle", { short: commit.short })}</h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>

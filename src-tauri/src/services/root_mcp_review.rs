@@ -1,6 +1,7 @@
 //! Root MCP's backend-owned copies and immutable, row-based write proposals.
 //! Lock order: REVIEW_LOCK, then the calendar RMW lock. No AppHandle or IPC.
 use super::root_mcp::{self, Change, Effects, Stores};
+use app_core::sync::LockExt;
 use super::root_mcp_security::{self as security, Access};
 use crate::{commands::calendar, storage};
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use std::sync::{Mutex, MutexGuard};
 
 static REVIEW_LOCK: Mutex<()> = Mutex::new(());
 pub fn lock() -> MutexGuard<'static, ()> {
-    REVIEW_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    REVIEW_LOCK.lock_ok()
 }
 
 // set_caldav_identity_at writes precisely these two fields. The fetch merge
@@ -21,11 +22,13 @@ pub const SYNC_FIELDS: &[&str] = &["caldav_etag", "caldav_href"];
 /// agent proposes, so it is ignored when a row is compared and carried from
 /// the current row when one is written, exactly like the sync fields.
 const STORE_FIELDS: &[&str] = &["rev"];
-const CONFLICT: &str = "This entry changed since the agent looked at it";
+pub(crate) const CONFLICT: &str = "This entry changed since the agent looked at it";
 /// An automatic write (`destructive` level) that could not be stored for a
 /// reason other than a stale precondition: the store was unreadable, the disk
 /// full. Nothing landed; the proposal is `failed`, never `conflicted`.
-const FAILED: &str = "The change could not be stored (not a conflict); propose it again";
+pub(crate) const FAILED: &str = "The change could not be stored (not a conflict); propose it again";
+pub(crate) const PENDING_LIMIT: &str = "MCP pending proposal limit reached; review existing proposals";
+pub(crate) const OUTSIDE_GRANT: &str = "Change touches rows outside this session's access grant";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Row {
@@ -108,15 +111,18 @@ pub fn load(state: &Path) -> Result<Vec<Proposal>, String> {
     storage::read_json(&path).map_err(|e| e.to_string())
 }
 fn save(state: &Path, proposals: &[Proposal]) -> Result<(), String> {
+    // Unknown future statuses are never silently evicted either.
+    let is_decided = |p: &Proposal| {
+        matches!(
+            p.status.as_str(),
+            "applied" | "rejected" | "conflicted" | "undone" | "failed"
+        )
+    };
     let mut keep = proposals.to_vec();
     let mut decided = 0;
     keep.reverse();
     keep.retain(|p| {
-        // Unknown future statuses are never silently evicted either.
-        if matches!(
-            p.status.as_str(),
-            "applied" | "rejected" | "conflicted" | "undone" | "failed"
-        ) {
+        if is_decided(p) {
             decided += 1;
             decided <= 200
         } else {
@@ -124,7 +130,35 @@ fn save(state: &Path, proposals: &[Proposal]) -> Result<(), String> {
         }
     });
     keep.reverse();
-    if serde_json::to_vec(&keep).map_err(|e| e.to_string())?.len() > security::MAX_LOG_BYTES {
+    // History also goes by size, oldest first: every `off` and `destructive`
+    // write is logged as `applied`, and big rows (a column reindex) can fill
+    // the cap with fewer than 200. A save refused here would come after an
+    // automatic write already landed — reported as failed, retried, doubled —
+    // and every later one would land the same way. Sized as written (pretty,
+    // which `load` measures): an entry's own pretty text, two more spaces of
+    // indent per line inside the array, and its separator.
+    let sizes: Vec<usize> = keep
+        .iter()
+        .map(|p| serde_json::to_vec_pretty(p).map(|v| v.len() + 2 * (v.iter().filter(|b| **b == b'\n').count() + 1) + 2))
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut total = sizes.iter().sum::<usize>() + 4;
+    let mut evict = vec![false; keep.len()];
+    for (i, p) in keep.iter().enumerate() {
+        if total <= security::MAX_LOG_BYTES {
+            break;
+        }
+        if is_decided(p) {
+            evict[i] = true;
+            total -= sizes[i];
+        }
+    }
+    let mut evict = evict.into_iter();
+    keep.retain(|_| !evict.next().unwrap_or(false));
+    // What `write_json_atomic` puts on disk (pretty, a trailing newline) and
+    // `load` measures — a compact count let a log through that `load` then
+    // refused, which stopped every later call and the review panel.
+    if serde_json::to_vec_pretty(&keep).map_err(|e| e.to_string())?.len() + 1 > security::MAX_LOG_BYTES {
         return Err("MCP proposal storage limit reached; review pending proposals".into());
     }
     storage::write_json_atomic(&log_path(state), &keep).map_err(|e| e.to_string())
@@ -149,7 +183,7 @@ pub fn list(stores: &Stores) -> Result<Vec<ReviewEntry>, String> {
     let real_bytes = std::fs::read(stores.calendar).unwrap_or_default();
     let pending: Vec<(&str, &str)> = proposals.iter().filter(|p| p.status == "pending").map(|p| (p.id.as_str(), p.created.as_str())).collect();
     let signature = hash(serde_json::to_string(&json!([hash(&real_bytes), pending])).unwrap().as_bytes());
-    let verified = LIST_SEEN.lock().unwrap_or_else(|p| p.into_inner()).as_deref() == Some(signature.as_str());
+    let verified = LIST_SEEN.lock_ok().as_deref() == Some(signature.as_str());
     if !verified {
         let mut tabs = std::collections::HashSet::new();
         for p in &proposals {
@@ -187,7 +221,7 @@ pub fn list(stores: &Stores) -> Result<Vec<ReviewEntry>, String> {
         if changed {
             save(stores.state, &proposals)?;
         }
-        *LIST_SEEN.lock().unwrap_or_else(|p| p.into_inner()) = Some(signature);
+        *LIST_SEEN.lock_ok() = Some(signature);
     }
     Ok(proposals
         .into_iter()
@@ -465,6 +499,50 @@ fn calendar_context(before: &Value, after: &Value, rows: &[Row]) -> Result<Vec<V
     }
     Ok(calendars)
 }
+/// The calendars a CalDAV account syncs (`<state>/caldav/accounts.json`,
+/// `CalDavCalendarRef::calendar_id`). No file is no account; one that cannot
+/// be read or parsed is an `Err`, which [`touches_caldav`] counts as touching.
+fn caldav_calendar_ids(state: &Path) -> Result<std::collections::HashSet<String>, String> {
+    let path = crate::commands::caldav::accounts_path_in(state);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let accounts: crate::schema::caldav::CalDavAccounts =
+        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    Ok(accounts.accounts.into_iter().flat_map(|a| a.calendars).map(|c| c.calendar_id).collect())
+}
+
+/// Whether a write reaches a CalDAV server once applied: a captured row (as
+/// it was or as it will be) has a server copy (`caldav_href`), or sits in a
+/// calendar a CalDAV account syncs. Such a write always stages, whatever the
+/// review level: an applied row is pushed by the window at once
+/// (`RootOverlay`'s change listener → `notifyCalendarWrite`), and a server
+/// change is seen by everyone sharing that calendar. Fails closed.
+fn touches_caldav(state: &Path, rows: &[Row]) -> bool {
+    let mut calendars = Vec::new();
+    for row in rows.iter().flat_map(|r| r.pre.iter().chain(std::iter::once(&r.post))) {
+        let href = row.get(calendar::CALDAV_HREF_KEY).and_then(Value::as_str);
+        if href.is_some_and(|h| !h.trim().is_empty()) {
+            return true;
+        }
+        // A calendar row is addressed by its own id; an event or card by its
+        // `calendar_id`. The board row has neither.
+        let key = if row.get("calendar_id").is_some() { "calendar_id" } else { "id" };
+        if let Some(id) = row.get(key).and_then(Value::as_str) {
+            calendars.push(id.to_string());
+        }
+    }
+    if calendars.is_empty() {
+        return false;
+    }
+    match caldav_calendar_ids(state) {
+        Ok(synced) => calendars.iter().any(|id| synced.contains(id)),
+        Err(_) => true,
+    }
+}
+
 pub fn level(settings: &Path) -> String {
     storage::read_json::<crate::schema::Settings>(settings)
         .ok()
@@ -493,25 +571,29 @@ pub fn call(
     // first mail read. Either way every write stages, additive ones included,
     // and `off` cannot lower that.
     let reader = stores.caller == root_mcp::Caller::Reader
-        || stores.session.is_some_and(|s| s.has_read_mail());
+        || stores.session.is_some_and(|s| s.tainted(stores.state));
     let scoped = !stores.access.calendars.all || !stores.access.projects.all;
     let level = if reader || scoped { "all".to_string() } else { stores.policy.review.clone() };
-    if level == "off" && name != "proposals_list" {
+    let write = security::tool(name).is_some_and(|t| t.write);
+    // `off` serves reads straight from the store. A write still takes the
+    // capture path: one that reaches a CalDAV server stages like any other
+    // level's, and the rest land at once (`automatic` below).
+    if level == "off" && !write && name != "proposals_list" {
         return root_mcp::call_tool(stores, name, args);
     }
     let mut proposals = load(stores.state)?;
-    if security::tool(name).is_some_and(|t| t.write) {
+    if write {
         let pending = proposals.iter().filter(|p| p.status == "pending").count();
         let own = proposals.iter().filter(|p| p.status == "pending" && p.tab == tab).count();
         if pending >= security::MAX_PENDING || own >= security::MAX_PENDING_PER_TAB {
-            return Err("MCP pending proposal limit reached; review existing proposals".into());
+            return Err(PENDING_LIMIT.into());
         }
     }
     // Rebuild on a changed real file or proposal sequence. Its one edit to the
     // log is a status; an untouched log is not rewritten on every read.
     let statuses = |ps: &[Proposal]| ps.iter().map(|p| p.status.clone()).collect::<Vec<_>>();
     let loaded = statuses(&proposals);
-    let path = if level != "off" {
+    let path = if level != "off" || write {
         Some(rebuild(stores, tab, &mut proposals)?)
     } else {
         None
@@ -556,7 +638,7 @@ pub fn call(
     let before = data_at(view.calendar)?;
     stores.check()?;
     let (mut value, mut effects) = root_mcp::call_tool(&view, name, args)?;
-    if level != "off" {
+    if path.is_some() {
         let after = data_at(view.calendar)?;
         let rows = capture(&before, &after, &effects.changes)?;
         if !rows.is_empty() {
@@ -565,22 +647,23 @@ pub fn call(
             }
             if rows.iter().any(|r|
                 !stores.access.row(&r.kind, &r.post) || r.pre.as_ref().is_some_and(|pre| !stores.access.row(&r.kind, pre))) {
-                return Err("Change touches rows outside this session's access grant".into());
+                return Err(OUTSIDE_GRANT.into());
             }
             stores.check()?;
             let calendars = calendar_context(&before, &after, &rows)?;
-            let automatic = level == "destructive"
-                && security::tool(name).is_some_and(|t| t.write && !t.destructive);
+            // A CalDAV write never lands unseen (decision E3): checked last,
+            // since it reads the accounts file.
+            let automatic = match level.as_str() {
+                "destructive" => security::tool(name).is_some_and(|t| t.write && !t.destructive),
+                "off" => write,
+                _ => false,
+            } && !touches_caldav(stores.state, &rows);
             let mut p = Proposal {
                 id: root_mcp::mint_token().ok_or("No OS entropy")?,
                 tab: tab.into(),
                 tool: name.into(),
                 args: args.clone(),
-                created: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis()
-                    .to_string(),
+                created: crate::clock::now_ms().to_string(),
                 rows,
                 calendars,
                 tainted: reader,
@@ -880,7 +963,13 @@ mod tests {
         fn approve(&self, p: &Proposal) -> Vec<Change> {
             decide(&self.stores(), &p.id, &digest(p), "apply").unwrap()
         }
+        /// Set the review level. Leaving `off` forgets the log: since `off`
+        /// writes are logged as `applied` too, a test's `off` phase is its
+        /// setup, and what it inspects starts after it.
         fn mode(&self, mode: &str) {
+            if level(&self.settings) == "off" && mode != "off" {
+                let _ = std::fs::remove_file(log_path(self.dir.path()));
+            }
             storage::write_json_atomic(&self.settings, &json!({"root_mcp_review": mode})).unwrap();
         }
         /// The store's content: what a proposal describes, minus the
@@ -1140,6 +1229,7 @@ mod tests {
             a["id"].as_str().unwrap(),
             "/new.ics",
             "new-etag",
+            None,
         )
         .unwrap();
         let effects = f.approve(&p);
@@ -1274,6 +1364,7 @@ mod tests {
             a["id"].as_str().unwrap(),
             "/original.ics",
             "etag",
+            None,
         )
         .unwrap();
         // A resource address on the source row is enough to exercise the same
@@ -1304,7 +1395,7 @@ mod tests {
         f.mode("off");
         let target = f.call("root:a", "calendar_create", json!({"name":"Target"}));
         let a = f.call("root:a", "todo_add", json!({"title":"A"}));
-        calendar::set_caldav_identity_at(&f.calendar, "task", a["id"].as_str().unwrap(), "/t.ics", "etag")
+        calendar::set_caldav_identity_at(&f.calendar, "task", a["id"].as_str().unwrap(), "/t.ics", "etag", None)
             .unwrap();
         f.mode("all");
         f.call("root:a", "todo_update", json!({"id":a["id"], "calendar":target["id"]}));
@@ -1334,10 +1425,11 @@ mod tests {
         assert_eq!(std::fs::read(&f.calendar).unwrap(), before, "the real store is byte-identical");
         let p = f.proposals();
         assert!(p[0].tainted && p[0].status == "pending");
-        // The same call from a root tab, same setting, writes straight through.
+        // The same call from a root tab, same setting, writes straight through
+        // (logged as applied, nothing pending).
         let (value, _) = call(&f.stores(), "root:a", "todo_add", &json!({"title":"Mine"})).unwrap();
-        assert!(value.get("staged").is_none());
-        assert!(!f.proposals().iter().any(|p| p.tab == "root:a"));
+        assert_eq!(value["staged"], false);
+        assert!(!f.proposals().iter().any(|p| p.tab == "root:a" && p.status != "applied"));
     }
 
     /// A local-model tab is tainted from its first mail read, not from spawn:
@@ -1350,7 +1442,7 @@ mod tests {
         let (_, session) = root_mcp::test_session(root_mcp::Caller::LocalModel);
         let stores = Stores { caller: root_mcp::Caller::LocalModel, session: Some(&session), ..f.stores() };
         let (value, _) = call(&stores, &session.identity.tab, "todo_add", &json!({"title":"Before"})).unwrap();
-        assert!(value.get("staged").is_none());
+        assert_eq!(value["staged"], false);
         session.mark_read_mail();
         let before = std::fs::read(&f.calendar).unwrap();
         let (value, effects) = call(&stores, &session.identity.tab, "todo_add", &json!({"title":"From a mail"})).unwrap();
@@ -1372,10 +1464,10 @@ mod tests {
         let (_, first) = root_mcp::test_session_for_tab(root_mcp::Caller::LocalModel, tab, f.dir.path());
         assert!(!first.has_read_mail());
         let stores = Stores { caller: root_mcp::Caller::LocalModel, session: Some(&first), ..f.stores() };
-        assert!(call(&stores, tab, "todo_add", &json!({"title":"Plain"})).unwrap().0.get("staged").is_none());
+        assert_eq!(call(&stores, tab, "todo_add", &json!({"title":"Plain"})).unwrap().0["staged"], false);
         // What the first mail read does: latch in memory and on disk.
         first.mark_read_mail();
-        root_mcp::record_read_mail(f.dir.path(), tab);
+        root_mcp::record_read_mail(f.dir.path(), tab, None).unwrap();
         // A respawn of the same tab (a `--resume`): a fresh token, the old taint.
         let (_, second) = root_mcp::test_session_for_tab(root_mcp::Caller::LocalModel, tab, f.dir.path());
         assert!(first.check().is_err(), "the old spawn's token is gone");
@@ -1391,6 +1483,184 @@ mod tests {
         assert!(!other.has_read_mail());
         root_mcp::revoke_tab(tab);
         root_mcp::revoke_tab("root:other");
+    }
+
+    /// Gap 33, two tabs at once: tabs of one model share its Vibe home and
+    /// the conversation logs in it, so a tab already open when another tab of
+    /// that model reads mail stages from that read on — not only tabs spawned
+    /// after it. A tab of another model is untouched.
+    #[test]
+    fn an_open_tab_of_a_model_that_read_mail_elsewhere_stages_from_then_on() {
+        let f = Fixture::new();
+        f.mode("off");
+        let (_, reader) = root_mcp::test_session_for_tab(root_mcp::Caller::LocalModel, "root:twin-a", f.dir.path());
+        let (_, twin) = root_mcp::test_session_for_tab(root_mcp::Caller::LocalModel, "root:twin-b", f.dir.path());
+        let (_, other) = root_mcp::test_session_model(
+            root_mcp::Caller::LocalModel, "root:twin-c", f.dir.path(), Some("127.0.0.1:11434".into()), Some("qwen3:8b".into()),
+        );
+        let add = |session: &root_mcp::Session, title: &str| {
+            let stores = Stores { caller: root_mcp::Caller::LocalModel, session: Some(session), ..f.stores() };
+            call(&stores, &session.identity.tab, "todo_add", &json!({ "title": title })).unwrap().0.get("staged").cloned()
+        };
+        assert_eq!(add(&twin, "Before"), Some(json!(false)), "both open, nothing read yet");
+        // Tab A's first mail read, as `root_mcp_mail::call` records it.
+        reader.mark_read_mail();
+        root_mcp::record_read_mail(f.dir.path(), "root:twin-a", reader.identity.model.as_deref()).unwrap();
+        assert_eq!(add(&twin, "After"), Some(json!(true)), "the open twin stages now");
+        assert!(twin.has_read_mail(), "and stays latched");
+        assert_eq!(add(&other, "Other model"), Some(json!(false)));
+        assert!(f.proposals().iter().any(|p| p.tab == "root:twin-b" && p.tainted && p.status == "pending"));
+        for tab in ["root:twin-a", "root:twin-b", "root:twin-c"] { root_mcp::revoke_tab(tab); }
+    }
+
+    /// Point a CalDAV account at `calendar_id` (`<state>/caldav/accounts.json`).
+    fn sync_calendar(f: &Fixture, calendar_id: &Value) {
+        let path = crate::commands::caldav::accounts_path_in(f.dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, json!({ "version": 1, "accounts": [{
+            "id": "acc", "base_url": "https://dav.example/", "user": "me",
+            "calendars": [{ "href": "https://dav.example/cal/shared/", "calendar_id": calendar_id }],
+        }]}).to_string()).unwrap();
+    }
+
+    /// E3: an agent's write that reaches a CalDAV server — an edit of a row
+    /// with a server copy, or a new row in a calendar an account syncs —
+    /// stages at every review level, `off` included, and leaves the real
+    /// store untouched until approved. Approving hands the window the change
+    /// it pushes.
+    #[test]
+    fn a_caldav_write_stages_at_every_level() {
+        for mode in ["off", "destructive", "all"] {
+            let f = Fixture::new();
+            f.mode("off");
+            let synced = f.call("root:a", "todo_add", json!({"title":"Synced"}));
+            calendar::set_caldav_identity_at(&f.calendar, "task", synced["id"].as_str().unwrap(), "/t.ics", "etag", None).unwrap();
+            let shared = f.call("root:a", "calendar_create", json!({"name":"Shared"}));
+            sync_calendar(&f, &shared["id"]);
+            f.mode(mode);
+            let before = std::fs::read(&f.calendar).unwrap();
+            let (edit, effects) = call(&f.stores(), "root:a", "todo_update", &json!({"id":synced["id"], "title":"Edited"})).unwrap();
+            assert_eq!(edit["staged"], true, "{mode}: an edit of a synced card");
+            assert!(effects.changes.is_empty(), "{mode}");
+            let add = f.call("root:a", "todo_add", json!({"title":"New", "calendar":shared["id"]}));
+            assert_eq!(add["staged"], true, "{mode}: a card in a synced calendar");
+            let add = f.call("root:a", "calendar_add_event", json!({"title":"Talk", "start":"2026-09-20T10:00", "calendar":shared["id"]}));
+            assert_eq!(add["staged"], true, "{mode}: an event in a synced calendar");
+            assert_eq!(std::fs::read(&f.calendar).unwrap(), before, "{mode}: nothing landed");
+            let pending: Vec<Proposal> = f.proposals().into_iter().filter(|p| p.status == "pending").collect();
+            assert_eq!(pending.len(), 3, "{mode}");
+            assert!(pending.iter().all(|p| !p.undo), "{mode}");
+            let effects = f.approve(&pending[0]);
+            assert_eq!(effects[0].row["title"], "Edited", "{mode}");
+            assert_eq!(effects[0].row["caldav_href"], "/t.ics", "{mode}: pushed to its resource");
+        }
+    }
+
+    /// Under `off` a write that touches no CalDAV calendar still lands at
+    /// once — logged as applied, undoable — a destructive one included.
+    #[test]
+    fn under_off_a_write_without_a_server_still_lands_at_once() {
+        let f = Fixture::new();
+        f.mode("off");
+        let shared = f.call("root:a", "calendar_create", json!({"name":"Shared"}));
+        sync_calendar(&f, &shared["id"]);
+        let (added, effects) = call(&f.stores(), "root:a", "todo_add", &json!({"title":"Local"})).unwrap();
+        assert_eq!(added["staged"], false);
+        assert_eq!(added["proposal_status"], "applied");
+        assert_eq!(effects.changes.len(), 1, "the window is told");
+        assert_eq!(data_at(&f.calendar).unwrap()["tasks"][0]["title"], "Local");
+        let (deleted, _) = call(&f.stores(), "root:a", "todo_delete", &json!({"id":added["id"]})).unwrap();
+        assert_eq!(deleted["staged"], false);
+        assert!(data_at(&f.calendar).unwrap()["tasks"].as_array().unwrap().is_empty());
+        let p = f.proposals().pop().unwrap();
+        assert!(p.undo && p.status == "applied");
+        decide(&f.stores(), &p.id, &digest(&p), "undo").unwrap();
+        assert_eq!(data_at(&f.calendar).unwrap()["tasks"][0]["title"], "Local", "undone");
+        // Reads still come straight from the store.
+        assert!(f.call("root:a", "todo_list", json!({})).get("staged").is_none());
+    }
+
+    /// An accounts file that cannot be read counts as syncing everything: the
+    /// write stages rather than risk an unseen push.
+    #[test]
+    fn an_unreadable_accounts_file_stages_the_write() {
+        let f = Fixture::new();
+        f.mode("off");
+        let path = crate::commands::caldav::accounts_path_in(f.dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{ not json").unwrap();
+        assert_eq!(f.call("root:a", "todo_add", json!({"title":"x"}))["staged"], true);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(f.call("root:a", "todo_add", json!({"title":"y"}))["staged"], false, "no file is no account");
+    }
+
+    /// Every `off` write is logged as applied. A log whose history has grown
+    /// near its byte cap evicts its oldest decided rows instead of refusing
+    /// the save — which came after the write had landed, so the agent was
+    /// told it failed (and retried it) while the card was already there.
+    #[test]
+    fn a_full_history_makes_room_instead_of_failing_a_landed_write() {
+        let f = Fixture::new();
+        f.mode("off");
+        f.call("root:a", "todo_add", json!({"title":"seed"}));
+        let seed = f.proposals().pop().unwrap();
+        let entry = |i: usize, pad: usize| {
+            let mut p = seed.clone();
+            p.id = format!("old-{i}");
+            p.args = json!({ "pad": "x".repeat(pad) });
+            p
+        };
+        let mut log: Vec<Proposal> = (0..150).map(|i| entry(i, 50_000)).collect();
+        // Measured as written: pretty JSON and a newline, what `load` checks.
+        let used = serde_json::to_vec_pretty(&log).unwrap().len() + 1;
+        log.push(entry(150, security::MAX_LOG_BYTES - used - 40_000));
+        storage::write_json_atomic(&log_path(f.dir.path()), &log).unwrap();
+        assert!(load(f.dir.path()).is_ok(), "the log as it stands still loads");
+
+        let title = "t".repeat(30_000);
+        let (added, effects) = call(&f.stores(), "root:a", "todo_add", &json!({ "title": title })).unwrap();
+        assert_eq!(added["proposal_status"], "applied");
+        assert_eq!(effects.changes.len(), 1, "the window is told");
+        let tasks = data_at(&f.calendar).unwrap()["tasks"].clone();
+        assert_eq!(tasks.as_array().unwrap().iter().filter(|t| t["title"] == title.as_str()).count(), 1);
+        let kept = f.proposals();
+        assert_eq!(kept.last().unwrap().id, added["proposal"].as_str().unwrap(), "the new row is logged");
+        assert!(kept.iter().all(|p| p.id != "old-0"), "the oldest went");
+        assert!(std::fs::metadata(log_path(f.dir.path())).unwrap().len() <= security::MAX_LOG_BYTES as u64);
+        // And the lane keeps working: the next write and the panel's list.
+        let (next, _) = call(&f.stores(), "root:a", "todo_add", &json!({ "title": title })).unwrap();
+        assert_eq!(next["proposal_status"], "applied");
+        assert!(list(&f.stores()).is_ok());
+    }
+
+    /// A scoped session's sandbox leaves out the calendars it may not see, so
+    /// the appointment a card was made from can be missing there. Such a card
+    /// still reads as external when that appointment came from a mail.
+    #[test]
+    fn a_card_from_a_hidden_mail_event_stays_external_in_a_scoped_view() {
+        let f = Fixture::new();
+        f.mode("off");
+        let work = f.call("setup", "calendar_create", json!({"name":"Work"}));
+        let event = f.call("setup", "calendar_add_event", json!({"title":"Kick-off", "calendar":work["id"], "start":"2026-09-20T10:00"}));
+        let card = f.call("setup", "todo_add", json!({"title":"Prepare https://evil.example/a"}));
+        let mut data = calendar::read_data(&f.calendar).unwrap();
+        let e = data.events.iter_mut().find(|e| e.id == event["id"].as_str().unwrap()).unwrap();
+        e.extra.insert(calendar::FROM_MAIL_KEY.into(), json!({"message_id":"INBOX-7"}));
+        let t = data.tasks.iter_mut().find(|t| t.id == card["id"].as_str().unwrap()).unwrap();
+        t.event = Some(crate::schema::calendar::TaskEventLink { event_id: event["id"].as_str().unwrap().into(), ..Default::default() });
+        let own = t.calendar_id.clone();
+        storage::write_json_atomic(&f.calendar, &data).unwrap();
+
+        let mut stores = f.stores();
+        stores.access.calendars = security::Scope { all: false, ids: vec![own] };
+        let listed = call(&stores, "scoped", "todo_list", &json!({})).unwrap().0;
+        let row = listed["cards"].as_array().unwrap().iter().find(|c| c["id"] == card["id"]).unwrap().clone();
+        assert_eq!(row["external"], true, "{row}");
+        assert!(!row.to_string().contains("evil.example"), "{row}");
+        // Unscoped, the event is in view and decides it the same way.
+        let listed = f.call("root:a", "todo_list", json!({}));
+        let row = listed["cards"].as_array().unwrap().iter().find(|c| c["id"] == card["id"]).unwrap().clone();
+        assert_eq!(row["external"], true, "{row}");
     }
 
     /// The first move on a board that has never been dragged on seeds the

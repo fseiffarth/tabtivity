@@ -32,7 +32,7 @@
 //! - **Any other OS** returns an error rather than failing to build.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -205,10 +205,7 @@ fn prune_stale_pending(dir: &Path) {
 
 /// `Screenshot-YYYYMMDD-HHMMSS.png` in UTC — sortable and collision-resistant.
 fn screenshot_filename() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0) as i64;
+    let secs = crate::clock::unix_secs(SystemTime::now()) as i64;
     let (y, mo, d) = civil_from_days(secs.div_euclid(86_400));
     let tod = secs.rem_euclid(86_400);
     let (h, mi, s) = (tod / 3600, (tod % 3600) / 60, tod % 60);

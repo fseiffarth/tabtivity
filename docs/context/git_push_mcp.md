@@ -164,6 +164,11 @@ the git bar (`ProjectFilesView`) and the Agents view. Everything carries the
   `window_required` (after argument checks, costing no budget), CI reads go
   without the token, and a private repo's `not_available` says why. Queuing
   those requests for the window's card is phase 2 of that plan.
+- **CI confirmations are per project and never expire**: an allowed
+  `owner/repo` stays in `git_ci_repos` until the entry is edited by hand
+  (no UI lists or removes them yet). A tab whose project had no repo at
+  spawn — or whose user ran `git init` after it started — gets
+  `repo_changed` for push, release and CI until it is restarted.
 - Out of v1: phone approval cards, remote/mirror projects, creating remote
   branches, other forges' token quirks, a typed outcome notice.
 
@@ -202,8 +207,45 @@ the signing reminder; the release job refuses unsigned anyway).
 `ci_security_alerts { ref?, limit? }` let a fenced agent read why the build,
 the tests or the security workflow failed. Tabtivity calls api.github.com from
 the host; the repo is the checked-out branch's upstream URL (else `origin`),
-github.com only (`not_github`), never an argument. The token goes to the API
-only when `https://github.com` is one of the project's token origins. `ci_run`
+github.com only (`not_github`), never an argument, resolved once per call
+(`git_ci::resolve`). The token goes to the API
+only when `https://github.com` is one of the project's token origins.
+
+**Only a confirmed repo is read** (gap 19, decision A2). `.git/config` is
+read-only in the fence only when it existed at spawn, so an agent in a
+repo-less folder could `git init`, point `origin` at any private repo the
+token can see, and read its logs and alerts. Now `git_push_mcp::ci_target`
+reads only when the remote's lowercase `owner/repo` equals the repo of the
+policy's `confirmed_url`, or is listed in the entry's `git_ci_repos`
+(lowercase `owner/repo` strings, beside the `git_push_mcp` block, not in it:
+`ProjectPolicy` is `deny_unknown_fields`, so an older build would read a new
+field there as an invalid policy). Anything else answers
+`ci_repo_unconfirmed` and stages an **"Allow CI for <owner/repo>"** card
+(`Kind::CiRepo` in the proposal store, `url` the remote URL, no branch): one
+card per project and repo, deduped against a waiting one, outside the push
+budget and the pending limit of two. Allow (`git_push_mcp_decide`) appends
+the repo to `git_ci_repos` and ends the card `allowed`; Dismiss works as for
+pushes. Neither `git_ci_repos` nor the policy's `confirmed_url` travels in
+a project bundle, either way (`git_push_mcp::drop_confirmations`, as phone
+access): a bundle may name any repo. A tab of the Mobile host (no window, no card) gets
+`ci_repo_unconfirmed` with "restart this tab from the window". The release
+gate runs the same check before `tip_ci` on the agent path (its pending or
+failed workflow names reach the agent in the refusal), refusing before any
+request and staging the same card; the user's own Release button is not
+gated.
+
+**A git dir that appeared after spawn is refused** (defence in depth).
+`grant_git_push` records the `.git` entry git discovery finds from the bound
+directory (nearest `<ancestor>/.git` that git would stop at: a pointer file,
+or a folder holding `HEAD`, `objects` and `refs` — an empty `.git` that a
+later `git init` fills in place is passed over; a link counts as its target)
+as `(dev, ino)` in
+`PushBinding::git_at_spawn`; before every `git_push`, `git_release` and
+`ci_*` the walk is redone, and no entry at spawn, or another one now (a
+`git init` in a repo-less project, or a nearer `.git` planted under a parent
+repo), answers `repo_changed` ("restart this tab"). Bare-layout folders need
+no check: the lane's git runs with `safe.bareRepository=explicit`. Windows
+records presence only (no stable inode in std, and no fence there). `ci_run`
 returns jobs and steps and, for up to three failed jobs, check annotations and
 a log excerpt (120 lines before the first `##[error]` to 20 after the last;
 timestamps and ANSI stripped; 12 KB; redacted). Job logs are fetched through
@@ -241,3 +283,10 @@ the app.
 10. Ask the agent why the last CI run failed: `ci_runs { failedOnly: true }`
     then `ci_run { id }` should quote the failing step's log and annotations.
     `ci_security_alerts` lists open CodeQL alerts (or says it is not set up).
+11. CI repo gate (gap 19): in a project whose push URL is confirmed, CI reads
+    go without a card. Set `origin` to another github.com repo and ask for
+    `ci_runs`: expect `ci_repo_unconfirmed` and an "Allow CI for
+    <owner/repo>" card in the git bar; asking again adds no second card.
+    Press Allow and ask again: the runs come back. In a folder with no repo
+    at tab start, `git init` from the tab and ask for `ci_runs` or a push:
+    expect `repo_changed`; restart the tab and it works.

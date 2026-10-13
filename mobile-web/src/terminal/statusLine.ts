@@ -391,6 +391,18 @@ function antigravityFrame(
 }
 
 /**
+ * The model a session's status names, composed for display: the model, with
+ * the reasoning effort beside it where the session prints one (Antigravity).
+ * The one composition for every surface that shows it — the phone's model
+ * chip, and the desktop's tab tag that the phone's tab cards carry
+ * (`lib/agents/agentModel.screenModelTag`).
+ */
+export function statusModelTag(status: SessionStatus | null | undefined): string | undefined {
+  if (!status?.model) return undefined;
+  return status.effort ? `${status.model} · ${status.effort}` : status.model;
+}
+
+/**
  * The status the session is showing right now, or `null` when the bottom of
  * the screen is not a TUI input frame (mid-scroll output, a full-screen
  * dialog, a shell).

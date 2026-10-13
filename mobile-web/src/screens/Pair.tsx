@@ -43,12 +43,42 @@ export function describeOidcOutcome(outcome: OidcOutcome, t: ReturnType<typeof u
   }
 }
 
+/** A pairing code as typed: the desktop's eight digits, or a server's
+ * `name:12345678` (the admin helper prints it with the account in front, and
+ * the gateway routes by it). Case, spaces and stray characters are dropped. */
+export function cleanPairingCode(raw: string): string {
+  const typed = raw.toLowerCase().replace(/[^a-z0-9_:]/g, "");
+  const colon = typed.indexOf(":");
+  return colon < 0 ? typed : typed.slice(0, colon + 1) + typed.slice(colon + 1).replace(/\D/g, "");
+}
+
+/** Whether a cleaned code is complete: eight digits, with or without a
+ * server account in front. */
+export function pairingCodeComplete(code: string): boolean {
+  return /^([a-z0-9_]{1,32}:)?\d{8}$/.test(code);
+}
+
+/** The code a desktop's Add device QR carried in the address fragment
+ * (`#pair=…`), taken once at load and wiped from the address at once, so it
+ * neither lingers in the phone's history nor survives a reload. */
+export function takeLinkedPairingCode(): string {
+  const match = /^#pair=([^&]*)/.exec(location.hash);
+  if (!match) return "";
+  history.replaceState(null, "", location.pathname + location.search);
+  try {
+    return cleanPairingCode(decodeURIComponent(match[1]));
+  } catch {
+    return "";
+  }
+}
+const linkedPairingCode = takeLinkedPairingCode();
+
 /** First pairing and local lock setup share one form. A failed biometric setup
  * leaves the phone paired, so a retry only finishes the lock: the one-time
  * pairing code has already been consumed. */
 export function Pair({ setupLock, onDone }: { setupLock: boolean; onDone: () => void }) {
   const t = useT();
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(linkedPairingCode);
   const [name, setName] = useState(() => appleTouchDevice() ?? t("mobile.pair.defaultName"));
   const [pin, setPin] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -110,7 +140,7 @@ export function Pair({ setupLock, onDone }: { setupLock: boolean; onDone: () => 
         </button>
         <p className="pair-lock-hint">{t("mobile.pair.oidcOr")}</p>
       </>}
-      <label>{t("mobile.pair.code")}<input className="code" value={code} inputMode="numeric" autoComplete="one-time-code" maxLength={8} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></label>
+      <label>{t("mobile.pair.code")}<input className="code" value={code} inputMode="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="one-time-code" maxLength={41} onChange={(event) => setCode(cleanPairingCode(event.target.value))} /></label>
     </>}
     {setupLock && <>
       <p className="pair-lock-hint">{biometricAvailable === false ? t("mobile.pair.pinOnlyHint") : t("mobile.pair.pinHint")}</p>
@@ -118,7 +148,7 @@ export function Pair({ setupLock, onDone }: { setupLock: boolean; onDone: () => 
       <label>{t("mobile.pair.confirmPin")}<input className="code" type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} value={confirm} onChange={(event) => setConfirm(event.target.value.replace(/\D/g, ""))} /></label>
     </>}
     {error && <p className="error" role="alert">{error}</p>}
-    <button className="primary" disabled={stage !== "idle" || (!paired && (code.length !== 8 || !name.trim())) || (setupLock && (!validPin(pin) || pin.length < MIN_NEW_PIN || pin !== confirm))} onClick={() => void submit()}>
+    <button className="primary" disabled={stage !== "idle" || (!paired && (!pairingCodeComplete(code) || !name.trim())) || (setupLock && (!validPin(pin) || pin.length < MIN_NEW_PIN || pin !== confirm))} onClick={() => void submit()}>
       {stage === "pairing" ? t("mobile.pair.pairing") : stage === "securing" ? t("mobile.pair.securing") : paired ? t("mobile.pair.finish") : setupLock ? t("mobile.pair.connectSecure") : t("mobile.pair.connect")}
     </button>
   </main>;

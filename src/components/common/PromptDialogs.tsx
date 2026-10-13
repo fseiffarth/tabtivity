@@ -1,5 +1,5 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
-import { type ReactNode, useCallback, useId, useLayoutEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useState } from "react";
 import { UntestedTag } from "./UntestedTag";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
@@ -92,17 +92,47 @@ export type MessageSpec = {
   error?: boolean;
 };
 
+/** How long a queued question's confirm button ignores activation after the
+ *  dialog appears — and how soon after an answer a new question counts as
+ *  following it (the stores' `queued`). */
+export const QUEUED_CONFIRM_DELAY_MS = 400;
+
+/**
+ * Whether question `id`'s confirm button may act yet. A question that waited in
+ * a queue appears the instant the one before it is answered, often under the
+ * same pointer — and so does one asked right after an answer (the next gate of
+ * the same action, a file that changed since): the second click of a fast
+ * double click on "Run" or "Open" would answer it unseen. So for a `queued`
+ * question the confirm button ignores clicks (and Enter, which reaches a
+ * button as a click) for [`QUEUED_CONFIRM_DELAY_MS`] after it appears; Cancel
+ * and Escape act at once. A question shown on its own is armed from the start.
+ */
+export function useConfirmArmed(id: number | null, queued: boolean): boolean {
+  const [armed, setArmed] = useState<number | null>(null);
+  useEffect(() => {
+    if (id === null || !queued) return;
+    const timer = setTimeout(() => setArmed(id), QUEUED_CONFIRM_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [id, queued]);
+  return id !== null && (!queued || armed === id);
+}
+
 /** The dialog frame every one of these wears — portaled, backdrop-dismissed.
  *  Exported for a question too specific for the helpers below. */
 export function DialogShell({
   onDismiss,
   children,
   className,
+  frame = "file-delete-dialog",
 }: {
   onDismiss: () => void;
   children: ReactNode;
-  /** Extra class beside `file-delete-dialog` (a wider box, say). */
+  /** Extra class beside the frame's (a wider box, say). */
   className?: string;
+  /** The family surface the box wears: the short prompt's
+   *  `file-delete-dialog`, or `project-dialog` for a question that keeps the
+   *  settings-style header (title row with a close button). */
+  frame?: "file-delete-dialog" | "project-dialog";
 }) {
   const ref = useModalFocus(onDismiss);
   const titleId = useId();
@@ -116,7 +146,7 @@ export function DialogShell({
         ref={ref}
         tabIndex={-1}
         aria-labelledby={titleId}
-        className={className ? `file-delete-dialog ${className}` : "file-delete-dialog"}
+        className={className ? `${frame} ${className}` : frame}
         role="dialog"
         aria-modal="true"
         onMouseDown={(e) => e.stopPropagation()}
@@ -236,6 +266,86 @@ export function ConfirmDialog({
           onClick={onConfirm}
         >
           {confirmLabel ?? t("common.ok")}
+        </button>
+      </div>
+    </DialogShell>
+  );
+}
+
+/**
+ * A yes/no question whose "yes" is work that can fail: the confirm button runs
+ * `onConfirm`, shows `busyLabel` while it runs, closes when it resolves, and
+ * keeps the dialog open with the reason when it rejects. Escape, the backdrop
+ * and × do nothing while it runs. The project pill's danger-zone confirms
+ * (archive, forget, detach, unpublish, delete history) are all this one.
+ *
+ * `children` is the prose under the title; a function receives the confirm
+ * action, for a field whose Enter confirms (the typed-name gate). `armed`
+ * gates the confirm button on top of "not busy".
+ */
+export function AsyncConfirmDialog({
+  title,
+  children,
+  confirmLabel,
+  busyLabel,
+  danger = false,
+  armed = true,
+  autoFocusConfirm = true,
+  onConfirm,
+  onClose,
+}: {
+  title: ReactNode;
+  children: ReactNode | ((confirm: () => void) => ReactNode);
+  confirmLabel: ReactNode;
+  busyLabel: ReactNode;
+  /** Paints the confirm button as the destructive action. */
+  danger?: boolean;
+  armed?: boolean;
+  /** Off when the body has its own focused field. */
+  autoFocusConfirm?: boolean;
+  onConfirm: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const ready = armed && !busy;
+
+  const run = async () => {
+    if (!ready) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onConfirm();
+      onClose();
+    } catch (err) {
+      setError(String(err));
+      setBusy(false);
+    }
+  };
+  const confirm = () => void run();
+  const dismiss = () => {
+    if (!busy) onClose();
+  };
+
+  return (
+    <DialogShell frame="project-dialog" onDismiss={dismiss}>
+      <div className="settings-title-row">
+        <h2>{title}</h2>
+        <button type="button" className="dialog-close-btn" onClick={dismiss}>×</button>
+      </div>
+      {typeof children === "function" ? children(confirm) : children}
+      {error && <ErrorNote className="project-dialog-error" error={error} />}
+      <div className="project-dialog-actions">
+        <button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</button>
+        <button
+          type="button"
+          className={danger ? "danger" : undefined}
+          autoFocus={autoFocusConfirm}
+          onClick={confirm}
+          disabled={!ready}
+        >
+          {busy ? busyLabel : confirmLabel}
         </button>
       </div>
     </DialogShell>

@@ -59,6 +59,11 @@
   font-size: 12px;
   cursor: var(--cur-pointer, pointer);
 }
+/* The export dialog's rebuildable-folder and skipped-entry lists: one size
+   column instead of the two-machine pair. */
+.big-folder-row.transfer-rebuildable-row {
+  grid-template-columns: 18px minmax(0, 1fr) 110px;
+}
 .big-folder-row:hover {
   background: var(--bg-hover);
 }
@@ -2232,6 +2237,15 @@
   font-size: 10px;
   line-height: 1.4;
   color: var(--text-secondary);
+}
+/* Add device's QR: its own white square (the SVG paints it), sized for a
+   phone camera at arm's length, centred over the code. Shared with Settings. */
+.mobile-pair-qr {
+  display: block;
+  width: 180px;
+  height: 180px;
+  margin: 0 auto 4px;
+  border-radius: var(--radius-sm);
 }
 /* Paired devices: one row each, a lamp for "signed in now", and the inbox
    tray's armed delete as Disconnect → Disconnect? (`InboxIndicator`). */

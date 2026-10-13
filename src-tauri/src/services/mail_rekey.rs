@@ -9,7 +9,8 @@
 //! answer without reaching into `commands`.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use app_core::sync::LockExt;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
@@ -44,11 +45,11 @@ static STATUS: Mutex<Option<RekeyStatus>> = Mutex::new(None);
 
 /// The re-key thread's word (`None`: not running, or finished).
 pub fn set(status: Option<RekeyStatus>) {
-    *STATUS.lock().unwrap_or_else(PoisonError::into_inner) = status;
+    *STATUS.lock_ok() = status;
 }
 
 pub fn current() -> Option<RekeyStatus> {
-    STATUS.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    STATUS.lock_ok().clone()
 }
 
 /// What the Server settings show for the store in `mail_dir`: the thread's
@@ -175,7 +176,7 @@ pub fn reseal_side_files(dir: &Path, keys: &MailKeys) -> Result<(), String> {
             Err(e) => return Err(e.to_string()),
         };
         if let Ok((plain, false)) = keys.open_any(|k| &k.field, &aad, &raw) {
-            mail_crypt::write_bytes_durable(&path, &mail_crypt::seal(&keys.field, &aad, &plain))?;
+            mail_crypt::write_bytes_atomic(&path, &mail_crypt::seal(&keys.field, &aad, &plain))?;
         }
     }
     crate::services::mail_pgp::reseal_keyring(dir, keys)?;

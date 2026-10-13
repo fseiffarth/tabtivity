@@ -13,6 +13,7 @@
 //! - Linux XDG sandbox env in a cfg(target_os="linux") block.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -499,8 +500,8 @@ enum Routed {
 }
 
 fn route_chunk_at(id: &str, bytes: &[u8], now: Instant, seq: u64) -> Routed {
-    let mut clock = digest_clock().lock().unwrap();
-    let mut map = routes().lock().unwrap();
+    let mut clock = digest_clock().lock_ok();
+    let mut map = routes().lock_ok();
     route_chunk_in(&mut map, &mut clock, id, bytes, now, seq)
 }
 
@@ -556,8 +557,8 @@ fn route_chunk(id: &str, bytes: &[u8], seq: u64) -> Routed {
 /// produce no extra event; a genuinely truncated codepoint produces one
 /// replacement character and follows the current visible/hidden route.
 fn route_finish(id: &str, seq: u64) -> Routed {
-    let mut clock = digest_clock().lock().unwrap();
-    let mut map = routes().lock().unwrap();
+    let mut clock = digest_clock().lock_ok();
+    let mut map = routes().lock_ok();
     let Some(route) = map.get_mut(id) else {
         return Routed::Quiet;
     };
@@ -611,8 +612,8 @@ fn digest_batch_take_in(
 }
 
 fn route_digest_batch_take(generation: u64) -> Vec<(String, String)> {
-    let mut clock = digest_clock().lock().unwrap();
-    let mut map = routes().lock().unwrap();
+    let mut clock = digest_clock().lock_ok();
+    let mut map = routes().lock_ok();
     digest_batch_take_in(&mut map, Instant::now(), &mut clock, generation)
 }
 
@@ -633,7 +634,7 @@ fn arm_digest_tick(ctx: &CoreCtx, tick: DigestTick) {
         if batch.is_empty() {
             return;
         }
-        let addressed = address_digest_batch(&routes().lock().unwrap(), batch);
+        let addressed = address_digest_batch(&routes().lock_ok(), batch);
         emit_activity_batch(&ctx, addressed);
     });
 }
@@ -692,7 +693,7 @@ fn route_open(id: &str) -> u64 {
 /// events name that tab instead of `id` (an attach PTY's, see
 /// [`attach_pty_id`]).
 fn route_open_at(id: &str, tab: Option<&str>, seq: u64) {
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     let route = map.entry(id.to_string()).or_default();
     route.tab = tab.map(str::to_string);
     route.pending.clear();
@@ -724,7 +725,7 @@ fn route_open_at(id: &str, tab: Option<&str>, seq: u64) {
 /// nothing is known about that PTY. Read-only: a replay does NOT consume it, so
 /// a second window attaching later gets the same history.
 pub fn route_scrollback(id: &str) -> TerminalScrollback {
-    let map = routes().lock().unwrap();
+    let map = routes().lock_ok();
     match map.get(id) {
         Some(route) => TerminalScrollback {
             // Whole (no cut: `usize::MAX`), behind the state its trimmed-off
@@ -746,7 +747,7 @@ pub fn route_scrollback(id: &str) -> TerminalScrollback {
 /// as output continues. `exited` says the program ended while asleep — the
 /// pane has no `terminal-exit` listener then, so the wake says it.
 pub fn route_wake_scrollback(id: &str) -> TerminalScrollback {
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     let Some(route) = map.get_mut(id) else {
         return TerminalScrollback::default();
     };
@@ -779,7 +780,7 @@ pub fn route_wake_scrollback(id: &str) -> TerminalScrollback {
 /// for a wake. A route whose spawn already ended is dropped now (nothing else
 /// would); a live one closes with its spawn, as any other.
 pub fn route_forget_sleep(id: &str) {
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     let Some(route) = map.get_mut(id) else { return };
     route.asleep = false;
     route.sleepers.clear();
@@ -793,7 +794,7 @@ pub fn route_forget_sleep(id: &str) {
 /// this was the current spawn, which makes the lifecycle notification obey the
 /// same guard as the route cleanup.
 fn route_close(id: &str, seq: u64) -> bool {
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     if !map.get(id).is_some_and(|r| r.seq == seq) {
         return false;
     }
@@ -885,8 +886,7 @@ fn emit_pty_event<S: Serialize>(ctx: &CoreCtx, route: &str, event: &str, payload
         return;
     }
     let windows = routes()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .get(route)
         .map(OutputRoute::event_windows)
         .unwrap_or_default();
@@ -906,7 +906,7 @@ pub fn route_set_visible(
     update_seq: u64,
     window: &str,
 ) {
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     let route = map.entry(id.to_string()).or_default();
     let was = route.subscribed();
     let current_seq = route
@@ -937,7 +937,7 @@ pub fn route_set_visible(
 /// the route keeps the longer catch-up tail and outlives the spawn's end until
 /// the wake reads it (or the tab's `pty_kill` forgets it).
 pub fn route_remove_view(id: &str, viewer_id: &str, update_seq: u64, sleeping: bool) {
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     let Some(route) = map.get_mut(id) else { return };
     if route
         .visible_viewers
@@ -972,7 +972,7 @@ pub fn route_remove_view(id: &str, viewer_id: &str, update_seq: u64, sleeping: b
 /// from the `WindowEvent::Destroyed` hook. Returns how many were dropped, so a
 /// caller can log/test it.
 pub fn route_drop_window_views(window: &str) -> usize {
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     let mut dropped = 0usize;
     let mut empty: Vec<String> = Vec::new();
     for (id, route) in map.iter_mut() {
@@ -1010,7 +1010,7 @@ pub fn route_move_window_views(from: &str, to: &str, window: &str) {
     if from == to {
         return;
     }
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     let Some(route) = map.get_mut(from) else { return };
     let moved: Vec<(String, ViewerReg)> = route
         .visible_viewers
@@ -1035,8 +1035,7 @@ pub fn route_move_window_views(from: &str, to: &str, window: &str) {
 /// or a pane asleep on it.
 fn route_viewer_windows(id: &str) -> Vec<String> {
     routes()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .get(id)
         .map(OutputRoute::event_windows)
         .unwrap_or_default()
@@ -1045,12 +1044,12 @@ fn route_viewer_windows(id: &str) -> Vec<String> {
 /// Scope teardown owns the PTY, so no view registration may keep its route
 /// alive after the process tree is reaped.
 pub fn route_remove_all_views(id: &str) {
-    routes().lock().unwrap().remove(id);
+    routes().lock_ok().remove(id);
 }
 
 /// A marker-watcher's hold (`pty_watch`): stream this PTY as if visible.
 pub fn route_watch(ctx: &CoreCtx, id: &str) {
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     let route = map.entry(id.to_string()).or_default();
     let was = route.subscribed();
     route.watchers += 1;
@@ -1063,7 +1062,7 @@ pub fn route_watch(ctx: &CoreCtx, id: &str) {
 /// watch leaked by a webview reload merely leaves the PTY streaming — today's
 /// behaviour, the fail-open direction.
 pub fn route_unwatch(id: &str) {
-    let mut map = routes().lock().unwrap();
+    let mut map = routes().lock_ok();
     if let Some(route) = map.get_mut(id) {
         route.watchers = route.watchers.saturating_sub(1);
     }
@@ -1787,7 +1786,7 @@ pub fn spawn_pty(
     // the caller (`commands::terminal::pty_spawn`) *before* any ssh wrapping, so
     // remote agent tabs resume correctly; by the time the command reaches here it
     // is fully resolved (and possibly already rewritten to `ssh`).
-    registry.lock().unwrap().seen.insert(opts.id.clone());
+    registry.lock_ok().seen.insert(opts.id.clone());
 
     // A server client's PTY is recorded as its (`release_client`), and one
     // that is a local tmux client can be attached to by another client
@@ -1825,7 +1824,7 @@ pub fn join_tab(
     };
     let attach_id = attach_pty_id(&opts.id, &client);
     let (stale, session) = {
-        let mut reg = registry.lock().unwrap();
+        let mut reg = registry.lock_ok();
         // An attach PTY is a client's view of a tab, never a tab of its own:
         // a spawn under one's id would replace (kill) it. And the id this
         // client's attach would take must not be somebody else's PTY.
@@ -1946,7 +1945,7 @@ fn launch(
     // (`insert_current_spawn`); an attach PTY is a viewer with no spawn of
     // its own to be superseded.
     let refused = {
-        let mut reg = registry.lock().unwrap();
+        let mut reg = registry.lock_ok();
         if tab.is_some() {
             reg.insert_current_spawn(id.to_string(), pair.master, writer, child, dead.clone(), meta, seq)
                 .err()
@@ -2038,8 +2037,7 @@ fn launch(
         // route (a server client's events go to the route's viewers).
         let exit_windows = per_client(&ctx).then(|| {
             routes()
-                .lock()
-                .unwrap()
+                .lock_ok()
                 .get(&id)
                 .map(OutputRoute::event_windows)
                 .unwrap_or_default()
@@ -2161,7 +2159,7 @@ pub fn resize_pty(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let mut reg = registry.lock().unwrap();
+    let mut reg = registry.lock_ok();
     let Some(entry) = reg.entries.get_mut(id) else {
         return Ok(());
     };

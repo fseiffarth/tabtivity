@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useT } from "../../lib/i18n";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import type { GitPushMcpLevel as Level, GitPushProposal } from "../../types";
@@ -74,6 +74,17 @@ export function useGitPushProposals(projectId: string | null | undefined): GitPu
 
 function shortSha(sha: string | null | undefined): string { return sha ? sha.slice(0, 7) : "—"; }
 
+/** The card's status pill. An "Allow CI" card is only ever waiting, allowed,
+ *  dismissed or expired; `allowed` is never a push's or a release's. */
+function statusLabel(proposal: GitPushProposal): TranslationKey {
+  const { kind, status } = proposal;
+  if (kind === "ci_repo") {
+    return status === "allowed" || status === "dismissed" || status === "expired" ? `gitPushMcp.ciStatus.${status}` : "gitPushMcp.ciStatus.pending";
+  }
+  const shown = status === "allowed" ? "pushed" : status;
+  return kind === "release" ? `gitPushMcp.releaseStatus.${shown}` : `gitPushMcp.status.${shown}`;
+}
+
 /** One proposal: what would be pushed, with Push / Dismiss while pending and
  *  the outcome afterwards. Shared by the git bar and the Agents view. */
 export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPushProposal; onDecided?: (next: GitPushProposal) => void }) {
@@ -94,12 +105,13 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
   const pending = proposal.status === "pending";
   const finished = !pending && proposal.status !== "running";
   const release = proposal.kind === "release";
+  const ciRepo = proposal.kind === "ci_repo";
   const output = proposal.output || proposal.preflight_output;
   return <div className="git-push-proposal" data-status={proposal.status} onClick={(event) => event.stopPropagation()}>
     <div className="git-push-proposal-head">
-      <span className="agent-schedule-pill">{t(release ? `gitPushMcp.releaseStatus.${proposal.status}` : `gitPushMcp.status.${proposal.status}`)}</span>
-      <UntestedTag id={release ? "gitRelease" : "gitPushMcp"} />
-      {release ? <>
+      <span className="agent-schedule-pill">{t(statusLabel(proposal))}</span>
+      {ciRepo ? <UntestedTag id="gitPushMcp.ciAllow" /> : <UntestedTag id={release ? "gitRelease" : "gitPushMcp"} />}
+      {ciRepo ? <strong>{t("gitPushMcp.ciAllowTitle", { repo: proposal.repo ?? "…" })}</strong> : release ? <>
         <strong>{proposal.tag ?? "…"}</strong>
         <small>{t("gitPushMcp.releaseOn", { branch: proposal.branch ?? "…" })}</small>
         <small className="git-push-proposal-sha">{shortSha(proposal.head)}</small>
@@ -111,6 +123,7 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
     </div>
     {proposal.url && <small className="git-push-proposal-url" title={proposal.url}>{proposal.url}</small>}
     {proposal.needs_url_confirm && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.confirmUrl")}</small>}
+    {ciRepo && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.ciAllowHelp")}</small>}
     {proposal.note && <p className="git-push-proposal-note">{t("gitPushMcp.note", { note: proposal.note })}</p>}
     {proposal.commits.length > 0 && <ul className="git-push-proposal-commits">
       {proposal.commits.map((line) => <li key={line}><code>{line}</code></li>)}
@@ -122,7 +135,7 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
       {showOutput && <pre className="git-push-proposal-output">{output}</pre>}
     </>}
     {pending && <div className="git-push-proposal-actions">
-      <button className="settings-btn sm primary" disabled={busy} onClick={() => void decide(true)}>{t(release ? "gitPushMcp.release" : proposal.needs_url_confirm ? "gitPushMcp.confirmAndPush" : "gitPushMcp.push")}</button>
+      <button className="settings-btn sm primary" disabled={busy} onClick={() => void decide(true)}>{t(ciRepo ? "gitPushMcp.ciAllow" : release ? "gitPushMcp.release" : proposal.needs_url_confirm ? "gitPushMcp.confirmAndPush" : "gitPushMcp.push")}</button>
       <button className="settings-btn sm" disabled={busy} onClick={() => void decide(false)}>{t("gitPushMcp.dismiss")}</button>
     </div>}
     {finished && <div className="git-push-proposal-actions">

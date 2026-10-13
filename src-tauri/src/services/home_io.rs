@@ -181,6 +181,13 @@ impl HomeDir {
         self.subdir_in(name, true).ok()
     }
 
+    /// [`HomeDir::subdir`] without creating anything: `None` when missing or
+    /// not a directory (a link included).
+    pub fn open_subdir(&self, name: &str) -> Option<Self> {
+        components(name).filter(|p| p.len() == 1)?;
+        self.subdir_in(name, false).ok()
+    }
+
     /// One name in this directory (a single component).
     pub fn file(&self, name: &str) -> Option<HomeFile> {
         components(name).filter(|p| p.len() == 1)?;
@@ -210,6 +217,124 @@ impl HomeDir {
             .collect();
         names.sort();
         names
+    }
+
+    /// Open the child directory `name` without creating it: `None` when
+    /// missing, a link or not a directory.
+    pub fn subdir_existing(&self, name: &str) -> Option<Self> {
+        components(name).filter(|p| p.len() == 1)?;
+        self.subdir_in(name, false).ok()
+    }
+
+    /// Remove the entry `name` in this directory — a file or a link as itself,
+    /// a directory with everything under it. Every level is opened through a
+    /// handle without following a link (`fstatat(AT_SYMLINK_NOFOLLOW)`,
+    /// `openat(O_NOFOLLOW)`, `unlinkat`), so a link swapped in anywhere below
+    /// is unlinked, never followed, and a directory swapped for a link
+    /// mid-walk fails the removal instead of redirecting it. `NotFound` when
+    /// `name` is not there.
+    pub fn remove_tree(&self, name: &str) -> io::Result<()> {
+        components(name)
+            .filter(|p| p.len() == 1)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        #[cfg(unix)]
+        {
+            self.remove_tree_in(OsStr::new(name), 0)
+        }
+        #[cfg(not(unix))]
+        {
+            // No fence on Windows (module doc): `remove_dir_all` does not
+            // follow links or junctions inside the tree.
+            let path = self.path.join(name);
+            let meta = std::fs::symlink_metadata(&path)?;
+            if meta.is_dir() && !meta.file_type().is_symlink() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn remove_tree_in(&self, name: &OsStr, depth: usize) -> io::Result<()> {
+        const MAX_DEPTH: usize = 64;
+        let c = cstr(name)?;
+        // SAFETY: a zeroed `stat` is a valid out-parameter.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: valid descriptor, C string and out-pointer.
+        if unsafe { libc::fstatat(self.fd.as_raw_fd(), c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if st.st_mode & libc::S_IFMT != libc::S_IFDIR {
+            // SAFETY: as above.
+            if unsafe { libc::unlinkat(self.fd.as_raw_fd(), c.as_ptr(), 0) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            return Ok(());
+        }
+        if depth >= MAX_DEPTH {
+            return Err(io::Error::other("directory tree too deep to remove"));
+        }
+        // SAFETY: as above; `O_NOFOLLOW` refuses a link swapped in since the
+        // `fstatat`.
+        let fd = unsafe {
+            libc::openat(
+                self.fd.as_raw_fd(),
+                c.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let child = HomeDir { fd: unsafe { OwnedFd::from_raw_fd(fd) }, path: self.path.join(name) };
+        for entry in child.entries()? {
+            child.remove_tree_in(&entry, depth + 1)?;
+        }
+        drop(child);
+        // SAFETY: as above.
+        if unsafe { libc::unlinkat(self.fd.as_raw_fd(), c.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// The names in this directory, read through the handle (not the path).
+    #[cfg(unix)]
+    fn entries(&self) -> io::Result<Vec<OsString>> {
+        use std::os::unix::ffi::OsStrExt;
+        // SAFETY: an open descriptor; the duplicate is owned by the stream.
+        let dup = unsafe { libc::fcntl(self.fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        if dup < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `dup` is a directory descriptor we own.
+        let stream = unsafe { libc::fdopendir(dup) };
+        if stream.is_null() {
+            let err = io::Error::last_os_error();
+            // SAFETY: not adopted by a stream, so still ours to close.
+            unsafe { libc::close(dup) };
+            return Err(err);
+        }
+        // The duplicate shares the offset with the handle: start at the top.
+        // SAFETY: a valid stream.
+        unsafe { libc::rewinddir(stream) };
+        let mut names = Vec::new();
+        loop {
+            // SAFETY: a valid stream; the entry is read before the next call.
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                break;
+            }
+            // SAFETY: `d_name` is NUL-terminated.
+            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if name != b"." && name != b".." {
+                names.push(OsStr::from_bytes(name).to_os_string());
+            }
+        }
+        // SAFETY: closes the stream and `dup` with it.
+        unsafe { libc::closedir(stream) };
+        Ok(names)
     }
 
     /// Make the directory private to the user (`0700`).
@@ -282,17 +407,24 @@ impl HomeFile {
 
     /// `lstat` of the name, never following a link.
     pub fn metadata(&self) -> Option<Meta> {
+        self.lstat().ok()
+    }
+
+    /// [`HomeFile::metadata`] with the error kept, for a caller that must tell
+    /// "not there" (`NotFound`) from "could not look" (a folder without search
+    /// permission, say) — treating the second as the first fails open.
+    pub fn lstat(&self) -> io::Result<Meta> {
         #[cfg(unix)]
         {
-            let c = cstr(&self.name).ok()?;
+            let c = cstr(&self.name)?;
             let mut st: libc::stat = unsafe { std::mem::zeroed() };
             // SAFETY: valid C string, descriptor and out-pointer.
             let r = unsafe { libc::fstatat(self.dir.fd.as_raw_fd(), c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
             if r != 0 {
-                return None;
+                return Err(io::Error::last_os_error());
             }
             let kind = st.st_mode & libc::S_IFMT;
-            Some(Meta {
+            Ok(Meta {
                 is_file: kind == libc::S_IFREG,
                 is_dir: kind == libc::S_IFDIR,
                 is_symlink: kind == libc::S_IFLNK,
@@ -303,8 +435,8 @@ impl HomeFile {
         }
         #[cfg(not(unix))]
         {
-            let meta = std::fs::symlink_metadata(self.path()).ok()?;
-            Some(Meta {
+            let meta = std::fs::symlink_metadata(self.path())?;
+            Ok(Meta {
                 is_file: meta.is_file(),
                 is_dir: meta.is_dir(),
                 is_symlink: meta.file_type().is_symlink(),
@@ -807,6 +939,40 @@ pub(crate) fn mkfifo(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_is_removed_through_handles_and_no_link_is_followed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(home.join("logs/session/a/b")).unwrap();
+        std::fs::create_dir_all(outside.join("session/keep")).unwrap();
+        std::fs::write(outside.join("precious"), b"x").unwrap();
+        std::fs::write(home.join("logs/session/a/b/c.json"), b"{}").unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("logs/session/a/dirlink")).unwrap();
+        std::os::unix::fs::symlink(outside.join("precious"), home.join("logs/session/filelink")).unwrap();
+
+        let logs = HomeDir::open_existing(&home, "logs").unwrap();
+        // The agent swaps `logs` for a link to a folder of its choosing after
+        // the handle was opened: the removal stays in the folder the handle
+        // holds.
+        std::fs::rename(home.join("logs"), home.join("logs.moved")).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("logs")).unwrap();
+        logs.remove_tree("session").unwrap();
+        assert!(!home.join("logs.moved/session").exists());
+        assert!(outside.join("session/keep").is_dir(), "the swapped-in link was followed");
+        assert_eq!(std::fs::read(outside.join("precious")).unwrap(), b"x");
+
+        // Missing is NotFound; a link entry is removed as itself.
+        assert_eq!(logs.remove_tree("session").unwrap_err().kind(), io::ErrorKind::NotFound);
+        let root = HomeDir::open_existing(&home, "").unwrap();
+        root.remove_tree("logs").unwrap();
+        assert!(std::fs::symlink_metadata(home.join("logs")).is_err());
+        assert!(outside.join("session/keep").is_dir());
+        assert!(root.remove_tree("../outside").is_err());
+        assert!(root.subdir_existing("missing").is_none());
+    }
 
     #[test]
     fn a_missing_directory_chain_is_created_private_and_a_write_lands_in_it() {

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { MobileSetupGuide } from "../mobile/MobileSetupGuide";
 import { PairedDeviceDialog } from "../mobile/PairedDeviceDialog";
+import { AddDevicePanel, useAddDevice } from "../mobile/AddDevice";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
@@ -102,11 +103,8 @@ export function MobileIndicator() {
   const refreshing = useMobileHostStatusStore((s) => s.refreshing);
   const statusError = useMobileHostStatusStore((s) => s.error);
   const [restarting, setRestarting] = useState<"reconnect" | "update" | null>(null);
-  const [pairing, setPairing] = useState(false);
-  // The code is only good for `PAIR_TTL` (five minutes), so it is held with its
-  // own expiry and dropped when that passes: a code still on screen after it
-  // stopped working is worse than no code at all.
-  const [pairCode, setPairCode] = useState<{ code: string; expiresAt: number } | null>(null);
+  const addDevice = useAddDevice();
+  const pairing = addDevice.busy;
   const [lockingDown, setLockingDown] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
@@ -133,17 +131,6 @@ export function MobileIndicator() {
   useEffect(() => {
     if (!mobileEnabled || !visible) closeMenu(MENU_ID);
   }, [mobileEnabled, visible, closeMenu]);
-
-  useEffect(() => {
-    if (!pairCode) return;
-    const remaining = pairCode.expiresAt * 1000 - Date.now();
-    if (remaining <= 0) {
-      setPairCode(null);
-      return;
-    }
-    const timer = window.setTimeout(() => setPairCode(null), remaining);
-    return () => window.clearTimeout(timer);
-  }, [pairCode]);
 
   const running = status?.running ?? false;
   const loadDevices = useCallback(async () => {
@@ -225,29 +212,6 @@ export function MobileIndicator() {
     }
   };
 
-  const createPairingCode = async () => {
-    // Pairing is the sidecar's own business, so the running host is asked again
-    // here rather than trusted from the last poll: the button is enabled off a
-    // status that may be up to MOBILE_HOST_POLL_MS old.
-    setPairing(true);
-    setError(null);
-    setPairCode(null);
-    try {
-      const current = await invoke<RuntimeStatus>("mobile_host_status");
-      useMobileHostStatusStore.getState().publish(current);
-      if (!current.running) throw new Error(tr("mobile.errStartHostFirst"));
-      const response = await invoke<AdminResponse>("mobile_admin", { request: { type: "pairing_code" } });
-      if (response.status !== "pairing_code" || !response.code) {
-        throw new Error(response.message ?? tr("mobile.errPairingUnavailable"));
-      }
-      setPairCode({ code: response.code, expiresAt: response.expires_at ?? Math.floor(Date.now() / 1000) + 300 });
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setPairing(false);
-    }
-  };
-
   const lockDownNow = async () => {
     if (!mobileHost) return;
     if (!window.confirm(tr("mobile.lockdownConfirm"))) return;
@@ -258,7 +222,7 @@ export function MobileIndicator() {
       if (response.status === "error") throw new Error(response.message ?? tr("mobile.indRevokeError"));
       await updateSettings({ [MOBILE_HOST_KEY]: { ...mobileHost, enabled: false } });
       await invoke("mobile_host_apply", { enabled: false });
-      setPairCode(null);
+      addDevice.clear();
       closeMenu(MENU_ID);
     } catch (reason) {
       setError(tr("mobile.lockdownPartial", { reason: String(reason) }));
@@ -294,7 +258,7 @@ export function MobileIndicator() {
 
   if (!visible) return null;
 
-  const shownError = error ?? statusError;
+  const shownError = error ?? addDevice.error ?? statusError;
 
   // Rendered from both branches so switching Mobile on from inside the guide
   // cannot yank the guide out from under the click that did it.
@@ -375,12 +339,7 @@ export function MobileIndicator() {
               {status?.origin && <div className="mobile-indicator-origin">{status.origin}</div>}
               {shownError && <ErrorNote className="mobile-indicator-error" error={shownError} />}
               {updateNotice && <div className="mobile-indicator-notice" role="status">{updateNotice}</div>}
-              {pairCode && (
-                <div className="mobile-indicator-paircode" role="status">
-                  <code>{pairCode.code}</code>
-                  <span>{t("mobile.pairCodeValidity")}</span>
-                </div>
-              )}
+              {addDevice.pairing && <AddDevicePanel pairing={addDevice.pairing} />}
               {running && devices && (
                 <div className="mobile-indicator-devices">
                   <div className="mobile-indicator-devices-label">
@@ -426,8 +385,8 @@ export function MobileIndicator() {
                 <button type="button" className="vpn-indicator-connect" disabled={busy} onClick={() => void restartHost("reconnect")}>
                   {restarting === "reconnect" ? t("mobile.indReconnecting") : t("mobile.indReconnect")}
                 </button>
-                <button type="button" className="vpn-indicator-connect" disabled={busy || !status?.running} onClick={() => void createPairingCode()}>
-                  {pairing ? t("mobile.creatingCode") : t("mobile.newPairingCode")}
+                <button type="button" className="vpn-indicator-connect" disabled={busy || !status?.running} onClick={() => void addDevice.start()}>
+                  {pairing ? t("mobile.creatingCode") : t("mobile.addDevice")} <UntestedTag id="mobile.addDevice" />
                 </button>
                 {(status?.update_available || restarting === "update") && (
                   <button

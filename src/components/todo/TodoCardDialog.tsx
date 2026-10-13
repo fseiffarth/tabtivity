@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useRef, useState } from "react";
 
 import type { CalendarTask, Subtask, TaskColumn } from "../../types";
@@ -60,6 +61,7 @@ function combineDue(date: string, time: string, withTime: boolean): string | nul
 
 export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const use24h = useUse24h();
   const isNew = !task.id;
   const mailClient = useExperimental("mail_client");
@@ -203,6 +205,8 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
       }}
     >
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="project-dialog dialog-framed todo-card-dialog"
         role="dialog"
         aria-modal="true"

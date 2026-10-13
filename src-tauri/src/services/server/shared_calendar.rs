@@ -27,8 +27,9 @@
 //! `calendar.json` only, and [`is_shared_id`] refuses a write naming one.
 
 use std::collections::{BTreeMap, BTreeSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -181,7 +182,7 @@ impl Shared {
     pub fn refresh(&self) -> Result<Vec<CalInfo>, String> {
         let list = expect_ok(ask_at(&self.socket, &Request::List)?)?.list;
         let stale: Vec<String> = {
-            let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+            let cache = self.cache.lock_ok();
             list.iter().filter(|i| cache.get(&i.id).is_none_or(|c| c.info.rev != i.rev || c.info.events != i.events || c.info.tasks != i.tasks)).map(|i| i.id.clone()).collect()
         };
         let mut fetched = BTreeMap::new();
@@ -191,7 +192,7 @@ impl Shared {
                 fetched.insert(id, content);
             }
         }
-        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut cache = self.cache.lock_ok();
         let listed: BTreeSet<&str> = list.iter().map(|i| i.id.as_str()).collect();
         cache.retain(|id, _| listed.contains(id.as_str()));
         cache.extend(fetched);
@@ -200,7 +201,7 @@ impl Shared {
 
     /// The revisions of what this daemon holds (for `wait`).
     pub fn revs(&self) -> BTreeMap<String, u64> {
-        self.cache.lock().unwrap_or_else(PoisonError::into_inner).iter().map(|(id, c)| (id.clone(), c.info.rev)).collect()
+        self.cache.lock_ok().iter().map(|(id, c)| (id.clone(), c.info.rev)).collect()
     }
 
     /// Block until the service has something newer than this daemon's copy
@@ -208,8 +209,8 @@ impl Shared {
     /// Callers that arrive while one wait is out share its answer.
     pub fn wait(&self) -> Result<bool, String> {
         let asked = std::time::Instant::now();
-        let _turn = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((ended, changed)) = *self.last_wait.lock().unwrap_or_else(PoisonError::into_inner) {
+        let _turn = self.waiting.lock_ok();
+        if let Some((ended, changed)) = *self.last_wait.lock_ok() {
             if ended >= asked {
                 return Ok(changed);
             }
@@ -220,7 +221,7 @@ impl Shared {
             // reloads the calendar (a page that never opened it).
             self.refresh()?;
         }
-        *self.last_wait.lock().unwrap_or_else(PoisonError::into_inner) = Some((std::time::Instant::now(), changed));
+        *self.last_wait.lock_ok() = Some((std::time::Instant::now(), changed));
         Ok(changed)
     }
 
@@ -231,7 +232,7 @@ impl Shared {
             eprintln!("shared calendars: {e}");
         }
         let Prefs { hidden, kept } = load_prefs(&self.state_dir);
-        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let cache = self.cache.lock_ok();
         for (id, content) in cache.iter() {
             let cal_id = local_id(id);
             let info = &content.info;
@@ -269,12 +270,12 @@ impl Shared {
 
     /// The shared calendar (service id) whose cached events hold `record_id`.
     fn owner_of_event(&self, record_id: &str) -> Option<(String, u64)> {
-        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let cache = self.cache.lock_ok();
         cache.iter().find_map(|(id, c)| c.events.iter().find(|e| e.get("id").and_then(Value::as_str) == Some(record_id)).map(|e| (id.clone(), e.get("rev").and_then(Value::as_u64).unwrap_or(0))))
     }
 
     fn owner_of_task(&self, record_id: &str) -> Option<(String, u64)> {
-        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let cache = self.cache.lock_ok();
         cache.iter().find_map(|(id, c)| c.tasks.iter().find(|t| t.get("id").and_then(Value::as_str) == Some(record_id)).map(|t| (id.clone(), t.get("rev").and_then(Value::as_u64).unwrap_or(0))))
     }
 
@@ -324,7 +325,7 @@ impl Shared {
         }
         let to = target?;
         let base_rev = if cached.is_some() { task.rev } else { 0 };
-        let owner = self.cache.lock().unwrap_or_else(PoisonError::into_inner).get(&to).is_some_and(|c| c.info.tasks == Some(Role::Owner));
+        let owner = self.cache.lock_ok().get(&to).is_some_and(|c| c.info.tasks == Some(Role::Owner));
         Some((|| {
             let record = to_value(task)?;
             let keep = stripped_of(&record);
@@ -377,7 +378,7 @@ impl Shared {
 
     /// The cached task `task_id`, as the calendar shows it.
     pub fn task(&self, task_id: &str) -> Option<CalendarTask> {
-        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let cache = self.cache.lock_ok();
         cache.iter().find_map(|(id, c)| {
             c.tasks.iter().find(|t| t.get("id").and_then(Value::as_str) == Some(task_id)).and_then(|t| serde_json::from_value::<CalendarTask>(t.clone()).ok()).map(|mut t| {
                 t.calendar_id = local_id(id);

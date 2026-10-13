@@ -14,7 +14,9 @@ summaries, and encryption for what is stored on this machine. It is
 experimental: switch it on in **Settings → System → Experimental** (Mail
 client). The mail assistant runs only on a local Ollama model that you assign
 to the **Mail** role in the Models & agents menu; nothing about your mail
-leaves the machine. See `local-models`.
+leaves the machine. It refuses an Ollama cloud model (one that runs on
+ollama.com) and any model Ollama does not list as installed. See
+`local-models`.
 
 ### Address book
 
@@ -50,6 +52,17 @@ Events, reminders, and `.ics` import and export, with CalDAV sync that merges
 by resource instead of replacing what is already there. Open it from the
 header's calendar indicator or `+` → Calendar. Drag in the grid to create an
 event.
+
+A CalDAV server address must start with `https://`. Plain `http://` is refused,
+because your password and calendar would cross the network unencrypted; for a
+server on your own machine, put a TLS proxy in front of it. Your password goes
+only to the server you entered and to other `https://` hosts under the same
+domain (a provider may answer from `p42-caldav.example.com` when you typed
+`caldav.example.com`). If you change an account from `http://` to `https://`,
+its calendars on the same server move along. An edit that cannot
+be sent right away (offline, a server error) stays on this computer and goes out
+with the next sync. If the server changed or deleted the same entry meanwhile,
+you are asked which version to keep.
 
 ## To-do board
 

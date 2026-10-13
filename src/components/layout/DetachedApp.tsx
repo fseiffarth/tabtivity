@@ -4,6 +4,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { detachedWindowVisible } from "../../lib/window/detachedVisibility";
 import { answerRetireRequests } from "../../lib/window/unsavedWork";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import {
   useSettingsStore,
   applyTheme,
@@ -80,6 +81,7 @@ import { chordMatches, resolveChord, zoomFor, type ShortcutMap } from "../../lib
 import { DetachedCenterPanel } from "./DetachedCenterPanel";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
+import { OpenExternalHost } from "../common/OpenExternalHost";
 import { SyncConfirmDialog } from "../common/SyncConfirmDialog";
 import { HpcGuardDialog } from "../common/HpcGuardDialog";
 import { UnfencedPlatformDialog } from "../common/UnfencedPlatformDialog";
@@ -416,7 +418,6 @@ export function DetachedApp({ param }: Props) {
   // trailing re-fire so a monitor switch measures the settled geometry rather
   // than mid-transition.
   useEffect(() => {
-    const unlisteners: Array<() => void> = [];
     let raf = 0;
     let trailing: ReturnType<typeof setTimeout> | undefined;
     const fire = () => {
@@ -433,8 +434,10 @@ export function DetachedApp({ param }: Props) {
       }, 250);
     };
     const win = getCurrentWindow();
-    win.onResized(fire).then((fn) => unlisteners.push(fn)).catch(() => {});
-    win.onScaleChanged(fire).then((fn) => unlisteners.push(fn)).catch(() => {});
+    const unlisteners = [
+      subscribeTauri(() => win.onResized(fire)),
+      subscribeTauri(() => win.onScaleChanged(fire)),
+    ];
     return () => {
       if (raf) cancelAnimationFrame(raf);
       if (trailing) clearTimeout(trailing);
@@ -871,6 +874,7 @@ export function DetachedApp({ param }: Props) {
       {/* A popout's viewer can Build or Format, so its exec-trust question
           renders here, in this window's own store. */}
       <ExecTrustHost />
+      <OpenExternalHost />
       {/* Same reason: a popout hosts the per-subwindow file viewer, so a pull or
           push can be started in this window and its confirmation has to render
           here — this store instance is this window's. */}

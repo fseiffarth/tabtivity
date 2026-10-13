@@ -10,10 +10,11 @@
  * step from mark to mark, and an outbox copy of a project file opens that
  * file's own layer (`docs/mobile_markup_shared_layer_plan.md`).
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { EMPTY_LAYER, addMark, type Layer } from "../../../mobile-web/src/markup/layer";
+import { EMPTY_LAYER, addMark, stampSize, type Layer } from "../../../mobile-web/src/markup/layer";
+import { DEFAULT_PRESETS, readPenPrefs, strokeWidth } from "../../../mobile-web/src/markup/pen";
 
 const store = vi.hoisted(() => ({
   loadLayer: vi.fn(),
@@ -192,6 +193,46 @@ describe("MarkupView", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws in the pen style, size and colour picked from the well, and erases a dragged area", async () => {
+    desktop();
+    store.saveLayer.mockClear();
+    const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(false));
+    const lastSaved = () => {
+      const calls = store.saveLayer.mock.calls as unknown as [string, Layer][];
+      return calls[calls.length - 1]?.[1];
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Colour: Red" }));
+    const options = () => within(screen.getByRole("group", { name: "Pen, colour and size" }));
+    // Yellow is the marker's, not the plain pen's.
+    expect(options().queryByRole("button", { name: "Yellow" })).toBeNull();
+    fireEvent.click(options().getByRole("button", { name: "Marker" }));
+    fireEvent.click(options().getByRole("button", { name: "Bold" }));
+    expect(options().getByText("Red — delete or fix")).toBeTruthy();
+    fireEvent.click(options().getByRole("button", { name: "Yellow" }));
+    const px = (units: number) => units * 336 / 800;
+    const canvas = container.querySelector(".markup-page-layer")!;
+    fireEvent.pointerDown(canvas, { pointerId: 1, pointerType: "mouse", clientX: px(100), clientY: px(200) });
+    fireEvent.pointerMove(canvas, { pointerId: 1, pointerType: "mouse", clientX: px(300), clientY: px(200) });
+    fireEvent.pointerUp(canvas, { pointerId: 1, pointerType: "mouse", clientX: px(300), clientY: px(200) });
+    await waitFor(() => expect(lastSaved()?.pages[1].marks).toHaveLength(2));
+    expect(lastSaved()!.pages[1].marks[1]).toMatchObject({ kind: "ink", color: "yellow", style: "marker", width: strokeWidth(800, { size: 2, style: "marker" }) });
+    // The eraser's well offers its sizes and the area.
+    fireEvent.click(screen.getByRole("button", { name: "Eraser" }));
+    fireEvent.click(screen.getByRole("button", { name: "Medium eraser" }));
+    fireEvent.click(screen.getByRole("button", { name: "Erase an area" }));
+    expect(screen.getByText(/Drag a rectangle/)).toBeTruthy();
+    fireEvent.pointerDown(canvas, { pointerId: 2, pointerType: "mouse", clientX: px(0), clientY: px(0) });
+    fireEvent.pointerMove(canvas, { pointerId: 2, pointerType: "mouse", clientX: px(800), clientY: px(600) });
+    expect(container.querySelector(".markup-area")).toBeTruthy();
+    fireEvent.pointerUp(canvas, { pointerId: 2, pointerType: "mouse", clientX: px(800), clientY: px(600) });
+    expect(container.querySelector(".markup-area")).toBeNull();
+    await waitFor(() => expect(lastSaved()?.pages).toEqual({}));
+    // The choices are this phone's, kept for the next view.
+    expect(readPenPrefs()).toMatchObject({ tool: "eraser", eraser: "area", style: "marker", size: 2, colors: { ink: "yellow" } });
   });
 
   it("clears every page from ⋯ in one step that Undo brings back", async () => {
@@ -425,5 +466,201 @@ describe("MarkupView · reading", () => {
     renderReader();
     await waitFor(() => expect(screen.getByRole("button", { name: /^Mark up/ }).classList.contains("has-marks")).toBe(true));
     expect(screen.queryByRole("toolbar")).toBeNull();
+  });
+});
+
+describe("MarkupView · tools round 2", () => {
+  /** The picture is 336 CSS pixels wide here: 800 / 336 page units a pixel. */
+  const px = (units: number) => units * 336 / 800;
+  const lastSaved = () => {
+    const calls = store.saveLayer.mock.calls as unknown as [string, Layer, unknown, unknown, Layer[] | undefined][];
+    return calls[calls.length - 1];
+  };
+  const lastMarks = () => lastSaved()?.[1].pages[1]?.marks ?? [];
+  async function open(layer: Layer | null = null) {
+    desktop();
+    store.loadLayer.mockResolvedValue(layer && { layer, fingerprint: { size: PICTURE.size, modified: PICTURE.modified }, saved: 1 });
+    store.saveLayer.mockClear();
+    const view = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalled());
+    await act(async () => {});
+    return view.container.querySelector(".markup-page-layer")!;
+  }
+  type Point = { pointerType?: string; width?: number; height?: number; pressure?: number };
+  const stroke = (canvas: Element, points: [number, number][], id = 1, extra: Point = {}) => {
+    const init = { pointerId: id, pointerType: "mouse", ...extra };
+    fireEvent.pointerDown(canvas, { ...init, clientX: px(points[0][0]), clientY: px(points[0][1]) });
+    for (const [x, y] of points.slice(1)) fireEvent.pointerMove(canvas, { ...init, clientX: px(x), clientY: px(y) });
+    const [x, y] = points[points.length - 1];
+    fireEvent.pointerUp(canvas, { ...init, clientX: px(x), clientY: px(y) });
+  };
+
+  it("says a picture has no text to mark, and marks nothing", async () => {
+    const canvas = await open();
+    fireEvent.click(screen.getByRole("button", { name: "Mark text" }));
+    expect(screen.getByText("No text on this page — draw instead")).toBeTruthy();
+    stroke(canvas, [[100, 100], [300, 100]]);
+    expect(lastMarks()).toEqual([]);
+  });
+
+  it("places the stamp picked in the well with one tap", async () => {
+    const canvas = await open(LAYER);
+    fireEvent.click(screen.getByRole("button", { name: "Stamp" }));
+    expect(screen.getByText("Tap where the stamp goes")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Colour: Red" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Stamp" })).getByRole("button", { name: "Swap" }));
+    stroke(canvas, [[100, 120]]);
+    await waitFor(() => expect(lastMarks()).toHaveLength(2));
+    expect(lastMarks()[1]).toEqual({ kind: "stamp", color: "red", at: [100, 120], size: stampSize(800), symbol: "swap" });
+  });
+
+  it("selects a mark with a tap, moves it, comments on it and deletes it", async () => {
+    const canvas = await open(LAYER);
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    // On the stroke from (10, 10) to (40, 30): dragged 100 units right and down.
+    stroke(canvas, [[25, 20], [75, 70], [125, 120]]);
+    await waitFor(() => expect(lastMarks()[0]).toMatchObject({ points: [[110, 110, 0.5], [140, 130, 0.5]] }));
+    expect(document.querySelector(".markup-selection")).toBeTruthy();
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Colour: Red" }));
+    const options = () => within(screen.getByRole("group", { name: "Select" }));
+    fireEvent.click(options().getByRole("button", { name: "Blue" }));
+    await waitFor(() => expect(lastMarks()[0]).toMatchObject({ color: "blue" }));
+    fireEvent.change(options().getByRole("textbox", { name: "Comment" }), { target: { value: "  too\nlong " } });
+    fireEvent.click(options().getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(lastMarks()[0]).toMatchObject({ comment: "too long" }));
+    fireEvent.click(options().getByRole("button", { name: "Remove comment" }));
+    await waitFor(() => expect(lastMarks()[0]).not.toHaveProperty("comment"));
+    fireEvent.click(options().getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(lastSaved()?.[1].pages).toEqual({}));
+    expect(document.querySelector(".markup-selection")).toBeNull();
+  });
+
+  it("selects the marks a dragged rectangle reaches, and a tap on nothing lets them go", async () => {
+    const both = addMark(LAYER, 1, [800, 600], { kind: "box", color: "yellow", rect: [200, 200, 50, 20] });
+    // Only the pen draws here, yet a finger selects, as it edits notes.
+    localStorage.setItem(storageDashKey("markup-pen"), "1");
+    const canvas = await open(both);
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    // From clear page (a press on a mark would grab it) around both marks.
+    stroke(canvas, [[500, 400], [300, 300], [0, 0]]);
+    expect(screen.getByText("2 selected")).toBeTruthy();
+    stroke(canvas, [[600, 500]], 2, { pointerType: "touch" });
+    expect(screen.queryByText("2 selected")).toBeNull();
+    expect(document.querySelector(".markup-selection")).toBeNull();
+    stroke(canvas, [[225, 210]], 3, { pointerType: "touch" });
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    // Nothing was drawn or moved: no save.
+    expect(store.saveLayer).not.toHaveBeenCalled();
+  });
+
+  it("straightens a stroke held still at its end, unless switched off in ⋯", async () => {
+    const canvas = await open();
+    const wobble: [number, number][] = [[100, 100], [150, 108], [200, 100], [250, 92], [300, 100]];
+    vi.useFakeTimers();
+    try {
+      const init = { pointerId: 1, pointerType: "mouse" };
+      fireEvent.pointerDown(canvas, { ...init, clientX: px(100), clientY: px(100) });
+      for (const [x, y] of wobble.slice(1)) fireEvent.pointerMove(canvas, { ...init, clientX: px(x), clientY: px(y) });
+      act(() => { vi.advanceTimersByTime(500); });
+      fireEvent.pointerUp(canvas, { ...init, clientX: px(300), clientY: px(100) });
+    } finally {
+      vi.useRealTimers();
+    }
+    await waitFor(() => expect(lastMarks()).toHaveLength(1));
+    expect((lastMarks()[0] as { points: unknown[] }).points).toEqual([[100, 100, 0.5], [300, 100, 0.5]]);
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("switch", { name: /Straighten a held stroke/ }));
+    expect(readPenPrefs().snap).toBe(false);
+    vi.useFakeTimers();
+    try {
+      const init = { pointerId: 2, pointerType: "mouse" };
+      fireEvent.pointerDown(canvas, { ...init, clientX: px(100), clientY: px(300) });
+      for (const [x, y] of wobble.slice(1)) fireEvent.pointerMove(canvas, { ...init, clientX: px(x), clientY: px(y + 200) });
+      act(() => { vi.advanceTimersByTime(500); });
+      fireEvent.pointerUp(canvas, { ...init, clientX: px(300), clientY: px(300) });
+    } finally {
+      vi.useRealTimers();
+    }
+    await waitFor(() => expect(lastMarks()).toHaveLength(2));
+    expect((lastMarks()[1] as { points: unknown[] }).points.length).toBeGreaterThan(2);
+  });
+
+  it("writes a note in the colour picked in its editor", async () => {
+    const canvas = await open();
+    fireEvent.click(screen.getByRole("button", { name: "Text note" }));
+    stroke(canvas, [[300, 300]]);
+    fireEvent.click(within(screen.getByRole("group", { name: "Note colour" })).getByRole("button", { name: "Blue" }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "fix" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(lastMarks()).toEqual([expect.objectContaining({ kind: "text", color: "blue", text: "fix" })]));
+  });
+
+  it("arms a preset with a tap, saves the pen as one and resets them", async () => {
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Colour: Red" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Presets" })).getByRole("button", { name: "Preset 2" }));
+    expect(screen.queryByRole("group", { name: "Presets" })).toBeNull();
+    expect(readPenPrefs()).toMatchObject({ tool: "ink", style: "marker", colors: { ink: "yellow" } });
+    fireEvent.click(screen.getByRole("button", { name: "Highlighter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour: Yellow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save as preset" }));
+    expect(readPenPrefs().presets).toHaveLength(4);
+    expect(readPenPrefs().presets[3]).toMatchObject({ tool: "box", color: "yellow" });
+    fireEvent.click(screen.getByRole("button", { name: "Reset presets" }));
+    expect(readPenPrefs().presets).toEqual(DEFAULT_PRESETS);
+  });
+
+  it("ignores a touch as wide as a palm, and still draws with a fingertip", async () => {
+    const canvas = await open();
+    stroke(canvas, [[100, 100], [300, 200]], 1, { pointerType: "touch", width: 40, height: 40 });
+    expect(lastMarks()).toEqual([]);
+    stroke(canvas, [[100, 100], [300, 200]], 2, { pointerType: "touch", width: 10, height: 10 });
+    await waitFor(() => expect(lastMarks()).toHaveLength(1));
+    // ⋯ steps the palm rejection on: Normal → Strict → Off.
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("button", { name: /Palm rejection/ }));
+    expect(readPenPrefs().palm).toBe("strict");
+  });
+
+  it("brings the undo steps the record kept back, and saves them with each change", async () => {
+    desktop();
+    store.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: PICTURE.size, modified: PICTURE.modified }, saved: 1, past: [EMPTY_LAYER] });
+    store.saveLayer.mockClear();
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    const undoButton = screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+    await waitFor(() => expect(undoButton.disabled).toBe(false));
+    fireEvent.click(undoButton);
+    await waitFor(() => expect(lastSaved()?.[1]).toEqual(EMPTY_LAYER));
+    expect(lastSaved()?.[4]).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    await waitFor(() => expect(lastSaved()?.[1]).toEqual(LAYER));
+    expect(lastSaved()?.[4]).toEqual([EMPTY_LAYER]);
+  });
+
+  it("marks the words a drag runs across, snapped to their line", async () => {
+    const PDF = { name: "paper.pdf", kind: "application/pdf", size: 9_000, modified: 1_790_000_000 };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([37, 80, 68, 70]), { status: 200 })));
+    store.loadLayer.mockResolvedValue(null);
+    store.saveLayer.mockClear();
+    const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} onClose={() => {}} />);
+    const frame = (container.querySelector("iframe.markup-frame") as HTMLIFrameElement).contentWindow!;
+    const say = (data: unknown) => window.dispatchEvent(new MessageEvent("message", { data, origin: "null", source: frame }));
+    const asked: { type: string; id?: number; page?: number }[] = [];
+    vi.spyOn(frame, "postMessage").mockImplementation((message: unknown) => { asked.push(message as { type: string }); });
+    act(() => { say({ type: "ready" }); say({ type: "meta", pages: [{ w: 800, h: 600 }] }); });
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Mark text" }));
+    await waitFor(() => expect(asked.some((message) => message.type === "text" && message.page === 1)).toBe(true));
+    const request = asked.find((message) => message.type === "text")!;
+    await act(async () => say({ type: "text", id: request.id, page: 1, runs: [{ str: "Hello brave world", x: 100, y: 100, w: 340, h: 20 }] }));
+    expect(screen.getByText("Drag across words — the marks snap to the lines")).toBeTruthy();
+    const canvas = container.querySelector(".markup-page-layer")!;
+    stroke(canvas, [[110, 110], [200, 112], [300, 110]]);
+    await waitFor(() => expect(lastMarks()).toHaveLength(1));
+    // A highlight over the whole words "Hello brave", the line's own height.
+    expect(lastMarks()[0]).toEqual({ kind: "box", color: "yellow", rect: [100, 100, 220, 20] });
   });
 });

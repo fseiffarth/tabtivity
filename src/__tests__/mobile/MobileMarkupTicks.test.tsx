@@ -89,7 +89,7 @@ function saved(): Layer {
   return calls[calls.length - 1][1];
 }
 
-const badges = () => screen.queryAllByRole("button", { name: /ticked this mark off as done/ });
+const badges = () => screen.queryAllByRole("button", { name: /ticked this off as done/ });
 const approveAll = () => screen.queryByRole("button", { name: "Approve all" });
 
 let skew = 0;

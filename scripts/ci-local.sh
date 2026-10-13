@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The local mirror of .github/workflows/ci-cd.yml: before a push, run what its
-# Linux jobs run (privacy, brand, secrets, lint, test), fail-fast, plus the
+# Linux jobs run (privacy, brand, secrets, lint, test-ubuntu), fail-fast, plus the
 # Windows and macOS cross-checks AGENTS.md asks for — the jobs on those
 # runners cannot run here, but their compile errors can be caught.
 #
@@ -39,6 +39,8 @@
 # as every crate. Any other file outside docs/, todo/, scripts/, .github/,
 # .githooks/ and *.md counts as frontend: the frontend build, and vitest's
 # `--changed <base>` (tests related to changed files) instead of the full suite.
+# The areas come from scripts/lib/changed.sh (shared with scripts/gates.sh),
+# which also counts a file outside a crate that the crate's tests read.
 #
 # The test steps run with a CI runner's environment (ci_like_env below:
 # symlinked TMPDIR, no global git config); CI_LOCAL_HOST_ENV=1 opts out.
@@ -52,6 +54,8 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
 workflow="${CI_LOCAL_WORKFLOW:-$repo/.github/workflows/ci-cd.yml}"
+# The change's areas (--fast), shared with scripts/gates.sh.
+. "$repo/scripts/lib/changed.sh"
 
 # ---------------------------------------------------------------------------
 # The steps, in run order: cheap checks first, then the lint job, the test
@@ -66,21 +70,21 @@ STEPS=(
   "drift|lint|ci-local.sh mirrors this workflow|ci|always"
   "privacy|privacy|Scan pushed changes for secrets / personal data|local:privacy@4197511463-1112|always"
   "gitleaks|secrets|Scan history for secrets|local:gitleaks@2296324494-115|always"
-  "npm-deps|lint,test,package|Install frontend dependencies|local:npm_deps@980916841-64|always"
+  "npm-deps|lint,test-ubuntu,package|Install frontend dependencies|local:npm_deps@4016385107-81|always"
   "lint-frontend|lint|Lint frontend|ci|always"
   "lint-backend|lint|Lint backend|ci|always"
   "lint-core|lint|Lint core crate|ci|always"
   "lint-gateway|lint|Lint gateway crate|ci|always"
   "lint-daemon-lib|lint|Lint the daemon's build of the library|ci|always"
   "lint-daemon|lint|Lint daemon crate|ci|always"
-  "failed-first|test|Re-run the last run's failed tests first|ci|always"
-  "build-frontend|test|Build frontend|ci|fe"
-  "test-frontend|test|Run frontend tests|ci|fe:vitest_changed"
-  "test-backend|test|Run backend tests|ci|backend"
-  "test-core|test|Run core crate tests|ci|core"
-  "test-gateway|test|Run gateway crate tests|ci|gateway"
-  "test-daemon-lib|test|Run the daemon build's library tests|ci|backend"
-  "daemon-ldd|test|Daemon links no desktop libraries|sub:target_dir|rs"
+  "failed-first|test-ubuntu|Re-run the last run's failed tests first|ci|always"
+  "build-frontend|test-ubuntu|Build frontend|ci|fe"
+  "test-frontend|test-ubuntu|Run frontend tests|ci|fe:vitest_changed"
+  "test-backend|test-ubuntu|Run backend tests|ci|backend"
+  "test-core|test-ubuntu|Run core crate tests|ci|core"
+  "test-gateway|test-ubuntu|Run gateway crate tests|ci|gateway"
+  "test-daemon-lib|test-ubuntu|Run the daemon build's library tests|ci|backend"
+  "daemon-ldd|test-ubuntu|Daemon links no desktop libraries|sub:target_dir|rs"
   "windows-clippy|local|Windows cross-check: clippy (src-tauri, all targets)|local:windows_clippy|rs"
   "windows-check|local|Windows cross-check: cargo check (workspace, all targets)|local:windows_check|rs"
   "macos-check|local|macOS cross-check: cargo check (workspace, all targets)|local:macos_check|rs"
@@ -95,8 +99,8 @@ ALLOW=(
   "*|Setup Rust|rust-toolchain.toml selects the same pinned Rust"
   "*|Rust cache|CI's target-dir cache; the local target dir persists"
   "secrets|Install gitleaks|an installed gitleaks is used, else the scan is SKIPPED"
-  "test|Restore the last run's failed tests|the list persists in the git dir"
-  "test|Save this run's failed tests|the list persists in the git dir"
+  "test-ubuntu|Restore the last run's failed tests|the list persists in the git dir"
+  "test-ubuntu|Save this run's failed tests|the list persists in the git dir"
   "package|Build release bundles|release packaging (npm run tauri:bundle), not a code gate"
   "package|Upload AppImage|artifact upload"
   "package|Upload DEB|artifact upload"
@@ -136,8 +140,9 @@ skip_gitleaks() {
 }
 run_gitleaks() { gitleaks git . --redact --no-banner --verbose; }
 
-# CI runs `npm ci`, which would delete and reinstall node_modules under
-# everything else using this tree. Check what npm ci would refuse or change.
+# CI runs `npm ci --ignore-scripts`, which would delete and reinstall
+# node_modules under everything else using this tree. Check what npm ci would
+# refuse or change.
 run_npm_deps() {
   echo "+ npm ls --package-lock-only --depth=0   # the lock satisfies package.json (npm ci refuses otherwise)"
   npm ls --package-lock-only --depth=0 >/dev/null
@@ -504,34 +509,16 @@ run_ci_text() {
 }
 
 compute_fast() {
-  local up branch f
+  local up branch
   if ! up="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
     branch="$(git branch --show-current)"
     up="origin/${branch:-develop}"
   fi
   git rev-parse -q --verify "$up^{commit}" >/dev/null || up=origin/develop
   FAST_BASE="$(git merge-base "$up" HEAD)" || die "--fast: no merge base with $up"
-  CHANGED="$( { git diff --name-only "$FAST_BASE"; git ls-files --others --exclude-standard; } | sort -u)"
-  A_FE=0 A_CORE=0 A_GATEWAY=0 A_TAURI=0 A_SERVERD=0 A_ALL=0
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    case "$f" in
-      src-core/*) A_CORE=1 ;;
-      src-gateway/*) A_GATEWAY=1 ;;
-      src-tauri/*) A_TAURI=1 ;;
-      src-serverd/*) A_SERVERD=1 ;;
-      Cargo.toml|Cargo.lock|rust-toolchain.toml) A_ALL=1 ;;
-      docs/*|todo/*|scripts/*|.github/*|.githooks/*|*.md) ;;
-      *) A_FE=1 ;;
-    esac
-  done <<<"$CHANGED"
-  local areas=""
-  [ "$A_FE" = 1 ] && areas+=" frontend"
-  [ "$A_CORE" = 1 ] && areas+=" src-core"
-  [ "$A_GATEWAY" = 1 ] && areas+=" src-gateway"
-  [ "$A_TAURI" = 1 ] && areas+=" src-tauri"
-  [ "$A_SERVERD" = 1 ] && areas+=" src-serverd"
-  [ "$A_ALL" = 1 ] && areas+=" cargo-workspace"
+  changed_areas "$FAST_BASE"
+  local areas
+  areas="$(changed_area_names)"
   echo "--fast: $(grep -c . <<<"$CHANGED" || true) files changed since $(git rev-parse --short "$FAST_BASE") ($up):${areas:- nothing that runs tests}"
 }
 

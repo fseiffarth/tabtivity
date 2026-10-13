@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { UntestedTag } from "../common/UntestedTag";
 import type { IcsFinding, IcsReport } from "../../lib/calendar/icsSafety";
 import { useT } from "../../lib/i18n";
@@ -91,10 +92,11 @@ export function IcsImportReviewDialog({
   onCancel: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onCancel);
 
   return (
     <div className="modal-backdrop">
-      <div className="project-dialog ics-review-dialog">
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog ics-review-dialog">
         <h2 className="ics-review-title">
           {t("icsReview.title")} <UntestedTag id="icsReview.title" />
         </h2>

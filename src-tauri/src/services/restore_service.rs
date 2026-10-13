@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 
 use crate::commands::apps::{do_launch, WindowRegistryState, ORIGIN_RESTORED};
@@ -60,7 +61,7 @@ pub fn restore_project_apps(
             continue;
         }
         {
-            let reg = registry.lock().unwrap();
+            let reg = registry.lock_ok();
             if reg
                 .windows
                 .values()

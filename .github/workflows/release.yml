@@ -28,7 +28,11 @@ on:
   workflow_dispatch:
   # Runs this file as main has it, with github.sha main's tip at trigger
   # time — the commit released is the run's own head_sha (SHA below).
-  workflow_run:
+  # zizmor's dangerous-triggers warns on every workflow_run: the risk is a
+  # privileged run acting on a fork's or a PR's artifacts. The job's `if:`
+  # admits only a green run of a push to this repository's own main, so the
+  # artifacts it downloads are ones main's own push built.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [ci-cd]
     types: [completed]
     branches: [main]
@@ -54,6 +58,12 @@ jobs:
     runs-on: ubuntu-24.04
     # Waiting for ci-cd (about an hour when it has just started) is most of it.
     timeout-minutes: 150
+    # RELEASE_SIGNING_KEY lives in this environment, not among the repository
+    # secrets: those reach a workflow run on any branch, this one only the
+    # refs its deployment rules admit (main and v* tags; Settings →
+    # Environments → release). A repository secret of the same name would
+    # still be read here, so delete it once the environment holds the key.
+    environment: release
     permissions:
       contents: write   # the tag and the Release
       actions: read     # the ci-cd run and its artifacts
@@ -68,6 +78,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           sparse-checkout: |
             package.json
@@ -252,7 +263,12 @@ jobs:
           gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$object" >/dev/null
           echo "created=1" >> "$GITHUB_OUTPUT"
 
-      - name: Publish GitHub Release
+      # zizmor's superfluous-actions suggests `gh release` instead. Kept: this
+      # third-party step never sees the signing key (only the signing step had
+      # it, and its file is gone), and assets it altered would fail
+      # SHA256SUMS.sig in every updater. Swap it only with a release watched
+      # end to end.
+      - name: Publish GitHub Release # zizmor: ignore[superfluous-actions]
         if: steps.decide.outputs.tag != ''
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:

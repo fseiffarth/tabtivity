@@ -60,13 +60,17 @@ import { resetOllamaAutoload, useOllamaAutoloadStore } from "../../stores/agents
 import { __resetOllamaActivityForTests } from "../../stores/agents/ollamaActivity";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { ModelsOverlayHost } from "../../components/models/ModelsOverlay";
+import { useTabsStore } from "../../stores/tabs";
+import { localModelTabLabels } from "../../components/models/useModelsHub";
+import { envName } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);
 
-type Model = { name: string; running: boolean };
+type Model = { name: string; running: boolean; remote?: boolean };
 let models: Model[] = [];
 let patches: Array<Record<string, unknown>> = [];
 let ollamaInstalled = true;
+let clearAnswer: (model: string) => Promise<unknown> = () => Promise.resolve(null);
 
 const modelInfo = (m: Model) => ({
   name: m.name,
@@ -76,6 +80,7 @@ const modelInfo = (m: Model) => ({
   size_vram: 0,
   size: 4_000_000_000,
   capabilities: ["completion", "tools"],
+  remote: m.remote ?? false,
 });
 
 function backend() {
@@ -115,6 +120,8 @@ function backend() {
         return Promise.resolve([]);
       case "machine_load_snapshot":
         return Promise.resolve({ supported: false });
+      case "clear_local_model_conversations":
+        return clearAnswer(args?.model as string);
       case "stop_ollama_model":
         models = models.map((m) => (m.name === args?.model ? { ...m, running: false } : m));
         return Promise.resolve(null);
@@ -164,6 +171,8 @@ beforeEach(() => {
   ];
   patches = [];
   ollamaInstalled = true;
+  clearAnswer = () => Promise.resolve(null);
+  useTabsStore.setState({ tabs: [], tabsByScope: {} } as never);
   h.listeners.clear();
   invokeMock.mockReset();
   backend();
@@ -254,6 +263,47 @@ describe("LocalModelMenu dropdown", () => {
     fireEvent.click(unload);
     await waitFor(() => expect(patches.filter((p) => "ollama_roles" in p)).toHaveLength(1));
     expect(patches.find((p) => "ollama_roles" in p)?.ollama_model).toBe("qwen:7b");
+  });
+});
+
+describe("LocalModelMenu and Ollama cloud models (gap 25)", () => {
+  it("never gives a sole resident cloud model the roles", async () => {
+    models = [{ name: "gpt-oss:120b-cloud", running: true, remote: true }];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    await screen.findByText("gpt-oss:120b-cloud");
+    await waitFor(() => expect(calls("list_ollama_models_detailed").length).toBeGreaterThan(0));
+    expect(patches.filter((p) => "ollama_roles" in p)).toHaveLength(0);
+  });
+
+  it("gives the one local resident every role beside a cloud model", async () => {
+    models = [
+      { name: "gpt-oss:120b-cloud", running: true, remote: true },
+      { name: "qwen:7b", running: true },
+    ];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    await waitFor(() => expect(patches.filter((p) => "ollama_roles" in p)).toHaveLength(1));
+    const patch = patches.find((p) => "ollama_roles" in p)!;
+    expect(patch.ollama_model).toBe("qwen:7b");
+    expect((patch.ollama_roles as Record<string, string>).mail).toBe("qwen:7b");
+  });
+
+  it("disables a cloud model's Mail chip with the reason, and leaves a local one alone", async () => {
+    models = [
+      { name: "gpt-oss:120b-cloud", running: true, remote: true },
+      { name: "qwen:7b", running: true },
+    ];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    const cloudMail = await screen.findByTitle(/gpt-oss:120b-cloud is an Ollama cloud model/);
+    expect(cloudMail.textContent).toBe("Mail");
+    expect((cloudMail as HTMLButtonElement).disabled).toBe(true);
+    const mailChips = screen.getAllByRole("button", { name: "Mail" }) as HTMLButtonElement[];
+    const localMail = mailChips.filter((b) => b !== cloudMail);
+    expect(localMail).toHaveLength(1);
+    expect(localMail[0].disabled).toBe(false);
+    expect(localMail[0].title).not.toMatch(/cloud/);
   });
 });
 
@@ -408,5 +458,79 @@ describe("LocalModelMenu button and the Models & agents overlay", () => {
     } finally {
       outside.remove();
     }
+  });
+});
+
+describe("Clear conversations (gap 33 follow-up)", () => {
+  const vibeTab = (key: string, label: string, env: Record<string, string>) =>
+    ({ key, label, cmd: "vibe", cwd: "/", kind: "local_agent", env }) as never;
+
+  it("finds a model's open tabs in every scope, by raw name or alias", () => {
+    const state = {
+      tabs: [vibeTab("a", "qwen here", { [envName("LOCAL_MODEL")]: "qwen:7b" })],
+      tabsByScope: {
+        p1: [vibeTab("a", "qwen here", { [envName("LOCAL_MODEL")]: "qwen:7b" })],
+        p2: [
+          vibeTab("b", "restored qwen", { VIBE_ACTIVE_MODEL: "qwen-7b" }),
+          vibeTab("c", "llama", { [envName("LOCAL_MODEL")]: "llama:8b", VIBE_ACTIVE_MODEL: "llama-8b" }),
+          { key: "d", label: "shell", cmd: "bash", cwd: "/", env: { VIBE_ACTIVE_MODEL: "qwen-7b" } } as never,
+        ],
+      },
+    };
+    expect(localModelTabLabels("qwen:7b", state)).toEqual(["qwen here", "restored qwen"]);
+    expect(localModelTabLabels("mistral", state)).toEqual([]);
+  });
+
+  it("asks, then clears the model's conversations and its mark", async () => {
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    const chip = await screen.findByTitle(/Delete qwen:7b's stored conversations/);
+    fireEvent.click(chip);
+    expect(await screen.findByText("Clear qwen:7b's conversations?")).toBeTruthy();
+    // The dialog outlives the dropdown it was raised from.
+    fireEvent.mouseLeave(wrap);
+    // Cancel is the focused default on a destructive confirm.
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    expect(calls("clear_local_model_conversations")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Clear conversations" }));
+    expect(await screen.findByText("qwen:7b's conversations cleared")).toBeTruthy();
+    expect(calls("clear_local_model_conversations")).toEqual([
+      ["clear_local_model_conversations", { model: "qwen:7b" }],
+    ]);
+  });
+
+  it("refuses while a tab of the model is open, naming it, and never asks the backend", async () => {
+    useTabsStore.setState({
+      tabs: [],
+      tabsByScope: { p1: [vibeTab("t1", "Thesis helper", { [envName("LOCAL_MODEL")]: "qwen:7b" })] },
+    } as never);
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    fireEvent.click(await screen.findByTitle(/Delete qwen:7b's stored conversations/));
+    expect(await screen.findByText("qwen:7b's conversations were not cleared")).toBeTruthy();
+    expect(screen.getByText(/Close the tabs of this model first: Thesis helper\./)).toBeTruthy();
+    expect(calls("clear_local_model_conversations")).toHaveLength(0);
+  });
+
+  it("says so when the backend finds a tab of the model still running", async () => {
+    clearAnswer = () => Promise.reject("local_model_tab_open");
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    fireEvent.click(await screen.findByTitle(/Delete qwen:7b's stored conversations/));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear conversations" }));
+    expect(await screen.findByText(/A tab of this model is still running/)).toBeTruthy();
+  });
+
+  it("says the conversations went but the read-mail mark stayed when a tab started mid-clear", async () => {
+    clearAnswer = () => Promise.reject("local_model_tab_started");
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    fireEvent.click(await screen.findByTitle(/Delete qwen:7b's stored conversations/));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear conversations" }));
+    expect(
+      await screen.findByText("qwen:7b's conversations were cleared, but its read-mail mark was kept"),
+    ).toBeTruthy();
+    expect(screen.getByText(/A tab of this model started while they were being deleted/)).toBeTruthy();
+    expect(screen.queryByText("qwen:7b's conversations were not cleared")).toBeNull();
   });
 });

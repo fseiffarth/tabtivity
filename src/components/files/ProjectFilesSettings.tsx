@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -281,6 +282,7 @@ export function ProjectFilesSettingsDialog({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const settings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const {
@@ -315,7 +317,7 @@ export function ProjectFilesSettingsDialog({
   return createPortal(
     <>
     <div className="modal-backdrop how-to-start-backdrop" onMouseDown={onClose}>
-      <div className="settings-dialog project-settings-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="settings-dialog project-settings-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <SettingsHeader title={t("projectSettings.title")} onClose={onClose} />
 
         {/* `.settings-dialog` is a split-scroll FRAME: it clips (overflow:hidden,

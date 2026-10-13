@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useModalFocus } from "../../hooks/useModalFocus";
+import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "../../stores/projects";
@@ -82,13 +83,7 @@ export function SendToProjectDialog({ source, fromProjectId, onClose }: Props) {
   const [finalRel, setFinalRel] = useState("");
 
   // Escape closes, mirroring the app's other modals.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const modalRef = useModalFocus(onClose);
 
   const loadFolder = useCallback(
     (project: ProjectEntry, target: string) => {
@@ -155,6 +150,10 @@ export function SendToProjectDialog({ source, fromProjectId, onClose }: Props) {
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="settings-dialog folder-picker-dialog send-to-project-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

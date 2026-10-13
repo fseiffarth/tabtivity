@@ -11,7 +11,8 @@
 
 #[cfg(target_os = "linux")]
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(target_os = "linux")]
+use app_core::sync::LockExt;
 
 use serde::Serialize;
 
@@ -82,12 +83,7 @@ pub struct SshLinkSnapshot {
     pub warning: Option<String>,
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
+use crate::clock::now_ms;
 
 fn unsupported_host(
     remote: bool,
@@ -758,11 +754,10 @@ pub async fn network_host_snapshot(
     } else {
         REMOTE_IFACES
     };
-    let output = tokio::task::spawn_blocking(move || {
+    let output = app_core::rt::try_blocking("network snapshot", move || {
         crate::services::ssh_exec::run_remote_shell(&spec, command)
     })
-    .await
-    .map_err(|e| format!("network snapshot task failed: {e}"))??;
+    .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Ok(unsupported_host(
@@ -876,7 +871,7 @@ fn cached_master(project_id: &str, args: &[String]) -> Option<u32> {
 
 #[cfg(target_os = "linux")]
 fn cached_master_as(project_id: &str, args: &[String], comm: &str) -> Option<u32> {
-    let mut known = known_masters().lock().unwrap_or_else(|p| p.into_inner());
+    let mut known = known_masters().lock_ok();
     let (known_args, pid, start) = known.get(project_id)?.clone();
     if known_args == args && start_time_of(pid, comm) == Some(start) {
         return Some(pid);
@@ -894,8 +889,7 @@ fn remember_master(project_id: &str, args: Vec<String>, pid: u32) {
 fn remember_master_as(project_id: &str, args: Vec<String>, pid: u32, comm: &str) {
     if let Some(start) = start_time_of(pid, comm) {
         known_masters()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_ok()
             .insert(project_id.to_string(), (args, pid, start));
     }
 }
@@ -1227,9 +1221,7 @@ pub async fn network_ssh_link_snapshot(
             warning: Some("Connect the SSH project to observe its link.".to_string()),
         });
     }
-    tokio::task::spawn_blocking(move || local_ssh_link(&project_id))
-        .await
-        .map_err(|e| format!("SSH-link snapshot task failed: {e}"))
+    app_core::rt::blocking("SSH-link snapshot", move || local_ssh_link(&project_id)).await
 }
 
 #[cfg(test)]

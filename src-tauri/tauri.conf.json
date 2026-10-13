@@ -1,6 +1,6 @@
 {
   "productName": "Tabtivity",
-  "version": "0.2.2",
+  "version": "0.2.8",
   "identifier": "io.github.fseiffarth.tabtivity",
   "build": {
     "frontendDist": "../dist",
@@ -11,6 +11,8 @@
   "app": {
     "windows": [
       {
+        "label": "main",
+        "create": false,
         "title": "Tabtivity",
         "width": 1400,
         "height": 900,

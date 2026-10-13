@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ProjectEntry } from "../../types";
@@ -28,6 +29,7 @@ import { useT } from "../../lib/i18n";
  */
 export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const projects = useProjectsStore((s) => s.projects);
   const boxes = useBoxesStore((s) => s.boxes);
   const renameBox = useBoxesStore((s) => s.renameBox);
@@ -107,11 +109,12 @@ export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="project-dialog dialog-framed box-editor"
         onMouseDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-        }}
       >
         <div className="settings-title-row">
           <h2>

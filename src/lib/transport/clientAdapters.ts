@@ -31,6 +31,9 @@ export function adaptClientCommand(client: WsClient, cmd: string, args: Args): P
       return Promise.resolve(false);
     // Open outside / reveal: a download or a new tab on the user-content origin.
     case "open_file":
+      // The desktop's launcher check (gap 21) has nothing to judge here: the
+      // browser downloads or shows the file itself. The ask still runs.
+      if (args.checkOnly) return Promise.resolve(null);
       return openContentUrl(client, String(args.path ?? ""), false);
     case "open_in_file_manager":
       return Promise.reject(new Error("open_in_file_manager: the server's folders cannot be shown in this browser"));

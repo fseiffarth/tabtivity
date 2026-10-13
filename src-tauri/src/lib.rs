@@ -22,11 +22,14 @@ pub use app_core::{
     app_env, app_name, app_repo, app_slug, app_tab_command, app_upper, legacy_name, legacy_slug,
     legacy_upper,
 };
+pub mod clock;
 pub mod commands;
+pub mod digest;
 pub mod duscan;
 pub mod gpustat;
 pub mod paths;
 pub mod platform;
+pub mod quote;
 pub mod schema;
 pub mod services;
 pub mod storage;
@@ -37,6 +40,7 @@ pub mod terminal;
 pub(crate) mod test_util;
 
 use commands::apps::{WindowRegistry, WindowRegistryState};
+use app_core::sync::LockExt;
 use commands::terminal::RegistryState;
 use commands::workspace::{WorkspaceState, WorkspaceStateArc};
 use std::sync::{Arc, Mutex};
@@ -113,11 +117,7 @@ fn append_to_log(path: &std::path::Path, msg: &str) {
 
 /// Human-readable ISO 8601 UTC timestamp with no external dependencies.
 pub(crate) fn iso_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let secs = clock::now_secs();
     let (y, mo, d, h, mi, s) = storage::epoch_to_utc(secs);
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
 }
@@ -565,6 +565,86 @@ pub fn format_crash_line(code: u32, addr: usize, buf: &mut [u8]) -> usize {
     pos
 }
 
+/// The app origins this build's own pages load from (`services::nav_gate`):
+/// the dev server's too, but only in a build that serves from it.
+#[cfg(feature = "desktop")]
+fn app_origins<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> services::nav_gate::AppOrigins {
+    let dev = if tauri::is_dev() { app.config().build.dev_url.clone() } else { None };
+    services::nav_gate::AppOrigins::for_build(cfg!(windows), dev.as_ref())
+}
+
+/// Decision D6: one gate on every webview's navigations, the config-created
+/// `main` window included. App windows (`main`, `detached-*`, `present-*`,
+/// `connect`, and any label nobody decided on) stay on the app origin;
+/// live browser pages and print windows keep their own gates.
+#[cfg(feature = "desktop")]
+fn nav_gate_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    use services::nav_gate::{gate_for, may_navigate, Gate};
+    use tauri::Manager;
+    tauri::plugin::Builder::new("nav-gate")
+        .on_navigation(|webview, url| match gate_for(webview.label()) {
+            Gate::Own => true,
+            Gate::AppOrigin => {
+                let allowed = may_navigate(url, &app_origins(webview.app_handle()));
+                if !allowed {
+                    eprintln!(
+                        "nav-gate: refused a navigation of {} to {}://{}",
+                        webview.label(),
+                        url.scheme(),
+                        url.host_str().unwrap_or("")
+                    );
+                }
+                allowed
+            }
+        })
+        .build()
+}
+
+/// The new-window handler every app window is built with (decision D6,
+/// gap 38): a middle click, `target=_blank` or `window.open` never opens a
+/// webview of the app's. A web page off the app origin goes to the system
+/// browser the way `open_external_url` sends every external link; anything
+/// else opens nowhere.
+#[cfg(feature = "desktop")]
+pub(crate) fn app_new_window<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> impl Fn(tauri::Url, tauri::webview::NewWindowFeatures) -> tauri::webview::NewWindowResponse<R> + Send + 'static
+{
+    move |url, _features| {
+        if let services::nav_gate::NewWindow::External(target) =
+            services::nav_gate::new_window(&url, &app_origins(&app))
+        {
+            // Off the UI thread: `opener` may wait on the desktop's handler.
+            std::thread::spawn(move || {
+                if let Err(e) = commands::ssh::open_external_url(target) {
+                    eprintln!("nav-gate: {e}");
+                }
+            });
+        }
+        tauri::webview::NewWindowResponse::Deny
+    }
+}
+
+/// Build the `main` window from its `tauri.conf.json` entry (which says
+/// `create: false`), so it carries [`app_new_window`]: a window Tauri creates
+/// from the config gets no new-window handler.
+#[cfg(feature = "desktop")]
+fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+    let label = services::window_service::MAIN_WINDOW_LABEL;
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == label)
+        .cloned()
+        .unwrap_or_else(|| tauri::utils::config::WindowConfig { label: label.to_string(), ..Default::default() });
+    tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+        .on_new_window(app_new_window(app.handle().clone()))
+        .build()?;
+    Ok(())
+}
+
 /// Webview renderer crashes (e.g. WebKitWebProcess SIGBUS) happen in a child
 /// process, so the signal handlers above never fire and the window keeps
 /// showing its last frame — an apparent freeze. Hook WebKit's
@@ -986,7 +1066,7 @@ fn restore_main_window(app: &tauri::App) {
     #[cfg(not(target_os = "macos"))]
     let _ = win.set_fullscreen(false);
 
-    let saved = storage::read_json::<schema::Settings>(&storage::state_dir().join("settings.json"))
+    let saved = storage::read_json::<schema::Settings>(&storage::settings_path())
         .ok()
         .and_then(|s| s.window_state);
     let monitors: Vec<services::window_state::MonitorRect> = win
@@ -1293,6 +1373,10 @@ pub fn run() {
         .manage(mobile_desktop.clone())
         .manage(pick_grants)
         .setup(move |_app| {
+            // The main window is built here, not by Tauri from the config,
+            // so it gets the new-window gate (`create_main_window`). Before
+            // anything below looks it up.
+            create_main_window(_app)?;
             // First: converted commands and services read their `CoreCtx`
             // from here, and `rt::spawn` needs Tauri's runtime installed.
             let core = tauri_host::install(_app.handle(), core_state);
@@ -1348,7 +1432,7 @@ pub fn run() {
             {
                 use tauri::{Emitter, Manager};
                 let handle = _app.handle().clone();
-                _app.state::<WindowRegistryState>().lock().unwrap().notify =
+                _app.state::<WindowRegistryState>().lock_ok().notify =
                     Some(Arc::new(move |project_id: Option<String>| {
                         let _ = handle.emit(
                             "app-windows-changed",
@@ -1374,7 +1458,7 @@ pub fn run() {
                 let workspace = _app.state::<WorkspaceStateArc>().inner().clone();
                 std::thread::spawn(move || {
                     if let Some(id) = platform::x11::find_window_for_title(crate::brand::DISPLAY, 30) {
-                        workspace.lock().unwrap().backend.set_main_window_id(id);
+                        workspace.lock_ok().backend.set_main_window_id(id);
                     }
                 });
             }
@@ -1388,7 +1472,7 @@ pub fn run() {
                 let workspace = _app.state::<WorkspaceStateArc>().inner().clone();
                 if let Some(hwnd) = _app.get_webview_window("main").and_then(|w| w.hwnd().ok()) {
                     let id = hwnd.0 as usize as u64;
-                    workspace.lock().unwrap().backend.set_main_window_id(id);
+                    workspace.lock_ok().backend.set_main_window_id(id);
                     // Add the WS_MAXIMIZEBOX/WS_THICKFRAME styles a borderless wry
                     // window lacks, so dragging the header against a screen edge
                     // triggers the native Aero Snap (top → maximize, sides → half).
@@ -1407,7 +1491,7 @@ pub fn run() {
                     .and_then(|w| w.ns_window().ok())
                     .and_then(platform::macos::ns_window_id)
                 {
-                    workspace.lock().unwrap().backend.set_main_window_id(id);
+                    workspace.lock_ok().backend.set_main_window_id(id);
                 }
             }
             // #240: watch for the display arrangement changing and re-fit every
@@ -1589,6 +1673,8 @@ pub fn run() {
             commands::mobile_control::global_inbox_open,
             commands::mobile_control::global_inbox_reveal,
             commands::mobile_control::global_inbox_delete,
+            commands::mobile_control::phone_uploads_list,
+            commands::mobile_control::phone_upload_undo,
             commands::default_apps::get_default_apps,
             commands::default_apps::save_default_apps,
             commands::default_apps::patch_default_apps,
@@ -1705,6 +1791,7 @@ pub fn run() {
             commands::projects::clear_archive,
             // Full project export / import (docs/context/project_transfer.md)
             commands::project_transfer::preview_project_export,
+            commands::project_transfer::preview_host_export,
             commands::project_transfer::export_project,
             commands::project_transfer::inspect_project_export,
             commands::project_transfer::import_project_export,
@@ -2254,6 +2341,7 @@ pub fn run() {
             commands::ollama::list_ollama_models,
             commands::ollama::ensure_vibe_ollama_model,
             commands::ollama::prepare_local_agent,
+            commands::ollama::clear_local_model_conversations,
             commands::ollama::list_local_drivers,
             commands::ollama::prepare_local_launch,
             commands::ollama::ensure_ollama_running,
@@ -2370,6 +2458,8 @@ pub fn run() {
             commands::spell::spell_install_language,
             commands::spell::spell_remove_language,
         ])))
+        // Decision D6: app windows never navigate off the app origin.
+        .plugin(nav_gate_plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_notification::init())
@@ -2434,12 +2524,12 @@ pub fn run() {
                         // A Wayland scope-out retire is an intended close whose
                         // record stays for the respawn: released, not reported.
                         let (wid, report) = commands::subwindow::on_detached_destroyed(
-                            &mut reg.lock().unwrap(),
+                            &mut reg.lock_ok(),
                             label,
                         );
                         if let Some(wid) = wid {
                             let ws = _app.state::<commands::workspace::WorkspaceStateArc>();
-                            ws.lock().unwrap().backend.unset_parkable(wid);
+                            ws.lock_ok().backend.unset_parkable(wid);
                         }
                         // Group B #224: tell the frontend a popout died. A
                         // legitimate teardown drops the store record BEFORE the
@@ -2488,7 +2578,7 @@ pub fn run() {
                 // tab's in-container process is TERMed via its still-live
                 // container. Dropping the registry alone would kill only the
                 // shell leaders and orphan everything they spawned.
-                _app.state::<RegistryState>().lock().unwrap().kill_all();
+                _app.state::<RegistryState>().lock_ok().kill_all();
                 // The local tmux servers those PTYs were clients of survive the
                 // clients by design (that is what makes a crash resumable), so a
                 // clean quit ends Tabtivity's own sessions explicitly. The window's

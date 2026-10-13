@@ -1,5 +1,7 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { useProjectsStore } from "../../stores/projects";
 import {
   LOCAL_LOSS_EVENTS,
@@ -89,24 +91,22 @@ export function LocalLossDialog() {
   useEffect(() => {
     if (!activeId) return;
     void refresh(activeId);
-    const uns: Array<() => void> = [];
-    let cancelled = false;
-    const on = (event: string) => {
-      void listen(event, (e) => {
-        if (localLossEventConcerns(event, e.payload, activeId)) void refresh(activeId);
-      }).then((u) => (cancelled ? u() : uns.push(u)));
-    };
-    LOCAL_LOSS_EVENTS.forEach(on);
-    return () => {
-      cancelled = true;
-      uns.forEach((u) => u());
-    };
+    const uns = LOCAL_LOSS_EVENTS.map((event) =>
+      subscribeTauri(() =>
+        listen(event, (e) => {
+          if (localLossEventConcerns(event, e.payload, activeId)) void refresh(activeId);
+        }),
+      ),
+    );
+    return () => uns.forEach((u) => u());
   }, [activeId, refresh]);
 
   // Only ever speak for the project on screen: a log fetched for a project the user has
   // since switched away from is not this project's news.
   const mine = loadedFor === activeId ? entries : [];
   const unseen = mine.filter((e) => !e.acked);
+  // No backdrop and no Escape: the report is acknowledged with its button.
+  const modalRef = useModalFocus(() => {}, !!activeId && unseen.length > 0);
   if (!activeId || unseen.length === 0) return null;
 
   const files = unseen.reduce((n, e) => n + e.total, 0);
@@ -116,7 +116,7 @@ export function LocalLossDialog() {
     // only ever shown because something was already destroyed, and acknowledging it is
     // permanent. A stray click on the backdrop must not be able to make it go away.
     <div className="modal-backdrop">
-      <div className="project-dialog local-loss-dialog">
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog local-loss-dialog">
         <h2 className="local-loss-title">{t("localLoss.title")}</h2>
         <p className="local-loss-lede">
           {t("localLoss.ledePre")}{" "}

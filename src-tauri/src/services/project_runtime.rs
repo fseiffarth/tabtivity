@@ -1,4 +1,5 @@
 use crate::brand::SLUG;
+use app_core::sync::LockExt;
 use serde::{Deserialize, Serialize};
 use app_core::CoreCtx;
 
@@ -152,7 +153,7 @@ pub fn switch_session(
         let next = project_id.map(String::from);
         std::thread::spawn(move || {
             if let Some(prev) = prev {
-                let live = registry.lock().unwrap().any_live_for_scope(&prev);
+                let live = registry.lock_ok().any_live_for_scope(&prev);
                 if !live {
                     crate::services::sandbox::down_for_project(&prev);
                     // The container rule, verbatim, for the VM tier
@@ -204,7 +205,7 @@ pub fn switch(
                 not(any(target_os = "windows", target_os = "macos")),
                 allow(unused_mut)
             )]
-            let mut wins = win_registry.lock().unwrap();
+            let mut wins = win_registry.lock_ok();
             // Windows/macOS: re-resolve any project-owned window whose id was never
             // captured at launch time (the visible top-level often belongs to a
             // CHILD of the spawned pid). Runs while holding ONLY the registry lock,
@@ -220,7 +221,7 @@ pub fn switch(
             );
             window_service::project_window_ids(&wins.windows, previous_project_id)
         };
-        let ws = workspace.lock().unwrap();
+        let ws = workspace.lock_ok();
         window_service::hide_windows(&*ws.backend, &prev_wids);
     }
 
@@ -233,7 +234,7 @@ pub fn switch(
     // 6. Save previous window session IDs to .tabtivity/sessions/windows.json.
     if let Some(local_file) = previous_local_file {
         let prev_reg_ids = {
-            let wins = win_registry.lock().unwrap();
+            let wins = win_registry.lock_ok();
             window_service::project_tracked_ids(&wins.windows, previous_project_id)
         };
         window_service::save_window_session(local_file, &prev_reg_ids);
@@ -249,16 +250,16 @@ pub fn switch(
     // 8. Show next project-owned windows (including freshly restored ones).
     {
         let next_wids = {
-            let wins = win_registry.lock().unwrap();
+            let wins = win_registry.lock_ok();
             window_service::project_window_ids(&wins.windows, project_id)
         };
-        let ws = workspace.lock().unwrap();
+        let ws = workspace.lock_ok();
         window_service::show_windows(&*ws.backend, &next_wids);
     }
 
     // 9. Collect opened window IDs and return the completed payload.
     let opened_window_ids = {
-        let wins = win_registry.lock().unwrap();
+        let wins = win_registry.lock_ok();
         window_service::project_tracked_ids(&wins.windows, project_id)
     };
 

@@ -4,6 +4,7 @@ use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
+use app_core::sync::LockExt;
 
 use crate::services::mobile_control::inbox;
 use crate::terminal::{PtyOptions, PtyRegistry};
@@ -16,7 +17,7 @@ pub type RegistryState = Arc<Mutex<PtyRegistry>>;
 /// A desktop window never has one, so its calls skip the lookup.
 pub(crate) fn pty_id_for(ctx: &Ctx, registry: &RegistryState, id: String) -> String {
     match ctx.caller {
-        app_core::Caller::Client(_) => registry.lock().unwrap().resolve(&ctx.caller, &id),
+        app_core::Caller::Client(_) => registry.lock_ok().resolve(&ctx.caller, &id),
         _ => id,
     }
 }
@@ -59,9 +60,7 @@ pub async fn pty_spawn(
         crate::services::tmux_local::attach_argv,
     )?;
     if let Some(stale) = join.stale {
-        app_core::rt::spawn_blocking(move || stale.teardown())
-            .await
-            .map_err(|e| e.to_string())?;
+        app_core::rt::blocking("terminal", move || stale.teardown()).await?;
     }
     if join.attached {
         return Ok(PtySpawned { attached: true, ..PtySpawned::default() });
@@ -75,7 +74,7 @@ pub async fn pty_spawn(
 
     // Crash-loop guard.
     {
-        let mut reg = registry.lock().unwrap();
+        let mut reg = registry.lock_ok();
         if !reg.check_crash_loop(&prepared.opts.id) {
             return Err(format!(
                 "terminal '{}' is crash-looping; not restarting",
@@ -94,7 +93,7 @@ pub async fn pty_spawn(
         prepared.spawn_seq(),
     );
     if result.is_ok() {
-        registry.lock().unwrap().set_drop_dir(&prepared.opts.id, drop_dir);
+        registry.lock_ok().set_drop_dir(&prepared.opts.id, drop_dir);
         prepared.commit();
         if mcp_token_handed_out {
             // The MCP session access fold lists live sessions; a new token is one.
@@ -122,9 +121,7 @@ pub async fn copilot_fence_auth_status() -> crate::services::copilot_auth::Copil
 /// Forget the Copilot sign-in Tabtivity holds for fenced tabs.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_fence_sign_out() -> Result<(), String> {
-    app_core::rt::spawn_blocking(crate::services::copilot_auth::sign_out)
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("terminal", crate::services::copilot_auth::sign_out).await
 }
 
 /// The project pills' fence markers, one call for every pill: whether new
@@ -137,14 +134,13 @@ pub async fn agent_fence_marks(
     project_ids: Vec<String>,
 ) -> Result<std::collections::HashMap<String, crate::services::agent_fence::AgentFenceMark>, String> {
     let registry = ctx.get::<RegistryState>().clone();
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::blocking("terminal", move || {
         let live = crate::services::agent_fence::live_unfenced_by_scope(|id| {
-            registry.lock().unwrap().pid(id)
+            registry.lock_ok().pid(id)
         });
         crate::services::agent_fence::marks_for_scopes(&project_ids, &live)
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// List the tmux sessions running on the **local** machine (TODO #85), for a local
@@ -154,7 +150,7 @@ pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSess
     if !crate::services::tmux_local::tmux_available() {
         return Ok(Vec::new());
     }
-    app_core::rt::spawn_blocking(|| {
+    app_core::rt::blocking("terminal", || {
         let out = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_ls_args())
             .output();
@@ -164,7 +160,6 @@ pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSess
         }
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// Kill a **local** tmux session (TODO #85) — the explicit-close / Sessions-view
@@ -174,7 +169,7 @@ pub async fn local_tmux_kill(session: String) -> Result<(), String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("terminal", move || {
         let output = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_kill_args(&session))
             .output()
@@ -203,7 +198,6 @@ pub async fn local_tmux_kill(session: String) -> Result<(), String> {
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// End every tmux session Tabtivity created on the local machine during a clean
@@ -217,9 +211,7 @@ pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
-    app_core::rt::spawn_blocking(crate::services::tmux_local::kill_app_sessions)
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("terminal", crate::services::tmux_local::kill_app_sessions).await
 }
 
 /// The visible screen of a **local** tmux session, as plain rows — what the
@@ -233,7 +225,7 @@ pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String
     {
         return Ok(None);
     }
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::blocking("terminal", move || {
         let output = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_screen_args(&session))
             .output()
@@ -244,7 +236,6 @@ pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String
             .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// Rename a **local** tmux session (TODO #85). `new_name` must be a safe tmux name.
@@ -256,7 +247,7 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::blocking("terminal", move || {
         let renamed = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_rename_args(
                 &session, &new_name,
@@ -270,7 +261,6 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
         }
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// What a drop of OS files onto a terminal tab gives the tab to type.
@@ -301,14 +291,11 @@ pub async fn pty_drop_files(
 ) -> Result<PtyDropped, String> {
     let dir = ctx
         .get::<RegistryState>()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .drop_dir(&id)
         .ok_or("no_terminal")?
         .ok_or("remote_tab")?;
-    app_core::rt::spawn_blocking(move || drop_files(Path::new(&dir), &paths, agent))
-        .await
-        .map_err(|e| e.to_string())
+    app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, agent)).await
 }
 
 fn drop_files(dir: &Path, paths: &[String], agent: bool) -> PtyDropped {
@@ -362,7 +349,7 @@ pub async fn pty_write(
     // credential (see `commands::credentials`).
     let id = pty_id_for(&ctx, registry, id);
     crate::commands::credentials::note_pty_input(&id, &data);
-    let sender = registry.lock().unwrap().input_sender(&id);
+    let sender = registry.lock_ok().input_sender(&id);
     if let Some(sender) = sender {
         sender
             .send(data)
@@ -483,12 +470,10 @@ pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
     let resolved = pty_id_for(&ctx, registry, id.clone());
     if resolved != id {
         crate::commands::credentials::forget_login_pty(&resolved);
-        let taken = registry.lock().unwrap().take(&resolved);
+        let taken = registry.lock_ok().take(&resolved);
         crate::terminal::route_remove_all_views(&resolved);
         if let Some(taken) = taken {
-            app_core::rt::spawn_blocking(move || taken.teardown())
-                .await
-                .map_err(|e| e.to_string())?;
+            app_core::rt::blocking("terminal", move || taken.teardown()).await?;
         }
         return Ok(());
     }
@@ -503,11 +488,9 @@ pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
     // is still the id's newest: this kill can land after a remount began
     // respawning the id (gap 18). Nothing taken, nothing to end — the
     // reader task's end already cleaned up that spawn.
-    let taken = registry.lock().unwrap().take(&id);
+    let taken = registry.lock_ok().take(&id);
     if let Some(taken) = taken {
-        app_core::rt::spawn_blocking(move || taken.teardown())
-            .await
-            .map_err(|e| e.to_string())?;
+        app_core::rt::blocking("terminal", move || taken.teardown()).await?;
     }
     Ok(())
 }
@@ -525,7 +508,7 @@ pub async fn pty_kill_scope(
     // (it is on every keystroke's path) and torn down after it, with one
     // process-table walk for the lot instead of one per tab.
     let (ids, taken) = {
-        let mut registry = registry.lock().unwrap();
+        let mut registry = registry.lock_ok();
         let ids = registry.ids_for_scope(&scope);
         let taken: Vec<_> = ids.iter().filter_map(|id| registry.take(id)).collect();
         (ids, taken)
@@ -536,9 +519,7 @@ pub async fn pty_kill_scope(
     }
     // The teardown ends each taken spawn's per-tab state, generation-guarded
     // like `pty_kill`'s.
-    app_core::rt::spawn_blocking(move || crate::terminal::teardown_taken(taken))
-        .await
-        .map_err(|e| e.to_string())?;
+    app_core::rt::blocking("terminal", move || crate::terminal::teardown_taken(taken)).await?;
     Ok(ids)
 }
 
@@ -557,7 +538,7 @@ pub async fn project_cpu_percent(
     use crate::sysstat;
 
     let roots: Vec<u32> = {
-        let reg = registry.lock().unwrap();
+        let reg = registry.lock_ok();
         pty_ids.iter().filter_map(|id| reg.pid(id)).collect()
     };
     if roots.is_empty() {

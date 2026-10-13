@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ProjectEntry } from "../../types";
@@ -25,6 +26,7 @@ export function CategoryEditor({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const projects = useProjectsStore((s) => s.projects);
   const setProjectCategories = useProjectsStore((s) => s.setProjectCategories);
 
@@ -75,6 +77,10 @@ export function CategoryEditor({
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="project-dialog dialog-framed category-editor"
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -121,7 +127,6 @@ export function CategoryEditor({
                   e.preventDefault();
                   addNew();
                 }
-                if (e.key === "Escape") onClose();
               }}
             />
             <button type="button" onClick={addNew} disabled={!input.trim()}>{t("common.add")}</button>

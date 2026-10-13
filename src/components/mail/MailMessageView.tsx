@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -544,6 +545,7 @@ function LinkConfirmDialog({
   onComposeTo: (address: string) => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [copied, setCopied] = useState(false);
   const openable = linkIsOpenable(link);
   const mailto = linkIsMailto(link);
@@ -551,6 +553,10 @@ function LinkConfirmDialog({
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="settings-dialog mail-link-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -772,6 +778,7 @@ function AttachmentSaveDialog({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   // A project with no local directory (never expected, but the type allows it)
   // is treated as "no tabtivity-emails folder": only the pick-a-location path is
   // offered. The folder name mirrors the backend's; this is a label, not the
@@ -783,7 +790,7 @@ function AttachmentSaveDialog({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="settings-dialog mail-link-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="settings-dialog mail-link-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("mail.attachmentSaveTitle")}</h2>
           <UntestedTag id="mailMessageView.3" />

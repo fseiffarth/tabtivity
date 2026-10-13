@@ -118,9 +118,7 @@ pub fn fingerprint(subjects: &[Subject]) -> String {
     hex(&h.finalize())
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+use crate::digest::hex;
 
 fn preview_of(s: &Subject) -> (String, bool) {
     if !s.preview {

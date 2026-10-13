@@ -24,8 +24,9 @@ frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 
 ## Gates
 
-Run before calling work done; all are CI gates and all sit at zero warnings
-except `npm run lint` (see below):
+Before calling work done, run `scripts/gates.sh`: only the gates below that
+your change (diff vs HEAD + untracked) touches; `--all` runs every one. All
+are CI gates, at zero warnings except `npm run lint`:
 
 ```
 npm run build        # the ONLY type-check (tsc + desktop, mobile, web bundles)
@@ -39,8 +40,9 @@ cargo clippy -p app-serverd --all-targets -- -D warnings
 scripts/brand-check.sh   # the app's name is spelled only in the brand modules
 ```
 
-Before pushing, run `scripts/ci-local.sh` (`--fast` for a small change): every
-Linux step of `ci-cd.yml` plus the cross-checks below; CI fails if they drift.
+Before pushing, run `scripts/gates.sh --all`, then `scripts/ci-local.sh`
+(`--fast` for a small change): every Linux step of `ci-cd.yml` plus the
+cross-checks below; CI fails if they drift.
 
 Rust is pinned in `rust-toolchain.toml`, and CI installs the same version
 (`RUST_TOOLCHAIN` in `ci-cd.yml`); bump both together, then install it on the

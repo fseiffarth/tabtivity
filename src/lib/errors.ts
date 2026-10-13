@@ -17,6 +17,7 @@ import type { TranslationKey } from "./i18n";
  * output), so an already-translated sentence set as the error passes through.
  */
 const RULES: { test: RegExp; key: TranslationKey }[] = [
+  { test: /\bcaldav_http_refused\b/, key: "caldav.httpRefused" },
   { test: /\bcommand [\w:.-]+ not found\b/i, key: "errors.backendOutdated" },
   { test: /Permission denied \((publickey|password|keyboard-interactive|gssapi)/i, key: "errors.sshAuth" },
   { test: /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i, key: "errors.sshHostKey" },

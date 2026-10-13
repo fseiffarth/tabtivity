@@ -41,6 +41,9 @@ export type MarkupTarget = {
    * prompt, its own question picker), for the pill — shown, answered in the
    * chat (`dialogLine`). */
   dialog?: string;
+  /** Opens the tab's model sheet over the view (`MarkupView`'s model chip);
+   * absent where the model cannot be picked. */
+  pickModel?: () => void;
 };
 
 /** **Mark up** where no agent tab is open to send to (the project screen, a
@@ -350,7 +353,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   const marked = shared ?? { scope, file, place: markup?.place ?? fresh?.place, folder: markup?.folder ?? fresh?.folder, refresh: markup?.refresh ?? fresh?.refresh, adoptFrom: undefined };
   if (marking && (markup || fresh)) {
     return <MarkupView tabId={markup?.tabId} projectId={target} scope={marked.scope} file={marked.file} place={marked.place} folder={marked.folder}
-      onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} />;
+      onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} />;
   }
   /** Print: a picture, or a text once the whole of it is read in; a PDF's
    * pages are the reader's to print (`MarkupView`). */
@@ -370,7 +373,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   // switches on in that same view.
   if (isPdf) {
     return <MarkupView tabId={markup?.tabId} projectId={target} place={marked.place} folder={marked.folder} onSend={markup?.onSend}
-      newTab={fresh} agent={markup?.agent} model={markup?.model} dialog={markup?.dialog} toChat={markup?.toChat} refresh={marked.refresh} scope={marked.scope} file={marked.file} adoptFrom={marked.adoptFrom} onClose={onClose}
+      newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} toChat={markup?.toChat} refresh={marked.refresh} scope={marked.scope} file={marked.file} adoptFrom={marked.adoptFrom} onClose={onClose}
       reader={{ actions, alert: sharing.failed === file.name ? t("mobile.outbox.shareError") : undefined }} />;
   }
   return <div className={`outbox-viewer${isText ? " outbox-text-sheet" : ""}`} role="dialog" aria-modal="true" aria-label={sentName(file)}>

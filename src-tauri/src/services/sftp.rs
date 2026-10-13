@@ -202,7 +202,7 @@ async fn open_any(
             ssh_base_args(user, host, port)?
         };
         let args = sftp_subsystem_args(base)?;
-        let mut cmd = Command::new("ssh");
+        let mut cmd = ssh_command("ssh");
         cmd.args(&args);
         return match spawn_sftp(cmd, None, None, what).await {
             // A key-auth denial against a host whose key is encrypted on disk is
@@ -261,7 +261,7 @@ fn secret_cmd(
 ) -> Result<(Command, Option<crate::services::ssh_common::Askpass>), String> {
     #[cfg(unix)]
     {
-        let mut cmd = Command::new("ssh");
+        let mut cmd = ssh_command("ssh");
         cmd.args(args);
         let ap = crate::services::ssh_common::make_askpass_for(kind, secret, args)?;
         for (k, v) in ap.env_vars() {
@@ -273,7 +273,7 @@ fn secret_cmd(
     {
         // Windows: askpass when OpenSSH ≥ 8.4, else the sshpass fallback.
         if crate::services::ssh_common::ssh_supports_askpass() {
-            let mut cmd = Command::new("ssh");
+            let mut cmd = ssh_command("ssh");
             cmd.args(args);
             let ap = crate::services::ssh_common::make_askpass_for(kind, secret, args)?;
             for (k, v) in ap.env_vars() {
@@ -289,7 +289,7 @@ fn secret_cmd(
                     .to_string(),
             )
         } else if crate::services::ssh_common::sshpass_available() {
-            let mut cmd = Command::new("sshpass");
+            let mut cmd = ssh_command("sshpass");
             cmd.arg("-e"); // read the password from $SSHPASS, never argv
             cmd.env("SSHPASS", secret);
             cmd.arg("ssh");
@@ -303,6 +303,14 @@ fn secret_cmd(
             )
         }
     }
+}
+
+/// An async [`Command`] for `bin` built through [`crate::paths::command_no_window`],
+/// like every other ssh spawn: a trusted helper (`ssh`) comes from the root-owned
+/// system directories first (#861), PATH is the effective one, and Windows gets
+/// no console window.
+fn ssh_command(bin: &str) -> Command {
+    Command::from(crate::paths::command_no_window(bin))
 }
 
 /// Spawn `cmd` (an `ssh -s sftp`) and complete the SFTP handshake over its pipes.
@@ -327,12 +335,6 @@ async fn spawn_sftp(
         // This is the connect the headless Connect modal drives, so its error text
         // is what the user reads — it must carry the reason, not an EOF.
         .stderr(Stdio::piped());
-    if let Some(path) = crate::paths::effective_path() {
-        cmd.env("PATH", path);
-    }
-    // Don't pop a console window for the child ssh on Windows.
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
     let mut child = cmd.spawn().map_err(launch)?;
     let stdin = child
@@ -945,19 +947,6 @@ pub async fn metadata_opt_on(
     }
 }
 
-/// SFTP-get a remote file into a local destination path on an open session
-/// (read the bytes, then write them locally). The primitive a per-project
-/// "download" command would call; see [`download`].
-#[allow(dead_code)] // wired by the download-routing command (Phase 3/5 follow-up)
-pub async fn download_on(
-    sftp: &Sftp,
-    remote_path: &str,
-    dest_local: &std::path::Path,
-) -> Result<(), String> {
-    let bytes = read_file_on(sftp, remote_path).await?;
-    std::fs::write(dest_local, bytes).map_err(|e| format!("write downloaded file failed: {e}"))
-}
-
 // ── One-shot wrappers (open a session, run one op, tear it down) ─────────────
 //
 // The cold-pool fallback for `commands::fs` (mirrors `list_dir` over
@@ -1103,20 +1092,6 @@ pub async fn metadata(
         (sftp, r)
     })
     .await
-}
-
-/// One-shot SFTP-get a remote file into a local destination path.
-#[allow(dead_code)] // wired by the download-routing command (Phase 3/5 follow-up)
-pub async fn download(
-    user: &Option<String>,
-    host: &str,
-    port: Option<u16>,
-    password: Option<&str>,
-    remote_path: &str,
-    dest_local: &std::path::Path,
-) -> Result<(), String> {
-    let bytes = read_file(user, host, port, password, remote_path).await?;
-    std::fs::write(dest_local, bytes).map_err(|e| format!("write downloaded file failed: {e}"))
 }
 
 #[cfg(test)]

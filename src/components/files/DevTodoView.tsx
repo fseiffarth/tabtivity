@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { renderMarkdown, taskSourceLines, toggleTaskCheckbox } from "../../lib/viewers/markdown";
+import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
 
@@ -73,8 +74,9 @@ function GroupBody({ text, onToggle }: { text: string; onToggle: (index: number)
       if (index >= 0) onToggle(index);
       return;
     }
-    // Links would navigate the whole webview away; this view only toggles.
-    if (target.closest?.("a")) e.preventDefault();
+    // Links would navigate the whole webview away; this view only toggles
+    // (and scrolls to an in-page anchor).
+    onMarkdownLinkClick(e, { root: ref.current });
   };
   return (
     <div

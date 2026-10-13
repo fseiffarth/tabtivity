@@ -258,6 +258,35 @@ pub struct CalDavWrite {
     /// the intended end state is the actual one.
     #[serde(default)]
     pub gone: bool,
+    /// After a push: the local row still carries its unpushed-edit mark
+    /// (`commands::calendar::CALDAV_DIRTY_KEY`) — it was edited again while the
+    /// write was in flight, so the next sync pushes it once more.
+    #[serde(default)]
+    pub dirty: bool,
+}
+
+/// A row with an unpushed local edit that a CalDAV merge kept rather than
+/// overwrote (gap 32), for the conflict dialog.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CalDavKept {
+    pub row_id: String,
+    /// `"event"` or `"task"`.
+    pub kind: String,
+    /// The resource the row was synced from.
+    pub href: String,
+    pub title: String,
+    /// `"changed"` — the server changed the resource too; `"deleted"` — the
+    /// server deleted it, and the row is now local-only.
+    pub reason: String,
+}
+
+/// What `caldav_apply` returns: the whole store (flattened, so the reply still
+/// reads as a `CalendarData`) plus the dirty rows the merge kept.
+#[derive(Debug, Clone, Serialize)]
+pub struct CalDavApplied {
+    #[serde(flatten)]
+    pub data: crate::schema::calendar::CalendarData,
+    pub caldav_kept: Vec<CalDavKept>,
 }
 
 /// What one fetch of a collection found.

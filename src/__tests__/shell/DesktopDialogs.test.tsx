@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ConfirmDialog, DialogShell, TextPromptDialog } from "../../components/common/PromptDialogs";
 import { Dropdown } from "../../components/common/Dropdown";
-import { hasActiveModal } from "../../hooks/useModalFocus";
+import { hasActiveModal, useModalFocus } from "../../hooks/useModalFocus";
 
 function Nested() {
   const [child, setChild] = useState(false);
@@ -54,6 +54,32 @@ describe("desktop modal focus", () => {
     expect(document.activeElement).toBe(opener);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a host that stays mounted gives focus back to what was focused when it opened", () => {
+    let setOpen: (open: boolean) => void = () => {};
+    function Host() {
+      const [open, set] = useState(false);
+      setOpen = set;
+      const ref = useModalFocus(() => set(false), open);
+      return (
+        <>
+          <button>At mount</button>
+          <button>At open</button>
+          {open && <div ref={ref} tabIndex={-1} role="dialog"><button>Inside</button></div>}
+        </>
+      );
+    }
+    render(<Host />);
+    screen.getByRole("button", { name: "At mount" }).focus();
+    const opener = screen.getByRole("button", { name: "At open" });
+    opener.focus();
+    act(() => setOpen(true));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Inside" }));
+    expect(hasActiveModal()).toBe(true);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(hasActiveModal()).toBe(false);
+    expect(document.activeElement).toBe(opener);
   });
 
   it("keeps rename selection, refuses busy dismissal and retains the value on failure", async () => {

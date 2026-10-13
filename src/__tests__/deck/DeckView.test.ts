@@ -14,6 +14,12 @@ import {
   deckRelative,
   withinProject,
 } from "../../components/embed/deck/DeckView";
+import {
+  figureSource,
+  figureTarget,
+  resolveRel,
+  texFigureDir,
+} from "../../components/embed/deck/deckAssets";
 
 describe("clampRailWidth", () => {
   it("clamps to the documented bounds", () => {
@@ -58,6 +64,25 @@ describe("deckRelative (V #108)", () => {
   });
 });
 
+describe("resolveRel", () => {
+  it("folds the `..` a deckRelative path climbs with, which the backend refuses", () => {
+    // The round trip of V #108: a figure above the deck is stored `../…`, and
+    // `read_file_bytes` refuses any path still holding a `..` (gap 22).
+    const src = deckRelative("/p/talks", "/p/figures/fig.png");
+    expect(resolveRel("/p/talks", src)).toBe("/p/figures/fig.png");
+    expect(resolveRel("/p/talks/2026", "../../fig.png")).toBe("/p/fig.png");
+    expect(resolveRel("C:\\p\\talks", "../figures/fig.png")).toBe("C:\\p\\figures\\fig.png");
+    expect(resolveRel("/p/talks", "/p/x/../fig.png")).toBe("/p/fig.png");
+  });
+
+  it("leaves a plain path exactly as joined", () => {
+    expect(resolveRel("/p/talks", "img/fig.png")).toBe("/p/talks/img/fig.png");
+    expect(resolveRel("/p/talks", "/abs/fig.png")).toBe("/abs/fig.png");
+    expect(resolveRel("", "fig.png")).toBe("fig.png");
+    expect(resolveRel("/p/talks", "fig..png")).toBe("/p/talks/fig..png");
+  });
+});
+
 describe("withinProject (V #108)", () => {
   it("accepts the project root and anything under it", () => {
     expect(withinProject("/p", "/p")).toBe(true);
@@ -75,5 +100,54 @@ describe("withinProject (V #108)", () => {
 
   it("defers to the backend in the root scope", () => {
     expect(withinProject(null, "/anywhere/fig.png")).toBe(true);
+  });
+});
+
+// Decision D3 (threat recheck gap 23): the deck writes a figure's PNG, and
+// compiles its `.tex`, only directly in its own `<deck>.tex-figures` folder.
+describe("figureTarget / figureSource", () => {
+  const deck = "/p/talks/talk.eldeck.json";
+
+  it("accepts a plain .png / .tex directly in the deck's own figure folder", () => {
+    expect(texFigureDir(deck)).toBe("/p/talks/talk.tex-figures");
+    expect(figureTarget(deck, "talk.tex-figures/f1.png")).toBe("/p/talks/talk.tex-figures/f1.png");
+    expect(figureTarget(deck, "talk.tex-figures/F1.PNG")).toBe("/p/talks/talk.tex-figures/F1.PNG");
+    expect(figureSource(deck, "talk.tex-figures/f1.tex")).toBe("/p/talks/talk.tex-figures/f1.tex");
+    // What "Add TeX figure" stores round-trips through the guard.
+    const png = `${texFigureDir(deck)}/abc.png`;
+    expect(figureTarget(deck, deckRelative("/p/talks", png))).toBe(png);
+    // Windows paths: the deck's own folder is still the only one.
+    const win = "C:\\p\\talk.eldeck.json";
+    expect(figureTarget(win, "talk.tex-figures/f1.png")).toBe("C:\\p\\talk.tex-figures/f1.png");
+    expect(figureTarget(win, "talk.tex-figures\\f1.png")).toBe("C:\\p\\talk.tex-figures/f1.png");
+  });
+
+  it.each([
+    ["absolute", "/home/u/.bashrc"],
+    ["absolute png", "/p/talks/talk.tex-figures/f1.png"],
+    ["windows absolute", "C:\\Users\\u\\x.png"],
+    ["drive-relative", "C:x.png"],
+    ["dot-dot out", "../other/talk.tex-figures/f1.png"],
+    ["dot-dot inside", "talk.tex-figures/../f1.png"],
+    ["dot-dot leaf", "talk.tex-figures/.."],
+    ["other folder", "figures/f1.png"],
+    ["another deck's folder", "other.tex-figures/f1.png"],
+    ["beside the deck", "f1.png"],
+    ["nested", "talk.tex-figures/sub/f1.png"],
+    ["empty component", "talk.tex-figures//f1.png"],
+    ["svg", "talk.tex-figures/f1.svg"],
+    ["bare extension", "talk.tex-figures/.png"],
+    ["stream", "talk.tex-figures/f1.png:evil.png"],
+    ["control char", "talk.tex-figures/f\n1.png"],
+    ["8.3 alias", "talk.tex-figures/EVIL~1.PNG"],
+    ["empty", ""],
+  ])("refuses %s", (_label, src) => {
+    expect(figureTarget(deck, src)).toBeNull();
+    expect(figureSource(deck, src.replace(/\.png$/, ".tex"))).toBeNull();
+  });
+
+  it("does not take a .tex for a PNG or a PNG for a .tex", () => {
+    expect(figureTarget(deck, "talk.tex-figures/f1.tex")).toBeNull();
+    expect(figureSource(deck, "talk.tex-figures/f1.png")).toBeNull();
   });
 });

@@ -41,8 +41,9 @@
 //! after-link chaining and prompt blame, both of which need its stores.
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local};
@@ -260,16 +261,16 @@ pub struct PhoneHolds {
 impl PhoneHolds {
     /// Mark `schedule_id` for the CLI's queue and wake the scheduler for it.
     pub fn hold(&self, schedule_id: &str) {
-        self.ids.lock().unwrap_or_else(PoisonError::into_inner).insert(schedule_id.to_string());
+        self.ids.lock_ok().insert(schedule_id.to_string());
         self.wake.notify_one();
     }
 
     pub fn due(&self, schedule_id: &str) -> bool {
-        self.ids.lock().unwrap_or_else(PoisonError::into_inner).contains(schedule_id)
+        self.ids.lock_ok().contains(schedule_id)
     }
 
     pub fn forget(&self, schedule_id: &str) {
-        self.ids.lock().unwrap_or_else(PoisonError::into_inner).remove(schedule_id);
+        self.ids.lock_ok().remove(schedule_id);
     }
 }
 
@@ -472,12 +473,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     opts.open(path)?.write_all(bytes)
 }
 
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+use crate::clock::now_secs;
 
 /// What one tick did, for the sidecar's journal and the tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -516,7 +512,7 @@ impl Context {
     }
 
     fn may_relaunch(&self, tmux: &str) -> bool {
-        let mut map = self.relaunched.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut map = self.relaunched.lock_ok();
         let now = Instant::now();
         map.retain(|_, at| now.duration_since(*at) < RELAUNCH_BACKOFF);
         if map.contains_key(tmux) {

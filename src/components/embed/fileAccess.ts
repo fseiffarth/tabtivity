@@ -163,18 +163,28 @@ export function writeFileText(
  * `encodeURIComponent` because a header is ASCII and a project path is not; the
  * backend decodes it and confines it to the same roots as before.
  */
+/** `write_file_bytes`'s header asking that the file's own folder be no link
+ *  either (`fs::NO_FOLDER_LINK_HEADER`). */
+export const NO_FOLDER_LINK_HEADER = "x-no-folder-link";
+
 export function writeFileBytes(
   path: string,
   content: number[] | Uint8Array,
   projectId: string | null,
+  opts?: {
+    /** Refuse the save when the file's own folder is a link, and make that
+     *  folder when it is missing — the deck's TeX figures (threat recheck
+     *  gap 23, D3), whose folder an agent could point at a box sibling. */
+    ownFolderUnlinked?: boolean;
+  },
 ): Promise<void> {
   const bytes = content instanceof Uint8Array ? content : Uint8Array.from(content);
-  return invoke("write_file_bytes", bytes, {
-    headers: {
-      [NAMES.filePathHeader]: encodeURIComponent(path),
-      [NAMES.fileProjectHeader]: encodeURIComponent(projectId ?? ""),
-    },
-  });
+  const headers: Record<string, string> = {
+    [NAMES.filePathHeader]: encodeURIComponent(path),
+    [NAMES.fileProjectHeader]: encodeURIComponent(projectId ?? ""),
+  };
+  if (opts?.ownFolderUnlinked) headers[NO_FOLDER_LINK_HEADER] = "1";
+  return invoke("write_file_bytes", bytes, { headers });
 }
 
 export function fileMtime(path: string, projectId: string | null): Promise<number> {
@@ -207,6 +217,15 @@ export function detectMime(path: string, projectId: string | null): Promise<stri
 export function describeFileErrorKey(e: unknown): TranslationKey {
   const raw = String(e);
   const remote = /sftp/i.test(raw);
+  // A viewer save refused because the file is a link (D1, `open_confined`).
+  // First: the refusal quotes the path, and a path holding "permission" or
+  // "denied" must not turn it into a permission error (the deck's figure poll
+  // keys its stop-retrying on this one).
+  // Also a deck figure whose folder is a link (`WriteOwnFolder`, the TeX
+  // compile's own-folder check).
+  if (/a link; (viewers do not save through links|the figure was not compiled)/.test(raw)) {
+    return "fileError.link";
+  }
   if (/permission|denied|eacces/i.test(raw)) {
     return "fileError.permission";
   }

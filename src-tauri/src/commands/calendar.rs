@@ -15,13 +15,14 @@
 //! to unit-test. This module is storage plus identity.
 
 use std::collections::HashSet;
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Deserialize;
 
 use crate::commands::projects::uuid_v4;
-use crate::schema::caldav::CalDavParsed;
+use crate::schema::caldav::{CalDavKept, CalDavParsed};
 use crate::schema::calendar::{
     Calendar, CalendarData, CalendarEvent, CalendarFile, CalendarTask, TaskColumn,
     DEFAULT_CALENDAR_ID, RANK_EPSILON, RANK_GAP,
@@ -37,8 +38,7 @@ static CALENDAR_RMW_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_calendar() -> std::sync::MutexGuard<'static, ()> {
     CALENDAR_RMW_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock_ok()
 }
 
 pub(crate) fn calendar_path() -> PathBuf {
@@ -270,15 +270,21 @@ pub(crate) fn create_event_at(path: &Path, mut event: CalendarEvent) -> Result<C
     stored_event(&data, &id)
 }
 
-/// Replace the event with `event.id` wholesale.
+/// Replace the event with `event.id` wholesale — but for its
+/// [`FROM_MAIL_KEY`] stamp, which no edit takes away.
 pub(crate) fn update_event_at(path: &Path, event: CalendarEvent) -> Result<CalendarEvent, String> {
     let (_, data) = transact(path, |data| {
+        let into_caldav = is_caldav_calendar(data, &event.calendar_id);
         let slot = data
             .events
             .iter_mut()
             .find(|e| e.id == event.id)
             .ok_or_else(|| format!("event '{}' not found", event.id))?;
-        *slot = event.clone();
+        let mut event = event.clone();
+        keep_from_mail(&mut event.extra, &slot.extra);
+        let same = slot.calendar_id == event.calendar_id;
+        keep_caldav_dirty(&mut event.extra, &slot.extra, same, into_caldav);
+        *slot = event;
         data.normalize();
         Ok(())
     })?;
@@ -350,18 +356,26 @@ pub(crate) fn relocate_event(
             ));
         }
     }
-    event.extra.remove(CALDAV_HREF_KEY);
-    event.extra.remove(CALDAV_ETAG_KEY);
+    forget_server_identity(&mut event.extra);
     event.calendar_id = to.to_string();
     Ok(())
+}
+
+/// Everything that ties a row to its old collection: its address and ETag,
+/// and the push bookkeeping about that address (gap 32) — a moved row must not
+/// raise a "deleted on the server" question in its new calendar. The new
+/// calendar's own push marks it again.
+fn forget_server_identity(extra: &mut std::collections::HashMap<String, serde_json::Value>) {
+    for key in [CALDAV_HREF_KEY, CALDAV_ETAG_KEY, CALDAV_SERVER_DELETED_KEY, CALDAV_DIRTY_KEY] {
+        extra.remove(key);
+    }
 }
 
 /// [`relocate_event`] for a to-do card: the server address is dropped so the
 /// next push creates the card in its new collection, and the caller deletes
 /// the old copy. A VTODO is one row per resource, so there is no series to split.
 pub(crate) fn relocate_task(task: &mut CalendarTask, to: &str) {
-    task.extra.remove(CALDAV_HREF_KEY);
-    task.extra.remove(CALDAV_ETAG_KEY);
+    forget_server_identity(&mut task.extra);
     task.calendar_id = to.to_string();
 }
 
@@ -458,12 +472,16 @@ pub(crate) fn create_task_at(path: &Path, mut task: CalendarTask) -> Result<Cale
 pub(crate) fn update_task_at(path: &Path, task: CalendarTask) -> Result<CalendarTask, String> {
     let id = task.id.clone();
     let (_, data) = transact(path, |data| {
+        let into_caldav = is_caldav_calendar(data, &task.calendar_id);
         let slot = data
             .tasks
             .iter_mut()
             .find(|t| t.id == id)
             .ok_or_else(|| format!("task '{id}' not found"))?;
-        *slot = task.clone();
+        let mut task = task.clone();
+        let same = slot.calendar_id == task.calendar_id;
+        keep_caldav_dirty(&mut task.extra, &slot.extra, same, into_caldav);
+        *slot = task;
         data.normalize();
         Ok(())
     })?;
@@ -872,6 +890,109 @@ fn replace_calendar_events_at(
 pub const CALDAV_HREF_KEY: &str = "caldav_href";
 /// The `extra` key holding its last-seen ETag, for `If-Match` when push lands.
 pub const CALDAV_ETAG_KEY: &str = "caldav_etag";
+/// The `extra` key (`true`) on a row of a CalDAV calendar whose local edit has
+/// not reached the server yet (gap 32). Set by the window's local write and by
+/// `caldav_push` before it sends; cleared only by a push the server accepted
+/// for that same revision ([`set_caldav_identity_at`]) or by the user's "Use
+/// the server's" ([`merge_caldav_calendar_kept_at`]'s `discard`). A merge never
+/// overwrites a dirty row, and the sync pushes dirty rows before it fetches.
+/// In `extra`, so older builds carry it through untouched.
+pub const CALDAV_DIRTY_KEY: &str = "caldav_dirty";
+/// The `extra` key holding the resource URL a dirty row had when the server
+/// deleted that resource: the row was kept as local-only, and the question
+/// "put it back, or delete it here too?" stays open until the user answers.
+pub const CALDAV_SERVER_DELETED_KEY: &str = "caldav_server_deleted";
+
+/// Whether calendar `id` is one a CalDAV subscription feeds: the subscribe
+/// step stamps the collection's address on the calendar record.
+fn is_caldav_calendar(data: &CalendarData, id: &str) -> bool {
+    data.calendars
+        .iter()
+        .find(|c| c.id == id)
+        .is_some_and(|c| !extra_str(&c.extra, CALDAV_HREF_KEY).trim().is_empty())
+}
+
+/// Rewrite the stored CalDAV addresses of calendars `ids` through `twin` (the
+/// `https://` twin of a same-host `http://` address, see
+/// `services::caldav::https_twin`), in one write: the calendar record's own
+/// collection address, and each row's resource address and its
+/// "deleted on the server" address. Called when an account moves from
+/// `http://` to `https://`, so its rows keep matching what the server lists
+/// and their pushes are not refused as "not https". An address `twin` leaves
+/// alone stays as it is.
+pub(crate) fn upgrade_caldav_hrefs_at(
+    path: &Path,
+    ids: &[String],
+    twin: impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    let mine = |cal: &str| ids.iter().any(|id| id == cal);
+    let swap = |extra: &mut std::collections::HashMap<String, serde_json::Value>, key: &str| {
+        if let Some(next) = twin(&extra_str(extra, key)) {
+            extra.insert(key.to_string(), serde_json::Value::String(next));
+        }
+    };
+    transact(path, |data| {
+        for c in data.calendars.iter_mut().filter(|c| mine(&c.id)) {
+            swap(&mut c.extra, CALDAV_HREF_KEY);
+        }
+        for e in data.events.iter_mut().filter(|e| mine(&e.calendar_id)) {
+            swap(&mut e.extra, CALDAV_HREF_KEY);
+            swap(&mut e.extra, CALDAV_SERVER_DELETED_KEY);
+        }
+        for t in data.tasks.iter_mut().filter(|t| mine(&t.calendar_id)) {
+            swap(&mut t.extra, CALDAV_HREF_KEY);
+            swap(&mut t.extra, CALDAV_SERVER_DELETED_KEY);
+        }
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+fn is_dirty(extra: &std::collections::HashMap<String, serde_json::Value>) -> bool {
+    extra.get(CALDAV_DIRTY_KEY).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Keep a stored dirty mark on the row replacing it within the same calendar:
+/// a window copy that never saw the mark must not be able to clear it. A move
+/// to another calendar drops the "deleted on the server" question (it was
+/// about the old collection), and a move into a local calendar — one no CalDAV
+/// subscription feeds — drops the mark too, whatever the incoming copy carried:
+/// nothing there will ever push it, and a stale mark would send the row once
+/// that calendar ever synced. A move into another CalDAV calendar keeps the
+/// mark the window's write set for its new collection.
+fn keep_caldav_dirty(
+    incoming: &mut std::collections::HashMap<String, serde_json::Value>,
+    stored: &std::collections::HashMap<String, serde_json::Value>,
+    same_calendar: bool,
+    into_caldav: bool,
+) {
+    if !same_calendar {
+        incoming.remove(CALDAV_SERVER_DELETED_KEY);
+        if !into_caldav {
+            incoming.remove(CALDAV_DIRTY_KEY);
+        }
+    } else if is_dirty(stored) {
+        incoming.insert(CALDAV_DIRTY_KEY.to_string(), serde_json::Value::Bool(true));
+    }
+}
+/// The `extra` key an event made from a mail carries (`{message_id,
+/// account_id}`, stamped by the mail pane's AI extract): its text is a
+/// sender's, and the root agent's tools serve it as `external`
+/// (`services::root_mcp::event_view`). Sticky: an edit in the window, a CalDAV
+/// merge or a server that sends the key itself never takes it away
+/// ([`keep_from_mail`]).
+pub const FROM_MAIL_KEY: &str = "from_mail";
+
+/// Keep the stored row's [`FROM_MAIL_KEY`] on the row replacing it, over
+/// whatever the new one says (absent, `null`, or a server's own value).
+fn keep_from_mail(
+    incoming: &mut std::collections::HashMap<String, serde_json::Value>,
+    stored: &std::collections::HashMap<String, serde_json::Value>,
+) {
+    if let Some(v) = stored.get(FROM_MAIL_KEY).filter(|v| !v.is_null()) {
+        incoming.insert(FROM_MAIL_KEY.to_string(), v.clone());
+    }
+}
 
 fn extra_str(extra: &std::collections::HashMap<String, serde_json::Value>, key: &str) -> String {
     extra
@@ -914,6 +1035,7 @@ fn carry_extra(
 /// because the alternative is guessing which of two same-titled occurrences is
 /// which; in the overwhelmingly common one-component-per-resource case the two
 /// are the same thing.
+#[cfg(test)]
 pub(crate) fn merge_caldav_calendar_at(
     path: &Path,
     calendar_id: &str,
@@ -921,21 +1043,94 @@ pub(crate) fn merge_caldav_calendar_at(
     removed: &[String],
     full: bool,
 ) -> Result<CalendarData, String> {
-    let (_, data) = transact(path, |data| merge_caldav_calendar_in(data, calendar_id, &parsed, removed, full))?;
-    Ok(data)
+    merge_caldav_calendar_kept_at(path, calendar_id, parsed, removed, full, &[]).map(|(data, _)| data)
 }
 
-/// The in-memory half of [`merge_caldav_calendar_at`], over a store already read.
+/// [`merge_caldav_calendar_at`], plus the **dirty rows** it kept (gap 32).
+///
+/// A row carrying [`CALDAV_DIRTY_KEY`] holds a local edit the server has not
+/// seen, so the merge never overwrites it:
+///
+/// - **matched** — its whole resource group is left as it is (a series' rows
+///   go back to the server as one object, so half an update would split it).
+///   When the server's ETag differs from the row's, the server changed it too:
+///   the row is reported (`reason: "changed"`) for the conflict dialog;
+/// - **deleted on the server** (an explicit `404`, or an event absent from a
+///   full listing) — the row stays, as a local-only row: its href and ETag are
+///   cleared, the old href is kept under [`CALDAV_SERVER_DELETED_KEY`], and it
+///   is reported (`reason: "deleted"`).
+///
+/// `discard` names rows whose local edit the user gave up on ("Use the
+/// server's"), in the same write: the mark is dropped before the merge, and a
+/// row the server had deleted is deleted here too.
+pub(crate) fn merge_caldav_calendar_kept_at(
+    path: &Path,
+    calendar_id: &str,
+    parsed: Vec<CalDavParsed>,
+    removed: &[String],
+    full: bool,
+    discard: &[String],
+) -> Result<(CalendarData, Vec<CalDavKept>), String> {
+    let (kept, data) = transact(path, |data| {
+        discard_local_edits(data, calendar_id, discard);
+        merge_caldav_calendar_in(data, calendar_id, &parsed, removed, full)
+    })?;
+    Ok((data, kept))
+}
+
+/// "Use the server's", for the named rows of one calendar.
+fn discard_local_edits(data: &mut CalendarData, calendar_id: &str, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let named = |id: &str, cal: &str| cal == calendar_id && ids.iter().any(|d| d == id);
+    data.events.retain(|e| !(named(&e.id, &e.calendar_id) && e.extra.contains_key(CALDAV_SERVER_DELETED_KEY)));
+    data.tasks.retain(|t| !(named(&t.id, &t.calendar_id) && t.extra.contains_key(CALDAV_SERVER_DELETED_KEY)));
+    for e in data.events.iter_mut().filter(|e| named(&e.id, &e.calendar_id)) {
+        e.extra.remove(CALDAV_DIRTY_KEY);
+    }
+    for t in data.tasks.iter_mut().filter(|t| named(&t.id, &t.calendar_id)) {
+        t.extra.remove(CALDAV_DIRTY_KEY);
+    }
+}
+
+/// A dirty row the server deleted: kept, local-only, and reported.
+fn keep_server_deleted(
+    extra: &mut std::collections::HashMap<String, serde_json::Value>,
+    id: &str,
+    kind: &str,
+    title: &str,
+    kept: &mut Vec<CalDavKept>,
+) {
+    let href = extra_str(extra, CALDAV_HREF_KEY);
+    extra.remove(CALDAV_HREF_KEY);
+    extra.remove(CALDAV_ETAG_KEY);
+    extra.insert(
+        CALDAV_SERVER_DELETED_KEY.to_string(),
+        serde_json::Value::String(href.clone()),
+    );
+    kept.push(CalDavKept {
+        row_id: id.to_string(),
+        kind: kind.to_string(),
+        href,
+        title: title.to_string(),
+        reason: "deleted".to_string(),
+    });
+}
+
+/// The in-memory half of [`merge_caldav_calendar_kept_at`], over a store
+/// already read. Returns the dirty rows it kept and why.
 fn merge_caldav_calendar_in(
     data: &mut CalendarData,
     calendar_id: &str,
     parsed: &[CalDavParsed],
     removed: &[String],
     full: bool,
-) -> Result<(), String> {
+) -> Result<Vec<CalDavKept>, String> {
     if !data.calendars.iter().any(|c| c.id == calendar_id) {
         return Err(format!("calendar '{calendar_id}' not found"));
     }
+    let mut kept: Vec<CalDavKept> = Vec::new();
 
     // Everything the server just told us about, grouped by resource.
     let mut seen_hrefs: HashSet<String> = HashSet::new();
@@ -950,6 +1145,42 @@ fn merge_caldav_calendar_in(
             continue;
         }
         seen_hrefs.insert(group.href.clone());
+
+        // ── A resource holding an unpushed local edit (gap 32) ───────────
+        let in_group = |cal: &str, extra: &std::collections::HashMap<String, serde_json::Value>| {
+            cal == calendar_id && extra_str(extra, CALDAV_HREF_KEY) == group.href
+        };
+        let mut dirty_group = false;
+        let changed = |extra: &std::collections::HashMap<String, serde_json::Value>| {
+            extra_str(extra, CALDAV_ETAG_KEY) != group.etag
+        };
+        for e in data.events.iter().filter(|e| in_group(&e.calendar_id, &e.extra) && is_dirty(&e.extra)) {
+            dirty_group = true;
+            if changed(&e.extra) {
+                kept.push(CalDavKept {
+                    row_id: e.id.clone(),
+                    kind: "event".into(),
+                    href: group.href.clone(),
+                    title: e.title.clone(),
+                    reason: "changed".into(),
+                });
+            }
+        }
+        for t in data.tasks.iter().filter(|t| in_group(&t.calendar_id, &t.extra) && is_dirty(&t.extra)) {
+            dirty_group = true;
+            if changed(&t.extra) {
+                kept.push(CalDavKept {
+                    row_id: t.id.clone(),
+                    kind: "task".into(),
+                    href: group.href.clone(),
+                    title: t.title.clone(),
+                    reason: "changed".into(),
+                });
+            }
+        }
+        if dirty_group {
+            continue;
+        }
 
         // ── Events in this resource ──────────────────────────────────────
         let local_events: Vec<usize> = data
@@ -980,6 +1211,7 @@ fn merge_caldav_calendar_in(
                     // other surface already references.
                     event.id = local.id.clone();
                     carry_extra(&mut event.extra, &local.extra);
+                    keep_from_mail(&mut event.extra, &local.extra);
                     data.events[slot] = event;
                 }
                 None => fresh_events.push(event),
@@ -1053,6 +1285,25 @@ fn merge_caldav_calendar_in(
         data.tasks.retain(|t| !stale.contains(&t.id));
     }
 
+    // A dirty row the server deleted is kept as a local-only row and reported,
+    // never deleted with it (gap 32): by an explicit `404`, or — events only —
+    // by its absence from a full listing.
+    let server_dropped = |cal: &str, extra: &std::collections::HashMap<String, serde_json::Value>, event: bool| {
+        if cal != calendar_id || !is_dirty(extra) {
+            return false;
+        }
+        let href = extra_str(extra, CALDAV_HREF_KEY);
+        !href.is_empty() && (gone.contains(href.as_str()) || (event && full && !seen_hrefs.contains(&href)))
+    };
+    for e in data.events.iter_mut().filter(|e| server_dropped(&e.calendar_id, &e.extra, true)) {
+        let (id, title) = (e.id.clone(), e.title.clone());
+        keep_server_deleted(&mut e.extra, &id, "event", &title, &mut kept);
+    }
+    for t in data.tasks.iter_mut().filter(|t| server_dropped(&t.calendar_id, &t.extra, false)) {
+        let (id, title) = (t.id.clone(), t.title.clone());
+        keep_server_deleted(&mut t.extra, &id, "task", &title, &mut kept);
+    }
+
     // Explicit deletions apply to both kinds — the server said `404` for that
     // exact resource, which is not ambiguous.
     if !gone.is_empty() {
@@ -1080,7 +1331,7 @@ fn merge_caldav_calendar_in(
     }
 
     data.normalize();
-    Ok(())
+    Ok(kept)
 }
 
 /// Record what a **push** made true: the resource URL a local row now lives at
@@ -1097,29 +1348,69 @@ fn merge_caldav_calendar_in(
 /// has to be able to *see* in order to refuse itself (`put_resource` does), and
 /// which the next sync clears. Leaving a stale ETag in place would be worse than
 /// having none: it is a validator that no longer describes anything.
+///
+/// It also settles the row's [`CALDAV_DIRTY_KEY`] (gap 32): the mark is cleared
+/// only when `pushed_rev` names the revision the row still has — i.e. nothing
+/// edited it while the write was in flight. `None` (the pushed bytes were
+/// already older than the row) keeps it. Returns whether the row is still
+/// dirty. A row the server now holds is no longer "deleted on the server", so
+/// [`CALDAV_SERVER_DELETED_KEY`] goes either way.
+///
+/// The other rows of the same resource (a series' occurrence overrides, which
+/// went to the server in the same body) get the new ETag too, or the next push
+/// of one of them would be conditional on a version the server no longer has
+/// and come back as a `412` against this machine's own write. Their marks stay:
+/// only the pushed row's revision is known here, so a dirty sibling is pushed
+/// once more, now conditional on the right ETag.
+#[cfg(test)]
 pub(crate) fn set_caldav_identity_at(
     path: &Path,
     kind: &str,
     row_id: &str,
     href: &str,
     etag: &str,
-) -> Result<(), String> {
-    transact(path, |data| {
-        let extra = match kind {
-            "event" => data
-                .events
-                .iter_mut()
-                .find(|e| e.id == row_id)
-                .map(|e| &mut e.extra),
-            "task" => data
-                .tasks
-                .iter_mut()
-                .find(|t| t.id == row_id)
-                .map(|t| &mut t.extra),
-            other => return Err(format!("unknown calendar row kind '{other}'")),
-        }
-        .ok_or_else(|| format!("no {kind} with id '{row_id}'"))?;
+    pushed_rev: Option<u64>,
+) -> Result<bool, String> {
+    set_caldav_identity_sent_at(path, kind, row_id, href, etag, pushed_rev, "")
+}
 
+/// [`set_caldav_identity_at`], told which existing resource the body was sent
+/// to as an update (`sent_to`; empty for a create). The resource's other rows
+/// take the new ETag when the pushed row was stored under `href` **or** the
+/// body went to `href` as an update — the second is a row that had no address
+/// yet and joined a resource its siblings already hold ("Keep mine" on a
+/// series row the server deleted after its master was put back, or on a
+/// create whose reply was lost): that body carried the whole group. A create
+/// touches no other row.
+pub(crate) fn set_caldav_identity_sent_at(
+    path: &Path,
+    kind: &str,
+    row_id: &str,
+    href: &str,
+    etag: &str,
+    pushed_rev: Option<u64>,
+    sent_to: &str,
+) -> Result<bool, String> {
+    transact(path, |data| {
+        let sibling_of = row_extra(data, kind, row_id).map(|(extra, _)| extra_str(extra, CALDAV_HREF_KEY))?;
+        if !href.is_empty() && (sibling_of == href || sent_to.trim() == href) {
+            let calendar = match kind {
+                "event" => data.events.iter().find(|e| e.id == row_id).map(|e| e.calendar_id.clone()),
+                _ => data.tasks.iter().find(|t| t.id == row_id).map(|t| t.calendar_id.clone()),
+            }
+            .unwrap_or_default();
+            let same_resource = |id: &str, cal: &str, extra: &std::collections::HashMap<String, serde_json::Value>| {
+                id != row_id && cal == calendar && extra_str(extra, CALDAV_HREF_KEY) == href
+            };
+            let fresh = serde_json::Value::String(etag.to_string());
+            for e in data.events.iter_mut().filter(|e| same_resource(&e.id, &e.calendar_id, &e.extra)) {
+                e.extra.insert(CALDAV_ETAG_KEY.to_string(), fresh.clone());
+            }
+            for t in data.tasks.iter_mut().filter(|t| same_resource(&t.id, &t.calendar_id, &t.extra)) {
+                t.extra.insert(CALDAV_ETAG_KEY.to_string(), fresh.clone());
+            }
+        }
+        let (extra, rev) = row_extra(data, kind, row_id)?;
         extra.insert(
             CALDAV_HREF_KEY.to_string(),
             serde_json::Value::String(href.to_string()),
@@ -1128,9 +1419,55 @@ pub(crate) fn set_caldav_identity_at(
             CALDAV_ETAG_KEY.to_string(),
             serde_json::Value::String(etag.to_string()),
         );
-        Ok(())
+        extra.remove(CALDAV_SERVER_DELETED_KEY);
+        if pushed_rev == Some(rev) {
+            extra.remove(CALDAV_DIRTY_KEY);
+        }
+        Ok(is_dirty(extra))
     })
-    .map(|_| ())
+    .map(|(dirty, _)| dirty)
+}
+
+/// Mark one row dirty ([`CALDAV_DIRTY_KEY`]) before a push is attempted, so a
+/// push that fails — offline, a refused password, a server error, a `412` —
+/// leaves the edit marked whichever writer made it (the window, an approved
+/// root-agent row). Returns the row's revision before and after the mark.
+pub(crate) fn mark_caldav_dirty_at(path: &Path, kind: &str, row_id: &str) -> Result<(u64, u64), String> {
+    let mut before = 0;
+    let (_, data) = transact(path, |data| {
+        let (extra, rev) = row_extra(data, kind, row_id)?;
+        before = rev;
+        extra.insert(CALDAV_DIRTY_KEY.to_string(), serde_json::Value::Bool(true));
+        Ok(())
+    })?;
+    let after = match kind {
+        "event" => data.events.iter().find(|e| e.id == row_id).map(|e| e.rev),
+        _ => data.tasks.iter().find(|t| t.id == row_id).map(|t| t.rev),
+    }
+    .unwrap_or(before);
+    Ok((before, after))
+}
+
+/// One row's `extra` and revision, by kind and id.
+fn row_extra<'a>(
+    data: &'a mut CalendarData,
+    kind: &str,
+    row_id: &str,
+) -> Result<(&'a mut std::collections::HashMap<String, serde_json::Value>, u64), String> {
+    match kind {
+        "event" => data
+            .events
+            .iter_mut()
+            .find(|e| e.id == row_id)
+            .map(|e| (&mut e.extra, e.rev)),
+        "task" => data
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == row_id)
+            .map(|t| (&mut t.extra, t.rev)),
+        other => return Err(format!("unknown calendar row kind '{other}'")),
+    }
+    .ok_or_else(|| format!("no {kind} with id '{row_id}'"))
 }
 
 // ── ICS file I/O ────────────────────────────────────────────────────────────
@@ -1171,24 +1508,17 @@ fn check_ics_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Offload a blocking calendar-store body to a worker thread. Every command
-/// below is a whole-file read (or read-modify-write) of `calendar.json` —
-/// written on every board drag — plus the user-picked `.ics` reads/writes; run
-/// synchronously on the main thread that turns into jank as CalDAV calendars
-/// grow (the freeze class `commands::git`'s `run_off_thread` doc describes).
-/// The `*_at` bodies stay sync and directly unit-testable.
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("calendar task failed: {e}"))?
-}
+// Offload a blocking calendar-store body to a worker thread. Every command
+// below is a whole-file read (or read-modify-write) of `calendar.json` —
+// written on every board drag — plus the user-picked `.ics` reads/writes; run
+// synchronously on the main thread that turns into jank as CalDAV calendars
+// grow (the freeze class `commands::git`'s off-thread note describes).
+// The `*_at` bodies stay sync and directly unit-testable.
 
 /// Read an `.ics` file the user picked, for the frontend parser.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_read_ics(path: String) -> Result<String, String> {
-    run_off_thread(move || calendar_read_ics_blocking(path)).await
+    app_core::rt::try_blocking("calendar", move || calendar_read_ics_blocking(path)).await
 }
 
 fn calendar_read_ics_blocking(path: String) -> Result<String, String> {
@@ -1211,7 +1541,7 @@ fn calendar_read_ics_blocking(path: String) -> Result<String, String> {
 /// Write an `.ics` file to the path the user picked.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_write_ics(path: String, content: String) -> Result<(), String> {
-    run_off_thread(move || calendar_write_ics_blocking(path, content)).await
+    app_core::rt::try_blocking("calendar", move || calendar_write_ics_blocking(path, content)).await
 }
 
 fn calendar_write_ics_blocking(path: String, content: String) -> Result<(), String> {
@@ -1255,7 +1585,7 @@ pub async fn calendar_replace_events(
     if crate::services::server::shared_calendar::is_shared_id(&calendar_id) {
         return Err("A shared calendar cannot be replaced in bulk; import into a calendar of your own".to_string());
     }
-    run_off_thread(move || replace_calendar_events_at(&calendar_path(), &calendar_id, events, tasks))
+    app_core::rt::try_blocking("calendar", move || replace_calendar_events_at(&calendar_path(), &calendar_id, events, tasks))
         .await
 }
 
@@ -1263,7 +1593,7 @@ pub async fn calendar_replace_events(
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_load() -> Result<CalendarData, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         let mut data = read_data(&calendar_path())?;
         // A hosted server: the calendars other users opened to this one, and
         // this user's own shared ones (plan §6.7).
@@ -1280,7 +1610,7 @@ pub async fn calendar_load() -> Result<CalendarData, String> {
 pub async fn calendar_save(mut data: CalendarData) -> Result<(), String> {
     // Shared calendars live in the server's calendar service, never here.
     crate::services::server::shared_calendar::strip_shared(&mut data);
-    run_off_thread(move || save_document_at(&calendar_path(), data)).await
+    app_core::rt::try_blocking("calendar", move || save_document_at(&calendar_path(), data)).await
 }
 
 /// Replace the whole store with `data` — the one whole-document write, and
@@ -1304,7 +1634,7 @@ pub(crate) fn save_document_at(path: &Path, data: CalendarData) -> Result<(), St
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_event(event: CalendarEvent) -> Result<CalendarEvent, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.put_event(&event, false)) {
             return routed;
         }
@@ -1327,7 +1657,7 @@ fn exists_locally(id: &str, events: bool) -> bool {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_event(event: CalendarEvent) -> Result<CalendarEvent, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.put_event(&event, exists_locally(&event.id, true))) {
             return routed;
         }
@@ -1338,7 +1668,7 @@ pub async fn update_event(event: CalendarEvent) -> Result<CalendarEvent, String>
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_event(id: String) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.delete_event(&id)) {
             return routed;
         }
@@ -1349,7 +1679,7 @@ pub async fn delete_event(id: String) -> Result<(), String> {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_task(task: CalendarTask) -> Result<CalendarTask, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.put_task(&task, false)) {
             return routed;
         }
@@ -1360,7 +1690,7 @@ pub async fn create_task(task: CalendarTask) -> Result<CalendarTask, String> {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_task(task: CalendarTask) -> Result<CalendarTask, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.put_task(&task, exists_locally(&task.id, false))) {
             return routed;
         }
@@ -1371,7 +1701,7 @@ pub async fn update_task(task: CalendarTask) -> Result<CalendarTask, String> {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_task(id: String) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         if let Some(routed) = shared().and_then(|s| s.delete_task(&id)) {
             return routed;
         }
@@ -1383,7 +1713,7 @@ pub async fn delete_task(id: String) -> Result<(), String> {
 /// Apply a board drag. See [`move_tasks_at`].
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn todo_move_tasks(moves: Vec<TaskPlacement>) -> Result<Vec<CalendarTask>, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         // A shared to-do list's card moves to its new column through the
         // calendar service (its place within the column is not shared in
         // v1); every other card as before.
@@ -1411,17 +1741,17 @@ pub async fn todo_columns_set(
     columns: Vec<TaskColumn>,
     fallback_column: Option<String>,
 ) -> Result<CalendarData, String> {
-    run_off_thread(move || columns_set_at(&calendar_path(), columns, fallback_column)).await
+    app_core::rt::try_blocking("calendar", move || columns_set_at(&calendar_path(), columns, fallback_column)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_calendar(calendar: Calendar) -> Result<Calendar, String> {
-    run_off_thread(move || create_calendar_at(&calendar_path(), calendar)).await
+    app_core::rt::try_blocking("calendar", move || create_calendar_at(&calendar_path(), calendar)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_calendar(calendar: Calendar) -> Result<Calendar, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("calendar", move || {
         // A shared calendar's only setting here is this user's own checkbox.
         if let (Some(shared), true) = (shared(), crate::services::server::shared_calendar::is_shared_id(&calendar.id)) {
             shared.set_visible(&calendar.id, calendar.visible)?;
@@ -1437,7 +1767,7 @@ pub async fn delete_calendar(id: String) -> Result<(), String> {
     if crate::services::server::shared_calendar::is_shared_id(&id) {
         return Err("A shared calendar is deleted by stopping sharing it (Server settings), or by its owner".to_string());
     }
-    run_off_thread(move || delete_calendar_at(&calendar_path(), &id)).await
+    app_core::rt::try_blocking("calendar", move || delete_calendar_at(&calendar_path(), &id)).await
 }
 
 /// Undo of [`delete_calendar`]. See [`restore_calendar_at`].
@@ -1447,7 +1777,7 @@ pub async fn restore_calendar(
     events: Vec<CalendarEvent>,
     tasks: Vec<CalendarTask>,
 ) -> Result<CalendarData, String> {
-    run_off_thread(move || restore_calendar_at(&calendar_path(), calendar, events, tasks)).await
+    app_core::rt::try_blocking("calendar", move || restore_calendar_at(&calendar_path(), calendar, events, tasks)).await
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -2391,7 +2721,7 @@ mod tests {
         });
         write_data(&path, &data).unwrap();
 
-        set_caldav_identity_at(&path, "event", "e1", "https://d/e/e1.ics", "\"7\"").unwrap();
+        set_caldav_identity_at(&path, "event", "e1", "https://d/e/e1.ics", "\"7\"", None).unwrap();
         let after = read_data(&path).unwrap().events.remove(0);
         assert_eq!(
             extra_str(&after.extra, CALDAV_HREF_KEY),
@@ -2405,14 +2735,14 @@ mod tests {
 
         // A server that accepted the write but named no version must clear the
         // old validator, not keep one that no longer describes anything.
-        set_caldav_identity_at(&path, "event", "e1", "https://d/e/e1.ics", "").unwrap();
+        set_caldav_identity_at(&path, "event", "e1", "https://d/e/e1.ics", "", None).unwrap();
         assert_eq!(
             extra_str(&read_data(&path).unwrap().events[0].extra, CALDAV_ETAG_KEY),
             ""
         );
 
-        assert!(set_caldav_identity_at(&path, "event", "nope", "h", "e").is_err());
-        assert!(set_caldav_identity_at(&path, "sheep", "e1", "h", "e").is_err());
+        assert!(set_caldav_identity_at(&path, "event", "nope", "h", "e", None).is_err());
+        assert!(set_caldav_identity_at(&path, "sheep", "e1", "h", "e", None).is_err());
     }
 
     #[test]
@@ -2694,5 +3024,499 @@ mod tests {
                 "a todo command must not take a path: {line}"
             );
         }
+    }
+
+    /// E3: an event made from a mail keeps its `from_mail` stamp through an
+    /// edit that leaves it out (or sends `null`) and through a CalDAV merge,
+    /// even one whose server copy names the key itself.
+    #[test]
+    fn a_mail_stamp_survives_edits_and_merges() {
+        let (_dir, path) = tmp_path();
+        let stamp = serde_json::json!({ "message_id": "INBOX-7", "account_id": "a1" });
+        let mut event = CalendarEvent {
+            title: "Kick-off".into(),
+            start: "2026-10-05T10:00".into(),
+            end: "2026-10-05T11:00".into(),
+            ..Default::default()
+        };
+        event.extra.insert(FROM_MAIL_KEY.into(), stamp.clone());
+        let created = create_event_at(&path, event).unwrap();
+        assert_eq!(created.extra.get(FROM_MAIL_KEY), Some(&stamp));
+
+        let mut edit = created.clone();
+        edit.title = "Kick-off (moved)".into();
+        edit.extra.remove(FROM_MAIL_KEY);
+        let updated = update_event_at(&path, edit.clone()).unwrap();
+        assert_eq!(updated.title, "Kick-off (moved)");
+        assert_eq!(updated.extra.get(FROM_MAIL_KEY), Some(&stamp), "an edit that leaves it out");
+        edit.extra.insert(FROM_MAIL_KEY.into(), serde_json::Value::Null);
+        assert_eq!(update_event_at(&path, edit).unwrap().extra.get(FROM_MAIL_KEY), Some(&stamp), "or nulls it");
+
+        // The synced copy: a merge carries the stamp, over the server's own key.
+        let cal = caldav_calendar(&path);
+        let mut stored = read_data(&path).unwrap();
+        let row = stored.events.iter_mut().find(|e| e.id == created.id).unwrap();
+        row.calendar_id = cal.clone();
+        row.extra.insert(CALDAV_HREF_KEY.into(), serde_json::json!("https://d/e/k.ics"));
+        storage::write_json_atomic(&path, &stored).unwrap();
+        let mut incoming = parsed_event("https://d/e/k.ics", "\"2\"", "Kick-off (server)", "2026-10-05T10:00");
+        incoming.events[0].extra.insert(FROM_MAIL_KEY.into(), serde_json::Value::Null);
+        let merged = merge_caldav_calendar_at(&path, &cal, vec![incoming], &[], true).unwrap();
+        let row = merged.events.iter().find(|e| e.id == created.id).unwrap();
+        assert_eq!(row.title, "Kick-off (server)");
+        assert_eq!(row.extra.get(FROM_MAIL_KEY), Some(&stamp));
+    }
+
+    /// An existing `calendar.json` — events and cards written before the stamp
+    /// existed — reads and writes back without gaining one; a stamped row
+    /// round-trips it unchanged.
+    #[test]
+    fn calendar_json_without_the_mail_stamp_round_trips() {
+        let (_dir, path) = tmp_path();
+        let old = r##"{"version":2,"calendars":[{"id":"default","name":"Personal","color":"#4aa3df","visible":true}],
+            "events":[{"id":"e1","calendar_id":"default","start":"2026-10-05T10:00","end":"2026-10-05T11:00","title":"Old"},
+                      {"id":"e2","calendar_id":"default","start":"2026-10-06T10:00","end":"2026-10-06T11:00","title":"Mail",
+                       "from_mail":{"message_id":"INBOX-7","account_id":"a1"}}],
+            "tasks":[{"id":"t1","calendar_id":"default","title":"Card","mail":{"message_id":"INBOX-7","subject":"Hi"}}]}"##;
+        std::fs::write(&path, old).unwrap();
+        let data = read_data(&path).unwrap();
+        storage::write_json_atomic(&path, &data).unwrap();
+        let back: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(back["events"][0].get("from_mail").is_none(), "{}", back["events"][0]);
+        assert_eq!(back["events"][1]["from_mail"], serde_json::json!({"message_id":"INBOX-7","account_id":"a1"}));
+        assert_eq!(back["tasks"][0]["mail"]["message_id"], "INBOX-7");
+        assert!(back["tasks"][0].get("from_mail").is_none());
+    }
+
+    // ── Unpushed local edits (gap 32) ────────────────────────────────────
+
+    /// A synced calendar holding one event and one card, both from the server.
+    fn synced_pair(path: &Path) -> (String, String, String) {
+        let cal = caldav_calendar(path);
+        let data = merge_caldav_calendar_at(
+            path,
+            &cal,
+            vec![
+                parsed_event("https://d/e/a.ics", "\"1\"", "standup", "2026-07-08T09:00"),
+                parsed_task("https://d/e/t.ics", "\"1\"", "card", 0),
+            ],
+            &[],
+            true,
+        )
+        .unwrap();
+        (cal, data.events[0].id.clone(), data.tasks[0].id.clone())
+    }
+
+    fn edit_dirty(path: &Path, event_id: &str, title: &str) {
+        let mut e = read_data(path).unwrap().events.into_iter().find(|e| e.id == event_id).unwrap();
+        e.title = title.into();
+        e.extra.insert(CALDAV_DIRTY_KEY.into(), serde_json::Value::Bool(true));
+        update_event_at(path, e).unwrap();
+    }
+
+    #[test]
+    fn a_failed_push_stays_dirty_and_the_merge_keeps_the_edit() {
+        let (_dir, path) = tmp_path();
+        let (cal, eid, _) = synced_pair(&path);
+        // The window's write marks it; `caldav_push` marks it again before it
+        // sends, and nothing clears it because the push failed.
+        edit_dirty(&path, &eid, "standup (moved)");
+        mark_caldav_dirty_at(&path, "event", &eid).unwrap();
+
+        // A sync whose server copy did not change: kept silently (a push is
+        // still owed), nothing reported.
+        let (data, kept) = merge_caldav_calendar_kept_at(
+            &path,
+            &cal,
+            vec![parsed_event("https://d/e/a.ics", "\"1\"", "standup", "2026-07-08T09:00")],
+            &[],
+            true,
+            &[],
+        )
+        .unwrap();
+        let e = data.events.iter().find(|e| e.id == eid).unwrap();
+        assert_eq!(e.title, "standup (moved)", "the merge never overwrites a dirty row");
+        assert!(is_dirty(&e.extra));
+        assert!(kept.is_empty(), "{kept:?}");
+
+        // The server changed it too: still kept, and reported as a conflict.
+        let (data, kept) = merge_caldav_calendar_kept_at(
+            &path,
+            &cal,
+            vec![parsed_event("https://d/e/a.ics", "\"2\"", "standup (server)", "2026-07-08T09:00")],
+            &[],
+            true,
+            &[],
+        )
+        .unwrap();
+        let e = data.events.iter().find(|e| e.id == eid).unwrap();
+        assert_eq!(e.title, "standup (moved)");
+        assert_eq!(extra_str(&e.extra, CALDAV_ETAG_KEY), "\"1\"", "still conditional on what it read");
+        assert_eq!(kept.len(), 1);
+        assert_eq!((kept[0].row_id.as_str(), kept[0].reason.as_str()), (eid.as_str(), "changed"));
+        assert_eq!(kept[0].href, "https://d/e/a.ics");
+
+        // "Use the server's": the mark goes in the same write and the server
+        // copy lands.
+        let (data, kept) = merge_caldav_calendar_kept_at(
+            &path,
+            &cal,
+            vec![parsed_event("https://d/e/a.ics", "\"2\"", "standup (server)", "2026-07-08T09:00")],
+            &[],
+            true,
+            std::slice::from_ref(&eid),
+        )
+        .unwrap();
+        let e = data.events.iter().find(|e| e.id == eid).unwrap();
+        assert_eq!(e.title, "standup (server)");
+        assert!(!e.extra.contains_key(CALDAV_DIRTY_KEY));
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn a_dirty_row_the_server_deleted_becomes_local_only_and_is_reported() {
+        let (_dir, path) = tmp_path();
+        let (cal, eid, tid) = synced_pair(&path);
+        edit_dirty(&path, &eid, "standup (mine)");
+        let mut t = read_data(&path).unwrap().tasks.remove(0);
+        t.title = "card (mine)".into();
+        t.extra.insert(CALDAV_DIRTY_KEY.into(), serde_json::Value::Bool(true));
+        update_task_at(&path, t).unwrap();
+
+        // The card by an explicit 404; the event by its absence from a full
+        // listing.
+        let (data, kept) =
+            merge_caldav_calendar_kept_at(&path, &cal, vec![], &["https://d/e/t.ics".into()], true, &[]).unwrap();
+        let e = data.events.iter().find(|e| e.id == eid).expect("event kept");
+        let t = data.tasks.iter().find(|t| t.id == tid).expect("card kept");
+        for (extra, title) in [(&e.extra, &e.title), (&t.extra, &t.title)] {
+            assert!(title.ends_with("(mine)"));
+            assert!(!extra.contains_key(CALDAV_HREF_KEY), "local-only now");
+            assert!(!extra.contains_key(CALDAV_ETAG_KEY));
+            assert!(is_dirty(extra));
+        }
+        assert_eq!(extra_str(&e.extra, CALDAV_SERVER_DELETED_KEY), "https://d/e/a.ics");
+        assert_eq!(extra_str(&t.extra, CALDAV_SERVER_DELETED_KEY), "https://d/e/t.ics");
+        let mut reasons: Vec<(String, String)> =
+            kept.iter().map(|k| (k.kind.clone(), k.reason.clone())).collect();
+        reasons.sort();
+        assert_eq!(
+            reasons,
+            [("event".to_string(), "deleted".to_string()), ("task".to_string(), "deleted".to_string())]
+        );
+
+        // A later sync leaves them alone (no href to match); "Use the
+        // server's" deletes them here too.
+        let (data, _) = merge_caldav_calendar_kept_at(&path, &cal, vec![], &[], true, &[]).unwrap();
+        assert_eq!((data.events.len(), data.tasks.len()), (1, 1));
+        let (data, _) =
+            merge_caldav_calendar_kept_at(&path, &cal, vec![], &[], true, &[eid.clone(), tid.clone()]).unwrap();
+        assert!(data.events.is_empty() && data.tasks.is_empty());
+    }
+
+    #[test]
+    fn a_clean_row_is_still_overwritten_and_deleted_as_before() {
+        let (_dir, path) = tmp_path();
+        let (cal, eid, _) = synced_pair(&path);
+        let (data, kept) = merge_caldav_calendar_kept_at(
+            &path,
+            &cal,
+            vec![parsed_event("https://d/e/a.ics", "\"2\"", "renamed", "2026-07-08T09:00")],
+            &["https://d/e/t.ics".into()],
+            true,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(data.events.iter().find(|e| e.id == eid).unwrap().title, "renamed");
+        assert!(data.tasks.is_empty());
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn a_push_clears_the_mark_only_for_the_revision_it_sent() {
+        let (_dir, path) = tmp_path();
+        let (_, eid, _) = synced_pair(&path);
+        let rev_of = |path: &Path| read_data(path).unwrap().events.into_iter().find(|e| e.id == eid).unwrap().rev;
+
+        // Sent, accepted, nothing edited meanwhile: clean.
+        let (_, marked) = mark_caldav_dirty_at(&path, "event", &eid).unwrap();
+        assert_eq!(marked, rev_of(&path));
+        let dirty = set_caldav_identity_at(&path, "event", &eid, "https://d/e/a.ics", "\"2\"", Some(marked)).unwrap();
+        assert!(!dirty);
+        assert!(!read_data(&path).unwrap().events[0].extra.contains_key(CALDAV_DIRTY_KEY));
+
+        // An edit lands while the write is in flight: the mark stays, so the
+        // newer edit is still pushed and never overwritten by a merge.
+        let (_, marked) = mark_caldav_dirty_at(&path, "event", &eid).unwrap();
+        edit_dirty(&path, &eid, "edited mid-push");
+        let dirty = set_caldav_identity_at(&path, "event", &eid, "https://d/e/a.ics", "\"3\"", Some(marked)).unwrap();
+        assert!(dirty);
+        // The pushed bytes were already stale (`None`): kept as well.
+        assert!(set_caldav_identity_at(&path, "event", &eid, "https://d/e/a.ics", "\"4\"", None).unwrap());
+
+        // A server-deleted marker goes once the row is on the server again.
+        let mut data = read_data(&path).unwrap();
+        data.events[0]
+            .extra
+            .insert(CALDAV_SERVER_DELETED_KEY.into(), serde_json::Value::String("https://d/e/a.ics".into()));
+        write_data(&path, &data).unwrap();
+        let rev = rev_of(&path);
+        assert!(!set_caldav_identity_at(&path, "event", &eid, "https://d/e/b.ics", "\"5\"", Some(rev)).unwrap());
+        assert!(!read_data(&path).unwrap().events[0].extra.contains_key(CALDAV_SERVER_DELETED_KEY));
+    }
+
+    #[test]
+    fn a_push_gives_the_resources_other_rows_its_etag_so_their_push_is_no_conflict() {
+        // A series with an override row: both edited while a push could not get
+        // through. The sync pushes the resource once (both rows ride in the
+        // body); the override must not keep the old ETag, or its own push is a
+        // `412` and the merge reports the server as having changed it.
+        let (_dir, path) = tmp_path();
+        let cal = caldav_calendar(&path);
+        let mut over = parsed_event("https://d/e/s.ics", "\"1\"", "series", "2026-07-08T09:00");
+        let second = over.events[0].clone();
+        over.events.push(CalendarEvent { start: "2026-07-15T10:00".into(), ..second });
+        let data = merge_caldav_calendar_at(&path, &cal, vec![over], &[], true).unwrap();
+        assert_eq!(data.events.len(), 2);
+        let (a, b) = (data.events[0].id.clone(), data.events[1].id.clone());
+        edit_dirty(&path, &a, "series (mine)");
+        edit_dirty(&path, &b, "override (mine)");
+        let (_, rev) = mark_caldav_dirty_at(&path, "event", &a).unwrap();
+
+        assert!(!set_caldav_identity_at(&path, "event", &a, "https://d/e/s.ics", "\"2\"", Some(rev)).unwrap());
+        let stored = read_data(&path).unwrap();
+        let row_b = stored.events.iter().find(|e| e.id == b).unwrap();
+        assert_eq!(extra_str(&row_b.extra, CALDAV_ETAG_KEY), "\"2\"");
+        assert!(is_dirty(&row_b.extra), "its own revision was not the one pushed");
+
+        // The server holds what was pushed: nothing to ask about.
+        let mut back = parsed_event("https://d/e/s.ics", "\"2\"", "series (mine)", "2026-07-08T09:00");
+        let second = back.events[0].clone();
+        back.events.push(CalendarEvent { start: "2026-07-15T10:00".into(), ..second });
+        let (_, kept) = merge_caldav_calendar_kept_at(&path, &cal, vec![back], &[], true, &[]).unwrap();
+        assert!(kept.is_empty(), "{kept:?}");
+
+        // A create (no address before) touches no other row.
+        let lone = create_event_at(&path, CalendarEvent { calendar_id: cal.clone(), title: "new".into(), ..Default::default() }).unwrap();
+        set_caldav_identity_at(&path, "event", &lone.id, "https://d/e/s.ics", "\"9\"", None).unwrap();
+        let stored = read_data(&path).unwrap();
+        assert_eq!(extra_str(&stored.events.iter().find(|e| e.id == b).unwrap().extra, CALDAV_ETAG_KEY), "\"2\"");
+    }
+
+    #[test]
+    fn an_edit_from_a_copy_without_the_mark_cannot_clear_it() {
+        let (_dir, path) = tmp_path();
+        let (_, eid, tid) = synced_pair(&path);
+        mark_caldav_dirty_at(&path, "event", &eid).unwrap();
+        mark_caldav_dirty_at(&path, "task", &tid).unwrap();
+        let data = read_data(&path).unwrap();
+        let mut e = data.events[0].clone();
+        e.extra.remove(CALDAV_DIRTY_KEY);
+        e.title = "again".into();
+        assert!(is_dirty(&update_event_at(&path, e.clone()).unwrap().extra));
+        let mut t = data.tasks[0].clone();
+        t.extra.remove(CALDAV_DIRTY_KEY);
+        assert!(is_dirty(&update_task_at(&path, t).unwrap().extra));
+        // A move to another calendar drops it; that calendar's write marks it
+        // again if it syncs.
+        let other = caldav_calendar(&path);
+        e.calendar_id = other.clone();
+        e.extra.insert(CALDAV_SERVER_DELETED_KEY.into(), serde_json::Value::String("https://d/e/a.ics".into()));
+        let moved = update_event_at(&path, e).unwrap();
+        assert!(!is_dirty(&moved.extra));
+        assert!(!moved.extra.contains_key(CALDAV_SERVER_DELETED_KEY), "no stale question in the new calendar");
+        // An agent's move (`relocate_*`) forgets the same bookkeeping.
+        let mut t = read_data(&path).unwrap().tasks.remove(0);
+        t.extra.insert(CALDAV_SERVER_DELETED_KEY.into(), serde_json::Value::String("x".into()));
+        relocate_task(&mut t, &other);
+        assert!(!is_dirty(&t.extra) && !t.extra.contains_key(CALDAV_SERVER_DELETED_KEY));
+        assert!(!t.extra.contains_key(CALDAV_HREF_KEY));
+    }
+
+    /// A calendar a CalDAV subscription feeds (its record carries the
+    /// collection's address), as `subscribe` creates it.
+    fn subscribed_calendar(path: &Path, href: &str) -> String {
+        let mut extra = HashMap::new();
+        extra.insert(CALDAV_HREF_KEY.to_string(), serde_json::Value::String(href.into()));
+        create_calendar_at(
+            path,
+            Calendar {
+                rev: 0,
+                id: String::new(),
+                name: "Team".into(),
+                color: "#4aa3df".into(),
+                visible: true,
+                readonly: false,
+                extra,
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    #[test]
+    fn a_row_moved_into_a_local_calendar_drops_its_push_bookkeeping() {
+        // Step 7 review item 7: the window's copy of a dirty row still carries
+        // `caldav_dirty` when it is moved; into a calendar nothing pushes, the
+        // mark (and the server-deleted question) must not come along.
+        let (_dir, path) = tmp_path();
+        let (_, eid, tid) = synced_pair(&path);
+        mark_caldav_dirty_at(&path, "event", &eid).unwrap();
+        mark_caldav_dirty_at(&path, "task", &tid).unwrap();
+        let data = read_data(&path).unwrap();
+        let local = caldav_calendar(&path);
+
+        let mut e = data.events[0].clone();
+        assert!(is_dirty(&e.extra));
+        e.calendar_id = local.clone();
+        e.extra.insert(CALDAV_SERVER_DELETED_KEY.into(), serde_json::Value::String("https://d/e/a.ics".into()));
+        let moved = update_event_at(&path, e).unwrap();
+        assert!(!is_dirty(&moved.extra), "{:?}", moved.extra);
+        assert!(!moved.extra.contains_key(CALDAV_SERVER_DELETED_KEY));
+
+        let mut t = data.tasks[0].clone();
+        assert!(is_dirty(&t.extra));
+        t.calendar_id = local;
+        let moved = update_task_at(&path, t).unwrap();
+        assert!(!is_dirty(&moved.extra), "{:?}", moved.extra);
+
+        // Into another CalDAV calendar the window's mark for the new
+        // collection stays (its push then creates the row there).
+        let team = subscribed_calendar(&path, "https://d/team/");
+        let mut e = read_data(&path).unwrap().events.remove(0);
+        e.calendar_id = team;
+        e.extra.insert(CALDAV_DIRTY_KEY.into(), serde_json::Value::Bool(true));
+        e.extra.insert(CALDAV_SERVER_DELETED_KEY.into(), serde_json::Value::String("https://d/e/a.ics".into()));
+        let moved = update_event_at(&path, e).unwrap();
+        assert!(is_dirty(&moved.extra));
+        assert!(!moved.extra.contains_key(CALDAV_SERVER_DELETED_KEY));
+    }
+
+    #[test]
+    fn an_account_moved_to_https_rewrites_its_rows_same_host_addresses() {
+        let (_dir, path) = tmp_path();
+        let cal = subscribed_calendar(&path, "http://dav.example.com/cal/");
+        let other = subscribed_calendar(&path, "http://dav.example.com/other/");
+        let data = merge_caldav_calendar_at(
+            &path,
+            &cal,
+            vec![
+                parsed_event("http://dav.example.com/cal/a.ics", "\"1\"", "standup", "2026-07-08T09:00"),
+                parsed_event("http://elsewhere.example.net/cal/b.ics", "\"1\"", "far", "2026-07-09T09:00"),
+                parsed_task("http://dav.example.com/cal/t.ics", "\"1\"", "card", 0),
+            ],
+            &[],
+            true,
+        )
+        .unwrap();
+        merge_caldav_calendar_at(
+            &path,
+            &other,
+            vec![parsed_event("http://dav.example.com/other/c.ics", "\"1\"", "untouched", "2026-07-10T09:00")],
+            &[],
+            true,
+        )
+        .unwrap();
+        let gone = data.events.iter().find(|e| e.title == "standup").unwrap().id.clone();
+        let mut d = read_data(&path).unwrap();
+        let row = d.events.iter_mut().find(|e| e.id == gone).unwrap();
+        row.extra.insert(
+            CALDAV_SERVER_DELETED_KEY.into(),
+            serde_json::Value::String("http://dav.example.com/cal/old.ics".into()),
+        );
+        write_data(&path, &d).unwrap();
+
+        let origin = url::Url::parse("https://dav.example.com/").unwrap();
+        upgrade_caldav_hrefs_at(&path, std::slice::from_ref(&cal), |h| {
+            crate::services::caldav::https_twin(h, &origin)
+        })
+        .unwrap();
+        let d = read_data(&path).unwrap();
+        let href_of = |title: &str| {
+            let e = d.events.iter().find(|e| e.title == title).unwrap();
+            extra_str(&e.extra, CALDAV_HREF_KEY)
+        };
+        assert_eq!(href_of("standup"), "https://dav.example.com/cal/a.ics");
+        assert_eq!(href_of("far"), "http://elsewhere.example.net/cal/b.ics", "another host is not ours to rewrite");
+        assert_eq!(href_of("untouched"), "http://dav.example.com/other/c.ics", "only the named calendars");
+        assert_eq!(extra_str(&d.tasks[0].extra, CALDAV_HREF_KEY), "https://dav.example.com/cal/t.ics");
+        let standup = d.events.iter().find(|e| e.title == "standup").unwrap();
+        assert_eq!(
+            extra_str(&standup.extra, CALDAV_SERVER_DELETED_KEY),
+            "https://dav.example.com/cal/old.ics"
+        );
+        let record = d.calendars.iter().find(|c| c.id == cal).unwrap();
+        assert_eq!(extra_str(&record.extra, CALDAV_HREF_KEY), "https://dav.example.com/cal/");
+    }
+
+    #[test]
+    fn a_row_put_back_into_its_masters_resource_gives_the_master_the_new_etag() {
+        // A series the server deleted, both rows dirty: the master was put back
+        // first (a create), then "Keep mine" on the override adopts the
+        // master's address. The master must take the new ETag, or its next
+        // push is a `412` against this machine's own write.
+        let (_dir, path) = tmp_path();
+        let cal = caldav_calendar(&path);
+        let mut series = parsed_event("https://d/e/s.ics", "\"1\"", "series", "2026-07-08T09:00");
+        let second = series.events[0].clone();
+        series.events.push(CalendarEvent { start: "2026-07-15T10:00".into(), ..second });
+        let data = merge_caldav_calendar_at(&path, &cal, vec![series], &[], true).unwrap();
+        let (master, over) = (data.events[0].id.clone(), data.events[1].id.clone());
+        let mut d = read_data(&path).unwrap();
+        let o = d.events.iter_mut().find(|e| e.id == over).unwrap();
+        o.extra.remove(CALDAV_HREF_KEY);
+        o.extra.remove(CALDAV_ETAG_KEY);
+        o.extra.insert(CALDAV_DIRTY_KEY.into(), serde_json::Value::Bool(true));
+        write_data(&path, &d).unwrap();
+
+        let (_, rev) = mark_caldav_dirty_at(&path, "event", &over).unwrap();
+        let dirty = set_caldav_identity_sent_at(
+            &path,
+            "event",
+            &over,
+            "https://d/e/s.ics",
+            "\"7\"",
+            Some(rev),
+            "https://d/e/s.ics",
+        )
+        .unwrap();
+        assert!(!dirty);
+        let d = read_data(&path).unwrap();
+        for id in [&master, &over] {
+            let e = d.events.iter().find(|e| &e.id == id).unwrap();
+            assert_eq!(extra_str(&e.extra, CALDAV_ETAG_KEY), "\"7\"", "{id}");
+            assert_eq!(extra_str(&e.extra, CALDAV_HREF_KEY), "https://d/e/s.ics");
+        }
+    }
+
+    #[test]
+    fn calendar_json_without_the_dirty_mark_round_trips() {
+        let (_dir, path) = tmp_path();
+        let old = r##"{"version":2,"calendars":[{"id":"c1","name":"Work","color":"#4aa3df","visible":true}],
+            "events":[{"id":"e1","calendar_id":"c1","start":"2026-10-05T10:00","end":"2026-10-05T11:00","title":"Old",
+                       "caldav_href":"https://d/e/a.ics","caldav_etag":"\"1\""},
+                      {"id":"e2","calendar_id":"c1","start":"2026-10-06T10:00","end":"2026-10-06T11:00","title":"Dirty",
+                       "caldav_href":"https://d/e/b.ics","caldav_etag":"\"1\"","caldav_dirty":true}],
+            "tasks":[{"id":"t1","calendar_id":"c1","title":"Card","caldav_href":"https://d/e/t.ics"}]}"##;
+        std::fs::write(&path, old).unwrap();
+        let data = read_data(&path).unwrap();
+        storage::write_json_atomic(&path, &data).unwrap();
+        let back: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(back["events"][0].get(CALDAV_DIRTY_KEY).is_none(), "{}", back["events"][0]);
+        assert!(back["tasks"][0].get(CALDAV_DIRTY_KEY).is_none());
+        assert_eq!(back["events"][1][CALDAV_DIRTY_KEY], serde_json::json!(true));
+        assert!(back["events"][0].get(CALDAV_SERVER_DELETED_KEY).is_none());
+        // An old row merges as before: overwritten, no report.
+        let (data, kept) = merge_caldav_calendar_kept_at(
+            &path,
+            "c1",
+            vec![parsed_event("https://d/e/a.ics", "\"2\"", "New", "2026-10-05T10:00")],
+            &[],
+            false,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(data.events.iter().find(|e| e.id == "e1").unwrap().title, "New");
+        assert!(kept.is_empty());
     }
 }

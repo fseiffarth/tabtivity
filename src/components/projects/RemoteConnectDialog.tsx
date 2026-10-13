@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -68,6 +69,7 @@ function RemoteConnectDialogInner({
 }) {
   const t = useT();
   const close = useConnectDialogStore((s) => s.close);
+  const modalRef = useModalFocus(close);
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
   // Which machine the careful switch below governs: the worker this dialog was
   // opened for, or the project's primary when it was opened for that. A worker is
@@ -308,6 +310,10 @@ function RemoteConnectDialogInner({
   return createPortal(
     <div className="modal-backdrop modal-backdrop-elevated" onMouseDown={close}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="project-dialog dialog-framed remote-connect-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

@@ -94,7 +94,7 @@ pub fn switch_project_session(
 /// The `local_file` of the previous and the next project, from the global
 /// project list.
 fn local_files(previous_project_id: Option<&str>, project_id: Option<&str>) -> (Option<String>, Option<String>) {
-    let list_path = storage::state_dir().join("projects.json");
+    let list_path = storage::projects_path();
     let projects: ProjectsList = if list_path.exists() {
         storage::read_json(&list_path).unwrap_or_default()
     } else {

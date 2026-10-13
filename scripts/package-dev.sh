@@ -23,7 +23,8 @@
 #            to try an uncommitted change in the frozen window.
 #
 # Both share the cargo target dir, so the build lands at target/release/tabtivity
-# either way and the launcher adopts whichever was verified last.
+# either way, and the launcher adopts it if this script recorded its hash on
+# the host (scripts/lib/dev-launcher.sh).
 #
 # Compared with package-local.sh (the stable AppImage under the plain "Tabtivity"
 # entry) this skips bundling: the release binary is linked with the frontend
@@ -33,71 +34,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The app's names (scripts/lib/brand.sh): $APP_DISPLAY, $APP_SLUG, $APP_BIN_NAME, …
 . "$ROOT/scripts/lib/brand.sh"
+# What the launcher trusts: the verified-build list and its own installed copy.
+. "$ROOT/scripts/lib/dev-launcher.sh"
 APP_DIR="$APP_SHARE_DIR"
 DESKTOP_DIR="$HOME/.local/share/applications"
 BINARY_DEST="$APP_DIR/$APP_DEV_BIN_NAME"
 DESKTOP_DEST="$DESKTOP_DIR/${APP_DISPLAY}Dev.desktop"
-LAUNCHER="$ROOT/start-$APP_SLUG-dev-build.sh"
+# The desktop entry runs the launcher's installed copy, never the checkout's:
+# an agent can edit the checkout, and the next click would run that edit
+# unfenced (threat recheck 2026-10-08, gap 20). Installed below, on the host.
+LAUNCHER_DIR="$(dev_launcher_dir "$APP_DIR")"
+LAUNCHER="$LAUNCHER_DIR/start-$APP_SLUG-dev-build.sh"
 FREEZE_TREE="$ROOT/target/freeze-tree"
-LIVE_PWA_DIR="$ROOT/target/mobile-pwa"
-
-# The phone's bundle, published where a RUNNING sidecar can find it.
-#
-# The PWA is compiled into the binary, and the running window keeps its old
-# inode across an install, so freezing a commit never reached the phone until
-# the user relaunched — that is how a bundle days behind kept being served with
-# nothing saying so. A published copy costs the sidecar one stat per request and
-# closes the gap without a relaunch: the phone reloads over HTTP, so a
-# pull-to-refresh is the whole update path (src-tauri/.../live_pwa.rs).
-#
-# Published from the tree that was just BUILT, before cargo starts: the bundle
-# takes two seconds and the compile takes two minutes, and the phone has no
-# reason to wait for the second.
-#
-# Written to target/ rather than under $HOME on purpose — commits come from
-# agent tabs, where `services::agent_fence` has replaced $HOME with a tmpfs that
-# dies with the tab (see the install guard below), while target/ is inside the
-# bound project and is real.
-publish_live_pwa() {
-  local src="$1/mobile-dist" commit="$2"
-  [ -d "$src" ] || { echo "package-dev: no $src to publish for the phone" >&2; return 0; }
-
-  local tmp="$LIVE_PWA_DIR.tmp.$$"
-  rm -rf "$tmp"
-  mkdir -p "$tmp"
-  cp -a "$src/." "$tmp/"
-
-  # The stamp is the whole contract: `built` is what stops an overlay from
-  # shadowing a NEWER binary, and `entry` is what lets the loader refuse half a
-  # bundle rather than serve a shell pointing at a script it does not have.
-  local entry
-  entry="$(cd "$tmp" && ls -1 assets/index-*.js 2>/dev/null | head -n1 || true)"
-  if [ -z "$entry" ] || [ ! -f "$tmp/index.html" ]; then
-    echo "package-dev: $src is not a whole bundle; the phone keeps the embedded one" >&2
-    rm -rf "$tmp"
-    return 0
-  fi
-  {
-    printf 'built=%s\n' "$(date +%s)"
-    printf 'commit=%s\n' "$commit"
-    printf 'entry=/%s\n' "$entry"
-  } >"$tmp/.stamp"
-
-  # Swap rather than overwrite: the sidecar reads these files while this runs,
-  # and a half-copied directory is a white screen. The gap between the two
-  # renames is a few milliseconds during which the loader finds no stamp and the
-  # binary answers from its embedded bundle, which is the safe direction.
-  rm -rf "$LIVE_PWA_DIR.old"
-  [ -d "$LIVE_PWA_DIR" ] && mv "$LIVE_PWA_DIR" "$LIVE_PWA_DIR.old"
-  mv "$tmp" "$LIVE_PWA_DIR"
-  rm -rf "$LIVE_PWA_DIR.old"
-  echo "package-dev: published the phone bundle ($commit) to $LIVE_PWA_DIR"
-}
-
-# Compiled into the binary as the one directory it may serve a newer bundle
-# from. Unset in CI and in every release build, where the overlay does not exist
-# at all.
-app_export MOBILE_LIVE_DIR "$LIVE_PWA_DIR"
 # The checkout the header's dev-build chip compares the installed snapshot with
 # (services::dev_build) — the main one even in --head mode, whose freeze tree
 # is a detached copy that never moves. Unset in CI and every release: no chip.
@@ -125,26 +73,28 @@ export CARGO_TARGET_DIR="$ROOT/target"
 
 if [ "$MODE" = head ]; then
   SRC="$FREEZE_TREE"
-  HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
+  HEAD_SHA="$(dev_git -C "$ROOT" rev-parse --verify "HEAD^{commit}")"
 
   # The worktree lives under target/, which `cargo clean` (or a hand) can wipe
   # while git still lists it, or leave a directory that git no longer knows.
   # Reconcile both ways before touching it; the rm is on one fixed path only.
-  git -C "$ROOT" worktree prune
-  if [ -e "$SRC" ] && ! git -C "$ROOT" worktree list --porcelain | grep -qxF "worktree $SRC"; then
+  # `dev_git`: the repo's hooks and fsmonitor are fence-writable and this runs
+  # on the host (a checkout would fire `post-checkout`).
+  dev_git -C "$ROOT" worktree prune
+  if [ -e "$SRC" ] && ! dev_git -C "$ROOT" worktree list --porcelain | grep -qxF "worktree $SRC"; then
     echo "package-dev: $SRC is not a registered worktree; recreating it" >&2
     rm -rf "$FREEZE_TREE"
   fi
   if [ ! -e "$SRC" ]; then
-    git -C "$ROOT" worktree add --detach "$SRC" "$HEAD_SHA"
+    dev_git -C "$ROOT" worktree add --detach "$SRC" "$HEAD_SHA"
   else
-    git -C "$SRC" checkout --quiet --detach --force "$HEAD_SHA"
+    dev_git -C "$SRC" checkout --quiet --detach --force "$HEAD_SHA"
     # Files a newer commit deleted are gone with the checkout; this clears
     # anything untracked and unignored that an older one left behind. dist/
     # and mobile-dist/ are ignored and stay; the node_modules symlink is not
     # (`node_modules/` in .gitignore matches a directory, not a link), so it is
     # excluded by name rather than deleted and re-linked on every freeze.
-    git -C "$SRC" clean -fdq -e node_modules
+    dev_git -C "$SRC" clean -fdq -e node_modules
   fi
   ln -sfn "$ROOT/node_modules" "$SRC/node_modules"
 
@@ -154,7 +104,6 @@ if [ "$MODE" = head ]; then
   # exhausted them (see the --tree branch), and a detached background build is
   # the last place to want that.
   ( cd "$SRC" && npm run build )
-  publish_live_pwa "$SRC" "$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   cargo build --release --features custom-protocol --manifest-path "$SRC/src-tauri/Cargo.toml"
 else
   SRC="$ROOT"
@@ -215,30 +164,52 @@ fi
 "$SRC/scripts/assert-embedded-frontend.sh" "$RAW_BIN"
 
 VERSION="$(node -p "require('$SRC/package.json').version")"
-COMMIT="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+COMMIT="$(dev_git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 DIRTY=""
-if [ "$MODE" = tree ] && ! git -C "$ROOT" diff --quiet HEAD -- 2>/dev/null; then DIRTY="+local"; fi
+if [ "$MODE" = tree ] && ! dev_git -C "$ROOT" diff --quiet HEAD -- 2>/dev/null; then DIRTY="+local"; fi
 
-# --head published the phone bundle before cargo started, so a commit reaches the
-# phone in seconds rather than after the compile. --tree has no such hurry and
-# publishes here, once the build it is freezing has actually succeeded.
-if [ "$MODE" = tree ]; then
-  publish_live_pwa "$SRC" "$COMMIT$DIRTY"
-fi
-
-# Record that THIS artifact passed that check. The launcher adopts on this
-# record rather than re-running the check at launch time against a dist/ that
-# has moved on since (four days of correct builds were refused that way,
-# 2026-09-14). The sha pins the record to the exact bytes, so a later build
-# that fails the check cannot inherit it.
+# Record that THIS artifact passed that check, rather than re-running it at
+# launch time against a dist/ that has moved on since (four days of correct
+# builds were refused that way, 2026-09-14). The sha pins the record to the
+# exact bytes, so a later build that fails the check cannot inherit it. The
+# record beside the artifact is for the dev-build chip and for people; the
+# launcher adopts only on the verified list written below.
 FROZEN_STAMP="$RAW_BIN.frozen"
+RAW_SHA="$(sha256sum "$RAW_BIN" | cut -d' ' -f1)"
+BUILT_AT="$(date -Is)"
 {
-  printf 'sha256=%s\n' "$(sha256sum "$RAW_BIN" | cut -d' ' -f1)"
+  printf 'sha256=%s\n' "$RAW_SHA"
   printf 'version=%s\n' "$VERSION"
   printf 'commit=%s%s\n' "$COMMIT" "$DIRTY"
   printf 'source=%s\n' "$MODE"
-  printf 'built=%s\n' "$(date -Is)"
+  printf 'built=%s\n' "$BUILT_AT"
 } >"$FROZEN_STAMP"
+
+# That record sits in target/, which every agent fence binding this project can
+# write, so the launcher no longer trusts it. What it trusts is written here,
+# on the host only: the hash goes into the per-user verified list, and the
+# launcher (with every helper it sources) is copied into
+# <app_dir>/dev-launcher/ — in --head mode read out of the commit itself
+# (`dev_git cat-file`), never from target/freeze-tree, which a fence binding
+# the project can edit while the build runs; in --tree mode from the working
+# tree, uncommitted edits included, as that mode freezes them anyway.
+# Inside a fence $HOME is the agent's own, so neither write could reach the
+# real ones anyway; skipping them there just says so. The desktop entry is
+# pointed at that copy at once, even when the install below is held back.
+if dev_on_host "$APP_DIR"; then
+  dev_verified_add "$(dev_verified_list "$APP_DIR")" "$RAW_SHA" "$COMMIT$DIRTY" "$VERSION" "$BUILT_AT"
+  if [ "$MODE" = head ]; then
+    LAUNCHER_FROM=("$ROOT" "$LAUNCHER_DIR" "$ROOT" "$HEAD_SHA")
+  else
+    LAUNCHER_FROM=("$ROOT" "$LAUNCHER_DIR" "$ROOT")
+  fi
+  if dev_launcher_install "${LAUNCHER_FROM[@]}"; then
+    dev_desktop_exec "$DESKTOP_DEST" "$LAUNCHER"
+  else
+    echo "package-dev: could not install the launcher copy into $LAUNCHER_DIR" >&2
+    exit 1
+  fi
+fi
 
 # Installing into a tmpfs is not installing.
 #
@@ -251,17 +222,19 @@ FROZEN_STAMP="$RAW_BIN.frozen"
 # desktop icon opened a two-day-old window while a dozen commits each reported
 # success (2026-09-04).
 #
-# So stop at the artifact and say so. start-tabtivity-dev-build.sh adopts it at
-# launch, in the user's own session, where no fence can swallow it.
-if [ "$(stat -f -c %T "$APP_DIR" 2>/dev/null || echo unknown)" = "tmpfs" ] ||
-   [ "$(app_env AGENT_FENCE)" = "1" ]; then
+# So stop at the artifact and say so. Since 2026-10-13 the launcher no longer
+# adopts it either: a build made inside a fence is not in the verified list
+# (gap 20 — target/ is exactly where an agent would plant a binary). The window
+# queues a build of every commit on the host (services::dev_build), and that
+# one is recorded.
+if ! dev_on_host "$APP_DIR"; then
   cat <<MSG
 package-dev: built $RAW_BIN ($VERSION @ $COMMIT$DIRTY, from $MODE), and stopped there.
-  $APP_DIR is a tmpfs, so this is running inside an agent fence and anything
-  installed there evaporates with the tab. The build is real; the install
-  would not be.
-  The "$APP_DISPLAY (dev)" launcher adopts that binary on its next start, so
-  relaunching $APP_DISPLAY (dev) picks this snapshot up. Nothing else to do.
+  This is running inside an agent fence ($APP_DIR is a tmpfs or the fence
+  variable is set): anything installed there evaporates with the tab, and a
+  build made here is not one the "$APP_DISPLAY (dev)" launcher will adopt.
+  The window builds each commit outside the fence by itself; to freeze
+  uncommitted edits, run npm run package:dev outside the fence.
 MSG
   exit 0
 fi
@@ -271,8 +244,8 @@ fi
 # ("executable was modified after program start") — which is how all six
 # main-process heap-corruption crashes of 2026-09-17..23 left nothing to read.
 # A post-commit freeze almost always lands under a running window, so leave the
-# snapshot where it is: start-tabtivity-dev-build.sh adopts it on the next launch,
-# and the dev-build chip already offers that relaunch.
+# snapshot where it is: the launcher adopts it on the next launch (its hash is in
+# the verified list now), and the dev-build chip already offers that relaunch.
 if pgrep -f "^$BINARY_DEST" >/dev/null 2>&1; then
   cat <<MSG
 package-dev: built $RAW_BIN ($VERSION @ $COMMIT$DIRTY, from $MODE), and left it
@@ -283,12 +256,28 @@ MSG
   exit 0
 fi
 
-# The running frozen instance keeps its old inode; `install` replaces the path
-# atomically enough that a relaunch picks the new snapshot up.
-install -Dm755 "$RAW_BIN" "$BINARY_DEST"
+# The running frozen instance keeps its old inode; the rename below replaces
+# the path atomically, so a relaunch picks the new snapshot up. Staged and
+# re-hashed first: target/ is writable from a fence, so what gets installed
+# must be the bytes that were hashed above, not whatever sits there now.
+STAGED="$BINARY_DEST.install.$$"
+install -Dm755 "$RAW_BIN" "$STAGED"
+if [ "$(sha256sum "$STAGED" | cut -d' ' -f1)" != "$RAW_SHA" ]; then
+  rm -f "$STAGED"
+  echo "package-dev: $RAW_BIN changed after it was built and hashed; not installing it" >&2
+  exit 1
+fi
+mv -f "$STAGED" "$BINARY_DEST"
 # The record travels with the binary: the launcher reads `<installed>.frozen`
-# to say which commit it is opening and whether that is behind HEAD.
-install -m644 "$FROZEN_STAMP" "$BINARY_DEST.frozen" 2>/dev/null || true
+# to say which commit it is opening and whether that is behind HEAD. Written
+# from this run's own values, not copied out of target/.
+{
+  printf 'sha256=%s\n' "$RAW_SHA"
+  printf 'version=%s\n' "$VERSION"
+  printf 'commit=%s%s\n' "$COMMIT" "$DIRTY"
+  printf 'source=%s\n' "$MODE"
+  printf 'built=%s\n' "$BUILT_AT"
+} >"$BINARY_DEST.frozen" 2>/dev/null || true
 # And keep this build under dev-builds/tabtivity-<commit>: the next install
 # replaces the path, and a crash in this snapshot is only symbolizable
 # against these exact bytes (scripts/crash-symbolize.sh).
@@ -301,7 +290,7 @@ cat >"$DESKTOP_DEST" <<DESKTOP
 Type=Application
 Name=$APP_DISPLAY (dev)
 Comment=Frozen build $VERSION @ $COMMIT$DIRTY ($STAMP) — no hot reload
-Exec=$LAUNCHER
+Exec=$(dev_desktop_quote "$LAUNCHER")
 Icon=$ROOT/src-tauri/icons/128x128.png
 Terminal=false
 Categories=Utility;TerminalEmulator;Development;

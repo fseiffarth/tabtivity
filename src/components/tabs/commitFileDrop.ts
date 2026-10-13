@@ -260,7 +260,6 @@ export function commitFileDrop(
 ) {
   if (!d || d.kind !== "file" || !d.filePath || !d.fileName) return;
 
-  const cap = d.embedCap;
   const overTabBar = d.reorderGroup != null && d.reorderIndex != null;
   const overSplit = d.overGroup != null && d.edge != null;
 
@@ -366,13 +365,16 @@ export function commitFileDrop(
       if (viewer) {
         useTabsStore.getState().detachNewTab(payloadFor(f), detachBounds);
       } else {
-        // A multi-file member has no cap probe → open with the OS default; the
-        // single primary keeps its resolved handler hint.
+        // Only an explicit handler hint is passed, never the capability's
+        // `resolved_exec`: that is usually the OS default for the type, and
+        // as a handler it would skip the store's ask and the backend's
+        // launcher refusal (threat recheck gap 21, decision C2). A default
+        // app the user configured is still found by `open_file` itself.
         useWindowsStore
           .getState()
           .openFile(
             f ? f.path : d.filePath,
-            f ? undefined : cap?.resolved_exec ?? d.fileExec,
+            f ? undefined : d.fileExec,
             projectId,
             "file_drag_out",
             // Land the external app on the monitor the file was dropped onto:

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PdfMarkupLayer, pagePoint } from "../../components/embed/pdf/PdfMarkupLayer";
 import type { MarkupEdit } from "../../components/embed/pdf/usePdfMarkup";
 import { EMPTY_LAYER, addMark, type Layer } from "../../../mobile-web/src/markup/layer";
+import { DEFAULT_PEN_PREFS } from "../../../mobile-web/src/markup/pen";
 
 const SIZE: [number, number] = [600, 800];
 
@@ -18,6 +19,7 @@ function stubEdit(over: Partial<MarkupEdit> = {}, base: Layer = EMPTY_LAYER): Ma
     showSent: true,
     tool: "box",
     color: "yellow",
+    pen: DEFAULT_PEN_PREFS,
     busy: false,
     note: null,
     add: vi.fn(() => true),
@@ -27,6 +29,18 @@ function stubEdit(over: Partial<MarkupEdit> = {}, base: Layer = EMPTY_LAYER): Ma
     editNote: vi.fn(),
     saveNote: vi.fn(),
     cancelNote: vi.fn(),
+    addAll: vi.fn(() => true),
+    editNoteColor: vi.fn(),
+    text: () => undefined,
+    wantText: vi.fn(),
+    selection: null,
+    select: vi.fn(),
+    clearSelection: vi.fn(),
+    commitSelection: vi.fn(),
+    comment: null,
+    editComment: vi.fn(),
+    saveComment: vi.fn(),
+    cancelComment: vi.fn(),
     ...over,
   };
 }

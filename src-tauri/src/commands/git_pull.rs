@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::git::{
     selected_git_context, GitWorktreeSelection, check_rev, hardened_git_command_in, local_non_repo, require_hook_trust, run_git,
-    run_git_hooked, run_off_thread, scoped_token_config,
+    run_git_hooked, scoped_token_config,
 };
 use crate::services::remote::{remote_target_for_dir, RemoteTarget};
 
@@ -198,7 +198,7 @@ pub async fn git_fetch(
     project_id: Option<String>,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         if worktree.is_none() {
             return git_fetch_blocking(project_dir, project_id);
         }
@@ -267,7 +267,7 @@ pub async fn git_pull_preview(
     branch: Option<String>,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<PullPreview, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_pull_preview_blocking(project_dir, branch),
         Some(selection) => git_pull_preview_blocking_selected(project_dir, branch, Some(selection)),
     })
@@ -355,7 +355,7 @@ pub async fn git_pull_apply(
     merge: bool,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<PullOutcome, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_pull_apply_blocking(project_dir, branch, merge),
         Some(selection) => {
             git_pull_apply_blocking_selected(project_dir, branch, merge, Some(selection))
@@ -432,7 +432,7 @@ pub async fn git_merge_state(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<MergeState, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
         let t = target.as_ref();
         if local_non_repo(t, &project_dir) || !is_merging(t, &project_dir) {
@@ -454,7 +454,7 @@ pub async fn git_merge_abort(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
         git_ok(target.as_ref(), &project_dir, &["merge", "--abort"]).map(|_| ())
     })
@@ -468,7 +468,7 @@ pub async fn git_merge_commit(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<(), String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_merge_commit_blocking(project_dir),
         Some(selection) => git_merge_commit_blocking_selected(project_dir, Some(selection)),
     })
@@ -506,7 +506,7 @@ fn git_merge_commit_blocking_selected(
 /// resolved text is written to this machine's working tree.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_merge_sides(path: String) -> Result<MergeSides, String> {
-    run_off_thread(move || git_merge_sides_blocking(path)).await
+    app_core::rt::try_blocking("git", move || git_merge_sides_blocking(path)).await
 }
 
 fn git_merge_sides_blocking(path: String) -> Result<MergeSides, String> {

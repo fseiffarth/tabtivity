@@ -633,9 +633,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             {/* The model is its own control, like the name: a tap opens the
                 session with its model picker already up, so changing the
                 model (and, where the agent asks, the effort) is one tap from
-                here rather than open-then-find-the-chip. */}
-            {tab.agent_model && <button className="tab-card-model" disabled={!tab.available} onClick={() => terminal(tab, { pickModel: true })} aria-haspopup="dialog" aria-label={t("mobile.project.changeModelOf", { label: tab.label })} title={t("mobile.project.changeModel")}>{tab.agent_model}</button>}
-            {tab.agent_model && isUntested("mobile.project.modelTap") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+                here rather than open-then-find-the-chip. A local-model
+                tab's model is only shown: it keeps the one it launched on. */}
+            {tab.agent_model && tab.local_model && <span className="tab-card-model">{tab.agent_model}</span>}
+            {tab.agent_model && !tab.local_model && <button className="tab-card-model" disabled={!tab.available} onClick={() => terminal(tab, { pickModel: true })} aria-haspopup="dialog" aria-label={t("mobile.project.changeModelOf", { label: tab.label })} title={t("mobile.project.changeModel")}>{tab.agent_model}</button>}
+            {tab.agent_model && !tab.local_model && isUntested("mobile.project.modelTap") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             <AgentModeMarks tab={tab} />
             {/* Which worktree the agent works in now, when it is not the
                 project folder — and the others its subagents at work are in. */}

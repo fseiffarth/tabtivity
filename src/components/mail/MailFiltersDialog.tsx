@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 /**
  * **The keyword filters** — words the user watches for, and the Important /
  * Urgent list a matching message lands in.
@@ -64,6 +65,7 @@ export interface MailFiltersDialogProps {
 
 export function MailFiltersDialog({ accounts, onClose }: MailFiltersDialogProps) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [rules, setRules] = useState<MailFilterRule[]>([]);
   const [selected, setSelected] = useState<number>(-1);
   const [dirty, setDirty] = useState(false);
@@ -153,6 +155,8 @@ export function MailFiltersDialog({ accounts, onClose }: MailFiltersDialogProps)
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
         className="settings-dialog mail-filters-dialog"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"

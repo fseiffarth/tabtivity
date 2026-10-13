@@ -1527,6 +1527,11 @@
 .tab-status-mark.working.shell {
   color: var(--status-shell-working);
 }
+/* That mark's slot on an agent tab working without a command: held empty so
+   the mark coming and going does not resize the tab. */
+.tab-status-mark.reserved {
+  visibility: hidden;
+}
 
 /* A root-console tab a one-click install opened (`runInstallInTab`): an accent
    ring that breathes until the tab is clicked, so the install stands out among

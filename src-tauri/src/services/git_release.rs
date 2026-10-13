@@ -162,10 +162,18 @@ fn local_target(dir: &Path, need_token: bool, token: Option<&str>) -> Result<(St
 /// passed, and `tag` must be new on the remote (and locally, unless it
 /// already names the tip). `need_token` refuses an
 /// https remote without a stored token (the agent lane, which never falls back
-/// to the user's own credential helpers).
-pub fn plan(dir: &Path, tag: &str, need_token: bool, token: Option<&str>, origins: &[String]) -> Result<ReleasePlan, Failure> {
+/// to the user's own credential helpers). `ci_allowed` says whether the
+/// remote URL's repo may be asked about CI with the token: the agent lane
+/// passes its confirmed-repo check (gap 19 — the pending/failed workflow
+/// names reach the agent in the refusal), the user's own button `|_| true`.
+pub fn plan(dir: &Path, tag: &str, need_token: bool, token: Option<&str>, origins: &[String], ci_allowed: &dyn Fn(&str) -> bool) -> Result<ReleasePlan, Failure> {
     validate_tag(tag).map_err(|e| Failure::new(Category::InvalidArguments, e))?;
     let (branch, remote, url, head, subject) = local_target(dir, need_token, token)?;
+    // Before any request: the release gate reads this repo's CI with the
+    // token, and its workflow names reach the caller.
+    if git_ci::github_repo(&url).is_some() && !ci_allowed(&url) {
+        return Err(Failure::new(Category::CiRepoUnconfirmed, "This remote's repository is not confirmed for this project, so its CI cannot be checked for a release."));
+    }
     if let Some(at) = local_tag_commit(dir, tag) {
         if at != head {
             return Err(Failure::new(Category::TagExists, format!("The tag '{tag}' already exists locally at {}; pick another name.", &at[..7.min(at.len())])));
@@ -219,7 +227,7 @@ pub fn preview(dir: &Path, token: Option<&str>, origins: &[String]) -> Preview {
             return out;
         }
     }
-    if let Err(failure) = plan(dir, &out.suggested, false, token, origins) {
+    if let Err(failure) = plan(dir, &out.suggested, false, token, origins, &|_| true) {
         out.problem = Some(failure.message);
         out.category = Some(failure.category);
     }
@@ -363,20 +371,20 @@ mod tests {
     fn releases_only_a_pushed_tip_and_never_moves_a_remote_tag() {
         let (_root, remote, work) = pair("0.1.86");
         let head = sh(&work, &["rev-parse", "HEAD"]);
-        let plan = plan(&work, "v0.1.86", false, None, &[]).unwrap();
+        let plan = plan(&work, "v0.1.86", false, None, &[], &|_| true).unwrap();
         assert_eq!((plan.branch.as_str(), plan.head.as_str()), ("develop", head.as_str()));
         release(&work, &plan, "", None, &[]).unwrap();
         assert_eq!(sh(&remote, &["rev-parse", "refs/tags/v0.1.86^{commit}"]), head);
         assert_eq!(sh(&remote, &["cat-file", "-t", "refs/tags/v0.1.86"]), "tag", "annotated");
-        assert_eq!(super::plan(&work, "v0.1.86", false, None, &[]).unwrap_err().category, Category::TagExists);
+        assert_eq!(super::plan(&work, "v0.1.86", false, None, &[], &|_| true).unwrap_err().category, Category::TagExists);
 
         std::fs::write(work.join("c.txt"), "c\n").unwrap();
         sh(&work, &["add", "c.txt"]);
         sh(&work, &["commit", "-q", "-m", "unpushed"]);
-        assert_eq!(super::plan(&work, "v0.1.87", false, None, &[]).unwrap_err().category, Category::NotPushed);
+        assert_eq!(super::plan(&work, "v0.1.87", false, None, &[], &|_| true).unwrap_err().category, Category::NotPushed);
         let preview = preview(&work, None, &[]);
         assert_eq!(preview.category, Some(Category::NotPushed));
-        assert!(super::plan(&work, "+v1", false, None, &[]).is_err());
+        assert!(super::plan(&work, "+v1", false, None, &[], &|_| true).is_err());
     }
 
     #[test]
@@ -388,7 +396,7 @@ mod tests {
         sh(&work, &["commit", "-q", "-m", "unpushed"]);
         let unpushed = sh(&work, &["rev-parse", "HEAD"]);
         sh(&work, &["reset", "-q", "--hard", &head]);
-        let plan = plan(&work, "v0.1.86", false, None, &[]).unwrap();
+        let plan = plan(&work, "v0.1.86", false, None, &[], &|_| true).unwrap();
         // The agent re-points the local tag at an unpushed commit after the
         // tag was created and checked, right before the transport.
         let w = work.clone();
@@ -416,6 +424,25 @@ mod tests {
     fn agent_lane_needs_a_token_for_https() {
         let (_root, _remote, work) = pair("1.0.0");
         sh(&work, &["remote", "set-url", "origin", "https://github.com/o/r.git"]);
-        assert_eq!(plan(&work, "v1.0.0", true, None, &[]).unwrap_err().category, Category::AuthFailed);
+        assert_eq!(plan(&work, "v1.0.0", true, None, &[], &|_| true).unwrap_err().category, Category::AuthFailed);
+    }
+
+    /// Gap 19: the agent lane's release gate asks GitHub about the remote's
+    /// repo only once that repo is confirmed — refused before any request, so
+    /// `tip_ci` never runs and no workflow name reaches the agent.
+    #[test]
+    fn an_unconfirmed_github_repo_is_refused_before_any_ci_read() {
+        let (_root, _remote, work) = pair("1.0.0");
+        sh(&work, &["remote", "set-url", "origin", "https://github.com/Other-Org/private.git"]);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let gate = |url: &str| { asked.borrow_mut().push(url.to_string()); false };
+        // A token is on hand, so only the gate stops the request.
+        let failure = plan(&work, "v1.0.0", true, Some("not-a-real-token"), &["https://github.com".into()], &gate).unwrap_err();
+        assert_eq!(failure.category, Category::CiRepoUnconfirmed, "{}", failure.message);
+        assert_eq!(*asked.borrow(), vec!["https://github.com/Other-Org/private.git".to_string()]);
+        // Not GitHub: no CI to read, so the gate is never asked.
+        let (_root, _remote, work) = pair("1.0.0");
+        let never = |_: &str| -> bool { panic!("a non-GitHub remote has no CI gate") };
+        assert!(plan(&work, "v1.0.0", false, None, &[], &never).is_ok());
     }
 }

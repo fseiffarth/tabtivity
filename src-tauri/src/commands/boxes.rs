@@ -145,7 +145,7 @@ pub(crate) fn reconcile_member_ids(boxes: BoxesList, project_ids: &HashSet<Strin
 /// Read the set of known project ids from `projects.json` (empty if absent).
 /// Used only to reconcile boxes in-memory; never mutates `projects.json`.
 fn known_project_ids() -> HashSet<String> {
-    let path = storage::state_dir().join("projects.json");
+    let path = storage::projects_path();
     if !path.exists() {
         return HashSet::new();
     }
@@ -161,7 +161,7 @@ fn known_project_ids() -> HashSet<String> {
 /// `resolveProjectDirectory`: the `directory` field if present, else the parent
 /// of a `…/project.json` `local_file`. Members that don't resolve are skipped.
 fn member_projects(member_ids: &[String]) -> Vec<(String, PathBuf)> {
-    let path = storage::state_dir().join("projects.json");
+    let path = storage::projects_path();
     let list: crate::schema::projects::ProjectsList = if path.exists() {
         storage::read_json(&path).unwrap_or_default()
     } else {
@@ -179,15 +179,7 @@ fn member_projects(member_ids: &[String]) -> Vec<(String, PathBuf)> {
 
 /// Mirror of the frontend `resolveProjectDirectory` for a single project entry.
 fn project_directory(p: &crate::schema::projects::ProjectEntry) -> Option<PathBuf> {
-    if let Some(Value::String(dir)) = p.extra.get("directory") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir));
-        }
-    }
-    p.local_file
-        .strip_suffix("/project.json")
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+    p.directory().map(PathBuf::from)
 }
 
 // ── Box tab scope (`box:<id>`) ──────────────────────────────────────────────
@@ -239,7 +231,7 @@ pub(crate) fn compute_box_allowed_roots(
 /// tree a local tab of a remote member actually runs in. `None` = unknown box.
 pub(crate) fn box_allowed_roots(box_id: &str) -> Option<Vec<PathBuf>> {
     let boxes = read_boxes().ok()?;
-    let path = storage::state_dir().join("projects.json");
+    let path = storage::projects_path();
     let projects: crate::schema::projects::ProjectsList = if path.exists() {
         storage::read_json(&path).unwrap_or_default()
     } else {
@@ -768,7 +760,7 @@ pub fn set_box_mobile_access(
     };
     if enabled {
         let settings: crate::schema::Settings =
-            storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default();
+            storage::read_json(&storage::settings_path()).unwrap_or_default();
         if !settings.persist_local_sessions() {
             return Err("Enable persistent local terminal sessions before Mobile access".into());
         }

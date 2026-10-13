@@ -20,7 +20,7 @@ import {
 import { mutedCalendarIds } from "../../lib/calendar/alarms";
 import { addDays, toStamp, todayStr } from "../../lib/calendar/calendarTime";
 import { parseIcs } from "../../lib/calendar/ics";
-import { notifyCalendarWrite } from "../../lib/calendar/calendarWriteHook";
+import { markForPush, notifyCalendarWrite } from "../../lib/calendar/calendarWriteHook";
 import { translate, useI18nStore } from "../../lib/i18n";
 
 /**
@@ -166,7 +166,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
   // delete before it (a refusal must be able to stop it).
 
   createEvent: async (draft) => {
-    const event = await invoke<CalendarEvent>("create_event", { event: withoutId(draft) });
+    const event = await invoke<CalendarEvent>("create_event", { event: markForPush(withoutId(draft)) });
     set((s) => ({ events: [...s.events, event] }));
     await notifyCalendarWrite({ op: "upsert", kind: "event", row: event });
     return event;
@@ -200,7 +200,9 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
       }
       event = { ...event, caldav_href: undefined, caldav_etag: undefined };
     }
-    const updated = await invoke<CalendarEvent>("update_event", { event });
+    // Marked in the same local write (gap 32): an edit the push then fails to
+    // deliver stays marked, and the next sync sends it before it fetches.
+    const updated = await invoke<CalendarEvent>("update_event", { event: markForPush(event) });
     set((s) => ({ events: s.events.map((e) => (e.id === updated.id ? updated : e)) }));
     if (moved) {
       // After the local write, unlike an ordinary delete: nothing is lost if
@@ -237,7 +239,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
 
   createTask: async (draft) => {
     const task = await invoke<CalendarTask>("create_task", {
-      task: { ...draft, id: "" } as CalendarTask,
+      task: markForPush({ ...draft, id: "" } as CalendarTask),
     });
     set((s) => ({ tasks: [...s.tasks, task] }));
     await notifyCalendarWrite({ op: "upsert", kind: "task", row: task });
@@ -254,7 +256,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
         ? prev
         : null;
     if (moved) task = { ...task, caldav_href: undefined, caldav_etag: undefined };
-    const updated = await invoke<CalendarTask>("update_task", { task });
+    const updated = await invoke<CalendarTask>("update_task", { task: markForPush(task) });
     set((s) => ({ tasks: s.tasks.map((t) => (t.id === updated.id ? updated : t)) }));
     if (moved) {
       await notifyCalendarWrite({ op: "delete", kind: "task", row: moved }).catch(() => {});

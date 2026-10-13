@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { resolveProjectDirectory, type ProjectEntry } from "../../types";
@@ -30,6 +31,7 @@ export function PythonInterpreterWindow({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const setProjectPython = useProjectsStore((s) => s.setProjectPython);
   const dir = resolveProjectDirectory(project);
   const AUTO = "";
@@ -85,7 +87,7 @@ export function PythonInterpreterWindow({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{project.name} — {t("pythonInterp.titleSuffix")}</h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>

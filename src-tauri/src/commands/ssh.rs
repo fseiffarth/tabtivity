@@ -76,7 +76,7 @@ pub async fn ssh_host_key_preview(
     host: String,
     port: Option<u16>,
 ) -> Result<HostKeyPreview, String> {
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("host key preview failed", move || {
         use crate::services::ssh_common as sc;
         let (resolved, resolved_port) = sc::resolve_host_port(&host, port);
         let known = sc::host_key_known(&resolved, resolved_port);
@@ -89,7 +89,6 @@ pub async fn ssh_host_key_preview(
         })
     })
     .await
-    .map_err(|e| format!("host key preview failed: {e}"))?
 }
 
 /// Record the user's acceptance of the keys `ssh_host_key_preview` showed, by
@@ -526,7 +525,7 @@ pub async fn ssh_connect(
     remember: Option<bool>,
     background: Option<bool>,
 ) -> Result<SshConnectOutcome, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("ssh probe", move || {
         use crate::services::remote_credentials as creds;
         // Both shapes at once, because this command is both. A **typed password**
         // is a person at a login form, so it is unconditionally their connect to
@@ -553,7 +552,6 @@ pub async fn ssh_connect(
         })
     })
     .await
-    .map_err(|e| format!("ssh probe task failed: {e}"))?
 }
 
 /// What [`ssh_connect`] did *besides* connecting: whether the "Save password"
@@ -595,7 +593,7 @@ pub async fn remote_saved_password_state(
     host: String,
     port: Option<u16>,
 ) -> SavedPasswordState {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         use crate::services::remote_credentials as creds;
         // Lock state first: it refreshes the cache `has()`'s gate then reads, so
         // the two facts describe the same moment rather than straddling a probe.
@@ -696,7 +694,7 @@ pub async fn ssh_probe(
     port: Option<u16>,
     background: Option<bool>,
 ) -> SshProbe {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         use crate::services::remote_credentials as creds;
         let _dial = crate::services::ssh_common::declared_dial(background, &user, &host, port);
         let saved = creds::get(&creds::ssh_account(&user, &host, port));
@@ -729,12 +727,11 @@ pub async fn remote_forget_password(
     host: String,
     port: Option<u16>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("forget password", move || {
         let account = crate::services::remote_credentials::ssh_account(&user, &host, port);
         crate::services::remote_credentials::set(&account, None)
     })
     .await
-    .map_err(|e| format!("forget password task failed: {e}"))?
 }
 
 /// Kill every tmux session on a remote host — the "end all my running jobs" half
@@ -754,7 +751,7 @@ pub async fn remote_kill_all_jobs(
     host: String,
     port: Option<u16>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("kill-jobs", move || {
         use crate::services::remote_credentials as creds;
         // Explicit-action-only, so it is user-initiated by definition — this is
         // the one path allowed to reach a tagged HPC host to end work on it.
@@ -770,7 +767,6 @@ pub async fn remote_kill_all_jobs(
         .map(|_| ())
     })
     .await
-    .map_err(|e| format!("kill-jobs task failed: {e}"))?
 }
 
 /// Close the shared multiplexing master for a host (`ssh -O exit`) so an active
@@ -786,12 +782,11 @@ pub async fn ssh_close_master(
     host: String,
     port: Option<u16>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("close-master", move || {
         close_control_master(&user, &host, port);
         Ok(())
     })
     .await
-    .map_err(|e| format!("close-master task failed: {e}"))?
 }
 
 /// Ask a live ControlMaster for this host to exit, over the shared `cm-%C`

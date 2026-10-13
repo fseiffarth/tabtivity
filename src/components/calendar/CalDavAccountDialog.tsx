@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { PasswordInput } from "../common/PasswordInput";
@@ -13,6 +14,7 @@ import {
   caldavDiscover,
   caldavForgetPassword,
   caldavPasswordState,
+  isHttpBaseUrl,
 } from "../../lib/calendar/caldav";
 import { useCalDavStore } from "../../stores/calendar/caldav";
 import { useT } from "../../lib/i18n";
@@ -58,6 +60,7 @@ export function CalDavAccountDialog({
   onSaved: (accountId: string) => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const upsert = useCalDavStore((s) => s.upsert);
   const subscribe = useCalDavStore((s) => s.subscribe);
   const unsubscribe = useCalDavStore((s) => s.unsubscribe);
@@ -126,7 +129,10 @@ export function CalDavAccountDialog({
   const patch = (p: Partial<CalDavAccount>) => setForm((f) => ({ ...f, ...p }));
 
   const incomplete = !form.base_url.trim() || !form.user.trim();
-  const insecure = /^http:\/\//i.test(form.base_url.trim());
+  // Plain `http://` is refused outright (decision E2b): the password and the
+  // calendar would cross the network in the clear. Find and Save stay off,
+  // and an existing http account opened here says why it stopped syncing.
+  const insecure = isHttpBaseUrl(form.base_url);
 
   async function doDiscover() {
     setBusy("discover");
@@ -163,6 +169,10 @@ export function CalDavAccountDialog({
   async function doSave() {
     if (incomplete) {
       setError(t("caldav.incomplete"));
+      return;
+    }
+    if (insecure) {
+      setError(t("caldav.httpRefused"));
       return;
     }
     setBusy("save");
@@ -225,7 +235,7 @@ export function CalDavAccountDialog({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="settings-dialog caldav-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="settings-dialog caldav-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>
             {account ? t("caldav.dialogEdit") : t("caldav.dialogNew")} <UntestedTag id="caldav.dialogNew" />
@@ -261,7 +271,11 @@ export function CalDavAccountDialog({
             />
             <span className="caldav-field-hint">{t("caldav.serverUrlHint")}</span>
           </label>
-          {insecure && <div className="caldav-warning-strip">{t("caldav.insecureUrl")}</div>}
+          {insecure && (
+            <div className="caldav-warning-strip" role="alert">
+              {t("caldav.httpRefused")} <UntestedTag id="caldav.httpRefused" />
+            </div>
+          )}
 
           <label className="caldav-field">
             <span className="caldav-field-label">{t("caldav.user")}</span>
@@ -345,7 +359,7 @@ export function CalDavAccountDialog({
             <button
               type="button"
               className="cal-btn"
-              disabled={busy !== "" || incomplete}
+              disabled={busy !== "" || incomplete || insecure}
               onClick={() => void doDiscover()}
             >
               {busy === "discover" ? t("caldav.discovering") : t("caldav.discover")}
@@ -396,7 +410,7 @@ export function CalDavAccountDialog({
             <button
               type="button"
               className="cal-btn cal-btn-primary"
-              disabled={busy !== "" || incomplete}
+              disabled={busy !== "" || incomplete || insecure}
               onClick={() => void doSave()}
             >
               {busy === "save" ? t("caldav.saving") : t("common.save")}

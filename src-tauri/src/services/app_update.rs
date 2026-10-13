@@ -365,9 +365,6 @@ fn expected_digest(sums: &str, asset_name: &str, version: &str) -> Result<String
     })
 }
 
-fn sha256_hex(digest: impl AsRef<[u8]>) -> String {
-    digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
-}
 
 /// Fetch a small release file (the checksum list or its signature).
 async fn fetch_small(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
@@ -639,7 +636,7 @@ pub async fn stage_download(
             on_progress(written, total);
         }
         file.flush().map_err(|e| format!("update staging: {e}"))?;
-        sha256_hex(hasher.finalize())
+        crate::digest::hex(&hasher.finalize())
     };
     if digest != expected {
         let _ = std::fs::remove_file(&part_path);
@@ -758,7 +755,7 @@ fn file_sha256(path: &Path) -> Result<String, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("update staging: {e}"))?;
     let mut hasher = sha2::Sha256::new();
     std::io::copy(&mut file, &mut hasher).map_err(|e| format!("update staging: {e}"))?;
-    Ok(sha256_hex(hasher.finalize()))
+    Ok(crate::digest::hex(&hasher.finalize()))
 }
 
 /// Put `new` in place of `target`, keeping a `.old` copy until the swap lands.

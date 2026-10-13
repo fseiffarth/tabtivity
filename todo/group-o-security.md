@@ -1029,6 +1029,11 @@ table). Code-read findings; only #862 was reproduced (scratch repo, git 2.53).
       new state files created 0600 (`storage::ensure_private_state_dir`,
       `write_json`; project-folder files keep the umask); every workflow
       action pinned by commit SHA (bump them by hand — no Dependabot).
+      Since 2026-10-13 Dependabot proposes the bumps (#2419).
+    - **pdf.js item moot 2026-10-13:** pdf.js 6.3 removed `isEvalSupported`
+      along with its last `new Function` (none in `build/` or `legacy/build/`
+      workers), so there is no eval path to switch off. Re-check on a pdf.js
+      bump.
 
 870. **Any fenced agent could plant code the next local-model tab runs.**
     Threat model gap 7. `agent_fence::local_model_mounts` bound all of
@@ -1528,3 +1533,51 @@ Tabtivity. None of these is started.
     in the fence's tmpfs), and do the same for `CODEX_UNMOUNTED`, which has
     the same shape. Stopgap until group S #2335 Phase 1 replaces the host home
     with a per-scope one; drop it if that ships first.
+
+### CI/CD hardening (2026-10-13)
+
+Landed in the workflows (unpushed, no CI run yet): `release.yml`'s job runs
+in a `release` environment; Dependabot (`.github/dependabot.yml`, onto
+develop, week-long cooldown, Tauri left to the hand update of the third-party
+checklist §19); zizmor (blocking) and cargo-deny (`deny.toml`: licenses,
+crates.io only) in `security.yml`; `persist-credentials: false` on every
+checkout; `npm ci --ignore-scripts`; Windows/macOS runners pinned to
+`windows-2025`/`macos-26`; a `timeout-minutes` on every job.
+
+2419. **Repository settings the workflows cannot set.** The first push after
+    the change above needs these on GitHub, or the key stays where it was.
+    - [ ] Settings → Environments → new `release`: deployment branches and
+      tags "Selected" → branch `main`, tag `v*`. Move `RELEASE_SIGNING_KEY`
+      into it, then delete the repository secret of that name (a repository
+      secret still reaches the job). Required reviewers: optional; with one,
+      every automatic release waits for that click.
+    - [ ] Settings → Actions → General: workflow permissions "Read
+      repository contents"; "Allow GitHub Actions to create and approve pull
+      requests" off; fork pull-request workflows need approval for all
+      outside contributors.
+    - [ ] Settings → Rules → a tag ruleset on `v*` that blocks updates (a
+      moved tag), not deletion — `release.yml` deletes a tag whose Release
+      failed.
+    - [ ] Settings → General → Releases: enable immutable releases, so a
+      published Release's assets and tag cannot be swapped afterwards.
+    - [ ] Settings → Code security: Dependabot alerts and security updates on.
+    - [ ] Watch the first `security` run: zizmor's online audits (impostor
+      commits, actions with advisories) need the job's token, so they ran
+      offline only before this landed.
+
+2420. **CI/CD follow-ups not done yet.**
+    - Build provenance: `actions/attest-build-provenance` in the package
+      jobs of main's runs (`id-token: write`, `attestations: write`), so a
+      download can be checked with `gh attestation verify`.
+    - StepSecurity harden-runner (≥ v2.16.0, egress block mode) on the
+      release job only: it needs only the GitHub API, github.com and the
+      artifact hosts.
+    - A composite action (`.github/actions/setup`) for the checkout / Node /
+      Rust / cache / `npm ci` block the jobs repeat eight times;
+      `ci-local.sh --check-drift` has to follow it.
+    - `rust-cache` `save-if: main` so branch pushes stop evicting main's
+      caches; `apt-get -o Acquire::Retries=3`; `retention-days` on the
+      package artifacts.
+    - Drop `continue-on-error` from the Windows/macOS clippy steps once green.
+    - Windows Authenticode (SignPath for open source, or Azure Trusted
+      Signing) and Apple notarization for the `.exe` and `.dmg`.

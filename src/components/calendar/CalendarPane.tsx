@@ -43,6 +43,7 @@ import { CalendarContextMenu, type CalendarMenuTarget } from "./CalendarContextM
 import { useCalendarClipboardStore } from "../../stores/calendar/clipboard";
 import { copyOfOccurrence, pastedAt, type PasteTarget } from "../../lib/calendar/calendarClipboard";
 import { isCalDavConflict, useCalDavStore } from "../../stores/calendar/caldav";
+import { caldavErrorText } from "../../lib/calendar/caldav";
 import type { CalDavAccount } from "../../types/caldav";
 import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
@@ -597,7 +598,7 @@ export function CalendarPane({ visible }: Props) {
       .syncCalendar(target.account.id, target.href, true);
     setNotice(
       status.phase === "error"
-        ? t("caldav.syncFailed", { error: status.error })
+        ? t("caldav.syncFailed", { error: caldavErrorText(status.error, t) })
         : t("caldav.synced", { name: cal?.name ?? target.href }),
     );
   }

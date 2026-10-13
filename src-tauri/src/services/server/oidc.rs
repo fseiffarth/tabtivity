@@ -17,6 +17,7 @@
 //!   the age check, so the same token pairs at most one device.
 
 use std::collections::HashMap;
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -206,7 +207,7 @@ async fn fetch_jwks(issuer: &str) -> Result<Jwks, String> {
 
 async fn jwks_for(issuer: &str, again: bool) -> Result<Jwks, String> {
     {
-        let cache = KEYS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cache = KEYS.lock_ok();
         if let Some(c) = cache.as_ref().filter(|c| c.issuer == issuer) {
             let fresh = c.fetched.elapsed() < KEYS_FOR;
             let may_refetch = c.fetched.elapsed() >= REFETCH_EVERY;
@@ -216,13 +217,13 @@ async fn jwks_for(issuer: &str, again: bool) -> Result<Jwks, String> {
         }
     }
     let jwks = fetch_jwks(issuer).await?;
-    *KEYS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(KeyCache { issuer: issuer.into(), fetched: Instant::now(), jwks: jwks.clone() });
+    *KEYS.lock_ok() = Some(KeyCache { issuer: issuer.into(), fetched: Instant::now(), jwks: jwks.clone() });
     Ok(jwks)
 }
 
 /// Remember `nonce` as spent; `false` when it already was.
 fn spend(nonce: &str, now: u64) -> bool {
-    let mut used = USED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut used = USED.lock_ok();
     let used = used.get_or_insert_with(HashMap::new);
     used.retain(|_, until| *until > now);
     if used.contains_key(nonce) {

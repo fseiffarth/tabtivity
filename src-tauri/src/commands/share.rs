@@ -21,10 +21,6 @@ pub struct ShareOverview {
     pub rows: Vec<ShareRow>,
 }
 
-async fn off_thread<T: Send + 'static>(job: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
-    tokio::task::spawn_blocking(job).await.map_err(|e| format!("sharing: {e}"))?
-}
-
 fn me() -> Result<String, String> {
     share::require_server()?;
     crate::services::server::user_name().ok_or_else(|| "This daemon does not know its account".to_string())
@@ -59,7 +55,7 @@ fn refusal(entry: &ProjectEntry) -> Option<&'static str> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_list() -> Result<ShareOverview, String> {
     let me = me()?;
-    off_thread(move || {
+    app_core::rt::try_blocking("sharing", move || {
         let state = state_dir();
         let mut rows = share::overview_in(&state, share::list_at(&share::hub_socket())?)?;
         for row in rows.iter_mut() {
@@ -77,7 +73,7 @@ pub async fn share_list() -> Result<ShareOverview, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_create(project_id: String) -> Result<ShareInfo, String> {
     let me = me()?;
-    off_thread(move || {
+    app_core::rt::try_blocking("sharing", move || {
         let entry = entry(&project_id)?;
         if let Some(why) = refusal(&entry) {
             return Err(why.to_string());
@@ -110,7 +106,7 @@ fn hub(request: Request) -> Result<(), String> {
 pub async fn share_grant(share: String, user: String, role: String) -> Result<(), String> {
     me()?;
     let role = role_of(&role)?;
-    off_thread(move || hub(Request::Grant { share, user, role })).await
+    app_core::rt::try_blocking("sharing", move || hub(Request::Grant { share, user, role })).await
 }
 
 /// Take a member off one of this user's shares: their access ends at once;
@@ -118,7 +114,7 @@ pub async fn share_grant(share: String, user: String, role: String) -> Result<()
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_revoke(share: String, user: String) -> Result<(), String> {
     me()?;
-    off_thread(move || hub(Request::Revoke { share, user })).await
+    app_core::rt::try_blocking("sharing", move || hub(Request::Revoke { share, user })).await
 }
 
 /// Stop sharing (the owner): the hub goes to the holding area, members see
@@ -127,7 +123,7 @@ pub async fn share_revoke(share: String, user: String) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_delete(share: String) -> Result<(), String> {
     me()?;
-    off_thread(move || share::stop_in(&state_dir(), &share::hub_socket(), &share)).await
+    app_core::rt::try_blocking("sharing", move || share::stop_in(&state_dir(), &share::hub_socket(), &share)).await
 }
 
 /// Clone a share shared with this user into the projects root and register
@@ -137,7 +133,7 @@ pub async fn share_delete(share: String) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_add(share: String) -> Result<ProjectEntry, String> {
     me()?;
-    off_thread(move || {
+    app_core::rt::try_blocking("sharing", move || {
         let state = state_dir();
         if let Some(project) = share::projects_of(&state, &share).into_iter().next() {
             return Err(format!("This share is already a project here ({project})"));
@@ -188,14 +184,14 @@ fn link(project_id: &str) -> Result<share::Link, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_push(project_id: String) -> Result<Pushed, String> {
     let me = me()?;
-    off_thread(move || share::push_in(&state_dir(), &share::hub_socket(), &link(&project_id)?, &me)).await
+    app_core::rt::try_blocking("sharing", move || share::push_in(&state_dir(), &share::hub_socket(), &link(&project_id)?, &me)).await
 }
 
 /// Fetch the hub and report each of its branches against HEAD.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_fetch(project_id: String) -> Result<Vec<BranchState>, String> {
     me()?;
-    off_thread(move || share::fetch_report(&link(&project_id)?)).await
+    app_core::rt::try_blocking("sharing", move || share::fetch_report(&link(&project_id)?)).await
 }
 
 /// "This user has the project open" (or closed), for its co-members.
@@ -205,7 +201,7 @@ pub async fn share_presence(project_id: String, open: bool) -> Result<(), String
     if crate::services::server::user_name().is_none() {
         return Ok(());
     }
-    off_thread(move || {
+    app_core::rt::try_blocking("sharing", move || {
         let Some(link) = share::link_of(&state_dir(), &project_id).filter(|l| l.state == "active") else { return Ok(()) };
         hub(Request::Presence { share: link.share, open })
     })
@@ -217,7 +213,7 @@ pub async fn share_presence(project_id: String, open: bool) -> Result<(), String
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_review(project_id: String, branch: String) -> Result<Review, String> {
     me()?;
-    off_thread(move || share::review_merge(&link(&project_id)?, &branch)).await
+    app_core::rt::try_blocking("sharing", move || share::review_merge(&link(&project_id)?, &branch)).await
 }
 
 /// Page `page` of a review (`branch`: of that merge; none: of what is
@@ -226,7 +222,7 @@ pub async fn share_review(project_id: String, branch: String) -> Result<Review, 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_review_page(project_id: String, branch: Option<String>, digest: String, page: usize) -> Result<String, String> {
     me()?;
-    off_thread(move || {
+    app_core::rt::try_blocking("sharing", move || {
         let link = link(&project_id)?;
         let of = match branch.as_deref() {
             Some(branch) => share::ReviewOf::Merge(branch),
@@ -243,7 +239,7 @@ pub async fn share_review_page(project_id: String, branch: Option<String>, diges
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_merge(project_id: String, branch: String, digest: Option<String>) -> Result<String, String> {
     me()?;
-    off_thread(move || share::merge_in(&state_dir(), &link(&project_id)?, &branch, digest.as_deref())).await
+    app_core::rt::try_blocking("sharing", move || share::merge_in(&state_dir(), &link(&project_id)?, &branch, digest.as_deref())).await
 }
 
 /// Agent-facing files already in the project from others, unreviewed (a
@@ -251,7 +247,7 @@ pub async fn share_merge(project_id: String, branch: String, digest: Option<Stri
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_pending(project_id: String) -> Result<Option<Review>, String> {
     me()?;
-    off_thread(move || share::pending_review(&link(&project_id)?)).await
+    app_core::rt::try_blocking("sharing", move || share::pending_review(&link(&project_id)?)).await
 }
 
 /// The user reviewed what [`share_pending`] showed (`digest`): agents may
@@ -259,5 +255,5 @@ pub async fn share_pending(project_id: String) -> Result<Option<Review>, String>
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_accept(project_id: String, digest: String) -> Result<(), String> {
     me()?;
-    off_thread(move || share::accept_in(&state_dir(), &link(&project_id)?, &digest)).await
+    app_core::rt::try_blocking("sharing", move || share::accept_in(&state_dir(), &link(&project_id)?, &digest)).await
 }

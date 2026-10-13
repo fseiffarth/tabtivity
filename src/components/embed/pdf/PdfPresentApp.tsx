@@ -28,6 +28,7 @@ import { loadPdf } from "../../../lib/viewers/pdfLoad";
 import { fileMtime, readFileBytes } from "../fileAccess";
 import { applyTheme, THEME_CHANGED_EVENT, useSettingsStore } from "../../../stores/settings";
 import { useT } from "../../../lib/i18n";
+import { subscribeTauri, useTauriListener } from "../../../hooks/useTauriListener";
 import { osFullscreenChord } from "../../../lib/shortcuts/shortcutHint";
 import { storageKey } from "../../../lib/brand";
 import {
@@ -127,20 +128,7 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
     void loadSettings({ skipZoom: true });
   }, [loadSettings]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listen<string>(THEME_CHANGED_EVENT, (e) => applyTheme(e.payload))
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
+  useTauriListener(() => listen<string>(THEME_CHANGED_EVENT, (e) => applyTheme(e.payload)), []);
 
   // Don't let the screensaver blank a projector mid-talk. The inhibitor is the
   // deck presenter's — global, idempotent and released on the way out — so a PDF
@@ -168,20 +156,11 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
   useEffect(() => {
     const win = getCurrentWindow();
     void win.isFullscreen().then(setFullscreen).catch(() => {});
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void win
-      .onResized(() => {
+    return subscribeTauri(() =>
+      win.onResized(() => {
         void win.isFullscreen().then(setFullscreen).catch(() => {});
-      })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+      }),
+    );
   }, []);
 
   // --- the seed ------------------------------------------------------------
@@ -189,20 +168,16 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
   const seededRef = useRef(false);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-
-    void listen<PdfPresentSeed>(pdfPresentSeedEvent(label), (e) => {
-      seededRef.current = true;
-      setSeed(e.payload);
-      // A re-seed (the reader pressed Present again, from a different sheet)
-      // moves this window to where they now are. The clamp needs the page count,
-      // which the load effect below re-applies once the document is open.
-      setPage(clampPage(e.payload.page, countRef.current || e.payload.page));
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
+    const unlisten = subscribeTauri(() =>
+      listen<PdfPresentSeed>(pdfPresentSeedEvent(label), (e) => {
+        seededRef.current = true;
+        setSeed(e.payload);
+        // A re-seed (the reader pressed Present again, from a different sheet)
+        // moves this window to where they now are. The clamp needs the page
+        // count, which the load effect below re-applies once the document is open.
+        setPage(clampPage(e.payload.page, countRef.current || e.payload.page));
+      }),
+    );
 
     // Ask, and keep asking until answered: this window and the editor's listener
     // race on open, and a dropped first request would leave a blank projector
@@ -214,9 +189,8 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
     }, READY_RETRY_MS);
 
     return () => {
-      cancelled = true;
       clearInterval(retry);
-      unlisten?.();
+      unlisten();
     };
   }, [label]);
 

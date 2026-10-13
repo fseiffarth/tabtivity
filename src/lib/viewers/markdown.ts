@@ -18,9 +18,33 @@
 
 import { escapeHtml, highlight, type Lang } from "./highlight";
 
-function safeHref(url: string): string | null {
-  const trimmed = url.trim();
-  if (!trimmed || /^\/\//.test(trimmed)) return null;
+/** An href as the URL parser will read it: leading and trailing C0 controls
+ *  and spaces dropped, ASCII tab, LF and CR removed anywhere (WHATWG URL). A
+ *  check made on the raw string would miss `/\t/host` or `java\tscript:`. */
+function urlForm(url: string): string {
+  const t = url.trim();
+  let start = 0;
+  let end = t.length;
+  while (start < end && t.charCodeAt(start) <= 0x20) start++;
+  while (end > start && t.charCodeAt(end - 1) <= 0x20) end--;
+  return t.slice(start, end).replace(/[\t\n\r]/g, "");
+}
+
+/** True for an href that names another machine: a network-path reference
+ *  (`//host`, `\\host`, `/\host`, `\/host` — the URL parser reads `\` as
+ *  `/` on every platform, and Windows opens `\\host\x` over SMB), or a
+ *  `file:` URL with a host other than `localhost`. A click on one would load
+ *  a remote page into the app window (threat recheck gap 38); a local image or
+ *  link resolved to one would make Windows contact that host. */
+function namesAnotherHost(href: string): boolean {
+  if (/^[\\/]{2}/.test(href)) return true;
+  const file = /^file:[\\/]{2}([^\\/]*)/i.exec(href);
+  return !!file && file[1] !== "" && file[1].toLowerCase() !== "localhost";
+}
+
+export function safeHref(url: string): string | null {
+  const trimmed = urlForm(url);
+  if (!trimmed || namesAnotherHost(trimmed)) return null;
   // Explicit schemes are opt-in. Everything else is a relative filesystem
   // target: Markdown commonly writes `[guide](docs/guide.md)`, without a `./`.
   // Keep Windows drive paths in that local category rather than mistaking `C:`
@@ -42,10 +66,13 @@ function safeHref(url: string): string | null {
  *  inline from disk. Anything carrying another scheme (e.g. `javascript:`) is
  *  rejected. */
 function imgSrc(url: string): { kind: "inline" | "remote" | "local"; url: string } | null {
-  const u = url.trim();
+  const u = urlForm(url);
   if (!u) return null;
   if (/^data:image\//i.test(u)) return { kind: "inline", url: u };
   if (/^https?:\/\//i.test(u)) return { kind: "remote", url: u };
+  // `//host/x.png`, `\\host\x.png`, `file://host/x.png`: not local, and
+  // resolving one on Windows would fetch it over SMB on render.
+  if (namesAnotherHost(u)) return null;
   if (/^file:/i.test(u)) return { kind: "local", url: u };
   if (/^[a-z][a-z0-9+.-]*:/i.test(u)) return null; // other explicit scheme → reject
   return { kind: "local", url: u }; // no scheme → relative/absolute local path
@@ -68,8 +95,8 @@ function remoteHost(url: string): string {
  *  way the renderer does — two copies of this rule would eventually show a graph
  *  node the preview never made clickable, or vice versa. */
 export function isLocalHref(href: string): boolean {
-  const trimmed = href.trim();
-  if (!trimmed || trimmed.startsWith("#") || /^\/\//.test(trimmed)) return false;
+  const trimmed = urlForm(href);
+  if (!trimmed || trimmed.startsWith("#") || namesAnotherHost(trimmed)) return false;
   if (/^(https?:|mailto:|tel:)/i.test(trimmed)) return false;
   return /^file:/i.test(trimmed)
     || /^[a-z]:[\\/]/i.test(trimmed)
@@ -123,6 +150,21 @@ export function slugify(raw: string): string {
     .replace(/[^\w\s-]/g, "")
     .trim()
     .replace(/\s+/g, "-");
+}
+
+/** Hands out the ids for one document's headings, in document order: the
+ *  heading's `slugify` slug, with GitHub's `-1`, `-2`, … suffix on a repeat so
+ *  two "Usage" sections get `usage` and `usage-1`. The renderer and the
+ *  table-of-contents generator (`markdownEdit.generateToc`) both draw from one
+ *  of these, so a TOC entry always names an id the preview actually has. */
+export function headingIdAllocator(): (text: string) => string {
+  const seen = new Map<string, number>();
+  return (text) => {
+    const base = slugify(text);
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return n === 0 ? base : `${base}-${n}`;
+  };
 }
 
 /** The rendered-heading id a link fragment names, or null when none matches.
@@ -500,12 +542,47 @@ function renderList(items: ListItem[]): string {
 /** `breaks`: a single line break inside a paragraph stays a break (`<br>`),
  * as in a chat message, instead of joining the lines into one. */
 export function renderMarkdown(src: string, { breaks = false }: { breaks?: boolean } = {}): string {
+  return renderBlocks(src, breaks);
+}
+
+/** One heading of a document as the renderer sees it: `text` is the raw
+ *  Markdown of its title (closing `#`s dropped), `id` the id it renders with
+ *  ("" when the title has no slug, which renders without an id). */
+export interface MarkdownHeading {
+  level: number;
+  text: string;
+  id: string;
+}
+
+/** Every ATX and setext heading of `src`, in order, exactly as `renderMarkdown`
+ *  parses and ids them — derived from the same pass, so a consumer (the TOC
+ *  generator) can never disagree with the preview about which lines are
+ *  headings or how a repeat is numbered. */
+export function markdownHeadings(src: string): MarkdownHeading[] {
+  const out: MarkdownHeading[] = [];
+  renderBlocks(src, false, (h) => out.push(h));
+  return out;
+}
+
+function renderBlocks(
+  src: string,
+  breaks: boolean,
+  onHeading?: (heading: MarkdownHeading) => void,
+): string {
   // Drop NUL up front — it is the inline placeholder delimiter (`mark`), and
   // stripping it here is what makes a marker impossible to forge from document
   // text. A NUL in a file being viewed as markdown has nothing to render anyway.
   const lines = src.replace(/\u0000/g, "").replace(/\r\n?/g, "\n").split("\n");
   const out: string[] = [];
   let i = 0;
+
+  const headingId = headingIdAllocator();
+  const pushHeading = (level: number, text: string) => {
+    const id = headingId(text);
+    onHeading?.({ level, text, id });
+    const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
+    out.push(`<h${level}${idAttr}>${renderInline(text)}</h${level}>`);
+  };
 
   let paragraph: string[] = [];
   const flushParagraph = () => {
@@ -544,13 +621,12 @@ export function renderMarkdown(src: string, { breaks = false }: { breaks?: boole
     }
 
     // ATX heading.
-    const heading = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+    // The optional closing `#` run needs whitespace before it (CommonMark), so
+    // a title that ends in `#` — "C#", "F#" — keeps it.
+    const heading = line.match(/^(#{1,6})\s+(.*?)\s*(?:(?<=\s)#+)?\s*$/);
     if (heading) {
       flushParagraph();
-      const level = heading[1].length;
-      const id = slugify(heading[2]);
-      const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
-      out.push(`<h${level}${idAttr}>${renderInline(heading[2])}</h${level}>`);
+      pushHeading(heading[1].length, heading[2]);
       i++;
       continue;
     }
@@ -567,9 +643,7 @@ export function renderMarkdown(src: string, { breaks = false }: { breaks?: boole
       const level = line.trim().startsWith("=") ? 1 : 2;
       const textRaw = paragraph[0];
       paragraph = [];
-      const id = slugify(textRaw);
-      const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
-      out.push(`<h${level}${idAttr}>${renderInline(textRaw)}</h${level}>`);
+      pushHeading(level, textRaw);
       i++;
       continue;
     }

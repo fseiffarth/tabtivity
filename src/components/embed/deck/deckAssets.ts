@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readFileBytes } from "../fileAccess";
+import { normalizePath } from "../../../lib/paths";
 import type { Deck, Interstitial } from "../../../lib/viewers/deck/model";
 import { type DecodedGif, decodeInterstitial, disposeGif } from "./gifPlayback";
 
@@ -22,10 +23,62 @@ export function dirOf(p: string): string {
   return i >= 0 ? p.slice(0, i) : "";
 }
 
-/** Resolve a deck-relative asset path against the sidecar's own directory. */
+/** Resolve a deck-relative asset path against the sidecar's own directory.
+ *
+ *  A `.`/`..` segment is folded away: `deckRelative` stores a figure beside or
+ *  above the deck as `../figures/x.png` (V #108), and the backend's file
+ *  commands refuse any path that still holds a `..` (threat recheck gap 22). */
 export function resolveRel(dir: string, rel: string): string {
-  if (/^([a-zA-Z]:[\\/]|\/)/.test(rel)) return rel;
-  return dir ? `${dir}/${rel}` : rel;
+  const joined = /^([a-zA-Z]:[\\/]|\/)/.test(rel) ? rel : dir ? `${dir}/${rel}` : rel;
+  return /(^|[\\/])\.\.?([\\/]|$)/.test(joined) ? normalizePath(joined) : joined;
+}
+
+/** The per-deck folder a TeX-figure object's source/PDF/PNG live in, beside the
+ *  sidecar — kept out of the main `.tex`'s own directory so a figure's build
+ *  artifacts (`.aux`/`.log`) never clutter the deck's own folder listing. */
+export function texFigureDir(deckPath: string): string {
+  return `${deckPath.replace(/\.eldeck\.json$/i, "")}.tex-figures`;
+}
+
+/** `rel` as an absolute path when it names a file directly in the deck's own
+ *  figure folder (`<deck>.tex-figures/<name><ext>`), else null. */
+function figureFile(deckPath: string, rel: string, ext: string): string | null {
+  const parts = rel.split(/[\\/]/);
+  if (parts.length !== 2) return null;
+  const [folder, name] = parts;
+  const dir = texFigureDir(deckPath);
+  const own = dir.slice(Math.max(dir.lastIndexOf("/"), dir.lastIndexOf("\\")) + 1);
+  if (folder !== own) return null;
+  // A plain name: not empty, not `.`/`..`, no drive or stream colon, no
+  // control character, no `~` (a Windows 8.3 alias such as `EVIL~1.PNG`
+  // names another file in the folder), and more than the bare extension.
+  if (name === "." || name === ".." || [...name].some((c) => c === ":" || c === "~" || c.charCodeAt(0) < 0x20)) {
+    return null;
+  }
+  if (name.length <= ext.length || !name.toLowerCase().endsWith(ext)) return null;
+  return `${dir}/${name}`;
+}
+
+/**
+ * Where the deck may write a TeX figure's PNG, or null when it may not
+ * (decision D3, threat recheck gap 23).
+ *
+ * The deck re-rasters a figure with no click (the figure poll) and on
+ * Recompile, so whatever the deck JSON says its `src` is gets overwritten — and
+ * that JSON may come from anyone who can write the project. Only a `.png`
+ * directly in the deck's own figure folder is written: a relative `src` with
+ * no `..`, no absolute path, no other folder and no nesting. Anything else is
+ * read as an image (picked figures above the deck are legitimate) but never
+ * written.
+ */
+export function figureTarget(deckPath: string, src: string): string | null {
+  return figureFile(deckPath, src, ".png");
+}
+
+/** The `.tex` a TeX figure may compile, by the same rule as `figureTarget`:
+ *  a compile writes its `.pdf`/`.aux`/`.log` beside the source. */
+export function figureSource(deckPath: string, texSrc: string): string | null {
+  return figureFile(deckPath, texSrc, ".tex");
 }
 
 /** Every interstitial in the deck, in slide order. */

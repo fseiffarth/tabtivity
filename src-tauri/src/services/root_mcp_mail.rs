@@ -59,6 +59,15 @@ pub const UNKNOWN_ACCOUNT: &str = "unknown account";
 /// A local-model tab's read while `ollama_host` names another machine: what it
 /// read would leave for that machine.
 pub const LOCAL_READ_REMOTE: &str = concat!("mail is read only by a model on this machine, and ", crate::app_name!(), "'s Ollama host is not loopback");
+/// A local-model tab's read while its model is not confirmed to run here
+/// (gap 25): an Ollama cloud model (a loopback Ollama forwards it to
+/// ollama.com), one its endpoint does not list, a list that could not be read,
+/// or a tab whose model could not be told at spawn.
+pub const LOCAL_READ_CLOUD: &str = concat!("mail is read only by a model on this machine, and ", crate::app_name!(), " could not confirm that this tab's model is one (an Ollama cloud model runs on ollama.com); start the tab on an installed local model");
+/// A local-model tab's read whose taint marker could not be written (gap 33):
+/// the read is refused, so a later spawn never starts clean with mail in its
+/// context.
+pub const LOCAL_READ_UNRECORDED: &str = concat!("mail was not read: ", crate::app_name!(), " could not record that this tab read mail, which keeps its later writes staged for review");
 /// A local-model tab's read while `Settings::root_mcp_mail_local_read` is off:
 /// the tools are of its class, so the switch is named rather than the tools
 /// denied. A cloud tab asking the same still gets `unknown tool`.
@@ -231,7 +240,7 @@ impl ScopedMail<'_> {
         self.stores.policy.reads_mail(self.stores.caller)
     }
     fn read_mail(&self) -> bool {
-        self.stores.session.is_some_and(|s| s.has_read_mail())
+        self.stores.session.is_some_and(|s| s.tainted(self.stores.state))
     }
     /// Ownership is the *tab*: a draft carries the tab's key
     /// (`Session::tab_key`), so a resumed tab keeps its drafts across a
@@ -1003,8 +1012,7 @@ fn attach_files(mail: &ScopedMail, caller: Caller, args: &Value, before: Option<
         if total > attach::MAX_DRAFT_BYTES {
             return Err(format!("the files come to more than {} MiB for one draft; nothing was attached", attach::MAX_DRAFT_BYTES / (1024 * 1024)));
         }
-        use sha2::Digest;
-        let digest: String = sha2::Sha256::digest(&file.bytes).iter().map(|b| format!("{b:02x}")).collect();
+        let digest = crate::digest::sha256_hex(&file.bytes);
         reply.push(json!({ "filename": file.filename, "size": file.bytes.len(), "sha256": digest }));
         add.push(NewStagedFile { staged_id: mail.new_id(), filename: file.filename, mime: file.mime, source: file.source, bytes: file.bytes });
     }
@@ -1140,13 +1148,24 @@ pub fn call(stores: &Stores, name: &str, args: &Value) -> Result<(Value, Effects
                 super::mail_ai::resolve_endpoint(crate::commands::ollama::host_setting(&settings).0).map_err(|_| LOCAL_READ_REMOTE.to_string())?
             }
         };
-        super::mail_ai::resolve_endpoint(Some(&endpoint)).map_err(|_| LOCAL_READ_REMOTE.to_string())?;
+        let addr = super::mail_ai::resolve_endpoint(Some(&endpoint)).map_err(|_| LOCAL_READ_REMOTE.to_string())?;
+        // A loopback Ollama still runs an Ollama cloud model on ollama.com
+        // (gap 25): the model recorded at spawn must be one that endpoint
+        // lists without a remote, and no other listed model may share its
+        // alias (the tab's Vibe home and taint are keyed by it). No recorded
+        // model (or no session) is not proof of one, and an unreadable list
+        // fails closed.
+        let model = stores.session.and_then(|s| s.identity.model.as_deref()).ok_or_else(|| LOCAL_READ_CLOUD.to_string())?;
+        crate::commands::ollama::tab_model_is_local_at(&addr, model).map_err(|_| LOCAL_READ_CLOUD.to_string())?;
         // Latched before the read, not after it: a result that fails halfway
-        // may already be in the model's context. On disk too, for the tab's
-        // next spawn (`root_mcp::tab_read_mail`).
+        // may already be in the model's context. On disk too, per tab and per
+        // model, for the next spawn (`root_mcp::spawn_read_mail`) — and a
+        // marker that did not land refuses the read (gap 33), the in-memory
+        // latch staying set for this spawn either way.
         if let Some(session) = stores.session {
             session.mark_read_mail();
-            super::root_mcp::record_read_mail(stores.state, &session.identity.tab);
+            super::root_mcp::record_read_mail(stores.state, &session.identity.tab, session.identity.model.as_deref())
+                .map_err(|_| LOCAL_READ_UNRECORDED.to_string())?;
         }
     }
     if caller == Caller::Reader {
@@ -1504,12 +1523,24 @@ mod tests {
     /// A local-model tab with `root_mcp_mail_local_read` on, its settings file
     /// matching the policy (a live session re-reads it per call).
     fn local_reader<'a>(f: &'a Fx, settings: &'a Path, session: &'a super::super::root_mcp::Session) -> Stores<'a> {
+        // The endpoint lists the test session's model as installed (gap 25),
+        // and the taint markers land beside the settings file (gap 33).
+        crate::commands::ollama::test_tags::set(Some(LOCAL_TAGS));
         let mut s = stores(Some(f), Caller::LocalModel);
         s.settings = settings;
+        s.state = settings.parent().unwrap();
         s.session = Some(session);
         s.policy.mail_local_read = true;
         s
     }
+
+    /// An `/api/tags` answer: the test sessions' local model, and an Ollama
+    /// cloud model under its own name and under a plain copied one.
+    const LOCAL_TAGS: &str = r#"{"models":[
+        {"name":"llama3:latest"},
+        {"name":"gpt-oss:120b-cloud","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443"},
+        {"name":"mine:latest","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443"}
+    ]}"#;
 
     fn local_settings(dir: &Path, ollama_host: &str) -> std::path::PathBuf {
         let path = dir.join("settings.json");
@@ -1963,6 +1994,31 @@ mod tests {
         super::super::root_mcp::revoke_tab("root:other");
     }
 
+    /// Gap 33, two tabs at once: a tab of the same model, already open when
+    /// the other one reads mail, writes reader drafts from that read on (the
+    /// two share the model's Vibe home); a tab of another model does not.
+    #[test]
+    fn an_open_twin_of_a_model_that_read_mail_writes_reader_drafts() {
+        use super::super::root_mcp::{revoke_tab, test_session_for_tab, test_session_model};
+        let mut f = fx();
+        f.marks = vec!["m1".into()];
+        let dir = tempfile::tempdir().unwrap();
+        let settings = local_settings(dir.path(), "127.0.0.1:11434");
+        let (_, reader) = test_session_for_tab(Caller::LocalModel, "root:twin-read", dir.path());
+        let (_, twin) = test_session_for_tab(Caller::LocalModel, "root:twin-open", dir.path());
+        let (_, other) = test_session_model(Caller::LocalModel, "root:twin-other", dir.path(), Some("127.0.0.1:11434".into()), Some("qwen3:8b".into()));
+        let origin_of_new = |session: &super::super::root_mcp::Session| {
+            let s = local_reader(&f, &settings, session);
+            let id = call(&s, "mail_draft_create", &json!({ "account_id": "open" })).unwrap().0["draft_id"].as_str().unwrap().to_string();
+            f.drafts.lock().unwrap().iter().find(|d| d.id == id).unwrap().origin.clone()
+        };
+        assert_eq!(origin_of_new(&twin).as_deref(), Some("agent"));
+        call(&local_reader(&f, &settings, &reader), "mail_read", &json!({ "message_id": "m1" })).unwrap();
+        assert_eq!(origin_of_new(&twin).as_deref(), Some("reader"), "the open twin");
+        assert_eq!(origin_of_new(&other).as_deref(), Some("agent"), "another model");
+        for tab in ["root:twin-read", "root:twin-open", "root:twin-other"] { revoke_tab(tab); }
+    }
+
     /// A draft begun before the tab's first read and edited after it carries
     /// the reader mark from then on; the mark is never taken back, and a
     /// cloud tab's draft never gains it.
@@ -2021,6 +2077,74 @@ mod tests {
         let s = local_reader(&f, &loopback, &unknown);
         assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_REMOTE, "no recorded endpoint is not loopback");
         for tab in ["root:was-remote", "root:was-local", "root:no-endpoint"] { super::super::root_mcp::revoke_tab(tab); }
+    }
+
+    /// Gap 25: a loopback endpoint is not enough — the model recorded at spawn
+    /// must be one that endpoint lists without a remote. A cloud model (by its
+    /// tag, or copied under a plain name), an unlisted one and no recorded
+    /// model are refused, as are an unreadable list and no server; a refused
+    /// read latches nothing, and drafts still work.
+    #[test]
+    fn local_reads_refuse_a_cloud_or_unconfirmed_model() {
+        use super::super::root_mcp::{model_read_mail, revoke_tab, tab_read_mail, test_session_model, test_session_with, TEST_LOCAL_MODEL};
+        let mut f = fx();
+        f.marks = vec!["m1".into()];
+        let dir = tempfile::tempdir().unwrap();
+        let settings = local_settings(dir.path(), "127.0.0.1:11434");
+        let ep = Some("127.0.0.1:11434".to_string());
+        let reads = [("mail_search", json!({ "account_id": "open" })), ("mail_read", json!({ "message_id": "m1" }))];
+        for (i, model) in [Some("gpt-oss:120b-cloud"), Some("mine"), Some("qwen3-coder:cloud"), Some("mistral:7b"), None].into_iter().enumerate() {
+            let tab = format!("root:model-{i}");
+            let (_, session) = test_session_model(Caller::LocalModel, &tab, dir.path(), ep.clone(), model.map(String::from));
+            let s = local_reader(&f, &settings, &session);
+            for (tool, args) in &reads {
+                assert_eq!(call(&s, tool, args).unwrap_err(), LOCAL_READ_CLOUD, "{model:?} {tool}");
+            }
+            assert!(!session.has_read_mail(), "{model:?}");
+            assert!(!tab_read_mail(dir.path(), &tab), "{model:?}");
+            assert!(model.is_none_or(|m| !model_read_mail(dir.path(), m)), "{model:?}");
+            assert!(call(&s, "mail_draft_create", &json!({ "account_id": "open" })).is_ok(), "drafts need no read: {model:?}");
+            revoke_tab(&tab);
+        }
+        let (_, session) = test_session_with(Caller::LocalModel, "root:model-ok", dir.path(), ep);
+        let s = local_reader(&f, &settings, &session);
+        for unreadable in [Some("not json"), Some(""), None] {
+            crate::commands::ollama::test_tags::set(unreadable);
+            assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_CLOUD, "{unreadable:?}");
+        }
+        // Another installed model sharing the tab model's alias (its Vibe home
+        // and taint key): not confirmed either (step 5 review).
+        let twin = r#"{"models":[{"name":"llama3:latest"},{"name":"llama3-latest"}]}"#;
+        crate::commands::ollama::test_tags::set(Some(twin));
+        assert_eq!(call(&s, "mail_read", &json!({ "message_id": "m1" })).unwrap_err(), LOCAL_READ_CLOUD, "shared alias");
+        assert!(!session.has_read_mail());
+        crate::commands::ollama::test_tags::set(Some(LOCAL_TAGS));
+        assert!(call(&s, "mail_read", &json!({ "message_id": "m1" })).is_ok(), "an installed local model reads");
+        assert!(session.has_read_mail() && tab_read_mail(dir.path(), "root:model-ok"));
+        assert!(model_read_mail(dir.path(), TEST_LOCAL_MODEL), "and taints its model");
+        revoke_tab("root:model-ok");
+    }
+
+    /// Gap 33: a read whose taint marker cannot be written is refused — the
+    /// next spawn would otherwise start clean with the mail in its context —
+    /// while this spawn's in-memory latch is set anyway.
+    #[test]
+    fn a_read_whose_taint_marker_cannot_be_written_is_refused() {
+        let mut f = fx();
+        f.marks = vec!["m1".into()];
+        let dir = tempfile::tempdir().unwrap();
+        let settings = local_settings(dir.path(), "127.0.0.1:11434");
+        let (_, session) = super::super::root_mcp::test_session_with(Caller::LocalModel, "root:unrecorded", dir.path(), Some("127.0.0.1:11434".into()));
+        let mut s = local_reader(&f, &settings, &session);
+        // A file where the marker folder has to go.
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, b"").unwrap();
+        s.state = &blocked;
+        for (tool, args) in [("mail_read", json!({ "message_id": "m1" })), ("mail_search", json!({ "account_id": "open" }))] {
+            assert_eq!(call(&s, tool, &args).unwrap_err(), LOCAL_READ_UNRECORDED, "{tool}");
+        }
+        assert!(session.has_read_mail(), "latched in memory before the read");
+        super::super::root_mcp::revoke_tab("root:unrecorded");
     }
 
     /// More drafts than a page: the list says it was cut, the way the offset

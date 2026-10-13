@@ -4,7 +4,8 @@
  * cannot say two different models about one session.
  */
 import { describe, expect, it } from "vitest";
-import { screenModelTag } from "../../lib/agents/agentModel";
+import { screenModelTag, transcriptModelTag } from "../../lib/agents/agentModel";
+import { statusModelTag } from "../../../mobile-web/src/terminal/statusLine";
 import type { ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 import { BRAND } from "../../lib/brand";
 
@@ -37,5 +38,24 @@ describe("the model an agent tab's screen is showing", () => {
     expect(screenModelTag(screen(["> ", "? for shortcuts · 85% context left"]), "Claude")).toBeUndefined();
     // No input box on screen is no status at all.
     expect(screenModelTag(screen(["● Hello."]), "Claude")).toBeUndefined();
+  });
+});
+
+// The phone's tab card carries the desktop's tag; the phone's model chip reads
+// its own screen. Both go through these two functions, so one session cannot
+// be one model on its card and another over its keyboard.
+describe("the one model tag both phone surfaces show", () => {
+  it("composes a status the same way wherever it is read", () => {
+    expect(statusModelTag({ model: "Sonnet 5.5" })).toBe("Sonnet 5.5");
+    expect(statusModelTag({ model: "Gemini 3.8 Flash", effort: "high" })).toBe("Gemini 3.8 Flash · high");
+    expect(statusModelTag({ mode: "plan" })).toBeUndefined();
+    expect(statusModelTag(null)).toBeUndefined();
+  });
+
+  it("names a stored session's model in the status line's words, never by family alone", () => {
+    expect(transcriptModelTag("claude-fable-5-1-20260801", true)).toBe("Fable 5.1");
+    // The desktop holds the id already shortened; it reads the same.
+    expect(transcriptModelTag("fable-5-1", true)).toBe("Fable 5.1");
+    expect(transcriptModelTag("gpt-5-codex", false)).toBe("gpt-5-codex");
   });
 });

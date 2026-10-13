@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     sync::{Mutex, OnceLock},
 };
+use app_core::sync::LockExt;
 
 use crate::{
     schema::agent_tasks::{
@@ -37,7 +38,7 @@ struct Guard {
 }
 
 fn lock() -> Guard {
-    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock_ok();
     Guard { _file: file_lock(&path()), _mutex: mutex }
 }
 
@@ -628,7 +629,7 @@ pub fn cancel_phone_rules(
     // struct literal evaluates its fields as written, so naming the file lock
     // first inverted it: a claim holding the mutex and this holding the file
     // lock waited on each other for good.
-    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock_ok();
     let _guard = Guard { _file: file_lock(path), _mutex: mutex };
     cancel_phone_rules_locked(path, reaches)
 }

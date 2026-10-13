@@ -159,6 +159,11 @@ export interface Settings {
     /** A paired phone may browse and read (never change) its Mobile projects'
      * files. Unset is off; read by the sidecar per request. */
     project_files?: boolean;
+    /** A paired phone may add new files to a plain folder of its Mobile
+     * projects ("Upload here"; never overwrites, no dot folders). Unset is off;
+     * only in effect while `project_files` is on too. Read by the sidecar per
+     * request. */
+    project_uploads?: boolean;
     /** Quitting Tabtivity leaves the Mobile host running (headless owner). Unset
      * is off; read by the quit path. */
     stay_after_quit?: boolean;
@@ -1162,10 +1167,13 @@ export interface GitPushProposal {
   session: string;
   tab: string;
   project: string;
-  /** A branch push, or a release tag on a pushed tip (`services::git_release`). */
-  kind: "push" | "release";
+  /** A branch push, a release tag on a pushed tip (`services::git_release`),
+   *  or leave to read CI for a repo that is not the confirmed push repo. */
+  kind: "push" | "release" | "ci_repo";
   /** The release tag (`kind === "release"`). */
   tag: string | null;
+  /** Lowercase `owner/repo` an "Allow CI" card allows (`kind === "ci_repo"`). */
+  repo: string | null;
   branch: string | null;
   remote: string | null;
   url: string | null;
@@ -1176,7 +1184,8 @@ export interface GitPushProposal {
   note: string;
   needs_url_confirm: boolean;
   created_at: string;
-  status: "running" | "pending" | "pushed" | "failed" | "dismissed" | "expired";
+  /** `allowed`: an "Allow CI" card the user allowed. */
+  status: "running" | "pending" | "pushed" | "failed" | "dismissed" | "expired" | "allowed";
   category: string | null;
   message: string;
   output: string;
@@ -1309,8 +1318,45 @@ export interface BundleContents {
   gitHistory: boolean;
   /** `node_modules`, `.venv`, `target`, … were left out of the bundle. */
   rebuildableSkipped: boolean;
+  /** The project's agent conversations travel (bundle format 2). */
+  agentHistory?: boolean;
+  /** `mirror` was packed from the host's own tree, not this machine's mirror. */
+  mirrorFromHost?: boolean;
   files: number;
   bytes: number;
+  /** Files the export could not carry (unreadable, a FIFO, too deep). */
+  skipped?: number;
+}
+
+/** A remote project's two copies: which one an export packs. */
+export type MirrorSource = "local" | "host";
+
+/** `preview_host_export` — the host's tree measured for the export dialog.
+ *  `files`/`bytes` leave out `.git` and the always-rebuildable folders. */
+export interface HostTally {
+  files: number;
+  bytes: number;
+  gitFiles: number;
+  gitBytes: number;
+  rebuildableFiles: number;
+  rebuildableBytes: number;
+}
+
+/** One rebuildable folder the export preview found, biggest first. */
+export interface RebuildableDir {
+  /** Root-relative, `/`-separated — what `keepRebuildable` takes back. */
+  path: string;
+  files: number;
+  bytes: number;
+}
+
+/** Why an export left an entry out. */
+export type ExportSkipReason = "unreadable" | "special" | "tooDeep" | "link";
+
+/** One entry an export left out. */
+export interface SkippedEntry {
+  path: string;
+  reason: ExportSkipReason;
 }
 
 /** `preview_project_export` — what an export would carry, with sizes, so the
@@ -1329,6 +1375,11 @@ export interface ExportPreview {
   gitBytes: number;
   rebuildableFiles: number;
   rebuildableBytes: number;
+  rebuildableDirs: RebuildableDir[];
+  /** Entries no toggle can carry (unreadable, FIFOs, too deep). */
+  skipped: number;
+  agentHistoryFiles: number;
+  agentHistoryBytes: number;
   tabs: number;
   boxNames: string[];
   suggestedFileName: string;
@@ -1345,6 +1396,10 @@ export interface ExportReport {
   payloadBytes: number;
   remote: boolean;
   notes: string[];
+  /** What was left out, named (capped); `skippedCount` counts them all. */
+  skipped: SkippedEntry[];
+  skippedCount: number;
+  agentFiles: number;
 }
 
 /** `project-export` progress event payload. */
@@ -1392,6 +1447,8 @@ export interface ImportBundleResult {
   newId: boolean;
   boxesJoined: string[];
   boxesMissing: string[];
+  /** Agent-conversation files restored into the project's agent homes. */
+  agentFiles: number;
   notes: string[];
 }
 
@@ -1613,6 +1670,17 @@ export interface CalendarEvent {
    *  so nothing else may write them. */
   caldav_href?: string;
   caldav_etag?: string;
+  /** A local edit of a row in a writable CalDAV calendar that the server has not
+   *  accepted yet (gap 32). A sync pushes it before it fetches and never merges
+   *  over it; only a push the server accepted, or "Use the server's", clears it.
+   *  Kept by the backend through every edit within the calendar. */
+  caldav_dirty?: boolean;
+  /** The resource URL this dirty row had when the server deleted it: the row was
+   *  kept as local-only, and the conflict dialog asks whether to put it back. */
+  caldav_server_deleted?: string;
+  /** The store's revision of this row; `caldav_push` clears `caldav_dirty` only
+   *  for the revision it sent. */
+  rev?: number;
   /** The iCalendar `UID` this row arrived with — the calendar object's identity
    *  everywhere outside this app. Empty for a row written here, which serializes
    *  under a stable synthetic uid instead (`lib/calendar/ics.ts`'s `icsUid`). Never
@@ -1626,6 +1694,18 @@ export interface CalendarEvent {
    *  authored here keeps its occurrence edits in `overrides` instead; the
    *  serializer writes both shapes the same way. */
   recurrence_id?: string;
+  /** The mail this event was made from (the mail pane's AI extract). Its title
+   *  is the sender's words, so a root agent's tools serve it as `external`
+   *  (`services::root_mcp::event_view`). Sticky: the backend keeps it through
+   *  every edit and CalDAV merge, and a pasted copy carries it on. Never sent
+   *  to a CalDAV server. */
+  from_mail?: EventMailLink;
+}
+
+/** Identifiers only — no subject or sender: `CalendarEvent.from_mail`. */
+export interface EventMailLink {
+  message_id: string;
+  account_id?: string;
 }
 
 /** One checklist item inside a task. */
@@ -1737,6 +1817,11 @@ export interface CalendarTask {
    *  sync — that is the whole point of matching on the href. */
   caldav_href?: string;
   caldav_etag?: string;
+  /** See `CalendarEvent.caldav_dirty`. */
+  caldav_dirty?: boolean;
+  /** See `CalendarEvent.caldav_server_deleted`. */
+  caldav_server_deleted?: string;
+  rev?: number;
   /** The iCalendar `UID` this card arrived with. See `CalendarEvent.uid`: a
    *  push writes the object back under the identity it came with, never a fresh
    *  one, or the server keeps the old VTODO and files ours beside it. */

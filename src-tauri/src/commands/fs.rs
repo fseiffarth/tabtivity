@@ -5,6 +5,7 @@
 //! (Efficiency #15) have a dedicated, testable home alongside `fs_watch`.
 
 use std::collections::{BTreeSet, HashSet};
+use app_core::sync::LockExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -334,16 +335,14 @@ pub async fn dir_size(
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let remote_dir = join_remote_dir(&target.spec.remote_path, &rel_path);
         let spec = target.spec.clone();
-        return tokio::task::spawn_blocking(move || {
+        return app_core::rt::blocking("fs", move || {
             crate::services::ssh_exec::remote_dir_size(&spec, &remote_dir)
         })
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     }
     let excluded = excluded.unwrap_or_default();
-    tokio::task::spawn_blocking(move || dir_size_local(&project_dir, &rel_path, &excluded))
+    app_core::rt::try_blocking("fs", move || dir_size_local(&project_dir, &rel_path, &excluded))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 /// Local-fs recursive directory size (bytes). Confinement-checked like the local
@@ -449,11 +448,10 @@ pub async fn dir_size_breakdown(
     excluded: Option<Vec<String>>,
 ) -> Result<DirSizeBreakdown, String> {
     let excluded = excluded.unwrap_or_default();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("fs", move || {
         dir_size_breakdown_local(&project_dir, &rel_path, &excluded)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 fn dir_size_breakdown_local(
@@ -788,23 +786,16 @@ async fn remote_metadata(
     }
 }
 
-/// Offload a blocking local-fs body to a worker thread. The full recursive
-/// walks (Ctrl+P/QuickOpen), tree copies/moves, external imports, and archive
-/// extraction below all do work proportional to tree/archive size; run inline
-/// they blocked the main thread — the freeze class `commands::git`'s
-/// `run_off_thread` doc describes. The sync bodies stay directly
-/// unit-testable.
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("fs task failed: {e}"))?
-}
+// Offload a blocking local-fs body to a worker thread. The full recursive
+// walks (Ctrl+P/QuickOpen), tree copies/moves, external imports, and archive
+// extraction below all do work proportional to tree/archive size; run inline
+// they blocked the main thread — the freeze class `commands::git`'s
+// off-thread note describes. The sync bodies stay directly
+// unit-testable.
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_project_endings(project_dir: String) -> Result<Vec<String>, String> {
-    run_off_thread(move || list_project_endings_blocking(project_dir)).await
+    app_core::rt::try_blocking("fs", move || list_project_endings_blocking(project_dir)).await
 }
 
 pub fn list_project_endings_blocking(project_dir: String) -> Result<Vec<String>, String> {
@@ -816,7 +807,7 @@ pub fn list_project_endings_blocking(project_dir: String) -> Result<Vec<String>,
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_project_paths(project_dir: String) -> Result<Vec<ProjectPathEntry>, String> {
-    run_off_thread(move || list_project_paths_blocking(project_dir)).await
+    app_core::rt::try_blocking("fs", move || list_project_paths_blocking(project_dir)).await
 }
 
 pub fn list_project_paths_blocking(project_dir: String) -> Result<Vec<ProjectPathEntry>, String> {
@@ -1105,7 +1096,7 @@ pub async fn copy_path(
     dest_project_dir: String,
     dest_rel: String,
 ) -> Result<(), String> {
-    run_off_thread(move || copy_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
+    app_core::rt::try_blocking("fs", move || copy_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
         .await
 }
 
@@ -1133,7 +1124,7 @@ pub async fn move_path(
     dest_project_dir: String,
     dest_rel: String,
 ) -> Result<(), String> {
-    run_off_thread(move || move_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
+    app_core::rt::try_blocking("fs", move || move_path_blocking(src_project_dir, src_rel, dest_project_dir, dest_rel))
         .await
 }
 
@@ -1191,7 +1182,7 @@ pub async fn import_external_file(
     replace: bool,
     dest_name: Option<String>,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("fs", move || {
         import_external_file_blocking(project_dir, source_path, dest_rel, replace, dest_name)
     })
     .await
@@ -1280,7 +1271,7 @@ pub fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool
 /// output is additionally confined to the destination folder before any write.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn extract_archive(project_dir: String, rel_path: String) -> Result<String, String> {
-    run_off_thread(move || extract_archive_blocking(project_dir, rel_path)).await
+    app_core::rt::try_blocking("fs", move || extract_archive_blocking(project_dir, rel_path)).await
 }
 
 pub fn extract_archive_blocking(project_dir: String, rel_path: String) -> Result<String, String> {
@@ -1461,12 +1452,13 @@ fn ext_mime_or_octet(path: &str) -> String {
         .unwrap_or_else(|| "application/octet-stream".to_string())
 }
 
-/// Local-fs MIME detection — byte-identical pre-Phase-3 body.
+/// Local-fs MIME detection: magic bytes from a file opened through [`open_confined`].
 pub fn detect_mime_local(path: &str, scope_id: Option<&str>) -> Result<String, String> {
     let p = PathBuf::from(path);
     confine_abs_read(&p, scope_id)?;
-    // 1. Try magic bytes via infer.
-    if let Ok(mut f) = fs::File::open(&p) {
+    // 1. Try magic bytes via infer, from a file opened through the held-folder
+    //    walk (a link swapped in after the check is refused, not followed).
+    if let Ok(mut f) = open_confined(&p, &allowed_roots(scope_id), Confined::Read) {
         let mut buf = [0u8; 8192];
         use std::io::Read;
         if let Ok(n) = f.read(&mut buf) {
@@ -1568,22 +1560,11 @@ pub async fn read_file_text(
     read_file_text_local(&path, project_id.as_deref())
 }
 
-/// Local-fs text read — byte-identical pre-Phase-3 body.
+/// Local-fs text read through [`open_confined`] (an in-root link still reads).
 pub fn read_file_text_local(path: &str, scope_id: Option<&str>) -> Result<String, String> {
     let p = PathBuf::from(path);
-    confine_abs_read(&p, scope_id)?;
-    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-        return Err("not a file".to_string());
-    }
-    if meta.len() > MAX_TEXT_VIEW_BYTES {
-        return Err(format!(
-            "file too large to view ({} bytes; limit {})",
-            meta.len(),
-            MAX_TEXT_VIEW_BYTES
-        ));
-    }
-    let bytes = fs::read(&p).map_err(|e| e.to_string())?;
+    let file = open_confined(&p, &allowed_roots(scope_id), Confined::Read)?;
+    let bytes = read_opened(file, MAX_TEXT_VIEW_BYTES)?;
     String::from_utf8(bytes).map_err(|_| "file is not valid UTF-8 text".to_string())
 }
 
@@ -1622,18 +1603,14 @@ pub async fn write_file_text(
     write_file_text_local(&path, &content, project_id.as_deref())
 }
 
-/// Local-fs text write (existing regular file only) — byte-identical pre-Phase-3 body.
+/// Local-fs text write: an existing regular file only, emptied and rewritten in
+/// place through [`open_confined`] — a leaf that is a link is refused (D1).
 pub fn write_file_text_local(
     path: &str,
     content: &str,
     scope_id: Option<&str>,
 ) -> Result<(), String> {
     let p = PathBuf::from(path);
-    confine_abs_write(&p, scope_id)?;
-    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-        return Err("not a file".to_string());
-    }
     if content.len() as u64 > MAX_TEXT_VIEW_BYTES {
         return Err(format!(
             "content too large to save ({} bytes; limit {})",
@@ -1641,7 +1618,8 @@ pub fn write_file_text_local(
             MAX_TEXT_VIEW_BYTES
         ));
     }
-    fs::write(&p, content).map_err(|e| e.to_string())
+    let file = open_confined(&p, &allowed_roots(scope_id), Confined::Overwrite)?;
+    write_opened(file, content.as_bytes())
 }
 
 /// Write raw bytes to an absolute path, confined to Tabtivity's known roots
@@ -1660,7 +1638,7 @@ pub fn write_file_text_local(
 /// The header values are `encodeURIComponent`-encoded, because a header is ASCII and
 /// a path is not: `~/tabtivity/projects/Übung/…` would otherwise be unsendable. Nothing
 /// about that is a trust boundary — the decoded path goes through exactly the same
-/// `confine_abs_write` as before.
+/// confinement (`open_confined`) as before.
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_file_bytes(
@@ -1685,7 +1663,9 @@ pub async fn write_file_bytes(
             &decoded
         }
     };
-    write_file_bytes_routed(path, content, project_id, pool).await
+    // The deck's figure writes (`NO_FOLDER_LINK_HEADER`): the folder too.
+    let own_folder_unlinked = request_header(&request, NO_FOLDER_LINK_HEADER).as_deref() == Some("1");
+    write_file_bytes_routed(path, content, project_id, own_folder_unlinked, pool).await
 }
 
 /// A JSON array of byte-sized integers as bytes; `None` for anything else.
@@ -1731,6 +1711,7 @@ async fn write_file_bytes_routed(
     path: String,
     content: &[u8],
     project_id: Option<String>,
+    own_folder_unlinked: bool,
     pool: &RemotePoolState,
 ) -> Result<(), String> {
     if let Some(pid) = project_id.as_deref() {
@@ -1749,17 +1730,19 @@ async fn write_file_bytes_routed(
             }
         }
     }
-    write_file_bytes_local(&path, content, project_id.as_deref())
+    write_file_bytes_local(&path, content, project_id.as_deref(), own_folder_unlinked)
 }
 
-/// Local-fs byte write (may create a new file) — byte-identical pre-Phase-3 body.
+/// Local-fs byte write through [`open_confined`]: an existing regular file is
+/// rewritten in place, a missing one created `O_EXCL`; a leaf that is a link,
+/// dangling or not, is refused and nothing is created at its target (D1).
 pub fn write_file_bytes_local(
     path: &str,
     content: &[u8],
     scope_id: Option<&str>,
+    own_folder_unlinked: bool,
 ) -> Result<(), String> {
     let p = PathBuf::from(path);
-    confine_abs_write(&p, scope_id)?;
     if content.len() as u64 > MAX_BINARY_VIEW_BYTES {
         return Err(format!(
             "content too large to save ({} bytes; limit {})",
@@ -1767,7 +1750,9 @@ pub fn write_file_bytes_local(
             MAX_BINARY_VIEW_BYTES
         ));
     }
-    fs::write(&p, content).map_err(|e| e.to_string())
+    let mode = if own_folder_unlinked { Confined::WriteOwnFolder } else { Confined::Write };
+    let file = open_confined(&p, &allowed_roots(scope_id), mode)?;
+    write_opened(file, content)
 }
 
 /// Read an absolute file path as raw bytes for the in-app PDF viewer.
@@ -1814,8 +1799,9 @@ pub async fn write_file_bytes_for(
     path: String,
     content: &[u8],
     project_id: Option<String>,
+    own_folder_unlinked: bool,
 ) -> Result<(), String> {
-    write_file_bytes_routed(path, content, project_id, ctx.get::<RemotePoolState>()).await
+    write_file_bytes_routed(path, content, project_id, own_folder_unlinked, ctx.get::<RemotePoolState>()).await
 }
 
 /// The read itself, kept separate from the IPC shape so the routing stays testable
@@ -1843,22 +1829,11 @@ async fn read_file_bytes_any(
     read_file_bytes_local(&path, project_id.as_deref())
 }
 
-/// Local-fs byte read — byte-identical pre-Phase-3 body.
+/// Local-fs byte read through [`open_confined`] (an in-root link still reads).
 pub fn read_file_bytes_local(path: &str, scope_id: Option<&str>) -> Result<Vec<u8>, String> {
     let p = PathBuf::from(path);
-    confine_abs_read(&p, scope_id)?;
-    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-        return Err("not a file".to_string());
-    }
-    if meta.len() > MAX_BINARY_VIEW_BYTES {
-        return Err(format!(
-            "file too large to view ({} bytes; limit {})",
-            meta.len(),
-            MAX_BINARY_VIEW_BYTES
-        ));
-    }
-    fs::read(&p).map_err(|e| e.to_string())
+    let file = open_confined(&p, &allowed_roots(scope_id), Confined::Read)?;
+    read_opened(file, MAX_BINARY_VIEW_BYTES)
 }
 
 /// Return a file's last-modified time as whole seconds since the Unix epoch.
@@ -1886,11 +1861,12 @@ pub async fn file_mtime(
     file_mtime_local(&path, project_id.as_deref())
 }
 
-/// Local-fs mtime — byte-identical pre-Phase-3 body.
+/// Local-fs mtime of a file or folder opened through [`open_confined`].
 pub fn file_mtime_local(path: &str, scope_id: Option<&str>) -> Result<u64, String> {
     let p = PathBuf::from(path);
-    confine_abs_read(&p, scope_id)?;
-    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+    let meta = open_confined(&p, &allowed_roots(scope_id), Confined::Stat)?
+        .metadata()
+        .map_err(|e| e.to_string())?;
     let secs = meta
         .modified()
         .map_err(|e| e.to_string())?
@@ -1928,8 +1904,9 @@ pub async fn file_size(
 /// Local-fs size, confined like `file_mtime_local`.
 pub fn file_size_local(path: &str, scope_id: Option<&str>) -> Result<u64, String> {
     let p = PathBuf::from(path);
-    confine_abs_read(&p, scope_id)?;
-    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+    let meta = open_confined(&p, &allowed_roots(scope_id), Confined::Stat)?
+        .metadata()
+        .map_err(|e| e.to_string())?;
     Ok(meta.len())
 }
 
@@ -1990,7 +1967,7 @@ where
         let Ok(content) = fs::read_to_string(&path) else {
             return std::sync::Arc::new(T::default());
         };
-        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slot = self.0.lock_ok();
         if let Some((cached_path, cached, value)) = slot.as_ref() {
             if *cached_path == path && *cached == content {
                 return value.clone();
@@ -2098,14 +2075,7 @@ fn compute_allowed_roots(
 /// A project entry's working directory: the canonical `directory` field when
 /// present, otherwise the parent of its `local_file` (which is `<dir>/project.json`).
 fn project_dir(entry: &ProjectEntry) -> Option<PathBuf> {
-    if let Some(Value::String(d)) = entry.extra.get("directory") {
-        if !d.is_empty() {
-            return Some(PathBuf::from(d));
-        }
-    }
-    Path::new(&entry.local_file)
-        .parent()
-        .map(|p| p.to_path_buf())
+    entry.directory().map(PathBuf::from)
 }
 
 /// A remote project's explicit local-mirror override (`extra["mirror"]`), or
@@ -2117,19 +2087,23 @@ fn mirror_override_dir(entry: &ProjectEntry) -> Option<PathBuf> {
     (!raw.is_empty()).then(|| PathBuf::from(raw))
 }
 
-/// Resolve `p` to a canonical path for confinement checks. For existing paths
-/// this follows symlinks and `..`; for not-yet-existing paths it canonicalizes
-/// the parent and re-joins the final component (so a write target inside an
-/// allowed root still validates before creation).
-fn resolve_for_confinement(p: &Path) -> PathBuf {
-    if p.exists() {
-        p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
-    } else {
-        match p.parent().and_then(|parent| parent.canonicalize().ok()) {
-            Some(parent) => parent.join(p.file_name().unwrap_or_default()),
-            None => p.to_path_buf(),
-        }
+/// Resolve `p` to a canonical path for confinement checks, or `None` when it
+/// is refused outright. Something standing at `p` (a file, a folder, a link)
+/// counts by its real target, so a dangling link — which resolves nowhere —
+/// is refused rather than taken for a new file (threat recheck gap 22). For a
+/// path that does not exist yet the nearest existing ancestor is resolved and
+/// the rest re-joined, so a write target inside an allowed root still
+/// validates before creation and a missing folder below an in-root link out
+/// of the project is judged by where the link leads. A `..` component is
+/// refused: `root/missing/../..` used to pass the prefix check lexically.
+fn resolve_for_confinement(p: &Path) -> Option<PathBuf> {
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return None;
     }
+    if fs::symlink_metadata(p).is_ok() {
+        return p.canonicalize().ok();
+    }
+    canonical_or_new(p).ok()
 }
 
 fn confine_abs(p: &Path, scope_id: Option<&str>) -> Result<(), String> {
@@ -2139,24 +2113,212 @@ fn confine_abs(p: &Path, scope_id: Option<&str>) -> Result<(), String> {
 /// Pure confinement check against an explicit root set. Empty `roots` (no current
 /// project) refuses everything.
 fn confine_abs_within(p: &Path, roots: &[PathBuf]) -> Result<(), String> {
-    let resolved = resolve_for_confinement(p);
-    if roots.iter().any(|root| resolved.starts_with(root)) {
-        Ok(())
-    } else {
-        Err(format!(
-            "path '{}' is not in the current project (open that project, or add it to a box with the current one, to access it)",
-            p.display()
-        ))
+    match resolve_for_confinement(p) {
+        Some(resolved) if roots.iter().any(|root| resolved.starts_with(root)) => Ok(()),
+        _ => Err(outside_roots(p)),
     }
+}
+
+/// The refusal for a path outside every allowed root.
+fn outside_roots(p: &Path) -> String {
+    format!(
+        "path '{}' is not in the current project (open that project, or add it to a box with the current one, to access it)",
+        p.display()
+    )
+}
+
+// ── Handle-based viewer I/O (threat recheck gaps 22 and 31, decision D1) ───
+
+/// What [`open_confined`] opens a path for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Confined {
+    /// An existing regular file, for reading.
+    Read,
+    /// An existing regular file or folder, for its metadata only.
+    Stat,
+    /// An existing regular file, emptied for an in-place save.
+    Overwrite,
+    /// An existing regular file emptied for an in-place save, or a new one
+    /// created `O_EXCL`.
+    Write,
+    /// [`Confined::Write`], and the file's own folder is walked by name from
+    /// its canonical parent, so a folder that is a link is refused too: the
+    /// deck's TeX figures, whose folder an agent could otherwise point at a
+    /// box sibling (threat recheck gap 23, D3). A leaf with `~` (a Windows
+    /// 8.3 alias such as `EVIL~1.PNG`, which names another file) is refused.
+    WriteOwnFolder,
+}
+
+/// `write_file_bytes` request header: `1` asks for
+/// [`Confined::WriteOwnFolder`] (the deck's figure writes).
+pub const NO_FOLDER_LINK_HEADER: &str = "x-no-folder-link";
+
+/// Open the absolute path `p` inside one of `roots` without following a link
+/// that was not there when the path was checked — the viewers' one way to the
+/// local disk (`read_file_*_local`, `write_file_*_local`, `file_mtime_local`,
+/// `file_size_local`, `detect_mime_local`).
+///
+/// The longest root holding the path is opened, and every folder below it is
+/// walked one name at a time through held handles
+/// (`mobile_control::files::ProjectDir`: `openat(O_NOFOLLOW)` on Unix,
+/// `NtCreateFile` with `FILE_OPEN_REPARSE_POINT` on Windows). Every component
+/// of a canonical path is link-free, so a folder swapped for a link after the
+/// check fails the walk instead of redirecting it.
+///
+/// Reads canonicalize the whole path: an in-root link still reads, as it
+/// always did, and its real target is what gets opened. A save canonicalizes
+/// only the folder and opens the leaf itself without following it: **a leaf
+/// that is a link — dangling or not, into the project or out of it — or a
+/// Windows link-type (name-surrogate) reparse point is refused** (decision
+/// D1). Other Windows reparse points (OneDrive placeholders, dedup) are no
+/// links and are read and saved through their filter. An existing file is
+/// emptied in place (inode, owner and mode kept); a missing one is created
+/// `O_EXCL`. A `..` or `.` component is refused outright.
+fn open_confined(p: &Path, roots: &[PathBuf], mode: Confined) -> Result<fs::File, String> {
+    use crate::services::mobile_control::files::{ProjectDir, WriteRefusal};
+    use std::path::Component;
+    if !p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
+        return Err(format!("path '{}' is not a plain absolute path", p.display()));
+    }
+    let missing = || format!("{}: No such file or directory", p.display());
+    let not_a_file = || "not a file".to_string();
+    let saving = matches!(mode, Confined::Overwrite | Confined::Write | Confined::WriteOwnFolder);
+    // The real path to walk: the canonical folder plus the leaf as named for
+    // a save (the canonical grandparent plus folder and leaf as named for
+    // `WriteOwnFolder`), the canonical whole path for a read.
+    let target = if saving {
+        let leaf = match p.components().next_back() {
+            Some(Component::Normal(leaf)) => leaf,
+            _ => return Err(not_a_file()),
+        };
+        let parent = p.parent().ok_or_else(not_a_file)?;
+        if mode == Confined::WriteOwnFolder {
+            if leaf.to_string_lossy().contains('~') {
+                return Err(format!("'{}' has a `~` in its name; it was not saved", p.display()));
+            }
+            let folder = match parent.components().next_back() {
+                Some(Component::Normal(folder)) => folder,
+                _ => return Err(not_a_file()),
+            };
+            let grand = parent.parent().ok_or_else(not_a_file)?;
+            grand.canonicalize().map_err(|_| missing())?.join(folder).join(leaf)
+        } else {
+            parent.canonicalize().map_err(|_| missing())?.join(leaf)
+        }
+    } else {
+        p.canonicalize().map_err(|_| missing())?
+    };
+    let root = roots
+        .iter()
+        .filter(|root| target.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .ok_or_else(|| outside_roots(p))?;
+    let rel = target.strip_prefix(root).map_err(|_| outside_roots(p))?;
+    let mut names = Vec::new();
+    for component in rel.components() {
+        match component {
+            Component::Normal(name) => names.push(
+                name.to_str()
+                    .ok_or_else(|| format!("path '{}' is not valid UTF-8", p.display()))?,
+            ),
+            _ => return Err(format!("path '{}' is not a plain absolute path", p.display())),
+        }
+    }
+    let changed = || {
+        format!(
+            "'{}' changed while it was opened (a folder on the way is now a link or gone); nothing was read or written",
+            p.display()
+        )
+    };
+    let mut dir = ProjectDir::open_root(root).map_err(|_| missing())?;
+    let Some((leaf, folders)) = names.split_last() else {
+        // The root itself: a folder, so only its metadata is served.
+        return if mode == Confined::Stat { Ok(dir.into_file()) } else { Err(not_a_file()) };
+    };
+    let link = || format!("'{}' is a link; viewers do not save through links", p.display());
+    for (i, name) in folders.iter().enumerate() {
+        let own_folder = mode == Confined::WriteOwnFolder && i + 1 == folders.len();
+        // The deck makes its figure folder on the first figure (`mkdirat`,
+        // then opened no-follow like any other folder).
+        if own_folder && matches!(dir.lookup_dir(name), Ok(None)) {
+            dir.create_dir(name).map_err(|e| e.to_string())?;
+        }
+        dir = match dir.lookup_dir(name) {
+            Ok(Some(next)) => next,
+            Ok(None) => return Err(missing()),
+            // The own folder of a `WriteOwnFolder` save was never resolved:
+            // something other than a plain folder there is that folder.
+            Err(()) if own_folder => {
+                return Err(format!(
+                    "'{}' is in a folder that is a link; viewers do not save through links",
+                    p.display()
+                ))
+            }
+            Err(()) => return Err(changed()),
+        };
+    }
+    let refused = |refusal: WriteRefusal| match refusal {
+        WriteRefusal::Link => link(),
+        WriteRefusal::NotFile => not_a_file(),
+        WriteRefusal::Io(error) => error.to_string(),
+    };
+    match mode {
+        Confined::Read => match dir.lookup_file(leaf) {
+            Ok(Some((file, _))) => Ok(file),
+            Ok(None) => Err(missing()),
+            Err(()) => Err(not_a_file()),
+        },
+        Confined::Stat => match dir.lookup_file(leaf) {
+            Ok(Some((file, _))) => Ok(file),
+            Ok(None) => Err(missing()),
+            Err(()) => match dir.lookup_dir(leaf) {
+                Ok(Some(folder)) => Ok(folder.into_file()),
+                Ok(None) => Err(missing()),
+                Err(()) => Err(not_a_file()),
+            },
+        },
+        Confined::Overwrite => dir.open_existing_for_write(leaf).map_err(refused)?.ok_or_else(missing),
+        Confined::Write | Confined::WriteOwnFolder => {
+            if let Some(file) = dir.open_existing_for_write(leaf).map_err(refused)? {
+                return Ok(file);
+            }
+            match dir.create_file(leaf) {
+                Ok(file) => Ok(file),
+                // Something took the name since: only an existing regular
+                // file is written, a link that appeared is still refused.
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    dir.open_existing_for_write(leaf).map_err(refused)?.ok_or_else(missing)
+                }
+                Err(error) => Err(error.to_string()),
+            }
+        }
+    }
+}
+
+/// At most `max` bytes of a file [`open_confined`] proved regular, read from
+/// its handle; a file larger than that is refused, never cut short.
+fn read_opened(file: fs::File, max: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    if len > max {
+        return Err(format!("file too large to view ({len} bytes; limit {max})"));
+    }
+    let mut bytes = Vec::with_capacity(len as usize);
+    file.take(max + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > max {
+        return Err(format!("file too large to view (over {max} bytes; limit {max})"));
+    }
+    Ok(bytes)
+}
+
+/// Write `content` through a handle [`open_confined`] opened for a save.
+fn write_opened(mut file: fs::File, content: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    file.write_all(content).map_err(|e| e.to_string())
 }
 
 /// Confine a read of an absolute path to the scope's known roots.
 fn confine_abs_read(p: &Path, scope_id: Option<&str>) -> Result<(), String> {
-    confine_abs(p, scope_id)
-}
-
-/// Confine a write of an absolute path to the scope's known roots.
-fn confine_abs_write(p: &Path, scope_id: Option<&str>) -> Result<(), String> {
     confine_abs(p, scope_id)
 }
 
@@ -3683,11 +3845,288 @@ mod tests {
 
     #[test]
     fn confine_abs_within_allows_paths_inside_current_project() {
-        let roots = vec![PathBuf::from("/home/u/code/projectx")];
-        // A file inside the project tree must pass even before it exists (write
-        // target validation canonicalizes the parent).
-        let inside = Path::new("/home/u/code/projectx/src/main.rs");
-        assert!(confine_abs_within(inside, &roots).is_ok());
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let roots = vec![root.clone()];
+        // A file inside the project tree must pass even before it exists, and
+        // so must one in a folder not made yet (the nearest existing ancestor
+        // is resolved and the rest re-joined).
+        assert!(confine_abs_within(&root.join("main.rs"), &roots).is_ok());
+        assert!(confine_abs_within(&root.join("src").join("main.rs"), &roots).is_ok());
+    }
+
+    /// `base` with `parts` appended as written. `Path::join` onto a Windows
+    /// verbatim path (what `canonicalize` returns there) resolves `..` as it
+    /// joins, so a joined path would test a plain one instead (ci-cd #389).
+    fn spelled(base: &Path, parts: &[&str]) -> PathBuf {
+        let mut path = base.as_os_str().to_owned();
+        for part in parts {
+            path.push(std::path::MAIN_SEPARATOR_STR);
+            path.push(part);
+        }
+        PathBuf::from(path)
+    }
+
+    #[test]
+    fn confine_abs_within_refuses_a_dot_dot_through_a_missing_folder() {
+        // `root/missing/../..` used to pass the prefix check lexically.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("p");
+        fs::create_dir(&root).unwrap();
+        let roots = vec![root.clone()];
+        let escape = spelled(&root, &["missing", "..", "..", "loot"]);
+        assert!(confine_abs_within(&escape, &roots).is_err());
+        // Even one that would land back inside is refused: `..` is never needed.
+        let back = spelled(&root, &["missing", "..", "x"]);
+        assert!(confine_abs_within(&back, &roots).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confine_abs_within_judges_a_dangling_link_by_its_target() {
+        // Gap 22: `exists()` is false for a dangling link, so it used to be
+        // judged as a new file at its own (in-root) name.
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = project.path().canonicalize().unwrap();
+        let link = root.join("x.pdf");
+        std::os::unix::fs::symlink(outside.path().join("new.pdf"), &link).unwrap();
+        assert!(confine_abs_within(&link, std::slice::from_ref(&root)).is_err());
+        // A missing folder below an in-root link out of the project is judged
+        // by where the link leads, not lexically.
+        std::os::unix::fs::symlink(outside.path(), root.join("out")).unwrap();
+        let deep = root.join("out").join("missing").join("x");
+        assert!(confine_abs_within(&deep, &[root]).is_err());
+    }
+
+    // ── open_confined: the viewers' held-handle I/O (gaps 22, 31; D1) ──────
+
+    /// A canonical project root in a fresh temp dir, and a second temp dir
+    /// outside it.
+    fn confined_fixture() -> (tempfile::TempDir, PathBuf, tempfile::TempDir) {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().canonicalize().unwrap();
+        (project, root, tempfile::tempdir().unwrap())
+    }
+
+    fn save(path: &Path, roots: &[PathBuf], mode: Confined, content: &[u8]) -> Result<(), String> {
+        write_opened(open_confined(path, roots, mode)?, content)
+    }
+
+    fn load(path: &Path, roots: &[PathBuf]) -> Result<Vec<u8>, String> {
+        read_opened(open_confined(path, roots, Confined::Read)?, MAX_BINARY_VIEW_BYTES)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_viewer_save_refuses_a_dangling_leaf_link_and_creates_nothing_at_its_target() {
+        let (_p, root, outside) = confined_fixture();
+        let roots = vec![root.clone()];
+        let victim = outside.path().join("autostart.desktop");
+        let link = root.join("deck.eldeck.json");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        for mode in [Confined::Write, Confined::Overwrite] {
+            let refused = save(&link, &roots, mode, b"payload").unwrap_err();
+            assert!(refused.contains("is a link"), "{mode:?}: {refused}");
+        }
+        assert!(!victim.exists(), "nothing was created at the link's target");
+        // A dangling link to a missing in-root name is refused the same way.
+        let inner = root.join("figure.png");
+        std::os::unix::fs::symlink(root.join("not-yet.png"), &inner).unwrap();
+        assert!(save(&inner, &roots, Confined::Write, b"png").unwrap_err().contains("is a link"));
+        assert!(!root.join("not-yet.png").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_viewer_save_refuses_an_in_root_link_that_still_reads() {
+        // D1: every symlinked leaf is refused for a save, in-root ones too —
+        // but a read follows it as it always did.
+        let (_p, root, _outside) = confined_fixture();
+        let roots = vec![root.clone()];
+        fs::write(root.join("real.md"), "hello").unwrap();
+        let link = root.join("link.md");
+        std::os::unix::fs::symlink(root.join("real.md"), &link).unwrap();
+        for mode in [Confined::Write, Confined::Overwrite] {
+            assert!(save(&link, &roots, mode, b"bye").unwrap_err().contains("is a link"), "{mode:?}");
+        }
+        assert_eq!(fs::read_to_string(root.join("real.md")).unwrap(), "hello");
+        assert_eq!(load(&link, &roots).unwrap(), b"hello");
+        assert!(open_confined(&link, &roots, Confined::Stat).is_ok());
+        // A link out of the project neither reads nor stats.
+        let (_q, _other_root, outside) = confined_fixture();
+        fs::write(outside.path().join("secret"), "s").unwrap();
+        let out = root.join("out.md");
+        std::os::unix::fs::symlink(outside.path().join("secret"), &out).unwrap();
+        assert!(load(&out, &roots).unwrap_err().contains("not in the current project"));
+        assert!(open_confined(&out, &roots, Confined::Stat).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_viewer_save_through_a_linked_folder_inside_the_project_still_works() {
+        // Only the leaf is held to D1: a folder reached through an in-root
+        // link is resolved first, then walked by its real path.
+        let (_p, root, _outside) = confined_fixture();
+        fs::create_dir(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+        save(&root.join("alias").join("a.png"), std::slice::from_ref(&root), Confined::Write, b"png").unwrap();
+        assert_eq!(fs::read(root.join("real").join("a.png")).unwrap(), b"png");
+    }
+
+    #[test]
+    fn a_figure_save_makes_its_own_folder_and_refuses_an_8_3_alias() {
+        let (_p, root, _outside) = confined_fixture();
+        let roots = vec![root.clone()];
+        let figures = root.join("talk.tex-figures");
+        save(&figures.join("f1.png"), &roots, Confined::WriteOwnFolder, b"png").unwrap();
+        assert_eq!(fs::read(figures.join("f1.png")).unwrap(), b"png");
+        save(&figures.join("f1.png"), &roots, Confined::WriteOwnFolder, b"png2").unwrap();
+        assert_eq!(fs::read(figures.join("f1.png")).unwrap(), b"png2");
+        assert!(save(&figures.join("EVIL~1.PNG"), &roots, Confined::WriteOwnFolder, b"x").unwrap_err().contains('~'));
+        assert!(!figures.join("EVIL~1.PNG").exists());
+        // Only the own folder is made, never one above it.
+        assert!(save(&root.join("gone").join("x.tex-figures").join("f.png"), &roots, Confined::WriteOwnFolder, b"x").is_err());
+        assert!(!root.join("gone").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_figure_save_refuses_a_figure_folder_that_is_a_link_even_to_a_root() {
+        // Threat recheck gap 23 review (0b): a fenced agent points the deck's
+        // figure folder at a box sibling it cannot see. An ordinary save
+        // resolves the folder (and lands in the sibling); a figure save walks
+        // it by name and refuses it.
+        let (_p, root, outside) = confined_fixture();
+        let sibling = outside.path().canonicalize().unwrap();
+        fs::write(sibling.join("paper.png"), b"theirs").unwrap();
+        std::os::unix::fs::symlink(&sibling, root.join("talk.tex-figures")).unwrap();
+        let roots = vec![root.clone(), sibling.clone()];
+        let target = root.join("talk.tex-figures").join("paper.png");
+        let err = save(&target, &roots, Confined::WriteOwnFolder, b"mine").unwrap_err();
+        assert!(err.contains("folder that is a link"), "{err}");
+        assert!(save(&root.join("talk.tex-figures").join("new.png"), &roots, Confined::WriteOwnFolder, b"x").is_err());
+        assert_eq!(fs::read(sibling.join("paper.png")).unwrap(), b"theirs");
+        assert!(!sibling.join("new.png").exists());
+        // What the plain mode does with the same path (why the deck asks for
+        // the strict one).
+        save(&target, &roots, Confined::Write, b"mine").unwrap();
+        assert_eq!(fs::read(sibling.join("paper.png")).unwrap(), b"mine");
+        // A dangling folder link is not "missing, so make it" either.
+        std::os::unix::fs::symlink(root.join("nowhere"), root.join("b.tex-figures")).unwrap();
+        assert!(save(&root.join("b.tex-figures").join("f.png"), &roots, Confined::WriteOwnFolder, b"x").is_err());
+        assert!(!root.join("nowhere").exists());
+    }
+
+    #[test]
+    fn a_viewer_save_rewrites_a_regular_file_in_place() {
+        let (_p, root, _outside) = confined_fixture();
+        let roots = vec![root.clone()];
+        let file = root.join("notes.md");
+        fs::write(&file, "a much longer original text").unwrap();
+        #[cfg(unix)]
+        let before = {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o640)).unwrap();
+            fs::metadata(&file).unwrap().ino()
+        };
+        save(&file, &roots, Confined::Overwrite, b"short").unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "short", "emptied before the write");
+        save(&file, &roots, Confined::Write, b"again").unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "again");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let meta = fs::metadata(&file).unwrap();
+            assert_eq!(meta.ino(), before, "the same file, not a replacement");
+            assert_eq!(meta.permissions().mode() & 0o777, 0o640, "its mode is kept");
+        }
+        assert_eq!(load(&file, &roots).unwrap(), b"again");
+    }
+
+    #[test]
+    fn a_viewer_save_creates_a_missing_file_but_never_a_missing_folder() {
+        let (_p, root, _outside) = confined_fixture();
+        let roots = vec![root.clone()];
+        let fresh = root.join("annotated.png");
+        assert!(save(&fresh, &roots, Confined::Overwrite, b"x").is_err(), "a text save never creates");
+        assert!(!fresh.exists());
+        save(&fresh, &roots, Confined::Write, b"png").unwrap();
+        assert_eq!(fs::read(&fresh).unwrap(), b"png");
+        let nested = root.join("missing").join("x.png");
+        assert!(save(&nested, &roots, Confined::Write, b"x").is_err());
+        assert!(!root.join("missing").exists());
+        // A folder is not a file, for a save or a read; its metadata still serves.
+        fs::create_dir(root.join("dir")).unwrap();
+        assert!(save(&root.join("dir"), &roots, Confined::Write, b"x").unwrap_err().contains("not a file"));
+        assert!(load(&root.join("dir"), &roots).unwrap_err().contains("not a file"));
+        assert!(open_confined(&root.join("dir"), &roots, Confined::Stat).unwrap().metadata().unwrap().is_dir());
+        assert!(open_confined(&root, &roots, Confined::Stat).is_ok());
+        assert!(load(&root, &roots).is_err());
+    }
+
+    #[test]
+    fn open_confined_refuses_dot_components_outside_roots_and_relative_paths() {
+        let (_p, root, outside) = confined_fixture();
+        let roots = vec![root.clone()];
+        fs::write(root.join("x"), "x").unwrap();
+        let dotted = spelled(&root, &["missing", "..", "x"]);
+        for mode in [Confined::Read, Confined::Stat, Confined::Overwrite, Confined::Write] {
+            assert!(open_confined(&dotted, &roots, mode).is_err(), "{mode:?}");
+            assert!(open_confined(Path::new("x"), &roots, mode).is_err(), "{mode:?}");
+        }
+        let elsewhere = outside.path().join("y");
+        assert!(save(&elsewhere, &roots, Confined::Write, b"y").unwrap_err().contains("not in the current project"));
+        assert!(!elsewhere.exists());
+        assert!(open_confined(&root.join("x"), &[], Confined::Read).is_err(), "no roots, nothing opens");
+    }
+
+    #[test]
+    fn open_confined_walks_from_the_longest_root() {
+        // A box folder holding a member project: both are roots, and the path
+        // opens under either.
+        let (_p, root, _outside) = confined_fixture();
+        let member = root.join("member");
+        fs::create_dir(&member).unwrap();
+        fs::write(member.join("a.txt"), "a").unwrap();
+        let roots = vec![root.clone(), member.clone()];
+        assert_eq!(load(&member.join("a.txt"), &roots).unwrap(), b"a");
+        assert_eq!(load(&member.join("a.txt"), &[root]).unwrap(), b"a");
+    }
+
+    #[test]
+    fn read_opened_refuses_a_file_over_the_cap() {
+        let (_p, root, _outside) = confined_fixture();
+        fs::write(root.join("big"), vec![b'x'; 11]).unwrap();
+        let file = open_confined(&root.join("big"), std::slice::from_ref(&root), Confined::Read).unwrap();
+        assert!(read_opened(file, 10).unwrap_err().contains("too large"));
+        let file = open_confined(&root.join("big"), &[root], Confined::Read).unwrap();
+        assert_eq!(read_opened(file, 11).unwrap().len(), 11);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_viewer_save_refuses_a_reparse_point_leaf_on_windows() {
+        // Creating a symbolic link needs Developer Mode or the privilege; a
+        // runner without it has nothing to test here.
+        let (_p, root, outside) = confined_fixture();
+        let roots = vec![root.clone()];
+        let victim = outside.path().join("victim.txt");
+        fs::write(&victim, "original").unwrap();
+        let link = root.join("link.txt");
+        if std::os::windows::fs::symlink_file(&victim, &link).is_err() {
+            return;
+        }
+        for mode in [Confined::Write, Confined::Overwrite] {
+            assert!(save(&link, &roots, mode, b"payload").unwrap_err().contains("is a link"), "{mode:?}");
+        }
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "original");
+        // A dangling one creates nothing at its target.
+        let gone = outside.path().join("gone.txt");
+        let dangling = root.join("dangling.txt");
+        std::os::windows::fs::symlink_file(&gone, &dangling).unwrap();
+        assert!(save(&dangling, &roots, Confined::Write, b"x").is_err());
+        assert!(!gone.exists());
     }
 
     #[test]

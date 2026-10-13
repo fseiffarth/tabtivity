@@ -14,6 +14,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use app_core::sync::LockExt;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -216,10 +217,10 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         // written to the audit ring: every agent tab may ask, and 500 rows of
         // doc lookups must not push the root tools' records out. Admission
         // failures above are still recorded.
-        if !root_mcp::help_enabled_in(&storage::state_dir().join("settings.json")) || session.check().is_err() {
+        if !root_mcp::help_enabled_in(&storage::settings_path()) || session.check().is_err() {
             return StatusCode::FORBIDDEN.into_response();
         }
-        let reply = tokio::task::spawn_blocking(move || {
+        let reply = app_core::rt::spawn_blocking(move || {
             let (_global, _own) = (global, own);
             crate::services::help_mcp::handle_message(&session, &message)
         }).await;
@@ -239,7 +240,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
             security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("revoked"));
             return StatusCode::UNAUTHORIZED.into_response();
         }
-        let outcome = tokio::task::spawn_blocking(move || {
+        let outcome = app_core::rt::spawn_blocking(move || {
             let (_global, _own) = (global, own);
             let reply = crate::services::markup_mcp::handle_message(&session, &message);
             let reason = reply.as_ref().and_then(crate::services::markup_mcp::refusal_reason);
@@ -266,7 +267,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
             let report = tokio::time::timeout(Duration::from_secs(8), crate::commands::agents::agent_usage(agent, Some(false))).await.ok();
             report.and_then(|r| r.raw).as_deref().and_then(|raw| crate::services::schedule_usage::next_reset(raw, chrono::Utc::now()))
         } else { None };
-        let outcome = tokio::task::spawn_blocking(move || {
+        let outcome = app_core::rt::spawn_blocking(move || {
             let (_global, _own) = (global, own);
             crate::services::schedule_mcp::handle_admitted(&session, &message, reset, admission)
         }).await;
@@ -285,7 +286,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
             security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("policy_disabled"));
             return StatusCode::FORBIDDEN.into_response();
         }
-        let outcome = tokio::task::spawn_blocking(move || {
+        let outcome = app_core::rt::spawn_blocking(move || {
             let (_global, _own) = (global, own);
             crate::services::git_push_mcp::handle_message(&session, &message)
         }).await;
@@ -308,7 +309,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         .state
         .try_get::<crate::commands::mail::MailState>()
         .map(|s| crate::commands::mail::AgentMail(s.clone()));
-    let outcome = tokio::task::spawn_blocking(move || {
+    let outcome = app_core::rt::spawn_blocking(move || {
         // Permits live in the worker: an HTTP disconnect cannot free capacity
         // while blocking work is still running.
         let (_global, _own) = (global, own);
@@ -357,8 +358,8 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
             return (refusal.status(), refusal.text()).into_response();
         }
     };
-    let failed = reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
-    security::audit(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed());
+    let reason = reply.as_ref().and_then(root_mcp::refusal_reason);
+    security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
     // One event per row: a board move can reindex a whole column.
     for change in effects.changes {
         ctx.emit(CHANGED_EVENT, change);
@@ -414,7 +415,7 @@ static SERVER: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>> = std::sync
 pub fn stop_for_exit() {
     SHUTDOWN.notify_waiters();
     SHUTDOWN.notify_one();
-    let handle = SERVER.lock().unwrap_or_else(|p| p.into_inner()).take();
+    let handle = SERVER.lock_ok().take();
     if let Some(handle) = handle {
         app_core::rt::block_on(async {
             let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
@@ -435,7 +436,7 @@ pub fn start(ctx: CoreCtx) {
             Err(error) => eprintln!("[root-mcp] {error}"),
         }
     });
-    *SERVER.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
+    *SERVER.lock_ok() = Some(handle);
 }
 
 /// What a listener that serves every lane sets up first — the window's, and
@@ -637,7 +638,7 @@ pub struct HelpMcpStatus {
 /// nor the token — the renderer has no use for either.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn root_mcp_status() -> RootMcpStatus {
-    let settings = storage::state_dir().join("settings.json");
+    let settings = storage::settings_path();
     let reader = root_mcp::serves(&settings, root_mcp::Caller::Reader);
     let local = crate::services::root_mcp_security::Policy::load(&settings)
         .is_ok_and(|p| p.serves(root_mcp::Caller::LocalModel) && p.reads_mail(root_mcp::Caller::LocalModel));
@@ -671,19 +672,19 @@ pub fn root_mcp_status() -> RootMcpStatus {
 /// Off the main thread: the first call builds the index.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn help_search(query: String, limit: Option<usize>) -> Result<Vec<crate::services::help_mcp::Hit>, String> {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::blocking("root console", move || {
         let query: String = query.chars().take(crate::services::help_mcp::MAX_QUERY_BYTES).collect();
         crate::services::help_mcp::index().search(&query, limit.unwrap_or(crate::services::help_mcp::DEFAULT_RESULTS))
-    }).await.map_err(|e| e.to_string())
+    }).await
 }
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn help_read(topic_id: String, section: Option<String>) -> Result<crate::services::help_mcp::Read, String> {
-    tokio::task::spawn_blocking(move || crate::services::help_mcp::index().read(&topic_id, section.as_deref()))
-        .await.map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("root console", move || crate::services::help_mcp::index().read(&topic_id, section.as_deref()))
+        .await
 }
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn help_topics() -> Result<Vec<crate::services::help_mcp::TopicRef>, String> {
-    tokio::task::spawn_blocking(|| crate::services::help_mcp::index().list()).await.map_err(|e| e.to_string())
+    app_core::rt::blocking("root console", || crate::services::help_mcp::index().list()).await
 }
 
 fn review_stores<T>(f: impl FnOnce(&Stores) -> Result<T, String>) -> Result<T, String> {
@@ -715,12 +716,11 @@ fn emit_review(ctx: &CoreCtx, changes: Vec<root_mcp::Change>) {
 pub async fn root_mcp_review_list(
     ctx: Ctx,
 ) -> Result<Vec<crate::services::root_mcp_review::ReviewEntry>, String> {
-    let (entries, before) = tokio::task::spawn_blocking(|| {
+    let (entries, before) = app_core::rt::try_blocking("root console", || {
         let before = crate::services::root_mcp_review::pending_count(&storage::state_dir());
         review_stores(crate::services::root_mcp_review::list).map(|entries| (entries, before))
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     let count = entries
         .iter()
         .filter(|p| p.proposal.status == "pending")
@@ -736,11 +736,10 @@ pub async fn root_mcp_review_apply(
     id: String,
     digest: String,
 ) -> Result<(), String> {
-    let result = tokio::task::spawn_blocking(move || {
+    let result = app_core::rt::blocking("root console", move || {
         review_stores(|s| crate::services::root_mcp_review::decide(s, &id, &digest, "apply"))
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
     emit_review(&ctx, result?);
     Ok(())
 }
@@ -750,11 +749,10 @@ pub async fn root_mcp_review_reject(
     id: String,
     digest: String,
 ) -> Result<(), String> {
-    let result = tokio::task::spawn_blocking(move || {
+    let result = app_core::rt::blocking("root console", move || {
         review_stores(|s| crate::services::root_mcp_review::decide(s, &id, &digest, "reject"))
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
     emit_review(&ctx, result?);
     Ok(())
 }
@@ -764,11 +762,10 @@ pub async fn root_mcp_review_undo(
     id: String,
     digest: String,
 ) -> Result<(), String> {
-    let result = tokio::task::spawn_blocking(move || {
+    let result = app_core::rt::blocking("root console", move || {
         review_stores(|s| crate::services::root_mcp_review::decide(s, &id, &digest, "undo"))
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
     emit_review(&ctx, result?);
     Ok(())
 }
@@ -777,11 +774,10 @@ pub async fn root_mcp_review_apply_all(
     ctx: Ctx,
     approvals: Vec<crate::services::root_mcp_review::Approval>,
 ) -> Result<(), String> {
-    let result = tokio::task::spawn_blocking(move || {
+    let result = app_core::rt::blocking("root console", move || {
         review_stores(|s| crate::services::root_mcp_review::apply_all(s, &approvals))
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
     emit_review(&ctx, result?);
     Ok(())
 }
@@ -790,16 +786,14 @@ pub async fn root_mcp_review_apply_all(
 /// all: the window's parser reads them, and its importer runs on the user's ✓.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_import_list() -> Result<Vec<crate::services::root_mcp_import::StagedImport>, String> {
-    tokio::task::spawn_blocking(|| crate::services::root_mcp_import::list(&storage::state_dir()))
+    app_core::rt::blocking("root console", || crate::services::root_mcp_import::list(&storage::state_dir()))
         .await
-        .map_err(|e| e.to_string())
 }
 /// Imported or discarded: the staged copy goes either way.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_import_remove(ctx: Ctx, id: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || crate::services::root_mcp_import::remove(&storage::state_dir(), &id))
-        .await
-        .map_err(|e| e.to_string())??;
+    app_core::rt::try_blocking("root console", move || crate::services::root_mcp_import::remove(&storage::state_dir(), &id))
+        .await?;
     emit_review(&ctx, Vec::new());
     Ok(())
 }
@@ -815,7 +809,7 @@ pub fn root_mcp_security_status() -> SecurityStatus {
 }
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_session_access(ctx: Ctx, id: String, access: Access) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || root_mcp::set_access(&id, access)).await.map_err(|e| e.to_string())??;
+    app_core::rt::try_blocking("root console", move || root_mcp::set_access(&id, access)).await?;
     ctx.emit(SESSIONS_EVENT, ());
     Ok(())
 }
@@ -823,7 +817,7 @@ pub async fn root_mcp_session_access(ctx: Ctx, id: String, access: Access) -> Re
 pub async fn root_mcp_session_revoke(ctx: Ctx, id: String, remove_proposals: Option<bool>) -> Result<(), String> {
     // Invalidate first, before waiting on the review lock to clean the sandbox.
     let tab = root_mcp::revoke_session(&id)?;
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("root console", move || {
         crate::services::root_mcp_review::cleanup_tab(&storage::state_dir(), &tab);
         crate::services::agent_tasks::drain_mutations();
         if remove_proposals == Some(true) { crate::services::schedule_mcp::remove_proposals(&id)?; }
@@ -834,7 +828,7 @@ pub async fn root_mcp_session_revoke(ctx: Ctx, id: String, remove_proposals: Opt
         ctx.emit("agent-schedules-changed", ());
         ctx.emit(SESSIONS_EVENT, ());
         Ok(())
-    }).await.map_err(|e| e.to_string())?
+    }).await
 }
 
 /// The push proposals of one project (the git bar's and the Agents view's
@@ -848,7 +842,7 @@ pub fn git_push_mcp_proposals(project_id: String) -> Vec<crate::services::git_pu
 /// the proposal in its final state.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_push_mcp_decide(ctx: Ctx, id: String, approve: bool) -> Result<crate::services::git_push_mcp::Proposal, String> {
-    let result = tokio::task::spawn_blocking(move || crate::services::git_push_mcp::decide(&id, approve)).await.map_err(|e| e.to_string())?;
+    let result = app_core::rt::blocking("root console", move || crate::services::git_push_mcp::decide(&id, approve)).await?;
     ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     result
 }

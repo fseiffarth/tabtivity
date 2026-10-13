@@ -4,8 +4,10 @@ import {
   useViewerState,
   useReadonlyFile,
   escapeHtmlText,
+  openMarkdownTarget,
 } from "./FileViewerPane";
 import { renderMarkdown } from "../../lib/viewers/markdown";
+import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
 import { highlight } from "../../lib/viewers/highlight";
 import { parseNotebook, type NbOutput, type ParsedNotebook } from "../../lib/viewers/notebook";
 import { useT } from "../../lib/i18n";
@@ -60,7 +62,14 @@ export function NotebookView({
   return (
     <div className="file-viewer notebook-viewer">
       <ViewerHeader onOpenExternally={onOpenExternally} />
-      <div className="notebook-viewer-body">
+      {/* Links in markdown cells: anchors scroll, local files open in a tab,
+          nothing navigates the app window away (threat recheck gap 38). */}
+      <div
+        className="notebook-viewer-body"
+        onClick={(e) =>
+          onMarkdownLinkClick(e, { basePath: path, open: openMarkdownTarget(tabKey, path) })
+        }
+      >
         {error != null ? (
           <div className="file-viewer-error">{t("notebookView.failedToLoad", { error })}</div>
         ) : !loaded ? (

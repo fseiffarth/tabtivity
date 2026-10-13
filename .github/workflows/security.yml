@@ -23,6 +23,7 @@ jobs:
   dependencies:
     name: dependencies
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     # Blocking: a new advisory fails the run. Fix it by updating the crate or
     # package; if no fix exists, ignore it below with a reason, as for `rsa`.
     # The weekly schedule means this can go red with no code change.
@@ -30,6 +31,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install cargo-audit
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
@@ -47,12 +50,71 @@ jobs:
       - name: Audit Rust dependencies
         run: cargo audit --ignore RUSTSEC-2023-0071
 
+      # The release binary, checksum pinned to the version, as for gitleaks in
+      # ci-cd.yml.
+      - name: Install cargo-deny
+        if: ${{ !cancelled() }}
+        env:
+          CARGO_DENY_VERSION: 0.20.2
+          CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+        run: |
+          set -euo pipefail
+          name="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
+          curl -sSfL -o "$RUNNER_TEMP/$name.tar.gz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/$name.tar.gz"
+          echo "$CARGO_DENY_SHA256  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP" --strip-components=1 "$name/cargo-deny"
+
+      # What the tree may contain, by deny.toml: licenses the shipped app can
+      # carry, crates from crates.io only (a git or other-registry dependency
+      # is a new trust root), no `*` requirements. Advisories stay with
+      # cargo-audit above.
+      - name: Check Rust licenses and sources
+        if: ${{ !cancelled() }}
+        run: '"$RUNNER_TEMP/cargo-deny" --locked check bans licenses sources'
+
       # --omit=dev: only what ships in the bundle. Vite, vitest and eslint never
       # reach a user, so their advisories are noise here.
       # `!cancelled()` so a Rust finding still leaves the npm report in the log.
       - name: Audit npm dependencies
         if: ${{ !cancelled() }}
         run: npm audit --omit=dev
+
+  # zizmor over the workflows and dependabot.yml: tokens left in .git/config,
+  # template injection, over-broad permissions, dangerous triggers, and —
+  # online, with the job's token — a pinned SHA that is not on the action's
+  # repository (an impostor commit) or an action version with an advisory.
+  # Blocking, unlike CodeQL's `actions` pack below (which overlaps on
+  # purpose): a finding is fixed, or ignored in .github/zizmor.yml or inline
+  # with its reason. The weekly schedule means a new advisory can turn it red
+  # with no change here.
+  workflows:
+    name: workflows (zizmor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        env:
+          ZIZMOR_VERSION: 1.30.1
+          ZIZMOR_SHA256: e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a
+        run: |
+          set -euo pipefail
+          tarball=zizmor-x86_64-unknown-linux-gnu.tar.gz
+          curl -sSfL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/$tarball"
+          echo "$ZIZMOR_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" zizmor
+
+      - name: Audit the workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/zizmor" --format github .github'
 
   # SAST. Findings land in the repo's Security → Code scanning tab, not in the
   # job result: analyze succeeds whatever it finds, so this never blocks a push.
@@ -61,6 +123,7 @@ jobs:
   codeql:
     name: codeql (${{ matrix.language }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     permissions:
       contents: read
       security-events: write   # upload results to code scanning
@@ -75,6 +138,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2

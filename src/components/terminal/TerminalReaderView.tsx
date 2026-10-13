@@ -826,7 +826,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   // Path links: the paths a read brings are looked up before it is drawn
   // (`learnPaths`), each once (`PathLinksContext`).
   const projectId = scope === "root" ? null : scope;
-  const tabDir = tab?.cwd || cwd || "";
+  // The folder the agent runs in: the spawn's resolved cwd (a local tab of a
+  // remote project runs in its local mirror), not the stored `tab.cwd`, which
+  // for such a project names its state folder.
+  const tabDir = cwd || tab?.cwd || "";
   const pathContext = usePathLinkContext(projectId, tabDir);
   const pathContextRef = useRef(pathContext);
   pathContextRef.current = pathContext;
@@ -1358,7 +1361,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
           modelTag={modelTag}
           usage={transcript?.available && !sinceClear ? transcript.usage : undefined}
           visible={visible}
-          path={tab.cwd || cwd}
+          path={tabDir}
           effort={seenEffort}
           onEffortPicked={setSeenEffort}
           typeKeys={typeIntoPane}

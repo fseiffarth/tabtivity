@@ -1,4 +1,5 @@
 use std::path::Path;
+use app_core::sync::LockExt;
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "desktop")]
@@ -31,7 +32,7 @@ impl WorkspaceState {
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_info(state: State<'_, WorkspaceStateArc>) -> WorkspaceInfo {
-    state.lock().unwrap().backend.info()
+    state.lock_ok().backend.info()
 }
 
 /// What the running desktop's workspace backend can do, for Settings: which
@@ -55,7 +56,7 @@ pub(crate) fn capabilities_of(backend: &dyn WorkspaceBackend) -> WorkspaceCapabi
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_capabilities(state: State<'_, WorkspaceStateArc>) -> WorkspaceCapabilities {
-    capabilities_of(&*state.lock().unwrap().backend)
+    capabilities_of(&*state.lock_ok().backend)
 }
 
 #[cfg(feature = "desktop")]
@@ -68,7 +69,7 @@ pub fn workspace_switch(
     previous_project_id: Option<String>,
 ) -> Result<(), String> {
     let (previous_window_ids, current_window_ids) = {
-        let windows = windows.lock().unwrap();
+        let windows = windows.lock_ok();
         let previous_window_ids =
             window_service::project_window_ids(&windows.windows, previous_project_id.as_deref());
         let current_window_ids =
@@ -77,11 +78,11 @@ pub fn workspace_switch(
     };
 
     {
-        let workspace = state.lock().unwrap();
+        let workspace = state.lock_ok();
         window_service::hide_windows(&*workspace.backend, &previous_window_ids);
         window_service::show_windows(&*workspace.backend, &current_window_ids);
     }
-    let info = state.lock().unwrap().backend.info();
+    let info = state.lock_ok().backend.info();
     let _ = app.emit("workspace-changed", info);
     Ok(())
 }
@@ -101,13 +102,13 @@ pub fn desktop_owns_super_key() -> bool {
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn show_window(state: State<'_, WorkspaceStateArc>, window_id: u64) -> Result<(), String> {
-    state.lock().unwrap().backend.show_window(window_id)
+    state.lock_ok().backend.show_window(window_id)
 }
 
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn hide_window(state: State<'_, WorkspaceStateArc>, window_id: u64) -> Result<(), String> {
-    state.lock().unwrap().backend.hide_window(window_id)
+    state.lock_ok().backend.hide_window(window_id)
 }
 
 #[cfg(feature = "desktop")]
@@ -116,7 +117,7 @@ pub fn get_opened_windows(
     windows: State<'_, WindowRegistryState>,
     project_id: Option<String>,
 ) -> Vec<TrackedWindow> {
-    let mut windows = windows.lock().unwrap();
+    let mut windows = windows.lock_ok();
     // Backstop for the exit watcher: a read is the moment a stale dead row
     // would become visible, so sweep the requested scope first.
     crate::commands::apps::prune_dead_windows(&mut windows, project_id.as_deref());
@@ -132,7 +133,7 @@ pub fn switch_project_windows(
     previous_project_id: Option<String>,
 ) -> Result<(), String> {
     let (previous_window_ids, current_window_ids) = {
-        let windows = windows.lock().unwrap();
+        let windows = windows.lock_ok();
         let previous =
             opened_windows_for_project(windows.windows.values(), previous_project_id.as_deref());
         let current = opened_windows_for_project(windows.windows.values(), project_id.as_deref());
@@ -148,7 +149,7 @@ pub fn switch_project_windows(
         )
     };
 
-    let backend = state.lock().unwrap();
+    let backend = state.lock_ok();
     for window_id in previous_window_ids {
         if let Err(error) = backend.backend.hide_window(window_id) {
             eprintln!("hide tracked window {window_id} failed: {error}");
@@ -165,7 +166,7 @@ pub fn switch_project_windows(
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_name(state: State<'_, WorkspaceStateArc>) -> String {
-    state.lock().unwrap().backend.name().to_string()
+    state.lock_ok().backend.name().to_string()
 }
 
 /// Returns "wlan", "lan", or "disconnected".
@@ -178,7 +179,7 @@ pub fn workspace_name(state: State<'_, WorkspaceStateArc>) -> String {
 /// yields "disconnected" instead of a stuck poll.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn network_conn_type() -> String {
-    tokio::task::spawn_blocking(network_conn_type_blocking)
+    app_core::rt::spawn_blocking(network_conn_type_blocking)
         .await
         .unwrap_or_else(|_| "disconnected".into())
 }
@@ -248,7 +249,7 @@ fn probe_output_capped(bin: &str, args: &[&str]) -> Option<String> {
 /// type probe, for the same reason.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn network_wifi_ssid() -> String {
-    tokio::task::spawn_blocking(wifi_ssid_blocking)
+    app_core::rt::spawn_blocking(wifi_ssid_blocking)
         .await
         .unwrap_or_default()
 }
@@ -296,13 +297,13 @@ fn ssid_memo_fresh(
 /// spawn three failing probes per poll).
 fn ssid_memo(key: Option<String>, max_age: std::time::Duration, read: impl FnOnce() -> String) -> String {
     let now = std::time::Instant::now();
-    if let Some((memo_key, at, ssid)) = SSID_MEMO.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some((memo_key, at, ssid)) = SSID_MEMO.lock_ok().as_ref() {
         if ssid_memo_fresh(memo_key, *at, &key, now, max_age) {
             return ssid.clone();
         }
     }
     let ssid = read();
-    *SSID_MEMO.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, now, ssid.clone()));
+    *SSID_MEMO.lock_ok() = Some((key, now, ssid.clone()));
     ssid
 }
 
@@ -510,7 +511,7 @@ pub struct NetworkIdentity {
 /// default is saved, so a machine that never set one never pays the SSID spawn.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn network_identity() -> NetworkIdentity {
-    tokio::task::spawn_blocking(network_identity_blocking)
+    app_core::rt::spawn_blocking(network_identity_blocking)
         .await
         .unwrap_or_else(|_| NetworkIdentity {
             kind: "disconnected".into(),

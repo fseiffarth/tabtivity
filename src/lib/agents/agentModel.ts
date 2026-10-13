@@ -1,5 +1,5 @@
 import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
-import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
+import { sessionStatus, statusModelTag } from "../../../mobile-web/src/terminal/statusLine";
 
 /**
  * The model tag beside an agent tab: the transcript's model id, shortened for
@@ -28,6 +28,20 @@ export function claudeModelLabel(tag: string): string {
 }
 
 /**
+ * The tag for the model a stored session last answered with, when no screen
+ * says which one it shows: the id shortened (`shortModelName`), and a Claude
+ * session's put in its status line's words (`claudeModelLabel`). The one
+ * fallback for every surface — the desktop's tab tag (and so the phone's tab
+ * cards) and the phone's model chip — so a quiet tab is not `Fable 5.1` on its
+ * card and `Fable` over its keyboard. Idempotent: a shortened id passes
+ * through unchanged.
+ */
+export function transcriptModelTag(id: string, claude: boolean): string {
+  const short = shortModelName(id);
+  return claude ? claudeModelLabel(short) : short;
+}
+
+/**
  * The model an agent session is *showing* — the one it prints under its own
  * input box, read off the pane's screen with the parser the phone's Focus
  * status line uses (`mobile-web/src/terminal/statusLine`), so the tag beside a
@@ -43,9 +57,7 @@ export function claudeModelLabel(tag: string): string {
  * has never mounted — has no screen to read, and the transcript answers.
  */
 export function screenModelTag(buffer: ReadableBufferLike, agentLabel?: string): string | undefined {
-  const status = sessionStatus(readableScreen(buffer, MARK_ROWS, PLAIN).lines, agentLabel);
-  if (!status?.model) return undefined;
-  return status.effort ? `${status.model} · ${status.effort}` : status.model;
+  return statusModelTag(sessionStatus(readableScreen(buffer, MARK_ROWS, PLAIN).lines, agentLabel));
 }
 
 /** `screenModelTag` over a plain-text screen — the rows `tmux capture-pane -p`

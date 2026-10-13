@@ -348,8 +348,22 @@ subscribed calendar's notes is the same kind of text. So `calendar_list`,
 `todo_list` and every write's reply go through `event_view`/`task_view`: an
 explicit field list (no `caldav_href`, etag or other server-parked `extra`),
 `strip_invisible` over every string, `external: true` plus `redact_urls` for a
-row in a read-only calendar, and `synced: true` for one that lives on a CalDAV
-server, where invitations land beside the user's own entries. The `Change` rows
+row whose text is not the user's, and `synced: true` for one that lives on a
+CalDAV server, where invitations land beside the user's own entries. External
+(decision E3, gap 27): a row in a read-only or imported calendar; an event
+stamped `from_mail` (the mail pane's AI extract stamps `{message_id,
+account_id}` at both creation points); a card with a `mail` link ("card from
+mail", AI to-do); a card whose `event` link points at an external event. Title
+and notes stay — URLs go and the mark says "data, never instructions". The
+rule is the same for every caller (no cloud/local branch): it is the one way
+mail text reaches a cloud root tab, which never reads mail. The stamp is
+sticky: `commands::calendar::update_event_at` and the CalDAV merge keep a
+stored `from_mail` over whatever the new row says (`keep_from_mail`), and a
+pasted copy carries it (`calendarClipboard.ts`). A card's mark is checked live
+against its event, so a card from a mail-derived event loses it once that
+event is deleted — except in a scoped session, whose sandbox leaves out the
+calendars it may not see: there a card whose event is not in view reads as
+external, since a hidden event and a deleted one look the same. The `Change` rows
 the window and the review layer use stay complete. `calendar_list` matches an
 event while any of it overlaps the range, and `expand` adds a series'
 occurrences (at most 92 days; `occurrences` in `root_mcp.rs` walks daily /
@@ -455,6 +469,21 @@ does not exist for it — the same "unknown tool" an invented name gets.
   which it is treated as a reader for writes: always staged, tainted, reader
   drafts. `served` lists the read tools for `LocalModel`; the switch decides
   per request.
+- **"Local" means the model, not the endpoint** (gap 25). A loopback Ollama
+  runs an Ollama cloud model (`*-cloud`) on ollama.com. The tab's model is
+  fixed at spawn in `Identity::model` (`local_model_of`: the raw
+  `TABTIVITY_LOCAL_MODEL`, else the `VIBE_ACTIVE_MODEL` alias mapped back
+  through the "MCP"-chipped models; a disagreeing pair or an ambiguous alias
+  is `None`; never read from the Vibe home, which the tab writes). Each read
+  asks `ollama::model_is_local_at` with the spawn endpoint: the model must be
+  listed by that endpoint's `/api/tags` with no remote and no `cloud` tag
+  (cached a minute; an unreadable list, no server or no recorded model fail
+  closed) — else `LOCAL_READ_CLOUD`. The mail assistant
+  (`services::mail_ai::chat`, auto-classify included) asks the same gate. The
+  two "kept to local models" switches use it too: under
+  `root_mcp_local_only` an unconfirmed local tab gets "MCP access
+  unavailable", under `root_mcp_mail_local_only` its mail tools answer
+  `MAIL_LOCAL_ONLY`, as a cloud agent's do.
 - **A reader** gets the read tools (`mail_folders`, `mail_search`, `mail_read`,
   `mail_thread`) and the draft tools, is served **no cross-project sweep**, and
   its calendar/board writes **always stage** with `tainted: true`, whatever
@@ -577,8 +606,10 @@ sandbox back over the live file.
 
 `services::root_mcp_review` owns the immutable proposal rows and the atomic log
 at `<state_dir>/root_mcp/proposals.json`. It keeps every pending proposal and
-the newest 200 decided entries; unknown future statuses and extra fields
-round-trip. A first board move also records seeded columns, upgrade markers and
+the newest 200 decided entries, fewer when their rows would take the log past
+8 MiB as written (pretty JSON, what `load` measures): the oldest decided go
+first, because a refused save would follow an automatic write that already
+landed. Unknown future statuses and extra fields round-trip. A first board move also records seeded columns, upgrade markers and
 normalized sibling rows, so applying or undoing it does not lose those effects.
 
 Only the Tauri review commands approve, reject, bulk-approve or undo. Approval
@@ -611,8 +642,21 @@ The `destructive` level stages tools with `destructiveHint`; other write tools
 apply immediately and appear in the log with conditional Undo. Undo uses inverse
 rows and the same preconditions, never overwriting a subsequent user edit. An
 automatic write depending on an unapproved row conflicts instead of bypassing
-that row's gate. `off` uses the original direct path. Changing levels affects
-the next request; already-pending proposals still need a decision.
+that row's gate. Under `off`, reads use the original direct path; a write takes
+the capture path and applies at once (logged `applied`, undoable, a destructive
+tool included). Changing levels affects the next request; already-pending
+proposals still need a decision.
+
+**A write that reaches a CalDAV server always stages** (decision E3), at every
+level, `off` included: `touches_caldav` — a captured row, before or after, has
+a `caldav_href`, or sits in a calendar a CalDAV account syncs
+(`CalDavCalendarRef.calendar_id` in `<state>/caldav/accounts.json`,
+`commands::caldav::accounts_path_in`). An accounts file that cannot be read or
+parsed counts as touching (fail closed); no file is no account. An applied row
+reaches the server through the window: the change event (`root-mcp-changed`)
+→ `RootOverlay`'s listener → `notifyCalendarWrite` (the CalDAV push hook), so
+an automatic write would have pushed unseen. Under `off` the per-proposal row
+limit and the pending cap now apply to writes too.
 
 Tokens are fresh per spawn and revoked on tab teardown (including failed
 spawns). Teardown removes only the copy, retaining proposals as from a closed
@@ -621,8 +665,37 @@ after the listener stops accepting and the workers in flight get a short
 drain. The same PTY id on resume finds its proposals (`proposals_list` is per
 tab) and its mail drafts (owned by `sha256(tab)`) with a fresh token, and
 starts tainted if any earlier spawn of it read mail (the marker under
-`root_mcp/read_mail/`). The runtime itself contains only the listener port,
-never a shared secret.
+`root_mcp/read_mail/`). A local-model tab also starts tainted if any tab of
+its model read mail (`root_mcp/read_mail_model/`, keyed by the hash of the
+model's alias, which also names its `VIBE_HOME`), because a new tab can
+continue a Vibe conversation another tab of the model had (gap 33). A tab
+of the model that is already open looks at that marker live on every write
+and draft (`Session::tainted`): it shares the Vibe home, logs included, so it
+is tainted from the other tab's read on, not only from its next spawn. The
+trade-off: once one tab of a model reads mail, every other tab of that
+model stages all its writes and marks its drafts as reader drafts, until
+"Clear conversations" on the model's row in the local model menu (follow-up
+decision (c), `commands::ollama::clear_local_model_conversations`) deletes the
+model's stored Vibe conversations — `logs/session/` of its `VIBE_HOME`, the
+unified store and the older `session_*` folders, deleted through directory
+handles opened without following a link at any component
+(`home_io::HomeDir::remove_tree`), so a link planted or swapped in anywhere is
+unlinked, never followed — and then the model marker, in that order and never the marker alone (the
+marker says a conversation holds mail; with none left to continue it has
+nothing to say). Config, hooks, logins, `vibehistory` and `vibe.log` stay.
+It is refused while a tab of the model is open: the window names its open
+tabs (raw model name or alias, every scope), and the backend refuses
+(`local_model_tab_open`) while a live spawn has that `VIBE_HOME`
+(`agent_fence::live_tabs_in_vibe_home`), asked again after the store is gone
+and before the marker goes, so a tab that started meanwhile keeps the marker;
+that second refusal is its own code (`local_model_tab_started`), and the
+window says the conversations were cleared but the read-mail mark was kept.
+A model name that is absolute or has an empty, `.` or `..` part is refused
+(`validate_model_name`): the name is the home's folder. Tab markers (`read_mail/`) are not
+touched, so a restored tab that read mail stays tainted. The markers are written before the read, and a
+write that fails refuses the read (`LOCAL_READ_UNRECORDED`), the in-memory
+latch staying set; a marker that cannot be looked at counts as present. The
+runtime itself contains only the listener port, never a shared secret.
 
 An automatic write (`destructive` level) is applied first and logged once, so
 the log never says `pending` for a change that landed; one the store could not
@@ -632,7 +705,11 @@ re-reads a pending automatic row whose rows already hold as `applied`.
 
 Refusals by name: a tool the user took away in *MCP session access* answers
 `ACCESS_NARROWED`; a local-model tab's mail read tool with the local-read
-switch off answers `LOCAL_READ_OFF`; only a tool outside the caller's class
+switch off answers `LOCAL_READ_OFF`, through a non-loopback endpoint
+`LOCAL_READ_REMOTE`, on a model not confirmed local (or one whose alias
+another installed model shares, `tab_model_is_local_at`) `LOCAL_READ_CLOUD`, and
+with a taint marker that could not be written `LOCAL_READ_UNRECORDED`; only a
+tool outside the caller's class
 answers `unknown tool` (so a cloud tab never learns mail read tools exist).
 Over HTTP, a revoked or re-granted session gets its own 401 text rather than
 the 503 "switched off in Settings"; requests refused before they authenticated
@@ -716,8 +793,13 @@ agent draft creation refuses when the mail store already has 500 drafts.
 Large successful write receipts are shortened without losing change events.
 
 The audit retains at most 500 records in memory, with the latest 50 shown in
-Settings: spawn id, caller class, known tool name, outcome and timing. It never
-records tokens, arbitrary arguments or message bodies and resets on app exit.
+Settings: spawn id, caller class, known tool name, outcome, timing and, for a
+refusal, a fixed category. The root lane maps its fixed refusal texts
+(`root_mcp::refusal_reason`: `access_narrowed`, `mail_off`, `mail_local_only`,
+`mail_locked`, `local_read_*`, `pending_limit`, `conflict`, `store_failed`,
+`outside_grant`, `too_many_rows`, `unknown_tool`, …); any other tool error is
+`invalid_or_unavailable`, never its text. It never records tokens, arbitrary
+arguments or message bodies and resets on app exit.
 
 On Linux the fence finally shadows the entire state directory and its
 canonical alias, then restores only explicit agent-support mounts. Project

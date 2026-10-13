@@ -10,7 +10,8 @@
 //! window records them as fired without showing them.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use app_core::sync::LockExt;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::auth::AuthStore;
@@ -61,12 +62,7 @@ pub fn due_to_push(state_dir: &Path, now: &str, now_secs: u64) -> Vec<calendar_a
     due.into_iter().filter(|a| granted.contains(&a.key) && !muted.contains(&a.calendar_id)).collect()
 }
 
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+use crate::clock::now_secs;
 
 /// The sidecar's loop: every [`TICK`] until `shutdown` says so.
 pub async fn run(state_dir: PathBuf, auth: Arc<Mutex<AuthStore>>, mut shutdown: tokio::sync::watch::Receiver<bool>) {
@@ -88,12 +84,12 @@ pub async fn run(state_dir: PathBuf, auth: Arc<Mutex<AuthStore>>, mut shutdown: 
                 let dir = state_dir.clone();
                 let due = tokio::task::spawn_blocking(move || due_to_push(&dir, &now, secs)).await.unwrap_or_default();
                 for alarm in due {
-                    let deliveries = auth.lock().unwrap_or_else(PoisonError::into_inner).push_deliveries(&notice(&alarm), None);
+                    let deliveries = auth.lock_ok().push_deliveries(&notice(&alarm), None);
                     match deliveries {
                         Ok(deliveries) if !deliveries.is_empty() => {
                             eprintln!("{}: reminder '{}' pushed to {} phone(s) with no window", crate::brand::MOBILE_HOST_BIN, alarm.key, deliveries.len());
                             for endpoint in push::send(deliveries).await {
-                                auth.lock().unwrap_or_else(PoisonError::into_inner).push_lapse_endpoint(&endpoint);
+                                auth.lock_ok().push_lapse_endpoint(&endpoint);
                             }
                         }
                         Ok(_) => eprintln!("{}: reminder '{}' due with no window and no phone to push to", crate::brand::MOBILE_HOST_BIN, alarm.key),

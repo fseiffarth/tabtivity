@@ -32,7 +32,7 @@ import { registerTerminal, unregisterTerminal } from "../../lib/terminal/termina
 import { noteSentPrompt } from "../../lib/agents/sentPrompts";
 import { setReaderDraft } from "../../lib/agents/readerDrafts";
 import type { Terminal } from "@xterm/xterm";
-import { NAMES, storageKey } from "../../lib/brand";
+import { NAMES, envName, storageKey } from "../../lib/brand";
 
 /** A pane's xterm as far as the Reader reads it: its active buffer, and the
  * write event it reads on — a splice into `rows` is this fake's write, as a
@@ -66,9 +66,9 @@ const transcript = {
   ],
 };
 
-function reader(host: HTMLElement) {
+function reader(host: HTMLElement, cwd = "/p") {
   return render(
-    <TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />,
+    <TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd={cwd} visible focused />,
   );
 }
 
@@ -654,11 +654,12 @@ describe("the Reader's live rows", () => {
   });
 
   it("shows the mode, the effort the busy row named, the folder and its worktree", async () => {
-    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cwd: `/home/u/p/${NAMES.worktreesDir}/feat-x` }] } }));
+    const worktree = `/home/u/p/${NAMES.worktreesDir}/feat-x`;
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cwd: worktree }] } }));
     const rows = ["> fix it", "", "✻ Pondering… (9s · ↓ 1.2k tokens · thinking with high effort)", ">", "⏵⏵ accept edits on (shift+tab to cycle)"];
     term = fakeTerminal(rows);
     registerTerminal("p:agent-1", term);
-    reader(host);
+    reader(host, worktree);
     expect(await screen.findByRole("button", { name: "Accept edits" })).toBeTruthy();
     const facts = host.querySelector(".terminal-reader-facts")!;
     expect(facts.textContent).toContain("high effort");
@@ -668,6 +669,17 @@ describe("the Reader's live rows", () => {
     rows.splice(0, rows.length, "Done.", ">", "⏵⏵ accept edits on (shift+tab to cycle)");
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(facts.textContent).toContain("high effort");
+  });
+
+  it("names the folder the agent runs in, not the stored cwd of a remote project's local tab", async () => {
+    // A local tab of a remote project stores the project's state folder as
+    // its cwd; it runs in the local copy the pane resolved (`localTabCwd`).
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cwd: "/state/remote-projects/abc123" }] } }));
+    term = fakeTerminal(["Done.", ">"]);
+    registerTerminal("p:agent-1", term);
+    reader(host, "/home/u/projects-ssh/simple-gnn");
+    await waitFor(() => expect(host.querySelector(".terminal-reader-facts")?.textContent).toContain("simple-gnn"));
+    expect(host.querySelector(".terminal-reader-facts")!.textContent).not.toContain("remote-projects");
   });
 
   it("shows the effort the transcript records and changes it with /effort, or Codex's /model", async () => {
@@ -772,6 +784,26 @@ describe("the Reader's live rows", () => {
     expect((chip as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(chip);
     expect(submitCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a local-model tab's model without offering the driver's /model list", async () => {
+    submitCommand.mockClear();
+    written.length = 0;
+    const local: TabEntry = {
+      key: "agent-1", label: "qwen3:8b · OpenCode", cmd: "ollama", args: ["launch", "opencode"], cwd: "/p",
+      kind: "local_agent", localDriver: "opencode", scheduleTargetId: "st-1", env: { [envName("LOCAL_MODEL")]: "qwen3:8b" },
+    };
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [local] } }));
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript" ? transcript : []));
+    term = fakeTerminal([">"]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    const facts = host.querySelector(".terminal-reader-facts")!;
+    expect(within(facts as HTMLElement).getByText("qwen3:8b").tagName).toBe("SPAN");
+    expect(within(facts as HTMLElement).queryByRole("button", { name: /qwen3|Model/ })).toBeNull();
+    expect(submitCommand).not.toHaveBeenCalled();
+    expect(written).toEqual([]);
   });
 
   it("opens the session's own /model picker as a list and answers it there", async () => {

@@ -34,6 +34,7 @@
 //! layer installs ([`set_change_hook`], `commands::markup_mcp`).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -179,8 +180,8 @@ fn prune(list: &mut Vec<Ask>) -> bool {
 /// tab's token was revoked (PTY exit, MCP session access). Whether anything
 /// changed.
 pub fn sweep() -> bool {
-    let asks_gone = prune(&mut store().lock().unwrap_or_else(|p| p.into_inner()));
-    let ticks_gone = prune_ticks(&mut tick_store().lock().unwrap_or_else(|p| p.into_inner()));
+    let asks_gone = prune(&mut store().lock_ok());
+    let ticks_gone = prune_ticks(&mut tick_store().lock_ok());
     let gone = asks_gone || ticks_gone;
     if gone { changed(); }
     gone
@@ -223,7 +224,7 @@ pub enum Shown<'a> {
 /// The open asks of one tab's target for the view showing `shown`. An ask
 /// without a file shows on every view.
 pub fn list(project: &str, target: &str, shown: Shown) -> Vec<AskView> {
-    let mut asks = store().lock().unwrap_or_else(|p| p.into_inner());
+    let mut asks = store().lock_ok();
     let gone = prune(&mut asks);
     let out = asks.iter()
         .filter(|a| a.state == State::Open && a.project == project && a.target == target)
@@ -304,7 +305,7 @@ fn prune_ticks(list: &mut Vec<Tick>) -> bool {
 /// The ticks of one tab's target for the view showing `shown`, oldest first.
 /// Every tick names a file, so a view of a file outside the project gets none.
 pub fn ticks(project: &str, target: &str, shown: Shown) -> Vec<TickView> {
-    let mut list = tick_store().lock().unwrap_or_else(|p| p.into_inner());
+    let mut list = tick_store().lock_ok();
     let gone = prune_ticks(&mut list);
     let out = list.iter()
         .filter(|t| t.project == project && t.target == target)
@@ -411,7 +412,7 @@ fn mint_receipt() -> String {
 /// question, marks the ask answered and returns the prompt to queue into the
 /// tab. A refused answer changes nothing.
 pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Result<Answered, AnswerError> {
-    let mut asks = store().lock().unwrap_or_else(|p| p.into_inner());
+    let mut asks = store().lock_ok();
     let gone = prune(&mut asks);
     let result = (|| {
         let at = open_index(&asks, project, target, id)?;
@@ -439,7 +440,7 @@ pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Resu
 /// (`answered`: `markup_withdraw` spends the receipt), or one withdrawn,
 /// expired or whose tab is gone (`gone`) stays closed. Reopening an ask already open again is not an error.
 pub fn reopen(project: &str, target: &str, id: &str, receipt: &str) -> Result<(), AnswerError> {
-    let mut asks = store().lock().unwrap_or_else(|p| p.into_inner());
+    let mut asks = store().lock_ok();
     let gone = prune(&mut asks);
     let result = (|| {
         let at = asks.iter().position(|a| a.id == id && a.project == project && a.target == target).ok_or(AnswerError::Gone)?;
@@ -466,7 +467,7 @@ pub fn reopen(project: &str, target: &str, id: &str, receipt: &str) -> Result<()
 /// **Answer in chat instead**: close the open ask `id` without a prompt.
 /// Dismissing one already closed is not an error — the card is gone either way.
 pub fn dismiss(project: &str, target: &str, id: &str) -> Result<(), AnswerError> {
-    let mut asks = store().lock().unwrap_or_else(|p| p.into_inner());
+    let mut asks = store().lock_ok();
     let gone = prune(&mut asks);
     let closed = match open_index(&asks, project, target, id) {
         Ok(at) => { asks[at].state = State::Dismissed; true }
@@ -692,7 +693,7 @@ fn tick_rates() -> &'static Mutex<HashMap<String, VecDeque<Instant>>> {
 }
 /// `limit` calls per tab in `rates`, rolling; a refused call takes nothing.
 fn admit_in(rates: &Mutex<HashMap<String, VecDeque<Instant>>>, tab: &str, limit: usize) -> bool {
-    let mut map = rates.lock().unwrap_or_else(|p| p.into_inner());
+    let mut map = rates.lock_ok();
     map.retain(|_, calls| { calls.retain(|at| at.elapsed() < Duration::from_secs(3600)); !calls.is_empty() });
     let calls = map.entry(tab.to_string()).or_default();
     if calls.len() >= limit { return false; }
@@ -805,7 +806,7 @@ fn call_ask(session: &Session, project: &str, target: &str, ctx: &Context, args:
     };
     let id = format!("ask-{}", super::root_mcp::mint_token().map(|t| t[..16].to_string())
         .unwrap_or_else(|| format!("{:x}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default())));
-    let mut asks = store().lock().unwrap_or_else(|p| p.into_inner());
+    let mut asks = store().lock_ok();
     prune(&mut asks);
     let mut replaced = None;
     for old in asks.iter_mut().filter(|a| a.state == State::Open && a.project == project && a.target == target) {
@@ -844,7 +845,7 @@ fn call_done(session: &Session, project: &str, target: &str, ctx: &Context, args
         Ok(rel) => rel,
         Err(_) => return refused(FILE_NOT_FOUND, "No such file in this project. Give `file` as the markup prompt named it (the path in backticks on its first line)."),
     };
-    let mut list = tick_store().lock().unwrap_or_else(|p| p.into_inner());
+    let mut list = tick_store().lock_ok();
     let pruned = prune_ticks(&mut list);
     let mut count = 0usize;
     for (page, mark) in parsed.marks {
@@ -865,7 +866,7 @@ fn call_done(session: &Session, project: &str, target: &str, ctx: &Context, args
 
 fn call_withdraw(project: &str, target: &str, args: &Value) -> Value {
     let args: WithdrawArgs = match serde_json::from_value(args.clone()) { Ok(a) => a, Err(e) => return refused(INVALID, format!("invalid arguments: {e}")) };
-    let mut asks = store().lock().unwrap_or_else(|p| p.into_inner());
+    let mut asks = store().lock_ok();
     let gone = prune(&mut asks);
     let withdrawn = match open_index(&asks, project, target, &args.id) {
         Ok(at) => { asks[at].state = State::Withdrawn; true }
@@ -902,7 +903,7 @@ pub fn project_root(project: &str) -> Option<PathBuf> {
 pub fn enabled_in(settings: &Path) -> bool {
     crate::storage::read_json::<crate::schema::Settings>(settings).is_ok_and(|s| s.markup_mcp())
 }
-pub fn enabled() -> bool { enabled_in(&crate::storage::state_dir().join("settings.json")) }
+pub fn enabled() -> bool { enabled_in(&crate::storage::settings_path()) }
 
 /// [`handle_message`] with its world passed in. Any other class, a revoked
 /// session or one without its project/target binding is refused here too,

@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use base64ct::{Base64UrlUnpadded, Encoding};
@@ -74,14 +73,12 @@ fn checked_device(name: &str, public_key: &str) -> Result<String, String> {
     Ok(clean_name)
 }
 
-pub(crate) fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+pub(crate) use crate::clock::now_secs as now;
 
-fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
+/// `N` bytes from the OS RNG — the one source for every id and key the
+/// mobile host mints. A failure is an error, never a run of zeros: a zeroed id
+/// collides with every other one.
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
     let mut bytes = [0u8; N];
     getrandom::fill(&mut bytes).map_err(|e| format!("no system randomness: {e}"))?;
     Ok(bytes)
@@ -181,7 +178,7 @@ pub fn invite_hash(code: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"invite\n");
     hasher.update(code.as_bytes());
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    crate::digest::hex(&hasher.finalize())
 }
 
 /// Write the invite for `code` into `control_dir` (the helper's step, done

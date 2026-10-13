@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { UntestedTag } from "../common/UntestedTag";
@@ -124,6 +125,7 @@ export function MailComposeDialog({
   onSaved,
 }: MailComposeDialogProps) {
   const t = useT();
+  const modalRef = useModalFocus(onClose, !embedded);
   const lang = useI18nStore((s) => s.lang);
   const use24h = useUse24h();
 
@@ -690,7 +692,7 @@ export function MailComposeDialog({
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="settings-dialog mail-compose-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="settings-dialog mail-compose-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>
             {composeTitle(t, mode)} <UntestedTag id="mailComposeDialog.1" />

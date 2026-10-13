@@ -437,20 +437,12 @@ pub fn parse_ws_allocate(id: &str, stdout: &str) -> Option<HpcWorkspace> {
 // (the bug `commands::git`/`commands::slurm` already fixed), so each is an async
 // wrapper around a blocking body.
 
-async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("workspace task failed: {e}"))?
-}
-
 /// Does this host hand out workspaces, and on which filesystems? Constant script.
 /// A host without the tooling answers `available: false` — never an error, since
 /// most hosts are not clusters.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_available(target: HpcWsTarget) -> Result<HpcWsInfo, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("workspace", move || {
         let script = concat!("command -v ws_allocate >/dev/null 2>&1 || exit 0\n\
                       printf '", crate::app_upper!(), "-WS-OK\\n'\n\
                       ws_list -l 2>/dev/null || true");
@@ -474,7 +466,7 @@ pub async fn hpc_ws_available(target: HpcWsTarget) -> Result<HpcWsInfo, String> 
 /// then `ws_find` per id for an authoritative path — one round trip.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_list(target: HpcWsTarget) -> Result<Vec<HpcWorkspace>, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("workspace", move || {
         let script = format!(
             "command -v ws_list >/dev/null 2>&1 || exit 0\n\
              ws_list 2>/dev/null || true\n\
@@ -500,7 +492,7 @@ pub async fn hpc_ws_allocate(
     target: HpcWsTarget,
     req: HpcWsAllocate,
 ) -> Result<HpcWorkspace, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("workspace", move || {
         let id = validate_token("workspace name", &req.id)?;
         let days = validate_days("duration", req.days)?;
         let fs = fs_flag(req.filesystem.as_deref())?;
@@ -554,7 +546,7 @@ pub async fn hpc_ws_extend(
     days: i64,
     filesystem: Option<String>,
 ) -> Result<HpcWorkspace, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("workspace", move || {
         let id = validate_token("workspace name", &id)?;
         let days = validate_days("duration", days)?;
         let fs = fs_flag(filesystem.as_deref())?;
@@ -587,7 +579,7 @@ pub async fn hpc_ws_release(
     id: String,
     filesystem: Option<String>,
 ) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("workspace", move || {
         let id = validate_token("workspace name", &id)?;
         let fs = fs_flag(filesystem.as_deref())?;
         let script = format!(
@@ -619,7 +611,7 @@ pub async fn hpc_ws_link(
     workspace_path: String,
     link_name: String,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("workspace", move || {
         let ws = validate_abs_path("workspace path", &workspace_path)?;
         let name = validate_token("link name", &link_name)?;
         let root = remote_target_for_dir(&project_dir)
@@ -714,7 +706,7 @@ pub fn parse_scratch_candidates(stdout: &str) -> Vec<ScratchCandidate> {
 /// still information (it is usually the group's shared tree, not yours).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_scratch_candidates(target: HpcWsTarget) -> Result<Vec<ScratchCandidate>, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("workspace", move || {
         // `eval` only ever expands a name from SCRATCH_VARS, and every value is
         // handled as data (quoted `"$p"`), never re-evaluated.
         let vars = SCRATCH_VARS.join(" ");
@@ -800,7 +792,7 @@ pub async fn hpc_ws_anchor(
     mirror_path: Option<String>,
     make_logs: Option<bool>,
 ) -> Result<HpcAnchor, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("workspace", move || {
         let rel = validate_anchor_rel(&anchor_rel)?;
         let logs = make_logs.unwrap_or(true);
         let ws_path = match workspace_path
@@ -953,7 +945,7 @@ pub async fn hpc_ws_move_root(
     project_id: String,
     new_root: String,
 ) -> Result<crate::schema::projects::ProjectEntry, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("workspace", move || {
         let root = validate_abs_path("project root", &new_root)?;
         let target = crate::services::remote::remote_target_for(&project_id)
             .ok_or_else(|| "not a remote project".to_string())?;

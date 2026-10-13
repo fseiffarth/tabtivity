@@ -32,7 +32,8 @@
 //! dir is checked here, not there.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use app_core::sync::LockExt;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::brand;
@@ -248,7 +249,7 @@ static USER_OFF_CACHE: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
 const CACHE_FOR: Duration = Duration::from_secs(3);
 
 fn cached<T: Clone>(slot: &Mutex<Option<(Instant, T)>>, load: impl FnOnce() -> T) -> T {
-    let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut slot = slot.lock_ok();
     if let Some((at, value)) = slot.as_ref() {
         if at.elapsed() < CACHE_FOR {
             return value.clone();
@@ -321,7 +322,7 @@ pub fn feature_refusal(cmd: &str) -> Option<Feature> {
 
 fn user_disabled_features() -> Vec<String> {
     cached(&USER_OFF_CACHE, || {
-        crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json"))
+        crate::storage::read_json::<crate::schema::Settings>(&crate::storage::settings_path())
             .map(|s| s.disabled_features)
             .unwrap_or_default()
     })

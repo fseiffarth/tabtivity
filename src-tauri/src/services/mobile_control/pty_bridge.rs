@@ -8,6 +8,7 @@ use std::{
         Arc, Condvar, Mutex, PoisonError,
     },
 };
+use app_core::sync::LockExt;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
@@ -61,7 +62,7 @@ impl BusyGuard {
 }
 impl Drop for BusyGuard {
     fn drop(&mut self) {
-        let mut busy = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut busy = self.busy.lock_ok();
         // Only clear the slot if it is still ours: an evicting acquire may
         // already have installed its own slot under this name.
         if busy
@@ -79,7 +80,7 @@ const EVICTION_WAIT: std::time::Duration = std::time::Duration::from_millis(2_50
 
 impl TerminalRegistry {
     pub fn is_busy(&self, name: &str) -> bool {
-        self.busy.lock().unwrap_or_else(PoisonError::into_inner).contains_key(name)
+        self.busy.lock_ok().contains_key(name)
     }
 
     /// A phone has this tab open *and in front of someone*. `is_busy` alone
@@ -89,8 +90,7 @@ impl TerminalRegistry {
     /// or "needs your answer" notice that an attached tab does not get.
     pub fn is_watched(&self, name: &str) -> bool {
         self.busy
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_ok()
             .get(name)
             .is_some_and(|slot| !slot.hidden.load(Ordering::Acquire))
     }
@@ -105,7 +105,7 @@ impl TerminalRegistry {
         let deadline = tokio::time::Instant::now() + EVICTION_WAIT;
         loop {
             {
-                let mut busy = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut busy = self.busy.lock_ok();
                 match busy.get(name) {
                     None => {
                         let slot = Arc::new(ViewerSlot::default());
@@ -337,7 +337,7 @@ impl OutputQueue {
     /// Blocking — call it from the reader thread only. `false` once the queue
     /// is closed: the chunk is dropped and the reader should stop.
     fn push(&self, chunk: Vec<u8>) -> bool {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.lock_ok();
         while !state.closed && state.bytes > 0 && state.bytes + chunk.len() > MAX_OUTPUT_QUEUE {
             state = self.space.wait(state).unwrap_or_else(PoisonError::into_inner);
         }
@@ -353,7 +353,7 @@ impl OutputQueue {
 
     /// Stop the queue: a parked `push` returns, and `pop` ends once drained.
     fn close(&self) {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner).closed = true;
+        self.state.lock_ok().closed = true;
         self.ready.notify_one();
         self.space.notify_all();
     }
@@ -362,7 +362,7 @@ impl OutputQueue {
     async fn pop(&self) -> Option<Vec<u8>> {
         loop {
             {
-                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut state = self.state.lock_ok();
                 if let Some(chunk) = state.chunks.pop_front() {
                     state.bytes -= chunk.len();
                     self.space.notify_all();
@@ -593,7 +593,7 @@ pub async fn attach(
     // The phone spoke: its session slides (`auth::SESSION_IDLE`). Every frame
     // it sends, not the tick — a tick is the sidecar checking, not the phone.
     let touch = |auth: &Arc<Mutex<AuthStore>>| {
-        auth.lock().unwrap_or_else(PoisonError::into_inner).touch(&token);
+        auth.lock_ok().touch(&token);
     };
     let result: Result<(), String> = loop {
         tokio::select! {
@@ -613,7 +613,7 @@ pub async fn attach(
                     // this is the phone the upgrade route checked, and the
                     // per-phone list is re-read for it below.
                     let (device, key) = {
-                        let mut auth = auth.lock().unwrap_or_else(PoisonError::into_inner);
+                        let mut auth = auth.lock_ok();
                         (auth.authenticate(&token), auth.host_key().to_vec())
                     };
                     // Two different facts, told apart on the wire: a session
@@ -626,7 +626,7 @@ pub async fn attach(
                     let loaded = {
                         let (catalog, state_dir) = (catalog.clone(), state_dir.clone());
                         tokio::task::spawn_blocking(move || {
-                            catalog.lock().unwrap_or_else(PoisonError::into_inner).load(&state_dir, &key)
+                            catalog.lock_ok().load(&state_dir, &key)
                         })
                         .await
                     };

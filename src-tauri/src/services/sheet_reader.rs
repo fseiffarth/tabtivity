@@ -26,6 +26,7 @@
 //! AppHandle-free: the command (`commands::sheets`) confines the path first.
 
 use std::ffi::OsString;
+use app_core::sync::LockExt;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -176,13 +177,13 @@ fn run_reader(mut cmd: Command, wall: Duration) -> Result<SheetData, String> {
     });
     let child = Arc::new(Mutex::new(child));
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    lock(&LIVE).push((id, child.clone()));
+    LIVE.lock_ok().push((id, child.clone()));
     // A quit that ran between the spawn and the registration missed this one.
     if CLOSING.load(Ordering::SeqCst) {
         kill_and_reap(&child);
     }
     let waited = wait_until(&child, Instant::now() + wall);
-    lock(&LIVE).retain(|(other, _)| *other != id);
+    LIVE.lock_ok().retain(|(other, _)| *other != id);
     let status = match waited {
         // Not waited for: whatever still holds the pipe keeps the drain
         // thread, not this one.
@@ -245,7 +246,7 @@ fn wait_until(child: &Mutex<Child>, deadline: Instant) -> Waited {
     let mut step = Duration::from_millis(2);
     loop {
         {
-            let mut guard = lock(child);
+            let mut guard = child.lock_ok();
             match guard.try_wait() {
                 Ok(Some(status)) => return Waited::Exited(status),
                 Ok(None) => {}
@@ -267,13 +268,9 @@ fn wait_until(child: &Mutex<Child>, deadline: Instant) -> Waited {
 }
 
 fn kill_and_reap(child: &Mutex<Child>) {
-    let mut guard = lock(child);
+    let mut guard = child.lock_ok();
     let _ = guard.kill();
     let _ = guard.wait();
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The reply is the last non-empty stdout line; anything a linked library
@@ -299,10 +296,10 @@ pub fn kill_all_for_exit() {
 /// End (and unregister) every registered reader `which` picks; whether any was.
 fn kill_registered(which: impl Fn(&Child) -> bool) -> bool {
     let picked: Vec<_> = {
-        let mut live = lock(&LIVE);
+        let mut live = LIVE.lock_ok();
         let (picked, kept) = std::mem::take(&mut *live)
             .into_iter()
-            .partition(|(_, child)| which(&lock(child)));
+            .partition(|(_, child)| which(&child.lock_ok()));
         *live = kept;
         picked
     };

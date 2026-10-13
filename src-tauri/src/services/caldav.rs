@@ -76,10 +76,31 @@ const USER_AGENT: &str = concat!(crate::app_name!(), "-CalDAV/1.0");
 /// endpoint speaks; increasingly the password is an app-specific one minted in
 /// the provider's own settings rather than the account's primary password (the
 /// setup dialog says so without assuming it).
+///
+/// `origin` is the **fixed credential origin** (gap 26): the account's
+/// normalized `base_url`, or during discovery the URL the user typed. Every hop
+/// of every request is judged against it by [`credentials_may_follow`] — never
+/// against the URL being requested, which for a stored collection or resource
+/// href is a string the *server* chose. Built only through [`Credentials::new`],
+/// which refuses `http://` (decision E2b).
 #[derive(Clone)]
 pub struct Credentials {
     pub user: String,
     pub password: String,
+    pub origin: Url,
+}
+
+impl Credentials {
+    /// A login whose credentials may only go where `base_url` names. Refuses a
+    /// `http://` base URL with [`HTTP_REFUSED`].
+    pub fn new(user: String, password: String, base_url: &str) -> Result<Self, String> {
+        let origin = normalize_base_url(base_url)?;
+        Ok(Self {
+            user,
+            password,
+            origin,
+        })
+    }
 }
 
 impl std::fmt::Debug for Credentials {
@@ -89,8 +110,63 @@ impl std::fmt::Debug for Credentials {
         f.debug_struct("Credentials")
             .field("user", &self.user)
             .field("password", &"<redacted>")
+            .field("origin", &self.origin.as_str())
             .finish()
     }
+}
+
+/// The fixed code every refusal of plain `http://` CalDAV starts with
+/// (decision E2b). The frontend maps it to one translated sentence saying why
+/// (`caldav.httpRefused`); the English text after it is the detail.
+pub const HTTP_REFUSED: &str = "caldav_http_refused";
+
+fn http_refused(detail: &str) -> String {
+    format!(
+        "{HTTP_REFUSED}: CalDAV needs https:// — over http:// the password and the calendar \
+         would cross the network in the clear ({detail})"
+    )
+}
+
+/// A request aimed at an address outside the credential origin, refused before
+/// anything is sent. Recoverable, and the sentence says how.
+fn off_origin(url: &Url, origin: &Url) -> String {
+    format!(
+        concat!(
+            "the server named {} for this account, outside the address the account uses ({}). ",
+            crate::app_name!(),
+            " only sends CalDAV credentials to that address (or another HTTPS host under its \
+             domain) — if you trust {}, set the account's server URL to it."
+        ),
+        url.host_str().unwrap_or("another host"),
+        origin.host_str().unwrap_or("its server"),
+        url.host_str().unwrap_or("that host"),
+    )
+}
+
+/// Whether `href` may be requested with `cred` — the check every server-named
+/// href (principal, home set, collection, resource) passes before it is used or
+/// stored. `http:` is never inside an origin (E2b).
+pub fn href_in_origin(origin: &Url, href: &str) -> bool {
+    Url::parse(href)
+        .map(|u| u.scheme() == "https" && credentials_may_follow(origin, &u))
+        .unwrap_or(false)
+}
+
+/// The `https://` twin of a **same-host** `http://` href, on the origin's port —
+/// what an account switched from `http://` to `https://` keeps of its old
+/// calendar subscriptions and resource addresses (E2b left them unusable).
+/// `None` for anything else: another host, another scheme, an `http` origin.
+pub fn https_twin(href: &str, origin: &Url) -> Option<String> {
+    if origin.scheme() != "https" {
+        return None;
+    }
+    let mut url = Url::parse(href).ok()?;
+    if url.scheme() != "http" || !url.host_str()?.eq_ignore_ascii_case(origin.host_str()?) {
+        return None;
+    }
+    url.set_scheme("https").ok()?;
+    url.set_port(origin.port()).ok()?;
+    Some(url.to_string())
 }
 
 // ── Multistatus parsing ─────────────────────────────────────────────────────
@@ -448,25 +524,93 @@ fn method(name: &str) -> Method {
 /// are followed by [`dav_request`] so the cap is ours and the method survives
 /// (reqwest would turn a `PROPFIND` into a `GET` on a 302, which answers a
 /// question nobody asked).
-fn client() -> Result<reqwest::Client, String> {
+fn client() -> Result<Dav, String> {
     crate::services::mail_engine::install_crypto_provider();
-    reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .redirect(reqwest::redirect::Policy::none())
+        // The backstop for E2b: [`dav_reply`] refuses every `http:` hop itself,
+        // with a sentence; this makes a hop that slipped past it fail anyway.
+        .https_only(true)
         .timeout(CALDAV_TIMEOUT)
         .referer(false)
         .build()
-        .map_err(|e| format!("caldav-client: {e}"))
+        .map_err(|e| format!("caldav-client: {e}"))?;
+    Ok(Dav { client })
+}
+
+/// The one way a request leaves this module. A struct rather than a bare
+/// `reqwest::Client` so the tests can answer requests in-process
+/// ([`tests::fake`]): with `https_only` set, a plain-HTTP mock server could not
+/// be reached at all, and no TLS test fixtures exist in this crate.
+struct Dav {
+    client: reqwest::Client,
+}
+
+/// One response, reduced to what [`dav_reply`] reads.
+struct Wire {
+    status: StatusCode,
+    location: Option<String>,
+    etag: String,
+    body: Vec<u8>,
+}
+
+impl Dav {
+    fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
+        self.client.request(method, url)
+    }
+
+    async fn send(&self, req: reqwest::RequestBuilder) -> Result<Wire, String> {
+        let req = req.build().map_err(|e| format!("caldav-request: {e}"))?;
+        let host = req.url().host_str().unwrap_or("the server").to_string();
+        #[cfg(test)]
+        if let Some(wire) = tests::fake::answer(&req) {
+            return Ok(wire);
+        }
+        let resp = self.client.execute(req).await.map_err(|e| {
+            // `reqwest`'s Display walks the source chain and can print the URL,
+            // which never carries the password (it is a header) — but the host
+            // is enough context on its own.
+            format!("could not reach {host}: {e}")
+        })?;
+        let status = resp.status();
+        let header = |name: reqwest::header::HeaderName| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_string())
+        };
+        let location = header(reqwest::header::LOCATION);
+        let etag = header(reqwest::header::ETAG).unwrap_or_default();
+        if status.is_redirection() || status == StatusCode::UNAUTHORIZED {
+            return Ok(Wire {
+                status,
+                location,
+                etag,
+                body: Vec::new(),
+            });
+        }
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("the reply could not be read: {e}"))?
+            .to_vec();
+        Ok(Wire {
+            status,
+            location,
+            etag,
+            body,
+        })
+    }
 }
 
 /// The URL a user typed, made into something joinable.
 ///
 /// A bare host (`cal.example.org`) gets `https://` — never `http://`: this
-/// carries a password on every request, and silently downgrading the one
-/// transport protecting it is the kind of "helpful" default that makes a
-/// feature worse than not having it. An explicit `http://` the user typed
-/// themselves is honoured (that is the self-hosted-on-localhost case) and the
-/// dialog warns about it.
+/// carries a password on every request. An explicit `http://` is **refused**
+/// (decision E2b, `localhost` included) with [`HTTP_REFUSED`]: a password and a
+/// calendar would cross the network in the clear, and a self-hosted server on
+/// plain HTTP gets a TLS proxy in front of it instead.
 pub fn normalize_base_url(raw: &str) -> Result<Url, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -479,7 +623,8 @@ pub fn normalize_base_url(raw: &str) -> Result<Url, String> {
     };
     let url = Url::parse(&with_scheme).map_err(|e| format!("not a usable URL: {e}"))?;
     match url.scheme() {
-        "https" | "http" => Ok(url),
+        "https" => Ok(url),
+        "http" => Err(http_refused(url.host_str().unwrap_or("http://"))),
         other => Err(format!(
             "unsupported URL scheme '{other}' — CalDAV is HTTP(S)"
         )),
@@ -494,10 +639,11 @@ pub fn normalize_base_url(raw: &str) -> Result<Url, String> {
 /// instead". Callers decide which ones mean failure.
 ///
 /// The credential rule is [`credentials_may_follow`]'s, applied per hop against
-/// the URL the *caller* named — never against the previous hop, or a chain of
-/// small steps would walk the password anywhere.
+/// the fixed origin in [`Credentials`] — never against the previous hop (a chain
+/// of small steps would walk the password anywhere), and never against the URL
+/// being requested (a stored href is a string the server chose; gap 26).
 async fn dav_request(
-    client: &reqwest::Client,
+    client: &Dav,
     method_name: &str,
     url: &Url,
     cred: &Credentials,
@@ -510,7 +656,7 @@ async fn dav_request(
 /// [`dav_request`] plus extra headers — the conditional (`If-Match`,
 /// `If-None-Match`) and content-type headers a write needs.
 async fn dav_request_with(
-    client: &reqwest::Client,
+    client: &Dav,
     method_name: &str,
     url: &Url,
     cred: &Credentials,
@@ -534,8 +680,16 @@ struct DavReply {
     etag: String,
 }
 
+/// Every hop is judged against `cred.origin` — the account's base URL, never
+/// the URL being requested (gap 26). The first hop of a request names a URL
+/// that may have come from the server (a principal, home set, collection or
+/// resource href); one outside the origin is refused before anything is sent,
+/// rather than retried without credentials. A redirect hop outside it goes out
+/// without credentials for a read (its `401` then says how to fix it) and is
+/// refused for a write, whose body is the user's calendar data. A hop to
+/// `http:` is refused outright, wherever it comes from (E2b).
 async fn dav_reply(
-    client: &reqwest::Client,
+    client: &Dav,
     method_name: &str,
     url: &Url,
     cred: &Credentials,
@@ -543,10 +697,21 @@ async fn dav_reply(
     body: Option<String>,
     headers: &[(&str, String)],
 ) -> Result<DavReply, String> {
-    let origin = url.clone();
+    let origin = &cred.origin;
+    let writes = matches!(method_name, "PUT" | "DELETE");
     let mut url = url.clone();
-    for _ in 0..=MAX_REDIRECTS {
-        let authorized = credentials_may_follow(&origin, &url);
+    for hop in 0..=MAX_REDIRECTS {
+        if url.scheme() != "https" {
+            return Err(http_refused(if hop == 0 {
+                "the calendar's stored address is not https"
+            } else {
+                "the server redirected to an insecure address"
+            }));
+        }
+        let authorized = credentials_may_follow(origin, &url);
+        if !authorized && (hop == 0 || writes) {
+            return Err(off_origin(&url, origin));
+        }
         let mut req = client.request(method(method_name), url.clone());
         if authorized {
             req = req.basic_auth(&cred.user, Some(&cred.password));
@@ -569,24 +734,11 @@ async fn dav_reply(
             req = req.body(body);
         }
 
-        let resp = req.send().await.map_err(|e| {
-            // `reqwest`'s Display walks the source chain and can print the URL,
-            // which never carries the password (it is a header) — but the host
-            // is enough context on its own.
-            format!(
-                "could not reach {}: {e}",
-                url.host_str().unwrap_or("the server")
-            )
-        })?;
-        let status = resp.status();
+        let wire = client.send(req).await?;
+        let status = wire.status;
 
         if status.is_redirection() {
-            let location = resp
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            match location {
+            match wire.location {
                 Some(loc) => {
                     let next = url
                         .join(&loc)
@@ -594,19 +746,8 @@ async fn dav_reply(
                     if next == url {
                         return Err("the server redirected to the same URL".to_string());
                     }
-                    // A redirect off TLS is refused outright rather than merely
-                    // stripped of credentials: everything after it — the
-                    // calendar's own contents included — would cross the network
-                    // in the clear, and a sync that silently degraded to that is
-                    // exactly the "looks like success" failure this feature is
-                    // not allowed to have.
-                    if origin.scheme() == "https" && next.scheme() != "https" {
-                        return Err(format!(
-                            "the server redirected from HTTPS to an insecure address \
-                             ({}) — refused",
-                            next.scheme()
-                        ));
-                    }
+                    // Judged at the top of the next hop: `http:` is refused
+                    // outright, and credentials ride only inside the origin.
                     url = next;
                     continue;
                 }
@@ -629,8 +770,8 @@ async fn dav_reply(
             if !authorized {
                 return Err(format!(
                     concat!("the server redirected to {} and that host asked for the password. ", crate::app_name!(), " \
-                     only sends CalDAV credentials to the server the account's URL names (or a \
-                     subdomain of it over HTTPS) — if you trust that address, set the account's \
+                     only sends CalDAV credentials to the server the account's URL names (or \
+                     another HTTPS host under its domain) — if you trust that address, set the account's \
                      server URL to it directly."),
                     url.host_str().unwrap_or("another host")
                 ));
@@ -643,29 +784,18 @@ async fn dav_reply(
             );
         }
 
-        let etag = resp
-            .headers()
-            .get(reqwest::header::ETAG)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("the reply could not be read: {e}"))?;
-        if bytes.len() > MAX_BODY {
+        if wire.body.len() > MAX_BODY {
             return Err(format!(
                 "the server's reply is too large ({} bytes; limit {MAX_BODY})",
-                bytes.len()
+                wire.body.len()
             ));
         }
-        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let text = String::from_utf8_lossy(&wire.body).into_owned();
         return Ok(DavReply {
             status,
             body: text,
             url,
-            etag,
+            etag: wire.etag,
         });
     }
     Err("too many redirects".to_string())
@@ -682,19 +812,22 @@ async fn dav_reply(
 /// client to a host of their choosing and be handed the calendar password in a
 /// header it can read.
 ///
-/// The rule is deliberately narrower than "same registrable domain":
+/// The rule (decided 2026-10-13, after iCloud-shaped providers broke on the
+/// stricter subdomain-only rule):
 ///
 /// - **same origin** (scheme, host, port) — the ordinary case, every hop inside
 ///   one server's own URL space;
-/// - **a subdomain of the credential's host, over TLS** — which is exactly the
-///   shape RFC 6764 discovery has, where the user types `example.org` and
-///   `/.well-known/caldav` redirects to `caldav.example.org`.
+/// - **another host under the credential host's registrable domain, over TLS on
+///   both ends** — RFC 6764 discovery (`example.org` → `caldav.example.org`) and
+///   providers that hand each account a sibling host (`caldav.example.com` →
+///   `p42-caldav.example.com`). The registrable domain (eTLD+1) comes from the
+///   public-suffix list (the `psl` crate), so `example.co.uk` never covers the
+///   rest of `.co.uk` and `alice.github.io` never covers `bob.github.io`. The
+///   other host must answer on the origin's port or on 443: another port on a
+///   sibling machine is another service, whoever runs it.
 ///
-/// Sibling hosts (`caldav.example.org` → `dav.example.org`) are **refused**,
-/// even though they are the same organization, because telling them apart from
-/// an attacker's host needs a public-suffix list this codebase does not have —
-/// `registrable()` is a two-label approximation (documented as such in
-/// `web_safety`), and under it `a.co.uk` and `evil.co.uk` are one site. A
+/// An IP-address host, a single-label host (`localhost`, `nas`) and a host that
+/// *is* a public suffix have no registrable domain and match only exactly. A
 /// refusal here is recoverable and says so: the user sets the account's URL to
 /// the address the server named, and that address becomes the credential origin.
 pub fn credentials_may_follow(from: &Url, to: &Url) -> bool {
@@ -704,18 +837,47 @@ pub fn credentials_may_follow(from: &Url, to: &Url) -> bool {
     let from_host = from_host.to_ascii_lowercase();
     let to_host = to_host.to_ascii_lowercase();
 
-    if from.scheme() == to.scheme()
-        && from_host == to_host
-        && from.port_or_known_default() == to.port_or_known_default()
-    {
-        return true;
+    if from_host == to_host {
+        // The same host on another port, or the same host and port under the
+        // other scheme, is another service: same origin only.
+        return from.scheme() == to.scheme()
+            && from.port_or_known_default() == to.port_or_known_default();
     }
-    // A subdomain hop is only ever allowed under TLS, on both ends: over plain
+    // Another host is only ever allowed under TLS, on both ends: over plain
     // HTTP the header is readable by anyone on the path, so "which host" stops
     // being the interesting question.
-    from.scheme() == "https"
-        && to.scheme() == "https"
-        && to_host.ends_with(&format!(".{from_host}"))
+    if from.scheme() != "https" || to.scheme() != "https" {
+        return false;
+    }
+    let to_port = to.port_or_known_default();
+    if to_port != from.port_or_known_default() && to_port != Some(443) {
+        return false;
+    }
+    // IP literals (v4 and v6) have no registrable domain: exact match only.
+    if !matches!(from.host(), Some(url::Host::Domain(_)))
+        || !matches!(to.host(), Some(url::Host::Domain(_)))
+    {
+        return false;
+    }
+    match registrable_domain(&from_host) {
+        Some(site) => to_host == site || to_host.ends_with(&format!(".{site}")),
+        None => false,
+    }
+}
+
+/// The registrable domain (eTLD+1) of a DNS host, by the public-suffix list —
+/// `None` for a single-label host, a host that is itself a public suffix, or a
+/// trailing-dot spelling (which then matches only exactly: fail closed).
+pub fn registrable_domain(host: &str) -> Option<String> {
+    if host.ends_with('.') || !host.contains('.') {
+        return None;
+    }
+    let host = host.to_ascii_lowercase();
+    let site = psl::domain_str(&host)?;
+    // `psl` falls back to the `*` rule for an unknown TLD, so `nas.lan` is its
+    // own site; a name the list knows only as a suffix has none.
+    (site.contains('.') && (host == site || host.ends_with(&format!(".{site}"))))
+        .then(|| site.to_string())
 }
 
 /// A 2xx/207 body, or a described failure. The status text is included because
@@ -801,7 +963,7 @@ fn collection_from(base: &Url, resp: &DavResponse) -> Option<CalDavCollection> {
 
 /// `PROPFIND Depth: 1` a collection home and keep the calendar collections.
 async fn list_collections(
-    client: &reqwest::Client,
+    client: &Dav,
     url: &Url,
     cred: &Credentials,
 ) -> Result<Vec<CalDavCollection>, String> {
@@ -833,12 +995,32 @@ async fn list_collections(
     };
 
     let parsed = parse_multistatus(&body)?;
-    Ok(parsed
+    let all: Vec<CalDavCollection> = parsed
         .responses
         .iter()
         .filter(|r| r.is_calendar())
         .filter_map(|r| collection_from(&final_url, r))
-        .collect())
+        .collect();
+    in_origin(all, &cred.origin)
+}
+
+/// Keep the collections the credentials may reach (gap 26). A server whose
+/// every calendar sits elsewhere gets the recoverable sentence instead of a
+/// silent "no calendars found".
+fn in_origin(all: Vec<CalDavCollection>, origin: &Url) -> Result<Vec<CalDavCollection>, String> {
+    let outside = all.iter().find(|c| !href_in_origin(origin, &c.href)).cloned();
+    let kept: Vec<CalDavCollection> = all
+        .into_iter()
+        .filter(|c| href_in_origin(origin, &c.href))
+        .collect();
+    match (kept.is_empty(), outside) {
+        (true, Some(c)) => Err(match Url::parse(&c.href) {
+            Ok(u) if u.scheme() != "https" => http_refused("the server listed its calendars at http:// addresses"),
+            Ok(u) => off_origin(&u, origin),
+            Err(_) => "the server listed its calendars at an unusable address".to_string(),
+        }),
+        _ => Ok(kept),
+    }
 }
 
 /// The discovery chain: whatever the user pasted → the calendar collections
@@ -855,6 +1037,10 @@ async fn list_collections(
 ///    then list it.
 /// 4. Failing all of the above, `PROPFIND /.well-known/caldav` on the origin
 ///    (a redirect to the real base path is normal) and try 1–3 again there.
+///
+/// `cred.origin` is the typed URL itself ([`Credentials::new`]), so the
+/// principal and home-set hrefs the server names along the way are held to it
+/// (gap 26): one outside it is refused before any request reaches it.
 pub async fn discover(base_url: &str, cred: &Credentials) -> Result<Vec<CalDavCollection>, String> {
     let url = normalize_base_url(base_url)?;
     let client = client()?;
@@ -884,7 +1070,7 @@ pub async fn discover(base_url: &str, cred: &Credentials) -> Result<Vec<CalDavCo
 /// Steps 1–3 of [`discover`] against one URL. `Ok(None)` means "nothing here",
 /// which is a reason to try the next URL rather than to fail.
 async fn discover_from(
-    client: &reqwest::Client,
+    client: &Dav,
     url: &Url,
     cred: &Credentials,
 ) -> Result<Option<Vec<CalDavCollection>>, String> {
@@ -902,7 +1088,7 @@ async fn discover_from(
     //    everything the row needs.
     if resp.is_calendar() {
         if let Some(one) = collection_from(&final_url, resp) {
-            return Ok(Some(vec![one]));
+            return in_origin(vec![one], &cred.origin).map(Some);
         }
     }
 
@@ -1007,15 +1193,32 @@ pub async fn change_tokens(
 }
 
 /// Turn a multistatus into resources and deletions.
-fn changes_from(base: &Url, parsed: &Multistatus, incremental: bool) -> CalDavChanges {
+///
+/// A resource href outside the credential `origin` is never stored: it would
+/// become a row's `caldav_href`, and every later push or delete of that row
+/// would aim the password at it (gap 26). It fails the whole read, with the
+/// recoverable sentence, rather than being dropped: a full listing is
+/// authoritative about what exists, so a silently dropped resource would delete
+/// its local copy and report the sync as a success (a server behind a proxy that
+/// names its resources `http://…` would empty the calendar). A deletion stub
+/// outside the origin is ignored — no stored row can carry that address.
+fn changes_from(
+    base: &Url,
+    origin: &Url,
+    parsed: &Multistatus,
+    incremental: bool,
+) -> Result<CalDavChanges, String> {
     let mut resources = Vec::new();
     let mut removed = Vec::new();
     for resp in &parsed.responses {
         let Some(href) = absolute(base, &resp.href) else {
             continue;
         };
+        let inside = href_in_origin(origin, &href);
         if resp.deleted() {
-            removed.push(href);
+            if inside {
+                removed.push(href);
+            }
             continue;
         }
         // The collection itself comes back in its own report; it is not a
@@ -1028,16 +1231,25 @@ fn changes_from(base: &Url, parsed: &Multistatus, incremental: bool) -> CalDavCh
         if etag.is_empty() && data.is_empty() {
             continue;
         }
+        if !inside {
+            return Err(match Url::parse(&href) {
+                Ok(u) if u.scheme() != "https" => {
+                    http_refused("the server listed this calendar's entries at http:// addresses")
+                }
+                Ok(u) => off_origin(&u, origin),
+                Err(_) => "the server listed an entry at an unusable address".to_string(),
+            });
+        }
         resources.push(CalDavResource { href, etag, data });
     }
-    CalDavChanges {
+    Ok(CalDavChanges {
         resources,
         removed,
         sync_token: parsed.sync_token.clone(),
         ctag: String::new(),
         incremental,
         unchanged: false,
-    }
+    })
 }
 
 /// Fetch resources whose data did not ride along with their etag.
@@ -1047,7 +1259,7 @@ fn changes_from(base: &Url, parsed: &Multistatus, incremental: bool) -> CalDavCh
 /// and an empty `calendar-data` parses to zero events — i.e. a change would
 /// quietly blank a row instead of updating it.
 async fn fill_missing_data(
-    client: &reqwest::Client,
+    client: &Dav,
     collection: &Url,
     cred: &Credentials,
     changes: &mut CalDavChanges,
@@ -1073,7 +1285,7 @@ async fn fill_missing_data(
         .await?;
         let body = require_ok(status, body, "fetching changed events")?;
         let parsed = parse_multistatus(&body)?;
-        let fetched = changes_from(collection, &parsed, true);
+        let fetched = changes_from(collection, &cred.origin, &parsed, true)?;
         for got in fetched.resources {
             if let Some(slot) = changes.resources.iter_mut().find(|r| r.href == got.href) {
                 if !got.data.trim().is_empty() {
@@ -1135,7 +1347,7 @@ pub async fn fetch_all(
         .await?;
         let body = require_ok(status, body, "reading the calendar")?;
         let parsed = parse_multistatus(&body)?;
-        let mut got = changes_from(&final_url, &parsed, false);
+        let mut got = changes_from(&final_url, &cred.origin, &parsed, false)?;
         out.resources.append(&mut got.resources);
     }
 
@@ -1173,7 +1385,7 @@ pub async fn fetch_changes(
     .await?;
     let body = require_ok(status, body, "reading the calendar's changes")?;
     let parsed = parse_multistatus(&body)?;
-    let mut out = changes_from(&final_url, &parsed, true);
+    let mut out = changes_from(&final_url, &cred.origin, &parsed, true)?;
     if out.sync_token.is_none() {
         return Err("the server's incremental sync reply carried no token".to_string());
     }
@@ -1271,7 +1483,7 @@ pub async fn current_etag(href: &str, cred: &Credentials) -> Result<String, Stri
     Ok(resource_etag(&client, &url, cred).await)
 }
 
-async fn resource_etag(client: &reqwest::Client, url: &Url, cred: &Credentials) -> String {
+async fn resource_etag(client: &Dav, url: &Url, cred: &Credentials) -> String {
     let body = format!(
         r#"{XML_DECL}
 <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>"#
@@ -1359,6 +1571,7 @@ pub async fn put_resource(
         etag,
         conflict: false,
         gone: false,
+        dirty: false,
     })
 }
 
@@ -1632,7 +1845,7 @@ END:VCALENDAR
 </multistatus>"#;
         let base = Url::parse("https://dav.example.org/calendars/user/personal/").unwrap();
         let parsed = parse_multistatus(xml).unwrap();
-        let changes = changes_from(&base, &parsed, false);
+        let changes = changes_from(&base, &base, &parsed, false).unwrap();
         assert_eq!(changes.resources.len(), 1);
         let res = &changes.resources[0];
         assert_eq!(
@@ -1669,7 +1882,7 @@ END:VCALENDAR</C:calendar-data></D:prop>
             parsed.sync_token.as_deref(),
             Some("http://example.com/sync/2")
         );
-        let changes = changes_from(&base, &parsed, true);
+        let changes = changes_from(&base, &base, &parsed, true).unwrap();
         assert_eq!(changes.resources.len(), 1);
         assert_eq!(
             changes.resources[0].href,
@@ -1692,7 +1905,7 @@ END:VCALENDAR</C:calendar-data></D:prop>
   </D:response>
 </D:multistatus>"#;
         let base = Url::parse("https://dav.example.org/cal/").unwrap();
-        let changes = changes_from(&base, &parse_multistatus(xml).unwrap(), true);
+        let changes = changes_from(&base, &base, &parse_multistatus(xml).unwrap(), true).unwrap();
         assert_eq!(changes.resources.len(), 1);
         assert!(
             changes.resources[0].data.is_empty(),
@@ -1773,14 +1986,12 @@ END:VCALENDAR</C:calendar-data></D:prop>
             normalize_base_url("cal.example.org/dav").unwrap().as_str(),
             "https://cal.example.org/dav"
         );
-        // An explicit http:// the user typed is honoured — that is the
-        // self-hosted-on-localhost case.
-        assert_eq!(
-            normalize_base_url("http://localhost:5232/")
-                .unwrap()
-                .as_str(),
-            "http://localhost:5232/"
-        );
+        // An explicit http:// is refused with the fixed code (E2b), the
+        // self-hosted-on-localhost case included.
+        for raw in ["http://localhost:5232/", "http://dav.example.org/", "HTTP://dav.example.org/"] {
+            let err = normalize_base_url(raw).unwrap_err();
+            assert!(err.starts_with(HTTP_REFUSED), "{raw}: {err}");
+        }
         assert!(normalize_base_url("ftp://example.org").is_err());
         assert!(normalize_base_url("   ").is_err());
     }
@@ -1830,18 +2041,117 @@ END:VCALENDAR</C:calendar-data></D:prop>
             &from,
             &u("https://evil.example/dav/")
         ));
-        // A sibling host is refused too: without a public-suffix list, "same
-        // organization" is not something this can tell from "same last two
-        // labels", and `a.co.uk`/`evil.co.uk` would pass such a test.
-        assert!(!credentials_may_follow(
-            &from,
-            &u("https://other.example.org/dav/")
-        ));
         // Suffix matching must not be substring matching.
         assert!(!credentials_may_follow(
             &from,
             &u("https://notdav.example.org.evil.test/")
         ));
+        assert!(!credentials_may_follow(
+            &from,
+            &u("https://evilexample.org/")
+        ));
+    }
+
+    #[test]
+    fn credentials_ride_to_a_sibling_host_under_the_same_registrable_domain() {
+        // The iCloud shape (decision 2026-10-13): the account names one host,
+        // the principal and calendars live on a per-user sibling.
+        let from = u("https://caldav.example.com/");
+        assert!(credentials_may_follow(
+            &from,
+            &u("https://p42-caldav.example.com/123/calendars/")
+        ));
+        assert!(credentials_may_follow(&from, &u("https://example.com/dav/")));
+        assert!(credentials_may_follow(&from, &u("https://a.b.example.com/")));
+        // A different registrable domain is refused, however alike it looks.
+        assert!(!credentials_may_follow(&from, &u("https://p42-caldav.example.net/")));
+        assert!(!credentials_may_follow(&from, &u("https://caldav.example.com.evil.test/")));
+        // Over http on either end: never another host.
+        assert!(!credentials_may_follow(&from, &u("http://p42-caldav.example.com/")));
+        // Another port on a sibling machine is another service; 443 is the
+        // https service of that host.
+        assert!(!credentials_may_follow(&from, &u("https://p42-caldav.example.com:8443/")));
+        let odd = u("https://caldav.example.com:8443/");
+        assert!(credentials_may_follow(&odd, &u("https://p42-caldav.example.com:8443/")));
+        assert!(credentials_may_follow(&odd, &u("https://p42-caldav.example.com/")));
+        assert!(!credentials_may_follow(&odd, &u("https://p42-caldav.example.com:9443/")));
+        // The same host keeps the same-origin rule: its other ports are not ours.
+        assert!(!credentials_may_follow(&odd, &u("https://caldav.example.com/")));
+    }
+
+    #[test]
+    fn the_registrable_domain_comes_from_the_public_suffix_list() {
+        // `example.co.uk` never covers the rest of `.co.uk`.
+        let uk = u("https://dav.example.co.uk/");
+        assert!(credentials_may_follow(&uk, &u("https://p1.example.co.uk/")));
+        assert!(!credentials_may_follow(&uk, &u("https://evil.co.uk/")));
+        assert!(!credentials_may_follow(&uk, &u("https://co.uk/")));
+        assert_eq!(registrable_domain("dav.example.co.uk").as_deref(), Some("example.co.uk"));
+        // Private-section suffixes too: one user's pages are not another's.
+        let gh = u("https://alice.github.io/dav/");
+        assert!(!credentials_may_follow(&gh, &u("https://bob.github.io/")));
+        assert!(!credentials_may_follow(&gh, &u("https://github.io/")));
+        // A host that *is* a public suffix has no site: exact match only.
+        assert_eq!(registrable_domain("co.uk"), None);
+        let bare = u("https://co.uk/");
+        assert!(!credentials_may_follow(&bare, &u("https://example.co.uk/")));
+        assert!(credentials_may_follow(&bare, &u("https://co.uk/dav/")));
+        // Wildcard rules (`*.ck`) and their exceptions (`!www.ck`).
+        assert_eq!(registrable_domain("a.b.ck").as_deref(), Some("a.b.ck"));
+        assert_eq!(registrable_domain("x.www.ck").as_deref(), Some("www.ck"));
+        // An unknown TLD falls back to the `*` rule: its own site per name.
+        assert_eq!(registrable_domain("dav.home.lan").as_deref(), Some("home.lan"));
+        assert!(!credentials_may_follow(&u("https://dav.home.lan/"), &u("https://nas.lan/")));
+        // Case is not identity.
+        assert!(credentials_may_follow(&from_upper(), &u("https://p42-caldav.example.com/")));
+    }
+
+    fn from_upper() -> Url {
+        u("https://CalDAV.Example.COM/")
+    }
+
+    #[test]
+    fn single_label_and_ip_hosts_match_only_exactly() {
+        let local = u("https://nas/");
+        assert_eq!(registrable_domain("nas"), None);
+        assert!(credentials_may_follow(&local, &u("https://nas/dav/")));
+        assert!(!credentials_may_follow(&local, &u("https://dav.nas/")));
+        assert!(!credentials_may_follow(&u("https://localhost:5232/"), &u("https://sub.localhost:5232/")));
+
+        let v4 = u("https://192.0.2.10/dav/");
+        assert!(credentials_may_follow(&v4, &u("https://192.0.2.10/other")));
+        assert!(!credentials_may_follow(&v4, &u("https://192.0.2.11/")));
+        assert!(!credentials_may_follow(&v4, &u("https://192.0.2.10.example.com/")));
+        let v6 = u("https://[2001:db8::1]/dav/");
+        assert!(credentials_may_follow(&v6, &u("https://[2001:db8::1]/x")));
+        assert!(!credentials_may_follow(&v6, &u("https://[2001:db8::2]/")));
+        // A domain account never covers an IP, nor the other way round.
+        assert!(!credentials_may_follow(&u("https://dav.example.com/"), &u("https://192.0.2.10/")));
+        // A trailing-dot spelling fails closed.
+        assert!(!credentials_may_follow(&u("https://dav.example.com./"), &u("https://p1.example.com./")));
+    }
+
+    #[test]
+    fn an_http_ref_on_the_same_host_has_an_https_twin_and_nothing_else_does() {
+        let origin = u("https://dav.example.com/");
+        assert_eq!(
+            https_twin("http://dav.example.com/cal/home/", &origin).as_deref(),
+            Some("https://dav.example.com/cal/home/")
+        );
+        assert_eq!(
+            https_twin("http://DAV.example.com:80/cal/", &origin).as_deref(),
+            Some("https://dav.example.com/cal/")
+        );
+        // The account's own port, whatever the http one was.
+        let odd = u("https://dav.example.com:8443/");
+        assert_eq!(
+            https_twin("http://dav.example.com:5232/cal/", &odd).as_deref(),
+            Some("https://dav.example.com:8443/cal/")
+        );
+        assert_eq!(https_twin("http://other.example.com/cal/", &origin), None);
+        assert_eq!(https_twin("https://dav.example.com/cal/", &origin), None);
+        assert_eq!(https_twin("not a url", &origin), None);
+        assert_eq!(https_twin("http://dav.example.com/cal/", &u("http://dav.example.com/")), None);
     }
 
     #[test]
@@ -1889,10 +2199,7 @@ END:VCALENDAR</C:calendar-data></D:prop>
         //
         // This reaches no network: the refusal happens while building the
         // condition header, before a client is even used.
-        let cred = Credentials {
-            user: "me".into(),
-            password: "pw".into(), // privacy-check: ok — test fixture, reaches no network
-        };
+        let cred = cred("https://dav.example.org/dav/");
         let err = put_resource(
             "https://dav.example.org/dav/me/personal/e1.ics",
             &cred,
@@ -1943,12 +2250,435 @@ END:VCALENDAR</C:calendar-data></D:prop>
 
     #[test]
     fn credentials_never_print_the_password() {
-        let cred = Credentials {
-            user: "someone".into(),
-            password: "hunter2".into(),
-        };
+        let cred = Credentials::new(
+            "someone".into(),
+            "hunter2".into(), // privacy-check: ok — test fixture, never sent
+            "https://dav.example.org/",
+        )
+        .unwrap();
         let shown = format!("{cred:?}");
         assert!(!shown.contains("hunter2"), "{shown}");
+    }
+
+    // ── The in-process transport (gap 26 / E2b tests) ──────────────────────
+    //
+    // `Dav::send` asks [`fake::answer`] first under `cfg(test)`. A thread-local
+    // handler is safe here: `#[tokio::test]` runs each test on one thread.
+
+    pub mod fake {
+        use super::super::{StatusCode, Wire};
+        use std::cell::RefCell;
+        use std::sync::{Arc, Mutex};
+
+        /// One request as the fake server saw it.
+        #[derive(Debug, Clone)]
+        pub struct Seen {
+            pub method: String,
+            pub url: String,
+            pub auth: bool,
+            pub body: String,
+        }
+
+        type Handler = Arc<dyn Fn(&Seen) -> Wire + Send + Sync>;
+        type Log = Arc<Mutex<Vec<Seen>>>;
+
+        thread_local! {
+            static HANDLER: RefCell<Option<(Handler, Log)>> = const { RefCell::new(None) };
+        }
+
+        pub fn answer(req: &reqwest::Request) -> Option<Wire> {
+            HANDLER.with(|slot| {
+                let slot = slot.borrow();
+                let (handler, log) = slot.as_ref()?;
+                let seen = Seen {
+                    method: req.method().as_str().to_string(),
+                    url: req.url().to_string(),
+                    auth: req.headers().contains_key(reqwest::header::AUTHORIZATION),
+                    body: req
+                        .body()
+                        .and_then(|b| b.as_bytes())
+                        .map(|b| String::from_utf8_lossy(b).into_owned())
+                        .unwrap_or_default(),
+                };
+                log.lock().unwrap().push(seen.clone());
+                Some(handler(&seen))
+            })
+        }
+
+        /// Uninstalls the handler when dropped.
+        pub struct Server(Log);
+
+        impl Server {
+            pub fn seen(&self) -> Vec<Seen> {
+                self.0.lock().unwrap().clone()
+            }
+            /// Every request that reached a host.
+            pub fn to_host(&self, host: &str) -> Vec<Seen> {
+                self.seen()
+                    .into_iter()
+                    .filter(|s| reqwest::Url::parse(&s.url).unwrap().host_str() == Some(host))
+                    .collect()
+            }
+        }
+
+        impl Drop for Server {
+            fn drop(&mut self) {
+                HANDLER.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+
+        pub fn serve(handler: impl Fn(&Seen) -> Wire + Send + Sync + 'static) -> Server {
+            let log: Log = Arc::default();
+            HANDLER.with(|slot| *slot.borrow_mut() = Some((Arc::new(handler), log.clone())));
+            Server(log)
+        }
+
+        pub fn reply(status: u16, body: &str) -> Wire {
+            Wire {
+                status: StatusCode::from_u16(status).unwrap(),
+                location: None,
+                etag: String::new(),
+                body: body.as_bytes().to_vec(),
+            }
+        }
+
+        pub fn redirect(to: &str) -> Wire {
+            Wire {
+                status: StatusCode::TEMPORARY_REDIRECT,
+                location: Some(to.to_string()),
+                etag: String::new(),
+                body: Vec::new(),
+            }
+        }
+    }
+
+    fn cred(origin: &str) -> Credentials {
+        Credentials::new(
+            "me".into(),
+            "pw".into(), // privacy-check: ok — test fixture, reaches no network
+            origin,
+        )
+        .unwrap()
+    }
+
+    /// A Depth-0 probe answer naming a principal and/or a home set.
+    fn probe(principal: Option<&str>, home: Option<&str>) -> String {
+        let mut props = String::new();
+        if let Some(p) = principal {
+            props.push_str(&format!(
+                "<d:current-user-principal><d:href>{p}</d:href></d:current-user-principal>"
+            ));
+        }
+        if let Some(h) = home {
+            props.push_str(&format!("<c:calendar-home-set><d:href>{h}</d:href></c:calendar-home-set>"));
+        }
+        format!(
+            r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+<d:response><d:href>/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype>{props}</d:prop>
+<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"#
+        )
+    }
+
+    /// A home listing with one calendar per href.
+    fn listing(hrefs: &[&str]) -> String {
+        let mut out = String::from(
+            r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">"#,
+        );
+        for h in hrefs {
+            out.push_str(&format!(
+                r#"<d:response><d:href>{h}</d:href><d:propstat><d:prop><d:resourcetype><d:collection/><c:calendar/></d:resourcetype><d:displayname>C</d:displayname></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"#
+            ));
+        }
+        out.push_str("</d:multistatus>");
+        out
+    }
+
+    /// A `calendar-query` answer with one resource per href.
+    fn resources(hrefs: &[&str]) -> String {
+        let mut out = String::from(
+            r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">"#,
+        );
+        for h in hrefs {
+            out.push_str(&format!(
+                r#"<d:response><d:href>{h}</d:href><d:propstat><d:prop><d:getetag>"e1"</d:getetag><c:calendar-data>BEGIN:VCALENDAR
+END:VCALENDAR</c:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"#
+            ));
+        }
+        out.push_str("</d:multistatus>");
+        out
+    }
+
+    #[tokio::test]
+    async fn a_principal_on_another_host_is_refused_before_any_request_reaches_it() {
+        let server = fake::serve(|req| {
+            if req.url.starts_with("https://dav.example.org/") {
+                fake::reply(207, &probe(Some("https://evil.example.net/principals/me/"), None))
+            } else {
+                fake::reply(207, &listing(&["/cal/"]))
+            }
+        });
+        let err = discover("https://dav.example.org/dav/", &cred("https://dav.example.org/dav/"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("evil.example.net"), "{err}");
+        assert!(server.to_host("evil.example.net").is_empty(), "{:?}", server.seen());
+        assert!(server.seen().iter().all(|s| s.auth), "every request went to the origin");
+    }
+
+    #[tokio::test]
+    async fn an_icloud_shaped_principal_on_a_sibling_host_signs_in() {
+        // Decision 2026-10-13: the account names `caldav.example.com`, the
+        // server answers with a per-user sibling; same registrable domain, so
+        // the login follows and the calendars there are listed.
+        let server = fake::serve(|req| {
+            if req.url.starts_with("https://caldav.example.com/") {
+                fake::reply(207, &probe(Some("https://p42-caldav.example.com/42/principal/"), None))
+            } else if req.url.contains("/principal/") {
+                fake::reply(207, &probe(None, Some("https://p42-caldav.example.com/42/calendars/")))
+            } else {
+                fake::reply(207, &listing(&["/42/calendars/home/"]))
+            }
+        });
+        let found = discover("https://caldav.example.com/", &cred("https://caldav.example.com/"))
+            .await
+            .unwrap();
+        assert!(
+            found.iter().any(|c| c.href == "https://p42-caldav.example.com/42/calendars/home/"),
+            "{found:?}"
+        );
+        assert!(!server.to_host("p42-caldav.example.com").is_empty());
+        assert!(server.seen().iter().all(|s| s.auth), "{:?}", server.seen());
+    }
+
+    #[tokio::test]
+    async fn a_home_set_on_another_host_is_refused_before_any_request_reaches_it() {
+        let server = fake::serve(|_| {
+            fake::reply(207, &probe(None, Some("https://evil.example.net/home/")))
+        });
+        let err = discover("https://dav.example.org/", &cred("https://dav.example.org/"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("evil.example.net"), "{err}");
+        assert!(server.to_host("evil.example.net").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_redirect_target_naming_itself_principal_never_gets_the_password() {
+        // Gap 26 (a): the host a redirect reached is asked without credentials,
+        // and naming itself as the principal does not make it the origin.
+        let server = fake::serve(|req| {
+            if req.url.starts_with("https://dav.example.org/") {
+                fake::redirect("https://evil.example.net/dav/")
+            } else {
+                fake::reply(207, &probe(Some("https://evil.example.net/principals/me/"), None))
+            }
+        });
+        let err = discover("https://dav.example.org/dav/", &cred("https://dav.example.org/dav/"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("evil.example.net"), "{err}");
+        let evil = server.to_host("evil.example.net");
+        assert!(!evil.is_empty(), "the redirect itself is followed");
+        assert!(evil.iter().all(|s| !s.auth), "{evil:?}");
+        assert!(
+            evil.iter().all(|s| !s.url.contains("/principals/")),
+            "the self-named principal is never requested: {evil:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_well_known_hop_into_a_subdomain_still_signs_in() {
+        let server = fake::serve(|req| match req.url.as_str() {
+            "https://example.org/" => fake::reply(404, ""),
+            "https://example.org/.well-known/caldav" => fake::redirect("https://caldav.example.org/"),
+            "https://caldav.example.org/" => fake::reply(207, &probe(Some("/p/me/"), None)),
+            "https://caldav.example.org/p/me/" => fake::reply(207, &probe(None, Some("/home/"))),
+            _ => fake::reply(207, &listing(&["/home/work/", "https://other.example.net/x/"])),
+        });
+        let found = discover("https://example.org/", &cred("https://example.org/")).await.unwrap();
+        assert_eq!(found.len(), 1, "the off-origin calendar is dropped: {found:?}");
+        assert_eq!(found[0].href, "https://caldav.example.org/home/work/");
+        assert!(server.seen().iter().all(|s| s.auth));
+    }
+
+    #[tokio::test]
+    async fn a_listing_whose_calendars_all_sit_elsewhere_says_so() {
+        let _server = fake::serve(|_| {
+            fake::reply(207, &listing(&["https://evil.example.net/cal/", "http://dav.example.org/cal/"]))
+        });
+        let err = list_collections(
+            &client().unwrap(),
+            &Url::parse("https://dav.example.org/home/").unwrap(),
+            &cred("https://dav.example.org/"),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("evil.example.net"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn stored_hrefs_outside_the_origin_get_no_request() {
+        let server = fake::serve(|_| fake::reply(207, &resources(&[])));
+        let cred = cred("https://dav.example.org/dav/");
+        // A collection on another host (gap 26), and one on http under an
+        // https origin (gap 26 (b), E2b).
+        let off = "https://evil.example.net/cal/";
+        let plain = "http://dav.example.org/dav/cal/";
+        assert!(fetch_all(off, &cred, &[]).await.unwrap_err().contains("evil.example.net"));
+        assert!(fetch_all(plain, &cred, &[]).await.unwrap_err().starts_with(HTTP_REFUSED));
+        assert!(fetch_changes(off, &cred, "t").await.is_err());
+        assert!(change_tokens(plain, &cred).await.is_err());
+        assert!(collection_read_only(off, &cred).await.is_err());
+        let put = put_resource(
+            &format!("{off}e.ics"),
+            &cred,
+            "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
+            WriteCondition::Create,
+        )
+        .await;
+        assert!(put.is_err());
+        assert!(delete_resource(&format!("{plain}e.ics"), &cred, "\"e\"").await.is_err());
+        assert_eq!(current_etag(&format!("{off}e.ics"), &cred).await.unwrap(), "");
+        assert!(server.seen().is_empty(), "nothing was sent: {:?}", server.seen());
+    }
+
+    #[tokio::test]
+    async fn resources_outside_the_origin_are_never_stored() {
+        // Not dropped either: a full listing is authoritative, so a dropped
+        // resource would delete its local copy behind a "synced" status. The
+        // read fails, naming the host.
+        let _server = fake::serve(|req| {
+            if req.body.contains("calendar-query") {
+                fake::reply(207, &resources(&["/dav/cal/ok.ics", "https://evil.example.net/x.ics"]))
+            } else {
+                fake::reply(207, &listing(&[]))
+            }
+        });
+        let err = fetch_all(
+            "https://dav.example.org/dav/cal/",
+            &cred("https://dav.example.org/dav/"),
+            &["VEVENT".to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("evil.example.net"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_listing_of_http_entries_fails_the_sync_instead_of_emptying_the_calendar() {
+        // A TLS proxy in front of a server that builds absolute `http://` hrefs:
+        // every entry is outside the origin. Read as "nothing there", the merge
+        // would delete every local row and call it a success.
+        let _server = fake::serve(|req| {
+            if req.body.contains("calendar-query") {
+                fake::reply(
+                    207,
+                    &resources(&["http://dav.example.org/dav/cal/a.ics", "http://dav.example.org/dav/cal/b.ics"]),
+                )
+            } else {
+                fake::reply(207, &listing(&[]))
+            }
+        });
+        let cred = cred("https://dav.example.org/dav/");
+        let err = fetch_all("https://dav.example.org/dav/cal/", &cred, &["VEVENT".to_string()])
+            .await
+            .unwrap_err();
+        assert!(err.starts_with(HTTP_REFUSED), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_read_redirected_off_the_origin_fails_rather_than_reading_empty() {
+        // A read may follow a redirect bare; what that host lists resolves
+        // against it and is outside the origin — an error, not an empty listing.
+        let server = fake::serve(|req| {
+            if req.url.starts_with("https://dav.example.org/") {
+                fake::redirect("https://elsewhere.example.net/cal/")
+            } else {
+                fake::reply(207, &resources(&["/cal/a.ics"]))
+            }
+        });
+        let err = fetch_all(
+            "https://dav.example.org/dav/cal/",
+            &cred("https://dav.example.org/dav/"),
+            &["VEVENT".to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("elsewhere.example.net"), "{err}");
+        assert!(server.to_host("elsewhere.example.net").iter().all(|s| !s.auth));
+    }
+
+    #[test]
+    fn a_deletion_stub_outside_the_origin_is_ignored() {
+        let xml = r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">
+<d:response><d:href>https://evil.example.net/x.ics</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>
+<d:response><d:href>/dav/cal/gone.ics</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>
+<d:sync-token>t2</d:sync-token></d:multistatus>"#;
+        let base = u("https://dav.example.org/dav/cal/");
+        let got = changes_from(&base, &base, &parse_multistatus(xml).unwrap(), true).unwrap();
+        assert_eq!(got.removed, ["https://dav.example.org/dav/cal/gone.ics"]);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_http_is_refused_outright() {
+        let server = fake::serve(|req| {
+            if req.url.starts_with("https://") {
+                fake::redirect("http://dav.example.org/dav/cal/")
+            } else {
+                fake::reply(207, &resources(&[]))
+            }
+        });
+        let err = fetch_all("https://dav.example.org/dav/cal/", &cred("https://dav.example.org/dav/"), &[])
+            .await
+            .unwrap_err();
+        assert!(err.starts_with(HTTP_REFUSED), "{err}");
+        assert!(server.seen().iter().all(|s| s.url.starts_with("https://")));
+    }
+
+    #[tokio::test]
+    async fn a_write_redirected_off_the_origin_is_refused_not_sent_bare() {
+        // A redirected PUT would carry the event itself to the other host.
+        let server = fake::serve(|req| {
+            if req.url.starts_with("https://dav.example.org/") {
+                fake::redirect("https://evil.example.net/e.ics")
+            } else {
+                fake::reply(201, "")
+            }
+        });
+        let err = put_resource(
+            "https://dav.example.org/dav/cal/e.ics",
+            &cred("https://dav.example.org/dav/"),
+            "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
+            WriteCondition::Create,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("evil.example.net"), "{err}");
+        assert!(server.to_host("evil.example.net").is_empty());
+        assert!(server.seen().iter().all(|s| s.method == "PUT" && s.auth));
+    }
+
+    #[test]
+    fn an_http_account_has_no_credentials_and_hrefs_check_the_origin() {
+        let err = Credentials::new("me".into(), "x".into(), "http://dav.example.org/").unwrap_err();
+        assert!(err.starts_with(HTTP_REFUSED), "{err}");
+        let origin = u("https://example.org/");
+        assert!(href_in_origin(&origin, "https://example.org/cal/"));
+        assert!(href_in_origin(&origin, "https://caldav.example.org/cal/"));
+        assert!(!href_in_origin(&origin, "http://example.org/cal/"));
+        assert!(!href_in_origin(&origin, "https://example.net/cal/"));
+        assert!(!href_in_origin(&origin, "https://evilexample.org/cal/"));
+        assert!(!href_in_origin(&origin, "not a url"));
+    }
+
+    #[tokio::test]
+    async fn the_real_client_refuses_plain_http_before_connecting() {
+        // The `https_only` backstop: a refusal at build time, not a connect
+        // error (which is what the same request gets without it).
+        let dav = client().unwrap();
+        let req = dav.client.get("http://127.0.0.1:9/").build().unwrap();
+        let err = dav.client.execute(req).await.unwrap_err();
+        assert!(err.is_builder(), "{err:?}");
     }
 
     #[test]

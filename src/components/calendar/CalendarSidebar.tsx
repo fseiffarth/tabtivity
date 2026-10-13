@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Calendar } from "../../types";
 import { calendarSyncStatus, useCalDavStore } from "../../stores/calendar/caldav";
+import { caldavErrorText } from "../../lib/calendar/caldav";
 import { addMonths, datePart, monthGrid, monthName, todayStr, weekdayLabel } from "../../lib/calendar/calendarTime";
 import { useI18nStore, useT } from "../../lib/i18n";
 import { BellIcon } from "../common/BellIcon";
@@ -407,7 +408,7 @@ export function CalendarSidebar({
                   // user can only respond to by opening things at random.
                   title={
                     failed
-                      ? t("caldav.syncFailedTitle", { error: sync.error })
+                      ? t("caldav.syncFailedTitle", { error: caldavErrorText(sync.error, t) })
                       : sync.at
                         ? t("caldav.syncedAtTitle", { at: sync.at })
                         : t("caldav.syncNowTitle")

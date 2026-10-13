@@ -1,4 +1,4 @@
-use std::{fs, io::Write, path::Path};
+use std::{fs, path::Path};
 
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -12,44 +12,15 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T, mode: u32) -> Res
     write_bytes_atomic(path, &bytes, mode)
 }
 
-/// Write `bytes` to a sibling created with `mode`, then rename it over `path`,
-/// so a reader sees either the old contents or the new ones and never a
-/// truncated file. The sibling carries the private mode from creation, so key
-/// material is never world-readable for even an instant. On Windows the
-/// sibling is restricted to its owner (`private_file::restrict_to_owner`)
-/// before a byte is written, and the rename keeps that ACL; `mode` is not
-/// used there.
+/// Write `bytes` owner-only and atomically (`storage::write_private_atomic_mode`):
+/// a uniquely named sibling carries `mode` from before its first byte, is
+/// synced and renamed over `path`, so a reader sees either the old contents or
+/// the new ones and never a truncated file, and key material is never
+/// world-readable for even an instant. On Windows the sibling is restricted to
+/// its owner (`private_file::restrict_to_owner`) before a byte is written, and
+/// the rename keeps that ACL; `mode` is not used there.
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
-    #[cfg(not(unix))]
-    let _ = mode;
-    let parent = path.parent().ok_or("state path has no parent")?;
-    fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    let tmp = path.with_extension("tmp");
-    let mut options = fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(mode);
-    }
-    let mut file = options
-        .open(&tmp)
-        .map_err(|e| format!("open {}: {e}", tmp.display()))?;
-    #[cfg(windows)]
-    crate::services::private_file::restrict_to_owner(&tmp);
-    file.write_all(bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())?;
-    }
-    fs::rename(&tmp, path).map_err(|e| format!("rename {}: {e}", path.display()))?;
-    if let Ok(directory) = fs::File::open(parent) {
-        let _ = directory.sync_all();
-    }
-    Ok(())
+    crate::storage::write_private_atomic_mode(path, bytes, mode)
 }
 
 #[cfg(unix)]

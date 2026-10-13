@@ -1,0 +1,45 @@
+# cargo-deny (security.yml's `dependencies` job): `cargo deny check bans
+# licenses sources`. Advisories stay with cargo-audit in the same job, so its
+# ignore list (with reasons) lives in one place.
+
+[graph]
+all-features = true
+
+# What the dependency tree may be licensed under. A crate offering a choice
+# ("MIT OR Apache-2.0 OR LGPL-2.1-or-later") passes when one allowed term
+# covers it, so a copyleft alternative alone does not need listing. A new
+# license here is a decision about what the shipped app may contain.
+[licenses]
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",   # webpki-root-certs: Mozilla's root store data
+  "ISC",
+  "MIT",
+  "MPL-2.0",               # file-level copyleft (cssparser via WebKit's Tauri stack)
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Tauri's tree carries many crates in two major versions; that is size, not a
+# security finding, and listing them would bury the checks below.
+multiple-versions = "allow"
+# A `*` version requirement on a registry crate takes whatever is published
+# next; the workspace's own path crates have no version and are fine.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+# Every crate comes from crates.io. A git or other-registry dependency is a
+# new trust root and has to be added here on purpose.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

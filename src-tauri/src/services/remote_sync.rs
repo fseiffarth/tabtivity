@@ -22,6 +22,7 @@
 //!   with the lock released.
 
 use crate::brand::SLUG;
+use app_core::sync::LockExt;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -164,7 +165,7 @@ pub fn default_mirror_dir_in(state_dir: &Path, project_id: &str) -> PathBuf {
 /// global list rather than the per-project `project.json` for the same reason as
 /// `remote::remote_target_for`: the global list is always on the local disk.
 fn mirror_override(project_id: &str) -> Option<PathBuf> {
-    let list_path = crate::storage::state_dir().join("projects.json");
+    let list_path = crate::storage::projects_path();
     let list: crate::schema::projects::ProjectsList = crate::storage::read_json(&list_path).ok()?;
     let entry = list.iter().find(|e| e.id == project_id)?;
     let raw = entry.extra.get("mirror")?.as_str()?.trim();
@@ -380,19 +381,12 @@ fn stamps() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Option<Stamp>>> {
     static STAMPS: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, Option<Stamp>>>> = std::sync::OnceLock::new();
     STAMPS
         .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .lock_ok()
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────
 
-/// Current wall-clock time as whole seconds since the Unix epoch.
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+use crate::clock::now_secs;
 
 /// The green/amber state for a SELECTED file, judged SYMMETRICALLY against both
 /// bases: amber when the host moved from its recorded base (`host` re-stat differs

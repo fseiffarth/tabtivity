@@ -65,10 +65,11 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, PoisonError,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
+use app_core::sync::LockExt;
 
 use app_core::{Caller, ClientId, CoreCtx, EventSink};
 use axum::{
@@ -104,7 +105,7 @@ static ORDERED_TAIL: Mutex<Option<tokio::sync::oneshot::Receiver<()>>> = Mutex::
 /// sender whose drop lets the next one go.
 fn ordered_turn() -> (Option<tokio::sync::oneshot::Receiver<()>>, tokio::sync::oneshot::Sender<()>) {
     let (done, next) = tokio::sync::oneshot::channel();
-    let before = ORDERED_TAIL.lock().unwrap_or_else(PoisonError::into_inner).replace(next);
+    let before = ORDERED_TAIL.lock_ok().replace(next);
     (before, done)
 }
 
@@ -189,7 +190,7 @@ pub struct WebEvents {
 
 impl WebEvents {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ClientId, ClientLink>> {
-        self.clients.lock().unwrap_or_else(PoisonError::into_inner)
+        self.clients.lock_ok()
     }
 
     pub fn attach(&self, client: &ClientId, tx: mpsc::Sender<Outbound>) {
@@ -352,36 +353,29 @@ fn random_token() -> Result<String, String> {
 /// so whichever runs first writes the file the other reads.
 pub fn login_token(control_dir: &Path) -> Result<String, String> {
     let path = control_dir.join(TOKEN_FILE);
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        let existing = existing.trim();
-        if existing.len() >= 32 {
-            return Ok(existing.to_string());
-        }
+    if let Some(existing) = read_token(&path) {
+        return Ok(existing);
     }
     std::fs::create_dir_all(control_dir).map_err(|e| format!("create {}: {e}", control_dir.display()))?;
     let token = random_token()?;
-    write_private(&path, token.as_bytes())?;
+    // The desktop window and the sidecar can both get here at once: the
+    // first mint to land wins and the other adopts it, so neither hands out
+    // a token the file no longer holds. A file that is there but unusable
+    // (the short read above) is replaced.
+    if !crate::storage::create_private_atomic(&path, token.as_bytes())? {
+        if let Some(existing) = read_token(&path) {
+            return Ok(existing);
+        }
+        crate::storage::write_private_atomic(&path, token.as_bytes())?;
+    }
     Ok(token)
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(|e| format!("write {}: {e}", path.display()))?;
-        file.write_all(bytes).map_err(|e| format!("write {}: {e}", path.display()))
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, bytes).map_err(|e| format!("write {}: {e}", path.display()))
-    }
+/// The stored login token, when the file holds a usable one.
+fn read_token(path: &Path) -> Option<String> {
+    let existing = std::fs::read_to_string(path).ok()?;
+    let existing = existing.trim();
+    (existing.len() >= 32).then(|| existing.to_string())
 }
 
 /// Replace the login token: every sign-in link minted from the old one stops
@@ -390,16 +384,11 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
 pub fn rotate_login_token(control_dir: &Path) -> Result<String, String> {
     std::fs::create_dir_all(control_dir).map_err(|e| format!("create {}: {e}", control_dir.display()))?;
     let token = random_token()?;
-    write_private(&control_dir.join(TOKEN_FILE), token.as_bytes())?;
+    crate::storage::write_private_atomic(&control_dir.join(TOKEN_FILE), token.as_bytes())?;
     Ok(token)
 }
 
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::clock::now_secs;
 
 /// `HMAC-SHA256(token, "desktop-login\n" ‖ exp ‖ "\n" ‖ nonce)`, base64url.
 /// What a sign-in link carries instead of the token itself; the nonce makes
@@ -420,7 +409,7 @@ fn login_signature(token: &str, exp: u64, nonce: &str) -> String {
 /// history is dead within minutes and was single-use anyway.
 pub fn login_url(port: u16, token: &str) -> String {
     let nonce = random_token().unwrap_or_default();
-    login_url_at(port, token, unix_now(), &nonce)
+    login_url_at(port, token, now_secs(), &nonce)
 }
 
 fn login_url_at(port: u16, token: &str, now: u64, nonce: &str) -> String {
@@ -555,15 +544,15 @@ impl WebClientState {
     }
 
     fn lock_sessions(&self) -> std::sync::MutexGuard<'_, WebSessions> {
-        self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
+        self.sessions.lock_ok()
     }
 
     fn lock_parked(&self) -> std::sync::MutexGuard<'_, HashMap<ClientId, Parked>> {
-        self.parked.lock().unwrap_or_else(PoisonError::into_inner)
+        self.parked.lock_ok()
     }
 
     fn lock_live(&self) -> std::sync::MutexGuard<'_, HashMap<ClientId, Live>> {
-        self.live.lock().unwrap_or_else(PoisonError::into_inner)
+        self.live.lock_ok()
     }
 
     /// A new connection's client id and generation. `resume` names the id a
@@ -633,7 +622,7 @@ impl WebClientState {
             return Some((SessionRef::Web(token), role));
         };
         let token = super::host::device_session_cookie(headers)?;
-        link.auth.lock().unwrap_or_else(PoisonError::into_inner).touch(token)?;
+        link.auth.lock_ok().touch(token)?;
         Some((SessionRef::Device(token.to_string()), server::gateway_role_in(headers)))
     }
 
@@ -644,7 +633,7 @@ impl WebClientState {
             SessionRef::Device(token) => self
                 .server
                 .as_ref()
-                .is_some_and(|link| link.auth.lock().unwrap_or_else(PoisonError::into_inner).touch(token).is_some()),
+                .is_some_and(|link| link.auth.lock_ok().touch(token).is_some()),
         }
     }
 
@@ -653,7 +642,7 @@ impl WebClientState {
             SessionRef::Web(token) => self.lock_sessions().logout(token),
             SessionRef::Device(token) => {
                 if let Some(link) = &self.server {
-                    link.auth.lock().unwrap_or_else(PoisonError::into_inner).logout(token);
+                    link.auth.lock_ok().logout(token);
                 }
             }
         }
@@ -877,7 +866,7 @@ async fn login(State(state): State<WebClientState>, headers: HeaderMap, Query(qu
         return page(StatusCode::TOO_MANY_REQUESTS, "<!doctype html><p>Too many sign-in attempts. Wait a minute.</p>".into());
     }
     let ok = match query.exp {
-        Some(exp) => state.lock_sessions().redeem_link(&expected, exp, &query.n, &query.sig, unix_now()),
+        Some(exp) => state.lock_sessions().redeem_link(&expected, exp, &query.n, &query.sig, now_secs()),
         None => false,
     };
     if !ok {
@@ -1280,7 +1269,7 @@ fn reap_if_still_parked(state: &WebClientState, client: &ClientId) {
 fn reap_client(state: &WebClientState, client: &ClientId) {
     crate::terminal::route_drop_window_views(client.as_str());
     if let Some(registry) = state.ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
-        let taken = registry.lock().unwrap_or_else(PoisonError::into_inner).release_client(client);
+        let taken = registry.lock_ok().release_client(client);
         for pty in &taken {
             // As `pty_kill` does: a login marking must not bless a later PTY
             // that reuses the id, and a pane this page put to sleep has no
@@ -1325,7 +1314,7 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, role: Role, id: u64,
             };
             let project_id = args.get("projectId").and_then(Value::as_str).map(str::to_string);
             let download = args.get("download").and_then(Value::as_bool).unwrap_or(false);
-            let out = match state.tickets.lock().unwrap_or_else(PoisonError::into_inner).mint(path, project_id, download) {
+            let out = match state.tickets.lock_ok().mint(path, project_id, download) {
                 Ok(ticket) => match state.content_url(&ticket) {
                     Some(url) => Ok(json!({ "url": url })),
                     None => Err(Value::String("desktop_file_ticket: this server has no user-content origin".into())),
@@ -1341,7 +1330,7 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, role: Role, id: u64,
             };
             let out = match (ctx.state.try_get::<crate::services::pick_grants::PickGrantsState>(), random_token()) {
                 (Some(grants), Ok(grant)) => {
-                    let grant = grants.lock().unwrap_or_else(PoisonError::into_inner).grant(std::path::PathBuf::from(path), grant);
+                    let grant = grants.lock_ok().grant(std::path::PathBuf::from(path), grant);
                     Ok(json!({ "grant": grant }))
                 }
                 (None, _) => Err(Value::String("desktop_file_grant: this host keeps no grants".into())),
@@ -1379,7 +1368,8 @@ async fn handle_raw_call(ctx: &CoreCtx, role: Role, id: u64, header: RawCallHead
         return Answer::Text(ret_frame(id, &Err(Value::String("write_file_bytes: missing path".into()))));
     };
     let project_id = decode(crate::brand::FILE_PROJECT_HEADER).filter(|p| !p.is_empty());
-    let out = crate::commands::fs::write_file_bytes_for(ctx, path, body, project_id)
+    let own_folder_unlinked = decode(crate::commands::fs::NO_FOLDER_LINK_HEADER).as_deref() == Some("1");
+    let out = crate::commands::fs::write_file_bytes_for(ctx, path, body, project_id, own_folder_unlinked)
         .await
         .map(|()| Value::Null)
         .map_err(Value::String);
@@ -1426,7 +1416,7 @@ async fn content(State(state): State<WebClientState>, headers: HeaderMap, RouteP
     if !state.enabled || !content_host_ok {
         return not_found();
     }
-    let Some((path, project_id, download)) = state.tickets.lock().unwrap_or_else(PoisonError::into_inner).get(&ticket) else {
+    let Some((path, project_id, download)) = state.tickets.lock_ok().get(&ticket) else {
         return not_found();
     };
     let name = Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
@@ -1647,6 +1637,21 @@ mod tests {
         let rotated = rotate_login_token(&control).unwrap();
         assert_ne!(rotated, first);
         assert_eq!(login_token(&control).unwrap(), rotated, "the rotated token is what the file holds now");
+    }
+
+    /// A file too short to be a token (a torn or hand-made one) is replaced
+    /// whole; the replacement is what every later read returns.
+    #[test]
+    fn a_short_token_file_is_replaced_and_then_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        std::fs::create_dir_all(&control).unwrap();
+        std::fs::write(control.join(TOKEN_FILE), b"short").unwrap();
+        let minted = login_token(&control).unwrap();
+        assert!(minted.len() >= 43);
+        assert_eq!(std::fs::read_to_string(control.join(TOKEN_FILE)).unwrap(), minted);
+        assert_eq!(login_token(&control).unwrap(), minted);
+        assert_eq!(std::fs::read_dir(&control).unwrap().count(), 1, "no staging file left");
     }
 
     #[test]

@@ -214,8 +214,6 @@ cancel_build() { # pid (= process group id)
   if git_dir="$(git -C "$FREEZE_TREE" rev-parse --absolute-git-dir 2>/dev/null)"; then
     rm -f "$git_dir/index.lock"
   fi
-  # A phone-bundle publish killed before its swap leaves its staging copy.
-  rm -rf "$ROOT/target/mobile-pwa.tmp."*
 }
 
 run() {

@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useState } from "react";
 import { UntestedTag } from "../common/UntestedTag";
 import { useCalDavStore } from "../../stores/calendar/caldav";
@@ -32,8 +33,14 @@ import { ErrorNote } from "../common/ErrorNote";
  *   puts the server's version into `calendar.json`, through the same merge every
  *   other sync goes through, rather than through a special path that would have
  *   to re-derive what the merge already knows.
- * - **Decide later** drops the question and keeps the local edit. The row is not
- *   pushed and not overwritten; the next edit to it will ask again.
+ * - **Decide later** drops the question and keeps the local edit. The row stays
+ *   marked as an unpushed edit (gap 32): no sync this session pushes it or
+ *   overwrites it, and the next edit to it — or the next run — asks again.
+ *
+ * A question can also come from a **sync** rather than a push: the merge keeps
+ * a row whose unpushed edit the server changed too, or whose resource the
+ * server deleted (`serverDeleted` — the row is local-only then; keeping it
+ * puts it back on the server, taking the server's deletes it here too).
  *
  * There is deliberately **no "merge"** option. Two versions of an appointment
  * differ in fields whose combination nobody can be assumed to want — half of one
@@ -46,7 +53,7 @@ export function CalDavConflictDialog() {
   const pushError = useCalDavStore((s) => s.pushError);
   const keepMine = useCalDavStore((s) => s.resolveKeepMine);
   const takeServer = useCalDavStore((s) => s.resolveTakeServer);
-  const dismiss = useCalDavStore((s) => s.dismissConflict);
+  const defer = useCalDavStore((s) => s.deferConflict);
   const [busy, setBusy] = useState("");
 
   // One question at a time, oldest first. A stack of modals over one another is
@@ -54,6 +61,9 @@ export function CalDavConflictDialog() {
   // re-syncs the whole collection, which can resolve a sibling conflict on its
   // own).
   const conflict = conflicts[0];
+  // Escape answers nothing, like the backdrop (see below): "Decide later" is
+  // the way out.
+  const modalRef = useModalFocus(() => {}, !!conflict);
   if (!conflict) return null;
 
   const run = async (fn: () => Promise<void>, tag: string) => {
@@ -70,7 +80,7 @@ export function CalDavConflictDialog() {
     // has not been told about, which is the thing the dialog exists to prevent.
     // "Decide later" is a button, so the way out is a decision to defer.
     <div className="modal-backdrop">
-      <div className="project-dialog caldav-conflict-dialog">
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog caldav-conflict-dialog">
         <h2 className="caldav-conflict-title">
           {t("caldavConflict.title")} <UntestedTag id="caldavConflict.title" />
         </h2>
@@ -78,7 +88,15 @@ export function CalDavConflictDialog() {
         <p className="caldav-conflict-lede">
           {conflict.op === "delete"
             ? t("caldavConflict.ledeDelete", { title: conflict.title })
-            : t("caldavConflict.ledeEdit", { title: conflict.title })}
+            : conflict.serverDeleted
+              ? t("caldavConflict.ledeServerDeleted", { title: conflict.title })
+              : t("caldavConflict.ledeEdit", { title: conflict.title })}
+          {conflict.serverDeleted && (
+            <>
+              {" "}
+              <UntestedTag id="caldavConflict.serverDeleted" />
+            </>
+          )}
         </p>
         <p className="caldav-conflict-detail">{t("caldavConflict.explain")}</p>
 
@@ -107,7 +125,7 @@ export function CalDavConflictDialog() {
             type="button"
             className="cal-btn cal-btn-ghost"
             disabled={busy !== ""}
-            onClick={() => dismiss(conflict.rowId)}
+            onClick={() => defer(conflict.rowId)}
             title={t("caldavConflict.laterHint")}
           >
             {t("caldavConflict.later")}

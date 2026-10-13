@@ -25,6 +25,7 @@
 //! non-Linux callers (descendant trees) ask of it.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use app_core::sync::LockExt;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -141,7 +142,7 @@ impl Table {
     }
 
     fn fresh(&self, max_age: Duration) -> Option<Arc<Snapshot>> {
-        let current = self.current.lock().unwrap_or_else(|p| p.into_inner());
+        let current = self.current.lock_ok();
         current.as_ref().filter(|snap| snap.age() < max_age).cloned()
     }
 
@@ -151,12 +152,12 @@ impl Table {
         if let Some(snap) = self.fresh(max_age) {
             return snap;
         }
-        let _walking = self.walk.lock().unwrap_or_else(|p| p.into_inner());
+        let _walking = self.walk.lock_ok();
         if let Some(snap) = self.fresh(max_age) {
             return snap;
         }
         let snap = Arc::new(Snapshot::new(read(), Instant::now()));
-        *self.current.lock().unwrap_or_else(|p| p.into_inner()) = Some(snap.clone());
+        *self.current.lock_ok() = Some(snap.clone());
         snap
     }
 }
@@ -251,7 +252,7 @@ impl UidCache {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ProcKey, Option<String>>> {
-        self.0.lock().unwrap_or_else(|p| p.into_inner())
+        self.0.lock_ok()
     }
 
     /// Forget processes no longer in the table.

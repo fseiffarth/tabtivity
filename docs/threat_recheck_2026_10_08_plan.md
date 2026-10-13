@@ -1,54 +1,87 @@
 # Threat-model recheck 2026-10-08 — findings and fix plan
 
-Status: **partly done.** Plan steps 1, 2, 3, 6, 8, 13 and 14 are fixed in
-develop (`bdafdf03`, 2026-10-09; not pushed, not live-verified). The rest is
-listed under "Resume state" below.
+Status: **code-complete, landing pending.** Plan steps 1, 2, 3, 6, 8, 13 and
+14 are in develop and main (`bdafdf03`, 2026-10-09). Plan steps 4, 5, 7, 9,
+10, 11 and 12 (the "Run 2026-10-12" section: 8 agent steps, 2 follow-up
+steps, a final review) are done on branch `threat/1012-final` (worktree
+`.claude/worktrees/threat1012-final`), not yet merged into develop. Nothing
+of either run is live-verified.
 
-## Resume state (2026-10-10)
+## Resume state (2026-10-13)
 
-"Continue the threat recheck" means: take the next item below whose decision
-is answered, run it with the plan → implement → review routine (handoff:
-`docs/threat_recheck_2026_10_08_handoff.md`, append new sections there), mark
-its rows in `docs/threat_model.md`, then land on develop. Ask the user only
-the decision an item names.
+"Continue the threat recheck" means the open items below, in this order. Ask
+the user only the decision an item names. Saying "continue" is the user's
+go-ahead for the subagents the plan → implement → review routine spawns
+(handoff: `docs/threat_recheck_2026_10_08_handoff.md`, append new sections
+there), in a worktree under `.claude/worktrees/`.
 
-1. **Steps waiting on a decision** (see "Decisions for the user"):
-
-   | Plan step | Gaps | Decision |
-   |---|---|---|
-   | 4 | 19 | A2 |
-   | 5 | 22, 31 | D1 |
-   | 7 | 23 (after step 5) | D3 |
-   | 9 | 25, 27, 33, 34 | E3 |
-   | 10 | 26, 32 | E2b |
-   | 11 | 21, 38 | C2, D6 |
-   | 12 | 20 | B1/C3 |
-
-2. **Follow-ups that need no decision** (found during the run; details in
-   the handoff's "Final review → Flagged for user"):
-   - Re-survey the logins still shared to every home, the Host home
-     included: Goose `secrets.yaml`, OpenCode `auth.json`, Qoder `.auth`
-     (gap 16 residual).
-   - Spawns still in `launch_prep::prepare` at quit escape `kill_all`, and
-     closing a tab during `prepare` leaves an orphaned PTY (gap 18 notes,
-     older than this run).
-   - Gap 30 residual: bwrap/Seatbelt open the control paths by name after
-     the check (`--ro-bind-fd` would close it).
-   - Background `sync_auto` skips files over 64 MiB with only a log line.
-   - `workspace_sync` serves stored tabs without the load sanitizer; a
-     headless relaunch of an adopted agent tab before a window re-saves it
-     has no `TAB_UID`.
-   - Spreadsheet reader limits: no `RLIMIT_AS` on macOS, no Job object on
-     Windows, `PR_SET_PDEATHSIG` Linux-only.
-   - Reviewer B's lead (`agent_session.rs` transcripts through symlinks):
-     step 4 refuses a link at the leaf only; a linked directory component is
-     still followed.
+1. **Landed on develop `eacfa41a` (2026-10-13, not pushed).** Merge with
+   develop: `df4c5874` (handoff, "Merge with develop (2026-10-13)"). Still
+   owed by the user: a host-side `npm run package:dev` once (the dev-build
+   launcher now adopts only host-listed builds; handoff, final review,
+   click-through step 1). The new `psl` crate is fetched normally on the host
+   and in CI. Mark rows 19–23, 25–27, 31–34, 38 (already "Fixed, not
+   live-verified." in `docs/threat_model.md`) live-verified only after the
+   click-through. Open decision from the merge: develop's project-bundle
+   import can bring a local model's Vibe conversations without the gap 33
+   read-mail marker.
+2. **Never run:** the live click-through of both runs — the 2026-10-08 run's
+   12 steps (handoff, "Final review → Live click-through") and the 2026-10-12
+   run's 39 steps (handoff, "Final review — Run 2026-10-12 → Live
+   click-through") — and macOS/Windows at runtime (only cross-compiled). Watch
+   the first CI run on those platforms (main window built in `setup`, the
+   OneDrive reparse handling, the new Windows-only tests).
 3. **Never reviewed:** reviewer F's whole area and the per-reviewer gaps
-   (see "Not reviewed" at the end). That needs a fresh read-only review
-   run first.
-4. **Never run:** the 12-step live click-through (handoff, "Final review →
-   Live click-through"), and macOS/Windows compiling. Watch the first CI run
-   on those platforms.
+   (see "Not reviewed" at the end). That needs a fresh read-only review run
+   first.
+4. **Open follow-ups** (no step built them; details in the handoff's two
+   final reviews, "Flagged for user"). Need a user decision:
+   - Pin allowed roots, or refuse a root that resolves outside where it is
+     registered: a project nested in a folder an agent can write can be
+     swapped for a link and becomes another root for every confined command
+     (older than this run).
+   - Close the gap 19 `repo_changed` check-then-use race by passing the
+     spawn-time git dir (`GIT_DIR`) to every lane git call; drop the push
+     *level* on bundle import too.
+   - Add the candidate launcher extensions the step 4 reviewer listed
+     (Windows `.ws`, `.wsc`, `.sct`, `.xll`, `.msu`, Access types, `.jnlp`,
+     `.appx`/`.msix`, `.theme`/`.themepack`, `.search-ms`, `.iso`/`.vhd(x)`;
+     macOS `.afploc`/`.inetloc`/`.webloc`, bundle-bit folders; Linux
+     `.jnlp`, `.flatpakref`, `.deb`/`.rpm`).
+   - Under review level `off`, serve reads from the sandbox while the tab has
+     pending proposals (today an agent can stage the same CalDAV write twice).
+   - UI gaps: list/revoke `git_ci_repos`; show a CalDAV row waiting to be
+     pushed (push off, or "Decide later", which lasts one session); a
+     refused navigation is stderr-only.
+   - "Clear conversations" fails on a read-only folder in the store (make it
+     writable first?); `9p` is judged "no Unix modes" everywhere, not only
+     WSL.
+   No decision needed:
+   - Deck "Edit" of a figure `.tex` saves through a linked figure folder (the
+     ordinary editor's `Write`); `compile_tex`'s own-folder check is
+     path-based.
+   - `local_model_of` trusts the env pair (also require `VIBE_HOME`'s leaf ==
+     `sanitize_alias(model)`); an unconfirmed local tab still lists the mail
+     tools.
+   - CalDAV: overlapping syncs of one collection can push a dirty row twice
+     (spurious 412 question; an in-flight guard per collection); an approved
+     agent write is unmarked if the app dies before its push starts.
+   - `dev_git` cannot switch off a `filter.*` driver or `core.worktree` in the
+     fence-writable `.git/config` for the freeze-tree checkout;
+     `assert-embedded-frontend.sh` runs from the freeze tree (inside C3).
+   - Root audit categories (`access_narrowed`, …) show raw, untranslated.
+   - From the 2026-10-08 run, still open: re-survey the logins still shared
+     to every home (Goose `secrets.yaml`, OpenCode `auth.json`, Qoder
+     `.auth`; gap 16 residual); spawns in `launch_prep::prepare` at quit
+     escape `kill_all`, and closing a tab during `prepare` orphans its PTY;
+     gap 30 residual (bwrap/Seatbelt open control paths by name after the
+     check; `--ro-bind-fd`); background `sync_auto` skips files over 64 MiB
+     with only a log line; `workspace_sync` serves stored tabs without the
+     load sanitizer, and a headless relaunch of an adopted agent tab before a
+     window re-saves it has no `TAB_UID`; spreadsheet reader limits (no
+     `RLIMIT_AS` on macOS, no Job object on Windows, `PR_SET_PDEATHSIG`
+     Linux-only); `agent_session.rs` transcripts follow a linked directory
+     component (only a leaf link is refused).
 
 Six read-only reviewers went over HEAD `16182b63` on 2026-10-08. Each read
 `docs/threat_model.md` and its area's `docs/context/` files first, then checked
@@ -546,17 +579,555 @@ default is step 1's migration: fenced homes keep their existing copy, so
 logins survive but a pre-fix plant persists there; the Host copy is
 dropped. List it under "Flagged for user" in the handoff.
 
+## Run 2026-10-12 — fixed decisions and agent steps
+
+Branch `threat/1012` in `.claude/worktrees/threat1012`, from develop
+`5d82c988`. Handoff: `docs/threat_recheck_2026_10_08_handoff.md`, new
+sections under "Run 2026-10-12". This run does plan steps 4, 5, 7, 9, 10, 11
+and 12. Another session's uncommitted CodeQL fixes sit in the main checkout
+(39 files, `fs.rs`, `git_ci.rs`, `agent_fence.rs`, `root_mcp.rs`,
+`mobile_control/*` among them); they are not on this branch, and landing
+merges with whatever develop holds then.
+
+Fixed decisions (not up for review; answered 2026-10-12, see "Decisions for
+the user"):
+- **A2:** agent CI reads only reach the repo confirmed for pushes, or one the
+  user allowed once on an "Allow CI for <repo>" card (reuse the push-card
+  flow and its store); anything else answers a new `ci_repo_unconfirmed`
+  category. Plus the plan's defence in depth (a git dir that appeared after
+  spawn is refused by push and CI).
+- **D1:** viewer writes refuse every symlinked leaf, in-root links included;
+  a dangling leaf link is refused too.
+- **D3:** the deck keeps its automatic re-raster, writing only `.png` files
+  under its own figure folder; absolute and `..` paths are refused for
+  deck-written `src`/`texSrc`.
+- **C2:** every no-viewer hand-off to the OS asks first, naming the file;
+  launcher types (`.desktop`, `.exe`, `.jar`, `.lnk`, `.cmd`, `.bat`,
+  `.vbs`, `.ps1`, `.app`, `.command`, `.sh`, … — the implementer completes
+  the list per OS) and executable-bit files are refused outright with a
+  message. Same for Reader change cards.
+- **D6:** add an app-wide navigation gate on the `main`, `detached-*` and
+  `present-*` windows that refuses navigation off the app origin.
+- **E3:** mail-derived cards and events served to a cloud root tab keep
+  title and notes, with URLs removed and an `external` mark. Agent writes to
+  a CalDAV-synced calendar always stage for approval, whatever the level.
+- **E2b:** refuse `http://` CalDAV entirely: discovery, stored hrefs and
+  accounts added as http, with an i18n message saying why. No migration
+  deletes an existing http account; it stops syncing and says so.
+- **B1:** drop `live_pwa` (the no-relaunch phone update); the phone app
+  always comes from the binary. Remove its build-side plumbing too.
+- **C3:** keep auto-queueing dev builds from the window; document the
+  residual in `docs/threat_model.md` and `docs/context/dev_builds.md`. The
+  launcher adopts `target/release/<bin>` only when its hash matches one the
+  unfenced build wrote into the state dir (no fence can write there).
+- **C3 follow-up (answered 2026-10-12, after the plan review's blocking
+  question):** when `package-dev.sh` runs outside a fence, it also installs a
+  copy of the dev launcher and every helper it sources into
+  `<app_dir>/dev-launcher/` and points the desktop entry there, so an
+  uncommitted edit to the checkout's launcher scripts never runs on the next
+  click. A committed edit still reaches the user through the queued build
+  (accepted under C3). Agent step 8 builds it.
+
+- **Follow-up decisions (answered 2026-10-12, after the step 4 review):**
+  (a) On filesystems without real Unix permissions (FAT/exFAT, ntfs-3g,
+  CIFS/SMB, WSL `/mnt/*`, …) the C2 launcher check ignores the execute bit
+  and judges by name only; a real executable there still gets the confirm.
+  (b) The project blob pane opens files that have an in-app viewer in a tab
+  like everywhere else; only files without one go to the OS and ask.
+  Built in follow-up agent step 9, with the step 4 reviewer's minor items
+  (the `ExecTrust` store's replace-the-pending-question pattern; the raw
+  `open_refused_launcher` code shown when revealing a macOS `.app`).
+  (c) Answered after the step 5 review: add a "Clear conversations" action
+  per local model in the local model menu that, after a confirm, deletes
+  that model's stored Vibe conversations and its read-mail taint marker
+  together (never the marker alone). Follow-up step 9 also takes the step 5
+  reviewer's hardening items: send the mail chat through the same Ollama
+  address the local-model check used (`ollama_http_at`, `capabilities_of`
+  too); refuse a model whose alias collides with another installed model's;
+  a `/api/tags` timeout says "not running", not "not installed".
+- **CalDAV credential host (answered 2026-10-13, after the step 7
+  implementer flagged iCloud-shaped providers):** credentials may go to any
+  https host under the account's registrable domain (public-suffix list, so
+  `example.co.uk` never covers `.co.uk`), not only the exact host. Built in
+  follow-up agent step 10, with the step 7 reviewer's small CalDAV bugs: an
+  account switched from http to https rewrites its same-host `http://`
+  calendar subscriptions to https; "Keep mine" on a question without a
+  resource address (lost-reply create, server-deleted series) works instead
+  of erroring; a row moved into a local calendar drops `caldav_dirty`.
+
+| Follow-up agent step | Items |
+|---|---|
+| 9 | (a) exec bit ignored on filesystems without Unix permissions; (b) blob pane opens in-app viewers; `ExecTrust` question queue; macOS `.app` reveal message; (c) "Clear conversations"; step 5 mail hardening items |
+| 10 | CalDAV same-registrable-domain credential rule; step 7 reviewer's small CalDAV bugs |
+
+| Agent step | Plan step | Gaps | Main files |
+|---|---|---|---|
+| 1 | 4 | 19 | `services/git_ci.rs`, `services/git_push_mcp.rs`, `services/root_mcp.rs` (`PushBinding`, `grant_git_push`), `services/git_release.rs` (`tip_ci`), `GitPushMcp.tsx` + `types/index.ts` (card) |
+| 2 | 5 | 22, 31 | `commands/fs.rs`, `commands/mail.rs`, `services/mobile_control/files.rs` + `files_windows.rs` (`ProjectDir`) |
+| 3 | 7 + 11 (gap 38 hosts) | 23, 38 | `DeckView.tsx`, `deckAssets.ts`, `NotebookView.tsx`, `SkillsLibraryView.tsx`, `MarkdownPromptField.tsx`, `DevTodoView.tsx`, `FileViewerPane.tsx` (link handler, shared), `markdown.ts::safeHref` |
+| 4 | 11 (gap 21 + D6) | 21, 38 | `stores/windows.ts` (`openFile`), `commands/apps.rs::open_file`, `commands/mobile_control.rs::global_inbox_open`, `lib.rs` (navigation-gate plugin) |
+| 5 | 9 (mail stays local) | 25, 33 | `services/mail_ai.rs`, `commands/ollama.rs`, `services/root_mcp.rs` (`Identity`, `record_read_mail`), `root_mcp_mail.rs`, `LocalModelMenu.tsx` |
+| 6 | 9 (provenance, drafts, staging) | 27, 34 | `MailAiMessageActions.tsx`, `root_mcp.rs` (`task_view`, `event_view`, `todo_list`), `root_mcp_review.rs::call` (CalDAV staging), `mail_store.rs::file_agent_drafts`, `commands/root_mcp.rs:361` |
+| 7 | 10 | 26, 32 | `services/caldav.rs`, `commands/caldav.rs`, `stores/calendar/caldav.ts`, `commands/calendar.rs`, `CalDavAccountDialog.tsx` |
+| 8 | 12 | 20 | `mobile_control/live_pwa.rs` (removed), `mobile_control/host.rs`, `build.rs`, `scripts/package-dev.sh`, `scripts/backend-stale.sh`, `start-tabtivity-dev-build.sh`, `start-tabtivity-tauri-hotreload.sh`, `docs/context/dev_builds.md` |
+
+### Plan review notes (2026-10-12, against `9611749e`)
+
+All 13 gaps are still in HEAD; no other work has fixed any of them. Line
+numbers below are at `9611749e`. Cited code that moved, or was named wrong, is
+corrected here, and the table above is updated to match. Notes marked
+**Chosen** settle open implementation questions. They do not change the fixed
+decisions. Order: 1, 2, 3, 4, 5, 6, 7, 8 (3 after 2, 6 after 5: both touch
+`root_mcp.rs`). The other session's uncommitted CodeQL edits in `fs.rs`,
+`git_ci.rs`, `root_mcp.rs` and `mobile_control/*` will conflict at landing.
+Keep hunks small and don't reformat.
+
+**Agent step 1 (gap 19, A2)**
+- Code: `git_ci::repo_of` `git_ci.rs:54` takes `branch.<b>.remote`, else
+  `origin`, and its URL. `runs` `:243`, `run` `:262` and `security_alerts`
+  `:351` call it and send `api_token` `:69`. They are dispatched from
+  `git_push_mcp::handle_admitted` `git_push_mcp.rs:1316-1323`, and admission
+  is at `:1144-1153`. `ProjectPolicy` `:63` holds `confirmed_url`, set by
+  `decide` `:924` and `set_policy` `:102`. `git_hosting.rs:199-211` is
+  `token_origins_for`. It is not an "origin add", so drop that citation.
+- Sibling, same fix: the Release plan reads CI for whatever URL the branch's
+  remote names, with the token (`git_release.rs:193-198`, `tip_ci`). Its
+  pending/failed workflow names reach the agent in the refusal message. Run
+  the same repo check before `tip_ci`. An unconfirmed repo answers
+  `ci_repo_unconfirmed` there too.
+- **Chosen, storage:** do not add a field to `ProjectPolicy`. It is
+  `deny_unknown_fields`, so an older dev build would read the new key as
+  "invalid push policy" and lose the whole lane. Keep a separate
+  `entry.extra["git_ci_repos"]`: a list of lowercase `owner/repo` strings,
+  patched through `projects::patch_project_entry` like `set_policy`. The
+  allow check is `github_repo(remote url)` (lowercased) ==
+  `github_repo(policy.confirmed_url)`, or that repo is listed.
+- **Chosen, card:** add `Kind::CiRepo` to the existing proposal store
+  (`Proposal` `:703`), with `url` set to the remote URL and `branch: None`.
+  An unconfirmed CI read stages one card per (project, repo) and dedupes it
+  against a pending one. It does not use the push rate or the
+  `PENDING_LIMIT` of 2 (otherwise one CI card would block pushes). It answers
+  `{"status":"refused","category":"ci_repo_unconfirmed"}`, with a message
+  that a card is waiting and the agent should ask again after the user allows
+  it. `decide` with `Kind::CiRepo` appends the repo and ends in a new
+  `Status::Allowed` (`"allowed"`). Dismiss works as it does for pushes. No
+  new Tauri command is needed: the card reuses `git_push_mcp_decide`/`_clear`
+  (`commands/root_mcp.rs:844-851`). Under `keyring_free()` (the Mobile host)
+  no card can be decided, so answer `ci_repo_unconfirmed` and tell the agent
+  to allow it from the window.
+- Frontend: `types/index.ts:1166,1179` (`kind`, `status`);
+  `GitPushMcp.tsx:96-130` renders a "ci" card ("Allow CI for <owner/repo>",
+  Allow/Dismiss). New `gitPushMcp.ci*` strings in English, and an
+  `UntestedTag` with a register row (`gitPushMcp.ciAllow`).
+- Defence in depth, the git dir that appeared after spawn: in
+  `root_mcp::grant_git_push` (`root_mcp.rs:932`), walk up from `dir` the way
+  git discovery does (`symlink_metadata` of each `<ancestor>/.git`). Record
+  the first hit's `(dev, ino)` in a new `PushBinding.git_at_spawn:
+  Option<(u64,u64)>` (`root_mcp.rs:115`). In `handle_admitted`, before
+  `git_push`, `git_release` and every `ci_*`, redo the walk. If there was no
+  git dir at spawn, or the identity differs, refuse with a new
+  `Category::RepoChanged` (`"repo_changed"`) and say "restart the tab". On
+  Windows use `file_index` from `GetFileInformationByHandle`, or skip the
+  check: no fence there. Update `Category::as_str`/`from_str`, the tool
+  descriptions and `INSTRUCTIONS`, and the `PushBinding` test at
+  `root_mcp.rs:3459`.
+- Tests: CI on an unconfirmed repo refused, card staged once, allowed after
+  `decide`; CI on the confirmed push URL passes; owner/repo compared in
+  lowercase; a `git init` after spawn → `repo_changed` for push and CI; an
+  old `projects.json` without `git_ci_repos` round-trips unchanged;
+  `tip_ci` is not called for an unconfirmed repo.
+- Docs: `docs/context/git_push_mcp.md` (CI repo rule, card, `repo_changed`).
+  Threat model row 19 (and drop its "macOS residual" wording).
+
+**Agent step 2 (gaps 22, 31, D1)**
+- Code moved: `resolve_for_confinement` `fs.rs:2124`, `confine_abs_within`
+  `:2141`, `read_file_text_local` `:1572`, `write_file_text_local` `:1626`,
+  `write_file_bytes_local` `:1756` (still a bare `fs::write`),
+  `read_file_bytes_local` `:1847`, `file_mtime_local` `:1890`,
+  `file_size_local` `:1929`, `detect_mime_local` `:1465`. Mail:
+  `emails_dir_in` `mail.rs:4951`, `write_unique_in_dir` `:5008`, caller
+  `:4919-4931`.
+- `services::files::ProjectDir` does not exist. The handle walk is
+  `services/mobile_control/files.rs:230` (Unix, `pub(super)`) and
+  `files_windows.rs:56` (Windows, `pub(crate)`, NtCreateFile
+  `FILE_OPEN_REPARSE_POINT`, refuses every reparse type). **Chosen:** make
+  that `ProjectDir` `pub(crate)` on both platforms and reuse it. Do not use
+  `home_io::HomeDir`: its writes are temp+rename at `0600`, and on Windows it
+  is path-based. Add one method to both platforms: `open_existing_for_write(name)`
+  (Unix `openat(O_WRONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC)`, `fstat` regular,
+  then `set_len(0)`; Windows FILE_OPEN + GENERIC_WRITE +
+  `FILE_OPEN_REPARSE_POINT`, refuse a reparse point). `create_file` (O_EXCL)
+  exists.
+- One helper in `fs.rs`, `open_confined(path, roots, mode)`. It canonicalizes
+  the parent, picks the longest allowed root it lies under, and walks the
+  rest with `ProjectDir::open_root` + `lookup_dir` (every component is
+  link-free after canonicalize, so a swap after the check fails closed). For
+  writes it opens the leaf with `O_NOFOLLOW`. **D1:** for writes, a leaf whose
+  `symlink_metadata` is a link (dangling or not) or a reparse point is refused
+  with "… is a link; viewers do not save through links". Reads canonicalize
+  the whole path (in-root links still read, as today), then open the
+  canonical path through the same walk, so a raced swap is refused instead of
+  followed. Refuse any `..`/non-normal component outright. Today a lexical
+  `missing/../..` passes the prefix check and only fails at `fs::write`.
+- `resolve_for_confinement` itself: use `symlink_metadata` instead of
+  `exists()`, so `confine_project_path`/`confine_user_path` callers stop
+  treating a dangling link as a new file.
+- Keep `write_project_file{,_bytes}_local` (`:990`, `:1019`) as they are. They
+  follow an in-root link on purpose, and the test
+  `write_project_file_still_saves_through_a_link_inside_the_project`
+  (`:3390`) pins that. They are drag-drop/project writes, not viewer saves.
+- Mail: replace `emails_dir_in` + `write_unique_in_dir` with one walk.
+  `ProjectDir::open_root(root)`, `create_dir(name)` + `lookup_dir(name)`
+  (which refuses a link), then `create_file(candidate)` in a loop on
+  `AlreadyExists`/`ELOOP`. Return the path for display only. The
+  `mark_downloaded(&target)` call afterwards is by path: accept that, or add
+  an fd variant (`fsetxattr`).
+- Frontend: saves surface the backend string today. Check that deck autosave
+  (`DeckView.tsx:443`) and the figure poll show the link refusal once rather
+  than retrying every tick.
+- Tests (Unix): a dangling leaf link is refused and its target not created;
+  an in-root symlinked leaf is refused for `write_file_text`/`_bytes` and
+  read fine; a regular-file save keeps its inode and mode; a new file is
+  created `O_EXCL`; `missing/../x` is refused; an emails folder swapped for a
+  link after the handle was opened writes into the real folder. Windows: run
+  the msvc clippy/check cross-check (AGENTS.md) for the new `files_windows.rs`
+  method.
+
+**Agent step 3 (gap 23, D3; gap 38 hosts)**
+- Deck code moved: `texFigureDir` `DeckView.tsx:150` (`<deck>.tex-figures`),
+  `rasterizeInto` `:1119` (the one PNG write), `addTexFigure` `:1134`,
+  `recompileTexObject` `:1200`, the poll `:1243-1300`. `resolveRel`
+  `deckAssets.ts:26` passes absolute paths. `sidecar.ts:288-294` keeps any
+  string.
+- **Chosen:** one guard `figureTarget(deckPath, src)`. It returns the
+  absolute path only when `src` is relative, has no `..` or empty component,
+  sits directly in `texFigureDir(deckPath)` (one level) and ends in `.png`.
+  `figureSource(deckPath, texSrc)` is the same with `.tex`. Apply both in
+  `rasterizeInto` and before every `compile_tex` of `texSrc` (poll, Recompile,
+  edit), not only in the poll: D3 covers every deck-written path. A refused
+  object gets a one-time notice (new `deckView.figureOutside` string) and is
+  skipped. Image reads (`:928`) keep `..` and absolute `src`: a picked figure
+  above the deck is legitimate, and reads are confined anyway.
+- Sibling data-loss bug, same file: `generateBase` (`:991-1003`) decides
+  "no `.tex` yet" from `readFileText` failing. That also fails for a
+  non-UTF-8 or over-cap `.tex`, which then gets overwritten. Decide on
+  `fileMtime` instead.
+- Gap 38 hosts at HEAD: `NotebookView.tsx:76`, `SkillsLibraryView.tsx:518`,
+  `MarkdownPromptField.tsx:194` (no click handler). The model to copy is the
+  markdown viewer's `onPreviewClick` (`FileViewerPane.tsx:8300-8345`), not
+  DevTodoView's bare `preventDefault`. **Chosen:** move its link half into
+  one helper (e.g. `src/lib/viewers/markdownLinks.ts`,
+  `onMarkdownLinkClick(e, { basePath, tabKey })`). It handles `#` anchors,
+  local file links via `resolveLocalHref` + `openLinkedFile`, and
+  `preventDefault` on every other anchor without a `target`. Use it in the
+  viewer, the three hosts and DevTodoView. A host with no file context (the
+  prompt field) only prevents. External links already carry
+  `target="_blank"` (`markdown.ts:275,299`) and stay as they are.
+- `safeHref` (`markdown.ts:21`) and `isLocalHref` (`:70`): first strip
+  ASCII tab/CR/LF, as the URL parser does, then refuse any href whose first
+  two characters are both `/` or `\`. Today `\\host/x`, `/\host` and
+  `\/host` pass, and the URL parser treats `\` as `/` on every platform, not
+  only Windows. Tests: those three and `/\t/host` are refused; `docs/a.md`
+  and `C:\x` still pass.
+- Tests: `figureTarget` table (absolute, `..`, other folder, `.svg`, nested →
+  null); the poll does not write for a hostile deck; a link click in each host
+  calls `preventDefault` (RTL).
+
+**Agent step 4 (gap 21, C2; D6)**
+- Code: `openFileEntry.ts:50-56` is one of many OS hand-offs. Others call
+  `useWindowsStore.openFile` directly: `DownloadsSection.tsx:171` (browser
+  downloads), `FileBrowser.tsx:367`, `ProjectBlobPane.tsx:647`,
+  `commitFileDrop.ts:373`, `FileViewerPane.tsx:652`, `EmbedPane.tsx:35`, plus
+  terminal path links (`lib/terminal/pathLinks.ts:177`) and Reader change
+  cards (`TerminalReaderChanges.tsx:282-305`), both through `openFileEntry`.
+  The backend is `open_file_blocking` `apps.rs:552`, OS default at `:625`.
+- **Chosen, choke points:** the confirm goes in the store's `openFile`
+  (`src/stores/windows.ts`) whenever no explicit `handler` is passed. That
+  covers every caller above, Shift+double-click included. The launcher
+  refusal goes in the backend, on the OS-default path only (`effective ==
+  None`). A user-configured default app or an explicit handler is the
+  user's choice. Resolve the path (`fs::canonicalize`) before the check, so
+  `notes.txt -> run.desktop` is caught. Refuse:
+  - Unix: a regular file with any execute bit.
+  - Linux: `.desktop`, `.sh`, `.run`, `.AppImage`, `.jar`.
+  - macOS: `.app`, `.command`, `.tool`, `.terminal`, `.pkg`, `.mpkg`,
+    `.workflow`, `.scpt`, `.jar`.
+  - Windows: every `PATHEXT` entry plus `.lnk`, `.url`, `.scr`, `.msi`,
+    `.hta`, `.vbs`, `.vbe`, `.js`, `.jse`, `.wsf`, `.wsh`, `.ps1`, `.cpl`,
+    `.reg`, `.appref-ms`, `.application`, `.msc`, `.jar`,
+    `.settingcontent-ms`.
+
+  Match case-insensitively. Return a fixed code (`open_refused_launcher`)
+  that the frontend maps to an i18n message.
+- No new command: add `check_only: Option<bool>` to `open_file`. The store
+  calls it first, and shows the refusal or the confirm ("Open <name> with the
+  system's default app?"). Only then does it make the real call. Same
+  refusal for the phone's global inbox: `global_inbox_open`
+  (`commands/mobile_control.rs:213`) is an unprompted OS open of a file the
+  phone uploaded. Give it the backend check, and make its frontend caller
+  confirm.
+- The confirm uses the shared dialog scheme. For an imperative ask from
+  non-React code, copy `lib/execTrust.ts` + `ExecTrustHost.tsx` (or
+  `stores/remote/syncConfirm.ts` + `SyncConfirmDialog.tsx`). Mount the host
+  in detached windows too. New strings, `UntestedTag` + register row
+  (`openExternalConfirm`).
+- D6: `main` comes from `tauri.conf.json`. `detached-*` comes from
+  `subwindow.rs:303`, `present-*` from `presenter.rs:124`, the connect window
+  from `connect.rs:142`. **Chosen:** one tiny plugin,
+  `tauri::plugin::Builder::new("nav-gate").on_navigation(…)`, registered in
+  `lib.rs` (`.plugin(…)` near `:2373`). It covers every webview, the
+  config-created `main` included. It skips labels that have their own gate
+  (`browser-*` live windows `browser.rs:337`, print windows
+  `print_native.rs:189`). For the rest (`main`, `detached-*`, `present-*`,
+  and the connect window, which loads the app origin with IPC too) it allows
+  only:
+  - the app origin: `tauri://localhost`; `http://tauri.localhost` on
+    Windows; the configured `devUrl` origin in a dev build;
+  - `about:blank`, `about:srcdoc`;
+  - `blob:` URLs of the app origin.
+
+  Put the predicate in a pure, unit-tested function in `services/`. Click
+  through mail HTML, the PDF viewer, the presenter, popouts and a hot-reload
+  page reload: the handler may also fire for subframes.
+- Tests: launcher table per OS (`cfg`-gated), exec-bit refusal, a link to a
+  launcher refused, `check_only` writes and spawns nothing, the nav predicate
+  table.
+
+**Agent step 5 (gaps 25, 33)**
+- Code moved: `mail_ai::chat` `mail_ai.rs:148`, its loopback check `:154`;
+  `is_remote_entry` `ollama.rs:983`; `installed_match` `:995` (used once,
+  `:1539`); the local read gate `root_mcp_mail.rs:1130-1150`;
+  `record_read_mail` `root_mcp.rs:270` (ignores errors), `tab_read_mail`
+  `:277`; the root-lane spawn `grant_root` `:812-830`; auto-assign
+  `LocalModelMenu.tsx:221-240`.
+- One backend helper `ollama::model_is_local(model) -> Result<(), &str>`:
+  `GET /api/tags` + `installed_match`. An unreadable body →
+  `model_not_installed` (fail closed); a cloud entry → `model_not_local`.
+  Call it in `mail_ai::chat` after the loopback check and before
+  `capabilities_of`. Cache the answer per model for about a minute:
+  auto-classify calls `chat` for every new mail.
+- Record the tab's model at spawn in a new `Identity.model:
+  Option<String>`. Take the raw `TABTIVITY_LOCAL_MODEL`, else map the
+  `VIBE_ACTIVE_MODEL` alias back the way `local_model_has_tools`
+  (`root_mcp.rs:639`) does. Never read it from the Vibe home at read time.
+  In the read gate, refuse when `model` is `None` or not local (the
+  `LOCAL_READ_REMOTE` text, or a new `LOCAL_READ_CLOUD` text). `Identity`
+  has about a dozen literal constructions (tests included); add the field
+  to each, `None` for non-local callers.
+- Gap 33: `record_read_mail` returns `io::Result<()>`. The gate latches the
+  in-memory taint first, then refuses the read if the marker write fails.
+  Add a model-keyed marker beside the tab one (hash of the alias, which is
+  what keys the per-model `VIBE_HOME`, `ollama.rs:4594`). At spawn the taint
+  is `tab_read_mail || model_read_mail`. Trade-off, state it in
+  `docs/context/root_console.md`: once one tab of a model reads mail, every
+  later tab of that model stages all its writes, until the marker is
+  cleared. If a "clear conversations" action exists for a model, clear the
+  marker there; otherwise document it.
+- `LocalModelMenu.tsx:224`: skip `m.remote` models (the list already
+  carries `remote`, `ollama.rs:917`) in the sole-resident auto-assign. The
+  Mail role picker should mark cloud models as unusable for Mail, with an
+  i18n hint.
+- Tests: `model_is_local` over a tags body with a `-cloud` entry, an empty
+  body and a local one; `chat` refuses a cloud mail model before
+  `/api/chat`; the read gate refuses for a cloud or unknown model; a failed
+  marker write refuses the read; a new tab of a tainted model starts tainted.
+
+**Agent step 6 (gaps 27, 34; E3; CalDAV staging; audit reason)**
+- Cards need no new stamp: a card from a mail already carries `task.mail`
+  (`todoBoard.ts:1019-1042`, schema `CalendarTask.mail`
+  `schema/calendar.rs:540`). The CalDAV merge keeps it
+  (`commands/calendar.rs` task merge copies `local.mail`). So `todoBoard.ts`
+  needs no change. Events have no link. Stamp `from_mail: {message_id,
+  account_id}` (a top-level key, so it lands in `CalendarEvent.extra`) at
+  both creation points in `MailAiMessageActions.tsx`: auto-create `:126-139`
+  and the dialog's `saveEvent` `:203-212`. Add it to the TS `CalendarEvent`
+  type as optional.
+- **Provenance is sticky:** check that the event dialog's edit path and the
+  calendar store keep unknown keys (a test that edits a stamped event and
+  reads `from_mail` back). If they don't, have the backend update keep an
+  existing `from_mail`. `carry_extra` (`commands/calendar.rs:886`) already
+  keeps it across a CalDAV merge.
+- Serving: `event_view` `root_mcp.rs:1681` and `task_view` `:1693`, plus the
+  `todo_list` loop `:2362-2375`. A row is mail-derived when the event has
+  `from_mail`, or the card has `mail`, or the card's `event` link points at a
+  `from_mail` event (a card made from a mail-derived event). Treat it like
+  `from_file`: `redact_value` (URLs only, title and notes stay) and
+  `external: true`. **Chosen:** do this for every caller, not only cloud
+  tabs. It is the existing `external` rule and needs no caller branch. Grep
+  `root_mcp*.rs` for other places that echo an event or card row (write
+  receipts, `proposals_list` rows) and send them through the same views.
+  Update the two tool descriptions (`:1262`, `:1360`).
+- CalDAV staging (`root_mcp_review.rs:495-500`, `automatic` at `:571`): a
+  write touches CalDAV when any captured row (pre or post) has
+  `caldav_href`, or its `calendar_id` is in a `CalDavCalendarRef.calendar_id`
+  of `accounts.json` (`schema/caldav.rs:44`). An unreadable accounts file
+  counts as touching (fail closed). Then `automatic = false`. Level `off`
+  short-circuits before rows are known (`:501`). **Chosen:** for write tools
+  under `off`, take the capture path with `automatic = !touches_caldav`, so
+  non-CalDAV writes still land at once (logged as `applied`/undoable, a small
+  visible change to `off`). CalDAV ones stage. Find how an applied agent row
+  reaches the server (the window's `pushRow` on the change event, or
+  nothing), and say so in `docs/context/caldav.md`.
+- Gap 34 `mail_store.rs:2766`: `seen()` clears `staged` wholesale. Compare
+  the agent rows instead: `origin == Some("agent")`, sorted by `staged_id`,
+  on `(staged_id, filename, mime, size, source)`. Ignore only the user's own
+  rows. First check why `staged` was cleared (the frontend's shown shape).
+  Extend the test at `:4179`.
+- Audit: the root lane now audits refusals at `commands/root_mcp.rs:361`
+  (`security::audit`, no reason), not `:354`. Add
+  `root_mcp::refusal_reason(reply) -> Option<&'static str>` mapping the fixed
+  refusal texts (`LOCAL_READ_REMOTE`, `LOCAL_READ_OFF`, `ACCESS_NARROWED`,
+  `LOCKED`, the pending limit, conflict/failed) to categories, and call
+  `audit_reason` like the other lanes do (`:250`, `:275`).
+- Tests: a mail-derived event and card served redacted + `external`; an
+  ordinary one not; a card linked to a `from_mail` event redacted; a write
+  into a CalDAV calendar stages under `off`, `destructive` and `all`; a
+  non-CalDAV write under `off` still applies; a draft whose agent attachment
+  changed is not filed.
+
+**Agent step 7 (gaps 26, 32; E2b)**
+- Code moved: `dav_reply` `caldav.rs:537`, credential origin = the requested
+  URL `:546-549`; `credentials_may_follow` `:700`; `normalize_base_url`
+  `:470` (accepts `http`); hrefs from the server via `absolute` `:736`,
+  `collection_from` `:769`, discovery `:858-952`. Commands take the stored
+  href: `caldav_fetch` `commands/caldav.rs:405`, `caldav_push` `:569`,
+  `caldav_delete` `:642`, `caldav_resource_etag` `:674`,
+  `caldav_refresh_access` `:697`. `Credentials` is built at `:165` and
+  `:392`.
+- **Chosen, fixed origin:** add `origin: Url` to `Credentials`
+  (`caldav.rs:80`, keep the Debug redaction). Fill it from the account's
+  normalized `base_url` in `credentials()` and from the typed URL in
+  `caldav_discover`. `dav_reply` checks `credentials_may_follow(&cred.origin,
+  &url)` on every hop, so the public signatures stay. Before the first hop of
+  any request that starts from a server-named href, also refuse outright
+  (with an error, not an unauthenticated retry) when it fails that check.
+  This covers principal and home-set during discovery, stored collection and
+  resource hrefs, and `caldav_account_upsert` (`:220`) rejecting picked
+  calendars off-origin.
+- **E2b:** `normalize_base_url` refuses `http` (flip the test at `:1776`).
+  The reqwest `client()` (`:451`) gets `.https_only(true)` as a backstop for
+  every hop and redirect. Return a fixed code (`caldav_http_refused`) that
+  the frontend maps to one i18n message saying why (passwords and calendars
+  would cross the network in clear; use https, e.g. a TLS proxy in front of
+  Radicale). Loopback `http://localhost` is refused too, as decided; the
+  message names it. Existing http accounts: nothing deletes them. The sync
+  loop skips them and shows the message on the account (derive it from the
+  stored `base_url` scheme). `CalDavAccountDialog.tsx` drops its http
+  warning and refuses Save with the message.
+- **Gap 32, design change:** `services::local_loss` does not fit. It is
+  per-project and file-oriented (`local_loss.rs:98,130`), and a calendar
+  row has no project. Drop it from this step. With the dirty flag below,
+  nothing overwrites a dirty row automatically. Only the user's "Take
+  server" in the existing conflict dialog does, which is already a decision.
+  - Mark `caldav_dirty: true` (in the row's `extra`; it round-trips and older
+    builds carry it) in the same local write that changes a row of a
+    writable CalDAV calendar. That write is the calendar store's write path,
+    where `pushRow` is called today. `caldav_push` clears the flag when it
+    stamps href/etag (`stores/calendar/caldav.ts:476-483`).
+  - `pushRow`'s catch (`:486-494`) keeps the row dirty. Its comment "the
+    next sync will carry it" is wrong today: fix the comment.
+  - The sync loop pushes a calendar's dirty rows (conditional on the stored
+    etag) before it fetches. A 412 lands in `conflicts` as today.
+  - `merge_caldav_calendar_in` (`commands/calendar.rs:928`) leaves a matched
+    dirty event or task untouched and returns its id, so `caldav_apply` can
+    report it. A server delete (`removed`) of a dirty row keeps the row,
+    clears its href/etag (it becomes local-only), and reports it as a
+    conflict.
+  - Agent rows applied by `root_mcp_review` into a CalDAV calendar get the
+    flag too, or step 6's staging makes them user-approved writes that take
+    the same path. Check which.
+- Tests: a principal href on another host gets no Basic auth and is refused;
+  an `http:` href under an `https` origin is refused; an `http` base URL is
+  refused at normalize, upsert and discovery; the merge keeps a dirty row
+  and reports it; a failed push leaves the row dirty; a dirty row is pushed
+  before the next fetch.
+- Docs: `docs/context/caldav.md` (origin rule, http refusal, dirty rows).
+
+**Agent step 8 (gap 20, B1/C3)**
+- Removing `live_pwa` touches:
+  - `mobile_control/mod.rs:19,37`;
+  - `host.rs:51` (import), `:702` (`pdf_frame`) and `:6015`
+    (`asset_response`), which go back to `MOBILE_ASSETS` only;
+  - `build.rs:24-40` (`newest_mtime`, only used for
+    `MOBILE_ASSETS_BUILT_AT`) and `:104-116` (`MOBILE_LIVE_DIR`, its
+    rerun-if-env line). Drop both constants; grep shows no other user;
+  - `package-dev.sh:42,51-100,157,226` (`publish_live_pwa`,
+    `LIVE_PWA_DIR`, the env export);
+  - `start-tabtivity-tauri-hotreload.sh:112-118`;
+  - `backend-stale.sh:132-150` (the overlay comparison; `expected_entry`
+    becomes `built_entry`);
+  - `package-dev-auto.sh:218`;
+  - the `dev_build.rs:546` log fixture line;
+  - the comment at `commands/mobile_control.rs:316`;
+  - the `filemap_backend.md` row, if one names `live_pwa`.
+
+  `docs/filemap_rationale/` is frozen: leave it. A leftover
+  `target/mobile-pwa/` is never read again, so nothing has to delete it.
+- C3, queue: `dev_build::queue_if_behind` `dev_build.rs:380-410` stays.
+  Document it in threat model row 20(b) and `dev_builds.md`: the window runs
+  the checkout's `package-dev-auto.sh` unfenced whenever HEAD moves, so an
+  agent's commit runs on the host at the next build. That is accepted.
+- C3, launcher (`start-tabtivity-dev-build.sh:94-135`):
+  - `package-dev.sh` already writes `<bin>.frozen` with the sha256 beside
+    the artifact (`:234-241`). Add the sha256 to a list in the state dir
+    (e.g. `<app_dir>/dev-builds/verified`, one sha per line, last 20 kept).
+    Write it only when not under `AGENT_FENCE` and `$APP_DIR` is not a
+    tmpfs (the check at `:260`). Inside a fence `$HOME` is the agent home,
+    so a write there never reaches the real list.
+  - The launcher adopts `target/release/<bin>` only when its sha256 is in
+    that list. Remove the `assert-embedded-frontend.sh` fallback (`:105`),
+    which would otherwise adopt an unlisted artifact.
+  - Check `agent_fence`'s bind list: no fence may bind `<app_dir>/dev-builds`
+    or a parent read-write.
+  - Notify why when the hash is unknown.
+- Docs: `dev_builds.md` (the live-PWA paragraph at `:39-48` goes, adoption
+  at `:94-102` rewritten), `mobile_access.md` if it mentions the overlay,
+  and AGENTS.md's "`npm run mobile:bundle` rebuilds it" stays true. See
+  blocking question 1 for what the launcher hash does not cover.
+- Tests: `dev_build` parse tests still pass without the publish line; a
+  shell-level check is optional. Run `npm run mobile:bundle` and
+  `npm run build`. The phone must still load from the binary (click-through
+  step).
+
+**All steps:** mark each fixed row in `docs/threat_model.md` "**Fixed, not
+live-verified.**". Run `npm run backend:stale` after backend edits and
+report it. New UI gets an `UntestedTag` + register row; every new string
+goes through `useT()`. No step adds a Tauri command (step 1 reuses
+`git_push_mcp_decide`, step 4 adds an argument), so `command_class` and
+`commandClasses.ts` stay as they are. If an implementer adds one anyway, it
+needs the `cfg_attr`, a class row and the regenerated file. Steps 2 and 4
+change `cfg(windows)`/path code: run the Windows cross-check.
+
+#### Blocking questions
+
+1. **C3 launcher hash (step 8): it covers less than it seems.** The desktop
+   entry runs `start-tabtivity-dev-build.sh` from the checkout
+   (`package-dev.sh:40`, `Exec=$LAUNCHER`). That launcher sources
+   `scripts/lib/brand.sh` and runs `scripts/retain-dev-build.sh` from the
+   checkout too. An agent can edit any of them, even without committing,
+   and the user's next click runs the edit unfenced, whatever the hash
+   says. The hash only stops a binary dropped into `target/release/` while
+   the launcher itself is untouched. Proposal: implement the hash as
+   decided (step 8 goes ahead) and document this limit in row 20. Also ask
+   the user whether `package-dev.sh`, when it runs unfenced, should install
+   a copy of the launcher and its helpers into `<app_dir>/dev-launcher/`
+   and point the desktop entry there. Then an uncommitted edit no longer
+   runs at the next click; a committed one still runs through the queued
+   build (C3).
+
+No other blocking questions.
+
 ## Decisions for the user
 
 - **A1 (step 1) — decided 2026-10-08: per-scope.** per-scope logins for every env- or config-shaped file (a login is entered once per scope), or keep sharing behind a per-CLI content validator. Reviewer's recommendation: per-scope for the dotenv files and Cline.
-- **A2 (step 4):** gate CI reads on the confirmed push URL (CI then needs one confirmed push or a one-time "allow CI for <repo>" card), or let CI read public repos without the token until confirmed.
-- **B1/C3 (step 12):** keep the no-relaunch phone update behind an unfenced adoption step, or drop it. Keep auto-queueing dev builds from the window, or require a click. Should the launcher verify the artifact it adopts?
-- **C2 (step 11):** confirm before handing any no-viewer file to the OS, or refuse launcher types outright.
-- **D1 (step 5):** refuse every symlinked leaf on viewer writes (simplest, matches the drop-box rule), or follow in-root links by handle.
-- **D3 (step 7):** keep the deck's automatic re-raster, limited to its own figure folder, or make it click-only.
-- **D6 (step 11):** add an app-wide navigation gate on `main`/`detached-*`/`present-*` that refuses anything off the app origin.
-- **E3 (step 9):** mail-derived cards and events for a cloud root tab: redact URLs and mark them, or withhold title and notes entirely. Related: synced CalDAV invitation rows reach a cloud root agent unredacted today; and at the `destructive` level an agent's calendar write is pushed to a CalDAV server without a click. Should CalDAV-bound rows always stage?
-- **E2b (step 10):** refuse `http://` CalDAV hrefs entirely, or only under an `https` account URL.
+- **A2 (step 4) — decided 2026-10-12: only the confirmed repo.** CI reads only the repo confirmed for pushes, or one allowed once on an "Allow CI for <repo>" card; anything else answers `ci_repo_unconfirmed`.
+- **B1/C3 (step 12) — decided 2026-10-12:** (B1) drop the no-relaunch phone update: remove `live_pwa`, the phone app always comes from the binary. (C3) keep auto-queueing dev builds from the window and document the residual in the threat model (the next dev build runs agent-written code anyway). The launcher verifies what it adopts: the unfenced build writes the binary's hash into the state dir, and the launcher adopts only a matching `target/release/<bin>`.
+- **C2 (step 11) — decided 2026-10-12: confirm all, refuse launchers.** Every no-viewer hand-off to the OS asks first, naming the file; launcher types (`.desktop`, `.exe`, `.jar`, `.lnk`, `.cmd`, `.vbs`, …) and executable-bit files are refused outright. Same for Reader change cards.
+- **D1 (step 5) — decided 2026-10-12: refuse every symlinked leaf** on viewer writes, in-root links included.
+- **D3 (step 7) — decided 2026-10-12: keep the automatic re-raster**, writing only `.png` files inside the deck's own figure folder; absolute and `..` paths refused.
+- **D6 (step 11) — decided 2026-10-12: yes**, add the app-wide navigation gate on `main`/`detached-*`/`present-*`.
+- **E3 (step 9) — decided 2026-10-12: redact URLs and mark external** for mail-derived cards and events served to a cloud root tab (title and notes stay). Related, also decided: agent writes to a CalDAV-synced calendar always stage for approval, whatever the level.
+- **E2b (step 10) — decided 2026-10-12: refuse `http://` CalDAV entirely**, accounts added as http included (they need a clear message saying why).
 
 ## Not reviewed
 

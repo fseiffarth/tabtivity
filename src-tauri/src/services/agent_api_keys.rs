@@ -247,7 +247,7 @@ pub fn get_key(provider: Provider) -> Option<String> {
 }
 
 fn settings() -> crate::schema::Settings {
-    crate::storage::read_json(&crate::storage::state_dir().join("settings.json")).unwrap_or_default()
+    crate::storage::read_json(&crate::storage::settings_path()).unwrap_or_default()
 }
 
 /// The CLIs the user switched on, from `settings.json` — readable in the
@@ -410,7 +410,7 @@ pub fn refuse_in_container(cmd: &str, keyless: bool) -> Result<(), String> {
 /// server user choosing the administrator's key for it (one credential per
 /// CLI, `server::agent_keys::choose`).
 pub fn switch_off(id: &str) -> Result<(), String> {
-    let path = crate::storage::state_dir().join("settings.json");
+    let path = crate::storage::settings_path();
     if !settings().agent_api_key_clis.is_some_and(|on| on.iter().any(|c| c == id)) {
         return Ok(());
     }

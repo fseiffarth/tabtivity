@@ -127,22 +127,10 @@ else
   probe_note="  (curl is unavailable, so the embedded bundle could only be checked by mtime.)"
 fi
 
+# The phone always gets the bundle compiled into the binary: the no-relaunch
+# overlay from target/mobile-pwa/ is gone (threat recheck 2026-10-08, gap 20 —
+# any agent could plant a bundle there).
 built_entry="$(mobile_entry "$ROOT/mobile-dist/index.html")"
-
-# The bundle a commit PUBLISHED for the running sidecar to pick up without a
-# relaunch (scripts/package-dev.sh publish_live_pwa). When one is present it,
-# not mobile-dist/, is what the phone should be on: the overlay wins over the
-# bundle compiled into the binary.
-live_entry=""
-live_commit=""
-live_built=""
-live_stamp="$ROOT/target/mobile-pwa/.stamp"
-if [ -r "$live_stamp" ]; then
-  live_entry="$(sed -n 's/^entry=//p' "$live_stamp" | head -n 1)"
-  live_commit="$(sed -n 's/^commit=//p' "$live_stamp" | head -n 1)"
-  live_built="$(sed -n 's/^built=//p' "$live_stamp" | head -n 1)"
-fi
-expected_entry="${live_entry:-$built_entry}"
 
 if [ -z "$app_pid" ] && [ -z "$served_entry" ]; then
   if [ "$mobile_only" = "0" ]; then
@@ -202,38 +190,13 @@ if [ -n "$mobile_src" ] && [ -n "$mobile_dist" ] && [ "$mobile_src" -gt "$mobile
   stale=1
   mobile_msg="MOBILE BUNDLE IS STALE — mobile-web/ sources are newer than mobile-dist/.
   Run 'npm run mobile:build', then rebuild the backend to re-embed it."
-elif [ -n "$served_entry" ] && [ -n "$expected_entry" ] && [ "$served_entry" != "$expected_entry" ]; then
+elif [ -n "$served_entry" ] && [ -n "$built_entry" ] && [ "$served_entry" != "$built_entry" ]; then
   # Ground truth beat the mtimes: the sidecar named a different bundle.
   stale=1
-  if [ -n "$live_entry" ]; then
-    # A bundle was published FOR this sidecar and it is not serving it. Either
-    # the running window predates the overlay support (it is compiled in, so the
-    # first pickup costs exactly one relaunch) or it refused the publish as not
-    # newer than its own embedded copy.
-    mobile_msg="MOBILE PWA IS STALE — a bundle is published for the running sidecar on
-  127.0.0.1:$port, and it is serving a different one. Either this window was built
-  before the live-overlay support, or it refused the publish as older than its own.
-  serving   : $served_entry
-  published : $live_entry ($live_commit)
-  One relaunch of the window picks the overlay up; after that, commits reach the
-  phone on their own and a pull-to-refresh is the whole update path."
-  else
-    mobile_msg="EMBEDDED MOBILE PWA IS STALE — the sidecar on 127.0.0.1:$port is serving a
+  mobile_msg="EMBEDDED MOBILE PWA IS STALE — the sidecar on 127.0.0.1:$port is serving a
   different bundle than the one built in mobile-dist/. The phone is on the old one.
   serving : $served_entry
   built   : $built_entry"
-  fi
-elif [ -n "$served_entry" ] && [ -n "$live_entry" ] && [ "$served_entry" = "$live_entry" ] \
-     && [ -n "$live_built" ] && [ "$started" != "0" ] && [ "$live_built" -gt "$started" ]; then
-  # Not stale — the opposite. Worth one line anyway: the overlay moves the PWA
-  # and nothing else, so the phone is running a bundle newer than the HTTP API
-  # answering it, and a mobile feature whose backend half landed after this
-  # window started will render and then fail its request.
-  mobile_msg="THE PHONE IS AHEAD OF THE RUNNING BACKEND — it is serving the published
-  bundle ($live_commit, $(date -d "@$live_built" '+%F %T')), which is newer than this window
-  (started $(date -d "@$started" '+%F %T')). The overlay carries the PWA only, not the
-  sidecar's API, so a mobile feature whose backend half is not in this window will
-  render and fail until you relaunch. Nothing to do if the phone looks right."
 elif [ -z "$served_entry" ] && [ -n "$mobile_dist" ] && [ "$started" != "0" ] && [ "$mobile_dist" -gt "$started" ]; then
   stale=1
   mobile_msg="EMBEDDED MOBILE PWA IS STALE — the running app was built before the current
@@ -327,7 +290,7 @@ if [ "$mobile_only" = "0" ] && [ -n "$app_pid" ] && [ "$app_kind" != "hot-reload
     fi
   fi
 elif [ "$mobile_only" = "0" ] && [ -n "$served_entry" ] && [ -n "$built_entry" ] \
-     && [ "$served_entry" != "$built_entry" ] && [ "$served_entry" != "${live_entry:-}" ]; then
+     && [ "$served_entry" != "$built_entry" ]; then
   # No pid — pgrep saw nothing, which also happens when this runs from inside an
   # agent tab, where the sandbox hides the host's processes. The sidecar still
   # answered over loopback, and it answered with an OLDER bundle than the one
@@ -360,11 +323,7 @@ if [ "$stale" = "0" ]; then
   fi
   if [ -n "$app_pid" ]; then
     echo "Backend is current: running pid $app_pid ($app_kind) started after the newest"
-    if [ -n "$live_entry" ] && [ "$served_entry" = "$live_entry" ]; then
-      echo "src-tauri change, and the phone is on the published bundle ($live_commit)."
-    else
-      echo "src-tauri change, and its embedded mobile PWA matches mobile-dist/."
-    fi
+    echo "src-tauri change, and its embedded mobile PWA matches mobile-dist/."
     if [ "$app_kind" != "hot-reload dev session" ]; then
       echo "Its compiled-in frontend matches dist/ too."
     fi

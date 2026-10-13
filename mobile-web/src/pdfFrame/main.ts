@@ -25,6 +25,7 @@ import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import { acceptToFrame, MAX_FRAME_PAGES, MAX_PAGE_CHARS, MAX_RENDER_WIDTH, MAX_RUN_CHARS, MAX_TEXT_RUNS, type FromFrame } from "../markup/frameProtocol";
 import { findQuote, type TextRun } from "../markup/findText";
+import { visibleRuns, type PagePixels } from "../markup/visibleText";
 
 (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = worker;
 // pdf.js paints a page in animation-frame slices, and a browser starves the
@@ -77,28 +78,48 @@ async function open(bytes: ArrayBuffer): Promise<void> {
   post({ type: "meta", pages });
 }
 
+/** Page `n` drawn about `width` pixels wide on `canvas`; its pixels per point. */
+async function paint(canvas: HTMLCanvasElement, n: number, width: number): Promise<{ ctx: CanvasRenderingContext2D; scale: number }> {
+  const page = await doc!.getPage(n);
+  const base = page.getViewport({ scale: 1 });
+  // As wide as asked, unless that makes a long page taller (or bigger)
+  // than the PWA accepts — then narrower.
+  const scale = Math.min(width / base.width, MAX_HEIGHT / base.height, Math.sqrt(MAX_PIXELS / (base.width * base.height)));
+  const viewport = page.getViewport({ scale });
+  canvas.width = Math.max(1, Math.round(viewport.width));
+  canvas.height = Math.max(1, Math.round(viewport.height));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("no canvas");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+  page.cleanup();
+  return { ctx, scale };
+}
+
 /** Page `n` drawn about `width` pixels wide, as a bitmap. */
 async function draw(n: number, width: number): Promise<ImageBitmap> {
   const canvas = document.createElement("canvas");
   try {
-    const page = await doc!.getPage(n);
-    const base = page.getViewport({ scale: 1 });
-    // As wide as asked, unless that makes a long page taller (or bigger)
-    // than the PWA accepts — then narrower.
-    const scale = Math.min(width / base.width, MAX_HEIGHT / base.height, Math.sqrt(MAX_PIXELS / (base.width * base.height)));
-    const viewport = page.getViewport({ scale });
-    canvas.width = Math.max(1, Math.round(viewport.width));
-    canvas.height = Math.max(1, Math.round(viewport.height));
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("no canvas");
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvas, canvasContext: ctx, viewport }).promise;
-    const bitmap = await createImageBitmap(canvas);
-    page.cleanup();
-    return bitmap;
+    await paint(canvas, n, width);
+    return await createImageBitmap(canvas);
   } finally {
     // Free the backing store now rather than at the next collection.
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
+/** How wide a page is drawn to tell its visible text from its hidden. */
+const INK_WIDTH = 1200;
+
+/** Page `n`'s pixels and their pixels per point, for `visibleRuns`. */
+async function pixels(n: number): Promise<{ pixels: PagePixels; scale: number }> {
+  const canvas = document.createElement("canvas");
+  try {
+    const { ctx, scale } = await paint(canvas, n, INK_WIDTH);
+    return { pixels: ctx.getImageData(0, 0, canvas.width, canvas.height), scale };
+  } finally {
     canvas.width = 0;
     canvas.height = 0;
   }
@@ -147,13 +168,20 @@ async function textRuns(n: number): Promise<TextRun[]> {
   return runs;
 }
 
-/** A page's runs for Submit's words under each mark (`anchors.ts`). */
+/** A page's runs for Submit's words under each mark (`anchors.ts`) — only
+ * those the drawn page shows (`visibleText.ts`): the words go into the
+ * agent's prompt as the user's own. */
 async function text(id: number, n: number): Promise<void> {
   let runs: TextRun[] = [];
   try {
-    if (doc && n <= doc.numPages) runs = await textRuns(n);
+    if (doc && n <= doc.numPages) {
+      const drawn = await pixels(n);
+      runs = visibleRuns(await textRuns(n), drawn.pixels, drawn.scale);
+    }
   } catch {
-    // A page whose text cannot be read sends its marks without words.
+    // A page whose text cannot be read, or that cannot be drawn to check
+    // what shows, sends its marks without words.
+    runs = [];
   }
   let chars = 0;
   const bounded = runs.slice(0, MAX_TEXT_RUNS).filter((run) => run.str.length <= MAX_RUN_CHARS && (chars += run.str.length) <= MAX_PAGE_CHARS);

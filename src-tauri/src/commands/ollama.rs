@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use app_core::sync::LockExt;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
@@ -72,7 +73,7 @@ const DEFAULT_OLLAMA_PORT: u16 = 11434;
 /// module hears, and the alternative is a stale endpoint that survives until
 /// relaunch. It is one small JSON read against a file the app already keeps hot.
 fn ollama_addr() -> Result<String, String> {
-    let settings = read_settings().unwrap_or_default();
+    let settings = crate::storage::load_settings().unwrap_or_default();
     let (host, allow_remote) = host_setting(&settings);
     resolve_ollama_addr(host, allow_remote)
 }
@@ -91,18 +92,11 @@ pub(crate) fn host_setting(settings: &crate::schema::Settings) -> (Option<&str>,
     (settings.ollama_host.as_deref(), settings.ollama_allow_remote_host.unwrap_or(false))
 }
 
-fn read_settings() -> Option<crate::schema::Settings> {
-    let path = crate::storage::state_dir().join("settings.json");
-    path.exists()
-        .then(|| crate::storage::read_json::<crate::schema::Settings>(&path).ok())
-        .flatten()
-}
-
 /// The user's chosen `OLLAMA_MODELS` directory (`Settings::ollama_models_path`),
 /// trimmed and dropped when empty. Read on every use for `ollama_addr`'s reason:
 /// a settings write is not an event this module hears.
 fn configured_models_dir() -> Option<std::path::PathBuf> {
-    read_settings()
+    crate::storage::load_settings()
         .and_then(|s| s.ollama_models_path)
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
@@ -290,8 +284,24 @@ fn ollama_http_within(
     json_body: Option<&str>,
     read_timeout: Duration,
 ) -> Result<String, String> {
-    let addr = ollama_addr()?;
-    let mut stream = connect_ollama(&addr)?;
+    ollama_http_at(&ollama_addr()?, method, path, json_body, read_timeout)
+}
+
+/// [`ollama_http_within`] against an endpoint the caller already resolved —
+/// one a tab was spawned with, which today's `ollama_host` may no longer name,
+/// or the one the mail assistant's local-model check asked (gap 25).
+pub(crate) fn ollama_http_at(
+    addr: &str,
+    method: &str,
+    path: &str,
+    json_body: Option<&str>,
+    read_timeout: Duration,
+) -> Result<String, String> {
+    #[cfg(test)]
+    if let Some(answer) = test_http::answer(addr, method, path) {
+        return answer;
+    }
+    let mut stream = connect_ollama(addr)?;
     stream
         .set_read_timeout(Some(read_timeout))
         .map_err(|e| format!("set timeout: {e}"))?;
@@ -762,6 +772,14 @@ static CAPABILITY_CACHE: std::sync::OnceLock<
 /// would make a transient probe failure silently hide every agent in the
 /// new-tab menu.
 fn model_capabilities(model: &str, digest: &str) -> Vec<String> {
+    match ollama_addr() {
+        Ok(addr) => model_capabilities_at(&addr, model, digest),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// [`model_capabilities`] asked of `addr`, an endpoint the caller resolved.
+fn model_capabilities_at(addr: &str, model: &str, digest: &str) -> Vec<String> {
     let cache = CAPABILITY_CACHE.get_or_init(Default::default);
     if !digest.is_empty() {
         if let Ok(map) = cache.lock() {
@@ -772,7 +790,7 @@ fn model_capabilities(model: &str, digest: &str) -> Vec<String> {
     }
 
     let body = serde_json::json!({ "model": model }).to_string();
-    let caps: Vec<String> = ollama_http("POST", "/api/show", Some(&body))
+    let caps: Vec<String> = ollama_http_at(addr, "POST", "/api/show", Some(&body), Duration::from_secs(600))
         .ok()
         .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
         .and_then(|v| v["capabilities"].as_array().cloned())
@@ -840,8 +858,12 @@ fn model_has_capability(model: &str, cap: &str) -> Option<bool> {
 /// [`model_capabilities`] documents. `services::mail_ai` reads it to refuse an
 /// embedding-only model, and honours the empty-is-unknown contract by allowing
 /// through anything it cannot classify.
-pub(crate) fn capabilities_of(model: &str) -> Vec<String> {
-    let digest = ollama_http("GET", "/api/tags", None)
+///
+/// Asked of `addr`, the endpoint the caller already resolved and judged
+/// (`services::mail_ai` passes the one its local-model check used, so a
+/// settings change in between cannot send the probe elsewhere).
+pub(crate) fn capabilities_of_at(addr: &str, model: &str) -> Vec<String> {
+    let digest = ollama_http_at(addr, "GET", "/api/tags", None, Duration::from_secs(600))
         .ok()
         .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
         .and_then(|v| v["models"].as_array().cloned())
@@ -850,7 +872,7 @@ pub(crate) fn capabilities_of(model: &str) -> Vec<String> {
         .find(|m| m["name"].as_str() == Some(model))
         .and_then(|m| m["digest"].as_str().map(String::from))
         .unwrap_or_default();
-    model_capabilities(model, &digest)
+    model_capabilities_at(addr, model, &digest)
 }
 
 /// Whether `model` can drive tool/function calls.
@@ -979,11 +1001,216 @@ fn keep_alive_of(
 }
 
 /// Whether an `/api/tags` entry is an Ollama cloud model: one that names the
-/// remote it runs on. Nothing about it is on this machine to load. Pure + tested.
+/// remote it runs on, or whose tag says so ([`is_cloud_name`]). Nothing about
+/// it is on this machine to load. Pure + tested.
 fn is_remote_entry(entry: &serde_json::Value) -> bool {
     ["remote_host", "remote_model"]
         .iter()
         .any(|k| entry[*k].as_str().is_some_and(|s| !s.trim().is_empty()))
+        || entry["name"].as_str().is_some_and(is_cloud_name)
+}
+
+/// Whether a model *name* is one of Ollama's cloud models by its tag
+/// (`gpt-oss:120b-cloud`, `qwen3-coder:cloud`): a second opinion beside the
+/// list's own `remote_*` fields, so a list that ever stops carrying them
+/// still refuses the name. A copy under another name (`ollama cp`) carries
+/// no such tag — the list's fields catch that one. Pure + tested.
+pub(crate) fn is_cloud_name(model: &str) -> bool {
+    let leaf = model.trim().rsplit('/').next().unwrap_or(model);
+    let tag = leaf.split('@').next().unwrap_or(leaf).split_once(':').map_or("", |(_, t)| t);
+    let tag = tag.to_ascii_lowercase();
+    tag == "cloud" || tag.ends_with("-cloud")
+}
+
+/// The verdict of [`model_is_local_in`] when `/api/tags` could not be read for
+/// want of a server: the 🧠 surface's own sentinel.
+pub(crate) const MODEL_NOT_RUNNING: &str = "not_running";
+
+/// Whether `model` runs on this machine, judged from the `/api/tags` answer
+/// of the endpoint that will run it (gap 25): `Ok` only for a listed model
+/// with no remote — [`installed_match`]'s rule, plus [`is_cloud_name`] before
+/// anything is asked. `Err("model_not_local")` for an Ollama cloud model
+/// (a loopback Ollama forwards it to ollama.com), `Err("model_not_installed")`
+/// for an unlisted name or an unreadable list (fail closed),
+/// `Err(MODEL_NOT_RUNNING)` when nothing answered. Pure + tested.
+pub(crate) fn model_is_local_in(
+    tags: Result<&str, &str>,
+    model: &str,
+) -> Result<(), &'static str> {
+    if is_cloud_name(model) {
+        return Err("model_not_local");
+    }
+    match tags {
+        Ok(body) => installed_match(body, model).map(|_| ()),
+        // No answer at all — nothing listening, or the connection failed or
+        // timed out mid-read — is "not running", never "not installed": the
+        // list was not read, so nothing is known about the model (step 5
+        // review). An error the server answered (`HTTP 500`) still is.
+        Err(e) if is_transport_failure(e) => Err(MODEL_NOT_RUNNING),
+        Err(_) => Err("model_not_installed"),
+    }
+}
+
+/// Whether an [`ollama_http_at`] error is the transport's — nothing answered,
+/// or the exchange broke off (`connect_ollama`'s sentinel, the `write:` /
+/// `read:` / `set timeout:` failures) — rather than an error the server sent.
+fn is_transport_failure(err: &str) -> bool {
+    err == MODEL_NOT_RUNNING || ["read: ", "write: ", "set timeout: "].iter().any(|p| err.starts_with(p))
+}
+
+/// The refusal for a tab's model whose alias another installed model shares.
+pub(crate) const MODEL_ALIAS_SHARED: &str = "model_alias_shared";
+
+/// [`model_is_local_in`] for a local-model **tab** (`services::root_mcp`):
+/// also refuses ([`MODEL_ALIAS_SHARED`]) when another model the endpoint lists
+/// has the same alias ([`sanitize_alias`]; `a:b-c` and `a-b:c` share
+/// `a-b-c`). A tab's Vibe home and its read-mail taint are keyed by the alias,
+/// and the home's `config.toml` names whichever of the two was prepared last,
+/// so the tab could be running the other one (step 5 review). Pure + tested.
+pub(crate) fn tab_model_is_local_in(tags: Result<&str, &str>, model: &str) -> Result<(), &'static str> {
+    model_is_local_in(tags, model)?;
+    match tags {
+        Ok(body) if alias_shared_in(body, model) => Err(MODEL_ALIAS_SHARED),
+        _ => Ok(()),
+    }
+}
+
+/// Whether a listed model other than the one `model` names answers to
+/// `model`'s alias — by its full name, or, for a `:latest` entry, by its bare
+/// name (a tab may name `x:latest` as `x`).
+fn alias_shared_in(tags_body: &str, model: &str) -> bool {
+    let model = model.trim();
+    let Ok(matched) = installed_match(tags_body, model) else { return false };
+    let alias = sanitize_alias(model);
+    let Some(entries) = serde_json::from_str::<serde_json::Value>(tags_body)
+        .ok()
+        .and_then(|v| v["models"].as_array().cloned())
+    else {
+        return false;
+    };
+    entries.iter().filter_map(|m| m["name"].as_str()).filter(|n| *n != matched).any(|name| {
+        sanitize_alias(name) == alias || name.strip_suffix(":latest").is_some_and(|bare| sanitize_alias(bare) == alias)
+    })
+}
+
+/// How long a [`model_is_local_at`] verdict is reused. Auto-classify asks for
+/// every new mail; a minute keeps that to one `/api/tags` read per burst.
+const LOCALITY_TTL: Duration = Duration::from_secs(60);
+
+/// [`model_is_local_at`]'s (and [`tab_model_is_local_at`]'s: `tab`) answers per
+/// `(endpoint, model)`, with when they were read. Only a definite verdict is
+/// kept (`Ok`, `model_not_local`): a failed or empty read is asked again next
+/// time, so a server that comes up is seen at once. Pure + tested.
+#[derive(Default)]
+struct LocalityCache(std::collections::HashMap<(String, String, bool), (Instant, Locality)>);
+
+/// One [`model_is_local_in`] verdict.
+type Locality = Result<(), &'static str>;
+
+impl LocalityCache {
+    fn get(&self, addr: &str, model: &str, tab: bool, now: Instant) -> Option<Locality> {
+        self.0
+            .get(&(addr.to_owned(), model.to_owned(), tab))
+            .filter(|(at, _)| now.saturating_duration_since(*at) < LOCALITY_TTL)
+            .map(|(_, verdict)| *verdict)
+    }
+    fn put(&mut self, addr: &str, model: &str, tab: bool, now: Instant, verdict: Locality) {
+        if matches!(verdict, Ok(()) | Err("model_not_local")) {
+            self.0.retain(|_, (at, _)| now.saturating_duration_since(*at) < LOCALITY_TTL);
+            self.0.insert((addr.to_owned(), model.to_owned(), tab), (now, verdict));
+        }
+    }
+}
+
+fn locality_cache() -> &'static std::sync::Mutex<LocalityCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<LocalityCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// [`model_is_local_in`] against the live `/api/tags` of `addr` — an endpoint
+/// the caller already resolved and judged loopback — cached for
+/// [`LOCALITY_TTL`]. The one gate between mail text and a model: the mail
+/// assistant (`services::mail_ai::chat`) and a local-model tab's mail reads
+/// (`services::root_mcp_mail`) both ask it before anything is sent.
+pub(crate) fn model_is_local_at(addr: &str, model: &str) -> Result<(), &'static str> {
+    locality_at(addr, model, false)
+}
+
+/// [`model_is_local_at`] for a local-model tab's recorded model:
+/// [`tab_model_is_local_in`]'s rule (no other installed model shares its
+/// alias), cached the same way.
+pub(crate) fn tab_model_is_local_at(addr: &str, model: &str) -> Result<(), &'static str> {
+    locality_at(addr, model, true)
+}
+
+fn locality_at(addr: &str, model: &str, tab: bool) -> Result<(), &'static str> {
+    let model = model.trim();
+    let judge = if tab { tab_model_is_local_in } else { model_is_local_in };
+    #[cfg(test)]
+    if let Some(tags) = test_tags::current() {
+        return judge(tags.as_deref().map_err(String::as_str), model);
+    }
+    let now = Instant::now();
+    if let Some(verdict) = locality_cache().lock().unwrap_or_else(|p| p.into_inner()).get(addr, model, tab, now) {
+        return verdict;
+    }
+    let tags = ollama_http_at(addr, "GET", "/api/tags", None, Duration::from_secs(10));
+    let verdict = judge(tags.as_deref().map_err(String::as_str), model);
+    locality_cache().lock().unwrap_or_else(|p| p.into_inner()).put(addr, model, tab, now, verdict);
+    verdict
+}
+
+/// What [`model_is_local_at`] reads in place of a live `/api/tags` inside a
+/// test: unset reads as no server (fail closed), so no test ever asks a real
+/// Ollama on the developer's machine. Per thread, like the tests themselves.
+#[cfg(test)]
+pub(crate) mod test_tags {
+    use std::cell::RefCell;
+    thread_local! {
+        static TAGS: RefCell<Option<Result<String, String>>> = const { RefCell::new(None) };
+    }
+    pub(crate) fn current() -> Option<Result<String, String>> {
+        Some(TAGS.with(|t| t.borrow().clone()).unwrap_or_else(|| Err(super::MODEL_NOT_RUNNING.to_owned())))
+    }
+    /// Answer `/api/tags` with `body` on this thread (`None`: nothing answers).
+    pub(crate) fn set(body: Option<&str>) {
+        TAGS.with(|t| *t.borrow_mut() = Some(body.map(str::to_owned).ok_or_else(|| super::MODEL_NOT_RUNNING.to_owned())));
+    }
+    /// Fail `/api/tags` with the transport error `err` on this thread.
+    pub(crate) fn fail(err: &str) {
+        TAGS.with(|t| *t.borrow_mut() = Some(Err(err.to_owned())));
+    }
+}
+
+/// A stand-in for the Ollama HTTP transport inside a test: while a handler is
+/// set on the thread, [`ollama_http_at`] asks it instead of dialing, and every
+/// request is recorded with the address it was sent to. Unset: the transport
+/// behaves as it always does.
+#[cfg(test)]
+pub(crate) mod test_http {
+    use std::cell::RefCell;
+    type Handler = Box<dyn Fn(&str, &str, &str) -> Result<String, String>>;
+    thread_local! {
+        static HANDLER: RefCell<Option<Handler>> = const { RefCell::new(None) };
+        static SEEN: RefCell<Vec<(String, String, String)>> = const { RefCell::new(Vec::new()) };
+    }
+    /// Answer `(addr, method, path)` with `handler` on this thread (`None`: stop).
+    pub(crate) fn set(handler: Option<Handler>) {
+        HANDLER.with(|h| *h.borrow_mut() = handler);
+        SEEN.with(|s| s.borrow_mut().clear());
+    }
+    pub(crate) fn answer(addr: &str, method: &str, path: &str) -> Option<Result<String, String>> {
+        HANDLER.with(|h| {
+            let handler = h.borrow();
+            let handler = handler.as_ref()?;
+            SEEN.with(|s| s.borrow_mut().push((addr.to_owned(), method.to_owned(), path.to_owned())));
+            Some(handler(addr, method, path))
+        })
+    }
+    /// The requests answered so far: `(addr, method, path)`.
+    pub(crate) fn seen() -> Vec<(String, String, String)> {
+        SEEN.with(|s| s.borrow().clone())
+    }
 }
 
 /// The installed model `wanted` names, as `/api/tags` lists it: an exact match,
@@ -1475,8 +1702,7 @@ fn phone_loads() -> &'static std::sync::Mutex<std::collections::HashSet<String>>
 /// having no window that tracks loads (`mobile_control::local_models`).
 pub fn phone_loading(listed: &str) -> bool {
     phone_loads()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .lock_ok()
         .contains(listed)
 }
 
@@ -1488,8 +1714,7 @@ impl PhoneLoadClaim {
     /// Claim `model`, or `None` when a phone load of it is already running.
     fn claim(model: &str) -> Option<Self> {
         let mut set = phone_loads()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .lock_ok();
         set.insert(model.to_owned())
             .then(|| PhoneLoadClaim(model.to_owned()))
     }
@@ -1498,8 +1723,7 @@ impl PhoneLoadClaim {
 impl Drop for PhoneLoadClaim {
     fn drop(&mut self) {
         phone_loads()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .lock_ok()
             .remove(&self.0);
     }
 }
@@ -1528,7 +1752,7 @@ pub async fn load_installed_ollama_model(
     let ctx = ctx.0;
     validate_model_name(&model)?;
     let wanted = model.trim().to_owned();
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::try_blocking("load", move || {
         let tags = ollama_http("GET", "/api/tags", None).map_err(|e| {
             if e == "not_running" {
                 "ollama_not_running".to_owned()
@@ -1550,7 +1774,6 @@ pub async fn load_installed_ollama_model(
         Ok(listed)
     })
     .await
-    .map_err(|e| format!("load task failed: {e}"))?
 }
 
 /// Pull (download or update) a model from the Ollama registry, streaming
@@ -1750,9 +1973,7 @@ pub async fn ollama_check_updates(models: Vec<String>) -> Result<Vec<OllamaModel
         .map(|m| (m.name, m.digest))
         .collect();
 
-    tokio::task::spawn_blocking(move || wanted_updates(wanted))
-        .await
-        .map_err(|e| format!("update check failed: {e}"))
+    app_core::rt::blocking("update check failed", move || wanted_updates(wanted)).await
 }
 
 /// The blocking half of [`ollama_check_updates`] — `curl` per model, off the
@@ -1929,7 +2150,7 @@ fn version_is_newer(candidate: &str, current: &str) -> Option<bool> {
 /// costs one unauthenticated GitHub request.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         // Deliberately NOT pointed at `ollama_host`: this reads the version of
         // the **installed binary**, which is what the feature gate above is
         // about (`ollama launch` exists from v0.15), and the whole contract of
@@ -2733,7 +2954,7 @@ fn ollama_under_systemd() -> bool {
 /// so it belongs to a menu opening, never to a poll.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_gpu_status() -> OllamaGpuStatus {
-    tokio::task::spawn_blocking(|| {
+    app_core::rt::spawn_blocking(|| {
         let gpus = crate::gpustat::snapshot();
         let mut status = OllamaGpuStatus {
             gpu_present: !gpus.is_empty(),
@@ -2787,11 +3008,6 @@ fn models_path_is_safe(path: &str) -> bool {
             .any(|c| c.is_control() || matches!(c, '"' | '%' | '\\'))
 }
 
-/// POSIX single-quote a string so it survives as one shell word.
-fn sh_single_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 /// The terminal command that points the **running service** at `path`, plus the
 /// shell it needs. Empty when there is nothing to run — no service (a server
 /// Tabtivity spawns already honours the setting via `ensure_ollama_running`), or a
@@ -2808,7 +3024,7 @@ fn models_dir_service_command(path: &str, systemd: bool) -> (String, String) {
     if !systemd || !models_path_is_safe(path) {
         return (String::new(), String::new());
     }
-    let q = sh_single_quote(path);
+    let q = crate::quote::posix(path);
     (
         format!(
             "svc_user=$(systemctl show -p User --value ollama); \
@@ -2854,7 +3070,7 @@ pub struct OllamaModelsDirPlan {
 /// so it belongs to the Settings panel opening, never to a poll.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_models_dir_plan(path: Option<String>) -> OllamaModelsDirPlan {
-    tokio::task::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let default_dir = crate::paths::home_dir()
             .join(".ollama")
             .join("models")
@@ -2997,9 +3213,7 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
 /// runtime: it can block for 16 s or more.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ensure_ollama_running_unattended() -> Result<(), String> {
-    tokio::task::spawn_blocking(|| ensure_running(false))
-        .await
-        .map_err(|e| format!("start task failed: {e}"))?
+    app_core::rt::try_blocking("start", || ensure_running(false)).await
 }
 
 /// The `systemctl` arguments that start the Ollama unit. Without
@@ -3033,8 +3247,7 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
     let addr = ollama_addr()?;
 
     let _one_start = START_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .lock_ok();
 
     if ollama_listening() {
         return Ok(());
@@ -3720,7 +3933,7 @@ pub async fn complete_text(
     use crate::services::text_completion;
     let event = format!("text-completion-{request_id}");
     text_completion::run(request_id, async move {
-        let settings = read_settings().unwrap_or_default();
+        let settings = crate::storage::load_settings().unwrap_or_default();
         let local_only = project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
             .is_some_and(|policy| policy.local_only);
         let (host, allow_remote) = host_setting(&settings);
@@ -3838,6 +4051,114 @@ pub async fn prepare_local_agent(model: String) -> Result<LocalAgentPrep, String
         vibe_home: vibe_home.to_string_lossy().into_owned(),
         alias,
     })
+}
+
+/// The refusal [`clear_local_model_conversations`] answers while a tab of the
+/// model runs; the window names the tabs.
+pub(crate) const LOCAL_MODEL_TAB_OPEN: &str = "local_model_tab_open";
+
+/// The refusal [`clear_local_model_conversations`] answers when a tab of the
+/// model started while the conversations were being deleted: they are gone,
+/// but the read-mail mark is kept (the new tab may already read mail). The
+/// window says exactly that.
+pub(crate) const LOCAL_MODEL_TAB_STARTED: &str = "local_model_tab_started";
+
+/// "Clear conversations" (local model menu): delete `model`'s stored Vibe
+/// conversations — `logs/session/` of its per-model `VIBE_HOME`, where Vibe
+/// keeps every session (the unified store and the older `session_*`
+/// folders) — and then its read-mail taint marker
+/// (`root_mcp::model_read_mail_marker`), together and in that order: the
+/// marker only says that a conversation of the model holds mail, so it goes
+/// only once no conversation can be continued (gap 33). Config, hooks, the
+/// prompt history and logins in the home are left alone. Refused
+/// ([`LOCAL_MODEL_TAB_OPEN`]) while any tab spawned with that home runs: its
+/// context may hold mail, and Vibe is writing the store.
+///
+/// Models whose names share an alias share the home, so their conversations
+/// (and marker) go together.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn clear_local_model_conversations(model: String) -> Result<(), String> {
+    validate_model_name(&model)?;
+    let model = model.trim().to_string();
+    let home = app_vibe_local_dir_for(&sanitize_alias(&model))?;
+    let marker = crate::services::root_mcp::model_read_mail_marker(&crate::storage::state_dir(), &model);
+    app_core::rt::try_blocking("ollama", move || {
+        let live = || crate::services::agent_fence::live_tabs_in_vibe_home(&home);
+        clear_conversations_in(&home, &marker, &live)
+    })
+    .await
+}
+
+/// [`clear_local_model_conversations`] over its paths: refuse while `live`
+/// names a tab, delete the session store, then the marker. `live` is asked
+/// again just before the marker goes: a tab of the model that started while
+/// the store was being deleted may already hold a conversation (one it
+/// resumed, or a new one that reads mail), so the marker stays and the clear
+/// answers [`LOCAL_MODEL_TAB_STARTED`] — the conversations *were* deleted.
+/// Pure over the filesystem + tested.
+fn clear_conversations_in(
+    home: &std::path::Path,
+    marker: &std::path::Path,
+    live: &dyn Fn() -> Vec<String>,
+) -> Result<(), String> {
+    if !live().is_empty() {
+        return Err(LOCAL_MODEL_TAB_OPEN.to_string());
+    }
+    remove_vibe_sessions(home)?;
+    if !live().is_empty() {
+        return Err(LOCAL_MODEL_TAB_STARTED.to_string());
+    }
+    match std::fs::remove_file(marker) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove the read-mail marker: {e}")),
+    }
+}
+
+/// Delete `<home>/logs/session`, never through a link: the home is written by
+/// the model's (fenced) tabs, so `logs` or `session` (or anything below) may
+/// be a link planted there — also between a check and the delete. So the
+/// delete goes through directory handles (`services::home_io`), opened
+/// without following a link at every component: a linked `logs` or `session`
+/// is removed as the link itself (all Vibe would read through), a link below
+/// is unlinked, and a folder swapped for a link mid-walk fails the clear
+/// instead of redirecting it. The home itself must be a plain folder. A
+/// missing home, `logs` or store is nothing to clear.
+fn remove_vibe_sessions(home: &std::path::Path) -> Result<(), String> {
+    use crate::services::home_io::HomeDir;
+    use std::io::ErrorKind::NotFound;
+    match std::fs::symlink_metadata(home) {
+        Err(e) if e.kind() == NotFound => return Ok(()),
+        Err(e) => return Err(format!("read {}: {e}", home.display())),
+        Ok(meta) if !meta.is_dir() => return Err(format!("{} is not a plain folder", home.display())),
+        Ok(_) => {}
+    }
+    let root = HomeDir::open_existing(home, "").ok_or_else(|| format!("open {}", home.display()))?;
+    // Only a `logs` that is not there is nothing to clear: one that cannot be
+    // looked at (the home's search permission taken away, say) fails the
+    // clear, or the marker would go while the conversations stay.
+    let logs_path = home.join("logs");
+    let logs = match root.file("logs").ok_or(()).map(|f| f.lstat()) {
+        Ok(Ok(meta)) => meta,
+        Ok(Err(e)) if e.kind() == NotFound => return Ok(()),
+        Ok(Err(e)) => return Err(format!("read {}: {e}", logs_path.display())),
+        Err(()) => return Err(format!("open {}", home.display())),
+    };
+    let gone = |result: std::io::Result<()>, what: &std::path::Path| match result {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == NotFound => Ok(()),
+        Err(e) => Err(format!("remove {}: {e}", what.display())),
+    };
+    if logs.is_symlink {
+        return gone(root.remove_tree("logs"), &logs_path);
+    }
+    if !logs.is_dir {
+        return Ok(());
+    }
+    let dir = root
+        .subdir_existing("logs")
+        .ok_or_else(|| format!("{} changed while it was being cleared", logs_path.display()))?;
+    gone(dir.remove_tree("session"), &logs_path.join("session"))
 }
 
 /// Ensure the Ollama provider and the given model are registered in
@@ -4566,7 +4887,7 @@ fn model_context_length(model: &str) -> Option<u64> {
         .filter(|n| *n > 0)
 }
 
-fn sanitize_alias(model: &str) -> String {
+pub(crate) fn sanitize_alias(model: &str) -> String {
     model.replace(':', "-")
 }
 
@@ -4577,6 +4898,14 @@ fn sanitize_alias(model: &str) -> String {
 /// also illegal in TOML basic strings. We allow only the characters that appear
 /// in real Ollama model refs (`<namespace>/<name>:<tag>`): ASCII alphanumerics
 /// and `. _ - : /` plus `@` (digest refs). Empty names are rejected too.
+///
+/// The name also becomes a path: the model's Vibe home is
+/// `vibe_local/<alias>` ([`app_vibe_local_dir_for`]), which
+/// `prepare_local_agent` writes and "Clear conversations" deletes from. So
+/// every `/`-separated part must be a real name — no empty part (a leading
+/// `/` would make the home absolute, and `Path::join` would drop
+/// `vibe_local` altogether), no `.` and no `..`. No Ollama ref has one; a
+/// listed name that does (a remote Ollama names its own models) is refused.
 fn validate_model_name(model: &str) -> Result<(), String> {
     let model = model.trim();
     if model.is_empty() {
@@ -4587,6 +4916,9 @@ fn validate_model_name(model: &str) -> Result<(), String> {
         .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/' | '@')))
     {
         return Err(format!("invalid character {bad:?} in model name '{model}'"));
+    }
+    if model.split('/').any(|part| matches!(part, "" | "." | "..")) {
+        return Err(format!("invalid path part in model name '{model}'"));
     }
     Ok(())
 }
@@ -4857,6 +5189,28 @@ mod tests {
                 validate_model_name(bad).is_err(),
                 "{bad:?} should be rejected"
             );
+        }
+    }
+
+    /// Step 9 review: the name is also the Vibe home's folder, which "Clear
+    /// conversations" deletes from and `prepare_local_agent` writes. A name
+    /// that is absolute or climbs out (`/home/u/.vibe`, `../../.vibe`) would
+    /// point both at a folder outside `vibe_local` — the user's own Vibe's.
+    #[test]
+    fn validate_model_name_rejects_path_escapes() {
+        for bad in ["/home/u/.vibe", "../../../.vibe", "a/../../b", "./x", "a//b", "a/", "..", "."] {
+            assert!(validate_model_name(bad).is_err(), "{bad:?} should be rejected");
+        }
+        for ok in ["hf.co/user/repo:Q4_K_M", "a..b:c", ".hidden-ish:1", "x/y.z:latest"] {
+            assert!(validate_model_name(ok).is_ok(), "{ok:?} should be accepted");
+        }
+        // Refused before anything is read or deleted (`prepare_local_agent`
+        // validates first too; not called here, as a regression would write
+        // into the real share dir's neighbourhood). Neither path exists, so
+        // the old code answered `Ok` here.
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        for bad in ["/nonexistent-vibe-home-for-a-test", "../../../nonexistent-vibe-home-for-a-test"] {
+            assert!(rt.block_on(clear_local_model_conversations(bad.to_string())).is_err(), "{bad}");
         }
     }
 
@@ -5772,6 +6126,145 @@ mod tests {
         assert_eq!(sanitize_alias("noname"), "noname");
     }
 
+    // ── "Clear conversations" (gap 33 follow-up (c)) ─────────────────────────
+
+    /// A model home as Vibe leaves it: config and logins beside the session
+    /// store (unified and legacy) and the debug log.
+    fn vibe_home_with_sessions(root: &std::path::Path) -> std::path::PathBuf {
+        let home = root.join("vibe_local").join("llama3-latest");
+        let unified = home.join("logs").join("session").join("unified").join("abc");
+        std::fs::create_dir_all(&unified).unwrap();
+        std::fs::write(unified.join("CURRENT"), b"x").unwrap();
+        let legacy = home.join("logs").join("session").join("session_20261013_1");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("meta.json"), b"{}").unwrap();
+        std::fs::write(home.join("logs").join("vibe.log"), b"log").unwrap();
+        for keep in ["config.toml", "hooks.toml", ".env", "vibehistory"] {
+            std::fs::write(home.join(keep), b"keep").unwrap();
+        }
+        home
+    }
+
+    fn none_live() -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Step 9 review: a tab of the model that starts while the store is being
+    /// deleted keeps the marker — its conversation may hold mail.
+    #[test]
+    fn a_tab_starting_during_the_clear_keeps_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = vibe_home_with_sessions(tmp.path());
+        let marker = tmp.path().join("marker");
+        std::fs::write(&marker, b"").unwrap();
+        let asked = std::cell::Cell::new(0);
+        let live = || {
+            asked.set(asked.get() + 1);
+            if asked.get() == 1 { Vec::new() } else { vec!["late-tab".to_string()] }
+        };
+        // A refusal of its own: the conversations are gone, the mark is kept.
+        assert_eq!(clear_conversations_in(&home, &marker, &live).unwrap_err(), LOCAL_MODEL_TAB_STARTED);
+        assert_eq!(asked.get(), 2);
+        assert!(marker.exists(), "the marker outlives a clear a new tab overlapped");
+        assert!(!home.join("logs").join("session").exists(), "the conversations were cleared");
+    }
+
+    #[test]
+    fn clearing_deletes_the_conversations_then_the_marker_and_nothing_else() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = vibe_home_with_sessions(tmp.path());
+        let marker = tmp.path().join("root_mcp").join("read_mail_model").join("h");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"").unwrap();
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
+        assert!(!home.join("logs").join("session").exists());
+        assert!(!marker.exists());
+        for keep in ["config.toml", "hooks.toml", ".env", "vibehistory"] {
+            assert!(home.join(keep).is_file(), "{keep}");
+        }
+        assert!(home.join("logs").join("vibe.log").is_file());
+        // Again: nothing left to clear is not an error; nor is a model never run.
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
+        clear_conversations_in(&tmp.path().join("vibe_local").join("never"), &marker, &none_live).unwrap();
+    }
+
+    #[test]
+    fn clearing_is_refused_while_a_tab_of_the_model_runs_and_keeps_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = vibe_home_with_sessions(tmp.path());
+        let marker = tmp.path().join("marker");
+        std::fs::write(&marker, b"").unwrap();
+        let err = clear_conversations_in(&home, &marker, &|| vec!["tab-1".to_string()]).unwrap_err();
+        assert_eq!(err, LOCAL_MODEL_TAB_OPEN);
+        assert!(home.join("logs").join("session").join("unified").is_dir());
+        assert!(marker.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clearing_never_follows_a_planted_link_and_keeps_the_marker_on_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(outside.join("session")).unwrap();
+        std::fs::write(outside.join("session").join("precious"), b"x").unwrap();
+        // `logs` a link out of the home: the link goes, the target stays.
+        let home = tmp.path().join("vibe_local").join("m");
+        std::fs::create_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("logs")).unwrap();
+        let marker = tmp.path().join("marker");
+        std::fs::write(&marker, b"").unwrap();
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
+        assert!(std::fs::symlink_metadata(home.join("logs")).is_err());
+        assert!(outside.join("session").join("precious").is_file());
+        // `session` a link: the same.
+        std::fs::create_dir_all(home.join("logs")).unwrap();
+        std::os::unix::fs::symlink(outside.join("session"), home.join("logs").join("session")).unwrap();
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
+        assert!(outside.join("session").join("precious").is_file());
+        // A link deeper in the store is unlinked, its target untouched.
+        assert!(std::fs::symlink_metadata(home.join("logs").join("session")).is_err());
+        std::fs::create_dir_all(home.join("logs").join("session").join("s1")).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("logs").join("session").join("s1").join("out")).unwrap();
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
+        assert!(!home.join("logs").join("session").exists());
+        assert!(outside.join("session").join("precious").is_file());
+        // A home that is itself a link is refused, and the marker stays.
+        let linked = tmp.path().join("vibe_local").join("linked");
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        std::fs::write(&marker, b"").unwrap();
+        assert!(clear_conversations_in(&linked, &marker, &none_live).is_err());
+        assert!(marker.exists());
+        assert!(outside.join("session").join("precious").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_store_that_cannot_be_looked_at_keeps_the_marker() {
+        // A home the model's tab took the search permission from: `logs`
+        // cannot be stat'ed. That is not "nothing to clear" — the clear fails
+        // and the marker stays with the conversations it guards.
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root ignores the permission bits
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("vibe_local").join("m");
+        std::fs::create_dir_all(home.join("logs").join("session")).unwrap();
+        std::fs::write(home.join("logs").join("session").join("s.json"), b"{}").unwrap();
+        let marker = tmp.path().join("marker");
+        std::fs::write(&marker, b"").unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let result = clear_conversations_in(&home, &marker, &none_live);
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err(), "{result:?}");
+        assert!(marker.exists(), "the marker went while the conversations stayed");
+        assert!(home.join("logs").join("session").join("s.json").is_file());
+        // Put right, the same clear goes through.
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
+        assert!(!marker.exists());
+        assert!(!home.join("logs").join("session").exists());
+    }
+
     // ── reload regression: writing the same model twice is idempotent ─────────
 
     #[test]
@@ -5821,14 +6314,6 @@ mod tests {
     }
 
     #[test]
-    fn sh_single_quote_wraps_and_escapes() {
-        assert_eq!(sh_single_quote("/plain/path"), "'/plain/path'");
-        assert_eq!(sh_single_quote("/with space"), "'/with space'");
-        // A lone apostrophe closes, escapes, reopens.
-        assert_eq!(sh_single_quote("a'b"), "'a'\\''b'");
-    }
-
-    #[test]
     fn service_command_is_a_drop_in_only_under_systemd() {
         let path = "/data/ollama/models";
         // No service to reconfigure → nothing to run (a Tabtivity-spawned server
@@ -5842,7 +6327,7 @@ mod tests {
         assert_eq!(shell, "bash");
         assert!(cmd.contains(concat!("ollama.service.d/", crate::app_slug!(), "-models.conf")));
         assert!(cmd.contains("OLLAMA_MODELS=%s")); // path arrives as a printf arg
-        assert!(cmd.contains(&sh_single_quote(path)));
+        assert!(cmd.contains(&crate::quote::posix(path)));
         assert!(cmd.contains("systemctl restart ollama"));
         // The dir is created and handed to whoever the unit runs as.
         assert!(cmd.contains("systemctl show -p User"));
@@ -6104,6 +6589,97 @@ mod phone_control_tests {
         assert!(!is_remote_entry(&serde_json::json!({"name":"a"})));
         assert!(!is_remote_entry(&serde_json::json!({"name":"a","remote_host":""})));
         assert!(!is_remote_entry(&serde_json::json!({"name":"a","remote_host":null})));
+        // The tag alone is enough, whatever the list leaves out.
+        assert!(is_remote_entry(&serde_json::json!({"name":"gpt-oss:120b-cloud"})));
+    }
+
+    #[test]
+    fn cloud_names_are_judged_by_their_tag() {
+        for name in ["gpt-oss:120b-cloud", "qwen3-coder:cloud", "ns/m:480B-CLOUD", " deepseek-v3.1:671b-cloud "] {
+            assert!(is_cloud_name(name), "{name}");
+        }
+        for name in ["llama3", "llama3:latest", "cloud", "my-cloud", "cloudy:7b", "reg.example:5000/cloud/m", "m@sha256:abc-cloud"] {
+            assert!(!is_cloud_name(name), "{name}");
+        }
+    }
+
+    /// Gap 25: only a listed model with no remote is local; a cloud model,
+    /// an unlisted one and an unreadable or absent list are refused.
+    #[test]
+    fn a_model_is_local_only_when_the_list_says_so() {
+        assert_eq!(model_is_local_in(Ok(TAGS_BODY), "llama3"), Ok(()));
+        assert_eq!(model_is_local_in(Ok(TAGS_BODY), "qwen3.5:9b"), Ok(()));
+        assert_eq!(model_is_local_in(Ok(TAGS_BODY), "gpt-oss:120b-cloud"), Err("model_not_local"));
+        // A cloud entry copied under a plain name: the list's fields decide.
+        let copied = r#"{"models":[{"name":"mine:latest","remote_host":"https://ollama.com:443","remote_model":"gpt-oss:120b"}]}"#;
+        assert_eq!(model_is_local_in(Ok(copied), "mine"), Err("model_not_local"));
+        // The tag refuses before the list is consulted at all.
+        assert_eq!(model_is_local_in(Err(MODEL_NOT_RUNNING), "kimi-k2:1t-cloud"), Err("model_not_local"));
+        assert_eq!(model_is_local_in(Ok(TAGS_BODY), "mistral"), Err("model_not_installed"));
+        assert_eq!(model_is_local_in(Ok(""), "llama3"), Err("model_not_installed"), "an empty body fails closed");
+        assert_eq!(model_is_local_in(Ok(r#"{"models":[]}"#), "llama3"), Err("model_not_installed"));
+        // A broken-off or timed-out read is "not running", not "not installed".
+        assert_eq!(model_is_local_in(Err("read: reset"), "llama3"), Err(MODEL_NOT_RUNNING));
+        assert_eq!(model_is_local_in(Err("read: Resource temporarily unavailable (os error 11)"), "llama3"), Err(MODEL_NOT_RUNNING));
+        assert_eq!(model_is_local_in(Err("write: Broken pipe"), "llama3"), Err(MODEL_NOT_RUNNING));
+        assert_eq!(model_is_local_in(Err(MODEL_NOT_RUNNING), "llama3"), Err(MODEL_NOT_RUNNING));
+        // An error the server sent is still a list that could not be read.
+        assert_eq!(model_is_local_in(Err("HTTP 500"), "llama3"), Err("model_not_installed"));
+    }
+
+    /// Step 5 review: a tab's model whose alias another installed model shares
+    /// (its Vibe home and taint are keyed by the alias) is refused; the mail
+    /// assistant, which names its model directly, is not affected.
+    #[test]
+    fn a_tab_model_sharing_its_alias_with_another_installed_model_is_refused() {
+        let tags = r#"{"models":[{"name":"a:b-c"},{"name":"a-b:c"},{"name":"solo:7b"},{"name":"x-y:latest"},{"name":"x:y"}]}"#;
+        assert_eq!(tab_model_is_local_in(Ok(tags), "a:b-c"), Err(MODEL_ALIAS_SHARED));
+        assert_eq!(tab_model_is_local_in(Ok(tags), "a-b:c"), Err(MODEL_ALIAS_SHARED));
+        assert_eq!(model_is_local_in(Ok(tags), "a:b-c"), Ok(()));
+        assert_eq!(tab_model_is_local_in(Ok(tags), "solo:7b"), Ok(()));
+        // `x-y:latest` answers to `x-y` as well, which is `x:y`'s alias.
+        assert_eq!(tab_model_is_local_in(Ok(tags), "x:y"), Err(MODEL_ALIAS_SHARED));
+        assert_eq!(tab_model_is_local_in(Ok(tags), "x-y"), Err(MODEL_ALIAS_SHARED));
+        // A local model named like a cloud model's alias: refused.
+        let cloud_twin = r#"{"models":[{"name":"gpt-oss-120b-cloud:latest"},{"name":"gpt-oss:120b-cloud","remote_host":"https://ollama.com:443"}]}"#;
+        assert_eq!(tab_model_is_local_in(Ok(cloud_twin), "gpt-oss-120b-cloud:latest"), Ok(()));
+        assert_eq!(tab_model_is_local_in(Ok(cloud_twin), "gpt-oss-120b-cloud"), Err(MODEL_ALIAS_SHARED));
+        // The base rules still come first.
+        assert_eq!(tab_model_is_local_in(Ok(tags), "mistral"), Err("model_not_installed"));
+        assert_eq!(tab_model_is_local_in(Err("read: timed out"), "solo:7b"), Err(MODEL_NOT_RUNNING));
+        test_tags::set(Some(tags));
+        assert_eq!(tab_model_is_local_at("127.0.0.1:11434", "a:b-c"), Err(MODEL_ALIAS_SHARED));
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "a:b-c"), Ok(()));
+        test_tags::set(None);
+    }
+
+    #[test]
+    fn locality_verdicts_are_kept_a_minute_and_failures_not_at_all() {
+        let mut cache = LocalityCache::default();
+        let t0 = Instant::now();
+        cache.put("127.0.0.1:11434", "llama3", false, t0, Ok(()));
+        cache.put("127.0.0.1:11434", "big:cloud", false, t0, Err("model_not_local"));
+        cache.put("127.0.0.1:11434", "gone", false, t0, Err("model_not_installed"));
+        cache.put("127.0.0.1:11434", "down", false, t0, Err(MODEL_NOT_RUNNING));
+        cache.put("127.0.0.1:11434", "twin", true, t0, Err(MODEL_ALIAS_SHARED));
+        assert_eq!(cache.get("127.0.0.1:11434", "llama3", false, t0 + Duration::from_secs(59)), Some(Ok(())));
+        assert_eq!(cache.get("127.0.0.1:11434", "big:cloud", false, t0), Some(Err("model_not_local")));
+        assert_eq!(cache.get("127.0.0.1:11434", "gone", false, t0), None);
+        assert_eq!(cache.get("127.0.0.1:11434", "down", false, t0), None);
+        assert_eq!(cache.get("127.0.0.1:11434", "twin", true, t0), None, "a shared alias is asked again");
+        assert_eq!(cache.get("127.0.0.1:11434", "llama3", true, t0), None, "the tab rule is kept apart");
+        assert_eq!(cache.get("127.0.0.1:11500", "llama3", false, t0), None, "per endpoint");
+        assert_eq!(cache.get("127.0.0.1:11434", "llama3", false, t0 + LOCALITY_TTL), None, "expired");
+    }
+
+    #[test]
+    fn the_test_tags_hook_fails_closed_until_set() {
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "llama3"), Err(MODEL_NOT_RUNNING));
+        test_tags::set(Some(TAGS_BODY));
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "llama3"), Ok(()));
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "gpt-oss:120b-cloud"), Err("model_not_local"));
+        test_tags::set(None);
+        assert_eq!(model_is_local_at("127.0.0.1:11434", "llama3"), Err(MODEL_NOT_RUNNING));
     }
 
     #[test]

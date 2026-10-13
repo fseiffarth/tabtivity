@@ -48,6 +48,7 @@ import { BigFolderDialogHost } from "../projects/BigFolderExcludeDialog";
 import { BoxEditorHost } from "../projects/BoxEditorDialog";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
+import { OpenExternalHost } from "../common/OpenExternalHost";
 import { CalendarOverlayHost } from "../calendar/CalendarOverlay";
 import { CalDavSyncHost } from "../calendar/CalDavSyncHost";
 import { PrinterNetworkDefaultsHost } from "../printing/PrinterNetworkDefaultsHost";
@@ -113,6 +114,7 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { flushUsage } from "../../stores/usage";
 import { useKeyboard } from "../../hooks/useKeyboard";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { useT, useI18nStore, translate, type TranslationKey } from "../../lib/i18n";
 import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePanelView";
 import type { FilesPanelView } from "../../types";
@@ -462,7 +464,6 @@ export function AppShell() {
   // window geometry a few frames after the event, so a single immediate fire can
   // measure mid-transition.
   useEffect(() => {
-    const unlisteners: Array<() => void> = [];
     let raf = 0;
     let trailing: ReturnType<typeof setTimeout> | undefined;
     const fire = () => {
@@ -479,8 +480,10 @@ export function AppShell() {
       }, 250);
     };
     const win = getCurrentWindow();
-    win.onResized(fire).then((fn) => unlisteners.push(fn)).catch(() => {});
-    win.onScaleChanged(fire).then((fn) => unlisteners.push(fn)).catch(() => {});
+    const unlisteners = [
+      subscribeTauri(() => win.onResized(fire)),
+      subscribeTauri(() => win.onScaleChanged(fire)),
+    ];
     return () => {
       if (raf) cancelAnimationFrame(raf);
       if (trailing) clearTimeout(trailing);
@@ -496,7 +499,6 @@ export function AppShell() {
   useEffect(() => {
     if (!settingsLoaded) return;
     const win = getCurrentWindow();
-    const unlisteners: Array<() => void> = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = () => {
       if (timer) clearTimeout(timer);
@@ -505,8 +507,10 @@ export function AppShell() {
         void saveWindowGeometry().catch(() => {});
       }, 300);
     };
-    win.onMoved(schedule).then((fn) => unlisteners.push(fn)).catch(() => {});
-    win.onResized(schedule).then((fn) => unlisteners.push(fn)).catch(() => {});
+    const unlisteners = [
+      subscribeTauri(() => win.onMoved(schedule)),
+      subscribeTauri(() => win.onResized(schedule)),
+    ];
     return () => {
       if (timer) clearTimeout(timer);
       unlisteners.forEach((fn) => fn());
@@ -1465,6 +1469,7 @@ export function AppShell() {
       {/* The ask-once "run this project's hooks / latexmkrc / prettier?" prompt
           (services::exec_trust), raised by a gated commit/push/build/format. */}
       <ExecTrustHost />
+      <OpenExternalHost />
       {/* Mail as a global app: the header's ✉ button opens the ordinary MailPane
           as an overlay over whatever is on screen. At the shell rather than in
           the header because it covers the window, not the header — and because

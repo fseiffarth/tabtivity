@@ -8,6 +8,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MAX_INBOX_FILE } from "../../../mobile-web/src/api";
 import { Project } from "../../../mobile-web/src/screens/Project";
 import { storageKey } from "../../../src/lib/brand";
 
@@ -417,5 +418,186 @@ describe("Mobile project — read-only file browser", () => {
 
     fireEvent.click(within(card).getByRole("button", { name: "Forget paper.pdf on this phone" }));
     expect(screen.queryByRole("button", { name: "Open paper.pdf" })).toBeNull();
+  });
+});
+
+describe("Mobile project — Upload here", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  type Entry = (typeof SRC.entries)[number];
+  /** The desktop with uploads on in `src` (not at the root): `post` answers
+   * each upload, and what landed is listed in `src` until undone. */
+  function uploadHost(post: (url: string, landed: Entry[]) => Promise<Response> | Response) {
+    const host = hostWith(true);
+    const landed: Entry[] = [];
+    return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/projects/p1/files/upload?name=") && init?.method === "POST") return post(url, landed);
+      if (url.startsWith("/api/v1/projects/p1/files/upload?f=") && init?.method === "DELETE") {
+        const token = new URL(url, "http://phone").searchParams.get("f");
+        const at = landed.findIndex((entry) => entry.token === token);
+        if (at < 0) return new Response(JSON.stringify({ error: "file_not_found" }), { status: 404 });
+        landed.splice(at, 1);
+        return new Response(JSON.stringify({ undone: true }), { status: 200 });
+      }
+      if (url === "/api/v1/projects/p1/files?dir=tok-src") return new Response(JSON.stringify({ ...SRC, entries: [...SRC.entries, ...landed], uploads: true }), { status: 200 });
+      return host(input, init);
+    });
+  }
+
+  /** The drawer, opened from the header's ☰ and walked into `src`. */
+  async function openSrc() {
+    fireEvent.click(await screen.findByRole("button", { name: "Project menu" }));
+    const sheet = screen.getByRole("dialog", { name: "Alpha" });
+    fireEvent.click(await within(sheet).findByRole("button", { name: "Open the folder src" }));
+    await within(sheet).findByRole("button", { name: "Open main.rs" });
+    return sheet;
+  }
+
+  function pick(files: File[]) {
+    const input = screen.getByTestId("project-files-upload-input") as HTMLInputElement;
+    Object.defineProperty(input, "files", { value: files, configurable: true });
+    fireEvent.change(input);
+  }
+
+  const posts = (fetch: ReturnType<typeof vi.fn>) =>
+    fetch.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "POST").map(([url]) => String(url));
+
+  it("offers Upload here only where the listing allows it", async () => {
+    vi.stubGlobal("fetch", uploadHost(() => new Response(null, { status: 500 })));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Project menu" }));
+    const sheet = screen.getByRole("dialog", { name: "Alpha" });
+    // The root's listing carries no `uploads` (an older desktop, or a dot folder).
+    await within(sheet).findByRole("button", { name: "Open the folder src" });
+    expect(within(sheet).queryByRole("button", { name: /^Upload here/ })).toBeNull();
+    expect(sheet.textContent).toContain("Read-only");
+
+    fireEvent.click(within(sheet).getByRole("button", { name: "Open the folder src" }));
+    expect(await within(sheet).findByRole("button", { name: /^Upload here/ })).toBeTruthy();
+    expect(sheet.textContent).toContain("Add-only");
+    expect(sheet.textContent).not.toContain("Read-only");
+  });
+
+  it("uploads the picks one after another into the folder, lists them, and undoes one", async () => {
+    let release: (() => void) | undefined;
+    const fetch = uploadHost(async (url, landed) => {
+      const name = new URL(url, "http://phone").searchParams.get("name") ?? "";
+      // The first answer waits, so the second file must not be out yet.
+      if (name === "notes.txt") await new Promise<void>((resolve) => { release = resolve; });
+      const entry = { token: `tok-${name}`, name: name === "main.rs" ? "main-2.rs" : name, kind: "text/plain; charset=utf-8", size: 5, modified: 1_770_000_100 };
+      landed.push(entry);
+      return new Response(JSON.stringify({ file: entry }), { status: 201 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const sheet = await openSrc();
+
+    fireEvent.click(within(sheet).getByRole("button", { name: /^Upload here/ }));
+    pick([new File(["notes"], "notes.txt", { type: "text/plain" }), new File(["fn x"], "main.rs")]);
+    await waitFor(() => expect(posts(fetch)).toEqual(["/api/v1/projects/p1/files/upload?name=notes.txt&dir=tok-src"]));
+    expect(within(sheet).getAllByText("Uploading…")).toHaveLength(2);
+    release?.();
+
+    // Each landed file is listed again in the folder; a taken name came back
+    // as the desktop's own (`main-2.rs`).
+    await within(sheet).findByRole("button", { name: "Open main-2.rs" });
+    expect(posts(fetch)).toEqual([
+      "/api/v1/projects/p1/files/upload?name=notes.txt&dir=tok-src",
+      "/api/v1/projects/p1/files/upload?name=main.rs&dir=tok-src",
+    ]);
+    await within(sheet).findByRole("button", { name: "Open notes.txt" });
+    expect(within(sheet).getAllByText("Added to src")).toHaveLength(2);
+
+    // Undo deletes by the landed file's token, and the folder lists without it.
+    fireEvent.click(within(sheet).getByRole("button", { name: "Undo adding main-2.rs" }));
+    await within(sheet).findByText("Removed again.");
+    expect(fetch).toHaveBeenCalledWith("/api/v1/projects/p1/files/upload?f=tok-main.rs", expect.objectContaining({ method: "DELETE" }));
+    await waitFor(() => expect(within(sheet).queryByRole("button", { name: "Open main-2.rs" })).toBeNull());
+
+    // Out of the folder, the other row keeps saying where it went, without Undo.
+    fireEvent.click(within(within(sheet).getByRole("navigation", { name: "Folders" })).getByRole("button", { name: "Alpha" }));
+    await within(sheet).findByRole("button", { name: "Open notes.md" });
+    expect(within(sheet).getByText("Added to src")).toBeTruthy();
+    expect(within(sheet).queryByRole("button", { name: "Undo adding notes.txt" })).toBeNull();
+  });
+
+  it("says why a file was not added, by the desktop's code", async () => {
+    vi.stubGlobal("fetch", uploadHost((url) => {
+      const name = new URL(url, "http://phone").searchParams.get("name");
+      if (name === "full.pdf") return new Response(JSON.stringify({ error: "uploads_full" }), { status: 507 });
+      if (name === "dot.pdf") return new Response(JSON.stringify({ error: "upload_refused" }), { status: 403 });
+      // A body past the route's limit: axum's own 413, no JSON.
+      if (name === "huge.pdf") return new Response("length limit exceeded", { status: 413 });
+      return new Response(JSON.stringify({ error: "write_failed" }), { status: 500 });
+    }));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const sheet = await openSrc();
+    fireEvent.click(within(sheet).getByRole("button", { name: /^Upload here/ }));
+    pick(["full.pdf", "dot.pdf", "huge.pdf", "disk.pdf"].map((name) => new File(["x"], name)));
+    await waitFor(() => expect(within(sheet).getAllByRole("alert")).toHaveLength(4));
+    expect(within(sheet).getAllByRole("alert").map((row) => row.textContent)).toEqual([
+      "full.pdfdid not fit — this project's 1 GB of uploads a day is used up.✕",
+      "dot.pdfwas not added — this folder takes no uploads.✕",
+      "huge.pdfis larger than 24 MB.✕",
+      "disk.pdfcould not be added to the project.✕",
+    ]);
+  });
+
+  it("refuses a file past 24 MB before anything is sent", async () => {
+    const fetch = uploadHost(() => new Response(null, { status: 500 }));
+    vi.stubGlobal("fetch", fetch);
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const sheet = await openSrc();
+    const big = new File(["x"], "movie.mp4");
+    Object.defineProperty(big, "size", { value: MAX_INBOX_FILE + 1 });
+    fireEvent.click(within(sheet).getByRole("button", { name: /^Upload here/ }));
+    pick([big]);
+    expect((await within(sheet).findByRole("alert")).textContent).toContain("is larger than 24 MB.");
+    expect(posts(fetch)).toEqual([]);
+  });
+
+  it("a re-list that fails hides Upload here, and the next good one clears the refusal", async () => {
+    const landed: Entry[] = [];
+    let lists = 0;
+    const host = hostWith(true);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/projects/p1/files/upload?name=") && init?.method === "POST") {
+        const name = new URL(url, "http://phone").searchParams.get("name") ?? "";
+        const entry = { token: `tok-${name}`, name, kind: "text/plain; charset=utf-8", size: 1, modified: 1_770_000_100 };
+        landed.push(entry);
+        return new Response(JSON.stringify({ file: entry }), { status: 201 });
+      }
+      if (url === "/api/v1/projects/p1/files?dir=tok-src") {
+        lists += 1;
+        // The re-list after the first upload meets a refusal.
+        if (lists === 2) return new Response(JSON.stringify({ error: "files_unavailable" }), { status: 503 });
+        return new Response(JSON.stringify({ ...SRC, entries: [...SRC.entries, ...landed], uploads: true }), { status: 200 });
+      }
+      return host(input, init);
+    }));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const sheet = await openSrc();
+
+    fireEvent.click(within(sheet).getByRole("button", { name: /^Upload here/ }));
+    pick([new File(["a"], "a.txt")]);
+    await within(sheet).findByText("The folder could not be read.");
+    expect(within(sheet).queryByRole("button", { name: /^Upload here/ })).toBeNull();
+
+    // The picker's input stays (still stamped with `src`): the next landing
+    // lists the folder again, and that answer replaces the refusal.
+    pick([new File(["b"], "b.txt")]);
+    await within(sheet).findByRole("button", { name: "Open b.txt" });
+    expect(within(sheet).queryByText("The folder could not be read.")).toBeNull();
+    expect(within(sheet).getByRole("button", { name: /^Upload here/ })).toBeTruthy();
   });
 });

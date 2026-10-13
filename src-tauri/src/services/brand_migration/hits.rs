@@ -10,6 +10,7 @@
 //! seconds, and a state write per match would be the larger cost.
 
 use std::collections::{BTreeMap, BTreeSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -68,7 +69,7 @@ impl Buffer {
     /// Count one hit of `id` at `now` in memory. Returns whether a write is
     /// due: the id is new to this process, or the last write is old enough.
     pub fn count(&self, id: &str, now: &str) -> bool {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = self.inner.lock_ok();
         let hit = inner.unwritten.entry(id.to_string()).or_insert_with(|| Hit {
             count: 0,
             first: now.to_string(),
@@ -89,7 +90,7 @@ impl Buffer {
     /// Write every count still in memory. A log that exists but cannot be
     /// parsed is left alone and the counts stay in memory.
     pub fn flush(&self, path: &Path) -> Result<(), String> {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = self.inner.lock_ok();
         if inner.unwritten.is_empty() {
             return Ok(());
         }

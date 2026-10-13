@@ -12,6 +12,8 @@
 //!
 //! Nothing here writes. A file is served exactly as the outbox serves one —
 //! typed by its bytes (`outbox::classify`), opened without following a link.
+//! The one write into a browsed folder — the phone's *Upload here*, add-only,
+//! behind a second switch — is `uploads.rs`, through the same [`ProjectDir`].
 
 use std::{
     collections::HashSet,
@@ -147,14 +149,14 @@ fn token_key_with(salt: &str, host_key: &[u8]) -> [u8; 32] {
     key
 }
 
-/// Seals a project-relative path for the phone.
-pub fn seal(host_key: &[u8], raw_id: &str, rel: &str) -> String {
+/// Seals a project-relative path for the phone. Fails only when the OS has
+/// no randomness for the nonce.
+pub fn seal(host_key: &[u8], raw_id: &str, rel: &str) -> Result<String, FilesError> {
     seal_with(crate::brand::MOBILE_FILES_SALT, host_key, raw_id, rel)
 }
 
-fn seal_with(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> String {
-    let mut nonce = [0u8; NONCE_LEN];
-    getrandom::fill(&mut nonce).expect("the OS RNG must be available to seal a path");
+fn seal_with(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> Result<String, FilesError> {
+    let nonce = super::auth::random_bytes::<NONCE_LEN>().map_err(FilesError::Io)?;
     let cipher = XChaCha20Poly1305::new((&token_key_with(salt, host_key)).into());
     let sealed = cipher
         .encrypt((&nonce).into(), Payload { msg: rel.as_bytes(), aad: raw_id.as_bytes() })
@@ -162,7 +164,7 @@ fn seal_with(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> String {
     let mut out = Vec::with_capacity(NONCE_LEN + sealed.len());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&sealed);
-    Base64UrlUnpadded::encode_string(&out)
+    Ok(Base64UrlUnpadded::encode_string(&out))
 }
 
 /// The relative path a token seals, if it was sealed for this project by this
@@ -222,16 +224,24 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
 /// holds the real one. Windows uses the same boundary through native
 /// handle-relative opens and handle-based directory enumeration.
 ///
-/// The phone's drop boxes (`outbox.rs`, `inbox.rs`) walk, list, read, create
-/// and delete through the same handles ([`ProjectDir::open_root`],
+/// The phone's drop boxes (`outbox.rs`, `inbox.rs`) and its uploads into a
+/// browsed folder (`uploads.rs`) walk, list, read, create and delete through
+/// the same handles ([`ProjectDir::open`], [`ProjectDir::open_root`],
 /// [`ProjectDir::lookup_dir`], [`ProjectDir::create_dir`],
-/// [`ProjectDir::create_file`], [`ProjectDir::remove_file`]).
+/// [`ProjectDir::create_file`], [`ProjectDir::remove_file`]). So do the
+/// desktop viewers' absolute-path reads and saves
+/// (`commands::fs::open_confined`, [`ProjectDir::lookup_file`],
+/// [`ProjectDir::open_existing_for_write`]) and mail's "Save to project"
+/// (`commands::mail`), hence the crate-wide visibility.
 #[cfg(unix)]
-pub(super) struct ProjectDir(fs::File);
+pub(crate) struct ProjectDir(fs::File);
 
 #[cfg(unix)]
 impl ProjectDir {
-    fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
+    /// The folder `rel` (a path the browser would list; `""` is the root),
+    /// walked from the root without following a link: `Unavailable` for a
+    /// gone root, `NotFound` for anything else on the way.
+    pub(super) fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
         let mut dir = Self::open_root(root)?;
         if !valid_rel(rel) {
             return Err(FilesError::NotFound);
@@ -245,7 +255,7 @@ impl ProjectDir {
     }
 
     /// The project root itself, held open — the one folder opened by path.
-    pub(super) fn open_root(root: &Path) -> Result<Self, FilesError> {
+    pub(crate) fn open_root(root: &Path) -> Result<Self, FilesError> {
         let root = canonical_root(root)?;
         fs::File::open(&root)
             .ok()
@@ -284,7 +294,7 @@ impl ProjectDir {
     /// The folder `name` in this one: `Ok(None)` when nothing has that name,
     /// `Err(())` when something does but is not a plain folder (a link, a
     /// file) — never followed either way.
-    pub(super) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
+    pub(crate) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
         let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_NONBLOCK | libc::O_CLOEXEC;
         match self.openat(name, flags, 0) {
             Ok(dir) => Ok(Some(Self(dir))),
@@ -296,7 +306,7 @@ impl ProjectDir {
     /// Creates the folder `name` here unless something already has that name
     /// (`mkdirat` never follows a link at it). Open it with [`Self::lookup_dir`],
     /// which refuses a link standing there.
-    pub(super) fn create_dir(&self, name: &str) -> std::io::Result<()> {
+    pub(crate) fn create_dir(&self, name: &str) -> std::io::Result<()> {
         use std::os::fd::AsRawFd;
         let c_name = segment_cstr(name)?;
         // SAFETY: a live directory descriptor and a NUL-terminated name.
@@ -311,9 +321,59 @@ impl ProjectDir {
 
     /// A new regular file `name` here, for writing: never an existing name
     /// (`AlreadyExists`), never through a link (`O_EXCL` does not follow one).
-    pub(super) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
+    pub(crate) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
         let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
         self.openat(name, flags, 0o666)
+    }
+
+    /// The held folder's own handle, for its metadata.
+    pub(crate) fn into_file(self) -> fs::File {
+        self.0
+    }
+
+    /// The regular file `name` in this one, opened for reading, with its
+    /// metadata: `Ok(None)` when nothing has that name, `Err(())` when
+    /// something does but is not a plain file (a link, a folder, a FIFO) —
+    /// never followed either way. The Windows twin has the same contract.
+    pub(crate) fn lookup_file(&self, name: &str) -> Result<Option<(fs::File, fs::Metadata)>, ()> {
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        match self.openat(name, flags, 0) {
+            Ok(file) => match file.metadata() {
+                Ok(meta) if meta.is_file() => Ok(Some((file, meta))),
+                _ => Err(()),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// The existing regular file `name` here, opened for writing and emptied
+    /// — an in-place save that keeps its inode, owner and mode. `Ok(None)`
+    /// when nothing has that name. A link at the name (dangling or not) is
+    /// refused, never followed, and so is anything but a regular file; the
+    /// file is truncated only after its own descriptor proved it regular.
+    pub(crate) fn open_existing_for_write(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
+        // Non-blocking, so a FIFO swapped in is refused below, not waited on.
+        let flags = libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        let file = match self.openat(name, flags, 0) {
+            Ok(file) => file,
+            Err(error) => {
+                return match error.raw_os_error() {
+                    Some(libc::ENOENT) => Ok(None),
+                    // `O_NOFOLLOW` on a link: ELOOP (EMLINK on the BSD lineage).
+                    Some(libc::ELOOP) | Some(libc::EMLINK) => Err(WriteRefusal::Link),
+                    // A folder, or a FIFO nobody reads.
+                    Some(libc::EISDIR) | Some(libc::ENXIO) => Err(WriteRefusal::NotFile),
+                    _ => Err(WriteRefusal::Io(error)),
+                }
+            }
+        };
+        let meta = file.metadata().map_err(WriteRefusal::Io)?;
+        if !meta.is_file() {
+            return Err(WriteRefusal::NotFile);
+        }
+        file.set_len(0).map_err(WriteRefusal::Io)?;
+        Ok(Some(file))
     }
 
     /// Unlinks `name` in this folder — a link itself, never what it points at.
@@ -408,6 +468,18 @@ impl ProjectDir {
     }
 }
 
+/// Why a held folder would not hand out a name for an in-place write
+/// ([`ProjectDir::open_existing_for_write`]).
+#[derive(Debug)]
+pub(crate) enum WriteRefusal {
+    /// A symbolic link (dangling or not), a junction or another link-type
+    /// (name-surrogate) reparse point; a OneDrive placeholder is no link.
+    Link,
+    /// A folder, FIFO, socket or device — anything but a regular file.
+    NotFile,
+    Io(std::io::Error),
+}
+
 /// One [`plain_segment`] as the C string `openat` and friends take; anything
 /// else is refused before a system call sees it.
 #[cfg(unix)]
@@ -423,6 +495,13 @@ fn segment_cstr(name: &str) -> std::io::Result<std::ffi::CString> {
 mod windows;
 #[cfg(windows)]
 pub(crate) use windows::ProjectDir;
+
+/// The volume and file id of what `path` names, a link followed: Windows'
+/// `(dev, ino)`, the same pair is the same file.
+#[cfg(windows)]
+pub(crate) fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
+    windows::path_identity(path).map(|(volume, id)| (volume, u128::from_le_bytes(id)))
+}
 
 fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }
@@ -498,15 +577,16 @@ pub fn list(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Lis
         let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
         let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
         let ignored = ignored.contains(&name);
-        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name)), name, kind, size, modified, created, ignored });
+        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name))?, name, kind, size, modified, created, ignored });
     }
     Ok(Listing { entries, truncated })
 }
 
 /// One file of the project as its folder's listing would row it, or `None`
 /// when it is not a regular file reached with no link on the way (or names
-/// something the browser hides). What the phone needs to open a file it was
-/// not browsing to — the Focus banner of an agent's markup question.
+/// something the browser hides), or when no token can be sealed for it (the
+/// OS has no randomness). What the phone needs to open a file it was not
+/// browsing to — the Focus banner of an agent's markup question.
 pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<Entry> {
     if rel.is_empty() || !valid_rel(rel) {
         return None;
@@ -517,7 +597,7 @@ pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
     let (_file, meta, kind) = outbox::sniff_opened(file, meta)?;
     let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
     let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
-    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false })
+    Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false })
 }
 
 /// One file's bytes and media type. Text longer than `MAX_OUTBOX_FILE` is
@@ -675,7 +755,7 @@ fn dir_entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
     let meta = ProjectDir::open(root, parent).ok()?.child_dir_meta(name)?;
     let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
     let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
-    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind: "dir", size: 0, modified, created, ignored: false })
+    Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind: "dir", size: 0, modified, created, ignored: false })
 }
 
 /// The project's files and folders whose names hold every word of `query`
@@ -735,7 +815,7 @@ pub fn search(root: &Path, query: &str, host_key: &[u8], raw_id: &str) -> Result
         while let Some(slash) = rel[end..].find('/') {
             let start = end;
             end += slash;
-            trail.push(Crumb { token: seal(host_key, raw_id, &rel[..end]), name: rel[start..end].to_string() });
+            trail.push(Crumb { token: seal(host_key, raw_id, &rel[..end])?, name: rel[start..end].to_string() });
             end += 1;
         }
         hits.push(Hit { entry, trail });
@@ -757,15 +837,15 @@ mod tests {
         use crate::brand::Name;
         use crate::services::brand_migration::{hits, testing::RENAMED};
         let _ = hits::taken();
-        let old = seal_with(&crate::brand::LEGACY.name(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf");
+        let old = seal_with(&crate::brand::LEGACY.name(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf").unwrap();
         assert_eq!(unseal_for(&RENAMED, KEY, "p1", &old).as_deref(), Some("docs/a.pdf"));
         assert_eq!(hits::taken(), ["mobile-files-salt"]);
-        let new = seal_with(&RENAMED.cur(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf");
+        let new = seal_with(&RENAMED.cur(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf").unwrap();
         assert_eq!(unseal_for(&RENAMED, KEY, "p1", &new).as_deref(), Some("docs/a.pdf"));
         assert_eq!(unseal_for(&RENAMED, KEY, "p2", &old), None);
         assert!(hits::taken().is_empty());
         // The production pair: what `seal` writes, `unseal` reads.
-        assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", "x/y.txt")).as_deref(), Some("x/y.txt"));
+        assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", "x/y.txt").unwrap()).as_deref(), Some("x/y.txt"));
     }
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-body";
 
@@ -795,12 +875,12 @@ mod tests {
 
     #[test]
     fn a_token_opens_only_for_its_own_project_and_host() {
-        let token = seal(KEY, "p1", "src/main.rs");
+        let token = seal(KEY, "p1", "src/main.rs").unwrap();
         assert_eq!(unseal(KEY, "p1", &token).as_deref(), Some("src/main.rs"));
         assert_eq!(unseal(KEY, "p2", &token), None, "replayed against another project");
         assert_eq!(unseal(b"another-host-key", "p1", &token), None);
         assert!(!token.contains("main"), "the path is not readable in the token");
-        assert_ne!(seal(KEY, "p1", "src/main.rs"), token, "a fresh nonce per seal");
+        assert_ne!(seal(KEY, "p1", "src/main.rs").unwrap(), token, "a fresh nonce per seal");
         let mut forged = Base64UrlUnpadded::decode_vec(&token).unwrap();
         *forged.last_mut().unwrap() ^= 1;
         assert_eq!(unseal(KEY, "p1", &Base64UrlUnpadded::encode_string(&forged)), None);
@@ -808,9 +888,9 @@ mod tests {
         assert_eq!(unseal(KEY, "p1", ""), None);
         // A sealed path the browser would not resolve does not open either.
         for bad in ["../etc", "a/../b", "/abs", ".git/config", "src/.env", "a//b"] {
-            assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", bad)), None, "{bad}");
+            assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", bad).unwrap()), None, "{bad}");
         }
-        assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", "")).as_deref(), Some(""));
+        assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", "").unwrap()).as_deref(), Some(""));
     }
 
     #[test]
@@ -1055,6 +1135,107 @@ mod tests {
         });
         assert_eq!(read(dir.path(), "src/main.rs"), Err(FilesError::NotFound));
         assert_eq!(list(dir.path(), "src", KEY, "p1"), Err(FilesError::NotFound));
+    }
+
+    /// Decision D1 is about links: only name-surrogate tags count as one.
+    /// OneDrive placeholders, deduplicated and WOF-compressed files carry
+    /// other tags and must stay readable and saveable.
+    #[cfg(windows)]
+    #[test]
+    fn only_name_surrogate_reparse_tags_count_as_links() {
+        use super::windows::is_name_surrogate;
+        for (tag, link) in [
+            (0xA000_000C_u32, true), // IO_REPARSE_TAG_SYMLINK
+            (0xA000_0003, true),     // IO_REPARSE_TAG_MOUNT_POINT (junction)
+            (0xA000_001D, true),     // IO_REPARSE_TAG_LX_SYMLINK (WSL)
+            (0x9000_001A, false),    // IO_REPARSE_TAG_CLOUD (OneDrive)
+            (0x9000_601A, false),    // IO_REPARSE_TAG_CLOUD_6
+            (0x8000_0013, false),    // IO_REPARSE_TAG_DEDUP
+            (0x8000_0017, false),    // IO_REPARSE_TAG_WOF
+            (0x8000_001B, false),    // IO_REPARSE_TAG_APPEXECLINK
+        ] {
+            assert_eq!(is_name_surrogate(tag), link, "{tag:#010x}");
+        }
+    }
+
+    /// A plain handle is kept without a second open, a junction is refused
+    /// without one; the identity a placeholder's second open is checked
+    /// against tells two files apart and one file opened twice not.
+    #[cfg(windows)]
+    #[test]
+    fn unlinked_keeps_plain_handles_refuses_links_and_tells_files_apart() {
+        use super::windows::{identity, unlinked, Unlinked};
+        use std::os::windows::fs::OpenOptionsExt;
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let dir = tree();
+        let outside = tempfile::tempdir().unwrap();
+        junction(outside.path(), &dir.path().join("away"));
+        let raw = |path: &Path| {
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
+                .open(path)
+                .unwrap()
+        };
+        let never = || -> std::io::Result<fs::File> { panic!("a second open was not needed") };
+        assert!(unlinked(raw(&dir.path().join("src/main.rs")), never).is_ok());
+        assert!(unlinked(raw(&dir.path().join("src")), never).is_ok());
+        assert!(matches!(unlinked(raw(&dir.path().join("away")), never), Err(Unlinked::Link)));
+        let main = dir.path().join("src/main.rs");
+        assert_eq!(identity(&raw(&main)).unwrap(), identity(&fs::File::open(&main).unwrap()).unwrap());
+        assert_ne!(identity(&raw(&main)).unwrap(), identity(&raw(&dir.path().join("src"))).unwrap());
+        // And the walk built on it still refuses the junction, keeps the rest.
+        let held = ProjectDir::open_root(dir.path()).unwrap();
+        assert!(held.lookup_dir("away").is_err());
+        assert!(held.lookup_dir("src").unwrap().is_some());
+        assert!(matches!(held.open_existing_for_write("away"), Err(WriteRefusal::NotFile | WriteRefusal::Link)));
+    }
+
+    /// Step 3 review (0c): a save asks write access only on the second open.
+    /// The first opens the name for its attributes only, so a cloud filter
+    /// that refuses a write open of a raw placeholder cannot fail the save;
+    /// a plain file is opened again on the name itself (a link swapped in
+    /// is opened as itself and fails the identity check), a link is refused
+    /// before any second open, and a different file on the second open is
+    /// refused.
+    #[cfg(windows)]
+    #[test]
+    fn a_save_probes_with_attribute_access_and_writes_through_the_second_open() {
+        use super::windows::{reopened, Unlinked};
+        use std::os::windows::fs::OpenOptionsExt;
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const READ_ATTRIBUTES: u32 = 0x80;
+        let dir = tree();
+        let outside = tempfile::tempdir().unwrap();
+        junction(outside.path(), &dir.path().join("away"));
+        let probe = |path: &Path| {
+            fs::OpenOptions::new()
+                .access_mode(READ_ATTRIBUTES)
+                .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
+                .open(path)
+                .unwrap()
+        };
+        let main = dir.path().join("src").join("main.rs");
+        let mut asked = None;
+        let kept = reopened(probe(&main), |plain| {
+            asked = Some(plain);
+            fs::OpenOptions::new().write(true).custom_flags(OPEN_REPARSE_POINT).open(&main)
+        });
+        assert!(kept.is_ok());
+        assert_eq!(asked, Some(true), "a plain file is reopened on the name itself");
+        let never = |_: bool| -> std::io::Result<fs::File> { panic!("a link needs no second open") };
+        assert!(matches!(reopened(probe(&dir.path().join("away")), never), Err(Unlinked::Link)));
+        let other = dir.path().join("README.md");
+        let swapped = reopened(probe(&main), |_| fs::OpenOptions::new().write(true).open(&other));
+        assert!(matches!(swapped, Err(Unlinked::Link)));
+        // And the save built on it still writes a plain file in place.
+        let held = ProjectDir::open_root(dir.path()).unwrap().lookup_dir("src").unwrap().unwrap();
+        let mut file = held.open_existing_for_write("main.rs").unwrap().unwrap();
+        std::io::Write::write_all(&mut file, b"saved").unwrap();
+        drop(file);
+        assert_eq!(fs::read(&main).unwrap(), b"saved");
     }
 
     fn hit_paths(found: &Found) -> Vec<String> {

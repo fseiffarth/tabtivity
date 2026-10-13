@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -49,6 +50,7 @@ export function execMatchesApp(exec: string, appExec: string): boolean {
  */
 export function SetDefaultAppDialog({ ext, fileName, projectId, onClose }: Props) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   const [scope, setScope] = useState<Scope>(projectId ? "project" : "global");
   const [apps, setApps] = useState<InstalledApp[]>([]);
   const [iconDataUrls, setIconDataUrls] = useState<Record<string, string | null>>({});
@@ -171,6 +173,10 @@ export function SetDefaultAppDialog({ ext, fileName, projectId, onClose }: Props
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         className="settings-dialog set-default-app-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >

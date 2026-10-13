@@ -30,7 +30,7 @@ export interface TabSchedules { total: number; enabled: number; next?: string; u
  * formats in its own zone; a record that carried none arrives without one, and
  * so does the one line a transcript-less agent leaves on its own screen. */
 export interface TabPrompt { text: string; at?: string }
-export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[] }
+export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[] }
 export interface TabWorktree { label: string; branch?: string }
 export interface SubagentWorktree extends TabWorktree { count: number }
 /** `default`: the desktop's default agent (`default_agent_cmd`), the one
@@ -619,6 +619,24 @@ export function closeTab(tabId: string): Promise<{ closed: boolean }> {
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}`, { method: "DELETE" });
 }
 
+/** The longest name a new project may have, in characters
+ * (`projects::PHONE_PROJECT_NAME_MAX`). */
+export const MAX_PROJECT_NAME = 80;
+
+/** The folder a new project's name becomes inside the projects folder: the
+ * backend's `sanitize_name`, so the sheet can show it before anything is sent. */
+export function projectFolderName(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").split("-").filter(Boolean).join("-");
+}
+
+/** `POST /api/v1/projects` — a new, empty project on the desktop, made from
+ * its name alone: always a folder in the projects folder, never an import,
+ * and open to this phone only. Works with the desktop window closed. Refusals:
+ * `invalid_name`, `project_exists` (409), `mobile_unavailable` (503). */
+export function createProject(name: string): Promise<{ project: ProjectRow }> {
+  return api("/api/v1/projects", { method: "POST", body: JSON.stringify({ name }) });
+}
+
 /** `POST /api/v1/projects/{id}/tabs/reopen` — bring back a closed agent tab
  * (the newest, or the one `closedId` names) on the desktop, resuming its
  * conversation, as the desktop's own "Reopen closed agent tab" does. Answers
@@ -1051,11 +1069,14 @@ export async function openOutside(url: string): Promise<void> {
  * first bytes announce, `modified` and `created` are unix seconds — `created`
  * missing where the desktop's filesystem keeps no birth time. */
 export interface ProjectFileEntry { token: string; name: string; kind: string; size: number; modified: number; created?: number; ignored?: boolean }
-export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean }
+/** `uploads`: whether **Upload here** may add files to this folder — the
+ * desktop's "Phone may add files to projects" switch is on and no folder on
+ * the way down starts with a dot. An older desktop omits it (no uploads). */
+export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean }
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>]` — one folder of the
- * project, read-only; no `dir` is the project's root. Answers only while the
- * desktop's "Project files on the phone" switch is on (`files_off` else). */
+ * project; no `dir` is the project's root. Answers only while the desktop's
+ * "Project files on the phone" switch is on (`files_off` else). */
 export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal): Promise<ProjectFileListing> {
   const query = dir ? `?dir=${encodeURIComponent(dir)}` : "";
   return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query}`, { signal });
@@ -1073,6 +1094,27 @@ export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean 
  * listing. */
 export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal): Promise<ProjectFileSearch> {
   return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}`, { signal });
+}
+
+/** `POST /api/v1/projects/{id}/files/upload?name=…[&dir=<token>]` — the
+ * drawer's **Upload here**: the raw file as a new file in the folder `dir`
+ * names (none: the project root). Add-only: the desktop keeps the phone's
+ * name unless it is taken (`name-2.pdf`), and answers the new file's row. */
+export async function uploadProjectFile(projectId: string, dir: string | undefined, file: Blob, name: string): Promise<ProjectFileEntry> {
+  const folder = dir ? `&dir=${encodeURIComponent(dir)}` : "";
+  const [status, body] = await postFile<{ file?: ProjectFileEntry }>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/files/upload?name=${encodeURIComponent(name)}${folder}`,
+    file,
+  );
+  if (!body?.file?.token) throw new ApiError(status, "malformed_response");
+  return body.file;
+}
+
+/** `DELETE /api/v1/projects/{id}/files/upload?f=<token>` — Undo of an
+ * upload: the desktop deletes the file only while it is one this feature
+ * wrote and still unchanged (`file_not_found` else). */
+export async function undoProjectUpload(projectId: string, token: string): Promise<void> {
+  await api<{ undone: boolean }>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/upload?f=${encodeURIComponent(token)}`, { method: "DELETE" });
 }
 
 /** Mark up's Reload for a project file opened by its sealed row rather than
@@ -1127,7 +1169,9 @@ async function postFile<T>(url: string, file: Blob, retried = false): Promise<[n
     body = undefined;
   }
   if (response.status === 401 && !retried && await onUnauthorized?.()) return postFile<T>(url, file, true);
-  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed", body);
+  // A body past the route's limit is refused before the desktop reads it: a
+  // bare 413 with no code (only a phone that skipped the size check sees it).
+  if (!response.ok) throw new ApiError(response.status, body?.error ?? (response.status === 413 ? "file_too_large" : "request_failed"), body);
   return [response.status, body];
 }
 

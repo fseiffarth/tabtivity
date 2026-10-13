@@ -76,8 +76,8 @@ pub fn remote_target_for(project_id: &str) -> Option<RemoteTarget> {
     })
 }
 
-/// `Some(target)` iff the project whose stored `directory` equals `project_dir`
-/// is remote; `None` for a local project, an unknown directory, or a read
+/// `Some(target)` iff the project whose directory ([`entry_directory`]) equals
+/// the trimmed `project_dir` is remote; `None` for a local project, an unknown directory, or a read
 /// failure.
 ///
 /// The git/file commands receive a `project_dir` (not a `project_id`), so to
@@ -92,7 +92,7 @@ pub fn remote_target_for_dir(project_dir: &str) -> Option<RemoteTarget> {
     let list = read_projects_list()?;
     let entry = list
         .iter()
-        .find(|e| entry_directory(e) == Some(project_dir))?;
+        .find(|e| entry_directory(e) == Some(project_dir.trim()))?;
     spec_from_entry(entry).map(|spec| RemoteTarget {
         spec,
         project_id: entry.id.clone(),
@@ -124,7 +124,7 @@ static PROJECTS_CACHE: std::sync::Mutex<Option<(std::time::SystemTime, u64, Arc<
 /// The value is an `Arc`, so a hit costs one clone of a pointer rather than of
 /// the whole list.
 fn read_projects_list() -> Option<Arc<ProjectsList>> {
-    let list_path = crate::storage::state_dir().join("projects.json");
+    let list_path = crate::storage::projects_path();
     let meta = std::fs::metadata(&list_path).ok()?;
     let stamp = (meta.modified().ok()?, meta.len());
 
@@ -143,9 +143,11 @@ fn read_projects_list() -> Option<Arc<ProjectsList>> {
     Some(list)
 }
 
-/// A `projects.json` entry's stored `directory` (its flattened `extra` field).
+/// A `projects.json` entry's folder — [`ProjectEntry::directory`]: the stored
+/// `directory` (its flattened `extra` field), trimmed, with the legacy
+/// `local_file` fallback. Remoteness is decided by `extra["remote"]` alone.
 pub(crate) fn entry_directory(entry: &ProjectEntry) -> Option<&str> {
-    entry.extra.get("directory").and_then(|v| v.as_str())
+    entry.directory()
 }
 
 /// The `directory` recorded for `project_id` in the always-local `projects.json`.
@@ -488,7 +490,6 @@ pub async fn disconnect_all(pool: &RemotePoolState) {
 /// `Arc<Sftp>` without holding the pool lock. `None` when the project is not
 /// connected — the caller then opens a one-shot session or surfaces a
 /// "disconnected" state rather than hanging.
-#[allow(dead_code)] // consumed by Phase 2/3 (remote file browse + I/O)
 pub async fn pooled_sftp(pool: &RemotePoolState, project_id: &str) -> Option<Arc<Sftp>> {
     pooled_sftp_host(pool, project_id, PRIMARY_HOST).await
 }

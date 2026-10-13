@@ -481,6 +481,7 @@ export function LocalModelsSection({
     toggleAutoload,
     unloadFromMemory,
     loadIntoMemory,
+    clearConversations,
   } = hub;
 
   // Putting the models back after an upgrade (`stores/agents/ollamaUpgrade`). Reported
@@ -837,10 +838,16 @@ export function LocalModelsSection({
                   {MODEL_ROLES.map((r) => {
                     const on = roles[r.key] === m.name;
                     const roleLabel = t(r.labelKey);
-                    const title = t(on ? "localModel.usedForRole" : "localModel.useForRole", {
-                      role: roleLabel.toLowerCase(),
-                      name: m.name,
-                    });
+                    // An Ollama cloud model can't be the Mail model: mail stays
+                    // on this machine (gap 25). Disabled like the MCP chip of a
+                    // model without tools — still clickable to turn it off.
+                    const cloudMail = r.key === "mail" && m.remote === true;
+                    const title = cloudMail
+                      ? t("localModel.mailCloudTitle", { name: m.name })
+                      : t(on ? "localModel.usedForRole" : "localModel.useForRole", {
+                          role: roleLabel.toLowerCase(),
+                          name: m.name,
+                        });
                     return (
                       <button
                         key={r.key}
@@ -849,12 +856,14 @@ export function LocalModelsSection({
                         title={
                           r.pending ? `${title} — ${t("localModel.roleNotWired")}` : title
                         }
+                        disabled={cloudMail && !on}
                         onClick={() => toggleRole(r.key, m.name)}
                       >
                         {roleLabel}
                       </button>
                     );
                   })}
+                  {m.remote && <UntestedTag id="localModelMenu.mailCloud" />}
                   <button
                     type="button"
                     className={`local-model-role-chip${
@@ -917,6 +926,17 @@ export function LocalModelsSection({
                     >
                       {t("localModel.autostartChip")}
                     </button>
+{/* Delete the model's stored Vibe conversations and its
+                        read-mail mark, after a confirm (gap 33 follow-up). */}
+                    <button
+                      type="button"
+                      className="local-model-role-chip"
+                      title={t("localModel.clearChipTitle", { name: m.name })}
+                      onClick={() => void clearConversations(m.name)}
+                    >
+                      {t("localModel.clearChip")}
+                    </button>
+                    <UntestedTag id="localModelMenu.clearConversations" />
                     {/* Evict this model from memory (keeps it on disk). */}
                     <button
                       type="button"
@@ -1032,6 +1052,17 @@ export function LocalModelsSection({
                           onUpdate={() => updateModel(m.name)}
                           t={t}
                         />
+                        {/* Delete the model's stored Vibe conversations and its
+                            read-mail mark, after a confirm (gap 33 follow-up). */}
+                        <button
+                          type="button"
+                          className="local-model-role-chip"
+                          title={t("localModel.clearChipTitle", { name: m.name })}
+                          onClick={() => void clearConversations(m.name)}
+                        >
+                          {t("localModel.clearChip")}
+                        </button>
+                        <UntestedTag id="localModelMenu.clearConversations" />
                         {/* Arm it for the next launch without loading it now. */}
                         <button
                           type="button"

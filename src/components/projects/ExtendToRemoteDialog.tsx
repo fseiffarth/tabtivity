@@ -1,3 +1,4 @@
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -53,6 +54,7 @@ export function ExtendToRemoteDialog({
   onClose: () => void;
 }) {
   const t = useT();
+  const modalRef = useModalFocus(onClose);
   // The remote path leaf and local-mirror-relative name both use the project's
   // sanitized name, matching direct remote creation (kind "new").
   const safeName = sanitizeName(project.name);
@@ -219,7 +221,7 @@ export function ExtendToRemoteDialog({
   // the whole thing sat pinned to the top of the window.
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="project-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("extendRemote.title", { name: project.name })}</h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>

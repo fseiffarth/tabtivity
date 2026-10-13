@@ -16,7 +16,7 @@ import { toDate, toStamp } from "../../lib/calendar/calendarTime";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { useMailStore } from "../../stores/mail";
 import { useSettingsStore } from "../../stores/settings";
-import type { CalendarEvent } from "../../types";
+import type { CalendarEvent, EventMailLink } from "../../types";
 import type { MailExtractedEvent, MailExtractedTask, MailHeader } from "../../types/mail";
 import { ErrorNote } from "../common/ErrorNote";
 
@@ -72,6 +72,10 @@ export function MailAiMessageActions({ header }: { header: MailHeader }) {
 
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
+
+  // The provenance every event made here carries (decision E3): the root
+  // agent's tools then serve it as someone else's text, URLs removed.
+  const fromMail: EventMailLink = { message_id: header.id, account_id: header.account_id };
 
   const senderLine = (() => {
     const s = formatAddress(header.from);
@@ -135,6 +139,7 @@ export function MailAiMessageActions({ header }: { header: MailHeader }) {
           title: ev.title,
           location: ev.location ?? undefined,
           notes: senderLine,
+          from_mail: fromMail,
         };
         await createEvent(draft);
         setNote(t("mailAi.taskAdded"));
@@ -206,7 +211,7 @@ export function MailAiMessageActions({ header }: { header: MailHeader }) {
     const { id: _id, ...draft } = event;
     void _id;
     void _scope;
-    await createEvent(draft);
+    await createEvent({ ...draft, from_mail: fromMail });
     setEventTarget(null);
     setNote(t("mailAi.taskAdded"));
   };

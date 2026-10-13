@@ -1266,14 +1266,7 @@ pub fn live_sessions_dir() -> PathBuf {
 /// *different* project resumes, i.e. prompt injection with that agent's full host
 /// authority.
 pub fn project_live_sessions_dir(project_id: &str) -> PathBuf {
-    live_sessions_dir().join(sanitize_project_key(project_id))
-}
-
-/// Reduce a project id to a single path-safe component — the shared
-/// [`storage::project_key`], which is also what names the per-project session
-/// directory and the sandbox's container. One reduction, one answer.
-fn sanitize_project_key(id: &str) -> String {
-    storage::project_key(id)
+    live_sessions_dir().join(storage::project_key(project_id))
 }
 
 fn hook_script_path() -> PathBuf {
@@ -2104,7 +2097,7 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
 fn hook_script_body(live_dir: &str) -> String {
     // `live_dir` is a Windows path (backslashes); embed it in a single-quoted
     // PowerShell literal so backslashes are not treated as escapes.
-    let live_dir = live_dir.replace('\'', "''");
+    let live_dir = crate::quote::powershell(live_dir);
     let hint = crate::services::agent_hint::HINT;
     format!(
         "# {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\r\n\
@@ -2130,7 +2123,7 @@ fn hook_script_body(live_dir: &str) -> String {
          if ($me.Success) {{ $event = $me.Groups[1].Value }}\r\n\
          $ntype = ''\r\n\
          if ($mn.Success) {{ $ntype = $mn.Groups[1].Value }}\r\n\
-         $dir = '{live_dir}'\r\n\
+         $dir = {live_dir}\r\n\
          [void](New-Item -ItemType Directory -Force -Path $dir -ErrorAction SilentlyContinue)\r\n\
          $rec = Join-Path $dir $uid\r\n\
          $cur = ''\r\n\
@@ -3083,8 +3076,8 @@ mod tests {
         assert_eq!(undo_clear_plan("gemini", None, uid), None);
 
         // The project id is reduced to exactly one path-safe component.
-        assert_eq!(sanitize_project_key("my proj/../x"), "my_proj____x");
-        assert_eq!(sanitize_project_key(""), "x");
+        assert_eq!(storage::project_key("my proj/../x"), "my_proj____x");
+        assert_eq!(storage::project_key(""), "x");
         assert!(project_live_sessions_dir("p1").ends_with("live_sessions/p1"));
 
         let _ = std::fs::remove_dir_all(&root);

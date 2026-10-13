@@ -92,6 +92,11 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
   server daemon run side by side; `/proc` is `hidepid=invisible` with a
   `<slug>-proc` exception group holding polkit only — add a service only
   after a live failure shows it is needed.
+- Running the whole server in a VM (2026-10-12): a recommended deployment
+  for a server that shares someone's desktop, set up by hand with libvirt
+  (`guide/server.md` § "Run the server in a virtual machine"). No code;
+  Tabtivity's own VMs don't fit (they stop with the app). Cost: no GPU for
+  Ollama without passthrough.
 - Account admin is `sudo` + the admin helper only (no polkit rule, no
   browser admin page yet, #2356). Accounts that are root-equivalent
   (any sudoers rule; `docker`, `lxd`, `incus-admin`, `libvirt`, `disk`) are

@@ -32,6 +32,7 @@
 //! tree of its own scope and the poll walks one tree per scope.
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -137,7 +138,7 @@ impl Drop for ResumeClaim {
 /// user can recover the intended conversation without deleting any history or
 /// bypassing Codex's live-writer lock.
 pub fn reserve_resume(opts: &mut crate::terminal::PtyOptions) -> Option<ResumeClaim> {
-    let mut b = binder().lock().unwrap();
+    let mut b = binder().lock_ok();
     let seq = b.reserve_resume(&opts.id, &mut opts.args)?;
     Some(ResumeClaim { pty: opts.id.clone(), seq, kept: false })
 }
@@ -168,11 +169,11 @@ impl Binder {
 }
 
 pub fn resume_seq(pty: &str) -> Option<u64> {
-    binder().lock().unwrap().resume_claims.get(pty).map(|(seq, _)| *seq)
+    binder().lock_ok().resume_claims.get(pty).map(|(seq, _)| *seq)
 }
 
 pub fn release_resume(pty: &str, seq: u64) {
-    binder().lock().unwrap().release_resume(pty, seq);
+    binder().lock_ok().release_resume(pty, seq);
 }
 
 fn binder() -> &'static Mutex<Binder> {
@@ -334,7 +335,7 @@ pub fn track(pty_id: &str, uid: &str, cwd: &Path, scope_id: Option<&str>, initia
     let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
 
     {
-        let mut b = binder().lock().unwrap();
+        let mut b = binder().lock_ok();
         b.next_seq += 1;
         let seq = b.next_seq;
         b.tabs.insert(
@@ -359,7 +360,7 @@ pub fn track(pty_id: &str, uid: &str, cwd: &Path, scope_id: Option<&str>, initia
 /// matters because a PTY's death is observed asynchronously: without it, the
 /// dying old process of a re-spawned tab would untrack the live new one.
 pub fn untrack(pty_id: &str, seq: u64) {
-    let mut b = binder().lock().unwrap();
+    let mut b = binder().lock_ok();
     if b.tabs.get(pty_id).is_some_and(|t| t.seq == seq) {
         b.tabs.remove(pty_id);
     }
@@ -368,7 +369,7 @@ pub fn untrack(pty_id: &str, seq: u64) {
 /// Stop following `pty_id` outright — the tab itself is gone (explicit kill), so
 /// there is no successor spawn to protect.
 pub fn untrack_now(pty_id: &str) {
-    let mut b = binder().lock().unwrap();
+    let mut b = binder().lock_ok();
     b.tabs.remove(pty_id);
     b.resume_claims.remove(pty_id);
 }
@@ -377,7 +378,7 @@ pub fn untrack_now(pty_id: &str) {
 /// teardown a token without plumbing `track`'s return value through the wrapper
 /// layers between them.
 pub fn current_seq(pty_id: &str) -> Option<u64> {
-    binder().lock().unwrap().tabs.get(pty_id).map(|t| t.seq)
+    binder().lock_ok().tabs.get(pty_id).map(|t| t.seq)
 }
 
 // ── Poll loop ───────────────────────────────────────────────────────────────
@@ -467,7 +468,7 @@ fn pass_due(watch: &mut RootWatch, root: &Path, now: Instant) -> bool {
 fn poll_once() -> Duration {
     let now = SystemTime::now();
     let (roots, young): (Vec<PathBuf>, HashSet<PathBuf>) = {
-        let b = binder().lock().unwrap();
+        let b = binder().lock_ok();
         let mut roots: Vec<PathBuf> = b.tabs.values().map(|t| t.root.clone()).collect();
         roots.sort();
         roots.dedup();
@@ -480,7 +481,7 @@ fn poll_once() -> Duration {
         (roots, young)
     };
     // A scope with no tracked tab left drops its watch.
-    root_watches().lock().unwrap().retain(|r, _| roots.contains(r));
+    root_watches().lock_ok().retain(|r, _| roots.contains(r));
     if roots.is_empty() {
         return SLOW_TICK;
     }
@@ -490,7 +491,7 @@ fn poll_once() -> Duration {
         .iter()
         .map(|root| {
             if !young.contains(root) {
-                let mut watches = root_watches().lock().unwrap();
+                let mut watches = root_watches().lock_ok();
                 let watch = watches.entry(root.clone()).or_insert_with(|| RootWatch {
                     watcher: None,
                     changed: Arc::new(AtomicBool::new(false)),
@@ -513,7 +514,7 @@ fn poll_once() -> Duration {
 /// The pass for the tabs whose rollouts land under `root`.
 fn poll_once_in(root: &Path, live_dir: &Path, store: Option<&Path>, state: &Mutex<Binder>) -> Duration {
     let mut tabs: Vec<Snapshot> = {
-        let b = state.lock().unwrap();
+        let b = state.lock_ok();
         b.tabs
             .iter()
             .filter(|(_, t)| t.root == root)
@@ -649,7 +650,7 @@ fn poll_once_in(root: &Path, live_dir: &Path, store: Option<&Path>, state: &Mute
 
 /// Record `id` as a tab's bound session (and never reconsider it).
 fn adopt(state: &Mutex<Binder>, pty_id: &str, id: String) {
-    let mut b = state.lock().unwrap();
+    let mut b = state.lock_ok();
     if let Some(t) = b.tabs.get_mut(pty_id) {
         t.known.insert(id.clone());
         t.guessed = None;
@@ -659,7 +660,7 @@ fn adopt(state: &Mutex<Binder>, pty_id: &str, id: String) {
 
 /// Mark the tab's bound session as one this binder wrote from its cwd guess.
 fn guess(state: &Mutex<Binder>, pty_id: &str, id: String) {
-    if let Some(t) = state.lock().unwrap().tabs.get_mut(pty_id) {
+    if let Some(t) = state.lock_ok().tabs.get_mut(pty_id) {
         t.guessed = Some(id);
     }
 }
@@ -668,7 +669,7 @@ fn guess(state: &Mutex<Binder>, pty_id: &str, id: String) {
 /// the hook has rewritten that record since, in which case it stays.
 fn withdraw(state: &Mutex<Binder>, live_dir: &Path, pty_id: &str, uid: &str, id: &str) {
     {
-        let mut b = state.lock().unwrap();
+        let mut b = state.lock_ok();
         if let Some(t) = b.tabs.get_mut(pty_id) {
             t.known.insert(id.to_string());
             t.guessed = None;
@@ -685,7 +686,7 @@ fn withdraw(state: &Mutex<Binder>, live_dir: &Path, pty_id: &str, uid: &str, id:
 /// Write off rollouts this tab has now looked at and does not want, so a later
 /// tick never opens them again.
 fn remember(state: &Mutex<Binder>, pty_id: &str, ids: Vec<String>) {
-    let mut b = state.lock().unwrap();
+    let mut b = state.lock_ok();
     if let Some(t) = b.tabs.get_mut(pty_id) {
         t.known.extend(ids);
     }
@@ -742,7 +743,12 @@ mod tests {
         }
         assert!(!pass_due(&mut w, &root, t0 + Duration::from_secs(2)), "nothing changed");
 
-        std::fs::write(root.join("2026/10/01/rollout-x.jsonl"), b"{}\n").unwrap();
+        // Written outside the tree and renamed in: one event. A write in place
+        // is a create and then a modify, and a modify landing after the pass
+        // below made the quiet check that follows it flaky.
+        let staged = root.with_extension("staged");
+        std::fs::write(&staged, b"{}\n").unwrap();
+        std::fs::rename(&staged, root.join("2026/10/01/rollout-x.jsonl")).unwrap();
         // Generous: the notify thread can be starved under a loaded test run;
         // the loop ends as soon as the change lands.
         let deadline = Instant::now() + Duration::from_secs(30);

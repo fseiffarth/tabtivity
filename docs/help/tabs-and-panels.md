@@ -68,7 +68,11 @@ fresh from the `+` menu. Closing a popped-out window closes its tabs for good.
 - Double-click a file to open it in Tabtivity's built-in viewers: PDF, LaTeX,
   Markdown, notebooks, YAML/JSON, tables/CSV, SQLite, images, audio/video,
   code and more. Right-click → **Set default app…** sends a type to an
-  external application instead.
+  external application instead. A file with no built-in viewer opens in the
+  system's default app only after you confirm; launchers, scripts, installers
+  and files marked executable are not opened at all (on USB sticks, Windows
+  drives and network shares, where every file looks executable, only the
+  file type counts). The project blob opens files the same way.
 - The file panel's **Project settings** dialog holds file hiding rules and
   the **Native Viewers** table (per type: use the built-in viewer,
   autocomplete, completion length, spelling).

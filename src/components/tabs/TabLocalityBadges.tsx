@@ -408,7 +408,16 @@ export function TabStatusMark({ stateClass }: { stateClass: string }) {
       <span className={`tab-status-mark ${state}`} title={label} aria-label={label}>
         {glyph}
       </span>
-      {alsoCommand && shellMark}
+      {alsoCommand ? (
+        shellMark
+      ) : state === "working" ? (
+        // The command mark's slot, kept while the agent works: a command it
+        // backgrounds comes and goes mid-turn, and the tab must not change
+        // width (shifting every tab after it) each time it does.
+        <span className="tab-status-mark working shell reserved" aria-hidden="true">
+          <PlayMark />
+        </span>
+      ) : null}
     </>
   );
 }

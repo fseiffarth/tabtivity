@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderMarkdown, taskSourceLines, toggleTaskCheckbox } from "../../lib/viewers/markdown";
+import { isLocalHref, renderMarkdown, safeHref, taskSourceLines, toggleTaskCheckbox } from "../../lib/viewers/markdown";
 
 describe("renderMarkdown", () => {
   it("renders ATX headings", () => {
@@ -293,5 +293,56 @@ describe("taskSourceLines", () => {
     const src = "- [ ] a\n```\n- [ ] code\n```\n  * [x] b\n1. [ ] numbered";
     expect(taskSourceLines(src)).toEqual(["- [ ] a", "  * [x] b"]);
     expect(toggleTaskCheckbox(src, 1)).toBe(src.replace("* [x] b", "* [ ] b"));
+  });
+});
+
+// Threat recheck gap 38: a link whose href names another host would load a
+// remote page into the app window on click, and Windows opens `\\host\x` over
+// SMB. The URL parser reads `\` as `/` and drops tab/CR/LF anywhere, so the
+// check runs on that form.
+describe("safeHref / isLocalHref — network paths", () => {
+  const NETWORK = [
+    "//evil.example/x",
+    "\\\\evil.example/x",
+    "/\\evil.example/x",
+    "\\/evil.example/x",
+    "/\t/evil.example/x",
+    "\t//evil.example/x",
+    "/\n/evil.example/x",
+    "\u0001//evil.example/x",
+    "file://evil.example/share/x",
+    "file:\\\\evil.example\\share\\x",
+    "FILE://evil.example/x",
+  ];
+  for (const href of NETWORK) {
+    it(`refuses ${JSON.stringify(href)}`, () => {
+      expect(safeHref(href)).toBeNull();
+      expect(isLocalHref(href)).toBe(false);
+    });
+  }
+
+  it("drops tab/CR/LF before judging a scheme", () => {
+    expect(safeHref("java\tscript:alert(1)")).toBeNull();
+    expect(safeHref("java\nscript:alert(1)")).toBeNull();
+  });
+
+  it("keeps relative, drive, absolute and local file: links", () => {
+    expect(safeHref("docs/a.md")).toBe("docs/a.md");
+    expect(isLocalHref("docs/a.md")).toBe(true);
+    expect(safeHref("C:\\x")).toBe("C:\\x");
+    expect(isLocalHref("C:\\x")).toBe(true);
+    expect(safeHref("/home/u/a.md")).toBe("/home/u/a.md");
+    expect(safeHref("file:///home/u/a.md")).toBe("file:///home/u/a.md");
+    expect(safeHref("file://localhost/home/u/a.md")).toBe("file://localhost/home/u/a.md");
+    expect(safeHref("https://example.com/a")).toBe("https://example.com/a");
+    expect(safeHref("#setup")).toBe("#setup");
+  });
+
+  it("renders a network-path image as no image at all", () => {
+    for (const src of ["//evil.example/p.png", "file://evil.example/p.png"]) {
+      const html = renderMarkdown(`![a](${src})`);
+      expect(html).not.toContain("<img");
+      expect(html).not.toContain("data-md-src");
+    }
   });
 });

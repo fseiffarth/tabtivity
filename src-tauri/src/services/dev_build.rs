@@ -18,6 +18,7 @@
 //! AppImage) has no source root, reads nothing, and shows no chip.
 
 use std::fs;
+use app_core::sync::LockExt;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -156,9 +157,7 @@ pub fn parse_log(text: &str) -> LogSummary {
             *phase = BuildPhase::Frontend;
         } else if script == Some("mobile:build") {
             *phase = BuildPhase::Mobile;
-        } else if trimmed.starts_with("package-dev: published the phone bundle")
-            || trimmed.starts_with("Compiling ")
-        {
+        } else if trimmed.starts_with("Compiling ") {
             *phase = BuildPhase::Cargo;
         } else if trimmed.starts_with("Finished `release`") {
             *phase = BuildPhase::Install;
@@ -265,12 +264,37 @@ fn own_exe() -> Option<(PathBuf, bool)> {
     }
 }
 
+/// The list of builds `package-dev.sh` made on the host, one
+/// `<sha256> <commit> <version> <built>` line each (`scripts/lib/dev-launcher.sh`).
+/// The launcher adopts `target/release/<bin>` only when its hash is listed: the
+/// tree is writable from every agent fence binding it, this folder from none
+/// (threat recheck 2026-10-08, gap 20).
+fn verified_list(app_dir: &Path) -> PathBuf {
+    app_dir.join("dev-builds").join("verified")
+}
+
+/// Where the desktop entry's launcher lives once `package-dev.sh` has run on
+/// the host: a copy of the checkout's, with every helper it sources, under
+/// `<app_dir>/dev-launcher/`, so an uncommitted edit to the checkout's scripts
+/// never runs unfenced on a relaunch. The checkout's own only while no copy
+/// exists yet (a machine that has not frozen since this landed).
+fn launcher_script(app_dir: &Path, root: &str) -> PathBuf {
+    let copy = app_dir.join("dev-launcher").join(crate::brand::DEV_LAUNCHER_SCRIPT);
+    if copy.is_file() {
+        copy
+    } else {
+        Path::new(root).join(crate::brand::DEV_LAUNCHER_SCRIPT)
+    }
+}
+
 /// The short commit of a finished snapshot in the tree that
 /// `start-tabtivity-dev-build.sh` would adopt: `target/release/tabtivity` newer than
 /// the installed binary, with the `.frozen` record `package-dev.sh` writes only
-/// after a verified build. A binary newer than its record is one cargo is still
-/// linking, or one that failed the check — not a snapshot.
-fn adoptable_snapshot(root: &str, installed: &Path) -> Option<String> {
+/// after a verified build, whose sha256 is also in the host's verified list
+/// (`verified_list`). A binary newer than its record is one cargo is still
+/// linking, or one that failed the check — not a snapshot. The binary itself
+/// is not hashed on every poll: the launcher does that, and refuses a mismatch.
+fn adoptable_snapshot(root: &str, installed: &Path, verified: &Path) -> Option<String> {
     let built = Path::new(root).join("target/release").join(crate::brand::BIN_NAME);
     let record = Path::new(root).join("target/release").join(crate::brand::FROZEN_RECORD_NAME);
     let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
@@ -278,11 +302,17 @@ fn adoptable_snapshot(root: &str, installed: &Path) -> Option<String> {
     if mtime(installed).is_some_and(|at| at >= built_at) || mtime(&record)? < built_at {
         return None;
     }
-    fs::read_to_string(&record)
+    let record = fs::read_to_string(&record).ok()?;
+    let field = |key: &str| record.lines().find_map(|l| l.strip_prefix(key)).map(str::trim);
+    let sha = field("sha256=").filter(|s| s.len() == 64)?;
+    let listed = fs::read_to_string(verified)
         .ok()?
         .lines()
-        .find_map(|l| l.strip_prefix("commit="))
-        .map(|c| short(c.trim()))
+        .any(|line| line.split(' ').next() == Some(sha));
+    if !listed {
+        return None;
+    }
+    field("commit=").map(short)
 }
 
 fn short(sha: &str) -> String {
@@ -324,7 +354,7 @@ pub fn status() -> Option<DevBuildStatus> {
         Some((exe, replaced)) if exe == binary => (true, replaced),
         _ => (false, false),
     };
-    let adoptable = adoptable_snapshot(root, &binary);
+    let adoptable = adoptable_snapshot(root, &binary, &verified_list(&dir));
 
     Some(DevBuildStatus {
         state,
@@ -391,7 +421,7 @@ pub fn queue_if_behind() {
         .and_then(|line| line.split(' ').next().map(str::to_string));
     let busy = lock_holder_alive(&dir.join("package-dev-auto.lock"))
         || dir.join("package-dev-auto.pending").exists();
-    let mut last = LAST_QUEUED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut last = LAST_QUEUED.lock_ok();
     if !needs_queue(&head, stamp.as_deref(), failed.as_deref(), busy, last.as_deref()) {
         return;
     }
@@ -419,7 +449,7 @@ pub fn set_paused(paused: bool) -> Result<(), String> {
     if !paused {
         // The script queued what the pause skipped; forget any HEAD this
         // process asked for meanwhile so a later poll may ask again.
-        *LAST_QUEUED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *LAST_QUEUED.lock_ok() = None;
     }
     Ok(())
 }
@@ -481,7 +511,7 @@ pub fn spawn_relauncher() -> Result<(), String> {
     if !own_exe().is_some_and(|(exe, _)| exe == binary) {
         return Err(concat!("this window is not the frozen ", crate::app_name!(), " (dev) binary").into());
     }
-    let launcher = Path::new(root).join(crate::brand::DEV_LAUNCHER_SCRIPT);
+    let launcher = launcher_script(&app_dir(), root);
     if !launcher.is_file() {
         return Err(format!("{} is missing", launcher.display()));
     }
@@ -543,7 +573,6 @@ mod tests {
 > tsc && vite build && npm run mobile:build
 ✓ built in 16.37s
 > ", crate::app_slug!(), "@0.1.72 mobile:build
-package-dev: published the phone bundle (47b2af1) to /r/target/mobile-pwa
    Compiling ", crate::app_slug!(), " v0.1.72 (/r/target/freeze-tree/src-tauri)
     Finished `release` profile [optimized] target(s) in 2m 14s
 Installed frozen binary: /h/", crate::app_slug!(), "-dev (0.1.72 @ 47b2af1, from head)
@@ -573,7 +602,7 @@ Installed frozen binary: /h/", crate::app_slug!(), "-dev (0.1.72 @ 47b2af1, from
         );
         assert_eq!(step(concat!("> ", crate::app_slug!(), "@0.1.73 mobile:build\n")), Some(BuildPhase::Mobile));
         assert_eq!(
-            step("package-dev: published the phone bundle (30ed347) to /x\n"),
+            step(concat!("   Compiling ", crate::app_slug!(), " v0.1.73 (/r/target/freeze-tree/src-tauri)\n")),
             Some(BuildPhase::Cargo)
         );
         assert_eq!(
@@ -620,23 +649,581 @@ Installed frozen binary: /h/", crate::app_slug!(), "-dev (0.1.72 @ 47b2af1, from
         };
         let built = release.join(crate::app_slug!());
         let record = release.join(concat!(crate::app_slug!(), ".frozen"));
+        let app = tempfile::tempdir().unwrap();
+        let verified = verified_list(app.path());
+        let sha = "a".repeat(64);
+        let recorded = format!("sha256={sha}\ncommit=30ed3471234\n");
 
         // Nothing built.
-        assert_eq!(adoptable_snapshot(root, &installed), None);
+        assert_eq!(adoptable_snapshot(root, &installed, &verified), None);
 
-        // Built after the install, record written after the build.
+        // Built after the install, record written after the build — but no
+        // build on the host listed that hash (an agent's build, or a planted
+        // file with a made-up record): not a snapshot the launcher adopts.
         touch(&installed, "old", 300);
         touch(&built, "new", 200);
-        touch(&record, "sha256=x\ncommit=30ed3471234\n", 100);
-        assert_eq!(adoptable_snapshot(root, &installed), Some("30ed347".into()));
+        touch(&record, &recorded, 100);
+        assert_eq!(adoptable_snapshot(root, &installed, &verified), None);
+        fs::create_dir_all(verified.parent().unwrap()).unwrap();
+        fs::write(&verified, format!("{} 1111111 0.1.0 x\n", "b".repeat(64))).unwrap();
+        assert_eq!(adoptable_snapshot(root, &installed, &verified), None);
+
+        // Listed: adoptable.
+        fs::write(&verified, format!("{} 1111111 0.1.0 x\n{sha} 30ed347 0.1.1 y\n", "b".repeat(64))).unwrap();
+        assert_eq!(adoptable_snapshot(root, &installed, &verified), Some("30ed347".into()));
 
         // A binary newer than its record is still being linked.
         touch(&built, "newer", 50);
-        assert_eq!(adoptable_snapshot(root, &installed), None);
+        assert_eq!(adoptable_snapshot(root, &installed, &verified), None);
 
         // Already installed.
-        touch(&record, "commit=30ed347\n", 40);
+        touch(&record, &recorded, 40);
         touch(&installed, "new", 10);
-        assert_eq!(adoptable_snapshot(root, &installed), None);
+        assert_eq!(adoptable_snapshot(root, &installed, &verified), None);
+    }
+
+    #[test]
+    fn a_relaunch_runs_the_installed_launcher_copy_not_the_checkouts() {
+        let app = tempfile::tempdir().unwrap();
+        let root = "/checkout";
+        // No copy yet (never frozen on the host since gap 20): the checkout's.
+        assert_eq!(
+            launcher_script(app.path(), root),
+            Path::new(root).join(crate::brand::DEV_LAUNCHER_SCRIPT)
+        );
+        let copy = app.path().join("dev-launcher").join(crate::brand::DEV_LAUNCHER_SCRIPT);
+        fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        fs::write(&copy, "#!/bin/sh\n").unwrap();
+        assert_eq!(launcher_script(app.path(), root), copy);
+    }
+}
+
+/// The dev launcher's trust rules (threat recheck 2026-10-08, gap 20), run as
+/// shell against temp dirs, fake binaries and a stub `notify-send`: never the
+/// real app, state dir or desktop entry. The launcher is a Linux-only flow.
+#[cfg(all(test, target_os = "linux"))]
+mod launcher_tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{Duration, SystemTime};
+
+    use crate::brand::{BIN_NAME, DEV_BIN_NAME, DEV_LAUNCHER_SCRIPT, ENV_PREFIX, LEGACY_ENV_PREFIX, STATE_DIR_NAME};
+
+    fn repo() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+    }
+
+    fn fence_vars() -> [String; 2] {
+        [format!("{ENV_PREFIX}AGENT_FENCE"), format!("{LEGACY_ENV_PREFIX}AGENT_FENCE")]
+    }
+
+    /// `bash -c script` with the repo's brand.sh and dev-launcher.sh sourced,
+    /// `$HOME` set to `home`, the fence variables removed and the stubs first
+    /// on PATH. Returns (success, stdout + stderr).
+    fn lib(home: &Path, script: &str, extra_env: &[(&str, &str)]) -> (bool, String) {
+        let prelude = r#"set -eu
+. "$REPO/scripts/lib/brand.sh"
+. "$REPO/scripts/lib/dev-launcher.sh"
+"#;
+        let mut cmd = Command::new("bash");
+        cmd.args(["-c", &format!("{prelude}{script}")])
+            .env("REPO", repo())
+            .env("HOME", home)
+            .env("PATH", format!("{}:{}", home.join("stub-bin").display(), std::env::var("PATH").unwrap_or_default()));
+        for var in fence_vars() {
+            cmd.env_remove(var);
+        }
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
+        let out = cmd.output().expect("bash runs");
+        (
+            out.status.success(),
+            format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)),
+        )
+    }
+
+    fn write_exec(path: &Path, body: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn age(path: &Path, secs: u64) {
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(secs)).unwrap();
+    }
+
+    fn sha256(path: &Path) -> String {
+        let out = Command::new("sha256sum").arg(path).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).split(' ').next().unwrap().to_string()
+    }
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        home: PathBuf,
+        share: PathBuf,
+        checkout: PathBuf,
+        built: PathBuf,
+        installed: PathBuf,
+    }
+
+    /// A home with an installed (old) dev binary, a checkout whose
+    /// target/release holds a newer one, a checkout full of planted launcher
+    /// scripts that would leave `$HOME/pwned`, and the launcher copy
+    /// installed from this repo by `dev_launcher_install`.
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let share = home.join(".local/share").join(STATE_DIR_NAME);
+        let checkout = dir.path().join("checkout");
+        let built = checkout.join("target/release").join(BIN_NAME);
+        let installed = share.join(DEV_BIN_NAME);
+        write_exec(&home.join("stub-bin/notify-send"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$HOME/notes\"\n");
+        write_exec(&installed, "#!/bin/sh\necho old >\"$HOME/ran\"\n");
+        write_exec(&built, "#!/bin/sh\necho new >\"$HOME/ran\"\n");
+        age(&installed, 300);
+        age(&built, 100);
+        let planted = "#!/bin/sh\ntouch \"$HOME/pwned\"\nreturn 0 2>/dev/null || exit 0\n";
+        for file in [
+            DEV_LAUNCHER_SCRIPT.to_string(),
+            "scripts/lib/brand.sh".into(),
+            "scripts/lib/dev-launcher.sh".into(),
+            "scripts/retain-dev-build.sh".into(),
+        ] {
+            write_exec(&checkout.join(file), planted);
+        }
+        let (ok, out) = lib(
+            &home,
+            r#"dev_launcher_install "$REPO" "$(dev_launcher_dir "$APP_SHARE_DIR")" "$CHECKOUT""#,
+            &[("CHECKOUT", checkout.to_str().unwrap())],
+        );
+        assert!(ok, "install failed: {out}");
+        Fixture { _dir: dir, home, share, checkout, built, installed }
+    }
+
+    impl Fixture {
+        fn launch(&self) -> (bool, String) {
+            let launcher = self.share.join("dev-launcher").join(DEV_LAUNCHER_SCRIPT);
+            let mut cmd = Command::new(&launcher);
+            cmd.env("HOME", &self.home).env(
+                "PATH",
+                format!("{}:{}", self.home.join("stub-bin").display(), std::env::var("PATH").unwrap_or_default()),
+            );
+            for var in fence_vars() {
+                cmd.env_remove(var);
+            }
+            let out = cmd.output().expect("launcher runs");
+            let log = fs::read_to_string(self.share.join(format!("{DEV_BIN_NAME}.log"))).unwrap_or_default();
+            (out.status.success(), log)
+        }
+
+        fn ran(&self) -> String {
+            fs::read_to_string(self.home.join("ran")).unwrap_or_default().trim().to_string()
+        }
+
+        fn notes(&self) -> String {
+            fs::read_to_string(self.home.join("notes")).unwrap_or_default()
+        }
+
+        fn record(&self, sha: &str) {
+            let (ok, out) = lib(
+                &self.home,
+                r#"dev_verified_add "$(dev_verified_list "$APP_SHARE_DIR")" "$SHA" 30ed347 0.1.99 2026-10-13T10:00:00+02:00"#,
+                &[("SHA", sha)],
+            );
+            assert!(ok, "{out}");
+        }
+    }
+
+    #[test]
+    fn the_copy_holds_every_file_the_launcher_reads_and_names_the_checkout() {
+        let f = fixture();
+        let copy = f.share.join("dev-launcher");
+        for file in [
+            DEV_LAUNCHER_SCRIPT,
+            "scripts/lib/brand.sh",
+            "scripts/lib/dev-launcher.sh",
+            "scripts/retain-dev-build.sh",
+            "src-core/src/brand.rs",
+            "src-tauri/Cargo.toml",
+        ] {
+            assert_eq!(fs::read(copy.join(file)).unwrap(), fs::read(repo().join(file)).unwrap(), "{file}");
+            let mode = fs::metadata(copy.join(file)).unwrap().permissions().mode();
+            assert_eq!(mode & 0o022, 0, "{file} is group/other-writable");
+        }
+        assert_eq!(fs::read_to_string(copy.join("source-root")).unwrap().trim(), f.checkout.to_str().unwrap());
+        // The launcher's own source names no helper outside the copy.
+        let launcher = fs::read_to_string(repo().join(DEV_LAUNCHER_SCRIPT)).unwrap();
+        assert!(!launcher.contains("$ROOT/scripts"), "the launcher reaches into the checkout's scripts");
+    }
+
+    #[test]
+    fn an_unlisted_build_in_the_tree_is_not_adopted_and_nothing_from_the_checkout_runs() {
+        let f = fixture();
+        // A record beside the binary claiming it is verified changes nothing.
+        fs::write(
+            f.built.with_file_name(crate::brand::FROZEN_RECORD_NAME),
+            format!("sha256={}\ncommit=30ed347\nversion=0.1.99\n", sha256(&f.built)),
+        )
+        .unwrap();
+        let (ok, log) = f.launch();
+        assert!(ok, "{log}");
+        assert_eq!(f.ran(), "old", "{log}");
+        assert!(log.contains("not adopting it"), "{log}");
+        assert!(f.notes().contains("no build outside an agent fence made it"), "{}", f.notes());
+        assert!(fs::read_to_string(&f.installed).unwrap().contains("old"));
+        assert!(!f.home.join("pwned").exists(), "a checkout script ran");
+        let leftovers: Vec<_> = fs::read_dir(&f.share)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".adopt."))
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn a_listed_build_is_adopted_with_the_lists_label() {
+        let f = fixture();
+        f.record(&sha256(&f.built));
+        // A hostile record beside it is ignored: the label comes from the list.
+        fs::write(
+            f.built.with_file_name(crate::brand::FROZEN_RECORD_NAME),
+            "commit=x|;e touch /nonexistent\nversion=--evil\n",
+        )
+        .unwrap();
+        let desktop = f.home.join(".local/share/applications").join(format!("{}Dev.desktop", crate::brand::DISPLAY));
+        fs::create_dir_all(desktop.parent().unwrap()).unwrap();
+        fs::write(&desktop, "[Desktop Entry]\nComment=old\nExec=/x\n").unwrap();
+        let (ok, log) = f.launch();
+        assert!(ok, "{log}");
+        assert_eq!(f.ran(), "new", "{log}");
+        assert_eq!(fs::read(&f.installed).unwrap(), fs::read(&f.built).unwrap());
+        let frozen = fs::read_to_string(f.installed.with_file_name(format!("{DEV_BIN_NAME}.frozen"))).unwrap();
+        assert!(frozen.contains("commit=30ed347\n") && frozen.contains("version=0.1.99\n"), "{frozen}");
+        assert!(fs::read_to_string(&desktop).unwrap().contains("Comment=Frozen build 0.1.99 @ 30ed347"));
+        assert!(f.share.join("dev-builds").join(format!("{}-30ed347", crate::brand::SLUG)).is_file());
+        assert!(!f.home.join("pwned").exists(), "a checkout script ran");
+    }
+
+    #[test]
+    fn a_binary_swapped_after_listing_is_refused() {
+        let f = fixture();
+        f.record(&sha256(&f.built));
+        write_exec(&f.built, "#!/bin/sh\necho planted >\"$HOME/ran\"\n");
+        let (ok, log) = f.launch();
+        assert!(ok, "{log}");
+        assert_eq!(f.ran(), "old", "{log}");
+    }
+
+    /// `git` in the fixture's checkout, blind to the user's own config.
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn a_snapshot_behind_head_still_opens_whatever_the_failure_record_holds() {
+        let f = fixture();
+        git(&f.checkout, &["init", "-q"]);
+        git(&f.checkout, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let first = git(&f.checkout, &["rev-parse", "--short", "HEAD"]);
+        git(&f.checkout, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        fs::write(f.installed.with_file_name(format!("{DEV_BIN_NAME}.frozen")), format!("commit={first}\n")).unwrap();
+        // An empty failure record (a write cut short) made `read` fail under
+        // `set -e`: the launcher ended before the window opened.
+        let failed = f.share.join("package-dev-auto.failed");
+        fs::write(&failed, "").unwrap();
+        let (ok, log) = f.launch();
+        assert!(ok, "{log}");
+        assert_eq!(f.ran(), "old", "{log}");
+        assert!(log.contains("1 commit(s) behind HEAD"), "{log}");
+        // And a well-formed one is still reported.
+        fs::write(&failed, "abc1234 101 2026-10-13T10:00:00+02:00\n").unwrap();
+        fs::remove_file(f.home.join("ran")).unwrap();
+        let (ok, log) = f.launch();
+        assert!(ok, "{log}");
+        assert_eq!(f.ran(), "old", "{log}");
+        assert!(log.contains("FAILED at abc1234 (status 101)"), "{log}");
+    }
+
+    #[test]
+    fn the_list_is_trusted_only_when_private_and_sanitises_its_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let list = home.join("verified");
+        let sha = "c".repeat(64);
+        let env = [("LIST", list.to_str().unwrap()), ("SHA", sha.as_str())];
+        let (ok, out) = lib(home, r#"dev_verified_add "$LIST" "$SHA" 'ab1;rm -rf /|x' '0.1 $(id)' 'now`x`'; dev_verified_lookup "$LIST" "$SHA""#, &env);
+        assert!(ok, "{out}");
+        assert_eq!(out.trim(), "ab1rm-rfx 0.1id nowx");
+        assert_eq!(fs::metadata(&list).unwrap().permissions().mode() & 0o077, 0);
+
+        // Not a sha256: nothing recorded, nothing found.
+        assert!(!lib(home, r#"dev_verified_add "$LIST" nope a b c"#, &env).0);
+        assert!(!lib(home, r#"dev_verified_lookup "$LIST" "$(printf 'd%.0s' $(seq 64))""#, &env).0);
+
+        // Group- or other-writable, or a link: not trusted.
+        fs::set_permissions(&list, fs::Permissions::from_mode(0o620)).unwrap();
+        assert!(!lib(home, r#"dev_verified_lookup "$LIST" "$SHA""#, &env).0);
+        fs::set_permissions(&list, fs::Permissions::from_mode(0o602)).unwrap();
+        assert!(!lib(home, r#"dev_verified_lookup "$LIST" "$SHA""#, &env).0);
+        fs::set_permissions(&list, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(lib(home, r#"dev_verified_lookup "$LIST" "$SHA""#, &env).0);
+        let link = home.join("link");
+        std::os::unix::fs::symlink(&list, &link).unwrap();
+        assert!(!lib(home, r#"dev_verified_lookup "$LINK" "$SHA""#, &[("LINK", link.to_str().unwrap()), ("SHA", sha.as_str())]).0);
+
+        // The newest DEV_VERIFIED_KEEP are kept; re-recording moves a hash last.
+        let (ok, out) = lib(
+            home,
+            r#"for i in $(seq 1 25); do dev_verified_add "$LIST" "$(printf '%064x' "$i")" "c$i" v t; done
+dev_verified_add "$LIST" "$(printf '%064x' 10)" again v t
+wc -l <"$LIST"; tail -n 1 "$LIST" | cut -d' ' -f2
+dev_verified_lookup "$LIST" "$(printf '%064x' 5)" || echo gone"#,
+            &env,
+        );
+        assert!(ok, "{out}");
+        assert_eq!(out.split_whitespace().collect::<Vec<_>>(), ["20", "again", "gone"]);
+
+        // Recording into a list the lookup would refuse starts it afresh:
+        // a line planted there is not carried into the new mode-600 file.
+        let planted = "e".repeat(64);
+        fs::write(&list, format!("{planted} 1111111 0.1.0 x\n")).unwrap();
+        fs::set_permissions(&list, fs::Permissions::from_mode(0o666)).unwrap();
+        let env = [("LIST", list.to_str().unwrap()), ("SHA", sha.as_str()), ("PLANTED", planted.as_str())];
+        let (ok, out) = lib(
+            home,
+            r#"dev_verified_add "$LIST" "$SHA" c v t
+dev_verified_lookup "$LIST" "$PLANTED" || echo refused
+dev_verified_lookup "$LIST" "$SHA" >/dev/null && echo kept"#,
+            &env,
+        );
+        assert!(ok, "{out}");
+        assert_eq!(out.split_whitespace().collect::<Vec<_>>(), ["refused", "kept"]);
+        assert_eq!(fs::metadata(&list).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    /// The launcher's files as they are in this repo, committed into a fresh
+    /// repository at `dir`. Returns the commit.
+    fn commit_launcher_files(dir: &Path) -> String {
+        fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q"]);
+        for file in [
+            DEV_LAUNCHER_SCRIPT,
+            "scripts/lib/brand.sh",
+            "scripts/lib/dev-launcher.sh",
+            "scripts/retain-dev-build.sh",
+            "src-core/src/brand.rs",
+            "src-tauri/Cargo.toml",
+        ] {
+            fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+            fs::copy(repo().join(file), dir.join(file)).unwrap();
+        }
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "launcher"]);
+        git(dir, &["rev-parse", "HEAD"])
+    }
+
+    #[test]
+    fn a_head_freeze_copies_the_launcher_from_the_commit_not_the_tree() {
+        // Step 8 review flag 1: in --head mode the copy was read from
+        // target/freeze-tree, which a fence can edit during the build. Now each
+        // file is read out of the commit with hardened git.
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let tree = dir.path().join("tree");
+        let dest = dir.path().join("dev-launcher");
+        fs::create_dir_all(&home).unwrap();
+        let head = commit_launcher_files(&tree);
+        let pwned = home.join("pwned");
+        let planted = format!("#!/bin/sh\ntouch '{}'\n", pwned.display());
+        // Uncommitted edits in the tree, a replace ref swapping the committed
+        // brand.sh for the planted one, and repo config naming programs.
+        for file in [DEV_LAUNCHER_SCRIPT, "scripts/lib/brand.sh", "scripts/lib/dev-launcher.sh"] {
+            write_exec(&tree.join(file), &planted);
+        }
+        let committed = git(&tree, &["rev-parse", "HEAD:scripts/lib/brand.sh"]);
+        let swapped = git(&tree, &["hash-object", "-w", "scripts/lib/brand.sh"]);
+        git(&tree, &["replace", &committed, &swapped]);
+        write_exec(&tree.join("hook.sh"), &planted);
+        let hook = tree.join("hook.sh");
+        git(&tree, &["config", "core.fsmonitor", hook.to_str().unwrap()]);
+        write_exec(&tree.join(".git/hooks/post-checkout"), &planted);
+
+        let (ok, out) = lib(
+            &home,
+            r#"dev_launcher_install "$TREE" "$DEST" "$TREE" "$HEAD""#,
+            &[
+                ("TREE", tree.to_str().unwrap()),
+                ("DEST", dest.to_str().unwrap()),
+                ("HEAD", &head[..12]),
+            ],
+        );
+        assert!(ok, "{out}");
+        for file in [
+            DEV_LAUNCHER_SCRIPT,
+            "scripts/lib/brand.sh",
+            "scripts/lib/dev-launcher.sh",
+            "scripts/retain-dev-build.sh",
+            "src-core/src/brand.rs",
+            "src-tauri/Cargo.toml",
+        ] {
+            assert_eq!(fs::read(dest.join(file)).unwrap(), fs::read(repo().join(file)).unwrap(), "{file}");
+            let mode = fs::metadata(dest.join(file)).unwrap().permissions().mode();
+            assert_eq!(mode & 0o022, 0, "{file} is group/other-writable");
+        }
+        assert_eq!(
+            fs::metadata(dest.join(DEV_LAUNCHER_SCRIPT)).unwrap().permissions().mode() & 0o111,
+            0o111,
+            "the launcher stays runnable"
+        );
+        assert_eq!(fs::read_to_string(dest.join("source-root")).unwrap().trim(), tree.to_str().unwrap());
+        assert!(!pwned.exists(), "a repo-configured program ran");
+
+        // Without a commit (the --tree mode) the tree is copied as it is.
+        let (ok, out) = lib(
+            &home,
+            r#"dev_launcher_install "$TREE" "$DEST" "$TREE""#,
+            &[("TREE", tree.to_str().unwrap()), ("DEST", dest.to_str().unwrap())],
+        );
+        assert!(ok, "{out}");
+        assert_eq!(fs::read_to_string(dest.join("scripts/lib/brand.sh")).unwrap(), planted);
+    }
+
+    #[test]
+    fn a_commit_whose_launcher_file_is_a_link_or_missing_installs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let tree = dir.path().join("tree");
+        let dest = dir.path().join("dev-launcher");
+        fs::create_dir_all(&home).unwrap();
+        let good = commit_launcher_files(&tree);
+        let run = |commit: &str| {
+            lib(
+                &home,
+                r#"dev_launcher_install "$TREE" "$DEST" "$TREE" "$COMMIT""#,
+                &[("TREE", tree.to_str().unwrap()), ("DEST", dest.to_str().unwrap()), ("COMMIT", commit)],
+            )
+        };
+        assert!(run(&good).0);
+        let before = fs::read(dest.join("scripts/lib/brand.sh")).unwrap();
+
+        // A symlink entry in the commit (to a file outside the repo).
+        fs::remove_file(tree.join("scripts/retain-dev-build.sh")).unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", tree.join("scripts/retain-dev-build.sh")).unwrap();
+        git(&tree, &["add", "-A"]);
+        git(&tree, &["commit", "-q", "-m", "link"]);
+        let (ok, out) = run("HEAD");
+        assert!(!ok && out.contains("not a regular file"), "{out}");
+
+        // A commit without one of the files.
+        git(&tree, &["rm", "-q", "scripts/retain-dev-build.sh"]);
+        git(&tree, &["commit", "-q", "-m", "gone"]);
+        assert!(!run("HEAD").0);
+        // Not a commit at all.
+        let (ok, out) = run("no-such-rev");
+        assert!(!ok && out.contains("not a commit"), "{out}");
+
+        // The installed copy is the good one, untouched, and no staging left.
+        assert_eq!(fs::read(dest.join("scripts/lib/brand.sh")).unwrap(), before);
+        let stray: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(stray.is_empty(), "{stray:?}");
+    }
+
+    #[test]
+    fn package_dev_reads_the_head_launcher_from_the_commit() {
+        let package_dev = fs::read_to_string(repo().join("scripts/package-dev.sh")).unwrap();
+        assert!(
+            package_dev.contains(r#"LAUNCHER_FROM=("$ROOT" "$LAUNCHER_DIR" "$ROOT" "$HEAD_SHA")"#),
+            "--head installs from the commit"
+        );
+        assert!(!package_dev.contains(r#"dev_launcher_install "$SRC""#), "never from the freeze tree");
+        // Every git call that changes the freeze tree on the host is hardened.
+        for verb in ["worktree add", "checkout --quiet", "clean -fdq", "worktree prune"] {
+            let hardened = package_dev.lines().any(|l| l.contains("dev_git -C") && l.contains(verb));
+            let bare = package_dev.lines().any(|l| l.trim_start().starts_with("git -C") && l.contains(verb));
+            assert!(hardened && !bare, "{verb}");
+        }
+        // And no other git call there runs bare: `diff` against the working
+        // tree starts the repo's `core.fsmonitor`, on the host.
+        let bare: Vec<&str> = package_dev
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && l.contains("git -C") && !l.contains("dev_git -C"))
+            .collect();
+        assert!(bare.is_empty(), "{bare:?}");
+    }
+
+    #[test]
+    fn only_a_host_session_writes_what_the_launcher_trusts() {
+        let dir = repo();
+        let dir = dir.to_str().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let script = r#"dev_on_host "$DIR" && echo host || echo fenced"#;
+        let [current, legacy] = fence_vars();
+        let fenced = lib(home.path(), script, &[("DIR", dir), (current.as_str(), "1")]).1;
+        assert_eq!(fenced.trim(), "fenced");
+        let fenced = lib(home.path(), script, &[("DIR", dir), (legacy.as_str(), "1")]).1;
+        assert_eq!(fenced.trim(), "fenced");
+        // package-dev.sh records and installs only under that check.
+        let package_dev = fs::read_to_string(repo().join("scripts/package-dev.sh")).unwrap();
+        let guard = package_dev.find("if dev_on_host \"$APP_DIR\"; then").expect("guarded");
+        let add = package_dev.find("dev_verified_add").unwrap();
+        let install = package_dev.find("dev_launcher_install").unwrap();
+        assert!(guard < add && guard < install);
+        assert!(
+            package_dev.contains("Exec=$(dev_desktop_quote \"$LAUNCHER\")") && package_dev.contains("LAUNCHER=\"$LAUNCHER_DIR/")
+        );
+    }
+
+    #[test]
+    fn the_desktop_entry_is_pointed_at_the_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("e.desktop");
+        let action = "[Desktop Action other]\nName=o\nExec=/keep/me --flag\n";
+        fs::write(&entry, format!("[Desktop Entry]\nName=x\nExec=/checkout/start.sh\nIcon=y\n\n{action}")).unwrap();
+        // A home with a space: the spec splits Exec= on spaces, so the path is
+        // one quoted argument (it was written bare, and the click ran `/h/a`).
+        // Run twice: the rewrite is idempotent.
+        let (ok, out) = lib(
+            dir.path(),
+            r#"dev_desktop_exec "$ENTRY" '/h/a b/dev-launcher/start.sh'; dev_desktop_exec "$ENTRY" '/h/a b/dev-launcher/start.sh'; dev_desktop_exec "$ENTRY.missing" /x"#,
+            &[("ENTRY", entry.to_str().unwrap())],
+        );
+        assert!(ok, "{out}");
+        assert_eq!(
+            fs::read_to_string(&entry).unwrap(),
+            format!("[Desktop Entry]\nName=x\nExec=\"/h/a b/dev-launcher/start.sh\"\nIcon=y\n\n{action}")
+        );
+        assert!(!dir.path().join("e.desktop.missing").exists());
+
+        // A plain path stays bare; `%`, `$`, `"`, `` ` `` and `\` are escaped
+        // the spec's way inside the quotes.
+        let (ok, out) = lib(
+            dir.path(),
+            r#"dev_desktop_quote /home/u/.local/share/app/dev-launcher/start.sh; echo
+dev_desktop_quote '/h/100% $x"y`z\w'"#,
+            &[],
+        );
+        assert!(ok, "{out}");
+        assert_eq!(
+            out,
+            "/home/u/.local/share/app/dev-launcher/start.sh\n\"/h/100%% \\\\$x\\\\\"y\\\\`z\\\\\\\\w\""
+        );
     }
 }

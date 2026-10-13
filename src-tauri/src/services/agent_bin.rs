@@ -64,7 +64,7 @@ fn install_in(dir: &Path, exe: Option<&Path>, clis: &[&str]) -> io::Result<()> {
 /// every shell it opens. Trimming the exported PATH lost it in every fenced
 /// tab (2026-09-29).
 pub(crate) fn shim_script(cli: &str, exe: &Path, dir: &Path) -> String {
-    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    let quote = crate::quote::posix;
     format!(
         "#!/bin/sh\n\
          # {DISPLAY} agent shim: runs {cli} fenced in this tab's scope (services::agent_shim).\n\

@@ -18,7 +18,7 @@ import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
 import { TerminalReaderStatus } from "./TerminalReaderStatus";
 import { usePoll, type PollRun } from "../../lib/usePoll";
-import { CLAUDE_EFFORTS, useSessionPicker } from "../../hooks/useSessionPicker";
+import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
  * backend floors it besides), and how often the reset countdowns tick. */
@@ -114,6 +114,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const permissionPicking = picking && session.command === "/permissions";
   const modelPicking = picking && !permissionPicking;
   const codex = isCodexCommand(tab.cmd);
+  const modelPickable = modelPickOffered(tab);
   useEffect(() => { onPicking(picking); }, [picking, onPicking]);
 
   const openPicker = (command: "/model" | "/permissions" = "/model") => {
@@ -382,18 +383,24 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint")}>
           {t("terminal.reader.status.button")} <UntestedTag id="terminal.reader.codexStatus" />
         </button>}
-        <button
-          type="button"
-          className="terminal-reader-fact-model"
-          onClick={() => modelPicking ? close() : openPicker()}
-          disabled={!modelPicking && (!!live.working || !!live.question || picking)}
-          aria-haspopup="dialog"
-          aria-expanded={modelPicking}
-          title={t("terminal.reader.modelHint")}
-        >
-          {modelLabel ?? t("terminal.reader.model")}
-        </button>
-        {(effortLabel || claude) && (
+        {modelPickable ? (
+          <button
+            type="button"
+            className="terminal-reader-fact-model"
+            onClick={() => modelPicking ? close() : openPicker()}
+            disabled={!modelPicking && (!!live.working || !!live.question || picking)}
+            aria-haspopup="dialog"
+            aria-expanded={modelPicking}
+            title={t("terminal.reader.modelHint")}
+          >
+            {modelLabel ?? t("terminal.reader.model")}
+          </button>
+        ) : modelLabel && <span className="terminal-reader-fact">{modelLabel}</span>}
+        {/* Outside Claude the effort is set on the model picker's next step,
+            so a local-model tab, which has no picker, only shows it. */}
+        {!claude && !modelPickable ? (
+          effortLabel && <span className="terminal-reader-fact">{t("terminal.reader.effort", { effort: effortLabel })}</span>
+        ) : (effortLabel || claude) && (
           <button
             type="button"
             className="terminal-reader-fact-model"

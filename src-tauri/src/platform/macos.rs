@@ -22,6 +22,7 @@
 //! same pattern as `sysstat.rs`'s libproc backend; no new crates).
 
 use std::ffi::c_void;
+use app_core::sync::LockExt;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -350,8 +351,7 @@ impl WorkspaceBackend for MacBackend {
         // never actually hidden.
         let pid = self
             .state
-            .lock()
-            .unwrap()
+            .lock_ok()
             .parked_pid(window_id)
             .or_else(|| self.owner_of(window_id).map(|(pid, _)| pid));
         if let Some(pid) = pid {
@@ -359,7 +359,7 @@ impl WorkspaceBackend for MacBackend {
                 self.unhide_pid(pid);
             }
         }
-        self.state.lock().unwrap().unmark_parked(window_id);
+        self.state.lock_ok().unmark_parked(window_id);
         Ok(())
     }
 
@@ -374,7 +374,7 @@ impl WorkspaceBackend for MacBackend {
         if pid == self.self_pid {
             return Ok(());
         }
-        if !self.state.lock().unwrap().is_parkable(window_id)
+        if !self.state.lock_ok().is_parkable(window_id)
             && is_protected_owner_name(&owner_name)
         {
             return Ok(());
@@ -384,7 +384,7 @@ impl WorkspaceBackend for MacBackend {
             return Ok(()); // not an application (daemon) or already gone
         }
         let _ = msg_send0(app, sel(c"hide"));
-        self.state.lock().unwrap().mark_parked(window_id, pid);
+        self.state.lock_ok().mark_parked(window_id, pid);
         Ok(())
     }
 
@@ -395,19 +395,19 @@ impl WorkspaceBackend for MacBackend {
     }
 
     fn set_parkable(&self, window_id: u64) {
-        self.state.lock().unwrap().add_parkable(window_id);
+        self.state.lock_ok().add_parkable(window_id);
     }
 
     fn unset_parkable(&self, window_id: u64) {
-        self.state.lock().unwrap().remove_parkable(window_id);
+        self.state.lock_ok().remove_parkable(window_id);
     }
 
     fn set_main_window_id(&self, window_id: u64) {
-        self.state.lock().unwrap().set_main(window_id);
+        self.state.lock_ok().set_main(window_id);
     }
 
     fn cleanup(&self) -> Result<(), String> {
-        let mut cleaned_up = self.cleaned_up.lock().unwrap();
+        let mut cleaned_up = self.cleaned_up.lock_ok();
         if *cleaned_up {
             return Ok(());
         }
@@ -416,7 +416,7 @@ impl WorkspaceBackend for MacBackend {
 
         // Unhide exactly the apps Tabtivity hid (dedup by pid — several tracked
         // windows can share one app, and unhide is app-granular anyway).
-        let parked = self.state.lock().unwrap().drain_parked();
+        let parked = self.state.lock_ok().drain_parked();
         let mut seen = std::collections::HashSet::new();
         for (_window_id, pid) in parked {
             if pid != self.self_pid && seen.insert(pid) {

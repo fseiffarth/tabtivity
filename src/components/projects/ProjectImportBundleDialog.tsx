@@ -43,6 +43,7 @@ export function ProjectImportBundleDialog({
   const [restoreSession, setRestoreSession] = useState(true);
   const [restoreTime, setRestoreTime] = useState(true);
   const [joinBoxes, setJoinBoxes] = useState(true);
+  const [restoreAgentHistory, setRestoreAgentHistory] = useState(true);
   const [busy, setBusy] = useState(false);
   const modalRef = useModalFocus(() => { if (!busy) onClose(); });
   const [error, setError] = useState("");
@@ -93,6 +94,7 @@ export function ProjectImportBundleDialog({
             restoreSession,
             restoreTime,
             joinBoxes,
+            restoreAgentHistory,
           },
         },
       );
@@ -156,6 +158,14 @@ export function ProjectImportBundleDialog({
             </p>
             {info.contents.rebuildableSkipped && (
               <p className="settings-help">{t("transfer.note.rebuildableSkipped")}</p>
+            )}
+            {(info.contents.skipped ?? 0) > 0 && (
+              <p className="project-dialog-error">
+                {t("transfer.bundleSkipped", { count: String(info.contents.skipped) })}
+              </p>
+            )}
+            {info.contents.mirrorFromHost && (
+              <p className="settings-help">{t("transfer.bundleFromHost")}</p>
             )}
             {!info.contents.gitHistory && !info.remote && (
               <p className="settings-help">{t("transfer.note.noGitHistory")}</p>
@@ -229,6 +239,21 @@ export function ProjectImportBundleDialog({
               />
             </label>
 
+            {info.contents.agentHistory && (
+              <label className="container-settings-toggle">
+                <span>
+                  {t("transfer.restoreAgentHistory")} <UntestedTag id="transfer.agentHistory" />
+                  <span className="settings-help">{t("transfer.restoreAgentHistoryHelp")}</span>
+                </span>
+                <Toggle
+                  checked={restoreAgentHistory}
+                  aria-label={t("transfer.restoreAgentHistory")}
+                  onChange={(e) => setRestoreAgentHistory(e.target.checked)}
+                  size="sm"
+                />
+              </label>
+            )}
+
             {info.boxNames.length > 0 && (
               <label className="container-settings-toggle">
                 <span>
@@ -261,6 +286,11 @@ export function ProjectImportBundleDialog({
             {result.tabsRestored > 0 && (
               <p className="settings-help">
                 {t("transfer.tabsRestored", { count: String(result.tabsRestored) })}
+              </p>
+            )}
+            {result.agentFiles > 0 && (
+              <p className="settings-help">
+                {t("transfer.agentFilesRestored", { count: String(result.agentFiles) })}
               </p>
             )}
             {result.boxesJoined.length > 0 && (

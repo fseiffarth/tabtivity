@@ -21,6 +21,9 @@ import { addDays, addMinutes, datePart, daysBetween, minutesBetween, timePart } 
  *    right-clicked — so the paste is one event. Carrying `rrule`/`exdates`/
  *    `overrides` over would silently clone a whole series (and its exceptions,
  *    which are keyed to dates the copy no longer has) from one right-click.
+ *
+ * Provenance *is* copied: an event made from a mail (`from_mail`) pastes as one
+ * too, or a copy would launder the sender's words into the user's own.
  */
 export interface CalendarClipboardEntry {
   /** The event to re-create. Already stripped of identity and repetition; only
@@ -55,6 +58,8 @@ export function copyOfOccurrence(event: CalendarEvent, occ: Occurrence): Calenda
       category: occ.category,
       status: occ.status,
       alarms: occ.alarms,
+      // A copy of a mail-made event is still the sender's words.
+      ...(event.from_mail ? { from_mail: event.from_mail } : {}),
     },
     title: occ.title,
     fromSeries: occ.recurring,

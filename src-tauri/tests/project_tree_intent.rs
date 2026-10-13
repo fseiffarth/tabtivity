@@ -177,8 +177,9 @@ fn no_executable_intent_is_read_from_the_project_tree() {
 /// reduce the project id to a single component.
 #[test]
 fn the_session_dir_is_in_the_state_dir_and_is_one_component_deep() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    std::env::set_var(app_lib::app_env!("STATE_DIR"), tmp.path());
+    // The binary's shared state dir: a set_var of this test's own would move
+    // it under the other modules' tests running in parallel (tests/it.rs).
+    crate::isolated_state_dir();
 
     let state = app_lib::storage::state_dir();
     for id in [

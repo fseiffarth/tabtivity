@@ -31,7 +31,7 @@ use crate::commands::fs::{canonical_or_new, enforce_confinement};
 /// the probe resolves.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn clipboard_has_image() -> bool {
-    tauri::async_runtime::spawn_blocking(|| match arboard::Clipboard::new() {
+    app_core::rt::spawn_blocking(|| match arboard::Clipboard::new() {
         Ok(mut cb) => cb.get_image().is_ok(),
         Err(_) => false,
     })
@@ -149,22 +149,20 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
                 let _ = tx.send(Err(e.to_string()));
             }
         });
-        tauri::async_runtime::spawn_blocking(move || {
+        app_core::rt::blocking("clipboard", move || {
             rx.recv()
                 .unwrap_or_else(|_| Err("the clipboard thread ended early".to_string()))
         })
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        tauri::async_runtime::spawn_blocking(move || {
+        app_core::rt::blocking("clipboard", move || {
             let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
             cb.set_text(text).map_err(|e| e.to_string())
         })
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
     }
 }
 

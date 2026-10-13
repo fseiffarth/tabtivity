@@ -3,12 +3,13 @@ import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
-import { ApiError, listProjectFiles, searchProjectFiles, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type TabRow, type ViewerScope } from "../api";
+import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uploadProjectFile, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type TabRow, type ViewerScope } from "../api";
 import { openFileTab, readFilesPlace, rememberFilesPlace } from "../filesPlace";
 import { shareAs, useOutboxShare } from "../outboxShare";
 import { sizeLabel } from "../terminal/fileLabels";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import { OutboxViewer, type MarkupNewTab, type MarkupTarget } from "./OutboxViewer";
+import { usePhonePicks, type PickedFile } from "./phonePicks";
 
 /** One folder on the way down: its sealed token (none for the project root)
  * and the name the reader tapped. */
@@ -84,17 +85,69 @@ function failureKey(reason: unknown, fallback: TranslationKey = "mobile.files.er
   return fallback;
 }
 
+/** Why a file did not land in the folder, by the desktop's code. */
+const UPLOAD_FAILURES: Record<string, TranslationKey> = {
+  uploads_off: "mobile.files.upload.off",
+  files_off: "mobile.files.upload.off",
+  upload_refused: "mobile.files.upload.refused",
+  uploads_full: "mobile.files.upload.full",
+  file_too_large: "mobile.sendToDesktop.tooLarge",
+  empty_file: "mobile.sendToDesktop.empty",
+  project_unavailable: "mobile.projectInbox.unavailable",
+  project_not_found: "mobile.projectInbox.notShared",
+  file_not_found: "mobile.files.upload.gone",
+  files_unavailable: "mobile.files.upload.gone",
+  timeout: "mobile.sendToDesktop.timeout",
+  offline: "mobile.sendToDesktop.offline",
+};
+/** Why an Undo left the file where it is, by the desktop's code. */
+const UNDO_FAILURES: Record<string, TranslationKey> = {
+  file_not_found: "mobile.files.upload.undoGone",
+  uploads_off: "mobile.files.upload.undoOff",
+  files_off: "mobile.files.upload.undoOff",
+  timeout: "mobile.files.upload.undoRetry",
+  offline: "mobile.files.upload.undoRetry",
+};
+/** Refusals after which the folder is listed again: its Upload here (the
+ * listing's `uploads`) or the folder itself may be gone. */
+const RELIST = new Set(["uploads_off", "files_off", "upload_refused", "file_not_found", "files_unavailable"]);
+
+const codeOf = (reason: unknown) => reason instanceof ApiError ? reason.code : "";
+
+/** A pick for **Upload here**: the folder it was picked in (its token, none
+ * at the root, and its trail's names for the row), the drawer's visit to that
+ * folder (Undo is offered only while it lasts), and once it landed, the
+ * file's own name — the desktop's, which may be `name-2.pdf` — and token. */
+interface FolderUpload extends PickedFile {
+  folder?: string;
+  place: string;
+  visit: number;
+  landed?: { token: string; name: string };
+  undoing?: boolean;
+  undone?: boolean;
+  /** Why the last Undo kept the file; `undoFinal` when another try would
+   * not change that. */
+  undoFailure?: string;
+  undoFinal?: boolean;
+}
+
 /** How long typing rests before the search goes out. */
 const SEARCH_DEBOUNCE_MS = 250;
 /** The sidecar's bound on a query (`files::MAX_QUERY`, bytes). */
 const MAX_QUERY = 80;
 
 /**
- * The project's own tree, read-only (`files.rs`, #31bo): folders to walk into
- * and files to open — a picture, a PDF or a text — in the outbox's full-screen
- * viewer, with its Save and Share (a PDF then goes on to the browser's
- * viewer). The "what did the agent just write" glance without a shell.
- * Nothing here can change a file.
+ * The project's own tree (`files.rs`, #31bo): folders to walk into and files
+ * to open — a picture, a PDF or a text — in the outbox's full-screen viewer,
+ * with its Save and Share (a PDF then goes on to the browser's viewer). The
+ * "what did the agent just write" glance without a shell. Nothing here
+ * changes a file that is there.
+ *
+ * Where the desktop allows it (the listing's `uploads`), **Upload here** adds
+ * files from this phone to the folder the drawer stands in (`uploads.rs`):
+ * one after another, each under its own name, never over an existing file.
+ * A landed file's row offers Undo while the drawer stays in that folder; the
+ * desktop deletes it only while it is still unchanged.
  *
  * A file the phone's share sheet takes carries ↗ Share on its row, as an
  * outbox tile does: passing a file on to Signal or WhatsApp should not mean
@@ -162,16 +215,67 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
   const sharing = useOutboxShare(scope);
   const here = trail[trail.length - 1];
   const drawer = useRef<HTMLElement | null>(null);
+  /** Bumped to list the folder again (an upload landed or was undone). */
+  const [reload, setReload] = useState(0);
+  const relist = useCallback(() => setReload((count) => count + 1), []);
+  /** The folder the listing shows: listed again, it is not blanked first. */
+  const listed = useRef<string | null>(null);
+  /** Counts the drawer's moves between folders: an upload's Undo lasts only
+   * as long as the visit it was picked in. */
+  const [visit, setVisit] = useState(0);
+  useEffect(() => { setVisit((count) => count + 1); }, [here.token]);
+
+  const uploads = usePhonePicks<FolderUpload>({
+    testId: "project-files-upload-input",
+    tooLarge: t("mobile.sendToDesktop.tooLarge"),
+    oneByOne: true,
+    send: (file, row, settle) => uploadProjectFile(projectId, row.folder, file, row.name).then(
+      (entry) => {
+        settle({ state: "sent", landed: { token: entry.token, name: entry.name } });
+        relist();
+      },
+      (reason: unknown) => {
+        const code = codeOf(reason);
+        settle({ state: "failed", failure: t(UPLOAD_FAILURES[code] ?? "mobile.files.upload.failed") });
+        if (RELIST.has(code)) relist();
+      },
+    ),
+  });
+
+  const undo = (row: FolderUpload) => {
+    const landed = row.landed;
+    if (!landed || row.undoing) return;
+    uploads.update(row.id, { undoing: true, undoFailure: undefined });
+    void undoProjectUpload(projectId, landed.token).then(
+      () => {
+        uploads.update(row.id, { undoing: false, undone: true });
+        relist();
+      },
+      (reason: unknown) => {
+        const code = codeOf(reason);
+        const key = UNDO_FAILURES[code] ?? "mobile.files.upload.undoFailed";
+        uploads.update(row.id, { undoing: false, undoFailure: t(key), undoFinal: key !== "mobile.files.upload.undoRetry" });
+        if (RELIST.has(code)) relist();
+      },
+    );
+  };
 
   useEffect(() => {
     if (!browse) return;
     const controller = new AbortController();
-    setListing(null);
-    setFailure(null);
+    const folder = here.token ?? "";
+    if (listed.current !== folder) {
+      setListing(null);
+      setFailure(null);
+    }
+    listed.current = folder;
     void listProjectFiles(projectId, here.token, controller.signal).then(
       (next) => {
         if (controller.signal.aborted) return;
         restored.current = false;
+        // A re-list after an upload is not blanked first: a refusal it met
+        // before must not outlive this answer.
+        setFailure(null);
         setListing(next);
       },
       (reason) => {
@@ -181,11 +285,14 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
           setTrail((current) => current.slice(0, -1));
           return;
         }
+        // Nor may the listing it replaced: its `uploads` would keep Upload
+        // here on screen beside the refusal (files switched off).
+        setListing(null);
         setFailure(key);
       },
     );
     return () => controller.abort();
-  }, [projectId, here.token, browse]);
+  }, [projectId, here.token, browse, reload]);
 
   useEffect(() => {
     // The last results stay up while the next search is out, so typing does
@@ -307,6 +414,23 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
     </li>;
   }
 
+  /** One **Upload here** pick: on its way, refused, landed (with Undo while
+   * the drawer stays in its folder), or undone. */
+  function uploadRow(upload: FolderUpload) {
+    const close = <button onClick={() => uploads.dismiss(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.landed?.name ?? upload.name })}>✕</button>;
+    if (upload.state === "failed") return <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{upload.failure}</span>{close}</div>;
+    if (upload.state === "sending" || !upload.landed) return <div key={upload.id} className="inbox-upload" role="status"><strong>{upload.name}</strong><span>{t("mobile.files.upload.sending")}</span></div>;
+    const name = upload.landed.name;
+    if (upload.undone) return <div key={upload.id} className="inbox-upload" role="status"><strong>{name}</strong><span>{t("mobile.files.upload.undone")}</span>{close}</div>;
+    const canUndo = upload.visit === visit && !upload.undoFinal;
+    return <div key={upload.id} className={upload.undoFailure ? "inbox-upload error" : "inbox-upload landed"} role="status">
+      <strong>{name}</strong>
+      <span>{upload.undoFailure ?? t("mobile.files.upload.landed", { folder: upload.place })}</span>
+      {canUndo && <button disabled={upload.undoing} onClick={() => undo(upload)} aria-label={t("mobile.files.upload.undoLabel", { name })}>{t("mobile.files.upload.undo")}</button>}
+      {close}
+    </div>;
+  }
+
   /** A folded section: the desktop tree's divider, then its rows when open. */
   function section(kind: "scaffold" | "ignored", isOpen: boolean, setOpen: (open: boolean) => void, entries: ProjectFileEntry[]) {
     const scaffold = kind === "scaffold";
@@ -326,7 +450,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
     <section ref={drawer} className="option-sheet project-files" role="dialog" aria-modal="true" aria-label={menu ? label : t("mobile.files.title")} onClick={(event) => event.stopPropagation()}>
       <header>
         <button className="files-close" onClick={onClose} aria-label={t("mobile.files.close")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>
-        <h2>{menu ? label : t("mobile.files.title")} {browse && (isUntested("mobile.files.browse") || isUntested("mobile.files.share") || isUntested("mobile.files.sections") || isUntested("mobile.files.remember") || isUntested("mobile.files.search")) && <small>{t("mobile.outbox.untested")}</small>}</h2>
+        <h2>{menu ? label : t("mobile.files.title")} {browse && (isUntested("mobile.files.browse") || isUntested("mobile.files.share") || isUntested("mobile.files.sections") || isUntested("mobile.files.remember") || isUntested("mobile.files.search") || isUntested("mobile.files.upload")) && <small>{t("mobile.outbox.untested")}</small>}</h2>
         <span className="files-close" aria-hidden="true" />
       </header>
       {menu}
@@ -341,7 +465,13 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
               onClick={() => setTrail((current) => current.slice(0, index + 1))}>{crumb.name}</button>;
           })}
         </nav>}
-        <p className="sheet-note">{t("mobile.files.readOnly")}</p>
+        {!searching && listing?.uploads && <button className="new-tab-file" onClick={() => uploads.open({ folder: here.token, place: here.name, visit })}>
+          <span><strong>{t("mobile.files.upload.button")}</strong><small>{t("mobile.files.upload.hint", { folder: here.name })}</small></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
+        </button>}
+        {uploads.input}
+        {uploads.rows.map(uploadRow)}
+        <p className="sheet-note">{t(!searching && listing?.uploads ? "mobile.files.addOnly" : "mobile.files.readOnly")}</p>
         {searching ? searchFailure
           ? <p className="sheet-note error" role="alert">{t(searchFailure)}</p>
           : !found

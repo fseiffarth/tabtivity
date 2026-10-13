@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
+import { confirmOsOpen, isLauncherRefusal, showLauncherRefusal } from "../lib/openExternal";
 
 export interface TrackedWindow {
   id: string;
@@ -23,6 +24,11 @@ interface WindowsStore {
    *  Rows the backend cannot signal (pid 0: OS-default opens, hand-offs)
    *  fall back to a plain untrack — either way the row ends up gone. */
   closeApp: (id: string) => Promise<void>;
+  /** Open `path` outside the app. With no `handler` the OS (or the user's
+   *  default app for the type) picks the program, so the user is asked
+   *  first, naming the file, and a launcher or executable is refused with a
+   *  note (threat recheck gap 21, decision C2). Resolves `null` when nothing
+   *  was opened (declined or refused). */
   openFile: (
     path: string,
     handler?: string,
@@ -32,7 +38,7 @@ interface WindowsStore {
     // best-effort). Used to open an external app on the screen a file was
     // dropped onto. Omitted → the WM places the window.
     position?: { x: number; y: number },
-  ) => Promise<TrackedWindow>;
+  ) => Promise<TrackedWindow | null>;
 }
 
 export const useWindowsStore = create<WindowsStore>((set) => ({
@@ -86,16 +92,37 @@ export const useWindowsStore = create<WindowsStore>((set) => ({
   },
 
   openFile: async (path, handler, projectId, origin, position) => {
-    const win = await invoke<TrackedWindow>("open_file", {
+    const args = {
       path,
       handler: handler ?? null,
       projectId: projectId ?? null,
       origin: origin ?? null,
       x: position?.x ?? null,
       y: position?.y ?? null,
-    });
-    set((s) => ({ windows: [...s.windows, win] }));
-    return win;
+    };
+    const track = (win: TrackedWindow) => {
+      set((s) => ({ windows: [...s.windows, win] }));
+      return win;
+    };
+    if (!handler) {
+      let early: TrackedWindow | null = null;
+      const asked = await confirmOsOpen(path, async () => {
+        early = await invoke<TrackedWindow | null>("open_file", { ...args, checkOnly: true });
+        return early;
+      });
+      // A backend without `checkOnly` opened it on the check already.
+      if (asked === "opened" && early) return track(early);
+      if (asked !== "open") return null;
+    }
+    try {
+      const win = await invoke<TrackedWindow | null>("open_file", args);
+      return win ? track(win) : null;
+    } catch (err) {
+      // The file became a launcher between the check and the open.
+      if (!isLauncherRefusal(err)) throw err;
+      await showLauncherRefusal(path);
+      return null;
+    }
   },
 }));
 

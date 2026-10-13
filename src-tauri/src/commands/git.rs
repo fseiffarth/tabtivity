@@ -738,25 +738,19 @@ pub(crate) fn local_non_repo(target: Option<&RemoteTarget>, project_dir: &str) -
     target.is_none() && !Path::new(project_dir).join(".git").exists()
 }
 
-/// Run a blocking git command body on a worker thread.
-///
-/// Every git command here is genuinely blocking — `run_git` either spawns a local
-/// `git` subprocess (`.output()`) or runs `git` over SSH (`run_git_remote`, which
-/// can stall up to the SSH `ConnectTimeout`/`ServerAlive` window on an unreachable
-/// or unauthenticated host). Tauri runs a synchronous `#[command]` on the MAIN
-/// thread, so doing that work inline froze the whole window whenever a remote
-/// project's host was down (the remote-disconnect freeze). Each command is an
-/// `async` wrapper that offloads its sync body here via `spawn_blocking`, so the
-/// blocking work runs on tokio's blocking pool and the UI thread stays free. The
-/// bodies live in sibling `*_blocking` fns (kept sync, so they remain directly
-/// unit-testable without a tokio runtime).
-pub(crate) async fn run_off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| format!("git task failed: {e}"))?
-}
+// Off-thread note: why every git command runs its body through
+// `app_core::rt::try_blocking`.
+//
+// Every git command here is genuinely blocking — `run_git` either spawns a local
+// `git` subprocess (`.output()`) or runs `git` over SSH (`run_git_remote`, which
+// can stall up to the SSH `ConnectTimeout`/`ServerAlive` window on an unreachable
+// or unauthenticated host). Tauri runs a synchronous `#[command]` on the MAIN
+// thread, so doing that work inline froze the whole window whenever a remote
+// project's host was down (the remote-disconnect freeze). Each command is an
+// `async` wrapper that offloads its sync body that way, so the
+// blocking work runs on tokio's blocking pool and the UI thread stays free. The
+// bodies live in sibling `*_blocking` fns (kept sync, so they remain directly
+// unit-testable without a tokio runtime).
 
 /// Whether the `git` binary is on `PATH`. The new/import-project dialog calls
 /// this before offering a git-backed project, so a missing `git` surfaces as an
@@ -798,7 +792,7 @@ pub async fn git_status(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<GitStatus, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_status_blocking(project_dir),
         Some(selection) => git_status_blocking_selected(project_dir, Some(selection)),
     })
@@ -968,7 +962,7 @@ pub struct GitDirtyProbe {
 /// with no upstream pays the namesake lookup.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_dirty_probe(project_dir: String) -> Result<GitDirtyProbe, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         // `has_remote` is not read by the dot (see `git_status_probe`); skip it.
         let status = git_status_probe(project_dir.clone(), false)?;
         let clean = status.is_repo
@@ -1002,7 +996,7 @@ pub async fn git_repo_root(
     project_dir: String,
     rel_path: String,
 ) -> Result<Option<String>, String> {
-    run_off_thread(move || git_repo_root_blocking(project_dir, rel_path)).await
+    app_core::rt::try_blocking("git", move || git_repo_root_blocking(project_dir, rel_path)).await
 }
 
 fn git_repo_root_blocking(project_dir: String, rel_path: String) -> Result<Option<String>, String> {
@@ -1035,7 +1029,7 @@ pub async fn git_add_all(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<(), String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_add_all_blocking(project_dir),
         Some(selection) => git_add_all_blocking_selected(project_dir, Some(selection)),
     })
@@ -1063,7 +1057,7 @@ pub async fn git_generate_commit_message(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<String, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_generate_commit_message_blocking(project_dir),
         Some(selection) => {
             git_generate_commit_message_blocking_selected(project_dir, Some(selection))
@@ -1168,7 +1162,7 @@ pub async fn git_commit(
     message: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<(), String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_commit_blocking(project_dir, message),
         Some(selection) => git_commit_blocking_selected(project_dir, message, Some(selection)),
     })
@@ -1206,7 +1200,7 @@ pub async fn git_file_statuses(
     project_dir: String,
     rel_path: String,
 ) -> Result<HashMap<String, String>, String> {
-    run_off_thread(move || git_file_statuses_blocking(project_dir, rel_path)).await
+    app_core::rt::try_blocking("git", move || git_file_statuses_blocking(project_dir, rel_path)).await
 }
 
 fn git_file_statuses_blocking(
@@ -1410,7 +1404,7 @@ fn git_file_statuses_blocking(
 /// Stages a specific path (file or directory) via `git add`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_add_path(project_dir: String, rel_path: String) -> Result<(), String> {
-    run_off_thread(move || git_add_path_blocking(project_dir, rel_path)).await
+    app_core::rt::try_blocking("git", move || git_add_path_blocking(project_dir, rel_path)).await
 }
 
 fn git_add_path_blocking(project_dir: String, rel_path: String) -> Result<(), String> {
@@ -1637,7 +1631,7 @@ pub async fn git_unpushed_commits(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<Vec<String>, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_unpushed_commits_blocking(project_dir),
         Some(selection) => git_unpushed_commits_blocking_selected(project_dir, Some(selection)),
     })
@@ -1722,7 +1716,7 @@ pub async fn git_push(
     project_id: Option<String>,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         if worktree.is_none() {
             return git_push_blocking(project_dir, project_id);
         }
@@ -1746,7 +1740,7 @@ pub async fn git_release_preview(
     project_id: Option<String>,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<crate::services::git_release::Preview, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
         if target.is_some() {
             return Err("Releases are tagged from local projects only.".to_string());
@@ -1774,7 +1768,7 @@ pub async fn git_release_tag(
     tag: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
         if target.is_some() {
             return Err("Releases are tagged from local projects only.".to_string());
@@ -1783,7 +1777,7 @@ pub async fn git_release_tag(
         let dir = Path::new(&project_dir);
         let (token, origins) = release_creds(project_id.as_deref());
         let plan =
-            crate::services::git_release::plan(dir, tag.trim(), false, token.as_deref(), &origins)
+            crate::services::git_release::plan(dir, tag.trim(), false, token.as_deref(), &origins, &|_| true)
                 .map_err(|f| f.message)?;
         crate::services::git_release::release(dir, &plan, &plan.tag, token.as_deref(), &origins)
             .map(|_| {
@@ -2078,7 +2072,7 @@ fn clone_error(stderr: &str, had_token: bool, https: bool) -> String {
 /// attached, so a prompt would be an invisible hang rather than a question.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_clone(url: String, dest: String) -> Result<String, String> {
-    run_off_thread(move || git_clone_blocking(url, dest)).await
+    app_core::rt::try_blocking("git", move || git_clone_blocking(url, dest)).await
 }
 
 pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, String> {
@@ -2188,7 +2182,7 @@ pub(crate) fn https_probe_url(raw: &str) -> Option<String> {
 /// URL.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_remote_visibility(url: String) -> Result<String, String> {
-    run_off_thread(move || git_remote_visibility_blocking(url)).await
+    app_core::rt::try_blocking("git", move || git_remote_visibility_blocking(url)).await
 }
 
 fn git_remote_visibility_blocking(url: String) -> Result<String, String> {
@@ -2265,7 +2259,7 @@ pub async fn git_log(
     skip: Option<u32>,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<Vec<GitCommit>, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_log_blocking(project_dir, limit, skip),
         Some(selection) => git_log_blocking_selected(project_dir, limit, skip, Some(selection)),
     })
@@ -2323,7 +2317,7 @@ pub async fn git_log_search(
     limit: Option<u32>,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<Vec<GitCommit>, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_log_search_blocking(project_dir, query, limit),
         Some(selection) => {
             git_log_search_blocking_selected(project_dir, query, limit, Some(selection))
@@ -2422,7 +2416,7 @@ pub async fn git_file_log(
     rel_path: String,
     limit: Option<u32>,
 ) -> Result<Vec<GitCommit>, String> {
-    run_off_thread(move || git_file_log_blocking(project_dir, rel_path, limit)).await
+    app_core::rt::try_blocking("git", move || git_file_log_blocking(project_dir, rel_path, limit)).await
 }
 
 fn git_file_log_blocking(
@@ -2462,7 +2456,7 @@ pub async fn git_file_at_rev(
     rel_path: String,
     rev: String,
 ) -> Result<String, String> {
-    run_off_thread(move || git_file_at_rev_blocking(project_dir, rel_path, rev)).await
+    app_core::rt::try_blocking("git", move || git_file_at_rev_blocking(project_dir, rel_path, rev)).await
 }
 
 fn git_file_at_rev_blocking(
@@ -2504,7 +2498,7 @@ pub async fn git_branches(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<Vec<GitBranch>, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_branches_blocking(project_dir),
         Some(selection) => git_branches_blocking_selected(project_dir, Some(selection)),
     })
@@ -2559,7 +2553,7 @@ pub async fn git_checkout(
     target: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<String, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_checkout_blocking(project_dir, target),
         Some(selection) => git_checkout_blocking_selected(project_dir, target, Some(selection)),
     })
@@ -2599,7 +2593,7 @@ pub async fn git_commit_message(
     hash: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<String, String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_commit_message_blocking(project_dir, hash),
         Some(selection) => git_commit_message_blocking_selected(project_dir, hash, Some(selection)),
     })
@@ -2636,7 +2630,7 @@ pub async fn git_reword_head(
     message: String,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<(), String> {
-    run_off_thread(move || match worktree {
+    app_core::rt::try_blocking("git", move || match worktree {
         None => git_reword_head_blocking(project_dir, message),
         Some(selection) => git_reword_head_blocking_selected(project_dir, message, Some(selection)),
     })
@@ -2678,7 +2672,7 @@ fn git_reword_head_blocking_selected(
 /// non-empty stdout as success regardless of exit status.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_diff_file(project_dir: String, rel_path: String) -> Result<String, String> {
-    run_off_thread(move || git_diff_file_blocking(project_dir, rel_path)).await
+    app_core::rt::try_blocking("git", move || git_diff_file_blocking(project_dir, rel_path)).await
 }
 
 fn git_diff_file_blocking(project_dir: String, rel_path: String) -> Result<String, String> {
@@ -2809,7 +2803,7 @@ fn parse_blame_porcelain(text: &str) -> Vec<GitBlameLine> {
 /// shared `run_git` dispatch.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_blame(project_dir: String, rel_path: String) -> Result<Vec<GitBlameLine>, String> {
-    run_off_thread(move || git_blame_blocking(project_dir, rel_path)).await
+    app_core::rt::try_blocking("git", move || git_blame_blocking(project_dir, rel_path)).await
 }
 
 fn git_blame_blocking(project_dir: String, rel_path: String) -> Result<Vec<GitBlameLine>, String> {
@@ -3231,7 +3225,7 @@ pub async fn git_worktree_list(
     site: Option<String>,
     host_id: Option<String>,
 ) -> Result<Vec<Worktree>, String> {
-    run_off_thread(move || git_worktree_list_blocking(project_dir, site, host_id)).await
+    app_core::rt::try_blocking("git", move || git_worktree_list_blocking(project_dir, site, host_id)).await
 }
 
 pub(crate) fn git_worktree_list_blocking(
@@ -3274,7 +3268,7 @@ pub async fn git_worktree_add(
     site: Option<String>,
     host_id: Option<String>,
 ) -> Result<String, String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         git_worktree_add_blocking(
             project_dir,
             path,
@@ -3419,7 +3413,7 @@ pub async fn git_worktree_remove(
     site: Option<String>,
     host_id: Option<String>,
 ) -> Result<(), String> {
-    run_off_thread(move || git_worktree_remove_blocking(project_dir, path, force, site, host_id))
+    app_core::rt::try_blocking("git", move || git_worktree_remove_blocking(project_dir, path, force, site, host_id))
         .await
 }
 
@@ -3466,7 +3460,7 @@ pub async fn git_worktree_lock(
     site: Option<String>,
     host_id: Option<String>,
 ) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref());
         if !valid_positional_path(&path) {
             return Err(format!("'{path}' is not a valid worktree path"));
@@ -3501,7 +3495,7 @@ pub async fn git_worktree_unlock(
     site: Option<String>,
     host_id: Option<String>,
 ) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref());
         if !valid_positional_path(&path) {
             return Err(format!("'{path}' is not a valid worktree path"));
@@ -3523,7 +3517,7 @@ pub async fn git_worktree_prune(
     site: Option<String>,
     host_id: Option<String>,
 ) -> Result<(), String> {
-    run_off_thread(move || {
+    app_core::rt::try_blocking("git", move || {
         let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref());
         let out = run_worktree_git(&ctx, &["worktree", "prune"])?;
         if !out.status.success() {
@@ -3569,18 +3563,18 @@ pub struct DetectedOrigin {
 /// repos pushed to a host — including ones published outside Tabtivity's own
 /// Publish flow (the sole writer of the `remote-*` `git_type`).
 ///
-/// Offloaded via [`run_off_thread`]: the body forks one `git remote get-url`
+/// Offloaded via `app_core::rt::try_blocking`: the body forks one `git remote get-url`
 /// per local project, and as a sync command that whole loop ran on the main
 /// thread, stalling the window for N process spawns on every call.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detect_git_providers() -> Result<HashMap<String, DetectedOrigin>, String> {
-    run_off_thread(detect_git_providers_blocking).await
+    app_core::rt::try_blocking("git", detect_git_providers_blocking).await
 }
 
 fn detect_git_providers_blocking() -> Result<HashMap<String, DetectedOrigin>, String> {
     use serde_json::Value;
 
-    let path = crate::storage::state_dir().join("projects.json");
+    let path = crate::storage::projects_path();
     if !path.exists() {
         return Ok(HashMap::new());
     }
@@ -3602,22 +3596,16 @@ fn detect_git_providers_blocking() -> Result<HashMap<String, DetectedOrigin>, St
         }
         // The project's working directory. Legacy entries (created before
         // `directory` was persisted — e.g. the self-hosting checkout's own
-        // entry) omit the key; fall back to `local_file`'s parent, which is
-        // always `<directory>/project.json`, so they still get sniffed/badged.
-        let dir: String = match entry.extra.get("directory") {
-            Some(Value::String(d)) => d.clone(),
-            _ => match Path::new(&entry.local_file).parent() {
-                Some(p) => p.to_string_lossy().into_owned(),
-                None => continue,
-            },
-        };
-        if !Path::new(&dir).join(".git").exists() {
+        // entry) omit the key; `directory()` falls back to `local_file`'s
+        // folder, so they still get sniffed/badged.
+        let Some(dir) = entry.directory() else { continue };
+        if !Path::new(dir).join(".git").exists() {
             continue;
         }
         // Bounded (#2349), in the folder rather than `-C` so the FIFO pre-check
         // sees it: one hung `config` read must not hold the whole sweep.
         let mut cmd = crate::paths::command_no_window("git");
-        cmd.args(["remote", "get-url", "origin"]).current_dir(&dir);
+        cmd.args(["remote", "get-url", "origin"]).current_dir(dir);
         let output = crate::services::git_bounded::output_within(cmd, std::time::Duration::from_secs(15));
         let Ok(output) = output else { continue };
         if !output.status.success() {

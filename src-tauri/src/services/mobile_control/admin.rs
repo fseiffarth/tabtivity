@@ -1,8 +1,9 @@
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex},
 };
+use app_core::sync::LockExt;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -50,7 +51,7 @@ fn cancel_left_behind(context: &AdminContext, why: &str) {
 /// answers changes the reply.
 /// `allowed` narrows it to the phones an agent notice's scope is open to.
 fn queue_notice(auth: &Arc<Mutex<AuthStore>>, notice: &Notice, allowed: Option<&[String]>) -> AdminResponse {
-    let deliveries = match auth.lock().unwrap_or_else(PoisonError::into_inner).push_deliveries(notice, allowed) {
+    let deliveries = match auth.lock_ok().push_deliveries(notice, allowed) {
         Ok(deliveries) => deliveries,
         Err(message) => return AdminResponse::Error { message },
     };
@@ -59,7 +60,7 @@ fn queue_notice(auth: &Arc<Mutex<AuthStore>>, notice: &Notice, allowed: Option<&
             let auth = auth.clone();
             runtime.spawn(async move {
                 for endpoint in push::send(deliveries).await {
-                    auth.lock().unwrap_or_else(PoisonError::into_inner).push_lapse_endpoint(&endpoint);
+                    auth.lock_ok().push_lapse_endpoint(&endpoint);
                 }
             });
         }
@@ -186,15 +187,15 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
             origin: context.origin.clone(),
             version: Some(env!("CARGO_PKG_VERSION").into()),
         },
-        Ok(AdminRequest::PairingCode) => match auth.lock().unwrap_or_else(PoisonError::into_inner).create_pairing_code() {
+        Ok(AdminRequest::PairingCode) => match auth.lock_ok().create_pairing_code() {
             Ok((code, expires_at)) => AdminResponse::PairingCode { code: crate::services::server::routed_pairing_code(&code), expires_at },
             Err(message) => AdminResponse::Error { message },
         },
         Ok(AdminRequest::Devices) => AdminResponse::Devices {
-            devices: auth.lock().unwrap_or_else(PoisonError::into_inner).devices(),
+            devices: auth.lock_ok().devices(),
         },
         Ok(AdminRequest::Revoke { device_id }) => {
-            let revoked = auth.lock().unwrap_or_else(PoisonError::into_inner).revoke(&device_id);
+            let revoked = auth.lock_ok().revoke(&device_id);
             match revoked {
                 Ok(()) => {
                     cancel_left_behind(context, "after a revoke");
@@ -204,15 +205,14 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
             }
         }
         Ok(AdminRequest::SetHiddenSections { device_id, sections }) => match auth
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .lock_ok()
             .set_hidden_sections(&device_id, &sections)
         {
             Ok(()) => AdminResponse::Ok,
             Err(message) => AdminResponse::Error { message },
         },
         Ok(AdminRequest::ForgetAll) => {
-            let forgotten = auth.lock().unwrap_or_else(PoisonError::into_inner).forget_all();
+            let forgotten = auth.lock_ok().forget_all();
             match forgotten {
                 Ok(()) => {
                     cancel_left_behind(context, "after Lock down");
@@ -516,6 +516,10 @@ pub async fn admin_call(_: &Path, _: &AdminRequest) -> Result<AdminResponse, Str
 /// listening, or no answer inside the deadline.
 const DESKTOP_UNAVAILABLE: &str = "desktop_unavailable";
 
+/// The error code [`desktop_call`] answers a request with no id with.
+#[cfg(any(unix, windows))]
+const NO_REQUEST_ID: &str = "no_request_id";
+
 /// Ask the desktop window over its control socket.
 ///
 /// **Version skew.** `DesktopRequest` denies unknown fields, so a window
@@ -535,6 +539,16 @@ pub async fn desktop_call(
     socket: &Path,
     request: &DesktopRequest,
 ) -> Result<DesktopResponse, String> {
+    // An empty id is one the RNG could not mint (`host::new_request_id`). Sent,
+    // it would share the window's pending slot with any other such request, so
+    // it is answered here as an error — not as `desktop_unavailable`, which
+    // would send the caller down the headless path behind a live window.
+    if request.request_id().is_empty() {
+        return Ok(DesktopResponse::Error {
+            code: NO_REQUEST_ID.into(),
+            message: "No request id could be drawn from the system's randomness".into(),
+        });
+    }
     let first = desktop_call_once(socket, request).await;
     match &first {
         Err(why) if why != DESKTOP_UNAVAILABLE => match without_device_id(request) {
@@ -655,6 +669,21 @@ pub fn io_other(message: String) -> io::Error {
 #[cfg(all(test, unix))]
 mod tests {
     use super::desktop_reachable;
+
+    #[tokio::test]
+    async fn a_request_without_an_id_is_refused_before_it_is_sent() {
+        use super::{desktop_call, DesktopRequest, DesktopResponse, NO_REQUEST_ID};
+        let dir = tempfile::tempdir().expect("control dir");
+        // Nothing listens: a sent request would come back `desktop_unavailable`.
+        let socket = dir.path().join("desktop-control.sock");
+        let empty = DesktopRequest::Activity { request_id: String::new() };
+        match desktop_call(&socket, &empty).await {
+            Ok(DesktopResponse::Error { code, .. }) => assert_eq!(code, NO_REQUEST_ID),
+            other => panic!("expected the no-id refusal, got {other:?}"),
+        }
+        let minted = DesktopRequest::Activity { request_id: "abc".into() };
+        assert!(desktop_call(&socket, &minted).await.is_err(), "an id is sent and finds no desktop");
+    }
 
     #[tokio::test]
     async fn a_desktop_is_reachable_only_while_something_listens_on_its_socket() {

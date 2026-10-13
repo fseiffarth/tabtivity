@@ -1,4 +1,5 @@
 use crate::gpustat::GpuSample;
+use app_core::sync::LockExt;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,19 +61,18 @@ fn reuse_within<T: Clone>(
 pub async fn debug_app_resource_usage(gpu: Option<bool>) -> Result<AppResourceUsage, String> {
     use crate::sysstat;
 
-    let (pids, t0) = app_core::rt::spawn_blocking(|| {
+    let (pids, t0) = app_core::rt::blocking("debug", || {
         let root = app_process_root(std::process::id());
         // Relaxed reuse: this is polled every 5 s for a header number.
         let pids = sysstat::descendant_pids_relaxed(&[root]);
         let t0 = sysstat::sum_jiffies(&pids);
         (pids, t0)
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
     let interval = std::time::Duration::from_millis(300);
     tokio::time::sleep(interval).await;
     let with_gpu = gpu.unwrap_or(true);
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::blocking("debug", move || {
         let t1 = sysstat::sum_jiffies(&pids);
         let busy_secs = t1.saturating_sub(t0) as f64 / sysstat::clk_tck() as f64;
         let cpu_percent = busy_secs / interval.as_secs_f64() * 100.0;
@@ -95,7 +95,6 @@ pub async fn debug_app_resource_usage(gpu: Option<bool>) -> Result<AppResourceUs
         }
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// The short commit this binary was compiled from (see `build.rs`), shown
@@ -125,9 +124,8 @@ pub async fn dev_build_status() -> Option<crate::services::dev_build::DevBuildSt
 /// (dev)" auto-builds, from the dev-build chip's switch. User-clicked only.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_build_set_paused(paused: bool) -> Result<(), String> {
-    app_core::rt::spawn_blocking(move || crate::services::dev_build::set_paused(paused))
+    app_core::rt::try_blocking("debug", move || crate::services::dev_build::set_paused(paused))
         .await
-        .map_err(|e| e.to_string())?
 }
 
 /// Build HEAD once while the background "Tabtivity (dev)" auto-builds stay
@@ -135,9 +133,7 @@ pub async fn dev_build_set_paused(paused: bool) -> Result<(), String> {
 /// snapshot already is HEAD. User-clicked only.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_build_now() -> Result<(), String> {
-    app_core::rt::spawn_blocking(crate::services::dev_build::build_now)
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("debug", crate::services::dev_build::build_now).await
 }
 
 /// Close this frozen "Tabtivity (dev)" window and reopen it on the newest
@@ -151,9 +147,7 @@ pub async fn dev_build_now() -> Result<(), String> {
 pub async fn dev_build_relaunch(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(feature = "desktop")]
     use tauri::Manager;
-    app_core::rt::spawn_blocking(crate::services::dev_build::spawn_relauncher)
-        .await
-        .map_err(|e| e.to_string())??;
+    app_core::rt::try_blocking("debug", crate::services::dev_build::spawn_relauncher).await?;
     match app.get_webview_window("main") {
         Some(main) => main.close().map_err(|e| e.to_string()),
         None => {
@@ -167,17 +161,13 @@ pub async fn dev_build_relaunch(app: tauri::AppHandle) -> Result<(), String> {
 /// dev build, which hides the view (see `services::dev_todo`).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_todo_groups() -> Result<Option<Vec<crate::services::dev_todo::TodoGroup>>, String> {
-    app_core::rt::spawn_blocking(crate::services::dev_todo::list)
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::blocking("debug", crate::services::dev_todo::list).await?
         .transpose()
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_todo_read(name: String) -> Result<String, String> {
-    app_core::rt::spawn_blocking(move || crate::services::dev_todo::read(&name))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("debug", move || crate::services::dev_todo::read(&name)).await
 }
 
 /// A checkbox click's write-back: lands only while the file still reads
@@ -188,11 +178,10 @@ pub async fn dev_todo_write(
     expected: String,
     next: String,
 ) -> Result<crate::services::dev_todo::WriteOutcome, String> {
-    app_core::rt::spawn_blocking(move || {
+    app_core::rt::try_blocking("debug", move || {
         crate::services::dev_todo::write(&name, &expected, &next)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Resident size (KiB) of the largest webview *renderer* process under the app.
@@ -348,7 +337,7 @@ fn renderer_rss(app: &tauri::AppHandle) -> Vec<RendererRss> {
     pids.sort_unstable();
 
     let claims: Vec<(u32, String)> = {
-        let mut guard = RENDERER_CLAIMS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = RENDERER_CLAIMS.lock_ok();
         guard.retain(|(pid, _)| pids.contains(pid));
         guard.clone()
     };
@@ -386,9 +375,7 @@ fn renderer_rss(app: &tauri::AppHandle) -> Vec<RendererRss> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn webview_renderer_claim(window: tauri::WebviewWindow, pid: u32) -> Result<(), String> {
     let label = window.label().to_string();
-    app_core::rt::spawn_blocking(move || claim_renderer(label, pid))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::try_blocking("debug", move || claim_renderer(label, pid)).await
 }
 
 fn claim_renderer(label: String, pid: u32) -> Result<(), String> {
@@ -399,7 +386,7 @@ fn claim_renderer(label: String, pid: u32) -> Result<(), String> {
     if !live {
         return Err(format!("pid {pid} is not a webview renderer of this app"));
     }
-    let mut guard = RENDERER_CLAIMS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = RENDERER_CLAIMS.lock_ok();
     guard.retain(|(p, l)| *p != pid && *l != label);
     guard.push((pid, label));
     Ok(())
@@ -444,7 +431,7 @@ pub fn webview_renderer_restart(window: tauri::WebviewWindow) -> Result<(), Stri
     let label = window.label().to_string();
     {
         let now = std::time::Instant::now();
-        let mut guard = RENDERER_RESTARTS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = RENDERER_RESTARTS.lock_ok();
         if let Some((_, at)) = guard.iter().find(|(l, _)| *l == label) {
             if now.duration_since(*at) < RENDERER_RESTART_COOLDOWN {
                 return Err(format!(

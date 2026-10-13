@@ -15,6 +15,7 @@
 //! through the shims in `agent_bin` (`--agent-shim`).
 
 use std::collections::{HashMap, HashSet};
+use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -249,17 +250,10 @@ pub fn decide(
     FenceDecision::Fenced { roots }
 }
 
+/// The project's folder ([`ProjectEntry::directory`]); `None` leaves the
+/// project without a fence root, so the callers fail closed.
 pub(crate) fn entry_directory(entry: &ProjectEntry) -> Option<PathBuf> {
-    if let Some(dir) = entry.extra.get("directory").and_then(|v| v.as_str()) {
-        if !dir.trim().is_empty() {
-            return Some(PathBuf::from(dir.trim()));
-        }
-    }
-    entry
-        .local_file
-        .strip_suffix("/project.json")
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+    entry.directory().map(PathBuf::from)
 }
 
 pub(crate) fn entry_mirror(entry: &ProjectEntry) -> Option<PathBuf> {
@@ -362,7 +356,7 @@ pub fn attach_roots(
 fn read_lists() -> (BoxesList, ProjectsList) {
     let boxes = storage::read_json(&storage::state_dir().join("boxes.json")).unwrap_or_default();
     let projects =
-        storage::read_json(&storage::state_dir().join("projects.json")).unwrap_or_default();
+        storage::read_json(&storage::projects_path()).unwrap_or_default();
     (boxes, projects)
 }
 
@@ -416,7 +410,7 @@ pub fn root_project_read_only_paths(
 /// read of a setting or a project list that may have changed in between.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn root_project_read_only_paths_for(tab: &str, scope_id: &str) -> Vec<String> {
-    let mut grants = root_project_grants().lock().unwrap_or_else(|p| p.into_inner());
+    let mut grants = root_project_grants().lock_ok();
     grants.remove(tab);
     if scope_id != ROOT_SCOPE {
         return Vec::new();
@@ -440,7 +434,7 @@ fn root_project_grants() -> &'static Mutex<HashMap<String, Vec<PathBuf>>> {
 /// `None` on a platform with no fence wrapper (the spawn path treats an
 /// unfenced root agent separately).
 pub fn take_root_projects_granted(tab: &str) -> Option<Vec<PathBuf>> {
-    root_project_grants().lock().unwrap_or_else(|p| p.into_inner()).remove(tab)
+    root_project_grants().lock_ok().remove(tab)
 }
 
 /// State-backed roots used by spawn.  Unknown project/box scopes return `None`
@@ -470,7 +464,7 @@ pub fn roots_for_scope(scope_id: Option<&str>, local_only: bool) -> Option<Vec<P
 }
 
 fn settings() -> crate::schema::Settings {
-    storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default()
+    storage::read_json(&storage::settings_path()).unwrap_or_default()
 }
 
 /// Whether a local agent started now runs fenced on this machine: a fence
@@ -679,7 +673,7 @@ fn command_search_dirs(opts: &PtyOptions) -> Vec<PathBuf> {
 /// next tab start without restarting Tabtivity. Serialize probes across callers.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn probe_until_available(cache: &Mutex<bool>, probe: impl FnOnce() -> bool) -> bool {
-    let mut available = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let mut available = cache.lock_ok();
     if !*available {
         *available = probe();
     }
@@ -1879,6 +1873,9 @@ struct LiveSpawn {
     seq: u64,
     /// The fence scope it runs in; `None` for an unfenced tab.
     scope_id: Option<String>,
+    /// The `VIBE_HOME` it was spawned with ([`note_vibe_home`]): a local
+    /// model's conversations are not cleared while a tab of it runs.
+    vibe_home: Option<PathBuf>,
 }
 
 fn tab_spawns() -> &'static Mutex<HashMap<String, TabSpawns>> {
@@ -1902,8 +1899,7 @@ pub fn next_spawn_seq() -> u64 {
 pub fn begin_spawn(tab_id: &str) -> u64 {
     let seq = next_spawn_seq();
     tab_spawns()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .lock_ok()
         .entry(tab_id.to_string())
         .or_default()
         .latest = seq;
@@ -1915,13 +1911,37 @@ pub fn begin_spawn(tab_id: &str) -> u64 {
 /// `false` when it was torn down already or a newer spawn has begun, and then
 /// nothing is recorded.
 pub fn register_tab(tab_id: &str, scope_id: Option<&str>, seq: u64) -> bool {
-    match tab_spawns().lock().unwrap_or_else(|e| e.into_inner()).get_mut(tab_id) {
+    match tab_spawns().lock_ok().get_mut(tab_id) {
         Some(spawns) if spawns.latest == seq => {
-            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string) });
+            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string), vibe_home: None });
             true
         }
         _ => false,
     }
+}
+
+/// Record the `VIBE_HOME` the live spawn `seq` of `tab_id` runs with
+/// (`launch_prep`'s commit, after [`register_tab`]). Nothing when `seq` is not
+/// the live spawn.
+pub fn note_vibe_home(tab_id: &str, seq: u64, home: &Path) {
+    let mut map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(live) = map.get_mut(tab_id).and_then(|s| s.live.as_mut()).filter(|l| l.seq == seq) {
+        live.vibe_home = Some(home.to_path_buf());
+    }
+}
+
+/// The tabs whose live process was spawned with `VIBE_HOME` = `home`: a
+/// local model's tabs, which "Clear conversations"
+/// (`commands::ollama::clear_local_model_conversations`) waits for.
+pub fn live_tabs_in_vibe_home(home: &Path) -> Vec<String> {
+    let map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+    let mut tabs: Vec<String> = map
+        .iter()
+        .filter(|(_, s)| s.live.as_ref().and_then(|l| l.vibe_home.as_deref()) == Some(home))
+        .map(|(id, _)| id.clone())
+        .collect();
+    tabs.sort();
+    tabs
 }
 
 /// Whether spawn `seq` is still the newest one begun for `tab_id` and not torn
@@ -1930,8 +1950,7 @@ pub fn register_tab(tab_id: &str, scope_id: Option<&str>, seq: u64) -> bool {
 /// tab's grants.
 pub fn is_current_spawn(tab_id: &str, seq: u64) -> bool {
     tab_spawns()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .lock_ok()
         .get(tab_id)
         .is_some_and(|s| s.latest == seq)
 }
@@ -1942,7 +1961,7 @@ pub fn is_current_spawn(tab_id: &str, seq: u64) -> bool {
 /// binding as well (`launch_prep::SpawnGeneration`), as no later kill finds a
 /// PTY to tear down.
 pub fn abandon_spawn(tab_id: &str, seq: u64) -> bool {
-    let mut map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+    let mut map = tab_spawns().lock_ok();
     let Some(spawns) = map.get_mut(tab_id) else { return false };
     if spawns.latest != seq {
         return false;
@@ -2062,7 +2081,7 @@ pub fn one_shot_command(_scope_id: &str, _cmd: &str, _args: &[String], _cwd: &Pa
 /// current: no spawn of it is in flight.
 pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
     let removed = {
-        let mut map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = tab_spawns().lock_ok();
         match map.get_mut(tab_id) {
             None => None,
             Some(spawns) if spawns.latest == seq => map.remove(tab_id).and_then(|s| s.live),
@@ -2109,13 +2128,13 @@ fn host_agent_tabs() -> &'static Mutex<HashMap<String, HostAgentTab>> {
 }
 
 pub fn track_host_agent_tab(tab_id: &str, tab: HostAgentTab) {
-    host_agent_tabs().lock().unwrap().insert(tab_id.to_string(), tab);
+    host_agent_tabs().lock_ok().insert(tab_id.to_string(), tab);
 }
 
 /// A respawn under the same id that no longer runs an agent on the host (it
 /// moved into a container, or became a shell) must stop being counted.
 pub fn untrack_host_agent_tab(tab_id: &str) {
-    host_agent_tabs().lock().unwrap().remove(tab_id);
+    host_agent_tabs().lock_ok().remove(tab_id);
 }
 
 /// What one tab's agent process turned out to be.
@@ -2190,8 +2209,7 @@ pub fn parse_tmux_pane_pids(out: &str) -> HashMap<String, u32> {
 #[cfg(target_os = "linux")]
 pub fn live_unfenced_by_scope(pid_of: impl Fn(&str) -> Option<u32>) -> HashMap<String, u32> {
     let tabs: Vec<(String, HostAgentTab)> = host_agent_tabs()
-        .lock()
-        .unwrap()
+        .lock_ok()
         .iter()
         .map(|(id, tab)| (id.clone(), tab.clone()))
         .collect();
@@ -2347,6 +2365,24 @@ mod tests {
         abandon_spawn(tab, only);
         assert!(!crate::services::api_proxy::token_live(&token));
         assert!(!register_tab(tab, None, only));
+    }
+
+    #[test]
+    fn a_live_spawn_names_its_vibe_home_until_it_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("vibe_local").join("llama3");
+        let tab = "gen-p:vibe-home";
+        let seq = begin_spawn(tab);
+        note_vibe_home(tab, seq, &home);
+        assert!(live_tabs_in_vibe_home(&home).is_empty(), "not live before the commit");
+        assert!(register_tab(tab, None, seq));
+        note_vibe_home(tab, seq + 1_000_000, &home);
+        assert!(live_tabs_in_vibe_home(&home).is_empty(), "another spawn's note is ignored");
+        note_vibe_home(tab, seq, &home);
+        assert_eq!(live_tabs_in_vibe_home(&home), vec![tab.to_string()]);
+        assert!(live_tabs_in_vibe_home(&dir.path().join("vibe_local").join("other")).is_empty());
+        assert!(on_tab_gone(tab, seq));
+        assert!(live_tabs_in_vibe_home(&home).is_empty());
     }
 
     #[test]
