@@ -358,7 +358,7 @@ gtk = { version = "0.18", optional = true }
 # Same crate/version wry uses; needed to hook `ProcessFailed` on the raw
 # `ICoreWebView2` for the webview crash reporter (the WebView2 spelling of the
 # `web-process-terminated` hook the Linux build takes from `webkit2gtk`).
-webview2-com = "0.38"
+webview2-com = "0.39"
 windows = { version = "0.61", features = [
     # Handle-relative, no-reparse project file reads for the phone browser.
     "Wdk_Foundation",
