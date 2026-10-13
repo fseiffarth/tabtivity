@@ -164,9 +164,9 @@ fi
 "$SRC/scripts/assert-embedded-frontend.sh" "$RAW_BIN"
 
 VERSION="$(node -p "require('$SRC/package.json').version")"
-COMMIT="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+COMMIT="$(dev_git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 DIRTY=""
-if [ "$MODE" = tree ] && ! git -C "$ROOT" diff --quiet HEAD -- 2>/dev/null; then DIRTY="+local"; fi
+if [ "$MODE" = tree ] && ! dev_git -C "$ROOT" diff --quiet HEAD -- 2>/dev/null; then DIRTY="+local"; fi
 
 # Record that THIS artifact passed that check, rather than re-running it at
 # launch time against a dist/ that has moved on since (four days of correct

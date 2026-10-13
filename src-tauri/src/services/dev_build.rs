@@ -1159,6 +1159,13 @@ dev_verified_lookup "$LIST" "$SHA" >/dev/null && echo kept"#,
             let bare = package_dev.lines().any(|l| l.trim_start().starts_with("git -C") && l.contains(verb));
             assert!(hardened && !bare, "{verb}");
         }
+        // And no other git call there runs bare: `diff` against the working
+        // tree starts the repo's `core.fsmonitor`, on the host.
+        let bare: Vec<&str> = package_dev
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && l.contains("git -C") && !l.contains("dev_git -C"))
+            .collect();
+        assert!(bare.is_empty(), "{bare:?}");
     }
 
     #[test]
