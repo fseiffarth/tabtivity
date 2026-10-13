@@ -55,7 +55,11 @@ event.
 
 A CalDAV server address must start with `https://`. Plain `http://` is refused,
 because your password and calendar would cross the network unencrypted; for a
-server on your own machine, put a TLS proxy in front of it. An edit that cannot
+server on your own machine, put a TLS proxy in front of it. Your password goes
+only to the server you entered and to other `https://` hosts under the same
+domain (a provider may answer from `p42-caldav.example.com` when you typed
+`caldav.example.com`). If you change an account from `http://` to `https://`,
+its calendars on the same server move along. An edit that cannot
 be sent right away (offline, a server error) stays on this computer and goes out
 with the next sync. If the server changed or deleted the same entry meanwhile,
 you are asked which version to keep.

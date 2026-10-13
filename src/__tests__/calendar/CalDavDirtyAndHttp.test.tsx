@@ -369,3 +369,150 @@ describe("plain http:// CalDAV is refused (E2b)", () => {
     expect(caldavErrorText("timed out", en)).toBe("timed out");
   });
 });
+
+describe("'Keep mine' on a row with no resource address (step 7 review)", () => {
+  const MINTED = `${HREF}n-uid.ics`;
+  const NEW: CalendarEvent = {
+    id: "n1",
+    calendar_id: "cal-1",
+    uid: "n-uid",
+    start: "2026-08-04T09:00",
+    end: "2026-08-04T10:00",
+    all_day: false,
+    title: "planning (mine)",
+    caldav_dirty: true,
+    rev: 2,
+  };
+  const question = (over: Partial<Parameters<ReturnType<typeof useCalDavStore.getState>["resolveKeepMine"]>[0]> = {}) => ({
+    rowId: "n1",
+    kind: "event" as const,
+    accountId: "acc-1",
+    href: HREF,
+    resourceHref: "",
+    title: "planning (mine)",
+    op: "upsert" as const,
+    at: "2026-08-04T09:00",
+    ...over,
+  });
+  const pushArgs = () =>
+    invoke.mock.calls.filter((c) => c[0] === "caldav_push").map((c) => c[1] as Record<string, unknown>);
+
+  it("a lost-reply create overwrites its own server copy and drops the imported duplicate", async () => {
+    // The create landed but its reply was lost; the retry met it (`412`), and
+    // the sync imports the server's copy as a second row under the same UID.
+    const dup: CalendarEvent = { ...NEW, id: "n2", title: "planning", caldav_dirty: undefined, caldav_href: MINTED, caldav_etag: '"3"' };
+    seed(account(), [NEW]);
+    const conflict = question();
+    useCalDavStore.setState({ conflicts: [conflict] });
+    backend({
+      caldav_apply: () => ({ calendars: [CAL], events: [NEW, dup], tasks: [], caldav_kept: [] }),
+      caldav_resource_etag: (args) => {
+        expect(args.resourceHref).toBe(MINTED);
+        return '"3"';
+      },
+      caldav_push: () => ({ href: MINTED, etag: '"4"', conflict: false, gone: false, dirty: false }),
+    });
+    await useCalDavStore.getState().resolveKeepMine(conflict);
+
+    const pushes = pushArgs();
+    expect(pushes).toHaveLength(1); // the sync's dirty pass skipped the open question
+    expect(pushes[0].resourceHref).toBe(MINTED);
+    expect(pushes[0].etag).toBe('"3"');
+    expect(String(pushes[0].ics).match(/BEGIN:VEVENT/g)).toHaveLength(1);
+    expect(String(pushes[0].ics)).toContain("planning (mine)");
+    expect(invoke.mock.calls.filter((c) => c[0] === "delete_event").map((c) => c[1])).toEqual([{ id: "n2" }]);
+    expect(commands()).not.toContain("caldav_delete");
+    const rows = useCalendarStore.getState().events;
+    expect(rows.map((e) => e.id)).toEqual(["n1"]);
+    expect(rows[0].caldav_href).toBe(MINTED);
+    expect(useCalDavStore.getState().conflicts).toHaveLength(0);
+    expect(useCalDavStore.getState().pushError).toBe("");
+  });
+
+  it("a series row the server deleted joins the resource its master was put back into", async () => {
+    const S = `${HREF}s-uid.ics`;
+    const master: CalendarEvent = { ...NEW, id: "m", uid: "s-uid", title: "series", caldav_dirty: undefined, caldav_href: S, caldav_etag: '"5"' };
+    const over: CalendarEvent = {
+      ...NEW,
+      id: "o",
+      uid: "s-uid",
+      title: "moved occurrence",
+      recurrence_id: "2026-08-11T09:00",
+      caldav_server_deleted: S,
+    };
+    seed(account(), [master, over]);
+    const conflict = question({ rowId: "o", resourceHref: S, serverDeleted: true, title: "moved occurrence" });
+    useCalDavStore.setState({ conflicts: [conflict] });
+    backend({
+      caldav_resource_etag: () => '"5"',
+      caldav_push: () => ({ href: S, etag: '"6"', conflict: false, gone: false, dirty: false }),
+    });
+    await useCalDavStore.getState().resolveKeepMine(conflict);
+
+    expect(commands()).not.toContain("caldav_fetch");
+    const [push] = pushArgs();
+    expect(push.resourceHref).toBe(S);
+    expect(push.etag).toBe('"5"');
+    const ics = String(push.ics);
+    expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(2);
+    expect(ics).toContain("RECURRENCE-ID");
+    expect(commands()).not.toContain("delete_event");
+    const rows = useCalendarStore.getState().events;
+    expect(rows.find((e) => e.id === "o")?.caldav_href).toBe(S);
+    expect(rows.find((e) => e.id === "m")?.caldav_etag).toBe('"6"');
+    expect(useCalDavStore.getState().conflicts).toHaveLength(0);
+  });
+
+  it("with nothing of the object on the server it is created again", async () => {
+    seed(account(), [NEW]);
+    const conflict = question();
+    useCalDavStore.setState({ conflicts: [conflict] });
+    backend();
+    await useCalDavStore.getState().resolveKeepMine(conflict);
+    expect(commands()).not.toContain("caldav_resource_etag");
+    const [push] = pushArgs();
+    expect(push.resourceHref).toBeNull();
+    expect(push.etag).toBeNull();
+  });
+
+  it("a push that conflicts again keeps the question and puts the duplicate back", async () => {
+    const dup: CalendarEvent = { ...NEW, id: "n2", title: "planning", caldav_dirty: undefined, caldav_href: MINTED, caldav_etag: '"3"' };
+    seed(account(), [NEW, dup]);
+    const conflict = question();
+    useCalDavStore.setState({ conflicts: [conflict] });
+    backend({
+      caldav_resource_etag: () => '"3"',
+      caldav_push: () => ({ href: MINTED, etag: "", conflict: true, gone: false, dirty: true }),
+    });
+    await useCalDavStore.getState().resolveKeepMine(conflict);
+    expect(commands()).not.toContain("delete_event");
+    const rows = useCalendarStore.getState().events;
+    expect(rows.map((e) => e.id).sort()).toEqual(["n1", "n2"]);
+    expect(rows.find((e) => e.id === "n1")?.caldav_href).toBeUndefined();
+    expect(useCalDavStore.getState().conflicts.map((c) => c.rowId)).toEqual(["n1"]);
+  });
+});
+
+describe("an account switched from http to https (step 7 review)", () => {
+  it("re-reads the calendar when the backend moved its addresses to https", async () => {
+    const httpRef = "http://dav.example.org/dav/me/personal/";
+    const acc = account({ base_url: "http://dav.example.org/dav/", calendars: [{ ...account().calendars[0], href: httpRef }] });
+    seed(acc, [{ ...ROW, caldav_href: `${httpRef}e1.ics` }]);
+    const moved = { ...acc, base_url: "https://dav.example.org/dav/", calendars: [{ ...acc.calendars[0], href: HREF }] };
+    backend({
+      caldav_account_upsert: () => ({ account: moved, saved: false }),
+      calendar_load: () => ({ calendars: [CAL], events: [ROW], tasks: [], task_columns: [] }),
+    });
+    await useCalDavStore.getState().upsert({ ...acc, base_url: "https://dav.example.org/dav/" }, null, null);
+    expect(commands()).toContain("calendar_load");
+    expect(useCalendarStore.getState().events[0].caldav_href).toBe(RESOURCE);
+    expect(useCalDavStore.getState().accounts[0].calendars[0].href).toBe(HREF);
+  });
+
+  it("does not re-read it for an ordinary save", async () => {
+    seed(account());
+    backend({ caldav_account_upsert: (args) => ({ account: args.account, saved: false }) });
+    await useCalDavStore.getState().upsert(account({ label: "Renamed" }), null, null);
+    expect(commands()).not.toContain("calendar_load");
+  });
+});

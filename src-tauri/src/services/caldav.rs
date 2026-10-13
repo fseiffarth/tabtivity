@@ -134,8 +134,8 @@ fn off_origin(url: &Url, origin: &Url) -> String {
         concat!(
             "the server named {} for this account, outside the address the account uses ({}). ",
             crate::app_name!(),
-            " only sends CalDAV credentials to that address (or a subdomain of it over HTTPS) — \
-             if you trust {}, set the account's server URL to it."
+            " only sends CalDAV credentials to that address (or another HTTPS host under its \
+             domain) — if you trust {}, set the account's server URL to it."
         ),
         url.host_str().unwrap_or("another host"),
         origin.host_str().unwrap_or("its server"),
@@ -150,6 +150,23 @@ pub fn href_in_origin(origin: &Url, href: &str) -> bool {
     Url::parse(href)
         .map(|u| u.scheme() == "https" && credentials_may_follow(origin, &u))
         .unwrap_or(false)
+}
+
+/// The `https://` twin of a **same-host** `http://` href, on the origin's port —
+/// what an account switched from `http://` to `https://` keeps of its old
+/// calendar subscriptions and resource addresses (E2b left them unusable).
+/// `None` for anything else: another host, another scheme, an `http` origin.
+pub fn https_twin(href: &str, origin: &Url) -> Option<String> {
+    if origin.scheme() != "https" {
+        return None;
+    }
+    let mut url = Url::parse(href).ok()?;
+    if url.scheme() != "http" || !url.host_str()?.eq_ignore_ascii_case(origin.host_str()?) {
+        return None;
+    }
+    url.set_scheme("https").ok()?;
+    url.set_port(origin.port()).ok()?;
+    Some(url.to_string())
 }
 
 // ── Multistatus parsing ─────────────────────────────────────────────────────
@@ -753,8 +770,8 @@ async fn dav_reply(
             if !authorized {
                 return Err(format!(
                     concat!("the server redirected to {} and that host asked for the password. ", crate::app_name!(), " \
-                     only sends CalDAV credentials to the server the account's URL names (or a \
-                     subdomain of it over HTTPS) — if you trust that address, set the account's \
+                     only sends CalDAV credentials to the server the account's URL names (or \
+                     another HTTPS host under its domain) — if you trust that address, set the account's \
                      server URL to it directly."),
                     url.host_str().unwrap_or("another host")
                 ));
@@ -795,19 +812,22 @@ async fn dav_reply(
 /// client to a host of their choosing and be handed the calendar password in a
 /// header it can read.
 ///
-/// The rule is deliberately narrower than "same registrable domain":
+/// The rule (decided 2026-10-13, after iCloud-shaped providers broke on the
+/// stricter subdomain-only rule):
 ///
 /// - **same origin** (scheme, host, port) — the ordinary case, every hop inside
 ///   one server's own URL space;
-/// - **a subdomain of the credential's host, over TLS** — which is exactly the
-///   shape RFC 6764 discovery has, where the user types `example.org` and
-///   `/.well-known/caldav` redirects to `caldav.example.org`.
+/// - **another host under the credential host's registrable domain, over TLS on
+///   both ends** — RFC 6764 discovery (`example.org` → `caldav.example.org`) and
+///   providers that hand each account a sibling host (`caldav.example.com` →
+///   `p42-caldav.example.com`). The registrable domain (eTLD+1) comes from the
+///   public-suffix list (the `psl` crate), so `example.co.uk` never covers the
+///   rest of `.co.uk` and `alice.github.io` never covers `bob.github.io`. The
+///   other host must answer on the origin's port or on 443: another port on a
+///   sibling machine is another service, whoever runs it.
 ///
-/// Sibling hosts (`caldav.example.org` → `dav.example.org`) are **refused**,
-/// even though they are the same organization, because telling them apart from
-/// an attacker's host needs a public-suffix list this codebase does not have —
-/// `registrable()` is a two-label approximation (documented as such in
-/// `web_safety`), and under it `a.co.uk` and `evil.co.uk` are one site. A
+/// An IP-address host, a single-label host (`localhost`, `nas`) and a host that
+/// *is* a public suffix have no registrable domain and match only exactly. A
 /// refusal here is recoverable and says so: the user sets the account's URL to
 /// the address the server named, and that address becomes the credential origin.
 pub fn credentials_may_follow(from: &Url, to: &Url) -> bool {
@@ -817,18 +837,47 @@ pub fn credentials_may_follow(from: &Url, to: &Url) -> bool {
     let from_host = from_host.to_ascii_lowercase();
     let to_host = to_host.to_ascii_lowercase();
 
-    if from.scheme() == to.scheme()
-        && from_host == to_host
-        && from.port_or_known_default() == to.port_or_known_default()
-    {
-        return true;
+    if from_host == to_host {
+        // The same host on another port, or the same host and port under the
+        // other scheme, is another service: same origin only.
+        return from.scheme() == to.scheme()
+            && from.port_or_known_default() == to.port_or_known_default();
     }
-    // A subdomain hop is only ever allowed under TLS, on both ends: over plain
+    // Another host is only ever allowed under TLS, on both ends: over plain
     // HTTP the header is readable by anyone on the path, so "which host" stops
     // being the interesting question.
-    from.scheme() == "https"
-        && to.scheme() == "https"
-        && to_host.ends_with(&format!(".{from_host}"))
+    if from.scheme() != "https" || to.scheme() != "https" {
+        return false;
+    }
+    let to_port = to.port_or_known_default();
+    if to_port != from.port_or_known_default() && to_port != Some(443) {
+        return false;
+    }
+    // IP literals (v4 and v6) have no registrable domain: exact match only.
+    if !matches!(from.host(), Some(url::Host::Domain(_)))
+        || !matches!(to.host(), Some(url::Host::Domain(_)))
+    {
+        return false;
+    }
+    match registrable_domain(&from_host) {
+        Some(site) => to_host == site || to_host.ends_with(&format!(".{site}")),
+        None => false,
+    }
+}
+
+/// The registrable domain (eTLD+1) of a DNS host, by the public-suffix list —
+/// `None` for a single-label host, a host that is itself a public suffix, or a
+/// trailing-dot spelling (which then matches only exactly: fail closed).
+pub fn registrable_domain(host: &str) -> Option<String> {
+    if host.ends_with('.') || !host.contains('.') {
+        return None;
+    }
+    let host = host.to_ascii_lowercase();
+    let site = psl::domain_str(&host)?;
+    // `psl` falls back to the `*` rule for an unknown TLD, so `nas.lan` is its
+    // own site; a name the list knows only as a suffix has none.
+    (site.contains('.') && (host == site || host.ends_with(&format!(".{site}"))))
+        .then(|| site.to_string())
 }
 
 /// A 2xx/207 body, or a described failure. The status text is included because
@@ -1992,18 +2041,117 @@ END:VCALENDAR</C:calendar-data></D:prop>
             &from,
             &u("https://evil.example/dav/")
         ));
-        // A sibling host is refused too: without a public-suffix list, "same
-        // organization" is not something this can tell from "same last two
-        // labels", and `a.co.uk`/`evil.co.uk` would pass such a test.
-        assert!(!credentials_may_follow(
-            &from,
-            &u("https://other.example.org/dav/")
-        ));
         // Suffix matching must not be substring matching.
         assert!(!credentials_may_follow(
             &from,
             &u("https://notdav.example.org.evil.test/")
         ));
+        assert!(!credentials_may_follow(
+            &from,
+            &u("https://evilexample.org/")
+        ));
+    }
+
+    #[test]
+    fn credentials_ride_to_a_sibling_host_under_the_same_registrable_domain() {
+        // The iCloud shape (decision 2026-10-13): the account names one host,
+        // the principal and calendars live on a per-user sibling.
+        let from = u("https://caldav.example.com/");
+        assert!(credentials_may_follow(
+            &from,
+            &u("https://p42-caldav.example.com/123/calendars/")
+        ));
+        assert!(credentials_may_follow(&from, &u("https://example.com/dav/")));
+        assert!(credentials_may_follow(&from, &u("https://a.b.example.com/")));
+        // A different registrable domain is refused, however alike it looks.
+        assert!(!credentials_may_follow(&from, &u("https://p42-caldav.example.net/")));
+        assert!(!credentials_may_follow(&from, &u("https://caldav.example.com.evil.test/")));
+        // Over http on either end: never another host.
+        assert!(!credentials_may_follow(&from, &u("http://p42-caldav.example.com/")));
+        // Another port on a sibling machine is another service; 443 is the
+        // https service of that host.
+        assert!(!credentials_may_follow(&from, &u("https://p42-caldav.example.com:8443/")));
+        let odd = u("https://caldav.example.com:8443/");
+        assert!(credentials_may_follow(&odd, &u("https://p42-caldav.example.com:8443/")));
+        assert!(credentials_may_follow(&odd, &u("https://p42-caldav.example.com/")));
+        assert!(!credentials_may_follow(&odd, &u("https://p42-caldav.example.com:9443/")));
+        // The same host keeps the same-origin rule: its other ports are not ours.
+        assert!(!credentials_may_follow(&odd, &u("https://caldav.example.com/")));
+    }
+
+    #[test]
+    fn the_registrable_domain_comes_from_the_public_suffix_list() {
+        // `example.co.uk` never covers the rest of `.co.uk`.
+        let uk = u("https://dav.example.co.uk/");
+        assert!(credentials_may_follow(&uk, &u("https://p1.example.co.uk/")));
+        assert!(!credentials_may_follow(&uk, &u("https://evil.co.uk/")));
+        assert!(!credentials_may_follow(&uk, &u("https://co.uk/")));
+        assert_eq!(registrable_domain("dav.example.co.uk").as_deref(), Some("example.co.uk"));
+        // Private-section suffixes too: one user's pages are not another's.
+        let gh = u("https://alice.github.io/dav/");
+        assert!(!credentials_may_follow(&gh, &u("https://bob.github.io/")));
+        assert!(!credentials_may_follow(&gh, &u("https://github.io/")));
+        // A host that *is* a public suffix has no site: exact match only.
+        assert_eq!(registrable_domain("co.uk"), None);
+        let bare = u("https://co.uk/");
+        assert!(!credentials_may_follow(&bare, &u("https://example.co.uk/")));
+        assert!(credentials_may_follow(&bare, &u("https://co.uk/dav/")));
+        // Wildcard rules (`*.ck`) and their exceptions (`!www.ck`).
+        assert_eq!(registrable_domain("a.b.ck").as_deref(), Some("a.b.ck"));
+        assert_eq!(registrable_domain("x.www.ck").as_deref(), Some("www.ck"));
+        // An unknown TLD falls back to the `*` rule: its own site per name.
+        assert_eq!(registrable_domain("dav.home.lan").as_deref(), Some("home.lan"));
+        assert!(!credentials_may_follow(&u("https://dav.home.lan/"), &u("https://nas.lan/")));
+        // Case is not identity.
+        assert!(credentials_may_follow(&from_upper(), &u("https://p42-caldav.example.com/")));
+    }
+
+    fn from_upper() -> Url {
+        u("https://CalDAV.Example.COM/")
+    }
+
+    #[test]
+    fn single_label_and_ip_hosts_match_only_exactly() {
+        let local = u("https://nas/");
+        assert_eq!(registrable_domain("nas"), None);
+        assert!(credentials_may_follow(&local, &u("https://nas/dav/")));
+        assert!(!credentials_may_follow(&local, &u("https://dav.nas/")));
+        assert!(!credentials_may_follow(&u("https://localhost:5232/"), &u("https://sub.localhost:5232/")));
+
+        let v4 = u("https://192.0.2.10/dav/");
+        assert!(credentials_may_follow(&v4, &u("https://192.0.2.10/other")));
+        assert!(!credentials_may_follow(&v4, &u("https://192.0.2.11/")));
+        assert!(!credentials_may_follow(&v4, &u("https://192.0.2.10.example.com/")));
+        let v6 = u("https://[2001:db8::1]/dav/");
+        assert!(credentials_may_follow(&v6, &u("https://[2001:db8::1]/x")));
+        assert!(!credentials_may_follow(&v6, &u("https://[2001:db8::2]/")));
+        // A domain account never covers an IP, nor the other way round.
+        assert!(!credentials_may_follow(&u("https://dav.example.com/"), &u("https://192.0.2.10/")));
+        // A trailing-dot spelling fails closed.
+        assert!(!credentials_may_follow(&u("https://dav.example.com./"), &u("https://p1.example.com./")));
+    }
+
+    #[test]
+    fn an_http_ref_on_the_same_host_has_an_https_twin_and_nothing_else_does() {
+        let origin = u("https://dav.example.com/");
+        assert_eq!(
+            https_twin("http://dav.example.com/cal/home/", &origin).as_deref(),
+            Some("https://dav.example.com/cal/home/")
+        );
+        assert_eq!(
+            https_twin("http://DAV.example.com:80/cal/", &origin).as_deref(),
+            Some("https://dav.example.com/cal/")
+        );
+        // The account's own port, whatever the http one was.
+        let odd = u("https://dav.example.com:8443/");
+        assert_eq!(
+            https_twin("http://dav.example.com:5232/cal/", &odd).as_deref(),
+            Some("https://dav.example.com:8443/cal/")
+        );
+        assert_eq!(https_twin("http://other.example.com/cal/", &origin), None);
+        assert_eq!(https_twin("https://dav.example.com/cal/", &origin), None);
+        assert_eq!(https_twin("not a url", &origin), None);
+        assert_eq!(https_twin("http://dav.example.com/cal/", &u("http://dav.example.com/")), None);
     }
 
     #[test]
@@ -2275,6 +2423,31 @@ END:VCALENDAR</c:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:
         assert!(err.contains("evil.example.net"), "{err}");
         assert!(server.to_host("evil.example.net").is_empty(), "{:?}", server.seen());
         assert!(server.seen().iter().all(|s| s.auth), "every request went to the origin");
+    }
+
+    #[tokio::test]
+    async fn an_icloud_shaped_principal_on_a_sibling_host_signs_in() {
+        // Decision 2026-10-13: the account names `caldav.example.com`, the
+        // server answers with a per-user sibling; same registrable domain, so
+        // the login follows and the calendars there are listed.
+        let server = fake::serve(|req| {
+            if req.url.starts_with("https://caldav.example.com/") {
+                fake::reply(207, &probe(Some("https://p42-caldav.example.com/42/principal/"), None))
+            } else if req.url.contains("/principal/") {
+                fake::reply(207, &probe(None, Some("https://p42-caldav.example.com/42/calendars/")))
+            } else {
+                fake::reply(207, &listing(&["/42/calendars/home/"]))
+            }
+        });
+        let found = discover("https://caldav.example.com/", &cred("https://caldav.example.com/"))
+            .await
+            .unwrap();
+        assert!(
+            found.iter().any(|c| c.href == "https://p42-caldav.example.com/42/calendars/home/"),
+            "{found:?}"
+        );
+        assert!(!server.to_host("p42-caldav.example.com").is_empty());
+        assert!(server.seen().iter().all(|s| s.auth), "{:?}", server.seen());
     }
 
     #[tokio::test]

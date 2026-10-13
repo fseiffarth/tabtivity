@@ -205,11 +205,32 @@ fn check_account_origin(prev: Option<&CalDavAccount>, account: &CalDavAccount) -
     match added.iter().find(|h| !caldav::href_in_origin(&origin, h)) {
         Some(href) => Err(format!(
             "the calendar at {href} is outside this account's server address ({}) — its \
-             password is only sent there (or to a subdomain of it over HTTPS)",
+             password is only sent there (or to another HTTPS host under its domain)",
             origin.as_str()
         )),
         None => Ok(()),
     }
+}
+
+/// An account whose server URL is `https://` now: its calendar refs still on
+/// `http://` **at the same host** become their `https://` twins (on the
+/// account's port), so switching an account from http to https keeps its
+/// subscriptions instead of leaving each one failing with "stored address is
+/// not https". Refs on another host are left alone (the origin check judges
+/// them). Returns the local calendar ids whose ref moved, for their rows'
+/// stored addresses to follow ([`crate::commands::calendar::upgrade_caldav_hrefs_at`]).
+fn upgrade_http_refs(account: &mut CalDavAccount) -> Vec<String> {
+    let Ok(origin) = caldav::normalize_base_url(&account.base_url) else {
+        return Vec::new();
+    };
+    let mut moved = Vec::new();
+    for cal in &mut account.calendars {
+        if let Some(twin) = caldav::https_twin(&cal.href, &origin) {
+            cal.href = twin;
+            moved.push(cal.calendar_id.clone());
+        }
+    }
+    moved
 }
 
 /// `Some(false)` is coerced to `None`.
@@ -275,7 +296,20 @@ pub async fn caldav_account_upsert(
             .accounts
             .into_iter()
             .find(|a| !account.id.is_empty() && a.id == account.id);
+        let mut account = account;
+        let upgraded = upgrade_http_refs(&mut account);
         check_account_origin(prev.as_ref(), &account)?;
+        if !upgraded.is_empty() {
+            // The rows first: if the account write below then fails, its refs
+            // are still the old `http://` ones (refused anyway), and the next
+            // save upgrades them onto rows that already match.
+            let origin = caldav::normalize_base_url(&account.base_url)?;
+            crate::commands::calendar::upgrade_caldav_hrefs_at(
+                &crate::commands::calendar::calendar_path(),
+                &upgraded,
+                |href| caldav::https_twin(href, &origin),
+            )?;
+        }
         let mut account = upsert_account_at(&accounts_path(), account)?;
 
         // An empty password field means "use whatever is already there", never
@@ -695,20 +729,22 @@ pub async fn caldav_push(
         return Ok(outcome);
     }
 
-    let (kind, row_id, stamp_href, stamp_etag) = (
+    let (kind, row_id, stamp_href, stamp_etag, sent_to) = (
         kind.clone(),
         row_id.clone(),
         outcome.href.clone(),
         outcome.etag.clone(),
+        existing.to_string(),
     );
     outcome.dirty = tokio::task::spawn_blocking(move || {
-        crate::commands::calendar::set_caldav_identity_at(
+        crate::commands::calendar::set_caldav_identity_sent_at(
             &crate::commands::calendar::calendar_path(),
             &kind,
             &row_id,
             &stamp_href,
             &stamp_etag,
             pushed_rev,
+            &sent_to,
         )
     })
     .await
@@ -1032,15 +1068,47 @@ mod tests {
     }
 
     #[test]
+    fn an_account_switched_to_https_takes_its_same_host_calendars_along() {
+        // Step 7 review item 2: an http account whose URL is changed to https
+        // kept its `http://` refs, and each failed "stored address is not
+        // https". Same-host refs move with it; other hosts are left alone.
+        let mut prev = with_ref(account("me"), "http://dav.example.org/dav/me/a/");
+        prev.base_url = "http://dav.example.org/dav/".into();
+        let mut a = with_ref(prev.clone(), "http://elsewhere.example.net/b/");
+        a.base_url = "https://dav.example.org/dav/".into();
+        let moved = upgrade_http_refs(&mut a);
+        assert_eq!(moved, vec![a.calendars[0].calendar_id.clone()]);
+        assert_eq!(a.calendars[0].href, "https://dav.example.org/dav/me/a/");
+        assert_eq!(a.calendars[1].href, "http://elsewhere.example.net/b/");
+        // The upgraded ref passes the origin check; the foreign http one does
+        // not, so the save says so instead of keeping a ref that never syncs.
+        let only_same = {
+            let mut x = a.clone();
+            x.calendars.truncate(1);
+            x
+        };
+        assert!(check_account_origin(Some(&prev), &only_same).is_ok());
+        assert!(check_account_origin(Some(&prev), &a).unwrap_err().contains("outside"));
+        // Still http: nothing is rewritten.
+        let mut still = prev.clone();
+        assert!(upgrade_http_refs(&mut still).is_empty());
+        assert_eq!(still.calendars[0].href, "http://dav.example.org/dav/me/a/");
+    }
+
+    #[test]
     fn a_picked_calendar_outside_the_origin_is_refused() {
         let base = account("me"); // https://dav.example.org/dav/
         assert!(check_account_origin(None, &with_ref(base.clone(), "https://dav.example.org/dav/me/a/")).is_ok());
         assert!(check_account_origin(None, &with_ref(base.clone(), "https://cal.dav.example.org/a/")).is_ok());
+        // Any https host under the account's registrable domain (2026-10-13).
+        assert!(check_account_origin(None, &with_ref(base.clone(), "https://example.org/a/")).is_ok());
+        assert!(check_account_origin(None, &with_ref(base.clone(), "https://p42-caldav.example.org/a/")).is_ok());
         for off in [
             "https://evil.example.net/a/",
             "http://dav.example.org/dav/me/a/",
             "https://dav.example.org:8443/a/",
-            "https://example.org/a/",
+            "https://p42-caldav.example.org:8443/a/",
+            "https://dav.example.org.evil.example.net/a/",
         ] {
             let err = check_account_origin(None, &with_ref(base.clone(), off)).unwrap_err();
             assert!(err.contains("outside"), "{off}: {err}");

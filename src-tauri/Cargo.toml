@@ -185,6 +185,11 @@ ammonia = "4"
 zeroize = { version = "1", features = ["derive"] }
 # Punycode/IDNA for the link-safety host comparison (plan B §2.5).
 idna = "1"
+# The public-suffix list, compiled in: CalDAV credentials may follow a redirect
+# or a server-named href to any https host under the account's registrable
+# domain (`caldav.example.com` → `p42-caldav.example.com`), and only a real
+# list keeps `example.co.uk` from covering all of `.co.uk`. No dependencies.
+psl = "2"
 # SHA-256 for the content-addressed blob store (plan B §3.1: attachment payloads
 # are stored under `blobs/<sha256>` with no extension, so a sender-supplied
 # filename never reaches a syscall).

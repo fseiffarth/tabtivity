@@ -847,7 +847,8 @@ five-line template). A sync **merges by resource URL** instead of replacing, so 
 local edit is never silently dropped (an unpushed edit is marked `caldav_dirty`,
 pushed before the next fetch and never merged over); an HTML login page fails
 loudly rather than importing zero events. Credentials go only to the account's
-own server address (or a subdomain over TLS), and plain `http://` is refused.
+own server address (or another host under its registrable domain over TLS,
+by the public-suffix list), and plain `http://` is refused.
 
 ### Native Viewers
 

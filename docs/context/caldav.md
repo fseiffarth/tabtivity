@@ -129,9 +129,19 @@ hop (a chain of small steps must not be able to walk the password anywhere) or
 the URL being requested:
 
 - **same origin** — every hop inside one server's URL space;
-- **a subdomain of the credential's host, over TLS** — RFC 6764's own shape,
-  where the user types `example.org` and `/.well-known/caldav` redirects to
-  `caldav.example.org`;
+- **another host under the credential host's registrable domain, over TLS on
+  both ends** (decided 2026-10-13) — RFC 6764's own shape, where the user types
+  `example.org` and `/.well-known/caldav` redirects to `caldav.example.org`,
+  and providers that put each account on a sibling host (`caldav.example.com`
+  → `p42-caldav.example.com`, iCloud-shaped). The registrable domain (eTLD+1)
+  comes from the public-suffix list compiled in by the `psl` crate, private
+  section included, so `example.co.uk` never covers the rest of `.co.uk` and
+  `alice.github.io` never covers `bob.github.io`. The other host must answer
+  on the origin's port or on 443 (another port is another service). An
+  IP-address host, a single-label host (`localhost`, `nas`), a host that is
+  itself a public suffix and a trailing-dot spelling have no registrable
+  domain and match only exactly; the same host on another port is refused as
+  before;
 - **nothing else**, and an `http:` hop is refused outright rather than merely
   stripped, because everything after it (the calendar's contents included)
   would cross the network in the clear.
@@ -187,13 +197,20 @@ sentence and keeps Find and Save off until the URL is `https://`; the backend
 still lets such an account be saved *unchanged* (an unsubscribe, a toggle) but
 never gains a calendar.
 
-Sibling hosts (`caldav.example.org` → `dav.example.org`) are refused too, which
-is stricter than "same organization" and deliberately so: telling those apart
-from an attacker's host needs a public-suffix list this codebase does not have
-(`web_safety::registrable` is a documented two-label approximation, under which
-`a.co.uk` and `evil.co.uk` are one site). The refusal is recoverable and its
-message says how — set the account's URL to the address the server named, and
-that address becomes the credential origin. An unauthenticated hop that comes
+An account whose server URL is changed from `http://` to `https://` keeps its
+calendars: `caldav_account_upsert` rewrites each `http://` calendar ref **on the
+same host** to its `https://` twin on the account's port
+(`caldav::https_twin`), and `calendar::upgrade_caldav_hrefs_at` moves those
+calendars' stored addresses with it in the same save (the calendar record's
+collection address, each row's `caldav_href` and `caldav_server_deleted`), so
+the rows keep matching what the server lists and their pushes are not refused
+as "not https". The window re-reads the calendar when a save comes back with
+moved refs, so no stale in-memory row writes the old address back. A ref on
+another host is left alone and fails the origin check like any other.
+
+A host under another registrable domain is refused. The refusal is recoverable
+and its message says how — set the account's URL to the address the server
+named, and that address becomes the credential origin. An unauthenticated hop that comes
 back `401` gets *that* sentence rather than "check your password", because the
 fix is not to retype one.
 
@@ -279,8 +296,11 @@ overwrote the matched row with the server's copy: the edit was gone. Now:
   again before it sends, so whoever wrote the row — the window, an approved
   root-agent row — a failed push leaves it marked. `update_event_at` /
   `update_task_at` keep a stored mark within the same calendar (a copy that
-  never saw it cannot clear it); a move drops it, and the window's write in the
-  new calendar marks it again.
+  never saw it cannot clear it). A move drops the `caldav_server_deleted`
+  question; a move into a local calendar (one whose record carries no
+  `caldav_href`) drops the mark too, whatever the window's copy carried, and a
+  move into another CalDAV calendar keeps the mark the window's write set
+  there.
 - **Clearing.** Only a push the server accepted clears it, and only for the
   row revision it sent: `caldav_push` takes the `rev` the window serialized,
   and `set_caldav_identity_at` clears the mark only if the row still has the
@@ -301,7 +321,18 @@ overwrote the matched row with the server's copy: the edit was gone. Now:
   `caldav_server_deleted` — and reported (`reason: "deleted"`).
 - **The question.** Kept rows land in `CalDavConflictDialog`. For a deleted one
   the lede says so; "keep mine" puts it back (a create), "use the server's"
-  deletes it here too. "Use the server's" is a forced **full** read with the row
+  deletes it here too. A question about a row with **no resource address** —
+  a create whose reply was lost (the retry's `If-None-Match: *` met the row's
+  own earlier create), or a series row the server deleted whose master was put
+  back first — is answered by joining the object the server already holds
+  under the row's UID (one object per UID in a collection): the row takes the
+  address a local row of that UID has (after a sync that imports a lost-reply
+  create's server copy), the push is an update conditional on the ETag read
+  then, and a local row that is the server's copy of the very same component
+  (same UID and occurrence) is dropped locally once the push lands. The
+  backend gives the resource's other rows the new ETag when the body went to
+  their address as an update (`set_caldav_identity_sent_at`). With no such
+  object known it is a create again. "Use the server's" is a forced **full** read with the row
   named in `caldav_apply`'s `discard`, which drops the mark in the same write —
   full because an earlier sync may already have moved the sync token past the
   server's change. "Decide later" defers the row for the session: no sync pushes

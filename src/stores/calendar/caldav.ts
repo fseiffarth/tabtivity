@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import {
   caldavAccountDelete,
@@ -15,6 +16,7 @@ import {
   syncStamp,
 } from "../../lib/calendar/caldav";
 import { resourceIcs, resourceRows, resourceUid } from "../../lib/calendar/caldavPush";
+import { icsUid } from "../../lib/calendar/ics";
 import {
   setCalendarDirtyPredicate,
   setCalendarWriteHandler,
@@ -283,6 +285,104 @@ async function applyWritability(account: CalDavAccount): Promise<void> {
   }
 }
 
+/**
+ * "Keep mine" for a row with **no resource address** — a create whose reply
+ * was lost (the retry's `If-None-Match: *` met the row's own earlier create),
+ * or a series row the server deleted whose master was already put back (its
+ * create met the master's resource). Both have the object on the server under
+ * the row's UID already, and CalDAV allows one object per UID in a collection.
+ *
+ * So the row joins that object: it takes the address a local row of the same
+ * UID holds (after a sync, which imports a lost-reply create's server copy),
+ * and the push is an update conditional on the ETag read now. A local row that
+ * is the server's copy of this very component (same UID and occurrence) is a
+ * duplicate: it leaves the body and, once the push lands, the calendar —
+ * locally only, since the push just replaced it on the server. With no such
+ * object known (or the server no longer holding it) the row is created again.
+ */
+async function keepMineUnaddressed(
+  conflict: CalDavConflict,
+  row: CalendarEvent | CalendarTask,
+  sync: () => Promise<unknown>,
+  push: (event: CalendarWriteEvent) => Promise<CalDavPushOutcome>,
+): Promise<CalDavPushOutcome> {
+  const kind = conflict.kind;
+  const uid = icsUid(row);
+  const holders = (): (CalendarEvent | CalendarTask)[] => {
+    const calendar = useCalendarStore.getState();
+    const rows: (CalendarEvent | CalendarTask)[] =
+      kind === "event" ? calendar.events : calendar.tasks;
+    return rows.filter(
+      (r) =>
+        r.id !== row.id &&
+        r.calendar_id === row.calendar_id &&
+        (r.caldav_href ?? "").trim() !== "" &&
+        icsUid(r) === uid,
+    );
+  };
+  let found = holders();
+  if (found.length === 0 && !conflict.serverDeleted) {
+    await sync();
+    found = holders();
+  }
+  const href = found.length > 0 ? (found[0].caldav_href ?? "").trim() : "";
+  const current = href ? await caldavResourceEtag(conflict.accountId, href) : "";
+  const fresh = { ...row, caldav_href: undefined, caldav_etag: undefined };
+  if (!href || !current) {
+    return push({ op: "upsert", kind, row: fresh as typeof row });
+  }
+
+  const slot = (r: CalendarEvent | CalendarTask) =>
+    kind === "task" ||
+    ((r as CalendarEvent).recurrence_id ?? "").trim() ===
+      ((row as CalendarEvent).recurrence_id ?? "").trim();
+  const dupes = found.filter((r) => (r.caldav_href ?? "").trim() === href && slot(r));
+  const gone = new Set(dupes.map((d) => d.id));
+  const staged = { ...row, caldav_href: href, caldav_etag: current, caldav_server_deleted: undefined };
+  useCalendarStore.setState((s) =>
+    kind === "event"
+      ? {
+          events: s.events
+            .filter((e) => !gone.has(e.id))
+            .map((e) => (e.id === row.id ? (staged as CalendarEvent) : e)),
+        }
+      : {
+          tasks: s.tasks
+            .filter((t) => !gone.has(t.id))
+            .map((t) => (t.id === row.id ? (staged as CalendarTask) : t)),
+        },
+  );
+  const outcome = await push({ op: "upsert", kind, row: staged as typeof row });
+  if (outcome === "pushed") {
+    for (const id of gone) {
+      await invoke<void>(kind === "event" ? "delete_event" : "delete_task", { id });
+    }
+    return outcome;
+  }
+  // Not on the server: the duplicates come back, and the row keeps no address
+  // it never earned (the backend stamped none).
+  useCalendarStore.setState((s) =>
+    kind === "event"
+      ? {
+          events: [
+            ...s.events.map((e) =>
+              e.id === row.id ? { ...e, caldav_href: undefined, caldav_etag: undefined } : e,
+            ),
+            ...(dupes as CalendarEvent[]),
+          ],
+        }
+      : {
+          tasks: [
+            ...s.tasks.map((t) =>
+              t.id === row.id ? { ...t, caldav_href: undefined, caldav_etag: undefined } : t,
+            ),
+            ...(dupes as CalendarTask[]),
+          ],
+        },
+  );
+  return outcome;
+}
+
 /** Mirror a backend `caldav_dirty` mark into the in-memory row. */
 function markDirty(kind: "event" | "task", rowId: string): void {
   useCalendarStore.setState((s) =>
@@ -316,6 +416,14 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
 
   upsert: async (account, password, remember) => {
     const result = await caldavAccountUpsert(account, password, remember);
+    // An account switched from http to https comes back with its same-host
+    // calendar addresses moved to https, and the backend moved the rows'
+    // stored addresses with them: read the calendar again before anything
+    // here writes a row (or a calendar record) back with the old address.
+    const sent = new Set(account.calendars.map((c) => c.href));
+    if (result.account.calendars.some((c) => !sent.has(c.href))) {
+      await useCalendarStore.getState().reload();
+    }
     set((s) => {
       const next = s.accounts.some((a) => a.id === result.account.id)
         ? s.accounts.map((a) => (a.id === result.account.id ? result.account : a))
@@ -694,6 +802,18 @@ export const useCalDavStore = create<CalDavStore>((set, get) => ({
       conflict.op === "delete" && (row.caldav_href ?? "").trim() !== conflict.resourceHref;
 
     try {
+      if (conflict.op === "upsert" && !(row.caldav_href ?? "").trim()) {
+        const outcome = await keepMineUnaddressed(
+          conflict,
+          row,
+          () => get().syncCalendar(conflict.accountId, conflict.href, true),
+          (event) => get().pushRow(event),
+        );
+        if (outcome === "conflict") return;
+        if (outcome === "error") return; // `pushError` says why; the question stays
+        get().dismissConflict(conflict.rowId);
+        return;
+      }
       // Re-read the validator and write against *that*. Still conditional: an
       // edit that lands between the question and the answer conflicts again
       // rather than being destroyed by the resolution of an older conflict.
