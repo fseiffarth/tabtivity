@@ -444,3 +444,30 @@ describe("per-language code highlighting", () => {
   });
 });
 /* eslint-enable no-template-curly-in-string */
+
+// The compare and editor views put this HTML in the page (CodeQL
+// js/xss-through-dom on CompareView): whatever a file holds, the output is
+// the highlighter's own spans around escaped text.
+describe("highlighted output is inert", () => {
+  const LANGS: Lang[] = [
+    "js", "jsx", "ts", "tsx", "rust", "python", "go", "c", "cpp", "java", "csharp", "kotlin", "swift", "clike",
+    "php", "ruby", "lua", "perl", "r", "haskell", "elixir", "shell", "json", "yaml", "toml", "css", "sql", "tex",
+    "markup", "markdown", "plain",
+  ];
+  const PAYLOADS = [
+    '<img src=x onerror=alert(1)>',
+    '</span><script>alert(1)</script><span class="tok-x">',
+    '"><svg onload=alert(1)> \'x\' `y` $' + '{z} &amp; &lt;',
+    '<!-- <a href="javascript:alert(1)">x</a> -->',
+    '\\begin{x}<b>\\end{x} [l](javascript:alert(1)) `<i>` **<u>**',
+    '/* <style> */ // <iframe> # <object>\n"<embed>" \'<form>\'',
+  ];
+
+  it.each(LANGS)("%s emits only its spans around the source", (lang) => {
+    for (const source of PAYLOADS) {
+      const html = highlight(source, lang)!;
+      expect(html.match(/<(?!span class="tok-[a-z-]+">|\/span>)/g), `${lang}: ${html}`).toBeNull();
+      expect(shownText(html)).toBe(source);
+    }
+  });
+});
