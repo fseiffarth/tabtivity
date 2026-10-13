@@ -280,7 +280,7 @@ cat >"$DESKTOP_DEST" <<DESKTOP
 Type=Application
 Name=$APP_DISPLAY (dev)
 Comment=Frozen build $VERSION @ $COMMIT$DIRTY ($STAMP) — no hot reload
-Exec=$LAUNCHER
+Exec=$(dev_desktop_quote "$LAUNCHER")
 Icon=$ROOT/src-tauri/icons/128x128.png
 Terminal=false
 Categories=Utility;TerminalEmulator;Development;

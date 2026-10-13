@@ -37,7 +37,10 @@
 #   dev_launcher_install SRC DEST ROOT
 #                                   copy the launcher files from checkout SRC
 #                                   into DEST (swapped in whole), recording ROOT
-#   dev_desktop_exec FILE EXEC      point desktop entry FILE's Exec= at EXEC
+#   dev_desktop_quote PATH          PATH as one argument of a desktop entry's
+#                                   Exec= (quoted and escaped when it needs it)
+#   dev_desktop_exec FILE EXEC      point the [Desktop Entry] group's Exec= in
+#                                   FILE at the program EXEC
 
 DEV_VERIFIED_KEEP=20
 
@@ -70,7 +73,10 @@ dev_verified_add() {
   mkdir -p "$(dirname "$list")" || return 1
   tmp="$list.tmp.$$"
   {
-    if [ -f "$list" ] && [ ! -L "$list" ]; then
+    # Only a list the lookup would trust carries its lines over: rewriting an
+    # untrusted one into a fresh mode-600 file would launder whatever was
+    # planted in it.
+    if _dev_list_trusted "$list"; then
       awk -v sha="$sha" '$1 != sha' "$list" || true
     fi
     printf '%s %s %s %s\n' "$sha" "$commit" "$version" "$built"
@@ -79,14 +85,21 @@ dev_verified_add() {
     mv -f "$tmp" "$list"
 }
 
-dev_verified_lookup() {
-  local list="$1" sha="$2" owner mode
-  _dev_is_sha256 "$sha" || return 1
+# A regular file (not a link) this user owns that neither group nor other can
+# write.
+_dev_list_trusted() {
+  local list="$1" owner mode
   [ -f "$list" ] && [ ! -L "$list" ] || return 1
   read -r owner mode < <(stat -c '%u %a' "$list" 2>/dev/null) || return 1
   [ "$owner" = "$(id -u)" ] || return 1
   # No write bit for group or other (octal digits 2, 3, 6, 7 in either place).
   case "$mode" in *[2367]?|*[2367]) return 1 ;; esac
+}
+
+dev_verified_lookup() {
+  local list="$1" sha="$2"
+  _dev_is_sha256 "$sha" || return 1
+  _dev_list_trusted "$list" || return 1
   awk -v sha="$sha" '
     $1 == sha && NF == 4 { found = $2 " " $3 " " $4 }
     END { if (found == "") exit 1; print found }
@@ -131,11 +144,35 @@ dev_launcher_install() {
   rm -rf "$dest.old"
 }
 
+# The desktop entry spec splits Exec= on spaces and expands `%` field codes, so
+# a path with a space (a home like "/home/a b") must be one quoted argument,
+# with `"`, `` ` ``, `$` and `\` escaped inside the quotes (and the string-level
+# backslash escaping applied on top), and `%` doubled.
+dev_desktop_quote() {
+  local arg="$1" bs='\'
+  case "$arg" in
+    *[!A-Za-z0-9/._+:@,=-]*) ;;
+    *) printf '%s' "$arg"; return 0 ;;
+  esac
+  arg="${arg//"$bs"/"$bs$bs$bs$bs"}"
+  arg="${arg//\"/"$bs$bs\""}"
+  arg="${arg//\`/"$bs$bs\`"}"
+  arg="${arg//\$/"$bs$bs\$"}"
+  arg="${arg//"%"/"%%"}"
+  printf '"%s"' "$arg"
+}
+
 dev_desktop_exec() {
-  local file="$1" exec="$2" tmp
+  local file="$1" exec tmp
   [ -f "$file" ] || return 0
+  exec="$(dev_desktop_quote "$2")"
   tmp="$file.tmp.$$"
-  EXEC="$exec" awk '/^Exec=/ { print "Exec=" ENVIRON["EXEC"]; next } { print }' "$file" >"$tmp" &&
+  # Only the main group's Exec=: a [Desktop Action …] keeps its own.
+  EXEC="$exec" awk '
+    /^\[/ { group = $0; sub(/\r$/, "", group); main = (group == "[Desktop Entry]") }
+    main && /^Exec=/ { print "Exec=" ENVIRON["EXEC"]; next }
+    { print }
+  ' "$file" >"$tmp" &&
     chmod 755 "$tmp" &&
     mv -f "$tmp" "$file"
 }

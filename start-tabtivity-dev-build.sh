@@ -179,7 +179,10 @@ if [ -n "$frozen_commit" ] && git -C "$ROOT" rev-parse --verify --quiet "$frozen
     why="the post-commit freeze has not caught up yet."
     failed="$APP_DIR/package-dev-auto.failed"
     if [ -f "$failed" ]; then
-      read -r fcommit fstatus _ <"$failed"
+      # `|| true`: an empty or unterminated record makes `read` fail, which
+      # under `set -e` ended the launcher before the window opened.
+      fcommit="" fstatus=""
+      read -r fcommit fstatus _ <"$failed" || true
       why="the post-commit freeze FAILED at $fcommit (status $fstatus) — see $APP_DIR/package-dev-auto.log."
     fi
     printf 'snapshot %s is %s commit(s) behind HEAD: %s\n' "$frozen_commit" "$behind" "$why"

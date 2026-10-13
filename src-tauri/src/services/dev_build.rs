@@ -156,9 +156,7 @@ pub fn parse_log(text: &str) -> LogSummary {
             *phase = BuildPhase::Frontend;
         } else if script == Some("mobile:build") {
             *phase = BuildPhase::Mobile;
-        } else if trimmed.starts_with("package-dev: published the phone bundle")
-            || trimmed.starts_with("Compiling ")
-        {
+        } else if trimmed.starts_with("Compiling ") {
             *phase = BuildPhase::Cargo;
         } else if trimmed.starts_with("Finished `release`") {
             *phase = BuildPhase::Install;
@@ -603,7 +601,7 @@ Installed frozen binary: /h/", crate::app_slug!(), "-dev (0.1.72 @ 47b2af1, from
         );
         assert_eq!(step(concat!("> ", crate::app_slug!(), "@0.1.73 mobile:build\n")), Some(BuildPhase::Mobile));
         assert_eq!(
-            step("package-dev: published the phone bundle (30ed347) to /x\n"),
+            step(concat!("   Compiling ", crate::app_slug!(), " v0.1.73 (/r/target/freeze-tree/src-tauri)\n")),
             Some(BuildPhase::Cargo)
         );
         assert_eq!(
@@ -919,6 +917,46 @@ mod launcher_tests {
         assert_eq!(f.ran(), "old", "{log}");
     }
 
+    /// `git` in the fixture's checkout, blind to the user's own config.
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn a_snapshot_behind_head_still_opens_whatever_the_failure_record_holds() {
+        let f = fixture();
+        git(&f.checkout, &["init", "-q"]);
+        git(&f.checkout, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let first = git(&f.checkout, &["rev-parse", "--short", "HEAD"]);
+        git(&f.checkout, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        fs::write(f.installed.with_file_name(format!("{DEV_BIN_NAME}.frozen")), format!("commit={first}\n")).unwrap();
+        // An empty failure record (a write cut short) made `read` fail under
+        // `set -e`: the launcher ended before the window opened.
+        let failed = f.share.join("package-dev-auto.failed");
+        fs::write(&failed, "").unwrap();
+        let (ok, log) = f.launch();
+        assert!(ok, "{log}");
+        assert_eq!(f.ran(), "old", "{log}");
+        assert!(log.contains("1 commit(s) behind HEAD"), "{log}");
+        // And a well-formed one is still reported.
+        fs::write(&failed, "abc1234 101 2026-10-13T10:00:00+02:00\n").unwrap();
+        fs::remove_file(f.home.join("ran")).unwrap();
+        let (ok, log) = f.launch();
+        assert!(ok, "{log}");
+        assert_eq!(f.ran(), "old", "{log}");
+        assert!(log.contains("FAILED at abc1234 (status 101)"), "{log}");
+    }
+
     #[test]
     fn the_list_is_trusted_only_when_private_and_sanitises_its_fields() {
         let dir = tempfile::tempdir().unwrap();
@@ -957,6 +995,23 @@ dev_verified_lookup "$LIST" "$(printf '%064x' 5)" || echo gone"#,
         );
         assert!(ok, "{out}");
         assert_eq!(out.split_whitespace().collect::<Vec<_>>(), ["20", "again", "gone"]);
+
+        // Recording into a list the lookup would refuse starts it afresh:
+        // a line planted there is not carried into the new mode-600 file.
+        let planted = "e".repeat(64);
+        fs::write(&list, format!("{planted} 1111111 0.1.0 x\n")).unwrap();
+        fs::set_permissions(&list, fs::Permissions::from_mode(0o666)).unwrap();
+        let env = [("LIST", list.to_str().unwrap()), ("SHA", sha.as_str()), ("PLANTED", planted.as_str())];
+        let (ok, out) = lib(
+            home,
+            r#"dev_verified_add "$LIST" "$SHA" c v t
+dev_verified_lookup "$LIST" "$PLANTED" || echo refused
+dev_verified_lookup "$LIST" "$SHA" >/dev/null && echo kept"#,
+            &env,
+        );
+        assert!(ok, "{out}");
+        assert_eq!(out.split_whitespace().collect::<Vec<_>>(), ["refused", "kept"]);
+        assert_eq!(fs::metadata(&list).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[test]
@@ -976,24 +1031,44 @@ dev_verified_lookup "$LIST" "$(printf '%064x' 5)" || echo gone"#,
         let add = package_dev.find("dev_verified_add").unwrap();
         let install = package_dev.find("dev_launcher_install").unwrap();
         assert!(guard < add && guard < install);
-        assert!(package_dev.contains("Exec=$LAUNCHER") && package_dev.contains("LAUNCHER=\"$LAUNCHER_DIR/"));
+        assert!(
+            package_dev.contains("Exec=$(dev_desktop_quote \"$LAUNCHER\")") && package_dev.contains("LAUNCHER=\"$LAUNCHER_DIR/")
+        );
     }
 
     #[test]
     fn the_desktop_entry_is_pointed_at_the_copy() {
         let dir = tempfile::tempdir().unwrap();
         let entry = dir.path().join("e.desktop");
-        fs::write(&entry, "[Desktop Entry]\nName=x\nExec=/checkout/start.sh\nIcon=y\n").unwrap();
+        let action = "[Desktop Action other]\nName=o\nExec=/keep/me --flag\n";
+        fs::write(&entry, format!("[Desktop Entry]\nName=x\nExec=/checkout/start.sh\nIcon=y\n\n{action}")).unwrap();
+        // A home with a space: the spec splits Exec= on spaces, so the path is
+        // one quoted argument (it was written bare, and the click ran `/h/a`).
+        // Run twice: the rewrite is idempotent.
         let (ok, out) = lib(
             dir.path(),
-            r#"dev_desktop_exec "$ENTRY" '/h/a b/dev-launcher/start.sh'; dev_desktop_exec "$ENTRY.missing" /x"#,
+            r#"dev_desktop_exec "$ENTRY" '/h/a b/dev-launcher/start.sh'; dev_desktop_exec "$ENTRY" '/h/a b/dev-launcher/start.sh'; dev_desktop_exec "$ENTRY.missing" /x"#,
             &[("ENTRY", entry.to_str().unwrap())],
         );
         assert!(ok, "{out}");
         assert_eq!(
             fs::read_to_string(&entry).unwrap(),
-            "[Desktop Entry]\nName=x\nExec=/h/a b/dev-launcher/start.sh\nIcon=y\n"
+            format!("[Desktop Entry]\nName=x\nExec=\"/h/a b/dev-launcher/start.sh\"\nIcon=y\n\n{action}")
         );
         assert!(!dir.path().join("e.desktop.missing").exists());
+
+        // A plain path stays bare; `%`, `$`, `"`, `` ` `` and `\` are escaped
+        // the spec's way inside the quotes.
+        let (ok, out) = lib(
+            dir.path(),
+            r#"dev_desktop_quote /home/u/.local/share/app/dev-launcher/start.sh; echo
+dev_desktop_quote '/h/100% $x"y`z\w'"#,
+            &[],
+        );
+        assert!(ok, "{out}");
+        assert_eq!(
+            out,
+            "/home/u/.local/share/app/dev-launcher/start.sh\n\"/h/100%% \\\\$x\\\\\"y\\\\`z\\\\\\\\w\""
+        );
     }
 }
