@@ -5200,3 +5200,148 @@ lands on develop. Steps 1–2 once, first.
 39. A project in OneDrive with online-only files: open, edit and save a
     Markdown file (it hydrates); "Save to project" a mail attachment; browse
     the project from the phone. A junction or symlink in it is still refused.
+
+## Merge with develop (2026-10-13)
+
+**Merge:** `df4c5874` "Merge develop into threat/1012-final" (parents
+`0a3b7ec7` = this run's final review, `168d6dd2` = develop at v0.2.3; 40
+develop commits since `5d82c988`: CodeQL fixes, `c9311223`'s one blocking
+helper `app_core::rt::{blocking,try_blocking}` + poison-safe `lock_ok`
+replacing every `run_off_thread`/`spawn_blocking` boilerplate, phone uploads
+("Upload here", `uploads.rs`, `phone_uploads_list`/`phone_upload_undo`),
+project transfer of agent conversations and of a remote host's tree, new
+project from the phone, the shortened help texts `f08416dd`, `autotests =
+false` + `tests/it.rs`, the version bump).
+
+### Conflicts and how each was resolved
+
+- **`commands/apps.rs` (`open_file`).** Develop dropped `run_off_thread` for
+  `app_core::rt::try_blocking("app", …)`; ours added `effective_handler` +
+  `open_goes_ahead` (C2 launcher refusal, `check_only`). Kept our body on
+  develop's helper; the `Option<TrackedWindow>` return and both checks stay.
+- **`commands/tex.rs` (`compile_tex`).** Same helper change; kept our
+  `own_folder_unlinked_check` (D3) as the first thing in the closure.
+- **`commands/caldav.rs` (4 hunks).** Develop's `try_blocking("caldav", …)`
+  everywhere; ours kept in full: `caldav_account_upsert`'s
+  `upgrade_http_refs` + `check_account_origin` + row href upgrade (E2b, step
+  10), `caldav_apply`'s `discard` argument and `CalDavApplied` return (gap 32),
+  `caldav_push`'s dirty mark before the PUT and `set_caldav_identity_sent_at`
+  with `outcome.dirty`. Develop's `.await` tails (no `map_err(..)??`) apply.
+- **`services/mail_ai.rs` (`chat`).** Develop removed `read_settings` for
+  `crate::storage::load_settings().unwrap_or_default()` (same file, same
+  fallback); ours split `chat` into `chat_with` + `preflight` (gap 25). Kept
+  ours, fed by develop's loader.
+- **`src/lib/i18n.ts` + `de/es/fr/it`.** Two keys both sides reworded:
+  `rootReview.settingHelp` (ours added "CalDAV-synced calendar changes always
+  wait for review", E3 staging) and `gitPushMcp.help` (ours added "only the
+  repo confirmed for pushes or one allowed on an Allow CI card", A2). Took
+  develop's shortened text and appended a short form of our sentence, in all
+  five dictionaries. Key sets checked: 9573 keys in each, no duplicates, none
+  missing or extra.
+- **`src/__tests__/root/InboxIndicator.test.tsx`.** Import conflict (ours
+  `useOpenExternalStore`, develop `storageKey`): both kept. Semantic fix:
+  our "opens nothing when the user declines or the backend refuses a launcher"
+  test's mock answered `undefined` to develop's new `phone_uploads_list`, so
+  the component's `uploads.filter` threw; the mock now answers `[]`, as
+  develop's own fixture beside it does.
+- **`docs/filemap_backend.md`.** Our `fs.rs` row (`open_confined`, D1) + develop's
+  longer `project_transfer.rs` row; develop's `mobile_control/` row (uploads,
+  new project) + our `files_windows.rs` row (link-type reparse points refused
+  by tag, others reopened and matched by file id; `open_existing_for_write`;
+  `fs::open_confined`) with develop's "and Upload here's `FILE_CREATE`";
+  develop's new `agent_history.rs` and `tar_stream.rs` rows + our `home_io.rs`
+  row (`remove_tree`).
+- **`docs/filemap_frontend.md`.** Develop's `PromptDialogs.tsx` row
+  (`AsyncConfirmDialog`) + our `ExecTrustHost` (queue, `useConfirmArmed`) and
+  `OpenExternalHost` rows.
+- **`docs/threat_model.md`** (phone project files row). Develop's text (the
+  Upload here paragraph, `.tabtivity` "also under the older name") with our
+  Windows reparse sentence (link-type by tag, OneDrive placeholders reopened
+  and matched by file id) in place of "rejects all reparse points". Rows
+  19–38 were untouched by develop and still read "Fixed, not live-verified".
+
+Not a conflict, done for develop's refactor: our new
+`clear_local_model_conversations` (`commands/ollama.rs`) moved from
+`tokio::task::spawn_blocking` + `map_err` to `try_blocking("ollama", …)`
+(same behaviour; the command runs on the host runtime like every other).
+
+**Where the stricter side won:** nowhere needed. No two changes contradicted;
+every check, refusal and test of ours stands, and every develop change stands.
+
+### Semantic check of the auto-merged files
+
+The 62 files both sides changed (`git diff --name-only 5d82c988 develop` ∩
+`… HEAD`) compile and test together. Looked at specifically:
+- **`tauri.conf.json`.** Develop changed only `version` (0.2.3); our
+  `"label": "main", "create": false` stays and `create_main_window` in
+  `setup` is the only builder of `main`. No window config of develop's is
+  ignored or duplicated. `lib.rs`: develop's edits are `lock_ok`, `clock`,
+  `settings_path` and three new commands in the handler list; the setup
+  order around our main-window creation is unchanged.
+- **`Cargo.toml`/`src-tauri/Cargo.toml`/`Cargo.lock`.** Develop's `md-5`,
+  `[profile.dev] debug = "line-tables-only"`, `crate-type = ["rlib"]`,
+  `autotests = false` with `tests/it.rs` (this run added no `tests/*.rs`) sit
+  beside our `psl = "2"`; the lock has `psl 2.1.241` + `psl-types` and
+  `md-5 0.10.6`; `cargo fetch --locked` with the overlay `CARGO_HOME` needed
+  nothing new (`md-5` was already cached there).
+- **`command_class.rs`/`commandClasses.ts`/`model_allowlist.rs`.** Develop's
+  rows (`phone_uploads_list`, `phone_upload_undo`, `preview_host_export`) and
+  ours (`clear_local_model_conversations` `Core` + `MODEL_ARG`) both present;
+  `UPDATE_COMMAND_CLASSES=1 … the_generated_command_classes_ts_is_current`
+  left `commandClasses.ts` unchanged.
+- **`root_mcp*.rs`, `git_ci.rs`, `git_push_mcp.rs`, `fs.rs`,
+  `root_mcp_review.rs`.** Develop's edits there are mechanical (`lock_ok`,
+  `try_blocking`, `settings_path`/`projects_path`, `clock::now_ms`,
+  `entry.directory()`) plus the CI budget map pruning (`admit_in`); none
+  touches our `ci_target`/`repo_changed`, `open_confined`, staging or
+  `refusal_reason` logic.
+- **`mobile_control/files.rs`/`files_windows.rs`.** Develop's `seal` now
+  returns `Result` and `ProjectDir::open` is `pub(super)`/`pub(in
+  mobile_control)` for `uploads.rs`; our `pub(crate)` struct, the Windows
+  reparse rule and `open_existing_for_write` coexist. Uploads create with
+  `O_EXCL`/`FILE_CREATE` and are not affected by the relaxed lookup rule.
+- **`project_transfer.rs`.** The single `ExportManifest` construction still
+  uses `exported_entry` and the import still calls
+  `drop_imported_confirmations` (`git_ci_repos`, `confirmed_url`); develop's
+  remote-tree export goes through the same manifest.
+- **Frontend.** `InboxIndicator.tsx` keeps develop's *Added to projects* and
+  our `confirmOsOpen` on `global_inbox_open`; `AppShell`/`DetachedApp` mount
+  `OpenExternalHost` beside `ExecTrustHost`; `PromptDialogs.tsx` has both
+  `AsyncConfirmDialog` and `useConfirmArmed`. Develop's new frontend adds no
+  OS hand-off or webview (one `target="_blank"` docs link in the mobile guide,
+  which our `app_new_window` sends to the system browser).
+
+Left for the user (not merge-breaking): develop's bundle import of agent
+conversations (`agent_history`) can bring a local model's Vibe sessions in
+without the gap 33 read-mail model marker, which lives in the state dir, not
+the bundle.
+
+### Gates (at `df4c5874`)
+
+- `npm run build` ok (the usual chunk-size notes).
+- `npm test`: 816 files / 8253 tests passed (first run: 1 failure, the
+  `InboxIndicator` fixture above; fixed, then all green).
+- `cargo test --workspace -q`: 4427 passed, 0 failed, 4 ignored (lib 4019).
+- `cargo test -p tabtivity --no-default-features --lib --test
+  server_secrets -q`: 3921 + 1 passed, 4 ignored (no flake).
+- `rtk proxy npm run lint`: 0 errors, 28 warnings; none new against develop
+  (the three warned files that differ from develop carry the same warnings
+  there).
+- `cargo clippy --workspace --all-targets -- -D warnings`, `-p tabtivity
+  --no-default-features --lib`, `-p app-serverd --all-targets`: clean.
+- `UPDATE_COMMAND_CLASSES=1 cargo test -p tabtivity --lib --
+  the_generated_command_classes_ts_is_current`: passed, file unchanged.
+- Windows cross-check (`clippy --manifest-path src-tauri/Cargo.toml --target
+  x86_64-pc-windows-msvc --all-targets -D warnings`; `cargo check --workspace
+  --all-targets` for that target, msvc shims): clean.
+  `aarch64-apple-darwin` `cargo check --workspace --all-targets` with the
+  check-only CC/AR stand-ins: clean (the 5 vendored `tauri-runtime-wry`
+  warnings).
+- `cargo build -p app-serverd` + `ldd tabtivity-serverd`: vdso, libgcc_s,
+  libm, libc, ld-linux only.
+- `scripts/brand-check.sh` ok; `scripts/privacy-check.sh` clean (staged,
+  `develop HEAD`: 57 commits, `5d82c988 HEAD`: 97 commits); `git diff
+  --check` clean; `npm run untested -- check` agrees.
+- Cargo used the overlay `CARGO_HOME` and `CARGO_TARGET_DIR` of
+  `.claude/worktrees/threat1012/target`, `CARGO_INCREMENTAL=0`.
+  `npm run backend:stale` not run; nothing run live.
