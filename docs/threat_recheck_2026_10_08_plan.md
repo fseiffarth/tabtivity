@@ -620,6 +620,20 @@ the user"):
   address the local-model check used (`ollama_http_at`, `capabilities_of`
   too); refuse a model whose alias collides with another installed model's;
   a `/api/tags` timeout says "not running", not "not installed".
+- **CalDAV credential host (answered 2026-10-13, after the step 7
+  implementer flagged iCloud-shaped providers):** credentials may go to any
+  https host under the account's registrable domain (public-suffix list, so
+  `example.co.uk` never covers `.co.uk`), not only the exact host. Built in
+  follow-up agent step 10, with the step 7 reviewer's small CalDAV bugs: an
+  account switched from http to https rewrites its same-host `http://`
+  calendar subscriptions to https; "Keep mine" on a question without a
+  resource address (lost-reply create, server-deleted series) works instead
+  of erroring; a row moved into a local calendar drops `caldav_dirty`.
+
+| Follow-up agent step | Items |
+|---|---|
+| 9 | (a) exec bit ignored on filesystems without Unix permissions; (b) blob pane opens in-app viewers; `ExecTrust` question queue; macOS `.app` reveal message; (c) "Clear conversations"; step 5 mail hardening items |
+| 10 | CalDAV same-registrable-domain credential rule; step 7 reviewer's small CalDAV bugs |
 
 | Agent step | Plan step | Gaps | Main files |
 |---|---|---|---|
