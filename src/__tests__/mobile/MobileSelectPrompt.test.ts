@@ -790,6 +790,26 @@ describe(`${BRAND.display} Mobile question tabs`, () => {
     ]);
   });
 
+  it("reads a row holding a line terminator in linear time", () => {
+    // Both tab-row patterns used to backtrack exponentially once a row held
+    // a character `.` stops at (CodeQL js/redos): a printed U+2028 could
+    // hang the page. 40 repetitions took hours; now well under a second.
+    for (const end of ["\u2028x", "\nx", "\rx", "\u2029x"]) {
+      const start = performance.now();
+      readQuestionTabs("☐ a" + "  ☐ a".repeat(40) + end);
+      readQuestionTabs("≡\t!\t│\t≡\t!" + "\t│\t≡\t!".repeat(40) + end);
+      questionTabsSubmit("≡\t!\t│\t≡\t!" + "\t│\t≡\t!".repeat(40) + end);
+      questionTabRowKeys("≡\t!\t│\t≡\t!" + "\t│\t≡\t!".repeat(40) + end);
+      expect(performance.now() - start).toBeLessThan(1000);
+    }
+    // A terminator in a separator still reads as one.
+    expect(readQuestionTabs("☒ Scope \u2028☐ Tag")).toEqual([
+      { label: "Scope", answered: true },
+      { label: "Tag", answered: false },
+    ]);
+    expect(readQuestionTabs("□ Scope │\u2028≡ Review →")).toEqual([{ label: "Scope", answered: false }]);
+  });
+
   it("is not fooled by a sentence", () => {
     expect(readQuestionTabs("✔ Done")).toBeNull();
     expect(readQuestionTabs("Push scope")).toBeNull();

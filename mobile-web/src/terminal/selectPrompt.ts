@@ -687,7 +687,12 @@ export interface QuestionTab {
   answered: boolean;
 }
 
-const TAB_ROW = /^\s*(?:←\s+)?((?:[☐☒☑✔✓]\s+\S.*?)(?:\s{2,}[☐☒☑✔✓]\s+\S.*?)*)(?:\s+→)?\s*$/u;
+// A chip's text is `[\s\S]*?`, not `.*?`: `.` stops at a line terminator that
+// the separators' `\s` spans, and on a row holding one (a printed U+2028)
+// these patterns backtracked exponentially (CodeQL js/redos). With any
+// character allowed a row that starts like one always matches, so nothing is
+// retried; on rows without a terminator the captures are the same.
+const TAB_ROW = /^\s*(?:←\s+)?((?:[☐☒☑✔✓]\s+\S[\s\S]*?)(?:\s{2,}[☐☒☑✔✓]\s+\S[\s\S]*?)*)(?:\s+→)?\s*$/u;
 const TAB = /^([☐☒☑✔✓])\s+(\S.*)$/u;
 
 /** The tab row Claude Code draws over the question an agent asks
@@ -712,7 +717,7 @@ export function readQuestionTabs(text: string): QuestionTab[] | null {
   return tabs.length > 0 ? tabs : null;
 }
 
-const GEMINI_TAB_ROW = /^\s*(?:←\s+)?([□✓≡]\s+\S.*?(?:\s+│\s+[□✓≡]\s+\S.*?)+)(?:\s+→)?\s*$/u;
+const GEMINI_TAB_ROW = /^\s*(?:←\s+)?([□✓≡]\s+\S[\s\S]*?(?:\s+│\s+[□✓≡]\s+\S[\s\S]*?)+)(?:\s+→)?\s*$/u;
 const GEMINI_TAB = /^([□✓≡])\s+(\S.*)$/u;
 
 /** Gemini CLI's tab row over an `ask_user` dialog that asks several — and
