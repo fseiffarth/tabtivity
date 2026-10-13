@@ -24,6 +24,9 @@ import { useT } from "../../lib/i18n";
 
 /** What `clear_local_model_conversations` answers while a tab of the model runs. */
 const LOCAL_MODEL_TAB_OPEN = "local_model_tab_open";
+/** …when a tab of the model started while the conversations were being
+ *  deleted: they are gone, the read-mail mark stays. */
+const LOCAL_MODEL_TAB_STARTED = "local_model_tab_started";
 
 /**
  * The open tabs (every scope) of a local model's Mistral Vibe home: a `vibe`
@@ -280,7 +283,12 @@ export function useModelsHub(active: boolean) {
       await showMessage(
         e === LOCAL_MODEL_TAB_OPEN
           ? { title: busyTitle, body: t("localModel.clearBusyRunning") }
-          : { title: t("localModel.clearFailedTitle", { name: model }), body: String(e), error: true },
+          : e === LOCAL_MODEL_TAB_STARTED
+            ? {
+                title: t("localModel.clearMarkKeptTitle", { name: model }),
+                body: t("localModel.clearMarkKeptBody"),
+              }
+            : { title: t("localModel.clearFailedTitle", { name: model }), body: String(e), error: true },
       );
     }
   };

@@ -3370,6 +3370,8 @@ export const dict: Dict = {
   "localModel.clearBusyRunning": "Un onglet de ce modèle est encore en cours. Fermez-le d'abord.",
   "localModel.clearDoneTitle": "Conversations de {name} effacées",
   "localModel.clearDoneBody": "Les nouveaux onglets de ce modèle démarrent une nouvelle conversation.",
+  "localModel.clearMarkKeptTitle": "Les conversations de {name} ont été effacées, mais sa marque de courrier lu est conservée",
+  "localModel.clearMarkKeptBody": "Un onglet de ce modèle a démarré pendant leur suppression et peut lire le courrier ; ses onglets soumettent donc toujours leurs actions à approbation. Fermez l'onglet et effacez de nouveau pour retirer la marque.",
   "localModel.clearFailedTitle": "Impossible d'effacer les conversations de {name}",
   "localModel.manageAgents": "Gérer les agents…",
   "localModel.skillsLibrary": "Bibliothèque de skills…",

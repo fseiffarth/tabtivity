@@ -3368,6 +3368,8 @@ export const dict: Dict = {
   "localModel.clearBusyRunning": "Una pestaña de este modelo sigue en marcha. Ciérrala primero.",
   "localModel.clearDoneTitle": "Conversaciones de {name} borradas",
   "localModel.clearDoneBody": "Las nuevas pestañas de este modelo empiezan una conversación nueva.",
+  "localModel.clearMarkKeptTitle": "Las conversaciones de {name} se borraron, pero se mantuvo su marca de correo leído",
+  "localModel.clearMarkKeptBody": "Una pestaña de este modelo se abrió mientras se borraban y puede leer correo, así que sus pestañas siguen dejando sus acciones para aprobación. Cierra la pestaña y vuelve a borrar para quitar la marca.",
   "localModel.clearFailedTitle": "No se pudieron borrar las conversaciones de {name}",
   "localModel.manageAgents": "Gestionar agentes…",
   "localModel.skillsLibrary": "Biblioteca de skills…",

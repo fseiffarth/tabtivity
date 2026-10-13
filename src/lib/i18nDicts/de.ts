@@ -3371,6 +3371,8 @@ export const dict: Dict = {
   "localModel.clearBusyRunning": "Ein Tab dieses Modells läuft noch. Schließe ihn zuerst.",
   "localModel.clearDoneTitle": "Unterhaltungen von {name} gelöscht",
   "localModel.clearDoneBody": "Neue Tabs dieses Modells beginnen eine neue Unterhaltung.",
+  "localModel.clearMarkKeptTitle": "Die Unterhaltungen von {name} wurden gelöscht, die Mail-gelesen-Markierung aber behalten",
+  "localModel.clearMarkKeptBody": "Während des Löschens ist ein Tab dieses Modells gestartet, der E-Mails lesen könnte; seine Tabs legen ihre Aktionen deshalb weiter zur Freigabe vor. Schließe den Tab und lösche erneut, um die Markierung zu entfernen.",
   "localModel.clearFailedTitle": "Die Unterhaltungen von {name} konnten nicht gelöscht werden",
   "localModel.manageAgents": "Agenten verwalten…",
   "localModel.skillsLibrary": "Skills-Bibliothek…",

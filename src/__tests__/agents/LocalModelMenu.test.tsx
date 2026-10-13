@@ -520,4 +520,17 @@ describe("Clear conversations (gap 33 follow-up)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Clear conversations" }));
     expect(await screen.findByText(/A tab of this model is still running/)).toBeTruthy();
   });
+
+  it("says the conversations went but the read-mail mark stayed when a tab started mid-clear", async () => {
+    clearAnswer = () => Promise.reject("local_model_tab_started");
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    fireEvent.click(await screen.findByTitle(/Delete qwen:7b's stored conversations/));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear conversations" }));
+    expect(
+      await screen.findByText("qwen:7b's conversations were cleared, but its read-mail mark was kept"),
+    ).toBeTruthy();
+    expect(screen.getByText(/A tab of this model started while they were being deleted/)).toBeTruthy();
+    expect(screen.queryByText("qwen:7b's conversations were not cleared")).toBeNull();
+  });
 });

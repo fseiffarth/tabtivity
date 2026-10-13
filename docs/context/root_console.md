@@ -677,15 +677,19 @@ model stages all its writes and marks its drafts as reader drafts, until
 "Clear conversations" on the model's row in the local model menu (follow-up
 decision (c), `commands::ollama::clear_local_model_conversations`) deletes the
 model's stored Vibe conversations — `logs/session/` of its `VIBE_HOME`, the
-unified store and the older `session_*` folders, never through a planted link
-— and then the model marker, in that order and never the marker alone (the
+unified store and the older `session_*` folders, deleted through directory
+handles opened without following a link at any component
+(`home_io::HomeDir::remove_tree`), so a link planted or swapped in anywhere is
+unlinked, never followed — and then the model marker, in that order and never the marker alone (the
 marker says a conversation holds mail; with none left to continue it has
 nothing to say). Config, hooks, logins, `vibehistory` and `vibe.log` stay.
 It is refused while a tab of the model is open: the window names its open
 tabs (raw model name or alias, every scope), and the backend refuses
 (`local_model_tab_open`) while a live spawn has that `VIBE_HOME`
 (`agent_fence::live_tabs_in_vibe_home`), asked again after the store is gone
-and before the marker goes, so a tab that started meanwhile keeps the marker.
+and before the marker goes, so a tab that started meanwhile keeps the marker;
+that second refusal is its own code (`local_model_tab_started`), and the
+window says the conversations were cleared but the read-mail mark was kept.
 A model name that is absolute or has an empty, `.` or `..` part is refused
 (`validate_model_name`): the name is the home's folder. Tab markers (`read_mail/`) are not
 touched, so a restored tab that read mail stays tainted. The markers are written before the read, and a

@@ -3488,6 +3488,8 @@ export const enSource = {
   "localModel.clearBusyRunning": "A tab of this model is still running. Close it first.",
   "localModel.clearDoneTitle": "{name}'s conversations cleared",
   "localModel.clearDoneBody": "New tabs of this model start a fresh conversation.",
+  "localModel.clearMarkKeptTitle": "{name}'s conversations were cleared, but its read-mail mark was kept",
+  "localModel.clearMarkKeptBody": "A tab of this model started while they were being deleted, and it may read mail, so its tabs still stage what they do. Close the tab and clear again to remove the mark.",
   "localModel.clearFailedTitle": "{name}'s conversations could not be cleared",
   "localModel.manageAgents": "Manage CLIs…",
   "localModel.skillsLibrary": "Skills library…",

@@ -4077,6 +4077,12 @@ pub async fn prepare_local_agent(model: String) -> Result<LocalAgentPrep, String
 /// model runs; the window names the tabs.
 pub(crate) const LOCAL_MODEL_TAB_OPEN: &str = "local_model_tab_open";
 
+/// The refusal [`clear_local_model_conversations`] answers when a tab of the
+/// model started while the conversations were being deleted: they are gone,
+/// but the read-mail mark is kept (the new tab may already read mail). The
+/// window says exactly that.
+pub(crate) const LOCAL_MODEL_TAB_STARTED: &str = "local_model_tab_started";
+
 /// "Clear conversations" (local model menu): delete `model`'s stored Vibe
 /// conversations — `logs/session/` of its per-model `VIBE_HOME`, where Vibe
 /// keeps every session (the unified store and the older `session_*`
@@ -4109,7 +4115,8 @@ pub async fn clear_local_model_conversations(model: String) -> Result<(), String
 /// again just before the marker goes: a tab of the model that started while
 /// the store was being deleted may already hold a conversation (one it
 /// resumed, or a new one that reads mail), so the marker stays and the clear
-/// is refused. Pure over the filesystem + tested.
+/// answers [`LOCAL_MODEL_TAB_STARTED`] — the conversations *were* deleted.
+/// Pure over the filesystem + tested.
 fn clear_conversations_in(
     home: &std::path::Path,
     marker: &std::path::Path,
@@ -4120,7 +4127,7 @@ fn clear_conversations_in(
     }
     remove_vibe_sessions(home)?;
     if !live().is_empty() {
-        return Err(LOCAL_MODEL_TAB_OPEN.to_string());
+        return Err(LOCAL_MODEL_TAB_STARTED.to_string());
     }
     match std::fs::remove_file(marker) {
         Ok(()) => Ok(()),
@@ -4130,11 +4137,16 @@ fn clear_conversations_in(
 }
 
 /// Delete `<home>/logs/session`, never through a link: the home is written by
-/// the model's (fenced) tabs, so `logs` or `session` may be a link planted
-/// there. A linked `logs` or `session` is removed as the link itself, which
-/// is all Vibe would read through; the home itself must be a plain folder.
-/// A missing home, `logs` or store is nothing to clear.
+/// the model's (fenced) tabs, so `logs` or `session` (or anything below) may
+/// be a link planted there — also between a check and the delete. So the
+/// delete goes through directory handles (`services::home_io`), opened
+/// without following a link at every component: a linked `logs` or `session`
+/// is removed as the link itself (all Vibe would read through), a link below
+/// is unlinked, and a folder swapped for a link mid-walk fails the clear
+/// instead of redirecting it. The home itself must be a plain folder. A
+/// missing home, `logs` or store is nothing to clear.
 fn remove_vibe_sessions(home: &std::path::Path) -> Result<(), String> {
+    use crate::services::home_io::HomeDir;
     use std::io::ErrorKind::NotFound;
     match std::fs::symlink_metadata(home) {
         Err(e) if e.kind() == NotFound => return Ok(()),
@@ -4142,22 +4154,25 @@ fn remove_vibe_sessions(home: &std::path::Path) -> Result<(), String> {
         Ok(meta) if !meta.is_dir() => return Err(format!("{} is not a plain folder", home.display())),
         Ok(_) => {}
     }
-    let logs = home.join("logs");
-    let target = match std::fs::symlink_metadata(&logs) {
-        Err(e) if e.kind() == NotFound => return Ok(()),
-        Err(e) => return Err(format!("read {}: {e}", logs.display())),
-        Ok(meta) if meta.file_type().is_symlink() => logs,
-        Ok(meta) if !meta.is_dir() => return Ok(()),
-        Ok(_) => logs.join("session"),
+    let root = HomeDir::open_existing(home, "").ok_or_else(|| format!("open {}", home.display()))?;
+    let Some(logs) = root.file("logs").and_then(|f| f.metadata()) else {
+        return Ok(());
     };
-    let removed = match std::fs::symlink_metadata(&target) {
-        Err(e) if e.kind() == NotFound => return Ok(()),
-        Err(e) => Err(e),
-        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&target),
-        // A file or a link (on Windows a directory link needs `remove_dir`).
-        Ok(_) => std::fs::remove_file(&target).or_else(|_| std::fs::remove_dir(&target)),
+    let gone = |result: std::io::Result<()>, what: &std::path::Path| match result {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == NotFound => Ok(()),
+        Err(e) => Err(format!("remove {}: {e}", what.display())),
     };
-    removed.map_err(|e| format!("remove {}: {e}", target.display()))
+    if logs.is_symlink {
+        return gone(root.remove_tree("logs"), &home.join("logs"));
+    }
+    if !logs.is_dir {
+        return Ok(());
+    }
+    let dir = root
+        .subdir_existing("logs")
+        .ok_or_else(|| format!("{} changed while it was being cleared", home.join("logs").display()))?;
+    gone(dir.remove_tree("session"), &home.join("logs").join("session"))
 }
 
 /// Ensure the Ollama provider and the given model are registered in
@@ -6161,9 +6176,11 @@ mod tests {
             asked.set(asked.get() + 1);
             if asked.get() == 1 { Vec::new() } else { vec!["late-tab".to_string()] }
         };
-        assert_eq!(clear_conversations_in(&home, &marker, &live).unwrap_err(), LOCAL_MODEL_TAB_OPEN);
+        // A refusal of its own: the conversations are gone, the mark is kept.
+        assert_eq!(clear_conversations_in(&home, &marker, &live).unwrap_err(), LOCAL_MODEL_TAB_STARTED);
         assert_eq!(asked.get(), 2);
         assert!(marker.exists(), "the marker outlives a clear a new tab overlapped");
+        assert!(!home.join("logs").join("session").exists(), "the conversations were cleared");
     }
 
     #[test]
@@ -6217,6 +6234,13 @@ mod tests {
         std::fs::create_dir_all(home.join("logs")).unwrap();
         std::os::unix::fs::symlink(outside.join("session"), home.join("logs").join("session")).unwrap();
         clear_conversations_in(&home, &marker, &none_live).unwrap();
+        assert!(outside.join("session").join("precious").is_file());
+        // A link deeper in the store is unlinked, its target untouched.
+        assert!(std::fs::symlink_metadata(home.join("logs").join("session")).is_err());
+        std::fs::create_dir_all(home.join("logs").join("session").join("s1")).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("logs").join("session").join("s1").join("out")).unwrap();
+        clear_conversations_in(&home, &marker, &none_live).unwrap();
+        assert!(!home.join("logs").join("session").exists());
         assert!(outside.join("session").join("precious").is_file());
         // A home that is itself a link is refused, and the marker stays.
         let linked = tmp.path().join("vibe_local").join("linked");

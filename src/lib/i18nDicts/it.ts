@@ -3368,6 +3368,8 @@ export const dict: Dict = {
   "localModel.clearBusyRunning": "Una scheda di questo modello è ancora in esecuzione. Chiudila prima.",
   "localModel.clearDoneTitle": "Conversazioni di {name} cancellate",
   "localModel.clearDoneBody": "Le nuove schede di questo modello iniziano una nuova conversazione.",
+  "localModel.clearMarkKeptTitle": "Le conversazioni di {name} sono state cancellate, ma il suo segno di posta letta è rimasto",
+  "localModel.clearMarkKeptBody": "Una scheda di questo modello si è avviata durante la cancellazione e può leggere la posta, quindi le sue schede continuano a sottoporre le azioni ad approvazione. Chiudi la scheda e cancella di nuovo per togliere il segno.",
   "localModel.clearFailedTitle": "Impossibile cancellare le conversazioni di {name}",
   "localModel.manageAgents": "Gestisci agenti…",
   "localModel.skillsLibrary": "Libreria di skill…",
