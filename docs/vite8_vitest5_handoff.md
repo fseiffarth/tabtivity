@@ -297,9 +297,310 @@ Status: **pass, no fix commits** (2026-10-14; reviewed `66f9ae39` +
   on changed entries (npm 11). Per-file test counts v4 vs v5: 0 diffs.
 - `ci-cd.yml`: comment-only change confirmed.
 
-## A5a / A5b — S5 = C3 Tailwind removal
+## A5a — S5 baseline (no commit)
 
-Status: not started.
+Status: **done** (2026-10-14, no commits, no tracked edits besides this
+section). Baseline at **develop `5af871a9`** (first taken at 1b5d8d4b, then
+redone: 9 commits landed meanwhile, two touching `src/styles`, and the
+utility set changed — `select-all` came back via a new comment). Worktree
+`.claude/worktrees/tw-base` (detached 5af871a9, hardlinked node_modules —
+never install there; A5b needs its own worktree + npm 11 install, as A4).
+Artifacts in `<scratchpad>/tw-baseline/` (12 MB; `<scratchpad>` =
+`<scratchpad>`):
+
+- **Built CSS** `css/`: `before.css` (desktop `dist/` bootstrap bundle,
+  656,547 B), `before-web.css` (`web-dist/`, differs only in `/desktop/`
+  font URLs; probe-identical), the lazy chunks `before[-web]-{TerminalView,
+  markdownEnrich,GitHistory,ImageAnnotator}.css` (no Tailwind in them),
+  `before-mobile-index.css` (record only). Build is deterministic (rebuild
+  → byte-identical bundles).
+- **`css/before[-web].stripped.css`** = the bundle minus what S5 drops by
+  design, re-serialised one rule per line — `after.css` should equal it up
+  to formatting. Made by `scripts/strip-tailwind.cjs <wt> tw/utilities.json
+  in out` (aborts if a utility-named rule sits outside the block); run it
+  with `--normalise-only` first on `after.css` so both sides share format,
+  then `diff`. Removed: 66 top-level nodes (61 selectors, `container`'s 5
+  `@media` included) + 103 `--tw-*` declarations (only the 3 default rules
+  `*,:before,:after` / `::backdrop` / `:before,:after{--tw-content}`; no app
+  rule declares or reads a `--tw-` var — 0 in every chunk).
+  `-webkit-`/`-moz-` declarations: 125 in `before.css`, 123 after stripping
+  (the two dropped are the `select-all` and `backdrop-filter` utilities'),
+  so A5b's prefix check compares against the stripped file.
+  Note: Lightning CSS (build.target pin) expands preflight's `html`
+  `font-family` with `-apple-system,…,Helvetica Neue` (system-ui polyfill)
+  and splits `button,input:where([type=button])…` into 4 rules — minifier
+  output, identical once `reset.css` carries the same source.
+- **Tailwind output** `tw/`: `tw-base.cli.css` / `tw-utilities.cli.css`
+  (`npx tailwindcss -c tailwind.config.js -i … -o …`, 555 / 316 lines;
+  the CLI runs autoprefixer itself), and via `scripts/emit-tailwind.cjs`
+  the same through PostCSS: `*.raw.css` (tailwindcss plugin alone — what
+  `reset.css` should contain) and `*.prefixed.css` (+ autoprefixer, as the
+  build ran it; rule-for-rule equal to the CLI output).
+- **Frozen preflight** (step 4): `tw/preflight-table.json` — 37 rules / 79
+  declarations in source order, `--tw-*` removed, `theme()` resolved as
+  emitted (`border-color: #e5e7eb`, sans/mono `font-family` stacks,
+  `font-feature-settings`/`font-variation-settings: normal`, placeholder
+  `#9ca3af`). Selector key = postcss `rule.selectors.join(", ")` — use the
+  same normalisation in `ResetParity.test.ts`. **Paste-ready:**
+  `tw/ResetParity.expected.ts` (`EXPECTED_PREFLIGHT`). The 103 `--tw-*`
+  declarations (51 + 51 + `--tw-content`) are listed separately in
+  `tw/preflight-tw-vars.json`; `preflight-table.prefixed.json` is the
+  autoprefixed variant (reference only). 3.4.19's `preflight.css` carries no
+  modern-normalize notice (only the `! tailwindcss v3.4.19 | MIT License`
+  banner; copyright line in `node_modules/tailwindcss/LICENSE`) — the plan's
+  "(and modern-normalize's)" has nothing to copy.
+- **Utilities: 54 + 7 `!` twins** at 5af871a9 (= the plan's list;
+  `select-all` was absent at 1b5d8d4b). `tw/utilities.json` has every rule.
+
+**Triage (S5 step 2).** Method: `scripts/scan-classes.cjs` walks the TS AST
+of all 761 `src/` files + `index.html`, records every string literal /
+template chunk / JSX text token equal to a utility name with its syntactic
+role (`triage/scan.json`, per-name counts `triage/triage-counts.json`);
+`scripts/scan-dynamic.cjs` takes every non-literal className / `classList` /
+`.className=` / `setAttribute("class")` operand that lands as a standalone
+token, follows it through const initialisers, `push`es and function
+returns, and resolves its value set with the type checker
+(`triage/dynamic.json`): **0** can carry a utility name (14 string-typed
+leftovers checked by hand: frame/bar classes, tones, `tok-*`, mail
+priority `important|urgent`, state classes). HTML-in-strings: 7 `class="${…}"`
+templates, all prefixed or fixed. Third-party DOM: `scripts/
+scan-lib-strings.py` over mermaid (+ chunks, dagre-d3-es, roughjs, d3-axis,
+cytoscape), KaTeX, pdf.js, xterm + addons, uqr (`triage/lib-*.txt`).
+Totals: **relied-on 0**; **app collisions 2** (both fully overridden);
+**third-party collisions 7** (2 not overridden → Flagged); **unused 45 +
+7 twins**.
+
+| selector (Tailwind sets) | verdict | evidence |
+|---|---|---|
+| `inline` (display:inline) | collision, overridden | `BoxScopeChip.tsx:477,532` `className="inline"` → `PillStatusBars.tsx:104` `<span class="pill-status-bars inline">`; `.pill-status-bars{display:flex}` (`projects-tabs.css:1592`, equal specificity, later) wins; `.pill-status-bars.inline` (:637) sets only position/flex/max-width. Probe: identical. Other hits: markdown/tex `kind:"inline"`, highlight keywords |
+| `static` (position:static) | collision, overridden | `PillStatusBars.tsx:114` `${cls} static` → `.pill-status-bar{position:relative}` (:1630) wins; `.pill-status-bar.static` (:645) sets no position. Probe identical. Others: highlight.ts keyword sets, style values |
+| `visible` (visibility:visible) | **3rd-party collision, NOT overridden** | xterm 6 scrollbar `visible scrollbar vertical` (VS Code scrollable element); `xterm.css` `.xterm .xterm-scrollable-element > .visible` sets opacity/background/transition/z-index, no visibility. Inside a `visibility:hidden` ancestor — `.center-panel.moving .pane-layer` (`subwindows.css:194`), `.detached-center.moving .pane-layer` (`base.css:183`), i.e. during a window move — the terminal's scrollbar stays painted. Probe `xterm-scrollbar-visible-in-moving`: visible→hidden, 144 px. App strings: style values, compare (`customScrollbar.ts:584`), prose |
+| `invisible` (visibility:hidden) | **3rd-party collision, NOT overridden** | xterm `invisible scrollbar vertical fade`; `xterm.css` gives opacity:0 + pointer-events:none + `.fade` 800 ms opacity transition. Tailwind hides it at once, so xterm's fade-out never shows. At rest pixel-identical (probe 0 px; visibility hidden→visible). App: `beamer.ts:36` TeX command list |
+| `shadow` (box-shadow via --tw) | 3rd-party collision, overridden | xterm shadow nodes `shadow[ top-left-corner][ top][ left]`: base rule `display:none`; every shown variant gets xterm's own box-shadow at (0,4,0); xterm passes `useShadows:!1` anyway. Probe: box-shadow differs only on the `display:none` node |
+| `block` (display:block) | 3rd-party collision, no rendering effect | mermaid block diagram `<g class="block">`: SVG `g` renders the same (probe 0 px). App: option value `"block"` (`FileViewerPane.tsx:6497`, `ProjectFilesSettings.tsx:518`), yaml `ScalarStyle`, style values |
+| `grid` (display:grid) | 3rd-party collision, no rendering effect | mermaid gantt `<g class="grid">` (probe 0 px). App: viewer mode `"grid"` (`FileViewerPane.tsx:7680–7815`, never a class), `role="grid"` (attribute), deck icon key |
+| `border` (border-width:1px) | 3rd-party collision, no rendering effect | mermaid quadrant `<g class="border">`: SVG paints no CSS border (probe 0 px). App: CSS comment in `SYSMON_CSS`, prose |
+| `transition` (150 ms transitions) | 3rd-party collision, no rendering effect | mermaid state edges `path.transition` (static SVG; probe 0 px). App: tests only |
+| `container` | unused | 92 i18n prose, project tier value `"container"` (`ProjectDialog.tsx:305–1439`) |
+| `collapse` `fixed` `absolute` `relative` `sticky` `inline-block` `flex` `break-all` `line-through` | unused | inline-style values (`position:"fixed"`, `display:"flex"`, …), compares (`customScrollbar.ts:583`), highlight keywords, CSS text in `SYSMON_CSS`, prose (`scaffold.ts:150`) |
+| `hidden` | unused | style values ×17, `visibilityState` compares, localStorage values (`PromptChart.tsx:920`, `PdfPresentApp.tsx:79`), `dataset.steerPointer` (`SteeringLegend.tsx:150`), prose; pdf.js toggles `.hidden` only in editor classes (FreeTextEditor, editToolbar) — the app mounts canvas + `TextLayer` (whose only class is `markedContent`) |
+| `table` `table-cell` `table-row` `list-item` | unused | viewer kind `"table"` (`fileUtils.ts:219,233,360`), TeX env names, odt.ts XML `localName` compares, `.reader-body table` element selectors in CSS strings |
+| `contents` `resize` `rounded` `filter` `ring` `blur` `italic` `transform` | unused | lesson id `"contents"`; `"resize"` events + drag kinds; corners setting `"rounded"` (→ CSS vars, `settings.ts:329`); mail priority source `"filter"`; `penCursor("ring")`; `"blur"` events; style values |
+| `isolate` `shrink` `flex-wrap` `overflow-scroll` `truncate` `grayscale` `backdrop-filter` `select-all` `border-collapse` | unused | no string use: identifier (`WindowControls.tsx:65`), comments (`TimeFieldCore.tsx:140` select-all, `TableView.tsx:285`, `TabBar.tsx:459`), CSS text (`browser.ts:177`, `SystemMonitorPane.tsx:1337`) |
+| `m-1` `w-1` `w-2` `w-7` `grow` `pr-1` `uppercase` `lowercase` `ordinal` `invert` `underline` `outline` | unused | test files only (+ prose / xterm cursor-style option values; KaTeX 0.19 uses `katex-underline`) |
+| `[path:line]` (`path: line`) | unused | `scaffold.ts:152` string `[path:line](./path:line)` |
+| `!container` `!visible` `!inline` `!table` `!hidden` `!ring` `!filter` | unused | JS negations (`CenterPanel.tsx:1681` `!container`, `sleepWhenHidden.ts:38` `!hidden`, …) |
+
+So the plan's step-2 claim holds for app code (only `inline`/`static`, 3
+sites, both overridden); it missed third-party DOM: xterm's scrollbar uses
+`visible`/`invisible`/`shadow`, mermaid's SVG `block`/`grid`/`border`/
+`transition`. Mermaid diagrams may also carry user `classDef` names — user
+content, out of scope.
+
+**Probe** (`probe/`): `run-probe.sh <out-prefix> <main.css> [chunk.css …]`
+→ `<prefix>-{main,controls}.{json,png}`; `diff.py <prefixA> <prefixB>`
+(exit 1 on any preflight/collision/root difference or a pixel change
+outside the thirdparty/control sections). The fence hides the X and Wayland
+sockets, so `run-probe.sh` always starts a private GTK3 **broadwayd**
+(scratch runtime dir, 127.0.0.1, killed on exit; plan env vars set) and
+`probe.py` pins the screen to 96 dpi (broadway reports −1 → WebKit scaled
+CSS px by 1e6). `fixture-main.html`: 97 preflight probes (pseudo-elements
+`::before/::after/::placeholder/::first-line` included) + html/body, the box-chip-menu rows with
+`pill-status-bars inline` / `pill-status-bar … static` in their real
+parents, xterm scrollbar/shadow nodes (plain, fading, and inside
+`.center-panel.moving .pane-layer`), mermaid `g.block/grid/border` +
+`path.transition`; 418 computed properties each + `--tw-*` vars.
+`fixture-controls.html`: one element per emitted utility (diffs expected).
+Baseline: `probe/results/before-*` (desktop) and `before-web-*` — identical
+to each other and to a rerun (0 px, 0 props). **Preview:**
+`probe/results/preview-stripped-*` ran on `before.stripped.css` (= the
+expected `after.css`): preflight + collision **identical** (0 px outside
+thirdparty), thirdparty differs exactly as the table says
+(`preview-stripped.diff.txt`). A5b: rerun with
+`TMPDIR=<scratchpad>/tw-baseline probe/run-probe.sh probe/results/after
+<after.css> css/before-TerminalView.css` (TerminalView chunk = xterm.css,
+unchanged by S5; or the after chunk) and `diff.py probe/results/before
+probe/results/after`.
+
+**`[PLUGIN_TIMINGS]`**: 0 in 4 full builds at 1b5d8d4b, 3 in 2 builds at
+5af871a9 (desktop 11.0 s of 11.8 s, web 7.6/8.3 s and 7.5/8.2 s, 91–93 %),
+always `plugin vite:css transform (7 calls)`, never mobile/pdf-frame. Tailwind
+is the likely cost: PostCSS over the inlined `src/styles` = 0.75 s with
+autoprefixer alone, 13.0 s cold / 1.1 s warm with Tailwind (content scan of
+`src/**` incl. tests). Logs `before-build{,-2}.log`. Desktop/web "built in"
+7.1–14.2 s. If it survives C3, rolldown 1.2.13 calls the switch
+`checks.bundlerTimings` (`pluginTimings` is deprecated).
+
+## A5b — S5 = C3 Tailwind removal
+
+Status: **landed** on local develop (2026-10-14, unpushed):
+**`c106e375`** `chore(deps): remove Tailwind; vendor its preflight`, on
+`daa7a31b`. Worktree `.claude/worktrees/tw-c3` (detached at daa7a31b, own npm
+11 install, the commit's edits as working-tree changes + its build output)
+kept for the reviewer. Scratch: `<scratchpad>/c3/` (`css/after*.css`,
+`after*.norm.css`, `probe/after*`, `head-suite.*`, `c3-suite.*`,
+`after-build*.log`, `gates.log`, `lint.log`, `lockcheck.cjs`, `msg.txt`).
+
+- **Base:** daa7a31b; since A5a's 5af871a9 only Rust/docs changed (nothing
+  under `src/`, `mobile-web/`, `index.html`, configs, `package*.json`), so
+  A5a's `before*.css` stood without re-deriving.
+- **Files (17):** new `src/styles/reset.css`; `src/styles/{index,base,
+  browser-print-tex}.css`; `package.json`, `package-lock.json`,
+  `postcss.config.js` (autoprefixer only), `tailwind.config.js` deleted;
+  `vite.mobile.config.ts` comment; `DOCUMENTATION.md` styling row; one word
+  each in `docs/guide/building.md` and `docs/README.tex` (stack lists still
+  said "Tailwind CSS"); tests: the three new ones + `CursorPacks.test.ts` +
+  `helpers/cssCorpus.ts`. No TSX touched. No filemap row (the map has no
+  `src/styles`/config rows; the plan says add none).
+- **reset.css:** `node_modules/tailwindcss/src/css/preflight.css` 3.4.19
+  byte-for-byte except the 5 `theme()` values (taken from A5a's
+  `tw-base.raw.css`) and the dropped `::before,::after{--tw-content:''}`
+  rule; the `*/::backdrop` `--tw-*` defaults aren't in preflight.css
+  (Tailwind emits them separately), so nothing to drop there. Header says
+  why, then Tailwind's copyright + full MIT permission text, then the
+  upstream `! tailwindcss v3.4.19 | MIT License` banner. First `@import` in
+  `index.css` (header updated); `base.css` loses the three `@tailwind` lines,
+  header says the reset lives in reset.css and no utilities exist.
+- **Utilities:** none re-homed (A5a triage, decision 12).
+- **Choice — `browser-print-tex.css`:** `.browser-btn` declared
+  `white-space: nowrap` twice (03afe42e). Tailwind 3's
+  `collapseDuplicateDeclarations` pass ran over the whole sheet and kept the
+  last one; without it Lightning CSS emitted both, the only diff vs
+  `before.stripped.css`. Dropped the first copy → output identical.
+- **Choice — `CursorPacks.test.ts`:** its "no bare `cursor: pointer`"
+  invariant now sees the reset's `button,[role="button"]{cursor:pointer}` and
+  `:disabled{cursor:default}`. These were in every build before (Tailwind
+  emitted them); the test just never saw them. `readAppStylesheet()` gained
+  `{ exclude: [...] }` (throws on a name index.css doesn't import);
+  CursorPacks excludes `reset.css`, with a comment. See Flagged.
+- **Tests (`src/__tests__/theme/`):**
+  - `NoTailwind` (4): no `@tailwind`/`@apply`/`@config`/`theme(`/`screen(`/
+    `--tw-` in any CSS under `src/` + `mobile-web/src/` (comments stripped;
+    the walk must find reset/base/mobile style.css); no `tailwindcss` /
+    `@tailwindcss/*` in any `package.json` dep field; no
+    `tailwind.config.{js,cjs,mjs,ts,cts,mts}`; `postcss.config.js` names
+    autoprefixer and no tailwind.
+  - `ResetParity` (4): A5a's `EXPECTED_PREFLIGHT` pasted verbatim; reset.css
+    parsed with `postcss.parse` must equal it exactly (rules, order,
+    declarations, values; `!important` would show); no at-rules or nesting;
+    MIT notice present; `index.css` imports `./reset.css` first, then
+    `./base.css`, once.
+  - `FormerUtilities` (3): walks every non-test `src/` file with the
+    TypeScript AST (+ `index.html`). Class contexts: `className`/`class`
+    attributes, class-named props/vars, `classList.*`, `.className =`/`+=`,
+    `setAttribute("class",…)`, `clsx`-style calls, `[…].join`, and
+    `class="…"` in any string. A token that is one of the 54 names needs a
+    selector where it stands alone in its compound, or must be in
+    `KNOWN_COLLISIONS` (`inline` → BoxScopeChip.tsx /
+    `.pill-status-bars.inline`; `static` → PillStatusBars.tsx /
+    `.pill-status-bar.static`, each with a comment) and used only in the
+    listed files. A second test fails if an allowlisted collision is no
+    longer used or its compound rule is gone. Stricter than the plan
+    (compound alone would let a new `className="inline"` pass anywhere).
+    ~1 s.
+  - **Fail-proofs** (each red, then reverted, then green): `@tailwind base`
+    re-added to base.css → NoTailwind red; `--tw-ring-color` in
+    `mobile-web/src/style.css` → red; placeholder `#9ca3af`→`#9ca3ae` →
+    ResetParity red; `summary` rule removed → red; `className="inline
+    truncate"` → FormerUtilities red (`truncate at BoxScopeChip.tsx:477`);
+    `inline` added in PillStatusBars.tsx → red (outside allowlist);
+    `.pill-status-bar.static` renamed in CSS → red. (No re-homed rule exists
+    to remove.)
+- **Lockfile:** `npx -y npm@11.21.0 uninstall --ignore-scripts
+  --before=2026-10-07 tailwindcss` from HEAD's lock. `git diff --histogram`
+  +0/−747, pure deletions: **58 entries dropped, 0 added, 0 changed** (only
+  the root's devDependencies line). `lockcheck.cjs` re-resolves HEAD's lock
+  without tailwindcss: the dropped set equals the unreachable set except root
+  `jiti` 1.21.7, reachable only as an *optional* peer of eslint/vite (correct
+  to drop; react-doctor keeps its nested `jiti` 2.x). One vite (8.3.3), one
+  vitest (5.0.0); rolldown + lightningcss win32/darwin-arm64/linux bindings
+  present; no esbuild; fsevents the only install script; `libc` 5 = HEAD's.
+  `npm ls --depth=0`, `--package-lock-only`, `ci --dry-run` clean.
+  **`npm audit` (full): 0 vulnerabilities** (HEAD: 7, braces chain +
+  postcss-selector-parser, all via tailwindcss).
+- **Build output:** `after.css` (desktop bootstrap, 649,312 B) and
+  `after-web.css`, normalised with A5a's `strip-tailwind.cjs
+  --normalise-only`, are **byte-identical** to `before[-web].stripped.css`.
+  Lazy chunks (TerminalView, markdownEnrich, GitHistory, ImageAnnotator;
+  desktop + web) and the mobile `index.css` byte-identical to A5a's.
+  Prefixed declarations: every `-webkit-`/`-moz-` declaration in `before.css`
+  is in `after.css` except the 3 inside dropped utilities (`.select-all`,
+  `.backdrop-filter`, `.transition`'s property list); 131 → 128 per bundle.
+- **Probe** (`run-probe.sh` on after.css + the after TerminalView chunk,
+  desktop and web; `diff.py` vs `before` / `before-web`): **exit 0**, 125/125
+  main + 63/63 control probes, **0 preflight/collision/root differences, 0 px
+  outside thirdparty/control**. Main diffs only on: xterm
+  `scrollbar-invisible` + its slider (visibility hidden→visible),
+  `scrollbar-visible-in-moving` + its slider (visible→hidden; the **144 px**,
+  bbox (202,911)–(206,947)) — decision 12; xterm `shadow` (box-shadow on the
+  `display:none` node); mermaid `g.block`/`g.grid` (display),
+  `g.border` (border widths), `path.transition` (transition) — no pixels.
+  116 elements change only `--tw-*` vars. The diff text is identical to
+  A5a's `preview-stripped.diff.txt`; web = desktop. PNGs:
+  `probe/after{,-web}-{main,controls}.png` + `-pixeldiff.png`.
+- **`[PLUGIN_TIMINGS]`: gone** — 0 in 4 builds (3 full `npm run build` +
+  the gates build) vs 3 in A5a's 2 baseline builds. Desktop "built in"
+  1.2–1.7 s (was 11.9 s), web 1.25–1.65 s (was 8.4 s); full `npm run build`
+  ~15 s wall. No `checks.pluginTimings` switch needed.
+- **Gates (tw-c3):** `npm run build` exit 0, **only HEAD's 3 chunk-size
+  warnings**; full suite **832 files / 8427 tests green** = HEAD's **829 /
+  8416** (same-day run in tw-base, whose tests equal daa7a31b's) **+ 3 files
+  / +11 tests**, every other file's count and status identical; `npm run
+  lint` 0 errors / 28 warnings (= HEAD); `scripts/gates.sh` all 5 selected
+  PASS (brand, whitespace, lint-fe, build, vitest --changed);
+  `scripts/brand-check.sh` PASS; `git diff --check` clean; pre-commit
+  (privacy scan + gitleaks) on the private index passed.
+- **Landing:** `--status` idle → private index from daa7a31b + worktree
+  blobs (`--force-remove tailwind.config.js`) → `git hook run pre-commit`
+  → `commit-tree` → HEAD still daa7a31b → `update-ref` → main-tree files
+  written from c106e375 (none of the 17 paths had foreign edits; another
+  session's uncommitted `src/styles/subwindows.css` etc. untouched) → `git
+  reset -q c106e375 -- <17 paths>` → `git hook run post-commit` (declined in
+  the fence again; `--status` idle) → main-tree `npx -y npm@11.21.0 install
+  --ignore-scripts`: `package.json` + lock identical to HEAD (`git diff
+  --quiet`), `npm ls --depth=0` clean, `node_modules/tailwindcss` gone, vite
+  8.3.3 / vitest 5.0.0, audit 0.
+- **Gotchas:** `strip-tailwind.cjs` needs an absolute worktree path
+  (`createRequire`). The CursorPacks hit only showed up because the reset
+  now sits in the corpus — any corpus invariant about element selectors may
+  meet preflight the same way (none else did: all 16 corpus-reading test
+  files green).
+
+## A5b review
+
+Status: **pass, no fix commits** (2026-10-14; reviewed `c106e375` in
+`tw-c3`, whose tree equals the commit). Scratch: `<scratchpad>/rev/`.
+
+- Reset: `postcss.parse` of `reset.css` vs A5a's raw `tw-base.raw.css`
+  (`--tw-*` dropped, empty rules skipped): 37 = 37 rules, 0 differences.
+  Textual diff vs `tailwindcss/src/css/preflight.css` 3.4.19: only the
+  banner, the 5 `theme()` values and the dropped `--tw-content` rule. MIT
+  permission text equals Tailwind's `LICENSE` word for word. The test's
+  `EXPECTED_PREFLIGHT` equals A5a's `ResetParity.expected.ts`.
+- Cascade: `base.css` was `index.css`'s first import and `@tailwind base`
+  its first statement, so nothing ever preceded the preflight; the order is
+  unchanged. Built desktop/web bootstrap CSS (normalised) byte-equal to
+  A5a's stripped baselines; all 8 lazy chunks and the mobile `index.css`
+  byte-equal; reset present in desktop + web bundles, absent from
+  `mobile-dist` (pdf-frame imports no CSS).
+- Tailwind's `collapseDuplicateDeclarations` only ever dropped exact
+  same-value duplicates (different values collapse only when both carry a
+  unit): app CSS's only other in-rule duplicates are 10 `overflow: hidden →
+  clip` fallbacks, never collapsed. `.browser-btn`: same computed value.
+- Tests: own fail-proof (reset `75%`→`76%`, `@apply` in `QuickOpen.css`,
+  `"truncate"` in a conditional inside `PillStatusBars`' template class) →
+  exactly the 3 expected reds, then restored. No vacuous walk (file-count /
+  `toContain` guards); paths are built with `/` by the tests themselves and
+  passed to `node:fs`, fine on Windows. CursorPacks' `reset.css` exclusion
+  keeps its old coverage exactly: it read `base.css`'s source, where the
+  preflight was a `@tailwind base` directive, so it never saw those cursors.
+  The other 11 corpus readers' patterns can't be satisfied by the reset.
+- Lock: package entries 58 dropped / 0 added / only root changed; an
+  independent reachability walk (optional peers excluded) matches the
+  dropped set exactly. `postcss ^8` + `autoprefixer ^10` still direct.
+- Docs/scope: accurate; no filemap rows exist for the touched files; no
+  Tailwind left in tracked files outside plan docs and an `ollama.rs`
+  comment about model output.
 
 ## Flagged for user
 
@@ -355,3 +656,97 @@ Status: not started.
 - (A4) vitest 5.0.1 becomes eligible 10-15 08:49Z; 5.0.2–5.0.4 carry the
   jsdom Blob, `--changed` bad-ref and fsModuleCache fixes. A later bump only
   changes the pin — `fsModuleCache: false` is already explicit.
+- (A5a) **Tailwind leaks onto xterm's scrollbar** (third-party DOM, missed by
+  the plan's triage). `.invisible{visibility:hidden}` cuts xterm's 800 ms
+  fade-out to an instant hide; `.visible{visibility:visible}` keeps a
+  terminal's scrollbar painted while `.center-panel.moving .pane-layer` /
+  `.detached-center.moving .pane-layer` hide the pane layer during a window
+  move (probe: 144 px). Per S5 step 2 the rule is "keep the leaked
+  declarations under our own selector and flag" — e.g.
+  `.xterm .xterm-scrollable-element > .scrollbar.invisible{visibility:hidden}`
+  (+ the `.visible` twin) — or drop both, which restores xterm's own
+  behaviour and fixes the window-move glitch. Keep or drop?
+- (A5a) Mermaid SVG nodes `g.block`, `g.grid`, `g.border`, `path.transition`
+  get Tailwind declarations that change their computed style but not a
+  pixel (SVG ignores display/border on `g`; the diagram is static). Drop
+  them without re-homing (A5a's recommendation), or keep under `.md-mermaid`?
+- (A5b) **The vendored reset's bare cursors ignore a cursor pack** — and
+  always did (Tailwind emitted the same rules): `button, [role="button"]
+  { cursor: pointer }` and `:disabled { cursor: default }`. With a pack
+  active, a `<button>` whose own app class sets no cursor shows the system
+  pointer, not the pack's. CursorPacks.test.ts now excludes reset.css
+  instead of failing. Fix (behaviour change, needs a live look): a
+  `cursors.css` rule such as `:where(:root[data-cursor]) button { cursor:
+  var(--cur-pointer, pointer) }` (+ `:disabled` → `--cur-default`), with
+  specificity kept at or below app classes. Do it, or accept?
+- (A5b) The running window's dev server still holds Tailwind's PostCSS
+  plugin in memory, while main's `node_modules/tailwindcss` and
+  `tailwind.config.js` are gone and `base.css`/`index.css` hot-reload
+  without `@tailwind`. Until the user restarts it, expect possible Tailwind
+  warnings ("content option missing") or a CSS reload error in the dev
+  console. Restart dev, then run the §8 "After C3" checks — including a
+  terminal's scrollbar: it now fades out over xterm's 800 ms and hides while
+  a window is being moved (decision 12).
+- (A5b) Frozen dev build for c106e375: post-commit declined inside the fence
+  again (`--status` idle). Check the dev-build chip.
+- (A5b) `docs/root_cleanup_plan.md` step 3 ("Tailwind config into
+  `src/styles/`") is now moot: only `postcss.config.js` (autoprefixer)
+  remains. Not edited (plan doc).
+
+
+## Final review
+
+Status: **pass, no fix commits** (2026-10-14; develop `0f2bb2ee`, fresh
+worktree `.claude/worktrees/final-rev` with its own `npx -y npm@11.21.0 ci
+--ignore-scripts`). Scratch: `<scratchpad>/final/` (`gates-all.log`,
+`ci-local.log`).
+
+- **Integration at HEAD:** only the six migration commits touch
+  `package*.json`; no config, `src/styles` or `index.html` change after
+  c106e375 (0f2bb2ee renames one test). `npm ci` clean; `npm ls --depth=0`
+  and `--package-lock-only --depth=0` clean; one vite (8.3.3), one vitest
+  (5.0.0), plugin-react 6.1.1; no tailwindcss / esbuild / rollup in the lock
+  or `node_modules`; fsevents the only install script; rolldown +
+  lightningcss win32-x64-msvc / darwin-arm64 / linux bindings present;
+  `libc` 5; lock root version = `package.json` 0.2.9. `npm audit` (full and
+  `--omit=dev`): 0. The main tree's uncommitted edits add no Tailwind syntax
+  or utility-named class.
+- **Leftovers** (`rg -i 'tailwind|esbuild|rollupOptions|inlineDynamicImports'`
+  over tracked files minus plan docs/lock/reset/theme tests): only correct
+  prose (DOCUMENTATION.md:65, base/index.css headers, the pdf-frame config's
+  "Rollup did X" history, an `ollama.rs` comment on model output), plus the
+  two nits flagged below. `.github/`, `scripts/`, configs: none. Filemap rows:
+  none name the touched files (the pdf-frame row's "classic IIFE" is still
+  true). No i18n or UntestedTag need (toolchain, CSS reset and tests only).
+- **Cross-OS tests:** `.gitattributes` `* text=auto eol=lf` pins LF on every
+  checkout, so `NoTailwind`/`ResetParity`/`FormerUtilities`/cssCorpus string
+  reads see `\n` on Windows too; all paths are relative, built with `/` and
+  compared as such (never from `path.join`); `MobilePdfFrameBuild` imports
+  the config via a relative specifier and mocks `vite`. No OS-specific
+  assumption found.
+- **Backend:** none of the six commits touches `src-tauri/`, `src-core/`,
+  `src-gateway/` or `src-serverd/`; the Windows/macOS cross-checks ran anyway
+  as part of `ci-local.sh` (green).
+- **`scripts/gates.sh --all`:** 10/10 PASS (brand, whitespace, lint-fe 0
+  errors / 28 warnings = HEAD, clippy ×3, build, `npm test`, `cargo test
+  --workspace`, daemon tests). Rust gates with `CARGO_HOME=.claude/worktrees/
+  cargo-home-c2`.
+- **`scripts/ci-local.sh` (full):** 22/23 PASS, 1 SKIPPED — gitleaks is not
+  installed in the fence (CI's secrets job runs it). Frontend suite **832
+  files / 8427 tests** green (= A5b's count; 0f2bb2ee only renames a file);
+  build: HEAD's 3 chunk-size warnings only, no `[PLUGIN_TIMINGS]`; Windows
+  clippy + check and macOS check green; daemon `ldd` clean; drift guard ok.
+- `scripts/privacy-check.sh origin/develop HEAD` (48 commits): pass.
+
+### Flagged for user (final review)
+
+- `mobile-web/src/shellAssets.ts:6` says loading the vite config "drags
+  esbuild into a jsdom test"; on vite 8 it is Rolldown/Lightning CSS. The
+  reason still holds; comment wording only — fix on the next edit there?
+- `docs/root_cleanup_plan.md` step 3 (move `tailwind.config.js`) is moot
+  (A5b's item, still open): mark it done/obsolete in that plan?
+- gitleaks was unavailable locally in every step's checks; the first push's
+  CI `secrets` job is its only run over this range.
+- Frozen dev builds for the range could not be confirmed from the fence
+  (`--status` idle; `target/` unreadable) — check the dev-build chip before
+  pushing, then S6: push, three-OS CI, §8 live checks.

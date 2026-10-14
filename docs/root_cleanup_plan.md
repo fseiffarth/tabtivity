@@ -70,14 +70,14 @@ steps also differ a lot in cost per row:
 | Delete the eldrun shims (part of step 1, no launcher move) | −3 | trivial once the desktop-entry check comes back clean |
 | `shared/`, `test-fixtures/`, `site/` (steps 4–5, without screenshots) | −3 | low, mechanical |
 | Mobile configs (step 2) | −3 | low, but only after `hosted` |
-| PostCSS + Tailwind (step 3) | −2 | low, but only after `hosted` |
+| PostCSS (step 3; Tailwind already gone) | −1 | low, but only after `hosted` |
 | `screenshots/` (step 5) | −1 | needs your privacy review of the PNG |
 | Move the Tabtivity launchers (rest of step 1 + step 6) | −3 | **highest:** touches the dev-build relaunch and your desktop entries |
 | `.gitleaksignore` (step 7) | −1 | three callers for one row |
 
-Recommendation: do the first four rows (−11 rows, 48 → 37), and skip the
-launcher move and step 7. Do `screenshots/` only if you review the PNG
-anyway.
+Recommendation: do the first four rows (−10 rows, 47 → 37; removing
+Tailwind already took `tailwind.config.js`), and skip the launcher move and
+step 7. Do `screenshots/` only if you review the PNG anyway.
 
 ## Sequencing
 
@@ -215,23 +215,20 @@ The changes:
 - The review confirmed `tsc -p mobile-web` resolves `../src/lib` and
   `shared/` the same way as today.
 
-### Step 3 † — PostCSS into `package.json`, Tailwind config into `src/styles/` (−2 rows; after `hosted`)
+### Step 3 † — PostCSS into `package.json` (−1 row; after `hosted`)
+
+Tailwind is removed (`c106e375`, `docs/vite8_vitest5_migration_plan.md`
+S5): `tailwind.config.js` no longer exists and `postcss.config.js` holds only
+autoprefixer.
 
 - Delete `postcss.config.js`. Add a `"postcss"` key to `package.json`:
-  `{ "plugins": { "tailwindcss": { "config": "./src/styles/tailwind.config.js" }, "autoprefixer": {} } }`.
+  `{ "plugins": { "autoprefixer": {} } }`.
   - Vite's `postcss-load-config` searches `package.json` too, so **automatic
-    discovery still works**. `hosted`'s `vite.web.config.ts` (no own
-    `css.postcss`) keeps getting Tailwind, which is the trap the first review
-    found with inlining into `vite.config.ts`.
+    discovery still works**, and `vite.web.config.ts` (no own `css.postcss`)
+    keeps autoprefixer.
   - The mobile config declares its own `css.postcss`, so it is unaffected.
-- `git mv tailwind.config.js src/styles/tailwind.config.js`. Tailwind 3
-  resolves `content` globs against the cwd unless `relative: true` is set, so
-  `./index.html` and `./src/**` keep working from npm scripts.
-- Add no `.vscode/settings.json` for Tailwind IntelliSense. It would be a
-  new tracked root row, and the extension should find
-  `tailwind.config.*` in subfolders on its own. That's unverified.
-- Check that the desktop and (after the merge) web CSS bundles are
-  byte-identical before and after.
+- Check that the desktop and web CSS bundles are byte-identical before and
+  after.
 
 ### Step 4 — `shared/` → `src/lib/shared/` (−1 row)
 

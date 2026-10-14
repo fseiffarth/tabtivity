@@ -523,6 +523,11 @@ silently reorders it against `base.css`'s load-bearing unlayered cascade.
 11. **After A1b / Gate D1 passed** (2026-10-14): vitest **5.0.0** (5.0.1
     reaches 30 days only on 10-15); clearMocks costs 1 file → adopt `true`;
     S4 writes `fsModuleCache: false` explicitly (5.0.4 flips the default).
+12. **xterm scrollbar leak: drop** (user, 2026-10-14). Tailwind's
+    `.visible`/`.invisible` reach xterm's scrollbar (A5a triage); C3 does not
+    re-home them, so xterm's 800 ms fade-out returns and the scrollbar hides
+    with the pane layer during a window move. Expected probe diffs on those
+    xterm nodes only; listed in §8.
 
 ## Agent steps
 
