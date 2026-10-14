@@ -14,7 +14,7 @@ import {
 } from "../markup/layer";
 import { composedPng, drawMark, drawPage, INK, LAYER_WIDTH, layerPng, pagePng, type Paint } from "../markup/rasterize";
 import {
-  COLOR_MEANING, colorOf, colorsFor, ERASER_MODES, eraserPx, PEN_SIZES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
+  colorOf, colorsFor, ERASER_MODES, eraserPx, PEN_SIZES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
   applyPreset, PALM_MODES, palmRejects, PRESSURE_CURVES, resetPresets, savePreset, SNAP_HOLD_MS, SNAP_SLOP_PX, TEXT_MARK_MODES,
   type PenPreset, type PenPrefs, type PenTool,
 } from "../markup/pen";
@@ -2305,13 +2305,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
             style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => { setColor(name); setPopover(null); }}
             aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
         </div>
-        <p className="markup-pen-meaning">{t("mobile.markup.colorMeaning", {
-          color: t(`mobile.markup.color.${color}` as TranslationKey),
-          meaning: t(`mobile.markup.meaning.${COLOR_MEANING[color]}` as TranslationKey),
-        })}{isUntested("mobile.markup.pen") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>
         <div className="markup-pen-row markup-pen-actions">
           <button onClick={() => setPen(savePreset)}>{t("mobile.markup.savePreset")}</button>
           <button onClick={() => setPen(resetPresets)}>{t("mobile.markup.resetPresets")}</button>
+          {isUntested("mobile.markup.pen") && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </div>
       </div>}
       {popover === "more" && <div className="markup-popover markup-more">

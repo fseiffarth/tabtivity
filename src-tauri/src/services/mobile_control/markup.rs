@@ -195,17 +195,6 @@ impl Color {
             Color::Yellow => "yellow",
         }
     }
-
-    /// What the colour asks for — the viewer's colour key says the same
-    /// (`mobile-web/src/markup/pen.ts` `COLOR_MEANING`).
-    fn meaning(self) -> &'static str {
-        match self {
-            Color::Red => "delete or fix",
-            Color::Blue => "insert or add",
-            Color::Black => "no particular meaning",
-            Color::Yellow => "check this",
-        }
-    }
 }
 
 /// How a pen stroke is drawn (`mobile-web/src/markup/layer.ts` `PenStyle`):
@@ -1044,8 +1033,9 @@ fn mark_what(listed: bool, mark: &Mark, anchor: Option<&Anchor>, source: Option<
             }
         },
     };
-    // A drawn mark says what it wants by its colour; a typed note in words,
-    // and by its colour too unless that is the plain black.
+    // A drawn mark is named with its colour, so the agent finds it on the
+    // page picture; a typed note too unless it is the plain black. Colours
+    // carry no meaning of their own.
     let what = if named_color(mark) { format!("{} {what}", mark_color(mark).word()) } else { what };
     let context = anchor.filter(|a| !a.line.is_empty()).map(|a| format!(" in {}", quoted(&a.line))).unwrap_or_default();
     let source = source.map(|s| format!(" — `{s}`")).unwrap_or_default();
@@ -1061,7 +1051,7 @@ fn mark_color(mark: &Mark) -> Color {
 }
 
 /// Whether the prompt names the mark's colour: every drawn mark's, and a
-/// typed note's unless it is black — the note's plain ink, which means nothing.
+/// typed note's unless it is black — the note's plain ink.
 fn named_color(mark: &Mark) -> bool {
     match mark {
         Mark::Text { color, .. } => *color != Color::Black,
@@ -1069,27 +1059,17 @@ fn named_color(mark: &Mark) -> bool {
     }
 }
 
-/// The key to the colours the prompt names (`named_color`) and the pen
-/// styles, the ones these pages use only: the viewer offers the same meanings
-/// beside its swatches (`mobile-web/src/markup/pen.ts`), and the agent reads
-/// each listed mark's colour word against it.
+/// The key to the pen styles that mean something, the ones these pages use
+/// only. Colours get none: they are plain colours.
 fn mark_key(pages: &[&MarkupPage]) -> Option<String> {
     let marks = || pages.iter().flat_map(|page| page.marks.iter());
-    let colors: Vec<Color> = [Color::Red, Color::Blue, Color::Yellow, Color::Black]
-        .into_iter()
-        .filter(|color| marks().any(|mark| named_color(mark) && mark_color(mark) == *color))
-        .collect();
     let styled = |wanted: PenStyle| marks().any(|mark| matches!(mark, Mark::Ink { style, .. } if *style == wanted));
-    let mut parts = Vec::new();
-    if !colors.is_empty() {
-        let listed: Vec<String> = colors.iter().map(|color| format!("{} = {}", color.word(), color.meaning())).collect();
-        parts.push(format!("Colours: {}.", listed.join(", ")));
-    }
+    let mut parts: Vec<&str> = Vec::new();
     if styled(PenStyle::Arrow) {
-        parts.push("An arrow moves what it starts at to where it points.".into());
+        parts.push("An arrow moves what it starts at to where it points.");
     }
     if styled(PenStyle::Dashed) {
-        parts.push("A dashed mark is tentative: a suggestion to weigh, not a must.".into());
+        parts.push("A dashed mark is tentative: a suggestion to weigh, not a must.");
     }
     (!parts.is_empty()).then(|| parts.join(" "))
 }
@@ -1592,10 +1572,9 @@ mod tests {
         let pages = vec![first];
         let parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: Some("r1"), origin: Origin::Chat, send_back: false };
         let text = prompt(&parts);
-        // The key names the drawn marks' colours only — the black note's is not one.
+        // The key explains the styles only; colours carry no meaning.
         assert!(
             text.contains(concat!(
-                "Colours: red = delete or fix, blue = insert or add, yellow = check this. ",
                 "An arrow moves what it starts at to where it points. ",
                 "A dashed mark is tentative: a suggestion to weigh, not a must.\n",
                 "- p1 m1: blue arrow (see the page picture)\n",
@@ -1667,7 +1646,6 @@ mod tests {
         let text = prompt(&parts);
         assert!(
             text.contains(concat!(
-                "Colours: red = delete or fix, blue = insert or add.\n",
                 "- p1 m1: blue insert mark at \"the cat\"\n",
                 "- p1 m2: red delete mark (see the page picture)\n",
                 "- p1 m3: red pen mark (see the page picture) — comment: \"too vague\"\n",
@@ -1678,12 +1656,12 @@ mod tests {
             )),
             "{text}"
         );
-        // A coloured note alone still gives the key its colour; a black one none.
+        // A coloured note is named by its colour, with no key; a black one plainly.
         let mut notes = page(2, concat!(".", crate::app_slug!(), "/inbox/b.png"));
         notes.marks = vec![Mark::Text { color: Color::Blue, at: [10.0, 10.0], size: 12.0, text: "x".into() }];
         let pages = vec![notes];
         let text = prompt(&Prompt { pages: &pages, round: None, ..parts });
-        assert!(text.contains("Colours: blue = insert or add.\n- p2: blue note \"x\"\n"), "{text}");
+        assert!(!text.contains("Colours:") && text.contains("- p2: blue note \"x\"\n"), "{text}");
         let mut plain = page(2, concat!(".", crate::app_slug!(), "/inbox/b.png"));
         plain.marks = vec![Mark::Text { color: Color::Black, at: [10.0, 10.0], size: 12.0, text: "x".into() }];
         let pages = vec![plain];
@@ -1704,7 +1682,7 @@ mod tests {
         // The unread stroke is listed by its place, pointing at the picture —
         // the views map `m<n>` to index n − 1 of the page's submitted marks.
         assert!(
-            text.contains("Colours: red = delete or fix.\n- p3 m1: \"one\"\n- p3 m2: red pen mark (see the page picture)\n- p3 m3: \"two\"\n- p7 m1: \"three\"\n"),
+            text.contains("- p3 m1: \"one\"\n- p3 m2: red pen mark (see the page picture)\n- p3 m3: \"two\"\n- p7 m1: \"three\"\n"),
             "{text}"
         );
         assert!(text.contains("This is markup round `abc123`; each mark above has its reference (`p<page> m<mark>`);"), "{text}");
@@ -1794,7 +1772,7 @@ mod tests {
         let text = done.prompt;
         assert!(text.contains(concat!("Each marked page, with my marks drawn on it:\nPage 1: @.", crate::app_slug!(), "/inbox/a-p1-marked.png\n")), "{text}");
         assert!(text.contains("and the source line SyncTeX gives for it:\n"), "{text}");
-        assert!(text.contains("Colours: red = delete or fix, blue = insert or add.\n- p1: red line through \"quick brown\" in \"The quick brown fox\" — `docs/main.tex:3`\n"), "{text}");
+        assert!(text.contains("- p1: red line through \"quick brown\" in \"The quick brown fox\" — `docs/main.tex:3`\n"), "{text}");
         assert!(text.contains("- p1: blue note \"cite Smith\" beside \"as shown in [3]\" — `docs/chapters/intro.tex:4`\n"), "{text}");
         // Nothing known of the third stroke but a file outside the project.
         assert!(!text.contains("paper.cls") && !text.contains("pen mark"), "{text}");

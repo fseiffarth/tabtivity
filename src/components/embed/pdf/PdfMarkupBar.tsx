@@ -18,7 +18,6 @@ import { useT, type TranslationKey } from "../../../lib/i18n";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { STAMP_SYMBOLS, type Layer, type MarkColor, type StampSymbol } from "../../../../mobile-web/src/markup/layer";
 import {
-  COLOR_MEANING,
   colorsFor,
   ERASER_MODES,
   PEN_SIZES,
@@ -119,12 +118,6 @@ export const ERASER_KEYS: Record<EraserMode, TranslationKey> = {
   medium: "mobile.markup.eraser.medium",
   large: "mobile.markup.eraser.large",
   area: "mobile.markup.eraser.area",
-};
-export const MEANING_KEYS: Record<(typeof COLOR_MEANING)[MarkColor], TranslationKey> = {
-  fix: "mobile.markup.meaning.fix",
-  insert: "mobile.markup.meaning.insert",
-  neutral: "mobile.markup.meaning.neutral",
-  check: "mobile.markup.meaning.check",
 };
 /** A size or reach as a dot of its own size, CSS px. */
 const DOT_PX: Record<PenSize, number> = { 0: 4, 1: 7, 2: 11 };
@@ -270,14 +263,13 @@ function Swatches({ colors, chosen, onPick }: { colors: readonly MarkColor[]; ch
     <span className="file-viewer-pdf-markup-colors" role="group" aria-label={t("mobile.markup.color")}>
       {colors.map((color, i) => {
         const name = t(COLOR_KEYS[color]);
-        const meaning = t(MEANING_KEYS[COLOR_MEANING[color]]);
         return (
           <button
             key={color}
             type="button"
             className={`file-viewer-zoom-btn file-viewer-pdf-markup-swatch is-${color}${chosen === color ? " active" : ""}`}
             aria-pressed={chosen === color}
-            title={chordHint(t("mobile.markup.colorMeaning", { color: name, meaning }), { key: String(i + 1) })}
+            title={chordHint(name, { key: String(i + 1) })}
             aria-label={t("mobile.markup.colorOf", { color: name })}
             onClick={() => onPick(color)}
             style={{ ["--swatch" as string]: INK[color] }}

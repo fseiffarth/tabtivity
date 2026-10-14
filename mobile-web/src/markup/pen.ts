@@ -5,10 +5,10 @@
  * viewer (`localStorage`), a convenience only: an unreadable or missing record
  * is the defaults.
  *
- * The colours mean something (`COLOR_MEANING`): the prompt names each mark's
- * colour and gives the key (`markup.rs`), so the agent reads red as delete or
- * fix, blue as insert, yellow as check this. Yellow is a highlighter's colour
- * only — a box or the marker — since yellow ink or text is unreadable on white.
+ * The colours are plain colours: the prompt names a mark's colour so the
+ * agent finds it on the page picture, never what it should mean. Yellow is a
+ * highlighter's colour only — a box or the marker — since yellow ink or text
+ * is unreadable on white.
  *
  * Beside the tools: the stamp's symbol, the text-mark mode, shape snapping,
  * the stylus's pressure curve, palm rejection (phone) and up to four saved
@@ -84,15 +84,6 @@ export const DEFAULT_PEN_PREFS: PenPrefs = {
   pressure: "normal",
   palm: "normal",
   presets: DEFAULT_PRESETS,
-};
-
-/** What each colour asks for — the prompt's colour key says the same
- * (`markup.rs` `color_meaning`). */
-export const COLOR_MEANING: Record<MarkColor, "fix" | "insert" | "neutral" | "check"> = {
-  red: "fix",
-  blue: "insert",
-  black: "neutral",
-  yellow: "check",
 };
 
 const INK_COLORS: readonly MarkColor[] = ["red", "blue", "black"];
