@@ -15,6 +15,8 @@ import { useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 import { isUntested } from "../../../src/lib/untested";
+import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
+import { phoneUse24h } from "../terminal/chatTimes";
 
 /** Per-tab scheduled prompts, opened from the project tab overview — the phone's
  * counterpart to the desktop Agents view, and deliberately not from inside the
@@ -206,7 +208,7 @@ export function ScheduleSheet({ tabId, label, onClose, initialMessage }: { tabId
         {kind === "in" ? <div className="mobile-schedule-in">
           <span>{t("agentSchedule.inDelay")} {isUntested("mobile.sheet.scheduleIn") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
           <div><input type="number" inputMode="numeric" min={0} step={1} value={inHours} disabled={held} aria-label={t("agentSchedule.inHours")} onChange={(event) => setInHours(event.target.value)} /><span>{t("agentSchedule.inHoursUnit")}</span><input type="number" inputMode="numeric" min={0} step={1} value={inMinutes} disabled={held} aria-label={t("agentSchedule.inMinutes")} onChange={(event) => setInMinutes(event.target.value)} /><span>{t("agentSchedule.inMinutesUnit")}</span></div>
-        </div> : kind === "once" ? <label>{t("mobile.schedule.desktopDateTime")}<input type="datetime-local" value={once} disabled={held} onChange={(event) => setOnce(event.target.value)} /></label> : <label>{t("mobile.schedule.desktopTime")}<input type="time" value={time} disabled={held} onChange={(event) => setTime(event.target.value)} /></label>}
+        </div> : kind === "once" ? <label>{t("mobile.schedule.desktopDateTime")}<div className="todo-due-fields"><input type="date" value={once.slice(0, 10)} disabled={held} aria-label={t("dateTime.date")} onChange={(event) => { if (event.target.value) setOnce(`${event.target.value}T${once.slice(11, 16)}`); }} /><TimeFieldCore value={once.slice(11, 16)} use24h={phoneUse24h()} required disabled={held} aria-label={t("dateTime.time")} onChange={(next) => setOnce(`${once.slice(0, 10)}T${next}`)} /></div></label> : <label>{t("mobile.schedule.desktopTime")}<TimeFieldCore value={time} use24h={phoneUse24h()} required disabled={held} aria-label={t("mobile.schedule.desktopTime")} onChange={setTime} /></label>}
         {kind === "weekdays" && <div className="mobile-schedule-weekdays">{MOBILE_WEEKDAYS.map((name, index) => <label key={name}><input type="checkbox" disabled={held} checked={weekdays.includes(index + 1)} onChange={() => setWeekdays((current) => current.includes(index + 1) ? current.filter((day) => day !== index + 1) : [...current, index + 1])} />{t(name)}</label>)}</div>}
         <div className="mobile-schedule-actions">{editing && <button disabled={busy} onClick={reset}>{t("common.cancel")}</button>}<button className="primary" disabled={busy || held} onClick={() => void save()}>{t(busy ? "common.saving" : "common.save")}</button></div>
       </div>

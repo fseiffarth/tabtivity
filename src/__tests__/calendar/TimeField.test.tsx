@@ -174,12 +174,62 @@ describe("TimeField", () => {
     const { hour, minute, onChange } = field("17:30");
     await user.click(hour);
     await user.keyboard("9");
-    // 9 cannot start a two-digit hour, so it stands alone and moves on.
-    expect(hour.value).toBe("9");
+    // 9 cannot start a two-digit hour, so it is the whole hour and moves on.
+    expect(hour.value).toBe("09");
     expect(onChange).toHaveBeenLastCalledWith("09:30");
     await user.keyboard("45");
     expect(minute.value).toBe("45");
     expect(onChange).toHaveBeenLastCalledWith("09:45");
+  });
+
+  // A click drops the caret where the pointer landed — the mouseup undoes the
+  // focus handler's select-all. Reading the box then made "15" typed into `09`
+  // with the caret after the 0 read `019` → 19 and jump to the minute after the
+  // 1. The segment counts its own keystrokes now, so the caret is irrelevant.
+  it.each([0, 1, 2])("types 15 into an hour whatever the caret position (%i)", async (at) => {
+    const user = userEvent.setup();
+    const { hour, minute, onChange } = field("09:00");
+    await user.click(hour);
+    hour.setSelectionRange(at, at);
+    await user.keyboard("1");
+    expect(hour.value).toBe("1");
+    expect(document.activeElement).toBe(hour);
+    await user.keyboard("5");
+    expect([hour.value, minute.value]).toEqual(["15", "00"]);
+    expect(document.activeElement).toBe(minute);
+    expect(onChange).toHaveBeenLastCalledWith("15:00");
+  });
+
+  it("takes a lone large digit as the whole segment and pads it", async () => {
+    const user = userEvent.setup();
+    const { hour, minute, onChange } = field("09:00");
+    await user.click(hour);
+    await user.keyboard("37");
+    expect([hour.value, minute.value]).toEqual(["03", "07"]);
+    expect(onChange).toHaveBeenLastCalledWith("03:07");
+  });
+
+  it("ignores a typed letter", async () => {
+    const user = userEvent.setup();
+    const { hour, onChange } = field("09:00");
+    await user.click(hour);
+    await user.keyboard("x");
+    expect(hour.value).toBe("09");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // An event's start has no "no time": emptying it must not store `""` (which
+  // saved the stamp `2026-10-13T`), and leaving shows the kept clock again.
+  it("never reports an empty clock when required, and shows the kept one on leaving", () => {
+    const onChange = vi.fn();
+    const r = render(<TimeField value="17:30" required onChange={onChange} aria-label="start" />);
+    const hour = r.getByLabelText("start (h)") as HTMLInputElement;
+    const minute = r.getByLabelText("start (min)") as HTMLInputElement;
+    fireEvent.change(minute, { target: { value: "" } });
+    fireEvent.change(hour, { target: { value: "" } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(hour);
+    expect([hour.value, minute.value]).toEqual(["17", "30"]);
   });
 
   it("passes the host's key handling through — every dialog stops its own Escape", () => {

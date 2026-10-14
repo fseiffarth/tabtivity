@@ -570,6 +570,18 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-due-fields,.todo-editor-grid,.todo-add-row,.todo-step-row { display:grid; gap:8px; }
 .todo-due-fields,.todo-editor-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .todo-inline-check { display:flex; align-items:center; gap:8px; }
+/* The clock-entry field (`common/TimeFieldCore`), shared with the desktop: the
+   box wears the phone's input look, the two segments inside it are bare (the
+   global `input` rule would make each a full-width box of its own). */
+.time-field { display:flex; align-items:center; width:100%; box-sizing:border-box; border:1px solid #3a3e50; border-radius:12px; padding:13px; background:#171a24; color:#fff; }
+.time-field:focus-within { border-color:var(--m-accent,#7c6cff); }
+.time-field.is-disabled { opacity:.45; }
+.time-field input.time-field-seg { width:2.2ch; flex:0 0 auto; padding:0; border:none; border-radius:4px; background:none; color:inherit; font:inherit; text-align:center; }
+.time-field input.time-field-seg:focus { outline:none; background:var(--m-accent,#7c6cff); color:var(--m-on-accent,#000); }
+.time-field-seg::selection { background:transparent; color:inherit; }
+.time-field-seg::placeholder { color:#8a8ea0; }
+.time-field-sep { padding:0 2px; opacity:.75; pointer-events:none; user-select:none; }
+.time-field-mer { margin-left:8px; padding:2px 6px; border:none; border-radius:4px; background:none; color:inherit; font:inherit; }
 .todo-inline-check input { width:auto; }
 .todo-editor-grid label { min-width:0; }
 .todo-editor-grid output { margin-left:5px; color:#d7d2ff; }

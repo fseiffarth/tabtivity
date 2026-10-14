@@ -24,6 +24,12 @@ export function chatTime(moment: Date, use24h?: boolean): string {
     : { hour: "2-digit", minute: "2-digit", hour12: !use24h });
 }
 
+/** The phone's own clock face — what `chatTime` prints without a desktop
+ * answer, and so what the phone's clock-entry fields (`TimeFieldCore`) show. */
+export function phoneUse24h(): boolean {
+  return new Intl.DateTimeFormat([], { hour: "numeric" }).resolvedOptions().hour12 !== true;
+}
+
 /** The local calendar day of a moment, as a sortable key (`2026-09-29`). */
 export function chatDayKey(moment: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");

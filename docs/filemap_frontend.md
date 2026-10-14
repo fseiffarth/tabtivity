@@ -273,7 +273,8 @@ stores stay at the top. No `index.ts` barrels.
 | `common/MenuShortcut.tsx` | The muted chord at a menu row's end ("Close   Ctrl+W"); resolves rebinds like `useChordHint`. Only on rows whose chord does the same thing. |
 | `common/icons/{Icon,FileIcon}.tsx` | The shared line-icon set (24-grid, 1.4 stroke, `currentColor`, `em`-sized) that replaces colour emoji in the chrome; `FileIcon` renders `fileIconKind()` for every file list. New icons go here, not as emoji — and not as typed symbols with the Unicode Emoji property (↗ ⬆ ⚠ ⚙ ✉ ☑ ▶ …), which a font fallback can hand to the colour-emoji font. |
 | `common/ConnLamp.tsx` | Red/orange/green SSH/OpenVPN status lamp (dialog + header). |
-| `common/TimeField.tsx` | Clock-entry field for the event dialog's start/end, drawn by Tabtivity. Native `<input type="time">` is ruled out (engine-locale 12/24h face). |
+| `common/TimeFieldCore.tsx` | **The** clock-entry field, desktop and phone: hour/minute segments with their own keystroke buffer (never the caret); `required` never reports `""`. Native `<input type="time">` is ruled out (engine-locale 12/24h face). |
+| `common/TimeField.tsx` | Desktop wrapper: `TimeFieldCore` with the `Settings.time_format_24h` face. The phone passes its own locale's face (`chatTimes.phoneUse24h`). |
 | `common/DateField.tsx` | The one date-entry field. Replaces `<input type="date">` (process-locale segment order; undismissable WebKitGTK popover). |
 | `common/DateTimeField.tsx` | Wall-clock instant field: `DateField` + `TimeField` + shortcut chips. Replaces `<input type="datetime-local">`; half a value is never reported. |
 | `common/SyncConfirmDialog.tsx` | The confirmation every manual byte-sync pull/push asks, mounted once per window (`AppShell` + `DetachedApp`); says which side's bytes overwrite which. |
