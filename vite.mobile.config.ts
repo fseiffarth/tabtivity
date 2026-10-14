@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import autoprefixer from "autoprefixer";
-import { manifestPath, PAGE_COLOR, type PaintedTheme } from "./mobile-web/src/pageColors";
-import { shellAssets } from "./mobile-web/src/shellAssets";
-import { themeColors } from "./mobile-web/src/themeColors";
+import { manifestPath, PAGE_COLOR, type PaintedTheme } from "./mobile-web/src/pageColors.ts";
+import { shellAssets } from "./mobile-web/src/shellAssets.ts";
+import { themeColors } from "./mobile-web/src/themeColors.ts";
 
 const BUILD_PLACEHOLDER = "__APP_BUILD__";
 const ASSETS_PLACEHOLDER = "__APP_ASSETS__";
@@ -114,5 +114,8 @@ export default defineConfig({
   build: {
     outDir: "../mobile-dist",
     emptyOutDir: true,
+    // Vite 6's default browser floor, kept on vite 8 (whose default rose to
+    // Safari 16.4 / Chrome 111): macOS 10.15's WebKit and older phones.
+    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
   },
 });

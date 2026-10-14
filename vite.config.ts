@@ -1,11 +1,16 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { NAMES } from "./src/lib/brand";
+import { NAMES } from "./src/lib/brand.ts";
 
 export default defineConfig(async () => ({
   plugins: [react()],
   clearScreen: false,
+  build: {
+    // Vite 6's default browser floor, kept on vite 8 (whose default rose to
+    // Safari 16.4 / Chrome 111): macOS 10.15's WebKit and older phones.
+    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
+  },
   resolve: {
     alias: [
       // pdfjs-dist's package.json exposes only `main` (no `exports`/`module`),
