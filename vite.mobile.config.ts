@@ -100,7 +100,8 @@ export default defineConfig({
   base: "/",
   // The phone's own sheets are written in one palette and rebuilt onto the
   // theme anchors in `themes.css` (`themeColors.ts`). Declaring PostCSS here
-  // replaces the root config, whose Tailwind the phone never used.
+  // replaces the root `postcss.config.js` (autoprefixer alone), so autoprefixer
+  // is listed again after `themeColors`.
   css: {
     postcss: {
       plugins: [themeColors({ include: (file) => file.replaceAll("\\", "/").includes("/mobile-web/src/") }), autoprefixer()],

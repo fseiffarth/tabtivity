@@ -57,7 +57,7 @@ update-desktop-database ~/.local/share/applications/
 
 ## Stack
 
-- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, Zustand
+- **Frontend:** React 18, TypeScript, Vite, plain CSS, Zustand
 - **Terminal UI:** xterm.js (`@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`)
 - **Backend:** Rust, Tauri v2
 - **PTY:** `portable-pty` crate

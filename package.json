@@ -67,7 +67,6 @@
     "jsdom": "^29.1.1",
     "postcss": "^8",
     "react-scan": "^0.5.7",
-    "tailwindcss": "^3",
     "typescript": "^5",
     "typescript-eslint": "^8.71.1",
     "typescript-native": "npm:typescript@7.0.2",

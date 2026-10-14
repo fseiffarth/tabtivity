@@ -3,7 +3,9 @@
    monolith's source order, which equal-specificity rules rely on — append new
    files at the end unless a rule genuinely must sit earlier in the cascade.
    Vite inlines these at build time; the emitted bundle is identical to the
-   monolith's. */
+   monolith's. reset.css (Tailwind 3's preflight, vendored) comes first, where
+   base.css's `@tailwind base` used to emit it. */
+@import "./reset.css";
 @import "./base.css";
 @import "./themes.css";
 @import "./shell.css";

@@ -3,11 +3,10 @@
    IMPORT ORDER IS LOAD-BEARING: these files are @imported in sequence from
    styles/index.css; equal-specificity rules rely on source order exactly as
    they did in the monolith, so never reorder the imports or move rules
-   between files without checking the cascade. */
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+   between files without checking the cascade.
+   The browser reset (Tailwind 3's vendored preflight) is reset.css, imported
+   just before this file; Tailwind itself is gone, so no utility classes exist —
+   style elements with the app's own classes. */
 
 /* ── Base reset ────────────────────────────────────────────────────────── */
 * {
