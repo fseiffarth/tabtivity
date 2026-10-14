@@ -1324,8 +1324,10 @@ fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> B
             }
             // SyncTeX spells a source under the PDF's folder as given
             // (`commands::synctex`), and `pdf` is `root.join(rel)`, so a
-            // source in the project strips against `root` as given.
-            let Ok(inside) = Path::new(&input).strip_prefix(root) else { continue };
+            // source in the project strips against `root` as given — minus
+            // Windows' `\\?\` prefix, which SyncTeX never hands back.
+            let input = Path::new(&input);
+            let Ok(inside) = input.strip_prefix(root).or_else(|_| input.strip_prefix(crate::commands::fs::display_path(root))) else { continue };
             // A map naming a file that is gone comes back un-canonicalised, so
             // a `..` in it could still climb out of the project.
             if inside.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {

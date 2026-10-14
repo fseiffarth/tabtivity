@@ -1896,7 +1896,7 @@ x1,33:3834000,3637000
 
         // A map naming a local source and a system class.
         std::fs::create_dir(root.join("slides")).expect("slides dir");
-        let slide = root.join("slides/idea.tex");
+        let slide = root.join("slides").join("idea.tex");
         let main = root.join("main.tex");
         File::create(&slide).expect("slide");
         File::create(&main).expect("main");
@@ -1931,10 +1931,11 @@ x1,33:3834000,3637000
             }
         );
 
-        // The slide is saved after the build: reported, by canonical path.
+        // The slide is saved after the build: reported, by canonical path,
+        // without Windows' `\\?\` prefix (which `root` carries there).
         set(&slide, t0 + Duration::from_secs(120));
         let st = status(&pdf);
-        assert_eq!(st.newer_sources, vec![slide.to_string_lossy().into_owned()]);
+        assert_eq!(st.newer_sources, vec![crate::commands::fs::display_path(&slide)]);
         assert!(!st.pdf_newer_than_map);
 
         // The PDF rebuilt without a map: the map is the older build's.

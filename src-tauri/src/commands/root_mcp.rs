@@ -1069,7 +1069,12 @@ mod security_tests {
         let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
         let (mut stream, _) = axum::serve::Listener::accept(&mut bounded).await;
         tokio::io::AsyncWriteExt::write_all(&mut client, b"POST").await.unwrap();
+        // The bytes cross a real socket: with the clock paused, an idle
+        // runtime would jump it to the idle deadline before they land (seen on
+        // macOS runners). Let real time run while they travel.
+        tokio::time::resume();
         let n = stream.read(&mut buf).await.unwrap();
+        tokio::time::pause();
         assert_eq!(&buf[..n], b"POST");
         let started = tokio::time::Instant::now();
         let err = stream.read(&mut buf).await.unwrap_err();
