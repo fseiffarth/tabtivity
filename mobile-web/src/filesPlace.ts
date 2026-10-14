@@ -1,7 +1,7 @@
 import { storageKey } from "../../src/lib/brand";
 
 /**
- * The folder the files drawer (`ProjectFiles`) was last standing in, per
+ * The folder the files library (`FilesLibrary`) was last standing in, per
  * project, so putting the drawer away — or the whole app — and opening it again
  * lands where the reader left off rather than at the project root.
  *
