@@ -22,6 +22,7 @@ import { destTopInBigPoints, loadPageLinks } from "../../components/embed/pdf/li
 import { loadPageNotes } from "../../components/embed/pdf/notes";
 import { pageTextItemBoxes, pageTextItemBoxesUnturned } from "../../components/embed/pdf/pageText";
 import { fingerprintPage, samePage } from "../../components/embed/pdf/pageFingerprint";
+import { syncRectToViewport, viewportToSyncPoint, type SyncRect } from "../../lib/viewers/tex/tex";
 
 /**
  * Two pages, the second turned by its own `/Rotate 90`. Page 1 carries every
@@ -240,6 +241,62 @@ describe("text boxes (pageText.ts)", () => {
     // A quarter turn clockwise sends PDF y (500) to screen x.
     expect(turned.x).toBeCloseTo(500, 5);
     expect(turned.y).toBeCloseTo(72 - 19.2, 5);
+  });
+});
+
+describe("SyncTeX geometry through pdf.js's own viewports (tex.ts)", () => {
+  // SyncTeX's space is the page as TeX laid it out: unturned, big points from the
+  // top-left. Exact where CropBox = MediaBox, TeX's default — as here.
+  const box: SyncRect = { page: 1, x: 72, y: 100, w: 200, h: 12 };
+  const close = (got: Record<string, number>, want: Record<string, number>) => {
+    for (const k of Object.keys(want)) expect(got[k], k).toBeCloseTo(want[k], 6);
+  };
+  const views = async (n: number, scale: number, turn: number) => {
+    const page = await doc.getPage(n);
+    return {
+      turned: page.getViewport({ scale, rotation: (page.rotate + turn) % 360 }),
+      unturned: page.getViewport({ scale: 1, rotation: 0 }),
+    };
+  };
+
+  it("an unturned page is a plain scale, both ways", async () => {
+    const { turned, unturned } = await views(1, 2, 0);
+    close(syncRectToViewport(box, turned, unturned), { left: 144, top: 200, width: 400, height: 24 });
+    close(viewportToSyncPoint(turned, unturned, 210, 120), { x: 105, y: 60 });
+  });
+
+  it("follows a sheet turned in the viewer by 90, 180 and 270 degrees", async () => {
+    // Where the box lands once the 612 × 792 page is turned clockwise, at scale 1.
+    const want: Record<number, { left: number; top: number; width: number; height: number }> = {
+      90: { left: 792 - 112, top: 72, width: 12, height: 200 },
+      180: { left: 612 - 272, top: 792 - 112, width: 200, height: 12 },
+      270: { left: 100, top: 612 - 272, width: 12, height: 200 },
+    };
+    for (const turn of [90, 180, 270]) {
+      const { turned, unturned } = await views(1, 1, turn);
+      const w = want[turn];
+      close(syncRectToViewport(box, turned, unturned), w);
+      // A click at the drawn box's centre is the box's centre in SyncTeX's space.
+      close(viewportToSyncPoint(turned, unturned, w.left + w.width / 2, w.top + w.height / 2), {
+        x: box.x + box.w / 2,
+        y: box.y + box.h / 2,
+      });
+    }
+  });
+
+  it("follows a page's own /Rotate 90 (a pdflscape sheet), round-tripping at any zoom", async () => {
+    for (const scale of [0.5, 1, 1.5]) {
+      const { turned, unturned } = await views(2, scale, 0);
+      expect(turned.rotation).toBe(90);
+      const css = syncRectToViewport(box, turned, unturned);
+      close(css, { left: 680 * scale, top: 72 * scale, width: 12 * scale, height: 200 * scale });
+      const a = viewportToSyncPoint(turned, unturned, css.left, css.top);
+      const b = viewportToSyncPoint(turned, unturned, css.left + css.width, css.top + css.height);
+      close(
+        { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) },
+        { x: box.x, y: box.y, w: box.w, h: box.h },
+      );
+    }
   });
 });
 

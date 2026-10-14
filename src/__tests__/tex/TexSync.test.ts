@@ -5,18 +5,18 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import {
-  pdfPointToBigPoints,
   bigPointsToCssRect,
   lineStartOffset,
   offsetToLineCol,
   wordAt,
   phraseAt,
   refineToWord,
-  forwardInputCandidates,
   pickSyncRect,
   pdfPageMatches,
   sourceColumnFraction,
   syncNoticeKind,
+  withUnsavedSource,
+  editedAboveLine,
   type SyncRect,
   type SyncTexStatus,
   type TextItemBox,
@@ -35,17 +35,11 @@ import {
 } from "../../stores/viewers/editorJump";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 
+// The SyncTeX ↔ drawn-page conversions (`viewportToSyncPoint`,
+// `syncRectToViewport`) are pinned against pdf.js's real viewports in
+// `pdf/PdfjsContract.test.ts`.
 describe("SyncTeX coordinate math", () => {
-  it("pdfPointToBigPoints divides the in-rect offset by scale", () => {
-    const rect = { left: 10, top: 20 };
-    // At scale 2, a click 200px right / 100px down of the page origin is 100x50
-    // big points.
-    expect(pdfPointToBigPoints(rect, 210, 120, 2)).toEqual({ x: 100, y: 50 });
-    // At scale 1 it is the raw offset.
-    expect(pdfPointToBigPoints(rect, 30, 25, 1)).toEqual({ x: 20, y: 5 });
-  });
-
-  it("bigPointsToCssRect is the inverse mapping (multiply by scale)", () => {
+  it("bigPointsToCssRect multiplies by scale (Ctrl+F and link boxes)", () => {
     const css = bigPointsToCssRect({ page: 1, x: 100, y: 50, w: 200, h: 12 }, 2);
     expect(css).toEqual({ left: 200, top: 100, width: 400, height: 24 });
   });
@@ -233,6 +227,20 @@ describe("pickSyncRect (choose the SyncTeX record under the clicked column)", ()
     // Early in the line → upper row; late → the wrapped lower row.
     expect(pickSyncRect(recs, 0.2)!.y).toBe(100);
     expect(pickSyncRect(recs, 0.8)!.y).toBe(130);
+  });
+
+  it("tiles only the first page with a hit", () => {
+    // A paragraph running over a page break: the tail on page 3 must not join
+    // the walk, or a late column would land on page 2's bottom row by width.
+    const recs: SyncRect[] = [
+      { page: 3, x: 0, y: 50, w: 300, h: 12 },
+      { page: 2, x: 0, y: 700, w: 100, h: 12 },
+      { page: 2, x: 0, y: 712, w: 100, h: 12 },
+    ];
+    expect(pickSyncRect(recs, 0.9)).toEqual({ page: 2, x: 0, y: 712, w: 100, h: 12 });
+    expect(pickSyncRect(recs, 0.1)).toEqual({ page: 2, x: 0, y: 700, w: 100, h: 12 });
+    // One box on the first page is that box, whatever the column.
+    expect(pickSyncRect([recs[0], { page: 1, x: 9, y: 9, w: 9, h: 9 }], 1)!.page).toBe(1);
   });
 
   it("treats zero-width boxes as one unit so it never divides by zero", () => {
@@ -476,57 +484,6 @@ describe("refineToWord (narrow a SyncTeX box to the clicked word)", () => {
   });
 });
 
-describe("forwardInputCandidates (SyncTeX forward-search path spellings)", () => {
-  it("yields absolute, build-dir-relative, and basename spellings (+ ./ forms)", () => {
-    expect(forwardInputCandidates("/proj/paper/main.tex", "/proj/paper")).toEqual([
-      "/proj/paper/main.tex",
-      "main.tex",
-      "./main.tex",
-      // basename equals the relative form here, so its duplicates are deduped.
-    ]);
-  });
-
-  it("keeps a nested relative path distinct from the basename", () => {
-    expect(
-      forwardInputCandidates("/proj/paper/chapters/intro.tex", "/proj/paper/"),
-    ).toEqual([
-      "/proj/paper/chapters/intro.tex",
-      "chapters/intro.tex",
-      "./chapters/intro.tex",
-      "intro.tex",
-      "./intro.tex",
-    ]);
-  });
-
-  it("falls back to absolute + basename when the file is outside the build dir", () => {
-    expect(forwardInputCandidates("/other/x.tex", "/proj/paper")).toEqual([
-      "/other/x.tex",
-      "x.tex",
-      "./x.tex",
-    ]);
-  });
-
-  it("handles native Windows paths, emitting forward-slash relatives SyncTeX stored", () => {
-    // The absolute spelling keeps native backslashes; the build-dir-relative and
-    // basename spellings use forward slashes (what TeX writes into the .synctex).
-    expect(
-      forwardInputCandidates("C:\\proj\\paper\\chapters\\intro.tex", "C:\\proj\\paper"),
-    ).toEqual([
-      "C:\\proj\\paper\\chapters\\intro.tex",
-      "chapters/intro.tex",
-      "./chapters/intro.tex",
-      "intro.tex",
-      "./intro.tex",
-    ]);
-    // Trailing separator on the build dir and a file directly in it.
-    expect(forwardInputCandidates("C:\\proj\\paper\\main.tex", "C:\\proj\\paper\\")).toEqual([
-      "C:\\proj\\paper\\main.tex",
-      "main.tex",
-      "./main.tex",
-    ]);
-  });
-});
-
 describe("editorJump store", () => {
   beforeEach(() => useEditorJumpStore.setState({ requestsByPath: {} }));
 
@@ -628,7 +585,7 @@ describe("pdfSync store", () => {
   });
 });
 
-describe("syncNoticeKind (what a reverse-search click is told)", () => {
+describe("syncNoticeKind (what a SyncTeX jump is told, either direction)", () => {
   const current: SyncTexStatus = { has_map: true, pdf_newer_than_map: false, newer_sources: [] };
 
   it("says nothing on a clean hit against a current map", () => {
@@ -663,6 +620,30 @@ describe("syncNoticeKind (what a reverse-search click is told)", () => {
     // still a miss.
     expect(syncNoticeKind(null, true)).toBeNull();
     expect(syncNoticeKind(null, false)).toBe("miss");
+  });
+
+  it("counts an unsaved draft as an edited source for forward search", () => {
+    const dirty = withUnsavedSource(current, "/p/a.tex");
+    expect(dirty).toEqual({ ...current, newer_sources: ["/p/a.tex"] });
+    expect(syncNoticeKind(dirty, true)).toBe("stale");
+    // Already listed (saved after the build, then edited again): named once.
+    expect(withUnsavedSource(dirty, "/p/a.tex")!.newer_sources).toEqual(["/p/a.tex"]);
+    // A map the PDF outgrew still says so first; an unknown status stays unknown.
+    expect(syncNoticeKind(withUnsavedSource({ ...current, pdf_newer_than_map: true }, "/p/a.tex"), true)).toBe("pdfNewer");
+    expect(withUnsavedSource(null, "/p/a.tex")).toBeNull();
+  });
+});
+
+describe("editedAboveLine (does an unsaved edit move forward search's line?)", () => {
+  const saved = "a\nb\nc\nd\n";
+  it("is true for a line inserted or changed above it", () => {
+    expect(editedAboveLine(saved, "new\na\nb\nc\nd\n", 3)).toBe(true);
+    expect(editedAboveLine(saved, "A\nb\nc\nd\n", 3)).toBe(true);
+  });
+  it("is false for an edit on the line itself or below it", () => {
+    expect(editedAboveLine(saved, "a\nb\nc changed\nd\n", 3)).toBe(false);
+    expect(editedAboveLine(saved, "a\nb\nc\nd\nmore\n", 3)).toBe(false);
+    expect(editedAboveLine(saved, saved, 1)).toBe(false);
   });
 });
 

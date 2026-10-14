@@ -358,16 +358,20 @@ export function texDiagnosticsByFile(
 
 /** A source location from SyncTeX reverse search; mirrors backend `SyncSource`. */
 export type SyncSource = {
-  /** Absolute path to the source `.tex`. */
+  /** Absolute path to the source `.tex`, spelled under the caller's spelling of
+   *  the PDF's folder (a symlinked project keeps its link path). */
   input: string;
   /** 1-based source line. */
   line: number;
-  /** 1-based source column (0 when SyncTeX did not report one). */
+  /** Always 0: SyncTeX records no column for reverse search. Kept so the jump
+   *  target's shape matches every other `line`/`column` caller. */
   column: number;
 };
 
 /** A PDF box from SyncTeX forward search; mirrors backend `SyncRect`. Units are
- *  big points (72 dpi) measured from the page's top-left corner. */
+ *  big points (72 dpi) measured from the top-left corner of the page as TeX laid
+ *  it out — the page's own, unturned space, whatever `/Rotate` or a turn in the
+ *  viewer later does to it (see {@link syncRectToViewport}). */
 export type SyncRect = {
   page: number;
   x: number;
@@ -377,7 +381,7 @@ export type SyncRect = {
 };
 
 /** Reverse search: which source line produced `(x, y)` (big points from the
- *  page top-left) on `page` of `pdf`. Resolves to null on any error / no hit. */
+ *  unturned page's top-left) on `page` of `pdf`. Resolves to null on any error / no hit. */
 export function synctexEdit(
   pdf: string,
   page: number,
@@ -387,14 +391,15 @@ export function synctexEdit(
   return invoke<SyncSource | null>("synctex_edit", { pdf, page, x, y }).catch(() => null);
 }
 
-/** What reverse search can promise for a PDF right now; mirrors the backend
+/** What SyncTeX can promise for a PDF right now; mirrors the backend
  *  `MapStatus`. Every true/non-empty field is a reason to recompile. */
 export type SyncTexStatus = {
   /** A `.synctex(.gz)` sits beside the PDF at all. */
   has_map: boolean;
   /** The PDF was rebuilt after the map (without SyncTeX, or by another tool). */
   pdf_newer_than_map: boolean;
-  /** Local sources saved after the map was written, absolute paths. */
+  /** Local sources saved after the map was written, absolute paths spelled the
+   *  way the PDF's folder was. */
   newer_sources: string[];
 };
 
@@ -405,12 +410,12 @@ export function synctexStatus(pdf: string): Promise<SyncTexStatus | null> {
   return invoke<SyncTexStatus>("synctex_status", { pdf }).catch(() => null);
 }
 
-/** The notice a reverse-search click deserves, from the map's status and whether
- *  the click resolved. Pure, so the wording decision is unit-tested:
+/** The notice a SyncTeX jump deserves — either direction — from the map's status
+ *  and whether the jump resolved. Pure, so the wording decision is unit-tested:
  *   - `noMap`     nothing to resolve against — compile with SyncTeX first;
  *   - `pdfNewer`  the PDF outgrew its map — the positions are a previous build's;
  *   - `stale`     a source was saved after the build — the line is the old one;
- *   - `miss`      the map is current but nothing was set at that spot;
+ *   - `miss`      the map is current but nothing matched;
  *   - `null`      a clean hit, or a status the backend could not report.
  *  A stale/pdf-newer notice is shown even on a hit: the jump still happens (a
  *  nearby line beats nothing), but the reader is told why it may be off. */
@@ -426,53 +431,37 @@ export function syncNoticeKind(
   return hit ? null : "miss";
 }
 
-/** Forward search: every SyncTeX record (`input:line:column` → the line's
- *  constituent boxes / wrapped rows). Resolves to `[]` when the query *ran* but
- *  matched nothing, and to `null` when the backend command itself errored — i.e.
- *  SyncTeX could not run at all (the `synctex` tool absent, or a backend not yet
- *  rebuilt for it). Keeping the two apart is what lets the caller tell an honest
- *  "no match on that line" from "jump-to-cursor is unavailable" (they used to
- *  read identically as a miss). */
-export function synctexView(
-  pdf: string,
-  input: string,
-  line: number,
-  column: number,
-): Promise<SyncRect[] | null> {
-  return invoke<SyncRect[]>("synctex_view", { pdf, input, line, column }).catch(() => null);
+/** `status` with `source` counted among the files edited since the build — what
+ *  a draft with unsaved edits is to forward search, whose caret line is the
+ *  draft's while the PDF was built from the file on disk. The backend only sees
+ *  saved files, so the editor adds its own. Null stays null (unknown is not
+ *  worded). Pure / unit-tested. */
+export function withUnsavedSource(
+  status: SyncTexStatus | null,
+  source: string,
+): SyncTexStatus | null {
+  if (!status || status.newer_sources.includes(source)) return status;
+  return { ...status, newer_sources: [...status.newer_sources, source] };
 }
 
-/**
- * SyncTeX forward search is sensitive to how the source path is spelled — it
- * matches the `-i` input against the path string recorded at compile time, which
- * may be the absolute path, the name relative to the compile dir, or a bare
- * basename depending on the engine/version and how the file was passed in. Tabtivity
- * compiles with the bare filename, so an absolute `-i` often fails to match. This
- * tries the absolute path, the path relative to the build dir, and the basename
- * (deduped, in that order) and returns the first spelling that yields records —
- * so forward search works regardless of which spelling SyncTeX stored.
- *
- * Propagates {@link synctexView}'s two failure modes so the caller can tell them
- * apart: `[]` when SyncTeX ran but no spelling matched (a genuine miss), `null`
- * when *every* attempt errored — i.e. SyncTeX could not run at all (unavailable).
- * A single spelling that runs (even to an empty result) counts as "ran", so a
- * mismatched spelling never masquerades as unavailable.
- */
-export async function synctexViewBest(
-  pdf: string,
-  input: string,
-  rootDir: string,
-  line: number,
-  column: number,
-): Promise<SyncRect[] | null> {
-  let ran = false;
-  for (const cand of forwardInputCandidates(input, rootDir)) {
-    const recs = await synctexView(pdf, cand, line, column);
-    if (recs === null) continue; // this attempt errored — the next spelling may run
-    ran = true;
-    if (recs.length) return recs; // first spelling that matched wins
-  }
-  return ran ? [] : null;
+/** Whether a draft's unsaved edits sit above `line` — the only edits that move
+ *  that line's number away from the one the build (made from the saved text)
+ *  recorded. An edit on or below it leaves forward search's line right, so it is
+ *  no reason for a stale notice. Pure / unit-tested. */
+export function editedAboveLine(saved: string, draft: string, line: number): boolean {
+  return saved.slice(0, lineStartOffset(saved, line)) !== draft.slice(0, lineStartOffset(draft, line));
+}
+
+/** Forward search: the PDF boxes SyncTeX holds for `input:line` — the line's own
+ *  boxes, or the nearest set line's when that one set nothing (a comment, a blank
+ *  line). The backend answers from the map natively, by any spelling of `input`.
+ *  `[]` is an honest miss; a rejected call (a backend without the command) reads
+ *  as one too. */
+export function synctexView(pdf: string, input: string, line: number): Promise<SyncRect[]> {
+  return invoke<SyncRect[]>("synctex_view", { pdf, input, line }).then(
+    (r) => (Array.isArray(r) ? r : []),
+    () => [],
+  );
 }
 
 /**
@@ -495,16 +484,21 @@ export function sourceColumnFraction(text: string, line: number, column: number)
 /**
  * Pick the SyncTeX forward-search record the clicked column lands in. The records
  * are the line's constituent boxes (and, when the source line wrapped, one row
- * per visual line); read in order (top-to-bottom, then left-to-right) their
- * widths tile the line, so the box covering `frac` of the cumulative horizontal
- * advance is the one under the caret. This resolves the ROW under wrapping (which
- * pure text matching could not), leaving the exact word to {@link refineToWord}.
+ * per visual line). Only the first page with a hit counts: a paragraph that runs
+ * over a page break tiles each page on its own, and walking both as one line
+ * would land a mid-line caret on whichever page happened to sort in between.
+ * Read in order (top-to-bottom, then left-to-right) that page's widths tile the
+ * line, so the box covering `frac` of the cumulative horizontal advance is the
+ * one under the caret. This resolves the ROW under wrapping (which pure text
+ * matching could not), leaving the exact word to {@link refineToWord}.
  * Returns null only for an empty list. Pure / unit-tested.
  */
 export function pickSyncRect(records: SyncRect[], frac: number): SyncRect | null {
   if (records.length === 0) return null;
-  if (records.length === 1) return records[0];
-  const sorted = [...records].sort((a, b) => a.y - b.y || a.x - b.x);
+  const first = Math.min(...records.map((r) => r.page));
+  const onPage = records.filter((r) => r.page === first);
+  if (onPage.length === 1) return onPage[0];
+  const sorted = [...onPage].sort((a, b) => a.y - b.y || a.x - b.x);
   // Zero-width boxes (SyncTeX occasionally omits W) count as one unit so the
   // walk still advances and never divides by zero.
   const widths = sorted.map((r) => (r.w > 0 ? r.w : 1));
@@ -516,35 +510,6 @@ export function pickSyncRect(records: SyncRect[], frac: number): SyncRect | null
     acc += widths[i];
   }
   return sorted[sorted.length - 1];
-}
-
-/** The source-path spellings to try for SyncTeX forward search, in order: the
- *  absolute path, the path relative to the build dir, and the bare basename
- *  (deduped). Pure / unit-tested — {@link synctexViewBest} feeds each to
- *  `synctex view -i` until one matches. */
-export function forwardInputCandidates(input: string, rootDir: string): string[] {
-  const rel = forwardRelative(rootDir, input);
-  const base = basename(input);
-  // SyncTeX may have stored the path with a `./` prefix (a common engine
-  // spelling); try those forms too.
-  const out: string[] = [input];
-  for (const r of [rel, base]) {
-    if (!r) continue;
-    out.push(r, `./${r}`);
-  }
-  return Array.from(new Set(out));
-}
-
-/** `file` expressed relative to directory `dir`, using forward slashes (the
- *  spelling SyncTeX records on every platform), or null when `file` is not under
- *  `dir`. Accepts either separator on either argument so it is correct for native
- *  Windows paths (`C:\proj` + `C:\proj\ch\x.tex` → `ch/x.tex`) as well as POSIX. */
-function forwardRelative(dir: string, file: string): string | null {
-  const trimmed = dir.replace(/[/\\]+$/, "");
-  if (!trimmed) return null;
-  const nDir = trimmed.replace(/\\/g, "/");
-  const nFile = file.replace(/\\/g, "/");
-  return nFile.startsWith(nDir + "/") ? nFile.slice(nDir.length + 1) : null;
 }
 
 /** Resolve the file that should actually be compiled for `path` (a child file
@@ -575,25 +540,65 @@ export function isTexDocumentRoot(text: string): boolean {
 }
 
 /**
- * Map a click on a pdf.js page canvas to SyncTeX big points (72 dpi from the
- * page's top-left). At pdf.js `scale = 1` the viewport unit already equals one
- * big point, so dividing the CSS-pixel offset within the page rect by `scale`
- * recovers big points. `rect` is the page canvas's bounding rect.
+ * The two pdf.js `PageViewport` conversions SyncTeX geometry needs — a structural
+ * subset, so the math is unit-tested against a fake viewport without a document.
  */
-export function pdfPointToBigPoints(
-  rect: { left: number; top: number },
-  clientX: number,
-  clientY: number,
-  scale: number,
+export type ViewportLike = {
+  convertToPdfPoint(x: number, y: number): number[];
+  convertToViewportPoint(x: number, y: number): number[];
+};
+
+/**
+ * Map a point on a page as drawn (`turned`: the viewport the canvas is painted
+ * with — its scale and its total rotation, the page's `/Rotate` plus any turn in
+ * the viewer) to SyncTeX big points: the page's own, unturned space (`unturned`:
+ * the scale-1, rotation-0 viewport), measured from its top-left. Going through
+ * PDF user space is what makes a `pdflscape` page or a sheet turned in the viewer
+ * map right. SyncTeX measures from the MediaBox's top-left while pdf.js's view
+ * is the CropBox, so this is exact when the two are the same — TeX's default; a
+ * cropped page is off by the crop margin, as it always was.
+ * `x`/`y` are CSS pixels from the canvas's top-left. Pure / unit-tested.
+ */
+export function viewportToSyncPoint(
+  turned: ViewportLike,
+  unturned: ViewportLike,
+  x: number,
+  y: number,
 ): { x: number; y: number } {
+  const [px, py] = turned.convertToPdfPoint(x, y);
+  const [ux, uy] = unturned.convertToViewportPoint(px, py);
+  return { x: ux, y: uy };
+}
+
+/**
+ * The inverse of {@link viewportToSyncPoint} for a box: a SyncTeX rect in the
+ * page's unturned big points → CSS pixels over the page as drawn (`turned`). The
+ * two corners travel separately and the result is re-normalised, since a turn
+ * swaps which corner is top-left. Pure / unit-tested.
+ */
+export function syncRectToViewport(
+  rect: SyncRect,
+  turned: ViewportLike,
+  unturned: ViewportLike,
+): { left: number; top: number; width: number; height: number } {
+  const corner = (x: number, y: number) => {
+    const [px, py] = unturned.convertToPdfPoint(x, y);
+    return turned.convertToViewportPoint(px, py);
+  };
+  const [ax, ay] = corner(rect.x, rect.y);
+  const [bx, by] = corner(rect.x + rect.w, rect.y + rect.h);
   return {
-    x: (clientX - rect.left) / scale,
-    y: (clientY - rect.top) / scale,
+    left: Math.min(ax, bx),
+    top: Math.min(ay, by),
+    width: Math.abs(bx - ax),
+    height: Math.abs(by - ay),
   };
 }
 
-/** Inverse of {@link pdfPointToBigPoints}: a SyncTeX box in big points → CSS
- *  pixels for positioning a highlight overlay over a page at `scale`. */
+/** A box in big points (top-left origin, in whatever space the page is drawn in)
+ *  → CSS pixels for positioning an overlay over a page at `scale`. The Ctrl+F
+ *  hits and link boxes are measured in the drawn space already; a SyncTeX box is
+ *  not, and goes through {@link syncRectToViewport} instead. */
 export function bigPointsToCssRect(
   rect: SyncRect,
   scale: number,
@@ -716,8 +721,7 @@ function pageHaystack(items: readonly TextItemBox[], caseSensitive: boolean): Pa
  * word a reader would type. Each run's box is sliced by the matched character span
  * using its uniform per-character width. An empty query (or no items) yields no
  * matches. Pure — unit-tested; the caller derives `items` via `getTextContent()` at
- * scale 1, the same boxes SyncTeX word-refinement uses, so highlights sit on the
- * glyphs.
+ * scale 1 in the space the page is drawn in, so highlights sit on the glyphs.
  */
 export function pdfPageMatches(
   items: TextItemBox[],
@@ -1045,6 +1049,8 @@ function refineSingle(target: SyncRect, needle: string, items: TextItemBox[]): S
  *      within its PDF row matches the clicked word's ordinal on the source line
  *      (`phrase.lineIndex`);
  *   4. and finally nearest the line centre horizontally.
+ * `target` and `items` must be in the same space — SyncTeX's is the page's own,
+ * unturned one, so the caller extracts the runs unturned too.
  * Returns a tight box around the clicked word, or null (→ caller keeps the line
  * box). Pure / tested.
  */

@@ -72,7 +72,7 @@ describe("scrollIntoPdfBox", () => {
   it("centres the target vertically in the scroller and leaves ancestors alone", () => {
     // 800px below the scrollport's top, 20px tall: centred at 800 - (500-20)/2.
     const { pane, scroll, el } = makeChain(BOX, { top: 900, left: 62, w: 376, h: 20 });
-    scrollIntoPdfBox(el, "center");
+    expect(scrollIntoPdfBox(el, "center")).toBe(true);
     expect(scroll.scrollTop).toBe(560);
     expect(pane.scrollTop).toBe(0);
     expect(pane.scrollLeft).toBe(0);
@@ -107,7 +107,8 @@ describe("scrollIntoPdfBox", () => {
       { top: 0, left: 0, w: 0, h: 0 },
     );
     scroll.scrollTop = 420;
-    scrollIntoPdfBox(el, "center");
+    // …and says so, so the SyncTeX reveal can try again when the pane is shown.
+    expect(scrollIntoPdfBox(el, "center")).toBe(false);
     expect(scroll.scrollTop).toBe(420);
     expect(pane.scrollTop).toBe(0);
   });
@@ -115,6 +116,6 @@ describe("scrollIntoPdfBox", () => {
   it("is a no-op for an element outside any PDF scroller", () => {
     const loose = document.createElement("div");
     document.body.appendChild(loose);
-    expect(() => scrollIntoPdfBox(loose, "center")).not.toThrow();
+    expect(scrollIntoPdfBox(loose, "center")).toBe(false);
   });
 });

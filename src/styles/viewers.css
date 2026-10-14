@@ -5607,6 +5607,13 @@
   animation: file-viewer-pdf-sync-fade 2.2s ease-out forwards;
 }
 
+/* Untested pills (lib/untested) beside a SyncTeX mark, up as long as the mark. */
+.file-viewer-pdf-sync-pills {
+  position: absolute;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .file-viewer-tex-compile.is-compiling {
     animation: none;

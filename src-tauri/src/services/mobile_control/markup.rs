@@ -1285,7 +1285,9 @@ fn probe(mark: &Mark) -> (f64, f64) {
 /// SyncTeX map beside a project PDF says: `path:line`, project-relative. Empty
 /// for an outbox copy (no map beside it), a PDF with no map or a map from an
 /// older build than the PDF. A source outside the project (a class file in
-/// the TeX tree) or one whose name could speak in the prompt is left out.
+/// the TeX tree), one saved since the build (its line numbers have moved, and
+/// a wrong line sends the agent to the wrong place) or one whose name could
+/// speak in the prompt is left out.
 /// Marks are in the page's displayed points from its top left, as reverse
 /// search clicks are (`commands::synctex`).
 fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> BTreeMap<(u32, usize), String> {
@@ -1298,9 +1300,9 @@ fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> B
     if !status.has_map || status.pdf_newer_than_map {
         return found;
     }
-    let Ok(canonical_root) = root.canonicalize() else {
-        return found;
-    };
+    // Spelled as `resolve_pages` spells an input (both under the PDF folder as
+    // given), so a plain comparison finds them.
+    let edited: std::collections::BTreeSet<&str> = status.newer_sources.iter().map(String::as_str).collect();
     let mut points: BTreeMap<u32, Vec<(f64, f64)>> = BTreeMap::new();
     let mut asked: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     let mut count = 0usize;
@@ -1317,7 +1319,18 @@ fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> B
     for (page, answers) in crate::commands::synctex::resolve_pages(&pdf, &points) {
         for (index, answer) in asked.get(&page).into_iter().flatten().zip(answers) {
             let Some((input, line)) = answer else { continue };
-            let Ok(inside) = Path::new(&input).strip_prefix(&canonical_root) else { continue };
+            if edited.contains(input.as_str()) {
+                continue;
+            }
+            // SyncTeX spells a source under the PDF's folder as given
+            // (`commands::synctex`), and `pdf` is `root.join(rel)`, so a
+            // source in the project strips against `root` as given.
+            let Ok(inside) = Path::new(&input).strip_prefix(root) else { continue };
+            // A map naming a file that is gone comes back un-canonicalised, so
+            // a `..` in it could still climb out of the project.
+            if inside.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+                continue;
+            }
             let Some(name) = inside.to_str().map(|name| name.replace('\\', "/")) else { continue };
             if name.is_empty() || name.chars().any(|c| c.is_control() || c == '`') {
                 continue;
@@ -1789,6 +1802,39 @@ mod tests {
         // An outbox copy has no map beside it: the words alone.
         let outbox_lines = source_lines(root, &ResolvedSource::Outbox("20261001-090000-draft.pdf".into()), &req.pages);
         assert!(outbox_lines.is_empty());
+        // A chapter saved after the build: its old line numbers are not sent;
+        // the untouched main file's still are.
+        fs::File::options()
+            .write(true)
+            .open(root.join("docs/chapters/intro.tex"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(120))
+            .unwrap();
+        let lines = source_lines(root, &ResolvedSource::Files("docs/draft.pdf".into()), &req.pages);
+        assert_eq!(lines.get(&(1, 0)).map(String::as_str), Some("docs/main.tex:3"));
+        assert_eq!(lines.get(&(1, 1)), None, "{lines:?}");
+    }
+
+    #[test]
+    fn a_source_climbing_out_of_the_project_is_not_named() {
+        // A map naming a file that no longer exists comes back as recorded,
+        // `..` and all: under the project root by prefix, outside it in fact.
+        let dir = project();
+        let root = &dir.path().canonicalize().unwrap();
+        fs::write(root.join("docs/draft.pdf"), markup_pdf::tests::classic_pdf(&[0], false)).unwrap();
+        let map = format!(
+            "SyncTeX Version:1\nInput:1:{r}/docs/../../x.tex\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n{{1\n\
+             [1,7:4736286,46220574:26673152,41484288,0\n(1,3:8799518,8865054:22609920,455111,0\nx1,3:11218261,8865054\n)\n]\n}}1\n",
+            r = crate::commands::fs::display_path(root)
+        );
+        fs::write(root.join("docs/draft.synctex"), map).unwrap();
+        let mut page = page(1, &layer(root, "a-p1-marked.png"));
+        page.marks = vec![Mark::Text { color: Color::Blue, at: [150.0, 133.0], size: 12.0, text: "here".into() }];
+        // SyncTeX does answer the mark; only the name is refused.
+        let (input, _) = crate::commands::synctex::resolve(&root.join("docs/draft.pdf"), 1, 150.0, 133.0).unwrap();
+        assert!(input.ends_with("x.tex"), "{input}");
+        let lines = source_lines(root, &ResolvedSource::Files("docs/draft.pdf".into()), &[page]);
+        assert!(lines.is_empty(), "{lines:?}");
     }
 
     #[test]
