@@ -55,6 +55,16 @@ change was not run live.
   packaged daily-driver Tabtivity (`npm run package`) without sharing any state —
   sessions live in the packaged build, out of HMR's reach. Still one dev
   session at a time (port 1420), and still launched by the user only.
+- A truly fresh install (no keychain, `~/.claude`, CLIs or host packages):
+  `scripts/fresh-vm.sh` — one QEMU desktop VM (copy-on-write over a baked
+  Ubuntu GNOME image, built on the first call); `fresh-vm.sh [version|file]`
+  swaps the installed release in place (the guest starts it at login),
+  `--fresh`/`reset` go back to a clean desktop; host-only (`/dev/kvm`). A host
+  run writes the "(VM)" desktop entry (app grid and desktop icon), which runs
+  an installed copy of the script under the VM folder, never the checkout's.
+  With a VM already there, a call asks: keep it (a stopped one boots with the
+  package installed over it; a running one gets the app started inside it via
+  the QEMU guest agent socket `qga.sock`), or delete it and start a new VM.
 - `npm run package:dev` freezes the *current working tree* as a release binary
   behind the "Tabtivity (dev)" desktop entry (`start-tabtivity-dev-build.sh`, binary
   at `~/.local/share/tabtivity/tabtivity-dev`). No hot reload: the user works and
