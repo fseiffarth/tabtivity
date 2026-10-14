@@ -346,7 +346,10 @@ html, body, #root {
    that module's look here — a 4px accent bar 2px in from the right edge (the
    transparent borders inset it within the inline 14px width). One class more
    than the rules xterm injects at runtime, hover/active included, so these win
-   regardless of order. */
+   regardless of order. xterm's hover/active rules set the `background`
+   shorthand, which resets the clip, and tie with the resting rule here — so
+   the state rule restates the clip, or the hovered or dragged thumb would
+   paint under the borders, the whole 14px wide. */
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
   box-sizing: border-box;
   border: 2px solid transparent;
@@ -358,6 +361,7 @@ html, body, #root {
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider:hover,
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider.active {
   background-color: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
 }
 
 /* ── Custom (square) scrollbars ─────────────────────────────────────────

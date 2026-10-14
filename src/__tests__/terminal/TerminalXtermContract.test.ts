@@ -370,3 +370,81 @@ describe("xterm 6's own scrollbar, as the stylesheets and FitAddon see it", () =
     }
   });
 });
+
+describe("the slider's look over the rules xterm injects", () => {
+  /** The `background` longhands a rule sets, its `background` shorthand
+   *  expanded the way the cascade sees it: an unnamed box resets the clip. */
+  function backgroundOf(block: string): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const decl of block.split(";")) {
+      const at = decl.indexOf(":");
+      if (at < 0) continue;
+      const prop = decl.slice(0, at).trim();
+      const value = decl.slice(at + 1).trim();
+      if (prop === "background") {
+        out.set("background-color", value.replace(/\s*\b(padding|border|content)-box\b/g, "").trim());
+        out.set("background-clip", /\bpadding-box\b/.test(value) ? "padding-box" : "border-box");
+      } else if (prop === "background-color" || prop === "background-clip") {
+        out.set(prop, value);
+      }
+    }
+    return out;
+  }
+
+  /** Classes, attributes and pseudo-classes, then elements — ids never occur here. */
+  function specificity(sel: string): number {
+    const classes = (sel.match(/\.[\w-]+|\[[^\]]*\]|:(?!:)[\w-]+/g) ?? []).length;
+    const types = (sel.replace(/\.[\w-]+|\[[^\]]*\]|:+[\w-]+(\([^)]*\))?/g, " ").match(/(^|[\s>+~])[a-z][\w-]*/gi) ?? []).length;
+    return classes * 100 + types;
+  }
+
+  interface Rule { selector: string; decls: Map<string, string>; from: string; order: number }
+
+  /** The rules of `css` that set a slider background, in source order. */
+  function sliderRules(css: string, from: string, start: number): Rule[] {
+    const out: Rule[] = [];
+    for (const [, prelude, block] of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const decls = backgroundOf(block);
+      if (!decls.size) continue;
+      for (const selector of prelude.split(",")) {
+        if (selector.includes(".slider")) out.push({ selector: selector.trim(), decls, from, order: start + out.length });
+      }
+    }
+    return out;
+  }
+
+  /** Which origin's value of `prop` the slider gets: highest specificity,
+   *  then the later rule — xterm's own style sits in the body, after the
+   *  app's sheets in the head. `:hover` is matched as a stand-in class. */
+  function winner(slider: HTMLElement, rules: Rule[], prop: string): string | undefined {
+    const live = rules
+      .filter((r) => r.decls.has(prop) && slider.matches(r.selector.replace(/:hover\b/g, ".zz-hover")))
+      .sort((a, b) => specificity(a.selector) - specificity(b.selector) || a.order - b.order);
+    return live[live.length - 1]?.from;
+  }
+
+  it("keeps the app's and the phone's slider colour and inset at rest, on hover and while dragged", () => {
+    const { host } = openTerm();
+    const injected = [...host.querySelectorAll("style")].map((s) => s.textContent ?? "").join("\n");
+    const theirs = sliderRules(injected, "xterm", 1000);
+    // The rules xterm 6 injects for its slider, hover and drag included.
+    expect(theirs.map((r) => r.selector)).toEqual([
+      ".xterm .xterm-scrollable-element > .scrollbar > .slider",
+      ".xterm .xterm-scrollable-element > .scrollbar > .slider:hover",
+      ".xterm .xterm-scrollable-element > .scrollbar > .slider.active",
+    ]);
+    const slider = host.querySelector<HTMLElement>(".xterm-scrollable-element > .scrollbar.vertical > .slider")!;
+    for (const [sheet, css] of [
+      ["app", readAppStylesheet()],
+      ["phone", readFileSync("mobile-web/src/style.css", "utf8") as string],
+    ] as const) {
+      const rules = [...sliderRules(css, sheet, 0), ...theirs];
+      for (const state of ["", "zz-hover", "active"]) {
+        slider.className = ["slider", state].filter(Boolean).join(" ");
+        for (const prop of ["background-color", "background-clip"]) {
+          expect(`${sheet} ${state || "rest"} ${prop}: ${winner(slider, rules, prop)}`).toBe(`${sheet} ${state || "rest"} ${prop}: ${sheet}`);
+        }
+      }
+    }
+  });
+});
