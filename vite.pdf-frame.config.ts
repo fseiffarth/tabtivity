@@ -70,6 +70,9 @@ export default defineConfig({
         format: "iife",
         entryFileNames: "assets/pdf-frame-[hash].js",
         codeSplitting: false,
+        // The ES modules it bundles are strict code; Rollup said so for an
+        // IIFE by default, Rolldown's `'auto'` does not.
+        strict: true,
         intro: "var __pdfFrameScriptUrl = document.currentScript && document.currentScript.src;",
       },
     },
