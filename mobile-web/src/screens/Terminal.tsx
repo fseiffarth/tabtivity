@@ -68,6 +68,7 @@ import {
   absorbHistory,
   emptyHistory,
   lastHistoryText,
+  scrollbackTrimEvent,
   shiftHistory,
   type HistoryChunk,
 } from "../terminal/readableHistory";
@@ -1410,14 +1411,10 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     screenRows.current = () => bufferRows(term.buffer.active);
     // The history log needs to know when xterm trims scrollback (row indices
     // shift), and xterm has no public event for it — so this rides the internal
-    // buffer list's own trim emitter, guarded: when a future xterm renames it,
-    // the view falls back to the bounded whole-screen rebuild instead of
-    // showing wrong lines.
+    // buffer list's own trim emitter (`scrollbackTrimEvent`), guarded: when a
+    // future xterm renames it, the view falls back to the bounded whole-screen
+    // rebuild instead of showing wrong lines.
     const history = emptyHistory();
-    type TrimEvent = (listener: (amount: number) => void) => { dispose(): void };
-    const trimEventOf = () => (term as unknown as {
-      _core?: { _bufferService?: { buffers?: { normal?: { lines?: { onTrim?: TrimEvent } } } } };
-    })._core?._bufferService?.buffers?.normal?.lines?.onTrim;
     let trimWatch: { dispose(): void } | undefined;
     // `term.reset()` — the replay boundary below — builds a *new* normal
     // buffer, and a listener on the old one's trim emitter then never fires
@@ -1427,10 +1424,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     // every reset instead.
     const watchTrim = () => {
       trimWatch?.dispose();
-      const trimEvent = trimEventOf();
-      trimWatch = typeof trimEvent === "function"
-        ? trimEvent((amount) => shiftHistory(history, amount))
-        : undefined;
+      trimWatch = scrollbackTrimEvent(term)?.((amount) => shiftHistory(history, amount));
     };
     watchTrim();
     const resetHistory = () => {
