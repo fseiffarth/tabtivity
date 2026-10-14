@@ -2,6 +2,7 @@
 id: ask-tabtivity
 title: Ask Tabtivity — the built-in help for agents
 keywords: [help, ask, question, mcp, tabtivity-help, documentation, how to, agent tools, search help]
+related: [getting-started, troubleshooting, root-console]
 ---
 
 Tabtivity ships this help as a small read-only MCP server named `tabtivity-help`.
@@ -44,9 +45,9 @@ calls it; Tabtivity grants no permission on your behalf.
 
 | Tool | What it does |
 |---|---|
-| `tabtivity_help_search` | Find topics and sections matching a question (up to 10 hits) |
-| `tabtivity_help_read` | Read one topic, or one section of it |
-| `tabtivity_help_topics` | List every topic with its sections |
+| `tabtivity_help_search` | Find topics and sections matching a question (up to 10 hits, at most 3 from one topic). `topic_id` searches inside one topic. A misspelt or cut-off word still finds its match. |
+| `tabtivity_help_read` | Read one topic, or one section of it — by the section's id, its heading, or `topic#section` — with the topics related to it |
+| `tabtivity_help_topics` | List every topic with its sections, keywords and related topics |
 | `tabtivity_help_status` | Tabtivity version, OS family, topic count, which CLIs get the server |
 
 All are read-only and bounded. The help knows nothing about your projects,
@@ -61,6 +62,9 @@ Turning it off stops it for newly opened tabs; the setting is `help_mcp` in
 
 ## Topics
 
-getting-started, projects, remote-projects, tabs-and-panels, keyboard,
-agent-clis, claude-code, codex, gemini-cli, local-models, sync, mobile,
-mail-calendar, containers-boxes, ask-tabtivity, troubleshooting.
+getting-started, projects, project-desktop, project-transfer, remote-projects,
+sync, git, tabs-and-panels, keyboard, files-and-viewers, pdf-and-markup,
+latex-and-presenter, agent-clis, claude-code, codex, gemini-cli,
+local-models, scheduled-prompts, root-console, mail-calendar, workspace-apps,
+mobile, containers-boxes, server, server-sharing, settings-and-appearance,
+ask-tabtivity, troubleshooting.

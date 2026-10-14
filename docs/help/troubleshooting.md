@@ -2,6 +2,7 @@
 id: troubleshooting
 title: Troubleshooting and FAQ
 keywords: [problem, error, fix, faq, not working, missing, crash, slow, freeze, not found, path, permission, eacces, bubblewrap]
+related: [agent-clis, local-models, remote-projects, settings-and-appearance]
 ---
 
 ## An agent is missing from the + menu

@@ -1,7 +1,8 @@
 ---
 id: mail-calendar
 title: Mail, calendar, to-do board and browser
-keywords: [mail, email, imap, smtp, address book, contacts, vcard, ldif, thunderbird import, autocomplete, calendar, caldav, ics, event, reminder, todo, board, browser, web, agent column, docked agent, approvals]
+keywords: [mail, email, imap, smtp, encryption, encrypt, passphrase, openpgp, pgp, gpg, signature, key, address book, contacts, vcard, ldif, thunderbird import, autocomplete, calendar, caldav, ics, event, reminder, todo, board, browser, web, agent column, docked agent, approvals]
+related: [root-console, workspace-apps, server-sharing, local-models]
 ---
 
 These surfaces are machine-wide, not per project. They open as overlays over
@@ -45,6 +46,38 @@ A list expands to its members' addresses. A contact's full nickname is
 suggested first. The ☆ beside a message's sender adds them to the book, and
 the ★ opens the card you already have. The address book stays on this
 machine, encrypted with the rest of the local mail store.
+
+### Encryption on this computer
+
+Tabtivity offers to **encrypt the mail it keeps on this machine** — messages,
+attachments and drafts — so a backup, a copy or a cloud-synced folder holds
+nothing readable. Choose how it unlocks: **Use the system keychain**
+(recommended: no prompt) or **Ask me for a passphrase** (typed once per
+session; there is no way to recover a forgotten one). Existing mail can be
+encrypted in place (**Encrypt existing mail**) or deleted and downloaded again
+(**Delete and download again**), which never leaves an unencrypted copy on an
+SSD. If the key cannot be read, the mail window shows a temporary mailbox: you
+can read mail, but nothing is saved until you unlock. What stays readable on
+disk: message counts, folder names, dates, sizes and read/starred flags.
+Encryption does not protect against programs running as you while Tabtivity is
+open.
+
+### Signed and encrypted mail (OpenPGP)
+
+Messages signed or encrypted with OpenPGP are checked and opened, and the
+message shows what was checked: **verified**, **valid, key not checked** (you
+have not confirmed the fingerprint with its owner), **signed by someone
+else**, **does not check out**, or **no key to check it with**. A signature
+covers the body only, not the subject, sender or date. When writing, **Sign
+this message** and **Encrypt this message**; the subject and recipients stay
+readable. Without a key for every recipient, sending is refused rather than
+sent in the clear.
+
+Keys: **Add a key** (paste or **From a file…**) for other people's public keys
+— tick **I checked this fingerprint with its owner** only after comparing it in
+person or by phone; **Copy out** gives your public key to share (your private
+key is never exported); **Use for this account** binds your key to an
+account. Tabtivity supports modern Curve25519 keys only, not RSA.
 
 ## Calendar
 

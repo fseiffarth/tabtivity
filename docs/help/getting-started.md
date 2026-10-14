@@ -2,6 +2,7 @@
 id: getting-started
 title: Getting started with Tabtivity
 keywords: [start, first run, welcome, intro, overview, setup, onboarding, tour, lessons]
+related: [projects, tabs-and-panels, agent-clis, settings-and-appearance, keyboard]
 ---
 
 Tabtivity keeps AI-assisted development in one window: projects in the header,

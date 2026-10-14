@@ -2,6 +2,7 @@
 id: keyboard
 title: Keyboard shortcuts and Tabtivity navigation
 keywords: [keyboard, shortcut, hotkey, keys, tabtivity navigation, steering, chord, rebind, f1, cheat sheet, navigation]
+related: [tabs-and-panels, settings-and-appearance]
 ---
 
 Every key below is a default — the Tabtivity navigation keys included. Rebind any

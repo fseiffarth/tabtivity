@@ -29,6 +29,21 @@ Why it is shaped this way:
   loopback is not Tabtivity's, and a tunnel would expose the listener. The VM
   `guestfwd` address stays `Reader`-only.
 - **`tabtivity_help_status` leaks nothing**: compile-time constants and OS/arch.
+- **The corpus contract** (`parse_topic`): front matter `id` (= filename),
+  `title`, `keywords: [..]` (≤ 32) and optional `related: [topic-id, ..]`
+  (≤ 8, held to existing ids by `real_corpus_parses`); `##` opens a section.
+  `ask-tabtivity.md`'s **Topics** section must name every topic
+  (`the_topics_section_names_every_topic`) — a new file goes there too.
+- **Search stays deterministic BM25.** The topic's title/keyword boost is one
+  constant per topic, not added to each unit's term frequency, so the body
+  alone ranks sections within a topic (a long answering section beats a short
+  sibling). A query word the corpus never uses expands to the halves of a
+  joined compound, else corpus words it prefixes or that are one edit away,
+  at half weight. One topic fills at most `MAX_PER_TOPIC` places unless the
+  search is filtered to it (`topic_id`). Snippets are the matching paragraph
+  (or table row) windowed around the hit.
+- **Read addressing**: a section by id, by its heading (slugged), or as
+  `topic#section` in `topic_id`.
 - **Headless tabs too.** A tab the Mobile host starts with no window gets the
   server from the host's own listener (`docs/headless_mcp_plan.md`).
 

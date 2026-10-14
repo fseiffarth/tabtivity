@@ -2,6 +2,7 @@
 id: sync
 title: Syncing remote projects (Git sync and file sync)
 keywords: [sync, Git sync, file sync, lockstep, byte-sync, mirror, remote, git, commit, conflict, orange, diverged, push, pull, auto-sync, exclude]
+related: [remote-projects, git]
 ---
 
 A remote project has two working trees: the **mirror** on this machine and the

@@ -2,6 +2,7 @@
 id: codex
 title: Codex in Tabtivity
 keywords: [codex, openai, chatgpt, install, login, sign in, resume, hooks, sandbox]
+related: [agent-clis, root-console, scheduled-prompts]
 ---
 
 Codex is OpenAI's coding agent CLI (command `codex`). Tabtivity runs it in agent

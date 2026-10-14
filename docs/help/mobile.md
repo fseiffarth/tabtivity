@@ -2,6 +2,7 @@
 id: mobile
 title: Tabtivity Mobile (phone companion)
 keywords: [mobile, phone, files, browse, project files, read-only, upload, search files, find a file, mark up, markup, annotate, pdf, markup_ask, questions about marks, markup_done, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, not connecting, stuck, force stop, version]
+related: [pdf-and-markup, scheduled-prompts, server, local-models]
 ---
 
 Tabtivity Mobile is a small companion web app for your phone. It shows the

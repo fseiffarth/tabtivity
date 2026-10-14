@@ -2,6 +2,7 @@
 id: remote-projects
 title: Remote (SSH) projects, VPN and compute machines
 keywords: [remote, ssh, sftp, host, server, cluster, hpc, slurm, vpn, openvpn, extend, machines, worker, tmux, sessions]
+related: [sync, git, containers-boxes, workspace-apps]
 ---
 
 A project can live on another machine. Tabtivity works with it over SSH and SFTP:
