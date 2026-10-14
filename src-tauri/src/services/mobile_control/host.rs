@@ -10077,6 +10077,7 @@ mod tests {
         let root = json(&body);
         assert_eq!(root["entries"][0]["name"], "src");
         assert_eq!(root["entries"][0]["kind"], "dir");
+        assert_eq!(root["entries"][0]["items"], 1, "a folder row counts its items");
         assert!(!body.contains(".env"), "hidden names are not listed: {body}");
         assert!(!body.contains(RAW_PROJECT));
         assert!(!body.contains(host.root.to_str().unwrap()));
