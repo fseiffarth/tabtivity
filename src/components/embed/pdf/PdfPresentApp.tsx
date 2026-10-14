@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { loadPdf } from "../../../lib/viewers/pdfLoad";
 import { fileMtime, readFileBytes } from "../fileAccess";
@@ -32,6 +32,7 @@ import { subscribeTauri, useTauriListener } from "../../../hooks/useTauriListene
 import { osFullscreenChord } from "../../../lib/shortcuts/shortcutHint";
 import { storageKey } from "../../../lib/brand";
 import {
+  type MonitorPick,
   type PdfPresentSeed,
   type TalkClock,
   PDF_PRESENT_READY,
@@ -41,6 +42,7 @@ import {
   resetClock,
   startClock,
   toggleClock,
+  writePresentScreen,
 } from "./present";
 import { type PresentBlank, PdfPresentBar } from "./PdfPresentBar";
 import { PdfPresentLaser } from "./PdfPresentLaser";
@@ -98,6 +100,8 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
   const [error, setError] = useState<string | null>(null);
   const [painted, setPainted] = useState(false);
   const [fullscreen, setFullscreen] = useState(true);
+  /** More than one monitor, so "next screen" has somewhere to go. */
+  const [multiScreen, setMultiScreen] = useState(false);
   const [hint, setHint] = useState(true);
   const [barShown, setBarShown] = useState(readBarShown);
   const [blank, setBlank] = useState<PresentBlank>(null);
@@ -162,6 +166,29 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
       }),
     );
   }, []);
+
+  // Counted on mount and on every resize: a projector plugged in mid-talk
+  // resizes nothing on its own, but a move to it does, and the bar button only
+  // has to be right by the time anyone reaches for it.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const count = () =>
+      void availableMonitors()
+        .then((ms) => setMultiScreen(ms.length > 1))
+        .catch(() => {});
+    count();
+    return subscribeTauri(() => win.onResized(count));
+  }, []);
+
+  /** Hop to the next monitor, fullscreen there, and remember it for the next
+   *  Present — the fix for "it opened on the wrong screen" (`present.ts`). */
+  const nextScreen = useCallback(() => {
+    void invoke<MonitorPick | null>("presenter_next_monitor", { label })
+      .then((pick) => {
+        if (pick) writePresentScreen(pick);
+      })
+      .catch(() => {});
+  }, [label]);
 
   // --- the seed ------------------------------------------------------------
 
@@ -538,6 +565,11 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
           e.preventDefault();
           resetTimer();
           return;
+        case "s":
+        case "S":
+          e.preventDefault();
+          nextScreen();
+          return;
         case "Enter":
           e.preventDefault();
           if (gotoRef.current) {
@@ -584,7 +616,7 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [closeSelf, step, goTo, toggleBar, toggleBlank, toggleTimer, resetTimer, toggleFullscreen]);
+  }, [closeSelf, step, goTo, toggleBar, toggleBlank, toggleTimer, resetTimer, toggleFullscreen, nextScreen]);
 
   // A wheel is the other way a sheet gets turned — one notch, one sheet, because
   // there is nothing here to scroll *within*.
@@ -654,6 +686,7 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
           laser={laser}
           onToggleLaser={() => setLaser((v) => !v)}
           onToggleFullscreen={toggleFullscreen}
+          onNextScreen={multiScreen ? nextScreen : undefined}
           onHide={toggleBar}
           onClose={closeSelf}
         />

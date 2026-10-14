@@ -464,6 +464,19 @@ export function WindowIcon(p: IconProps) {
   );
 }
 
+/** A screen with an arrow leaving it to the right — "move to the next monitor". */
+export function NextScreenIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="3" y="4.5" width="13" height="10" rx="1.5" />
+      <path d="M7 18.5h5" />
+      <path d="M9.5 14.5v4" />
+      <path d="M15 11.5h6" />
+      <path d="M18.5 9l2.5 2.5-2.5 2.5" />
+    </Frame>
+  );
+}
+
 // ── Glyphs that used to be typed ─────────────────────────────────────────────
 // Every icon below replaces a Unicode symbol with the Emoji property (↗ ⬆ ⬇ ⬅
 // ➡ ↔ ↩ ⚠ ⚙ ✉ ☑ ▶ ☁ ✔ ✏ ⏱): a font fallback could hand any of those to the

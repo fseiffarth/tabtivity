@@ -140,6 +140,7 @@ import {
   PDF_PRESENT_READY,
   pdfPresentLabel,
   pdfPresentSeedEvent,
+  readPresentScreen,
 } from "./present";
 import { openRoutedUri } from "../../../lib/linkTarget";
 import {
@@ -2324,8 +2325,13 @@ function PdfCanvas({
         // windowed on a single-monitor machine, which is the right default for a
         // talk with a notes view but not for "show me this PDF fullscreen".
         // Opening is idempotent by label, so a second press re-focuses the window
-        // already up and the seed below moves it to this sheet.
-        await invoke("open_presenter_window", { label: presentLabel, fullscreen: true });
+        // already up and the seed below moves it to this sheet. `monitor` is the
+        // screen the reader last moved the present window to, if any.
+        await invoke("open_presenter_window", {
+          label: presentLabel,
+          fullscreen: true,
+          monitor: readPresentScreen(),
+        });
         setPresentOpen(true);
         seedPresent();
       } catch (e) {

@@ -2290,6 +2290,7 @@ pub fn run() {
             // The deck presenter's audience window (M#90)
             commands::presenter::open_presenter_window,
             commands::presenter::close_presenter_window,
+            commands::presenter::presenter_next_monitor,
             commands::presenter::presenter_inhibit_sleep,
             commands::presenter::presenter_release_sleep,
             commands::workspace::workspace_name,
