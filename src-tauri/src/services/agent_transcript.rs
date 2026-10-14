@@ -49,6 +49,13 @@ use crate::services::agent_session::{self, TranscriptKind};
 /// actually catching up on, and what fell before it is announced as
 /// `truncated` rather than silently missing.
 const TAIL_BYTES: u64 = 6 * 1024 * 1024;
+/// The entries one `TAIL_BYTES` of tail is read for: a caller asking for
+/// more (the Reader's "Show earlier turns") gets a longer tail, or a session
+/// whose tail holds fewer entries than the first ask would answer the same
+/// read again however far back it asks.
+const TAIL_STEP_ENTRIES: usize = 60;
+/// The longest tail any read takes.
+const MAX_TAIL_BYTES: u64 = 64 * 1024 * 1024;
 /// Entries answered when the caller names no limit.
 pub const DEFAULT_LIMIT: usize = 120;
 /// The most entries one answer carries, whatever the caller asks for.
@@ -769,6 +776,13 @@ enum Spawns<'a> {
     Codex { stores: &'a [PathBuf], thread: &'a str },
 }
 
+/// How much of a transcript's tail a read for `limit` entries takes: one
+/// `TAIL_BYTES` per `TAIL_STEP_ENTRIES`, at most `MAX_TAIL_BYTES`.
+fn tail_bytes(limit: usize) -> u64 {
+    let steps = limit.div_ceil(TAIL_STEP_ENTRIES).max(1) as u64;
+    TAIL_BYTES.saturating_mul(steps).min(MAX_TAIL_BYTES)
+}
+
 /// Read the transcript at `path` — its tail, then the last `limit` entries.
 /// `None` only when the file cannot be read; a session with no turn yet is an
 /// empty, available transcript.
@@ -815,7 +829,7 @@ fn read_transcript_in(
         });
     }
     let len = meta.len();
-    let start = len.saturating_sub(TAIL_BYTES);
+    let start = len.saturating_sub(tail_bytes(limit));
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut buf = Vec::with_capacity((len - start) as usize);
     file.read_to_end(&mut buf).ok()?;
@@ -1983,6 +1997,40 @@ mod tests {
         assert_eq!(kinds(&last).iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec!["answer", "prompt"]);
 
         assert!(read_transcript(&dir.path().join("missing.jsonl"), TranscriptKind::Claude, None, 5).is_none());
+    }
+
+    #[test]
+    fn asking_for_earlier_turns_reads_further_back_than_the_first_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        // One tool result longer than the first read's whole tail between
+        // the two prompts: the first read holds only the newer one.
+        let filler = "x".repeat(TAIL_BYTES as usize + 1024);
+        let text = format!(
+            concat!(
+                "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"older prompt\"}}}}\n",
+                "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"{}\"}}]}}}}\n",
+                "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"newer prompt\"}}}}\n",
+            ),
+            filler,
+        );
+        std::fs::write(&path, text).unwrap();
+
+        let first = read_transcript(&path, TranscriptKind::Claude, None, TAIL_STEP_ENTRIES).unwrap();
+        assert!(first.truncated);
+        assert_eq!(kinds(&first), vec![("prompt", "newer prompt")]);
+        // "Show earlier turns" asks for more entries; it must get them.
+        let earlier = read_transcript(&path, TranscriptKind::Claude, None, 2 * TAIL_STEP_ENTRIES).unwrap();
+        assert!(!earlier.truncated);
+        assert_eq!(kinds(&earlier), vec![("prompt", "older prompt"), ("prompt", "newer prompt")]);
+    }
+
+    #[test]
+    fn the_tail_grows_with_the_limit_up_to_its_cap() {
+        assert_eq!(tail_bytes(0), TAIL_BYTES);
+        assert_eq!(tail_bytes(TAIL_STEP_ENTRIES), TAIL_BYTES);
+        assert_eq!(tail_bytes(TAIL_STEP_ENTRIES + 1), 2 * TAIL_BYTES);
+        assert_eq!(tail_bytes(MAX_LIMIT), MAX_TAIL_BYTES);
     }
 
     #[test]
