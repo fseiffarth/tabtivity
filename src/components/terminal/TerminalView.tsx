@@ -1771,9 +1771,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // Agent-pane zoom: Ctrl+wheel scales the font; a window event keeps every
     // other open agent pane in sync with the shared level. Both are no-ops for
     // non-agent shells. The wheel listener is non-passive so it can preventDefault.
+    // It listens in the capture phase and keeps the wheel from xterm: xterm 6's
+    // scrollable element stops every wheel it gets — scrolling the buffer, or
+    // sent to the program as a Ctrl+wheel report — so a listener on the way
+    // back up never heard one, and Ctrl+wheel stopped zooming.
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
+      e.stopPropagation();
       const cur = termRef.current?.options.fontSize ?? DEFAULT_FONT_SIZE;
       applyFontSize(cur + (e.deltaY < 0 ? 1 : -1), true);
     };
@@ -1881,7 +1886,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
 
     contextMenuTarget?.addEventListener("mousedown", onMouseDownCapture, true);
     if (zoomable) {
-      containerRef.current?.addEventListener("wheel", onWheel, { passive: false });
+      containerRef.current?.addEventListener("wheel", onWheel, { passive: false, capture: true });
       window.addEventListener(AGENT_ZOOM_EVENT, onZoomEvent);
     }
     document.addEventListener("mouseup", onDocMouseUp);
@@ -1918,7 +1923,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       contextMenuTarget?.removeEventListener("mousemove", onMouseMoveCapture, true);
       contextMenuTarget?.removeEventListener("mousedown", onMouseDownCapture, true);
       if (zoomable) {
-        containerRef.current?.removeEventListener("wheel", onWheel);
+        containerRef.current?.removeEventListener("wheel", onWheel, true);
         window.removeEventListener(AGENT_ZOOM_EVENT, onZoomEvent);
       }
       document.removeEventListener("mouseup", onDocMouseUp);

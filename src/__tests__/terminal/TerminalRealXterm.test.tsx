@@ -142,6 +142,46 @@ describe("TerminalView on the real xterm 6", () => {
     await waitFor(() => expect(copied()).toEqual(["beta", long]));
   });
 
+  it("zooms an agent pane on Ctrl+wheel before xterm 6's scrollable element swallows it", async () => {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<TerminalView id="p:zoom" cmd="claude" cwd="/p" visible focused={false} zoomable />));
+    });
+    const term = terminalFor("p:zoom")!;
+    await waitFor(() => expect(bus.output.has("p:zoom")).toBe(true));
+    await act(async () => {
+      bus.output.get("p:zoom")!(Array.from({ length: 80 }, (_, i) => `line ${i}`).join("\r\n"));
+    });
+    await waitFor(() => expect(term.buffer.active.baseY).toBeGreaterThan(0));
+    const screen = container.querySelector<HTMLElement>(".xterm-screen")!;
+    const wheel = (ctrlKey: boolean) =>
+      act(() => {
+        screen.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, ctrlKey, bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+      });
+    const live = term.buffer.active.viewportY;
+    const size = term.options.fontSize!;
+
+    // Over scrollback: the font grows and the buffer stays where it was.
+    await wheel(true);
+    expect(term.options.fontSize).toBe(size + 1);
+    expect(term.buffer.active.viewportY).toBe(live);
+
+    // While the program tracks the mouse (tmux): zoomed, and no Ctrl+wheel
+    // report reaches it.
+    await act(async () => {
+      bus.output.get("p:zoom")!("\x1b[?1000h\x1b[?1006h");
+    });
+    await waitFor(() => expect(term.modes.mouseTrackingMode).toBe("vt200"));
+    await wheel(true);
+    expect(term.options.fontSize).toBe(size + 2);
+    expect(ptyInput("p:zoom")).toBe("");
+
+    // A plain wheel is still xterm's: here, a report for the program.
+    await wheel(false);
+    await waitFor(() => expect(ptyInput("p:zoom")).toMatch(/^\x1b\[<64;\d+;\d+M$/));
+    expect(term.options.fontSize).toBe(size + 2);
+  });
+
   it("keyboard select walks the real buffer and copies what it drew", async () => {
     const { term, press, output } = await mount("p:keysel", "bash");
     await output("alpha beta gamma\r\nsecond row\r\n");
