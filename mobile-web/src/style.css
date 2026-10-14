@@ -1852,9 +1852,6 @@ span.files-close { background:transparent; }
    animation. A tap approves the mark; "n done · Approve all" sits under the
    round's pill in its look. */
 .markup-pin.is-tick { width:26px; min-width:26px; height:26px; padding:0; border-radius:50%; background:#91e6a9; color:#0f2a18; font-size:.9rem; }
-/* A remark's own Submit while marking (`submitSpot`: outside it, over no mark). */
-.markup-pin.is-submit { min-width:0; padding:0 8px; border-radius:12px; background:#2f6fec; color:#fff; font-size:.72rem; }
-.markup-pin.is-submit:disabled { opacity:.45; }
 .markup-pin.is-tick:disabled { opacity:.5; }
 .markup-ticks .markup-round-words { color:#91e6a9; font-weight:600; }
 .markup-ticks .markup-approve-all { margin-left:auto; min-height:32px; }

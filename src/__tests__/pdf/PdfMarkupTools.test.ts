@@ -25,7 +25,6 @@ import {
   markAt,
   markBox,
   markSent,
-  markSentSome,
   marksIn,
   MAX_COMMENT,
   moveMarks,
@@ -125,9 +124,6 @@ describe("stamps in the layer", () => {
     const sent = markSent(withMarks(a, b), undefined, "r1", { 1: ["fox", null, "extra"] });
     expect(sent.sent!.log![0].words).toEqual({ 1: ["fox", null] });
     expect(markSent(withMarks(a, b), undefined, "r1").sent!.log![0].words).toBeUndefined();
-    const some = markSentSome(withMarks(a, b), 1, [b], "r2", ["lazy"]);
-    expect(some.sent!.log![0]).toMatchObject({ id: "r2", pages: { 1: [b] }, words: { 1: ["lazy"] } });
-    expect(marksOf(some)).toEqual([a]);
   });
 });
 

@@ -910,51 +910,6 @@ export function tickGroups(layer: Layer, ticked: readonly TickedMark[]): TickGro
   return out.sort((a, b) => a.page - b.page || a.marks[0].index - b.marks[0].index);
 }
 
-/** Unsent marks of one page that sit together — one remark as it is being
- * written — which a Submit of its own can send alone (`onlyMarks`,
- * `markSentSome`). `marks` are the layer's objects in page order. */
-export type MarkGroup = { page: number; marks: Mark[]; box: [number, number, number, number] };
-
-/** The unsent marks grouped by page and nearness (`nearGroups`), on `pages`
- * (every marked page when left out). Groups in page order, then by their
- * first mark. */
-export function markGroups(layer: Layer, pages?: readonly number[]): MarkGroup[] {
-  const out: MarkGroup[] = [];
-  for (const page of pages ?? markedPages(layer)) {
-    const now = layer.pages[page];
-    if (!now?.marks.length) continue;
-    for (const { at, box } of nearGroups(now.size, now.marks.map(markBox))) {
-      out.push({ page, marks: at.map((i) => now.marks[i]), box });
-    }
-  }
-  // Stable: within a page, groups stay in order of their first mark.
-  return out.sort((a, b) => a.page - b.page);
-}
-
-/** What a group's Submit carries: the layer with only `shown` of page `page`
- * left unsent, in their page order — no other page, no other mark. */
-export function onlyMarks(layer: Layer, page: number, shown: readonly Mark[]): Layer {
-  const now = layer.pages[page];
-  const want = new Set(shown);
-  const marks = now ? now.marks.filter((mark) => want.has(mark)) : [];
-  return { ...layer, pages: marks.length ? { [page]: { size: now!.size, marks } } : {} };
-}
-
-/** A group's Submit went out: of page `page`, only `shown` go to the sent
- * side (logged under `roundId` as `markSent` logs a page, with `words` the
- * words under each of `shown` in page order); the page's other marks and
- * every other page stay unsent. */
-export function markSentSome(layer: Layer, page: number, shown: readonly Mark[], roundId?: string, words?: (string | null)[]): Layer {
-  const now = layer.pages[page];
-  if (!now) return layer;
-  const want = new Set(shown);
-  const moving = now.marks.filter((mark) => want.has(mark));
-  if (!moving.length) return layer;
-  const rest = now.marks.filter((mark) => !want.has(mark));
-  const sent = markSent({ ...layer, pages: { ...layer.pages, [page]: { size: now.size, marks: moving } } }, [page], roundId, words ? { [page]: words } : undefined);
-  return rest.length ? { ...sent, pages: { ...sent.pages, [page]: { size: now.size, marks: rest } } } : sent;
-}
-
 /** The reader approved a badge's group: of the sent marks it was drawn for
  * (`shown`, the objects), those still on page `page` and still ticked in
  * `layer` go — a mark erased, approved or unticked since stays as it is. */
@@ -984,41 +939,6 @@ export function markBox(mark: Mark): [number, number, number, number] {
     x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
   }
   return [x0 - half, y0 - half, x1 - x0 + 2 * half, y1 - y0 + 2 * half];
-}
-
-/** Where a group's own Submit button goes — its top-left corner in CSS px,
- * given the group's box, the page's scale, the page and the button in CSS
- * px, and every unsent mark's box on the page (page units): just outside the
- * group, never over its marks or any other's, so it hides nothing the reader
- * wrote. Tried in turn: above its right end (where writing does not go on),
- * above its left end, below either end, beside it on the right or left; the
- * first spot on the page clear of every mark wins, else the first on the
- * page, else the first clamped onto it. */
-export function submitSpot(
-  box: [number, number, number, number],
-  scale: number,
-  page: [number, number],
-  button: [number, number],
-  marks: readonly [number, number, number, number][],
-): [number, number] {
-  const GAP = 3;
-  const [bw, bh] = button;
-  const [x, y, w, h] = box.map((v) => v * scale);
-  const spots: [number, number][] = [
-    [x + w - bw, y - GAP - bh],
-    [x, y - GAP - bh],
-    [x + w - bw, y + h + GAP],
-    [x, y + h + GAP],
-    [x + w + GAP, y],
-    [x - GAP - bw, y],
-  ];
-  const onPage = ([l, t]: [number, number]) => l >= 0 && t >= 0 && l + bw <= page[0] && t + bh <= page[1];
-  const clear = ([l, t]: [number, number]) => marks.every(([mx, my, mw, mh]) =>
-    l >= (mx + mw) * scale || l + bw <= mx * scale || t >= (my + mh) * scale || t + bh <= my * scale);
-  const pick = spots.find((spot) => onPage(spot) && clear(spot)) ?? spots.find(onPage);
-  if (pick) return pick;
-  const clamp = (v: number, max: number) => Math.min(Math.max(0, max), Math.max(0, v));
-  return [clamp(spots[0][0], page[0] - bw), clamp(spots[0][1], page[1] - bh)];
 }
 
 /** Where a tick's ✓ badge goes — its top-left corner in CSS px, given the

@@ -652,7 +652,6 @@ export function PdfMarkupBar({
             {t("mobile.markup.submit")}
           </button>
           <UntestedTag id="desktop.markup.anchors" />
-        {markup.groups.length > 0 && <UntestedTag id="desktop.markup.groupSubmit" />}
           <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={onDone} disabled={busy}>
             {t("mobile.markup.done")}
           </button>

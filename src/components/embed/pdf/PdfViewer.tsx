@@ -119,8 +119,6 @@ import { PdfMarkupLayer } from "./PdfMarkupLayer";
 import { PdfMarkupBar, selectionColors } from "./PdfMarkupBar";
 import { PdfMarkupQuestions, PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
 import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
-import { PdfGroupSubmits } from "./PdfMarkupGroups";
-import type { Mark, MarkGroup, PageLayer } from "../../../../mobile-web/src/markup/layer";
 import { usePdfMarkup, type MarkupEdit, type MarkupTool, type QuestionFocus } from "./usePdfMarkup";
 import { colorsFor } from "../../../../mobile-web/src/markup/pen";
 import type { QuestionPin } from "../../../lib/viewers/markupQuestions";
@@ -640,7 +638,6 @@ function PdfPageCanvas({
   markup,
   questionPins,
   tickBadges,
-  groupSubmits,
   onSize,
 }: {
   doc: PDFDocumentProxy;
@@ -777,14 +774,6 @@ function PdfPageCanvas({
     badges: readonly TickBadge[];
     disabled: boolean;
     onApprove: (marks: TickBadge["marks"]) => void;
-  } | null;
-  /** The unsent remarks' own Submits (`PdfMarkupGroups`), over the markup
-   *  layer: a click sends that group alone. */
-  groupSubmits?: {
-    groups: readonly MarkGroup[];
-    page: PageLayer | undefined;
-    disabled: boolean;
-    onSubmit: (marks: readonly Mark[]) => void;
   } | null;
 }) {
   const t = useT();
@@ -1687,16 +1676,6 @@ function PdfPageCanvas({
           remarks included, which it leaves visible but out of reach. */}
       {markup && cssSize && (
         <PdfMarkupLayer n={pageNumber} size={[cssSize.w, cssSize.h]} scale={scale} edit={markup} />
-      )}
-      {groupSubmits && groupSubmits.groups.length > 0 && cssSize && (
-        <PdfGroupSubmits
-          groups={groupSubmits.groups}
-          page={groupSubmits.page}
-          size={[cssSize.w, cssSize.h]}
-          scale={scale}
-          disabled={groupSubmits.disabled}
-          onSubmit={groupSubmits.onSubmit}
-        />
       )}
       {tickBadges && tickBadges.badges.length > 0 && cssSize && (
         <PdfTickBadges
@@ -2851,15 +2830,6 @@ function PdfCanvas({
     [markup.edit.base, markup.ticks.groups, markup.ticks.captions],
   );
   const approveTick = markup.ticks.approve;
-  // Each unsent remark's own Submit, by page — none while a stroke is drawn.
-  const groupsByPage = useMemo(() => {
-    const out = new Map<number, MarkGroup[]>();
-    for (const group of markup.groups) out.set(group.page, [...(out.get(group.page) ?? []), group]);
-    return out;
-  }, [markup.groups]);
-  const drawing = markup.edit.layer !== markup.edit.base;
-  const groupSubmitOff = markup.sending || markup.target === null || markup.edit.note !== null;
-  const submitGroup = markup.submit;
   const pickQuestionPin = useCallback((pin: QuestionPin) => showQuestion(pin.askId, pin.index, "card"), [showQuestion]);
   const holder = markup.key ? markupHolder(markup.key) : undefined;
   const gate = markupGate({ ...gateInput, claimedElsewhere: holder !== undefined && holder !== markupOwner });
@@ -5619,11 +5589,6 @@ function PdfCanvas({
                     questionPins={
                       marking && ref.src === SELF && questionPins.has(i + 1)
                         ? { pins: questionPins.get(i + 1)!, focus: markup.questions.focus, onPick: pickQuestionPin }
-                        : null
-                    }
-                    groupSubmits={
-                      marking && ref.src === SELF && !drawing && groupsByPage.has(i + 1)
-                        ? { groups: groupsByPage.get(i + 1)!, page: markup.edit.base.pages[i + 1], disabled: groupSubmitOff, onSubmit: (marks) => void submitGroup({ page: i + 1, marks }) }
                         : null
                     }
                     tickBadges={

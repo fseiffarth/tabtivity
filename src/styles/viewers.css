@@ -4767,17 +4767,6 @@
   flex: none;
   box-shadow: none;
 }
-/* A remark's own Submit while marking (`PdfMarkupGroups`): the same pin,
-   wider, outside the group and over no mark (`submitSpot`); dimmed for the
-   moment after its group changed, while it takes no click. */
-.file-viewer-pdf-question-pin.is-submit {
-  border-radius: 4px;
-  font-weight: 600;
-}
-.file-viewer-pdf-question-pin.is-submit.is-settling,
-.file-viewer-pdf-question-pin.is-submit:disabled {
-  opacity: 0.5;
-}
 /* A tick's ✓ (`PdfMarkupTicks`): the same pin just outside a sent mark's
    top-right corner (`tickBadgeSpot`, never over its words), in the success colour — the agent says it handled the mark; a click
    approves and removes it. */

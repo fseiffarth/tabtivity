@@ -81,11 +81,8 @@ import {
   hasSent,
   isEmpty,
   markedPages,
-  markGroups,
   markSent,
-  markSentSome,
   mintRound,
-  onlyMarks,
   redo as redoHistory,
   removeMarks,
   replaceMark,
@@ -103,7 +100,6 @@ import {
   type StampSymbol,
   type TextMark,
   type TickedMark,
-  type MarkGroup,
   type TickGroup,
 } from "../../../../mobile-web/src/markup/layer";
 import type { TextRun } from "../../../../mobile-web/src/markup/findText";
@@ -948,23 +944,14 @@ export function usePdfMarkup({
   const marked = markedPages(history.present);
   const sendable = marked.filter((n) => n <= pageCount);
   const leftOut = marked.length - sendable.length;
-  /** The unsent marks by remark, each with a Submit of its own, as they are
-   *  written — the strokes in flight join once they land. */
-  const sendableKey = sendable.join(",");
-  const groups: MarkGroup[] = useMemo(
-    () => markGroups(history.present, sendableKey ? sendableKey.split(",").map(Number) : []),
-    [history.present, sendableKey],
-  );
-
-  /** Sends every marked page, or with `only` one group of unsent marks
-   *  (`markGroups`: its own Submit button) — the rest stays unsent. */
-  const submit = useCallback(async (only?: { page: number; marks: readonly Mark[] }) => {
+  /** Sends every marked page. */
+  const submit = useCallback(async () => {
     if (!projectId || !target || sending || note) return;
     const reason = (error: unknown) => {
       const code = markupErrorCode(error);
       return t(markupReasonKey(code), { code });
     };
-    const present = only ? onlyMarks(history.present, only.page, only.marks) : history.present;
+    const present = history.present;
     const pages = markedPages(present).filter((n) => n <= pageCount);
     if (!pages.length) return;
     setSending(true);
@@ -1022,12 +1009,6 @@ export function usePdfMarkup({
     // unless a page changed meanwhile (drawing waits, but not every path).
     setScratchLayer(null);
     setHistory((now) => {
-      if (only) {
-        // The group's marks, as long as every one is still on its page.
-        const still = new Set(now.present.pages[only.page]?.marks ?? []);
-        const moving = present.pages[only.page].marks;
-        return startHistory(markSentSome(now.present, only.page, moving, moving.every((mark) => still.has(mark)) ? roundId : undefined, words[only.page]));
-      }
       const asSent = pages.every((n) => now.present.pages[n]?.marks === present.pages[n].marks);
       return startHistory(markSent(now.present, pages, asSent ? roundId : undefined, words));
     });
@@ -1299,7 +1280,6 @@ export function usePdfMarkup({
     failure,
     dismissFailure: () => setFailure(null),
     sendable,
-    groups,
     leftOut,
     submit,
   };
