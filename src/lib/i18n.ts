@@ -6805,6 +6805,8 @@ export const enSource = {
   "fileTree.pasteMoveSuffix": " (move)",
   "fileTree.pasteItemsCount": "Paste {count} items{move}",
   "fileTree.pasteNamed": "Paste{move} “{name}”",
+  "fileTree.pasteFromSystemNamed": "Paste “{name}” from the system clipboard",
+  "fileTree.pasteFromSystemCount": "Paste {count} items from the system clipboard",
   "fileTree.connectingToHost": "Connecting to the remote host…",
   "fileTree.disconnectedReconnect": "Disconnected — reconnect (header lamp) to browse files.",
   "fileTree.remoteBarTitle": "Remote project — live updates are off; refresh to re-list",

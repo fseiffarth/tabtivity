@@ -29,6 +29,9 @@ export function adaptClientCommand(client: WsClient, cmd: string, args: Args): P
       return navigator.clipboard.writeText(String(args.text ?? ""));
     case "clipboard_has_image":
       return Promise.resolve(false);
+    // The browser's files are not the server's: nothing to paste into a project.
+    case "clipboard_file_paths":
+      return Promise.resolve([]);
     // Open outside / reveal: a download or a new tab on the user-content origin.
     case "open_file":
       // The desktop's launcher check (gap 21) has nothing to judge here: the

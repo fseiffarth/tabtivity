@@ -6481,6 +6481,8 @@ export const dict: Dict = {
   "fileTree.pasteMoveSuffix": " (verschieben)",
   "fileTree.pasteItemsCount": "{count} Elemente einfügen{move}",
   "fileTree.pasteNamed": "Einfügen{move} „{name}“",
+  "fileTree.pasteFromSystemNamed": "„{name}“ aus der System-Zwischenablage einfügen",
+  "fileTree.pasteFromSystemCount": "{count} Elemente aus der System-Zwischenablage einfügen",
   "fileTree.connectingToHost": "Verbindung zum Remote-Host wird hergestellt…",
   "fileTree.disconnectedReconnect": "Getrennt — erneut verbinden (Kopfzeilenlampe), um Dateien zu durchsuchen.",
   "fileTree.remoteBarTitle": "Remote-Projekt — Live-Updates sind aus; aktualisieren zum erneuten Auflisten",

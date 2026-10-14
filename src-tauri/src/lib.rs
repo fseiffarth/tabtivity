@@ -2156,6 +2156,7 @@ pub fn run() {
             commands::fs::extract_archive,
             commands::clipboard::clipboard_has_image,
             commands::clipboard::save_clipboard_image,
+            commands::clipboard::clipboard_file_paths,
             commands::clipboard::copy_png_bytes_to_clipboard,
             commands::clipboard::copy_text_to_clipboard,
             commands::connect::connect_status,

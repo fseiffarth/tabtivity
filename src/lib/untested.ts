@@ -175,6 +175,7 @@ export const UNTESTED = {
   "fileTree.3": { area: "files", what: "FileTree · {t(syncExcluded ? \"fileTree.includeInSync\" : \"fileTree.excludeFromSync\")}" },
   "fileTree.4": { area: "files", what: "FileTree · Send to project…" },
   "fileTree.5": { area: "files", what: "FileTree · Download to…" },
+  "fileTree.pasteFromSystem": { area: "files", what: "FileTree · Paste files/folders copied in the OS file manager (system clipboard)" },
   "gitHistory.1": { area: "files", what: "GitHistory · Worktrees", tested: "2026-09-28" },
   "gitHistory.worktreeSelection": { area: "files", what: "Git · Select a worktree; branches, history and actions follow its checkout" },
   "gitHistory.loadMoreCommits": { area: "files", what: "GitHistory · Load older commits" },

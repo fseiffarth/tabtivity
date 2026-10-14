@@ -350,6 +350,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("update_event", Core),
     ("update_task", Core),
     // commands/clipboard.rs
+    ("clipboard_file_paths", Client),
     ("clipboard_has_image", Client),
     ("copy_png_bytes_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),

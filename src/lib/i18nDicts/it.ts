@@ -6477,6 +6477,8 @@ export const dict: Dict = {
   "fileTree.pasteMoveSuffix": " (sposta)",
   "fileTree.pasteItemsCount": "Incolla {count} elementi{move}",
   "fileTree.pasteNamed": "Incolla{move} “{name}”",
+  "fileTree.pasteFromSystemNamed": "Incolla “{name}” dagli appunti di sistema",
+  "fileTree.pasteFromSystemCount": "Incolla {count} elementi dagli appunti di sistema",
   "fileTree.connectingToHost": "Connessione all'host remoto…",
   "fileTree.disconnectedReconnect": "Disconnesso — riconnettiti (spia dell'intestazione) per sfogliare i file.",
   "fileTree.remoteBarTitle": "Progetto remoto — gli aggiornamenti in tempo reale sono disattivati; aggiorna per rielencare",

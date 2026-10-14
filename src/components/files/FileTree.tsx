@@ -244,9 +244,12 @@ type EntryContextMenu = {
 } | null;
 type DeleteConfirm = { entries: FileEntry[] } | null;
 /** Open paste-rename window: `kind` is whether the source is the in-app file
- *  clipboard or a system-clipboard image (screenshot); `name` is the name being
- *  chosen for the pasted result in the current folder. */
-type PastePrompt = { kind: "file" | "image"; name: string; error: string | null };
+ *  clipboard, a system-clipboard image (screenshot) or a file/folder a file
+ *  manager copied (`system`); `name` is the name being chosen for the pasted
+ *  result in the current folder. */
+type PastePrompt = { kind: "file" | "image" | "system"; name: string; error: string | null };
+/** A file or folder on the OS clipboard (`clipboard_file_paths`). */
+type SystemClipboardFile = { path: string; name: string; isDir: boolean };
 /** The entry whose rename dialog is open (`RenameDialog` owns the typed name).
  *  Replaces a `window.prompt`, which WebKitGTK draws as a browser alert titled
  *  with the dev-server origin ("localhost:1420 says"). */
@@ -951,6 +954,9 @@ export function FileTree({
   // Whether the system clipboard holds an image when the context menu opened
   // (probed async on right-click), gating the "Paste screenshot" option.
   const [clipboardImage, setClipboardImage] = useState(false);
+  // Files/folders a file manager put on the system clipboard, probed the same
+  // way; pasted as copies through the OS-drop import (`import_external_file`).
+  const [systemFiles, setSystemFiles] = useState<SystemClipboardFile[]>([]);
   const clipboardEntries = useFileClipboardStore((s) => s.entries);
   const setClipboardEntries = useFileClipboardStore((s) => s.setEntries);
   const clearClipboard = useFileClipboardStore((s) => s.clear);
@@ -2860,7 +2866,7 @@ export function FileTree({
       entry,
       rowRect: { left: row.left, top: row.top, width: row.width, height: row.height },
     });
-    probeClipboardImage();
+    probeSystemClipboard();
   }
 
   /** "Download to…" (`docs/vm_projects_plan.md` Phase 2): SFTP-copy a remote
@@ -3369,6 +3375,12 @@ export function FileTree({
     setPastePrompt({ kind: "file", name: suggestPasteName(clipboard.name), error: null });
   }
 
+  function openSystemPastePrompt() {
+    setContextMenu(null);
+    if (!systemFiles[0]) return;
+    setPastePrompt({ kind: "system", name: suggestPasteName(systemFiles[0].name), error: null });
+  }
+
   function openScreenshotPrompt() {
     setContextMenu(null);
     setPastePrompt({ kind: "image", name: suggestPasteName("screenshot.png"), error: null });
@@ -3387,6 +3399,50 @@ export function FileTree({
           : t("fileTree.pasteNamed", { name: clipboard?.name ?? "", move })}
       </button>
     );
+  }
+
+  // The context-menu entry for files a file manager copied. One item keeps the
+  // rename prompt, several paste in bulk — the in-app Paste's split.
+  function renderSystemPasteButton() {
+    if (systemFiles.length === 0) return null;
+    const multi = systemFiles.length > 1;
+    return (
+      <button className="untested" onClick={() => (multi ? void pasteAllSystem() : openSystemPastePrompt())}>
+        {multi
+          ? t("fileTree.pasteFromSystemCount", { count: systemFiles.length })
+          : t("fileTree.pasteFromSystemNamed", { name: systemFiles[0].name })}
+        <UntestedTag id="fileTree.pasteFromSystem" />
+      </button>
+    );
+  }
+
+  // Copy every system-clipboard item into the current folder, auto-naming each
+  // collision with " copy" (pasteAll's rule). The source is never moved, even
+  // after a file manager's Cut.
+  async function pasteAllSystem() {
+    setContextMenu(null);
+    const files = systemFiles;
+    if (files.length === 0) return;
+    setLoading(true);
+    setError(null);
+    const claimed = new Set<string>();
+    try {
+      for (const f of files) {
+        const destName = suggestPasteName(f.name, claimed);
+        claimed.add(destName);
+        await invoke("import_external_file", {
+          projectDir,
+          sourcePath: f.path,
+          destRel: relPath,
+          replace: false,
+          destName,
+        });
+      }
+      await load(relPath);
+    } catch (err) {
+      setError(String(err));
+      setLoading(false);
+    }
   }
 
   // Paste a multi-item clipboard into the current folder in one go — no per-file
@@ -3437,6 +3493,16 @@ export function FileTree({
     try {
       if (pastePrompt.kind === "image") {
         await invoke("save_clipboard_image", { projectDir, relPath: destRel });
+      } else if (pastePrompt.kind === "system") {
+        const source = systemFiles[0];
+        if (!source) return;
+        await invoke("import_external_file", {
+          projectDir,
+          sourcePath: source.path,
+          destRel: relPath,
+          replace: false,
+          destName: newName,
+        });
       } else {
         if (!clipboard) return;
         await invoke(clipboard.op === "cut" ? "move_path" : "copy_path", {
@@ -3472,16 +3538,23 @@ export function FileTree({
     cancelTooltipTimer();
     setTooltip(null);
     setContextMenu({ x: e.clientX, y: e.clientY, entry: null, rowRect: null });
-    probeClipboardImage();
+    probeSystemClipboard();
   }
 
-  // Ask the backend whether a screenshot/image is on the system clipboard so the
-  // open context menu can reveal "Paste screenshot". Async, so the menu shows
-  // immediately and the option appears once the probe resolves.
-  function probeClipboardImage() {
+  // Ask the backend whether a screenshot/image or copied files are on the system
+  // clipboard so the open context menu can reveal "Paste screenshot" / "Paste
+  // … from the system clipboard". Async, so the menu shows immediately and the
+  // options appear once the probes resolve. A remote listing has no local
+  // folder to import into, so it skips the file probe.
+  function probeSystemClipboard() {
     invoke<boolean>("clipboard_has_image")
       .then(setClipboardImage)
       .catch(() => setClipboardImage(false));
+    setSystemFiles([]);
+    if (remoteListing) return;
+    invoke<SystemClipboardFile[]>("clipboard_file_paths")
+      .then((files) => setSystemFiles(Array.isArray(files) ? files : []))
+      .catch(() => setSystemFiles([]));
   }
 
   async function confirmDelete() {
@@ -4646,8 +4719,9 @@ export function FileTree({
                   </button>
                 </>
               )}
-              {(clipboard || clipboardImage) && <hr />}
+              {(clipboard || clipboardImage || systemFiles.length > 0) && <hr />}
               {renderPasteButton()}
+              {renderSystemPasteButton()}
               {clipboardImage && (
                 <button onClick={openScreenshotPrompt}>
                   {t("fileTree.pasteScreenshot")}
@@ -4888,6 +4962,7 @@ export function FileTree({
                   </button>
                 )}
                 {renderPasteButton()}
+                {renderSystemPasteButton()}
                 {clipboardImage && (
                   <button onClick={openScreenshotPrompt}>
                     {t("fileTree.pasteScreenshot")}
@@ -5027,11 +5102,19 @@ export function FileTree({
             <h2>
               {pastePrompt.kind === "image"
                 ? t("fileTree.pasteScreenshotTitle")
-                : t(clipboard?.isDir ? "fileTree.pasteFolderTitle" : "fileTree.pasteFileTitle")}
+                : t(
+                    (pastePrompt.kind === "system" ? systemFiles[0]?.isDir : clipboard?.isDir)
+                      ? "fileTree.pasteFolderTitle"
+                      : "fileTree.pasteFileTitle",
+                  )}
             </h2>
             <p>
               {pastePrompt.kind === "image" ? (
                 <>{t("fileTree.saveClipboardImage")}</>
+              ) : pastePrompt.kind === "system" ? (
+                <>
+                  {t("common.copy")} <strong>{systemFiles[0]?.name}</strong>
+                </>
               ) : (
                 <>
                   {t(clipboard?.op === "cut" ? "common.move" : "common.copy")}{" "}
