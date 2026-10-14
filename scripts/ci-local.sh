@@ -56,6 +56,9 @@ cd "$repo"
 workflow="${CI_LOCAL_WORKFLOW:-$repo/.github/workflows/ci-cd.yml}"
 # The change's areas (--fast), shared with scripts/gates.sh.
 . "$repo/scripts/lib/changed.sh"
+# SCHED_IDLE + nice 19, so a gate run never makes the window lag (the file says why).
+. "$repo/scripts/lib/low_priority.sh"
+low_priority_reexec "$repo/scripts/ci-local.sh" "$@"
 
 # ---------------------------------------------------------------------------
 # The steps, in run order: cheap checks first, then the lint job, the test

@@ -31,6 +31,9 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
 . "$repo/scripts/lib/changed.sh"
+# SCHED_IDLE + nice 19, so a gate run never makes the window lag (the file says why).
+. "$repo/scripts/lib/low_priority.sh"
+low_priority_reexec "$repo/scripts/gates.sh" "$@"
 command -v cargo >/dev/null 2>&1 || PATH="$HOME/.cargo/bin:$PATH"
 export LC_NUMERIC=C  # $EPOCHREALTIME with a "." for the timings
 
