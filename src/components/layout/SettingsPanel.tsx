@@ -78,7 +78,7 @@ import { Dropdown } from "../common/Dropdown";
 import { PasswordInput } from "../common/PasswordInput";
 import { useT, LANGUAGES, type Language, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
-import { IS_HOST_WINDOWS, IS_MAC, PLATFORM } from "../../lib/platform";
+import { IS_HOST_WINDOWS, IS_LINUX, IS_MAC, PLATFORM } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import { useHintsStore } from "../../stores/hints";
 import { canConnectVpnSilently } from "../../lib/remote/vpn/vpnConnect";
@@ -1192,7 +1192,7 @@ const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   mobile: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"],
   performance: ["settings.energySaver", "settings.fastMode", "settings.sleepTabs", "settings.shellScrollback", "settings.tabCosts"],
   resourceMonitor: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"],
-  experimental: ["settings.debug", "settings.terminalWebgl", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter"],
+  experimental: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter"],
   git: ["nav.git.blurb"],
   vpn: ["nav.vpn.blurb"],
   remoteHosts: ["nav.remoteHosts.blurb"],
@@ -2109,6 +2109,18 @@ export function SettingsDialog({
               onChange={(e) => void updateSettings({ terminal_webgl: e.target.checked })}
               help={t("settings.terminalWebglHelp")}
             />
+
+            {/* Linux only: WebKitGTK's DMA-BUF renderer, read by the backend at
+                launch (docs/gpu_compositing_plan.md). The canvas defect that
+                made it drop PDF content is avoided on every webview regardless. */}
+            {IS_LINUX && (
+              <ToggleCard
+                label={<>{t("settings.gpuCompositing")} <UntestedTag id="settings.gpuCompositing" /></>}
+                checked={experimentalEnabled(settings, "gpu_compositing")}
+                onChange={(e) => void updateSettings({ gpu_compositing: e.target.checked })}
+                help={t("settings.gpuCompositingHelp")}
+              />
+            )}
 
             <ToggleCard
               label={<>{t("settings.mdGraph")} <UntestedTag id="settings.mdGraph" /></>}

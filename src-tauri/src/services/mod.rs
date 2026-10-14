@@ -235,6 +235,9 @@ pub use app_core::services::webkit_a11y;
 // viewer's frames decode where the software painter can draw them. Installed
 // before the first webview, stripped from spawned children.
 pub mod webkit_video;
+// Whether the window starts on WebKit's GPU paint path (the experimental
+// `gpu_compositing` setting), and the 2D-canvas switch every webview gets.
+pub mod webkit_gpu;
 
 // Privilege-free directory links on Windows (junctions via `mklink /J`),
 // shared by box member links, the state-dir migration and project import.

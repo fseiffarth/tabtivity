@@ -1533,6 +1533,8 @@ export const dict: Dict = {
   "settings.experimental": "Experimentell",
   "settings.terminalWebgl": "WebGL-Terminal-Renderer",
   "settings.terminalWebglHelp": "Zeichnet Terminals auf der GPU, was schneller ist. Schalte es aus, wenn du Flackern, fehlenden Text oder Abstürze siehst – manche GPU-Treiber sind fehlerhaft. Fällt von selbst auf den Standard-Renderer zurück, wenn WebGL versagt; wirkt sofort.",
+  "settings.gpuCompositing": "GPU-Compositing",
+  "settings.gpuCompositingHelp": "Lässt das Fenster auf der GPU zeichnen, wodurch das Scrollen deutlich flüssiger wird. Wirkt nach einem Neustart von {app}. Schalte es aus, wenn du Flackern, fehlende Inhalte oder Abstürze siehst. Ein Start mit WEBKIT_DISABLE_DMABUF_RENDERER=1 schaltet es aus.",
   "settings.mdGraph": "Markdown-Linkgraph",
   "settings.mdGraphHelp": "Fügt dem Markdown-Betrachter einen Graph-Modus hinzu: eine anklickbare Karte der Dateien, auf die dieses Dokument verlinkt, Link für Link verfolgt. Ein Klick auf einen Knoten öffnet die Datei.",
   "settings.pythonRunDebug": "Python Ausführen/Debuggen im Code-Viewer",

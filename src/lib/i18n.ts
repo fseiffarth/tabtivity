@@ -1465,6 +1465,8 @@ export const enSource = {
   "settings.experimental": "Experimental",
   "settings.terminalWebgl": "WebGL terminal renderer",
   "settings.terminalWebglHelp": "Draws terminals on the GPU, which is faster. Turn it off if you see flicker, missing text or crashes — some GPU drivers are broken. Falls back to the standard renderer by itself if WebGL fails; applies at once.",
+  "settings.gpuCompositing": "GPU compositing",
+  "settings.gpuCompositingHelp": "Lets the window paint on the GPU, which makes scrolling much smoother. Applies after you restart {app}. Turn it off if you see flicker, missing content or crashes. Starting with WEBKIT_DISABLE_DMABUF_RENDERER=1 forces it off.",
   "settings.mdGraph": "Markdown link graph",
   "settings.mdGraphHelp": "Adds a Graph mode to the markdown viewer: a clickable map of the files this document links to, followed link by link. Click a node to open that file.",
   "settings.projectRemarks": "Project file remarks",

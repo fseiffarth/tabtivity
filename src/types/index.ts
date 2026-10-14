@@ -645,6 +645,11 @@ export interface Settings {
    *  `docs/typing_latency_plan.md` Step 4); a terminal whose WebGL fails, at load
    *  or via runtime context loss, demotes itself back to the DOM renderer. */
   terminal_webgl?: boolean;
+  /** EXPERIMENTAL, default OFF, Linux only. Start WebKitGTK with its DMA-BUF
+   *  (GPU) renderer on; read by the backend once at launch, so it applies after
+   *  a restart (`docs/gpu_compositing_plan.md`). Like `terminal_webgl`, never
+   *  carried by Debug mode. */
+  gpu_compositing?: boolean;
   /** EXPERIMENTAL, default OFF. The markdown relationship graph: adds a "Graph"
    *  mode to the markdown viewer that crawls the viewed document's local-file
    *  links (markdown targets recursively, everything else as a leaf) and renders

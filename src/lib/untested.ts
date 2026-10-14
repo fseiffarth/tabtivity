@@ -310,6 +310,7 @@ export const UNTESTED = {
   "settings.rootMcpMailLocalOnly": { area: "layout", what: "SettingsPanel · Only local models get the mail tools" },
   "settings.rootMcpMailLocalRead": { area: "layout", what: "SettingsPanel · Local models may read the mails you share (marked only, loopback Ollama, writes staged after a read)" },
   "settings.terminalWebgl": { area: "layout", what: "SettingsPanel · WebGL terminal renderer" },
+  "settings.gpuCompositing": { area: "layout", what: "SettingsPanel · GPU compositing (Linux, after a restart: DMA-BUF renderer on, 2D canvas acceleration off on every webview; PDFs complete, smooth scroll, no flicker or renderer crash)" },
   "settings.themeVars": { area: "layout", what: "SettingsPanel · Theme colors" },
   "settings.todoBoard": { area: "layout", what: "SettingsPanel · To-do board button in the header" },
   "settings.workspaceNoParking": { area: "layout", what: "SettingsPanel · This desktop can't hide other apps' windows, so switching projects leaves them on screen.…" },

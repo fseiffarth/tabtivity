@@ -126,6 +126,7 @@ describe("AppShell load → experimental migration", () => {
     expect(patch.experimental_explicit).toBe(true);
     expect(patch.web_browser).toBe(true);
     expect(patch).not.toHaveProperty("terminal_webgl");
+    expect(patch).not.toHaveProperty("gpu_compositing");
   });
 
   it("writes once under StrictMode's doubled load effect", async () => {

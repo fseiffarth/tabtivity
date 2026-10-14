@@ -600,6 +600,48 @@ fn nav_gate_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
+/// WebKit's GPU-accelerated 2D canvas off on every webview, present and future
+/// (the detached popout and the presenter included, which the per-window
+/// `hook_webview_crash_reporter` never sees). With the DMA-BUF renderer on, that
+/// canvas drops draw operations; with it off, the switch changes nothing. See
+/// `services::webkit_gpu`.
+#[cfg(feature = "desktop")]
+fn webkit_tuning_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("webkit-tuning")
+        .on_webview_ready(|webview| {
+            #[cfg(target_os = "linux")]
+            disable_canvas_acceleration(&webview);
+            #[cfg(not(target_os = "linux"))]
+            let _ = webview;
+        })
+        .build()
+}
+
+/// Set `WebKitSettings:enable-2d-canvas-acceleration` to false on one webview.
+/// The property is WebKitGTK ≥ 2.46, and glib panics on an unknown property, so
+/// an older WebKit is logged once and left as it is.
+#[cfg(feature = "desktop")]
+#[cfg(target_os = "linux")]
+fn disable_canvas_acceleration<R: tauri::Runtime>(webview: &tauri::Webview<R>) {
+    use gtk::glib::prelude::ObjectExt;
+    use services::webkit_gpu::CANVAS_ACCEL_PROPERTY;
+    use webkit2gtk::WebViewExt;
+
+    static MISSING_LOGGED: std::sync::Once = std::sync::Once::new();
+    let _ = webview.with_webview(|platform| {
+        let Some(settings) = platform.inner().settings() else {
+            return;
+        };
+        if settings.find_property(CANVAS_ACCEL_PROPERTY).is_some() {
+            settings.set_property(CANVAS_ACCEL_PROPERTY, false);
+        } else {
+            MISSING_LOGGED.call_once(|| {
+                eprintln!("webkit-tuning: this WebKitGTK has no {CANVAS_ACCEL_PROPERTY}; canvas acceleration left as is");
+            });
+        }
+    });
+}
+
 /// The new-window handler every app window is built with (decision D6,
 /// gap 38): a middle click, `target=_blank` or `window.open` never opens a
 /// webview of the app's. A web page off the app origin goes to the system
@@ -1260,12 +1302,22 @@ pub fn standalone_core_state() -> app_core::CoreState {
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // WebKit's DMA-BUF renderer SIGBUSes inside Mesa on some driver stacks
-    // (seen 2026-06-11 with Mesa 26.0.3: renderer died, window froze). Fall
-    // back to shared-memory rendering unless the user explicitly overrides.
+    // WebKit's DMA-BUF renderer SIGBUSed inside Mesa (2026-06-11, Mesa 26.0.3:
+    // renderer died, window froze) and later dropped PDF content. That loss was
+    // traced to the GPU-accelerated 2D canvas, which every webview now has off
+    // (`webkit_tuning_plugin`); see docs/pdf_gpu_rendering_check_plan.md and
+    // docs/gpu_compositing_plan.md. So the renderer stays off by default, on
+    // only with the experimental `gpu_compositing` setting, and an inherited
+    // value is always the user's. Read here, before GTK/WebKit init and before
+    // any thread exists (`set_var`). A missing or unreadable file means off.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    {
+        use services::webkit_video::DMABUF_RENDERER_VAR;
+        let gpu = storage::load_settings().is_some_and(|s| s.gpu_compositing());
+        let inherited = std::env::var_os(DMABUF_RENDERER_VAR);
+        if services::webkit_gpu::should_disable_dmabuf(inherited.as_deref(), gpu) {
+            std::env::set_var(DMABUF_RENDERER_VAR, "1");
+        }
     }
 
     // With that renderer off the page paints on the CPU, so a GPU video
@@ -2458,6 +2510,8 @@ pub fn run() {
             commands::spell::spell_install_language,
             commands::spell::spell_remove_language,
         ])))
+        // Every webview's 2D canvas unaccelerated (`services::webkit_gpu`).
+        .plugin(webkit_tuning_plugin())
         // Decision D6: app windows never navigate off the app origin.
         .plugin(nav_gate_plugin())
         .plugin(tauri_plugin_dialog::init())
