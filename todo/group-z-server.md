@@ -1141,3 +1141,28 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2424. **`scripts/server-vm.sh`: a test server in one command.** ✅ **Built**
+    (2026-10-14, never run: the agent fence has no `/dev/kvm`; user: "would
+    you recommend the same for setting up a server inside a vm? one arg
+    should be the vm size" and "also allow larger disks up to 500gb").
+    Headless QEMU VM from an Ubuntu cloud image; `small`/`medium`/`large`
+    (4/8/16 GiB, 2/4/6 CPUs, 40/80/160 GB), `--disk` up to 500 GB, sparse and
+    grow-only; installs `latest`, a version, a `.deb` or `--build`, and does
+    the guide's steps 4–7 (tailnet join, `install`, fstab `/proc` line,
+    Tailscale Serve, `check`, admin user + pairing code). Until a release
+    carries the server `.deb` (#2423), use `--build`.
+    - [ ] 🖐️ Manual test — on the host: `scripts/server-vm.sh small --build`
+      bakes the base, boots, prints a login link (or joins with
+      `TABTIVITY_SERVER_VM_TS_AUTHKEY`), `check` has no FAIL line, the URL
+      and pairing code sign a phone in. `stop`, then `medium --disk 200`:
+      the disk grows and `df /` in `ssh` shows it; `small --disk 100` is
+      refused. `invite` prints a new code; `reset` and a new run start clean.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

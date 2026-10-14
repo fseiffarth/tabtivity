@@ -66,6 +66,20 @@ your computer's. Then follow the steps below inside the VM. Take a second
 snapshot before step 4; `sudo virsh snapshot-revert tabtivity-server <name>`
 goes back to one.
 
+**Just trying it out?** From a checkout of the source, one command builds a
+headless VM, installs the server and does steps 4–7 for you: it joins your
+tailnet, sets the server up, adds you as administrator and prints the
+address and your pairing code.
+
+```bash
+scripts/server-vm.sh medium            # small, medium or large; --disk up to 500 (GB)
+scripts/server-vm.sh medium 0.3.1      # later: install another version over it
+scripts/server-vm.sh stop              # or start, ssh, invite, status, reset
+```
+
+That VM does not start again by itself after a reboot; for a server people
+rely on, use the libvirt VM above or a dedicated machine.
+
 **Limit:** a VM has no GPU unless you set up PCI passthrough, so the shared
 local models run on the CPU only. If local models matter, use a dedicated
 machine instead.
