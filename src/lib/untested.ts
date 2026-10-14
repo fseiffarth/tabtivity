@@ -41,6 +41,8 @@ export const UNTESTED = {
   "desktop.intro.agents": { area: "shell", what: "How to start · Agent CLIs page: installed chips, install/sign-in in a terminal, Node.js prerequisite" },
   "desktop.intro.localModels": { area: "shell", what: "How to start · Local models page: Ollama install/start, recommended pull, GPU load, use for tabs" },
   "desktop.intro.askApp": { area: "shell", what: "How to start · Ask Tabtivity page: help-server status, on/off switch, help search box" },
+  "desktop.intro.goals": { area: "shell", what: "How to start · Goals page: multi-select goal cards, live 'Next up' preview, answers remembered and shape the route" },
+  "desktop.intro.forYou": { area: "shell", what: "How to start · For you page: lessons matched to the chosen goals, Walk me through it starts each" },
   "settings.vmPrerequisites": { area: "settings", what: "VM page · install missing QEMU prerequisites in a root terminal tab" },
   "settings.showUntestedTags": { area: "settings", what: "General page · show or hide every untested tag" },
 

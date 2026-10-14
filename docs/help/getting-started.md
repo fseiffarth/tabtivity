@@ -39,7 +39,13 @@ is the shortest path from a fresh install to a working agent tab.
 ## Learning more inside Tabtivity
 
 - **How to start** — the first-run introduction; reopen it from the Settings
-  menu (gear) or Settings → General → Hints & onboarding.
+  menu (gear) or Settings → General → Hints & onboarding. Its second page,
+  "What do you want to do?", takes several answers (code with AI agents, run
+  AI privately, write documents, work on servers, isolate projects, organize
+  your day, continue on your phone, or just look around). The answers decide
+  which setup pages follow and which lessons the "For you" page suggests;
+  picking nothing gives the full tour. The answers are remembered — change
+  them any time from the last page's "Change my answers".
 - **Take a tour / Advanced tour** — guided highlights of the window; the
   advanced tour covers remote hosts, VPN, containers, VMs and the phone.
 - **Lessons** — narrated step-by-step walkthroughs, one per task (add a
