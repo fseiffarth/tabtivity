@@ -450,27 +450,20 @@ const FileRow = React.memo(function FileRow({
       // here relocates it (hit-tested by data-move-rel in the drag).
       data-move-rel={e.is_dir ? rel : undefined}
       {...(e.is_dir ? moveTargetAttrs : undefined)}
-      // Dirs: single-click navigates + native DnD (file export).
-      // Files, plain drag: pointer-based drag onto a tab bar for
-      // drag-to-tab files (built-in viewer OR embeddable handler); R6 —
-      // native DnD disabled then so it can't hijack the pointer. Opened
-      // by double-click.
-      // Files, CTRL held: arm native HTML5 DnD so any file can be dragged
-      // out into an embedded browser / external target like Signal (the
-      // pointer drag-to-tab bails on Ctrl, see onEntryPointerDown).
+      // Plain drag: pointer-based — files with a built-in viewer OR an
+      // embeddable handler drop onto a tab bar; files and folders alike
+      // move into a folder row / crumb / ↑ (spring-opening it on a dwell).
+      // R6 — native DnD disabled then so it can't hijack the pointer.
+      // Files open by double-click, folders navigate on a single click.
+      // CTRL held: arm native HTML5 DnD so any entry can be dragged out
+      // into an embedded browser / external target like Signal (the
+      // pointer drag bails on Ctrl, see onEntryPointerDown).
       onClick={(ev) => rows.click(ev, e)}
       onDoubleClick={e.is_dir ? undefined : (ev) => rows.open(e, ev)}
       onContextMenu={(ev) => rows.contextMenu(ev, e)}
-      draggable={e.is_dir || ctrlHeld}
-      onDragStart={
-        e.is_dir || ctrlHeld
-          ? (ev) => rows.dragStart(ev, e)
-          : (ev) => ev.preventDefault()
-      }
-      // Every file arms the pointer drag — files with a tab/viewer target
-      // can drop onto a tab bar, and ALL files can be dragged into a
-      // folder to move them. Folders aren't dragged (they navigate).
-      onPointerDown={!e.is_dir ? (ev) => rows.pointerDown(ev, e, dragTarget) : undefined}
+      draggable={ctrlHeld}
+      onDragStart={ctrlHeld ? (ev) => rows.dragStart(ev, e) : (ev) => ev.preventDefault()}
+      onPointerDown={(ev) => rows.pointerDown(ev, e, dragTarget)}
       onMouseEnter={(ev) => rows.mouseEnter(ev, e)}
       onMouseLeave={rows.mouseLeave}
     >
@@ -897,6 +890,9 @@ export function FileTree({
   // (which is what the move's no-op check wants), not the one now listed.
   const relPathRef = useRef(relPath);
   relPathRef.current = relPath;
+  // When the last drag gesture ended (see `commitRelease`), so the click its
+  // release fires is not taken as a click on the row.
+  const dragClickGuard = useRef(0);
   const [moveTargetRel, setMoveTargetRel] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<EntryContextMenu>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -2073,6 +2069,7 @@ export function FileTree({
   // folder — drives the multi-selection instead (shift = range, ctrl/cmd =
   // toggle). Opening a file stays a double-click (onDoubleClick → handleOpen).
   function handleRowClick(ev: React.MouseEvent, entry: FileEntry) {
+    if (Date.now() - dragClickGuard.current < 400) return;
     const hasMod = ev.shiftKey || ev.ctrlKey || ev.metaKey;
     if (entry.is_dir && !hasMod) {
       clearSelection();
@@ -2256,7 +2253,8 @@ export function FileTree({
     entry: FileEntry,
     dragTarget: InternalViewer | "embed" | null,
   ) {
-    if (e.button !== 0 || entry.is_dir) return;
+    if (e.button !== 0) return;
+    // A folder is dragged only to move it (`dragTarget` is null for one).
     // A built-in viewer drives the in-app drop; "embed" means an external
     // handler, so no viewer. `canTab` is whether this file can land on a tab bar
     // / new window at all — only such files take the commitFileDrop path on
@@ -2278,6 +2276,7 @@ export function FileTree({
       .filter((en) => !en.is_dir)
       .map((en) => ({ path: en.path, name: en.name, viewer: internalViewerFor(en, disabledViewerSet) ?? undefined }));
     const canDrop = isMultiDrag ? dragFiles.length > 0 : canTab;
+    const draggedDirRels = dragEntries.filter((en) => en.is_dir).map(relForEntry);
     // Ctrl held → the user wants to EXPORT/COPY this file out to another app
     // (Signal, a browser, a file manager). The row arms HTML5 `draggable` while
     // `ctrlHeld` (see renderEntry); its onDragStart suppresses the broken
@@ -2385,7 +2384,7 @@ export function FileTree({
         // Built-in viewers render in-app and need no external handler, so skip
         // the embed-capability probe for them. For other embeddable files,
         // prefetch the capability so the drop can resolve embed-vs-external.
-        if (!viewer) {
+        if (!viewer && !entry.is_dir) {
           invoke<EmbedCap>("embed_capability", { path: entry.path, handler: null, projectId })
             .then((cap) => useDragStore.getState().setEmbedCap(cap))
             .catch(() => useDragStore.getState().setEmbedCap(null));
@@ -2473,6 +2472,7 @@ export function FileTree({
         root: projectDir,
         folderRel: relPath,
         remote: remoteListing,
+        draggedDirRels,
       });
       setMoveTarget(resolved, resolved?.crossRoot ? moveEl : null);
       // Spring-loading: hovering a folder row / crumb / ↑ of THIS tree navigates
@@ -2546,6 +2546,9 @@ export function FileTree({
       // the cleanup() call.
       const moveTarget = moveTargetRef.current;
       cleanup();
+      // A release on the row the drag began on still fires its click, which on
+      // a folder would navigate into it. Swallow that one click.
+      if (dragging) dragClickGuard.current = Date.now();
       if (!dragging) {
         // Never moved → a plain click does NOT open. Opening a file is a
         // double-click (onDoubleClick → handleClick); dragging it onto a tab bar
@@ -2827,9 +2830,11 @@ export function FileTree({
         crossRoot: target.crossRoot,
       });
       retargetTabsForRenamedPath(sourceAbs, newAbs);
-      // This tree re-lists (the entry left it); a cross-root destination tree
-      // catches up through its own fs-watch.
-      await load(relPath);
+      // This tree re-lists the folder now on screen — after a spring-load that
+      // is where the drag went, not where it started (the entry left either
+      // way); a cross-root destination tree catches up through its own
+      // fs-watch.
+      await load(relPathRef.current);
     } catch (err) {
       setError(String(err));
       setLoading(false);

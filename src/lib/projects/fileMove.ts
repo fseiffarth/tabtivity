@@ -32,6 +32,9 @@ export interface MoveSourceInfo {
   folderRel: string;
   /** Whether the source tree lists a remote (SFTP) source. */
   remote: boolean;
+  /** Rel paths (same root) of the folders being dragged: none of them can
+   *  hold itself, so neither it nor anything under it is a destination. */
+  draggedDirRels?: readonly string[];
 }
 
 export interface ResolvedMoveTarget {
@@ -45,7 +48,8 @@ export interface ResolvedMoveTarget {
  * What dropping here would do: a same-tree move, a cross-root (cross-project)
  * move, or nothing (`null`).
  *
- * - Same root: dropping onto the folder the file already lives in is a no-op.
+ * - Same root: dropping onto the folder the file already lives in is a no-op,
+ *   and a dragged folder never lands in itself or its own subtree.
  * - Different root: only local↔local is offered. `move_path` is a local-fs
  *   command, so a move in or out of a remote (SFTP) listing cannot be honored —
  *   refusing the target up front (no highlight, no drop) beats a move that
@@ -58,6 +62,10 @@ export function resolveMoveTarget(
   if (!target) return null;
   if (target.root === source.root) {
     if (target.rel === source.folderRel) return null;
+    const insideDragged = (source.draggedDirRels ?? []).some(
+      (dir) => target.rel === dir || target.rel.startsWith(`${dir}/`),
+    );
+    if (insideDragged) return null;
     return { root: target.root, rel: target.rel, crossRoot: false };
   }
   if (source.remote || target.remote) return null;
