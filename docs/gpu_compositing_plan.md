@@ -3,6 +3,37 @@
 Written 2026-10-14. Status: built 2026-10-14 (steps 1–10), uncommitted and
 **live-unverified**; TODO `todo/group-u-performance.md` #2421 / #2422.
 
+## After restart: what to test
+
+The live checklist is TODO **#2421** (`todo/group-u-performance.md`) — tick
+the ✅/❌ box for the platform there. Short form:
+
+0. The running build must contain commit `cde65763`. The dev auto-build may be
+   paused (`scripts/package-dev-auto.sh --status`): resume it, or run
+   `npm run package:dev`, then quit and relaunch Tabtivity (dev).
+1. **Switch off (default) first**: nothing should look different. Open
+   `~/Downloads/Testpage.pdf`; it must look as before (canvas acceleration is
+   now off on every webview even with the switch off).
+2. Settings → Experimental → tick **GPU compositing** → quit, relaunch.
+3. Check the renderer is no longer forced onto the CPU path:
+   `for p in $(pgrep -x WebKitWebProces); do echo "$p $(cat /proc/$(ps -o ppid= -p $p | tr -d ' ')/comm) $(tr '\0' '\n' </proc/$p/environ | grep -c WEBKIT_DISABLE_DMABUF_RENDERER=1)"; done`
+   → `0` on the Tabtivity rows (`1` = still forced off). An inherited
+   `WEBKIT_DISABLE_DMABUF_RENDERER` in the launching environment overrides the
+   switch.
+4. `Testpage.pdf`: every plot, axis label and the caption present, figures
+   aligned, at 50 / 100 / 200 % and after scrolling away and back. Only a PDF
+   that triggers the defect counts; a random PDF proves nothing.
+5. Scroll a long figure-heavy PDF 10+ min: noticeably smoother? Any flicker,
+   missing tiles, or a `WEBVIEW … TERMINATED` line in crash.log?
+6. Terminals (typing, fast output), markup drawing, deck presenter, a detached
+   popout, print preview, a browser live page, resize/maximize, menus and
+   dialogs: no partial paint. Leave the experimental terminal WebGL renderer
+   off for this round.
+7. Untick, relaunch: step 3 prints `1` again.
+
+If the window is unusable with the switch on: launch once with
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` in the environment, untick, relaunch.
+
 ## Goal
 
 An opt-in **Settings → Experimental → "GPU compositing"** switch, Linux only.

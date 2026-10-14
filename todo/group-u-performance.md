@@ -2326,3 +2326,55 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2421. **GPU compositing (Linux, experimental).** ✅ Done 2026-10-14,
+    code-complete and **live-unverified** (`docs/gpu_compositing_plan.md`).
+    Settings → Experimental → "GPU compositing" (Linux only, default off,
+    never carried by Debug mode) stops `run()` forcing
+    `WEBKIT_DISABLE_DMABUF_RENDERER=1`; it applies at the next launch, and an
+    inherited value of that variable always wins. Every webview, whatever the
+    setting, gets `enable-2d-canvas-acceleration` off (`webkit_tuning_plugin`),
+    because the accelerated 2D canvas is what dropped PDF content on the GPU
+    path (`docs/pdf_gpu_rendering_check_plan.md` Results). Backend changed.
+    - [x] 🤖 Automated test — `services::webkit_gpu` tests (the startup
+      decision and the property name), `schema::settings`
+      `gpu_compositing_defaults_absent_and_round_trips`, and the
+      experimental-flag tests (`Experimental`, `ExperimentalExplicit`,
+      `AppShellExperimentalMigration`: off in Debug mode, never migrated).
+    - [ ] 🖐️ Manual test — tick Settings → Experimental → GPU compositing,
+      restart. The renderer no longer carries the disable — in a terminal:
+      `for p in $(pgrep -x WebKitWebProces); do echo "$p $(cat /proc/$(ps -o ppid= -p $p | tr -d ' ')/comm) $(tr '\0' '\n' </proc/$p/environ | grep -c WEBKIT_DISABLE_DMABUF_RENDERER=1)"; done`
+      prints `0` after the Tabtivity process name (`1` = still forced off). Open
+      `~/Downloads/Testpage.pdf` (a file that triggers the canvas defect; a
+      random PDF proves nothing): every plot, label and the caption are there
+      and figures aligned, at 50/100/200 % and after scrolling away and back.
+      Scroll a long figure-heavy PDF 10+ min: smoother than with the switch
+      off, no flicker or missing tiles, no `WEBVIEW … TERMINATED` in
+      crash.log. Then terminals, markup drawing, the deck presenter, a
+      detached popout, print preview, a browser live page, resize/maximize,
+      menus and dialogs: no partial paint. Untick, restart: the same
+      command prints `1` again. Windows/macOS: the switch is not shown and
+      nothing changes.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2422. **Re-check the GPU path on WebKitGTK 2.54.** Open until Ubuntu ships
+    2.54. Its CPU path measured 2–3× slower than 2.52's (8–16 fps scroll at
+    near-fullscreen), so the default may need to flip.
+    - [ ] 🖐️ Manual test — on WebKitGTK 2.54, with GPU compositing off and
+      then on: `Testpage.pdf` complete and aligned, window paint (menus,
+      fades, resize) clean, and scroll speed noted for both.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
