@@ -1249,14 +1249,14 @@ not written.
 | `@tauri-apps/api` internals (browser client) | 2.12 | `src/lib/transport/wsInternals.ts` re-implements `window.__TAURI_INTERNALS__` (`invoke`, `transformCallback`, `unregisterCallback`, `convertFileSrc`, `metadata`) and `__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener`, plus the wire shapes of `plugin:event\|*`, `plugin:dialog\|open/save/message` (`buttonsToRust`), `plugin:notification\|*` command names, `plugin:window\|*`. On an API or plugin-dialog/-notification bump: diff `core.js`, `event.js`, `window.js` and both plugins' `dist-js/index.js` against the shim (most of a release's diff is doc comments: strip them first); `WebTransport.test.ts` covers the shapes it knows |
 | `tauri-runtime-wry` | patched 2.12.1 (`src-tauri/patches/`, root `Cargo.toml` `[patch.crates-io]`) | `Context.main_thread` behind an `Arc`, or off-thread `AppHandle` clones race tao's Linux `Rc` and corrupt the heap. On a tauri bump: re-copy the new version and re-apply the `TABTIVITY PATCH` hunks (since 2.12 also `make_event_handler`, which moves fields out of `main_thread` and must clone them from the `Arc`); move `src-tauri/Cargo.toml`'s Windows `webview2-com` and `windows` to the versions the new wry uses (only the Windows clippy cross-check sees a mismatch); or drop the patch once upstream fixes it |
 | `@xterm/xterm` + addons | `^6.0`, webgl `^0.19` (no canvas addon since 6) | key encodings (`ESC [ Z`, CSI-u) the mobile bridge relies on; Alt+arrow word jumps re-added by `altArrowWordJump` (6 dropped them); scrollbar is xterm's own `.xterm-scrollable-element` slider, styled in `base.css` / phone `style.css`; mobile reads internal `_core._bufferService.buffers.normal.lines.onTrim` (`readableHistory.scrollbackTrimEvent`). On a bump run `TerminalXtermContract`, `TerminalRealXterm` and `MobileTerminalXtermTrim`: the only tests on the real package (the rest mock it) |
-| `pdfjs-dist` | `^6.3` (floor 6.0) | beamer shadow compositing |
+| `pdfjs-dist` | `^6.4` (floor 6.0) | beamer shadow compositing; the API shapes `outline`/`links`/`notes`/`pageText`/`pageFingerprint` read — `PdfjsContract.test.ts` and `MobilePdfFrame.test.ts` run the real (legacy) build. The modern build the desktop bundles calls `Promise.try`, `Map.prototype.getOrInsertComputed` and `Math.sumPrecise` (6.3 and 6.4 alike): a webview without them cannot open a PDF — `rg -c` them on a bump |
 | `portable-pty` | 0.9 | PTY registry / reconnect |
 | `keyring` | 3 | platform credential stores |
 | `async-imap`, `mail-send`, `mail-parser`, `rustls` 0.23 | see `Cargo.toml` | mail protocol + TLS |
 | `openssh-sftp-client` | 0.15 | SFTP over the ControlMaster |
 | `zbus`, `xcb` | — | DBus/X11 desktop integration |
 | `spellbook` | 0.4 | Hunspell-compatible checker |
-| `mermaid`, `katex` | `^11`, `^0.17` | markdown viewers |
+| `mermaid`, `katex` | `^11`, `^0.19` | markdown viewers; `MarkdownKatex.test.ts` runs the real KaTeX (error notes, `trust: false`, output shape) |
 
 On a bump: `npm run build && npm test`, `cargo test`, `cargo clippy
 --all-targets -- -D warnings` (CI uses *today's* stable — `rustup update`
