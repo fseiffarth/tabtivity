@@ -3062,6 +3062,10 @@ button.terminal-reader-option:hover:not(:disabled) {
    than the live one, its rows not buttons — the ones the answer took lit,
    the rest dimmed as a sent list's are. */
 .terminal-reader-question.asked {
+  /* Anchors the corner `.terminal-reader-time`, which is absolute: without
+     this every asked card's time piled up in the view's lower-right corner. */
+  position: relative;
+  padding-bottom: 20px;
   border-color: var(--border-color);
 }
 .terminal-reader-question.asked .terminal-reader-option {
