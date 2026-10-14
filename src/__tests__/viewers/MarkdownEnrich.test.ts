@@ -25,6 +25,9 @@ import { renderMarkdown } from "../../lib/viewers/markdown";
 import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
 import type React from "react";
 
+// Captured at module load: clearMocks wipes call history before each test.
+const mermaidInitCalls = [...mermaidInitialize.mock.calls];
+
 function container(markdown: string): HTMLElement {
   const el = document.createElement("div");
   el.innerHTML = renderMarkdown(markdown);
@@ -47,8 +50,8 @@ afterEach(() => {
 
 describe("mermaid is initialised once, locked down", () => {
   it("never scans the DOM on its own and sanitises its SVG", () => {
-    expect(mermaidInitialize).toHaveBeenCalledOnce();
-    expect(mermaidInitialize).toHaveBeenCalledWith(
+    expect(mermaidInitCalls).toHaveLength(1);
+    expect(mermaidInitCalls[0][0]).toEqual(
       expect.objectContaining({ startOnLoad: false, securityLevel: "strict" }),
     );
   });
