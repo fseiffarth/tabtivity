@@ -92,6 +92,9 @@ export function adaptClientCommand(client: WsClient, cmd: string, args: Args): P
  * The window plugin (`plugin:window|*`, `plugin:webview|*`), answered for the
  * one window a browser page is. Geometry comes from the viewport; the
  * desktop's maximize/minimize/decorations have no meaning and resolve.
+ * Answers and argument keys are what `@tauri-apps/api`'s `window.js` and
+ * `webview.js` read and send (sizes `{width, height}`, positions `{x, y}`,
+ * setters' `value`); `WebTransport.test.ts` drives the installed ones.
  */
 export function adaptWindowCommand(command: string, args: Args): Promise<unknown> {
   switch (command) {
@@ -102,10 +105,16 @@ export function adaptWindowCommand(command: string, args: Args): Promise<unknown
       return Promise.resolve(window.devicePixelRatio || 1);
     case "inner_size":
     case "outer_size":
-      return Promise.resolve({ type: "Physical", data: { width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)), height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)) } });
+      return Promise.resolve({ width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)), height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)) });
     case "inner_position":
     case "outer_position":
-      return Promise.resolve({ type: "Physical", data: { x: 0, y: 0 } });
+      return Promise.resolve({ x: 0, y: 0 });
+    case "current_monitor":
+    case "primary_monitor":
+    case "monitor_from_point":
+      return Promise.resolve(null);
+    case "available_monitors":
+      return Promise.resolve([]);
     case "is_fullscreen":
       return Promise.resolve(document.fullscreenElement !== null);
     case "is_maximized":
@@ -126,16 +135,16 @@ export function adaptWindowCommand(command: string, args: Args): Promise<unknown
     case "title":
       return Promise.resolve(document.title);
     case "set_title":
-      document.title = String(args.title ?? document.title);
+      document.title = String(args.value ?? document.title);
       return Promise.resolve();
     case "theme":
       return Promise.resolve(window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light");
     case "set_fullscreen":
-      if (args.fullscreen) return document.documentElement.requestFullscreen?.().catch(() => undefined) ?? Promise.resolve();
+      if (args.value) return document.documentElement.requestFullscreen?.().catch(() => undefined) ?? Promise.resolve();
       return document.fullscreenElement ? document.exitFullscreen().catch(() => undefined) : Promise.resolve();
-    case "set_zoom":
+    case "set_webview_zoom":
       // The desktop zooms the whole webview; a page zooms its root.
-      document.documentElement.style.setProperty("zoom", String(Number(args.scaleFactor ?? 1)));
+      document.documentElement.style.setProperty("zoom", String(Number(args.value ?? 1)));
       return Promise.resolve();
     default:
       // maximize, minimize, show, hide, set_size, set_position, center,

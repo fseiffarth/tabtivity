@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen, once } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { getAllWindows, getCurrentWindow } from "@tauri-apps/api/window";
+import { availableMonitors, currentMonitor, getAllWindows, getCurrentWindow, primaryMonitor } from "@tauri-apps/api/window";
 import { ask, confirm, message, open, save } from "@tauri-apps/plugin-dialog";
 import { DisconnectedError, linkState, resetLinkStateForTests } from "../../lib/transport/linkState";
 import { KIND_CALL, KIND_RET, WsClient, type SocketLike } from "../../lib/transport/wsClient";
@@ -362,6 +362,43 @@ describe("the installed @tauri-apps JS through the shim", () => {
     await expect(win.maximize()).resolves.toBeUndefined();
     expect(getCurrentWebview().label).toBe("main");
     expect(socket.textFrames()).toEqual([]);
+  });
+
+  it("window: sizes, positions and monitors answer in the shapes window.js reads", async () => {
+    installed();
+    const win = getCurrentWindow();
+    const scale = window.devicePixelRatio || 1;
+    const size = await win.outerSize();
+    expect([size.width, size.height]).toEqual([Math.round(window.innerWidth * scale), Math.round(window.innerHeight * scale)]);
+    expect((await win.innerSize()).width).toBe(size.width);
+    const outer = await win.outerPosition();
+    const inner = await win.innerPosition();
+    expect([outer.x, outer.y, inner.x, inner.y]).toEqual([0, 0, 0, 0]);
+    // A page knows no monitors: "none" is an answer window.js can map.
+    await expect(currentMonitor()).resolves.toBeNull();
+    await expect(primaryMonitor()).resolves.toBeNull();
+    await expect(availableMonitors()).resolves.toEqual([]);
+  });
+
+  it("window/webview: title, fullscreen and zoom read the keys window.js and webview.js send", async () => {
+    installed();
+    // jsdom has no Fullscreen API.
+    const root = document.documentElement as unknown as { requestFullscreen?: () => Promise<void>; style: CSSStyleDeclaration };
+    const request = vi.fn(() => Promise.resolve());
+    root.requestFullscreen = request;
+    const savedTitle = document.title;
+    try {
+      await getCurrentWindow().setTitle("Board");
+      expect(document.title).toBe("Board");
+      await getCurrentWindow().setFullscreen(true);
+      expect(request).toHaveBeenCalledTimes(1);
+      await getCurrentWebview().setZoom(1.25);
+      expect(root.style.getPropertyValue("zoom")).toBe("1.25");
+    } finally {
+      document.title = savedTitle;
+      delete root.requestFullscreen;
+      root.style.removeProperty("zoom");
+    }
   });
 
   it("notification: the list calls answer under the names the installed plugin sends", async () => {
