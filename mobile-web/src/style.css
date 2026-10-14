@@ -768,9 +768,17 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .terminal .xterm,.terminal .xterm-viewport { height:100%; overscroll-behavior:contain; }
 /* xterm gives `.xterm-screen` an explicit cols-wide pixel width. Letting the
    terminal element grow to it is what gives the scroller something to
-   scroll, and keeps the themed viewport background under the panned-to
-   columns instead of ending a screenful in. */
+   scroll, and keeps the themed background under the panned-to columns
+   instead of ending a screenful in. */
 .terminal .xterm { width:max-content; min-width:100%; }
+/* That themed background is the scrollable element's in xterm 6 (painted
+   inline from the theme); `.xterm-viewport`, which carried it up to xterm 5,
+   is now left at xterm.css's #000. Stretched to the element's full height,
+   the scrollable element covers it, so the strip under the last row — up to
+   a row's worth of a fitted screen, more under a desktop window's geometry —
+   is the theme's ground and not a black band (in a light theme above all).
+   xterm sizes its scroll range from the rows, never from this box. */
+.terminal .xterm-scrollable-element { min-height:100%; }
 /* xterm 6 draws its own bar (VS Code's scrollable element, 14px wide inline)
    instead of a native one on `.xterm-viewport`; its slider keeps the old 7px
    square thumb, inset by a transparent border. A class more than the slider
