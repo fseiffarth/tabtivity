@@ -39,6 +39,8 @@ target/
 # Node / frontend (Phase 2+)
 node_modules/
 .next/
+# vitest 5's default report dir (--reporter=json/junit without --outputFile).
+.vitest/
 
 # Tauri build artifacts
 src-tauri/target/
