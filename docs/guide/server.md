@@ -10,12 +10,17 @@ reboot.
 > run it on a real server yet. Expect rough edges, and please report what you
 > find.
 
-**Time needed:** about 30 minutes, most of it waiting for builds.
+**Time needed:** about 15 minutes with the release package; about 30 when
+you build from source, most of it waiting for builds.
 
 ## What you need
 
 - **A Linux machine** that is always on. These steps assume **Ubuntu 24.04**;
-  other distributions work but their package names may differ.
+  other distributions work but their package names may differ. The release
+  package is for x86_64 machines with Ubuntu 24.04 / Debian 13 or newer;
+  anything else builds from source. There is no Windows or macOS server: on
+  such a machine, run the server in a Linux virtual machine (next section;
+  on a Mac use UTM or Lima instead of virt-manager, on Windows Hyper-V).
 - **`sudo` rights** on that machine.
 - **[Tailscale](https://tailscale.com/download)** installed and logged in on
   the server and on every device that will use it. People reach the server
@@ -67,17 +72,50 @@ machine instead.
 
 ## Step 1 — Install the packages
 
+The release package in step 2 brings what it needs (tmux, bubblewrap, git,
+curl). Only if you build from source, install the build tools too:
+
 ```bash
 sudo apt install git curl jq build-essential tmux bubblewrap
 ```
 
-You also need **Rust** ([rustup.rs](https://rustup.rs); the right version is
-picked automatically) and a current **Node.js LTS** release.
+plus **Rust** ([rustup.rs](https://rustup.rs); the right version is picked
+automatically) and a current **Node.js LTS** release.
 
 Optional: `sudo apt install podman uidmap` if your users should be able to run
-projects in containers.
+projects in containers. Node.js is also needed if you want to offer agent CLIs
+that install through npm (Gemini); Claude and Codex don't need it.
 
-## Step 2 — Build Tabtivity
+## Step 2 — Install Tabtivity
+
+### From a release (recommended)
+
+Every [release](https://github.com/fseiffarth/tabtivity/releases) carries
+the server as `tabtivity-server_<version>_amd64.deb`. Download the newest one
+and check that it is the file the release signed:
+
+```bash
+v=$(basename "$(curl -fsSLo /dev/null -w '%{url_effective}' \
+    https://github.com/fseiffarth/tabtivity/releases/latest)")
+base=https://github.com/fseiffarth/tabtivity/releases/download/$v
+curl -fL -O "$base/tabtivity-server_${v#v}_amd64.deb" \
+    -O "$base/SHA256SUMS" -O "$base/SHA256SUMS.sig"
+curl -fLo release-signing.pub.pem \
+    https://raw.githubusercontent.com/fseiffarth/tabtivity/main/src-tauri/release-signing.pub.pem
+openssl dgst -sha256 -verify release-signing.pub.pem -signature SHA256SUMS.sig SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+Both checks must say `Verified OK` and `OK`. Then install it:
+
+```bash
+sudo apt install "./tabtivity-server_${v#v}_amd64.deb"
+```
+
+The package puts the programs in `/usr/lib/tabtivity/` and the web pages in
+`/usr/share/tabtivity/`. It doesn't start anything yet; step 4 does.
+
+### From source
 
 ```bash
 git clone https://github.com/fseiffarth/tabtivity.git
@@ -85,17 +123,17 @@ cd tabtivity
 npm ci
 npm run build
 cargo build --release -p app-serverd -p app-gateway
-```
-
-## Step 3 — Copy the files into place
-
-```bash
 sudo install -D -m 0755 target/release/tabtivity-serverd \
     target/release/tabtivity-gateway target/release/tabtivity-admin-helper \
     -t /usr/lib/tabtivity/
 sudo mkdir -p /usr/share/tabtivity
 sudo cp -r web-dist mobile-dist /usr/share/tabtivity/
 ```
+
+`scripts/package-server-deb.sh` builds the same `.deb` the release ships, if
+you would rather install a package.
+
+## Step 3 — A short name for the admin tool
 
 To save typing, give the admin tool a short name for the rest of this guide:
 
@@ -215,10 +253,14 @@ inside their own agent tabs.
 | Who did what | `sudo cat /var/lib/tabtivity-gateway/audit.jsonl` |
 | All admin commands | `tt-admin help` |
 
-**Updating:** pull the new version, build it (step 2), copy it into place
-(step 3), then restart every server service. Restarting only the gateway is
-not enough: each person's session and the key, sharing and calendar services
-would keep running the old version.
+**Updating:** with the release package, download and check the new one as in
+step 2, then `sudo apt install ./tabtivity-server_<version>_amd64.deb`. The
+package restarts every server service that is running: the gateway, each
+person's session, and the key, sharing and calendar services (restarting
+only the gateway would leave the rest on the old version).
+
+From source: pull the new version, build it and copy it into place (step 2),
+then restart every server service yourself:
 
 ```bash
 cd tabtivity && git pull

@@ -200,6 +200,9 @@ jobs:
             printf -- '- Windows: NSIS `.exe` installer\n'
             printf -- '- macOS: universal Intel/Apple Silicon `.dmg` (unsigned — right-click → Open, or run '
             printf '`xattr -dr com.apple.quarantine /Applications/Tabtivity.app`)\n'
+            printf -- '- Linux server (preview, x86_64, never run in production): `tabtivity-server_*.deb` — '
+            printf 'set it up with the [server guide](https://github.com/%s/blob/main/docs/guide/server.md); ' "$GH_REPO"
+            printf 'Windows and macOS hosts run it in a Linux VM\n'
 
             # Until the cleanup release (the one that drops the old-name
             # lookups): what an upgrade across the rename does and asks for.
@@ -226,13 +229,19 @@ jobs:
             echo "::error::RELEASE_SIGNING_KEY is not set; refusing to publish an unsigned release"
             exit 1
           fi
-          # A green ci-cd run built every platform; all of them ship.
-          for ext in AppImage deb exe dmg; do
-            if [ -z "$(find release-assets -type f -name "*.$ext" -print -quit)" ]; then
-              echo "::error::The ci-cd run has no .$ext bundle (expired artifacts? re-run ci-cd on this commit)"
+          # A green ci-cd run built every platform; all of them ship. The
+          # desktop .deb and the server's (`*-server_*.deb`) are told apart by
+          # name, so one cannot stand in for the other.
+          for want in '*.AppImage|AppImage' '*.exe|.exe' '*.dmg|.dmg' '*-server_*.deb|server .deb'; do
+            if [ -z "$(find release-assets -type f -name "${want%%|*}" -print -quit)" ]; then
+              echo "::error::The ci-cd run has no ${want#*|} bundle (expired artifacts? re-run ci-cd on this commit)"
               exit 1
             fi
           done
+          if [ -z "$(find release-assets -type f -name '*.deb' ! -name '*-server_*.deb' -print -quit)" ]; then
+            echo "::error::The ci-cd run has no desktop .deb bundle (expired artifacts? re-run ci-cd on this commit)"
+            exit 1
+          fi
           key="$RUNNER_TEMP/release-signing.key.pem"
           trap 'rm -f "$key"' EXIT
           (umask 077; printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")

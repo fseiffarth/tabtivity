@@ -2,7 +2,9 @@
 
 The release workflow (`.github/workflows/release.yml`) signs `SHA256SUMS` with an ECDSA P-256 key and the in-app
 updater installs nothing whose hash isn't in that signed list (#160,
-`services::app_update`). The public half is compiled in from
+`services::app_update`). The list covers every asset, the server's
+`<slug>-server_*.deb` too (the server guide verifies it by hand; the desktop
+updater never picks it, `app_update::is_server_package`). The public half is compiled in from
 `src-tauri/release-signing.pub.pem`; the private half lives only in the
 `RELEASE_SIGNING_KEY` repository secret (plus your offline copy). Without the
 secret the release workflow fails before publishing, and the pre-push hook warns on

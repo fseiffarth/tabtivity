@@ -43,6 +43,12 @@ Read this first; keep it current when a decision or an open point changes.
   browser client — everything the window's listener serves.
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
+- **Released as a `.deb` (2026-10-14, plan §8.1).** Each GitHub release
+  carries `<slug>-server_<version>_amd64.deb` next to the desktop bundles,
+  in the signed `SHA256SUMS` (`scripts/package-server-deb.sh`, ci-cd.yml's
+  `package-server` job); the release notes call it a preview. x86_64 only;
+  aarch64, `.rpm` and a Windows/macOS server are not built (those hosts run
+  it in a Linux VM). Never installed from a release yet.
 
 ## Where the detail lives
 

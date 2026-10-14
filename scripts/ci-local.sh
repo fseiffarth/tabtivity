@@ -73,7 +73,7 @@ STEPS=(
   "drift|lint|ci-local.sh mirrors this workflow|ci|always"
   "privacy|privacy|Scan pushed changes for secrets / personal data|local:privacy@4197511463-1112|always"
   "gitleaks|secrets|Scan history for secrets|local:gitleaks@2296324494-115|always"
-  "npm-deps|lint,test-ubuntu,package|Install frontend dependencies|local:npm_deps@4016385107-81|always"
+  "npm-deps|lint,test-ubuntu,package,package-server|Install frontend dependencies|local:npm_deps@4016385107-81|always"
   "lint-frontend|lint|Lint frontend|ci|always"
   "lint-backend|lint|Lint backend|ci|always"
   "lint-core|lint|Lint core crate|ci|always"
@@ -107,6 +107,8 @@ ALLOW=(
   "package|Build release bundles|release packaging (npm run tauri:bundle), not a code gate"
   "package|Upload AppImage|artifact upload"
   "package|Upload DEB|artifact upload"
+  "package-server|Build server package|release packaging (scripts/package-server-deb.sh), not a code gate"
+  "package-server|Upload server DEB|artifact upload"
 )
 
 # ---------------------------------------------------------------------------

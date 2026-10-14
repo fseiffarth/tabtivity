@@ -248,6 +248,12 @@ fn arch_tokens() -> &'static [&'static str] {
     }
 }
 
+/// The server's package (`<slug>-server_<version>_<arch>.deb`), released next
+/// to the desktop bundles: never a desktop update, whatever its extension.
+fn is_server_package(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with(concat!(crate::app_slug!(), "-server_"))
+}
+
 /// Pick the asset to offer, from `(name, url, size)` triples.
 ///
 /// Extension decides first (a `.deb` is never an answer for Windows), arch
@@ -259,6 +265,7 @@ pub fn pick_asset(assets: &[(String, String, u64)], kind: InstallKind) -> Option
             .iter()
             .filter(|(name, url, _)| {
                 is_repo_download_url(url)
+                    && !is_server_package(name)
                     && name
                         .rsplit('.')
                         .next()
@@ -1055,6 +1062,14 @@ zWKrqHHacn3R/vU4reeTtE+MP1CZrcNAOYOmswDjH92r/YoK3ZxNK3NjBg==
             10,
         )];
         assert!(pick_asset(&assets, InstallKind::Nsis).is_none());
+    }
+
+    #[test]
+    fn the_server_package_is_never_a_desktop_update() {
+        let server = concat!(crate::app_slug!(), "-server_0.1.53_amd64.deb");
+        let assets = vec![asset(server), asset("Desktop_0.1.53_amd64.deb")];
+        assert_eq!(pick_asset(&assets, InstallKind::Manual).unwrap().name, "Desktop_0.1.53_amd64.deb");
+        assert!(pick_asset(&[asset(server)], InstallKind::Manual).is_none());
     }
 
     #[test]
