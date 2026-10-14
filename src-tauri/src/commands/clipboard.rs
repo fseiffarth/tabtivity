@@ -198,7 +198,8 @@ fn decode_png_bytes_rgba(bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), String
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let size = reader.output_buffer_size().ok_or("PNG too large to decode")?;
+    let mut buf = vec![0u8; size];
     let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
     let px = &buf[..info.buffer_size()];
 
@@ -253,7 +254,7 @@ mod tests {
         // 2x1 RGBA image → decodes back to the same dimensions.
         let rgba = vec![255u8, 0, 0, 255, 0, 255, 0, 255];
         let png_bytes = encode_png(2, 1, &rgba).unwrap();
-        let decoder = png::Decoder::new(png_bytes.as_slice());
+        let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes.as_slice()));
         let reader = decoder.read_info().unwrap();
         let info = reader.info();
         assert_eq!((info.width, info.height), (2, 1));

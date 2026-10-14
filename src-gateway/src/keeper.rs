@@ -217,9 +217,8 @@ pub(crate) fn read_key_in(dir: &Path, cli: &str) -> Result<Option<String>, ()> {
 /// key's way).
 fn mint_token() -> String {
     use base64ct::Encoding;
-    use rand::RngCore;
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    crate::fill_random(&mut bytes);
     format!("broker-{}", base64ct::Base64UrlUnpadded::encode_string(&bytes))
 }
 

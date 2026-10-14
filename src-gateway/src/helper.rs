@@ -415,8 +415,17 @@ pub struct Ctx<'a> {
 }
 
 fn eight_digits() -> String {
-    use rand::Rng;
-    format!("{:08}", rand::rngs::OsRng.gen_range(0..100_000_000u32))
+    // Uniform over 0..10^8: redraw the top 94,967,296 values of a `u32`,
+    // which would otherwise favour the low codes.
+    const LIMIT: u32 = 42 * 100_000_000;
+    loop {
+        let mut bytes = [0u8; 4];
+        crate::fill_random(&mut bytes);
+        let n = u32::from_le_bytes(bytes);
+        if n < LIMIT {
+            return format!("{:08}", n % 100_000_000);
+        }
+    }
 }
 
 /// Run `plan`, step by step; the first failure stops it.

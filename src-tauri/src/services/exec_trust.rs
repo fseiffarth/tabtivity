@@ -504,7 +504,7 @@ fn config_executes(name: &str, bytes: &[u8]) -> bool {
         .iter()
         .any(|ext| name.ends_with(ext));
     let shared = !name.ends_with(".toml")
-        && serde_yaml::from_str::<serde_yaml::Value>(&text).is_ok_and(|v| v.is_string());
+        && serde_norway::from_str::<serde_norway::Value>(&text).is_ok_and(|v| v.is_string());
     script || shared || text.contains("plugins")
 }
 

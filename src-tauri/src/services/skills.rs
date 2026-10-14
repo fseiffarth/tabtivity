@@ -181,7 +181,7 @@ fn parse_skill_md(content: &str, folder_name: &str) -> (String, String, String) 
         if let Some(end) = rest.find("\n---") {
             let block = &rest[..end];
             body = rest[end + 4..].trim_start_matches('\n').to_string();
-            if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(block) {
+            if let Ok(value) = serde_norway::from_str::<serde_norway::Value>(block) {
                 if let Some(n) = value.get("name").and_then(|v| v.as_str()) {
                     name = n.to_string();
                 }

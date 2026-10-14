@@ -9,7 +9,7 @@
 //! pinned formatter wins. When no tool is found the command returns a typed
 //! `formatter-unavailable:<lang>` error and the frontend disables the button.
 //!
-//! Syntax checking is done in-process via `serde_json`/`serde_yaml`, which give
+//! Syntax checking is done in-process via `serde_json`/`serde_norway`, which give
 //! an exact line/column for the first parse error — more reliable than the
 //! webview's `JSON.parse`, whose JavaScriptCore messages carry no position.
 
@@ -321,7 +321,7 @@ pub fn check_syntax(text: String, lang: String) -> Option<SyntaxIssue> {
                 message: e.to_string(),
             }),
         },
-        "yaml" => match serde_yaml::from_str::<serde_yaml::Value>(&text) {
+        "yaml" => match serde_norway::from_str::<serde_norway::Value>(&text) {
             Ok(_) => None,
             Err(e) => {
                 let (line, column) = e
