@@ -183,6 +183,156 @@ pub fn local_opencode_changes(
     opencode_changes(&db, project_id, tab_dir, since, subagent, version, limit)
 }
 
+/// Every file a tab's conversation changed, by the path its CLI named — the
+/// phone's "not committed yet" count (`mobile_control::chat_uncommitted`)
+/// checks these against `git status`. Unlike the Changes panel this reads
+/// the whole transcript, not the Reader's tail, and a Claude session's
+/// subagents' files with it; no diff is kept. `None` for a CLI whose edits
+/// are not read here; an empty list for a session before its first edit.
+/// What the agent changed through a shell command is not in any of these
+/// records, so the list is a floor, never the whole tree's changes.
+pub fn changed_paths(
+    cmd: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    since: Option<i64>,
+    launch_id: Option<&str>,
+    local_model: bool,
+) -> Option<Vec<String>> {
+    if cmd == "opencode" {
+        let read = if local_model {
+            local_opencode_changes(project_id, tab_dir, since, None, None, MAX_LIMIT)
+        } else {
+            agent_session_changes(cmd, project_id, tab_dir, since, launch_id.unwrap_or(""), None, None, MAX_LIMIT)
+        };
+        return read.available.then(|| paths_of(&read.changes).into_iter().collect());
+    }
+    let kind = match cmd {
+        "claude" => Store::Claude,
+        "codex" => Store::Codex,
+        _ => return None,
+    };
+    if local_model {
+        return None;
+    }
+    let Some(main) = launch_id.and_then(|id| agent_transcript::conversation_file(cmd, project_id, id, None)) else {
+        // Nothing written yet — a session before its first turn.
+        return Some(Vec::new());
+    };
+    let mut files = vec![main.clone()];
+    if kind == Store::Claude {
+        files.extend(claude_subagent_files(&main.with_extension("").join("subagents")));
+    }
+    let mut paths = std::collections::BTreeSet::new();
+    for file in &files {
+        paths.extend(scan_paths(file, kind)?);
+    }
+    Some(paths.into_iter().collect())
+}
+
+/// The most of one transcript [`scan_paths`] reads in one go: a longer file,
+/// or a longer stretch appended since the last scan, is read from that far
+/// before its end.
+const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
+/// How many subagent files of one session are read.
+const MAX_SUBAGENT_FILES: usize = 200;
+/// How many transcripts' scans are kept between reads.
+const MAX_SCANNED: usize = 256;
+
+/// Each transcript's scan so far: how far it was read (to the end of its last
+/// whole line), and the files the changes up to there named.
+#[derive(Clone, Default)]
+struct Scanned {
+    read_to: u64,
+    paths: std::collections::BTreeSet<String>,
+}
+
+static SCANNED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Scanned>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The files the transcript at `path` records a change to. A transcript only
+/// grows, so each read goes on from where the last stopped; one that is
+/// shorter than that was replaced and is read anew. `None` when it cannot be
+/// read.
+fn scan_paths(path: &Path, kind: Store) -> Option<std::collections::BTreeSet<String>> {
+    use app_core::sync::LockExt;
+    use std::io::{Read, Seek, SeekFrom};
+    // The agent writes its transcript: never a link, a FIFO or another special
+    // file (threat model gap 29).
+    let mut file = crate::services::home_io::open_regular(path)?;
+    let len = file.metadata().ok()?.len();
+    let known = SCANNED.lock_ok().get(path).cloned().filter(|known| known.read_to <= len);
+    let Scanned { read_to, mut paths } = known.unwrap_or_default();
+    if read_to == len {
+        return Some(paths);
+    }
+    let start = read_to.max(len.saturating_sub(MAX_SCAN_BYTES));
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::with_capacity((len - start) as usize);
+    file.take(len - start).read_to_end(&mut buf).ok()?;
+    // A line still being written is left for the next read.
+    let whole = buf.iter().rposition(|&b| b == b'\n').map_or(0, |at| at + 1);
+    let text = String::from_utf8_lossy(&buf[..whole]);
+    let mut lines = text.lines();
+    if start > read_to {
+        // Whatever came before the seek point is missing from the first line.
+        lines.next();
+    }
+    let mut changes = Vec::new();
+    for line in lines {
+        let candidate = match kind {
+            Store::Claude => line.contains("\"toolUseResult\"") && line.contains("\"filePath\""),
+            Store::Codex => line.contains("\"FileChange\""),
+        };
+        if !candidate {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        match kind {
+            Store::Claude => changes.extend(claude_change(&value)),
+            Store::Codex => codex_changes(&value, &mut changes),
+        }
+    }
+    paths.extend(paths_of(&changes));
+    let mut scanned = SCANNED.lock_ok();
+    if scanned.len() >= MAX_SCANNED && !scanned.contains_key(path) {
+        scanned.clear();
+    }
+    scanned.insert(path.to_path_buf(), Scanned { read_to: start + whole as u64, paths: paths.clone() });
+    Some(paths)
+}
+
+/// Every file `changes` touched: each change's path, and where a move put it.
+fn paths_of(changes: &[FileChange]) -> std::collections::BTreeSet<String> {
+    changes
+        .iter()
+        .flat_map(|change| std::iter::once(change.path.clone()).chain(change.moved_to.clone()))
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
+/// A Claude session's subagent transcripts (`agent-<id>.jsonl` in `folder`),
+/// at most [`MAX_SUBAGENT_FILES`] of them, in name order.
+fn claude_subagent_files(folder: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("agent-") && name.ends_with(".jsonl")
+        })
+        .map(|entry| entry.path())
+        .collect();
+    files.sort();
+    files.truncate(MAX_SUBAGENT_FILES);
+    files
+}
+
 /// An OpenCode tab's changes, from the session the Reader reads for it in
 /// the store `db`.
 fn opencode_changes(
@@ -502,6 +652,32 @@ mod tests {
         // Asked again with its version: unchanged, nothing re-sent.
         let again = read_changes(&path, Store::Claude, read.version.as_deref(), DEFAULT_LIMIT).unwrap();
         assert!(again.unchanged && again.changes.is_empty());
+    }
+
+    #[test]
+    fn the_whole_transcripts_paths_are_scanned_on_from_where_the_last_scan_stopped() {
+        let edit = |path: &str| {
+            serde_json::json!({"type": "user", "toolUseResult": {"filePath": path,
+                "structuredPatch": [{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-a", "+b"]}]}})
+            .to_string()
+        };
+        let (_dir, path) = write_lines(&[edit("/p/a.rs"), edit("/p/b.rs")]);
+        let first = scan_paths(&path, Store::Claude).unwrap();
+        assert_eq!(first.iter().map(String::as_str).collect::<Vec<_>>(), ["/p/a.rs", "/p/b.rs"]);
+        // Appended: a whole line and one still being written.
+        let mut more = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        use std::io::Write as _;
+        write!(more, "{}\n{}", edit("/p/c.rs"), &edit("/p/d.rs")[..20]).unwrap();
+        let second = scan_paths(&path, Store::Claude).unwrap();
+        assert_eq!(second.iter().map(String::as_str).collect::<Vec<_>>(), ["/p/a.rs", "/p/b.rs", "/p/c.rs"]);
+        // The half line is read once it is whole.
+        writeln!(more, "{}", &edit("/p/d.rs")[20..]).unwrap();
+        let third = scan_paths(&path, Store::Claude).unwrap();
+        assert!(third.contains("/p/d.rs"), "{third:?}");
+        // A file replaced by a shorter one is read anew.
+        std::fs::write(&path, edit("/p/z.rs") + "\n").unwrap();
+        let fresh = scan_paths(&path, Store::Claude).unwrap();
+        assert_eq!(fresh.iter().map(String::as_str).collect::<Vec<_>>(), ["/p/z.rs"]);
     }
 
     #[test]

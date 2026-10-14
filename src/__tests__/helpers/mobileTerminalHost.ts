@@ -2,7 +2,8 @@
  * The phone's Terminal screen talks to the desktop on two channels: the
  * terminal socket the tests drive (a `FakeWebSocket`), and a handful of HTTP
  * requests it makes on its own — the composer's status chip, the Focus view's
- * transcript, the outbox, PDF-markup questions, and the fire-and-forget report
+ * transcript, the Commit chip's uncommitted count, the outbox, PDF-markup
+ * questions, and the fire-and-forget report
  * of a sent prompt. Tests about the socket answer those as an unreachable
  * desktop would, with the network error a browser gives, so the screen takes
  * its offline path; any other request still fails the test as unmocked.
@@ -11,7 +12,7 @@
 import { vi } from "vitest";
 import { unmockedFetch } from "./testGuards";
 
-const SIDE_READS = /^\/api\/v1\/tabs\/[^/?]+\/(status|transcript|outbox|markup\/questions)(\?|$)/;
+const SIDE_READS = /^\/api\/v1\/tabs\/[^/?]+\/(status|transcript|uncommitted|outbox|markup\/questions)(\?|$)/;
 const PROMPT_REPORT = /^\/api\/v1\/tabs\/[^/?]+\/prompt$/;
 
 function urlOf(input: RequestInfo | URL): string {

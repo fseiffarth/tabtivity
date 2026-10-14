@@ -116,6 +116,8 @@ import { isCursorTab, readCursorPicker } from "../terminal/cursorAgent";
 import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../terminal/agentModes";
 import { agentFamily, agentInputWrites, bracketsAgentMessage } from "../terminal/composer";
 import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../terminal/commitPrompts";
+import { useChatUncommitted } from "../terminal/chatUncommitted";
+import { CommitFiles } from "./CommitFiles";
 import { agentWork } from "../terminal/agentBusy";
 import { chatTurns, isLiveEcho } from "../terminal/chatTurns";
 import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
@@ -2068,6 +2070,11 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   const transcriptVersion = useRef<string | undefined>();
   const transcriptRequest = useRef<AbortController>();
   useEffect(() => { transcriptVersion.current = transcript?.version; }, [transcript]);
+  /** What this chat changed and has not committed: the Commit chip's count
+   * and its sheet's list, read again each time the sheet opens. */
+  const [commitRefresh, setCommitRefresh] = useState(0);
+  const uncommitted = useChatUncommitted(tab.id, tab.kind === "agent", transcript?.version, commitRefresh);
+  const uncommittedCount = uncommitted?.available ? uncommitted.total : 0;
   /** Reads the stored session: on open, every TRANSCRIPT_POLL while the page
    * is visible, and TRANSCRIPT_SETTLE after the screen last changed. A read
    * that answers `unchanged` keeps what is shown; one that fails keeps it too
@@ -3626,13 +3633,6 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     () => (liveTail.length > 0 ? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel) : null),
     [liveTail, agentLabel],
   );
-  /** A fresh tab's chat waits on the CLI — still starting, or answered from
-   * here with no session recorded yet. A question on screen waits on the
-   * reader instead, so it never runs the clock. Past `STARTING_GRACE` the
-   * screen is shown: an error the CLI printed reaches the reader. */
-  const startWaiting = preSessionWait && !liveQuestion && (!cliReady || promptOnScreen);
-  useEffect(() => {
-    if (!startWaiting) return;
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
    * not read: the chat says so and offers the screen, rather than showing
    * nothing while the session waits. */
@@ -3640,6 +3640,13 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     () => sessionShown && !liveQuestion && dialogFooterShown(liveScreen),
     [sessionShown, liveQuestion, liveScreen],
   );
+  /** A fresh tab's chat waits on the CLI — still starting, or answered from
+   * here with no session recorded yet. A question on screen waits on the
+   * reader instead, so it never runs the clock. Past `STARTING_GRACE` the
+   * screen is shown: an error the CLI printed reaches the reader. */
+  const startWaiting = preSessionWait && !liveQuestion && (!cliReady || promptOnScreen);
+  useEffect(() => {
+    if (!startWaiting) return;
     const timer = window.setTimeout(() => setStartGaveUp(true), STARTING_GRACE);
     return () => window.clearTimeout(timer);
   }, [startWaiting]);
@@ -4215,6 +4222,11 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
                     {questionContext.length > 0 && <ReadableTurns lines={questionContext} chat={chat} agent={agentLabel} promptLabel={t("mobile.transcript.prompt")} columns={paneColumns.current} />}
                     <QuestionList prompt={liveQuestion} tabs={questionTabs} tabFocus={questionTabFocus} tabSubmit={questionTabSubmit} question={questionAsk} sent={sentSignature === questionSignature ? questionSent?.number : undefined} sendingLabel={t("mobile.transcript.answering")} onPick={answerQuestion} onType={answerQuestionText} onStep={stepQuestion} />
                   </div>}
+                  {unreadQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")} data-testid="question-unread">
+                    <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.questionUnread") && <> · {t("mobile.focus.untested")}</>}</small>
+                    <p className="transcript-screen-note">{t("mobile.transcript.questionUnread")}</p>
+                    <button type="button" className="transcript-screen-action" onClick={() => chooseView("terminal")}>{t("mobile.transcript.toTerminal")}</button>
+                  </div>}
                   {sessionBusy && <div className="transcript-working" role="status">
                     <span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span>
                     {workingModel ? t("mobile.focus.workingModel", { model: workingModel }) : t("mobile.focus.working")}
@@ -4222,11 +4234,6 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
                       {workFacts.join(" · ")}
                       {isUntested("mobile.focus.workingFacts") && <em> · {t("mobile.focus.untested")}</em>}
                     </small>}
-                  {unreadQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")} data-testid="question-unread">
-                    <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.questionUnread") && <> · {t("mobile.focus.untested")}</>}</small>
-                    <p className="transcript-screen-note">{t("mobile.transcript.questionUnread")}</p>
-                    <button type="button" className="transcript-screen-action" onClick={() => chooseView("terminal")}>{t("mobile.transcript.toTerminal")}</button>
-                  </div>}
                   </div>}
                   {/* A prompt sent while the agent worked waits below its work
                       until the desktop types it in: not taken yet. */}
@@ -4412,7 +4419,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
               : <button className="composer-prefix" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={clearConversation} aria-label={t("mobile.composer.clearChat")} title={t("mobile.composer.clearChat")}>{t("mobile.composer.clearChip")}</button>}
             {((undoable && isUntested("mobile.composer.undoClear")) || (undoing && isUntested("mobile.composer.undoing"))) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
             {/* Commit opens its sheet: one commit, or split into several. */}
-            <button className="composer-prefix composer-commit" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={() => setCommitSheet(true)} aria-label={t("mobile.commit.open")} aria-haspopup="dialog" aria-expanded={commitSheet} title={t("mobile.commit.open")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M2 12h6.5M15.5 12H22" /></svg></button>
+            <button className="composer-prefix composer-commit" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={() => { setCommitSheet(true); setCommitRefresh((count) => count + 1); }} aria-label={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")} aria-haspopup="dialog" aria-expanded={commitSheet} title={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M2 12h6.5M15.5 12H22" /></svg>{uncommittedCount > 0 && <span className="composer-commit-count" aria-hidden="true">{uncommittedCount > 99 ? "99+" : uncommittedCount}</span>}</button>
             </div>
           </>}
           {tab.kind !== "agent" && <>
@@ -4472,7 +4479,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       busy={!connected}
       onPick={pickCommit}
       onClose={() => setCommitSheet(false)}
-    />}
+    ><CommitFiles uncommitted={uncommitted} /></OptionSheet>}
     {desktopSheet && <OptionSheet
       title={t("mobile.add.desktop")}
       note={desktopFailure

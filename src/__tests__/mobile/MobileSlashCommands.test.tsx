@@ -315,6 +315,51 @@ describe(`${BRAND.display} Mobile slash commands — the composer`, () => {
     expect(readSlashCommands("claude")).toEqual([]);
   });
 
+  it("counts this chat's uncommitted files on the Commit chip and lists them in its sheet", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/uncommitted")) {
+        asked.push(url);
+        return Promise.resolve(new Response(JSON.stringify({
+          available: true,
+          total: 2,
+          files: [
+            { path: "src/a.ts", status: "modified" },
+            { path: "notes.md", status: "added", worktree: { label: "topic", branch: "topic" } },
+          ],
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ error: "not_found" }), { status: 404 }));
+    }));
+    render(<Terminal tab={CLAUDE_TAB} back={() => {}} />);
+    await settle();
+    await settle();
+    expect(asked[0]).toContain(`/api/v1/tabs/${CLAUDE_TAB.id}/uncommitted`);
+    const chip = screen.getByRole("button", { name: "Commit · 2 files from this chat not committed" });
+    expect(chip.querySelector(".composer-commit-count")?.textContent).toBe("2");
+
+    const reads = asked.length;
+    fireEvent.click(chip);
+    await settle();
+    expect(asked.length).toBe(reads + 1);
+    const sheet = screen.getByRole("dialog", { name: "Commit" });
+    expect(within(sheet).getByText("2 files from this chat not committed")).toBeTruthy();
+    expect(within(sheet).getByText("src/a.ts")).toBeTruthy();
+    expect(within(sheet).getByText("notes.md").closest("li")?.textContent).toContain("topic — ⎇ topic");
+    expect(within(sheet).getByText("Commit your changes only")).toBeTruthy();
+  });
+
+  it("shows no count when the host does not serve one", async () => {
+    render(<Terminal tab={CLAUDE_TAB} back={() => {}} />);
+    await settle();
+    const chip = screen.getByRole("button", { name: "Commit" });
+    expect(chip.querySelector(".composer-commit-count")).toBeNull();
+    fireEvent.click(chip);
+    const sheet = screen.getByRole("dialog", { name: "Commit" });
+    expect(sheet.querySelector(".commit-files")).toBeNull();
+  });
+
     it("offers only the chips a CLI documents", async () => {
     render(<Terminal tab={{ ...CLAUDE_TAB, id: "tab-g", label: "Gemini" }} back={() => {}} />);
     await settle();

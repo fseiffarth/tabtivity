@@ -80,7 +80,7 @@ function routeOutbox(inner: (url: string, init?: RequestInit) => Promise<Respons
     ? Promise.resolve(jsonResponse(200, { images: [], files: [] }))
     : url.includes("/transcript")
       ? Promise.resolve(jsonResponse(200, { transcript: { available: false, reason: "no_session", entries: [], truncated: false } }))
-      : url.endsWith("/status") || url.includes("/markup/questions")
+      : url.endsWith("/status") || url.endsWith("/uncommitted") || url.includes("/markup/questions")
         ? Promise.resolve(jsonResponse(503, { error: "desktop_unavailable" }))
         : inner(url, init);
 }

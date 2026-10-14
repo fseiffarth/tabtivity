@@ -841,6 +841,36 @@ export async function getTranscript(tabId: string, version?: string, limit?: num
   return transcript;
 }
 
+/** One file the chat changed that git still lists as changed. `path` is
+ * relative to its checkout; `worktree` names a linked worktree (or a box
+ * member's folder) it is in, never by path. */
+export interface UncommittedFile {
+  path: string;
+  status: "modified" | "added" | "deleted";
+  worktree?: { label: string; branch?: string };
+}
+/** What the chat changed and has not committed: a floor — an edit made
+ * through a shell command is not in the CLI's record. `available: false` for
+ * a CLI whose edits are not read, a remote project, or git not answering. */
+export interface ChatUncommitted {
+  available: boolean;
+  reason?: string;
+  files: UncommittedFile[];
+  total: number;
+}
+
+/** `GET /api/v1/tabs/{id}/uncommitted` — the Commit chip's count. A host
+ * older than the route answers a bodiless 404: `null`, and the chip shows no
+ * count. */
+export async function getUncommitted(tabId: string, signal?: AbortSignal): Promise<ChatUncommitted | null> {
+  try {
+    return await api<ChatUncommitted>(`/api/v1/tabs/${encodeURIComponent(tabId)}/uncommitted`, { signal });
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404 && reason.code === "request_failed") return null;
+    throw reason;
+  }
+}
+
 /** A file the phone dropped into the tab's project inbox. `reference` is
  * project-relative (`.tabtivity/inbox/<file>`) — the one path shape that crosses
  * this boundary, because it carries no host component and is exactly what the

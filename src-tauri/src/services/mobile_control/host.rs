@@ -29,6 +29,7 @@ use super::{
     admin,
     alarms,
     auth::AuthStore,
+    chat_uncommitted,
     config::{verify_tailscale_serve, HostConfig},
     discovery::{shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
@@ -3892,6 +3893,42 @@ async fn agent_transcript(
     }
 }
 
+/// `GET /api/v1/tabs/{tab_id}/uncommitted` — the files the agent tab's
+/// conversation changed that are still not committed, for the chat screen's
+/// Commit chip (`chat_uncommitted`). Answered here, window open or not: the
+/// CLI's own transcript and hardened local git reads. Read-only; cached per
+/// tab for `chat_uncommitted::TTL`.
+async fn tab_uncommitted(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some((project, tab)) = snapshot.tab(&tab_id) else {
+        return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+    };
+    if tab.public.kind != "agent" {
+        return api_error(StatusCode::BAD_REQUEST, "agent_tab_required");
+    }
+    if let Some(cached) = chat_uncommitted::cached(&tab_id, Instant::now()) {
+        return (StatusCode::OK, Json(json!(cached)));
+    }
+    let raw_id = project.raw_id.clone();
+    let roots = if project.roots.is_empty() { vec![project.root.clone()] } else { project.roots.clone() };
+    let tab = tab.clone();
+    let Ok(answer) = tokio::task::spawn_blocking(move || chat_uncommitted::for_tab(&raw_id, &roots, &tab)).await else {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "git_failed");
+    };
+    chat_uncommitted::remember(&tab_id, answer.clone(), Instant::now());
+    (StatusCode::OK, Json(json!(answer)))
+}
+
 /// A transcript as the phone may see it: the shell commands the desktop
 /// Reader shows beside its working row are command lines, and the folders the
 /// agent and its subagents work in are paths, neither of which crosses the
@@ -6317,6 +6354,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/tabs/{tab_id}/status", get(agent_status))
         .route("/api/v1/tabs/{tab_id}/transcript", get(agent_transcript))
+        .route("/api/v1/tabs/{tab_id}/uncommitted", get(tab_uncommitted))
         .route("/api/v1/tabs/{tab_id}/terminal", get(terminal))
         // The phone's drop box takes a whole photo; every other body stays at
         // the control-message limit below (the inner layer wins).
@@ -7170,6 +7208,7 @@ mod tests {
         "/api/v1/tabs/anything",
         "/api/v1/tabs/anything/schedules",
         "/api/v1/tabs/anything/transcript",
+        "/api/v1/tabs/anything/uncommitted",
         "/api/v1/projects/anything/prompts",
         "/api/v1/tabs/anything/desktop-images",
         "/api/v1/tabs/anything/markup/questions",

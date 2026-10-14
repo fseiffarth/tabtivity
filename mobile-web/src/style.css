@@ -1021,6 +1021,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* Its own label only: a bare `small` also caught every option's note in the
    list below and set it in tiny blue capitals. */
 .transcript-screen > small { padding:0 4px; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; letter-spacing:.05em; }
+/* A dialog the chat could not read: what to do instead, and the way there. */
+.transcript-screen-note { margin:0; padding:0 4px; color:#d9dce7; font-size:.86rem; line-height:1.4; }
+.transcript-screen-action { justify-self:start; }
 /* Under the stored session while the live screen shows the agent mid-turn. */
 .transcript-working { display:flex; align-items:center; gap:8px; padding:6px 10px; color:#9da3b6; font:500 .78rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; }
 .transcript-working-dots { display:inline-flex; gap:3px; }
@@ -1124,6 +1127,13 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* Commit: an icon chip, so a fourth chip still fits a narrow phone. */
 .composer-prefix.composer-commit { display:grid; place-items:center; width:30px; padding:0; }
 .composer-bar .composer-commit svg { width:17px; height:17px; }
+/* What this chat changed and has not committed, on the chip's corner. */
+.composer-prefix.composer-commit { position:relative; }
+.composer-commit-count { position:absolute; top:-6px; right:-7px; min-width:17px; height:17px; padding:0 4px; border-radius:9px; background:#d29922; color:#14161f; font-size:.66rem; font-weight:700; line-height:17px; text-align:center; font-variant-numeric:tabular-nums; pointer-events:none; }
+.commit-files { display:grid; gap:4px; }
+.commit-files .git-section { margin:0; }
+.commit-files code { font-size:.8rem; overflow-wrap:anywhere; }
+.commit-files .git-more > button { width:100%; padding:0; border:0; background:none; color:#9da3b6; font:inherit; text-align:center; }
 .composer-untested { color:#ffd36b; font-size:.7rem; font-style:normal; }
 /* The draft row: the textarea, while there is a draft a ✕ that empties it —
    a phone keyboard has no select-all, and a long dictated draft was otherwise
@@ -1824,6 +1834,3 @@ span.files-close { background:transparent; }
   .print-page:last-child { break-after:auto; }
   .print-page img { display:block; max-width:100%; max-height:98vh; margin:0 auto; }
 }
-/* A dialog the chat could not read: what to do instead, and the way there. */
-.transcript-screen-note { margin:0; padding:0 4px; color:#d9dce7; font-size:.86rem; line-height:1.4; }
-.transcript-screen-action { justify-self:start; }

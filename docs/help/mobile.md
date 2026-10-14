@@ -320,6 +320,18 @@ It works with the desktop closed, refreshes when you come back to the app or
 tap **↻ Refresh**, and covers projects only, not boxes or the root console.
 The ＋ sheet's **Agents start in** row lists the same worktrees.
 
+### What this chat has not committed
+
+In an agent tab's chat, the **Commit** chip next to **Clear** carries a
+number when files this conversation edited are still uncommitted — the
+number drops as they are committed, from the phone or the desktop. Tap
+the chip to see them above the commit choices: each file with "changed",
+"new" or "deleted", and the worktree it is in when that is not the project
+folder. It works for Claude Code, Codex and OpenCode tabs, with the desktop
+closed too. Only the agent's own file edits are counted: a file it changed
+through a shell command (a script, `sed`, `git mv`) is not listed, and a
+remote project shows no number.
+
 ## Local models from the phone
 
 Home → **Local models** opens the Ollama models installed on the desktop
