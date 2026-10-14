@@ -883,17 +883,10 @@
   -webkit-backdrop-filter: blur(8px) saturate(120%);
 }
 
-/* Ambient color wash behind the glass chrome — flat single-color bg-main
-   gives blurred edges nothing to reveal; a faint tinted glow makes the
-   frosted panels read as glass over a scene instead of glass over a void. */
-[data-theme="fancy_dark"] .app-shell {
-  background-image:
-    radial-gradient(1200px 600px at 12% -10%, rgba(54, 197, 240, 0.09), transparent 60%),
-    radial-gradient(1000px 520px at 100% 0%, rgba(179, 136, 255, 0.08), transparent 55%);
-}
-
-[data-theme="light_lavender"] .app-shell {
-  background-image:
-    radial-gradient(1200px 600px at 12% -10%, rgba(124, 92, 219, 0.08), transparent 60%),
-    radial-gradient(1000px 520px at 100% 0%, rgba(157, 110, 203, 0.07), transparent 55%);
-}
+/* No ambient color wash behind the chrome (there were two faint radial
+   gradients on .app-shell here). WebKitGTK paints in software with DMABUF off,
+   so every repaint anywhere in the window — a streaming terminal, a pill, the
+   caret — re-rasterised the gradient under the dirty rect, pixel by pixel.
+   Profiled 2026-10-14 under load: 40% of the renderer main thread was that
+   gradient alone, against a solid fill's memset, and typing waited behind it.
+   Keep big surfaces flat colours; a gradient belongs on small elements only. */
