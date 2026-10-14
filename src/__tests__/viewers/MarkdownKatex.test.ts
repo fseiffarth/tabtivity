@@ -16,6 +16,7 @@ vi.mock("mermaid", () => ({ default: { render: vi.fn(), initialize: vi.fn() } })
 
 import { enrichMarkdownDom } from "../../lib/viewers/markdownEnrich";
 import { renderMarkdown } from "../../lib/viewers/markdown";
+import { MARKDOWN_PRINT_CSS, buildPrintDoc } from "../../lib/viewers/print";
 
 async function rendered(markdown: string): Promise<HTMLElement> {
   const el = document.createElement("div");
@@ -113,5 +114,26 @@ describe("input the default strict mode only warns about", () => {
     expect(el.querySelector(".katex-error")).toBeNull();
     expect(el.querySelector(".md-math .katex math")).not.toBeNull();
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe("printing the preview", () => {
+  it("prints each expression once, as its MathML", async () => {
+    // What `handlePrint` hands the print pipeline: the enriched preview DOM in a
+    // standalone document that has no katex.css and none of KaTeX's fonts.
+    const el = await rendered("Inline $a^2$ and\n\n$$\\sum_i x_i$$");
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument!;
+    doc.open();
+    doc.write(buildPrintDoc(`<div class="markdown-body">${el.innerHTML}</div>`, MARKDOWN_PRINT_CSS));
+    doc.close();
+    const view = frame.contentWindow!;
+    const htmlCopies = Array.from(doc.querySelectorAll(".katex-html"));
+    const mathml = Array.from(doc.querySelectorAll(".katex-mathml"));
+    expect(htmlCopies).toHaveLength(2);
+    expect(mathml).toHaveLength(2);
+    for (const node of htmlCopies) expect(view.getComputedStyle(node).display).toBe("none");
+    for (const node of mathml) expect(view.getComputedStyle(node).display).not.toBe("none");
   });
 });
