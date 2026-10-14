@@ -330,7 +330,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * the new marks. Once the agent has finished, **Reload PDF** draws the file
  * as it is now (or its newer copy, `refresh`) under the same layer.
  */
-export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, adoptFrom, toChat }: {
+export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, adoptFrom, toChat, startMarking = false }: {
   tabId?: string;
   /** The project the file belongs to — the phone-side layer's key. */
   projectId?: string;
@@ -373,6 +373,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** Tucks the view away behind the host tab's chat, still mounted, with the
    * file's name for the chat's way back (`Terminal`'s `markupAway`). */
   toChat?: (name: string) => void;
+  /** The reader opens marking whatever this phone's "PDFs open in" says — the
+   * files library's **Mark up** asked for it. */
+  startMarking?: boolean;
 }) {
   const t = useT();
   /** The file shown — the host's, until a Reload finds a newer one. */
@@ -451,7 +454,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * Automatic — once only the pen draws, where fingers scroll all the same. */
   const [marking, setMarking] = useState(() => {
     if (!canMark) return false;
-    if (!reading) return true;
+    if (!reading || startMarking) return true;
     const open = readMarkupOpen();
     return open === "markup" || (open === "auto" && readPenMode() === "pen");
   });

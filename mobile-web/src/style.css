@@ -1301,7 +1301,7 @@ span.files-close { background:transparent; }
 .files-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(104px,1fr)); gap:14px 10px; margin:0; padding:0 4px; list-style:none; }
 .files-tile { position:relative; display:grid; align-content:start; gap:4px; min-width:0; }
 .files-tile-open { display:grid; gap:3px; min-width:0; padding:0; border:0; background:transparent; color:#d8e2f5; text-align:left; }
-.files-tile-cover { display:grid; place-items:center; aspect-ratio:4 / 5; overflow:hidden; border:1px solid #2b3040; border-radius:10px; background:#1e2230; }
+.files-tile-cover { position:relative; display:grid; place-items:center; aspect-ratio:4 / 5; overflow:hidden; border:1px solid #2b3040; border-radius:10px; background:#1e2230; }
 .files-tile-cover .files-icon { display:grid; place-items:center; width:56px; height:56px; border-radius:14px; background:#252a3a; color:#aab2c5; }
 .files-tile-cover .files-icon svg { width:30px; height:30px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
 .files-tile-cover .files-icon-dir { background:#1d2a44; color:#8fb8ff; }
@@ -1319,6 +1319,17 @@ span.files-close { background:transparent; }
 .files-grid .files-section button { display:flex; align-items:center; width:100%; text-align:left; }
 .files-grid .files-section svg { fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 .files-grid .files-share-error { padding:0 2px; }
+/* A thumbnail lies over the kind icon and fades in (opacity only); a folder's
+   colour is inline on the cover and its icon. */
+.files-thumb { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:top center; opacity:0; transition:opacity .2s ease-out; }
+.files-thumb.shown { opacity:1; }
+@media (prefers-reduced-motion:reduce) { .files-thumb { transition:none; } }
+/* Favorites (a sideways strip of tiles at the root) and recent files. */
+.files-saved { display:grid; gap:8px; min-width:0; }
+.files-saved h3 { margin:0; padding:0 4px; color:#98a0b4; font-size:.76rem; font-weight:650; letter-spacing:.04em; text-transform:uppercase; }
+.files-strip { display:flex; gap:10px; overflow-x:auto; overscroll-behavior-x:contain; padding-bottom:4px; scrollbar-width:none; }
+.files-strip > .files-tile { flex:0 0 96px; }
+.files-stale { opacity:.45; }
 /* The search box under the head, and a hit's folder above its times. */
 .files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
 .files-list small.files-hit-place { overflow:hidden; color:#8fb8ff; text-overflow:ellipsis; white-space:nowrap; }

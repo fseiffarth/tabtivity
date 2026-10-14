@@ -10,6 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_INBOX_FILE } from "../../../mobile-web/src/api";
+import { FilesLibrary } from "../../../mobile-web/src/components/FilesLibrary";
 import { Project } from "../../../mobile-web/src/screens/Project";
 import { storageKey } from "../../../src/lib/brand";
 
@@ -334,7 +335,7 @@ describe("Mobile project — read-only file browser", () => {
     fireEvent.click(await screen.findByRole("button", { name: "More for main.rs" }));
     const menu = screen.getByRole("dialog", { name: "main.rs" });
     expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== "✕"))
-      .toEqual(["Open", "Show in folder"]);
+      .toEqual(["Open", "Favorite", "Show in folder"]);
     fireEvent.click(within(menu).getByRole("button", { name: "Show in folder" }));
     await screen.findByRole("button", { name: "Open the folder deep" });
     expect((screen.getByRole("searchbox", { name: "Search the project's files" }) as HTMLInputElement).value).toBe("");
@@ -760,5 +761,225 @@ describe("Mobile project — Upload here", () => {
     await within(sheet).findByRole("button", { name: "Open b.txt" });
     expect(within(sheet).queryByText("The folder could not be read.")).toBeNull();
     expect(within(sheet).getByRole("button", { name: /^Upload here/ })).toBeTruthy();
+  });
+});
+
+describe("Mobile project — favorites, recent files, folder colours, thumbnails", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Picks `label` in `name`'s item menu (▾ / ⋯). */
+  function itemPick(library: HTMLElement, name: string, label: string) {
+    fireEvent.click(within(library).getByRole("button", { name: `More for ${name}` }));
+    fireEvent.click(within(screen.getByRole("dialog", { name })).getByRole("button", { name: label }));
+  }
+  const strip = (library: HTMLElement) => within(library).queryByRole("region", { name: "Favorites" });
+  /** The folder's own listing, below the strip. */
+  const listed = (library: HTMLElement, folder: string) => within(within(library).getByRole("list", { name: folder }));
+
+  it("stars a folder and a file into the root's strip, opens them from there, and unstars them", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    let library = await openLibrary();
+    await within(library).findByRole("button", { name: "Open the folder src" });
+    expect(strip(library)).toBeNull();
+
+    itemPick(library, "src", "Favorite");
+    // A file deeper down keeps the folders above it.
+    fireEvent.click(listed(library, "Alpha").getByRole("button", { name: "Open the folder src" }));
+    await within(library).findByRole("button", { name: "Open main.rs" });
+    itemPick(library, "main.rs", "Favorite");
+    fireEvent.click(within(library).getByRole("button", { name: "Up to Alpha" }));
+    await within(library).findByRole("button", { name: "Open notes.md" });
+
+    const favorites = strip(library)!;
+    expect(Array.from(favorites.querySelectorAll(".files-tile-open strong")).map((name) => name.textContent)).toEqual(["main.rs", "src"]);
+    expect(Array.from(favorites.querySelectorAll(".files-hit-place")).map((place) => place.textContent)).toEqual(["src", "Project folder"]);
+    expect(JSON.parse(localStorage.getItem(storageKey("mobile.filesFavorites")) ?? "{}").p1).toEqual([
+      { kind: "text/plain; charset=utf-8", name: "main.rs", token: "tok-main", trail: [{ token: "tok-src", name: "src" }] },
+      { kind: "dir", name: "src", token: "tok-src", trail: [] },
+    ]);
+
+    // A favorite folder is walked into, found again by its folder's listing.
+    fireEvent.click(within(favorites).getByRole("button", { name: "Open the folder src" }));
+    await within(library).findByRole("button", { name: "Open the folder deep" });
+    expect(strip(library)).toBeNull();
+    fireEvent.click(within(library).getByRole("button", { name: "Up to Alpha" }));
+    await within(library).findByRole("button", { name: "Open notes.md" });
+
+    // A favorite file opens in the viewer, the library standing in its folder.
+    fireEvent.click(within(strip(library)!).getByRole("button", { name: "Open main.rs" }));
+    const viewer = await screen.findByRole("dialog", { name: "main.rs" });
+    fireEvent.click(within(viewer).getByRole("button", { name: "Close" }));
+    await screen.findByRole("button", { name: "Open the folder deep" });
+    // The viewer took the library's place; this is the library drawn again.
+    library = screen.getByRole("dialog", { name: "Files" });
+
+    // Show in folder from the strip, and Unfavorite from any menu.
+    fireEvent.click(within(library).getByRole("button", { name: "Up to Alpha" }));
+    await within(library).findByRole("button", { name: "Open notes.md" });
+    fireEvent.click(within(strip(library)!).getByRole("button", { name: "More for main.rs" }));
+    const menu = screen.getByRole("dialog", { name: "main.rs" });
+    expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== "✕"))
+      .toEqual(["Open", "Unfavorite", "Show in folder"]);
+    fireEvent.click(within(menu).getByRole("button", { name: "Show in folder" }));
+    await within(library).findByRole("button", { name: "Open the folder deep" });
+    itemPick(library, "main.rs", "Unfavorite");
+    fireEvent.click(within(library).getByRole("button", { name: "Up to Alpha" }));
+    await within(library).findByRole("button", { name: "Open notes.md" });
+    fireEvent.click(listed(library, "Alpha").getByRole("button", { name: "More for src" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "src" })).getByRole("button", { name: "Unfavorite" }));
+    expect(strip(library)).toBeNull();
+  });
+
+  it("dims a favorite that was moved or deleted, says so, and offers Remove", async () => {
+    localStorage.setItem(storageKey("mobile.filesFavorites"), JSON.stringify({
+      p1: [
+        { kind: "application/pdf", name: "old.pdf", token: "tok-old", trail: [] },
+        // Its folder's token no longer opens either.
+        { kind: "dir", name: "gone", token: "tok-gone", trail: [{ token: "tok-renamed", name: "renamed" }] },
+      ],
+    }));
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const library = await openLibrary();
+    await within(library).findByRole("button", { name: "Open the folder src" });
+    const favorites = strip(library)!;
+
+    fireEvent.click(within(favorites).getByRole("button", { name: "Open old.pdf" }));
+    const sheet = await screen.findByRole("dialog", { name: "old.pdf" });
+    expect(sheet.textContent).toContain("old.pdf was moved or deleted.");
+    expect(within(favorites).getByRole("button", { name: "Open old.pdf" }).closest("li")?.className).toContain("files-stale");
+    fireEvent.click(within(sheet).getByRole("button", { name: "Remove" }));
+
+    fireEvent.click(within(strip(library)!).getByRole("button", { name: "Open the folder gone" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "gone" })).getByRole("button", { name: "Remove" }));
+    expect(strip(library)).toBeNull();
+    expect(localStorage.getItem(storageKey("mobile.filesFavorites"))).toBeNull();
+    // Nothing opened meanwhile.
+    expect(screen.queryByRole("dialog", { name: "old.pdf" })).toBeNull();
+  });
+
+  it("lists the files opened here under the focused empty search box, newest first, and opens them again", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const library = await openLibrary();
+    const search = within(library).getByRole("searchbox", { name: "Search the project's files" });
+    fireEvent.focus(search);
+    expect(within(library).getByRole("region", { name: "Recent" }).textContent).toContain("No files opened here yet.");
+    fireEvent.blur(search);
+
+    fireEvent.click(await within(library).findByRole("button", { name: "Open notes.md" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Close" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open the folder src" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open main.rs" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "main.rs" })).getByRole("button", { name: "Close" }));
+    // A folder walked into is not a recent.
+    await screen.findByRole("button", { name: "Open the folder deep" });
+
+    const box = screen.getByRole("searchbox", { name: "Search the project's files" });
+    fireEvent.focus(box);
+    const recent = screen.getByRole("region", { name: "Recent" });
+    expect(Array.from(recent.querySelectorAll(".files-tile-open strong")).map((name) => name.textContent)).toEqual(["main.rs", "notes.md"]);
+    // In place of the listing, while the box is empty.
+    expect(screen.queryByRole("button", { name: "Open the folder deep" })).toBeNull();
+    fireEvent.change(box, { target: { value: "ma" } });
+    expect(screen.queryByRole("region", { name: "Recent" })).toBeNull();
+    fireEvent.change(box, { target: { value: "" } });
+
+    fireEvent.click(within(screen.getByRole("region", { name: "Recent" })).getByRole("button", { name: "Open notes.md" }));
+    const text = await screen.findByRole("dialog", { name: "notes.md" });
+    await waitFor(() => expect(text.querySelector("pre")?.textContent).toBe("# Hello\n"));
+    fireEvent.click(within(text).getByRole("button", { name: "Close" }));
+    // It opened in its own folder, the root, and is the newest recent now.
+    await screen.findByRole("button", { name: "Open the folder src" });
+    expect(JSON.parse(localStorage.getItem(storageKey("mobile.filesRecents")) ?? "{}").p1.map((item: { name: string }) => item.name))
+      .toEqual(["notes.md", "main.rs"]);
+  });
+
+  it("colours a folder on this phone: its tile's cover, its list icon, and No colour clears it", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const library = await openLibrary();
+    await within(library).findByRole("button", { name: "Open the folder src" });
+    // Files have no colour entry.
+    fireEvent.click(within(library).getByRole("button", { name: "More for notes.md" }));
+    expect(within(screen.getByRole("dialog", { name: "notes.md" })).queryByRole("button", { name: "Folder colour" })).toBeNull();
+    fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Close" }));
+
+    itemPick(library, "src", "Folder colour");
+    const sheet = screen.getByRole("dialog", { name: "Colour for src" });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Green" }));
+    expect(within(sheet).getByRole("button", { name: "Green" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(sheet).getByRole("button", { name: "Done" }));
+    const icon = () => within(library).getByRole("button", { name: "Open the folder src" }).querySelector<HTMLElement>(".files-icon")!;
+    expect(icon().style.color).toBe("rgb(89, 185, 106)");
+    expect(JSON.parse(localStorage.getItem(storageKey("mobile.filesFolderColors")) ?? "{}")).toEqual({ p1: [["src", "green"]] });
+
+    viewPick(library, "List");
+    expect(icon().style.color).toBe("rgb(89, 185, 106)");
+    // An id this bundle does not know draws as no colour.
+    localStorage.setItem(storageKey("mobile.filesFolderColors"), JSON.stringify({ p1: [["src", "magenta"]] }));
+    itemPick(library, "src", "Folder colour");
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Colour for src" })).getByRole("button", { name: "No colour" }));
+    expect(icon().style.color).toBe("");
+    expect(localStorage.getItem(storageKey("mobile.filesFolderColors"))).toBeNull();
+  });
+
+  it("watches covers for thumbnails only with Thumbnails on; off, the kind icons stay", async () => {
+    const observed: Element[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      observe(node: Element) { observed.push(node); }
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.stubGlobal("indexedDB", {});
+    vi.stubGlobal("createImageBitmap", () => Promise.reject(new Error("decode")));
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const library = await openLibrary();
+    await within(library).findByRole("button", { name: "Open the folder src" });
+    // On by default: the picture's and the PDF's covers wait to be on screen.
+    await waitFor(() => expect(observed.map((node) => node.closest("li")?.querySelector("strong")?.textContent).sort()).toEqual(["paper.pdf", "plot.png"]));
+
+    viewPick(library, "Thumbnails");
+    observed.length = 0;
+    expect(JSON.parse(localStorage.getItem(storageKey("mobile.filesLibraryView")) ?? "{}")).toMatchObject({ thumbs: false });
+    const cover = within(library).getByRole("button", { name: "Open plot.png" }).querySelector(".files-tile-cover")!;
+    expect(cover.querySelector(".files-icon-image")).not.toBeNull();
+    expect(library.querySelector("img.files-thumb")).toBeNull();
+    // Nothing was fetched for a cover.
+    const fetch = vi.mocked(globalThis.fetch);
+    expect(fetch.mock.calls.some(([url]) => String(url).includes("/files/raw"))).toBe(false);
+    expect(observed).toEqual([]);
+  });
+
+  it("offers Mark up for a PDF and a picture where the library can, and opens the viewer marking", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<FilesLibrary projectId="p1" label="Alpha" onClose={() => {}} showTab={() => {}} />);
+    const library = await screen.findByRole("dialog", { name: "Files" });
+    await within(library).findByRole("button", { name: "Open the folder src" });
+    for (const name of ["notes.md", "src"]) {
+      fireEvent.click(within(library).getByRole("button", { name: `More for ${name}` }));
+      expect(within(screen.getByRole("dialog", { name })).queryByRole("button", { name: "Mark up" })).toBeNull();
+      fireEvent.click(within(screen.getByRole("dialog", { name })).getByRole("button", { name: "Close" }));
+    }
+
+    // Tapped, the PDF reads first; Mark up opens it marking.
+    fireEvent.click(within(library).getByRole("button", { name: "Open paper.pdf" }));
+    const pdf = screen.getByRole("dialog", { name: "paper.pdf" });
+    expect(pdf.className).not.toContain("marking");
+    expect(pdf.querySelector(".markup-toggle")).not.toBeNull();
+    fireEvent.click(within(pdf).getByRole("button", { name: "Close" }));
+    itemPick(await screen.findByRole("dialog", { name: "Files" }), "paper.pdf", "Mark up");
+    const marking = document.querySelector(".markup-view.marking");
+    expect(marking?.querySelector(".markup-submit")).not.toBeNull();
   });
 });
