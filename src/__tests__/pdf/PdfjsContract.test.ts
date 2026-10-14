@@ -307,4 +307,60 @@ describe("repaint fingerprint (pageFingerprint.ts)", () => {
     // Half a turn keeps the sheet's size, so only the turn itself can tell them apart.
     expect(samePage(one, await fingerprintPage(p1, 180))).toBe(false);
   });
+
+  // The quiet reload compares a page of the NEW document with the one painted
+  // from the old: that is the only comparison the fingerprint exists for.
+  it("matches an unchanged page in a reloaded document", async () => {
+    const reloaded = await loadPdf(paperPdf());
+    try {
+      const before = await fingerprintPage(await doc.getPage(1));
+      expect(samePage(before, await fingerprintPage(await reloaded.getPage(1)))).toBe(true);
+    } finally {
+      await reloaded.loadingTask.destroy();
+    }
+  });
+
+  it("does not depend on the order a load happened to parse the pages in", async () => {
+    // Page 1 sets Helvetica, page 2 Times then Helvetica. pdf.js numbers fonts
+    // per document in the order it meets them.
+    const twoFonts = () =>
+      assemblePdf([
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources 7 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R /Resources 7 0 R >>",
+        stream("", "BT /F1 12 Tf 72 700 Td (One) Tj ET"),
+        stream("", "BT /F2 12 Tf 72 700 Td (Two) Tj ET BT /F1 12 Tf 72 680 Td (Two) Tj ET"),
+        "<< /Font << /F1 8 0 R /F2 9 0 R >> >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>",
+      ]);
+    const [a, b] = await Promise.all([loadPdf(twoFonts()), loadPdf(twoFonts())]);
+    try {
+      await (await a.getPage(1)).getOperatorList(); // a meets Helvetica first …
+      const pageA = await a.getPage(2);
+      const pageB = await b.getPage(2); // … b meets Times first
+      const fonts = async (p: typeof pageA) => {
+        const ops = await p.getOperatorList();
+        return ops.argsArray
+          .filter((_, i) => ops.fnArray[i] === pdfjs.OPS.setFont)
+          .map((args) => String((args as unknown[])[0]).replace(/^g_d\d+_/, ""));
+      };
+      // The premise: the same page's fonts carry different names in the two loads.
+      expect(await fonts(pageA)).not.toEqual(await fonts(pageB));
+      expect(samePage(await fingerprintPage(pageA), await fingerprintPage(pageB))).toBe(true);
+    } finally {
+      await Promise.all([a.loadingTask.destroy(), b.loadingTask.destroy()]);
+    }
+  });
+
+  it("still tells a changed word apart across loads", async () => {
+    const [a, b] = await Promise.all([loadPdf(onePagePdf("Draft one")), loadPdf(onePagePdf("Draft two"))]);
+    try {
+      const fa = await fingerprintPage(await a.getPage(1));
+      expect(samePage(fa, await fingerprintPage(await b.getPage(1)))).toBe(false);
+    } finally {
+      await Promise.all([a.loadingTask.destroy(), b.loadingTask.destroy()]);
+    }
+  });
 });

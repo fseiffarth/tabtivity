@@ -55,13 +55,34 @@ function mixNumber(h: number, v: number): number {
  *  rest by length. Glyph runs are the long case and stay well under this. */
 const MAX_ELEMS = 512;
 
-function mixValue(h: number, v: unknown, depth: number): number {
+/**
+ * pdf.js names a font — and a cached image or Type3 glyph — after the DOCUMENT
+ * that loaded it: `g_d3_f2` is the second font document load 3 met. Both numbers
+ * are new on a reload (every `getDocument` is the next `d<n>`, and fonts are
+ * numbered in the order pages happened to be parsed), so hashing the name made
+ * every text page of a recompiled PDF look changed and the quiet reload repaint
+ * all of them. Such a name is hashed as the order it first appears in on this
+ * page instead: the same page draws its fonts in the same order whatever the
+ * load called them, and a page that switches fonts still changes the order.
+ */
+const DOC_SCOPED_NAME = /^g_d\d+_/;
+
+/** Per-page numbering of the document-scoped names one fingerprint met. */
+type NameOrder = Map<string, number>;
+
+function mixName(h: number, name: string, names: NameOrder): number {
+  let n = names.get(name);
+  if (n === undefined) names.set(name, (n = names.size));
+  return mix(mix(h, 0x6e), n);
+}
+
+function mixValue(h: number, v: unknown, depth: number, names: NameOrder): number {
   if (v == null) return mix(h, 1);
   switch (typeof v) {
     case "number":
       return mixNumber(h, v);
     case "string":
-      return mixString(h, v);
+      return DOC_SCOPED_NAME.test(v) ? mixName(h, v, names) : mixString(h, v);
     case "boolean":
       return mix(h, v ? 2 : 3);
     case "object":
@@ -81,7 +102,7 @@ function mixValue(h: number, v: unknown, depth: number): number {
     let out = mix(h, v.length);
     if (depth <= 0) return out;
     const n = Math.min(v.length, MAX_ELEMS);
-    for (let i = 0; i < n; i++) out = mixValue(out, v[i], depth - 1);
+    for (let i = 0; i < n; i++) out = mixValue(out, v[i], depth - 1, names);
     return out;
   }
   const o = v as Record<string, unknown>;
@@ -99,7 +120,7 @@ function mixValue(h: number, v: unknown, depth: number): number {
   const keys = Object.keys(o).sort().slice(0, 32);
   for (const k of keys) {
     out = mixString(out, k);
-    out = mixValue(out, o[k], depth - 1);
+    out = mixValue(out, o[k], depth - 1, names);
   }
   return out;
 }
@@ -131,7 +152,8 @@ export async function fingerprintPage(
     const args = ops.argsArray as ArrayLike<unknown>;
     h = mix(h, fns.length);
     for (let i = 0; i < fns.length; i++) h = mix(h, fns[i]);
-    for (let i = 0; i < args.length; i++) h = mixValue(h, args[i], 3);
+    const names: NameOrder = new Map();
+    for (let i = 0; i < args.length; i++) h = mixValue(h, args[i], 3, names);
     return `${fns.length}:${h.toString(16)}`;
   } catch {
     return null;
