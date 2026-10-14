@@ -34,10 +34,9 @@ env:
 #
 # `npm ci --ignore-scripts`: no dependency's install script runs here, where
 # a compromised package's postinstall would execute with the job's token and
-# secrets. The lock's only install scripts are esbuild's (a binary check and
-# a startup optimisation; it finds its binary through its @esbuild/<platform>
-# optional package without it) and fsevents' (a rebuild of a prebuilt
-# binary). A new dependency that truly needs its script fails loudly here.
+# secrets. The lock's only install script is fsevents' (a rebuild of a
+# prebuilt binary). A new dependency that truly needs its script fails
+# loudly here.
 jobs:
   # The pre-push hook runs this same scan, but the hook needs
   # `git config core.hooksPath .githooks` per clone and a fresh clone has it
