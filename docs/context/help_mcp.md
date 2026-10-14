@@ -49,3 +49,13 @@ Why it is shaped this way:
 
 Frontend hooks: `root_mcp_status.help` (`enabled`, `wiredClis`, `topics`) and
 the Tauri commands `help_search`, `help_read`, `help_topics` (camelCase).
+
+**The header's ? (`header/helpAgent.ts`).** It opens the default agent as a
+ROOT tab in the root console, primed by `initialInput`: no project folder as
+cwd, closing the console ends nothing. It ignores the 🧠 "Root" chip on
+purpose — since "MCP" is its own chip, Root only shapes the root + menu, and a
+root tab without the MCP chip is handed no root tools at spawn
+(`grant_root`), only the help lane. Vibe is picked as Mistral's cloud agent
+only when there is no local model to drive: installing it is how the intro
+sets up Local Model tabs. No agent and no local model → the intro's Agent CLIs
+and Local models pages in one dialog (`HelpAgentSetup`).

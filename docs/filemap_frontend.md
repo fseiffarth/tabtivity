@@ -455,3 +455,4 @@ stores stay at the top. No `index.ts` barrels.
 | `lib/alertDone.ts` | What the Alerts ✓ does (side panel + phone): card → `toggleTaskDone`, mail → clear local priority mark, … Nothing is ever deleted. |
 | `lib/alerts.ts` | Alerts selectors (pure): merge mail/events/tasks, severity then time. `now` is a parameter; lookahead in whole days, no backward limit. |
 | `lib/calendar/calendarCategories.ts` | Event category → color palette. |
+| `header/HelpAgentButton.tsx` + `helpAgent.ts` + `HelpAgentSetup.tsx` | Header ? : opens the default agent (else a help-wired one, else the local model via Vibe) as a primed "Help" root tab in the root console, reused while live; with none, a dialog mounting the intro's Agent CLIs + Local models pages as the two install paths. |

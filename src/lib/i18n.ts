@@ -10082,3 +10082,16 @@ export function useT() {
     [lang, dictGen],
   );
 }
+  "helpAgent.button": "Ask the help agent about {app}",
+  "helpAgent.tabLabel": "Help · {agent}",
+  "helpAgent.prompt": "I'd like help using {app}. Answer my questions from {app}'s built-in help: search it with the {slug}-help tools, read the best section and say which topic you used. If those tools are not available to you, tell me so instead of guessing. To start, greet me briefly and ask what I want to do in {app}.",
+  "helpAgent.setup.title": "Set up a help agent",
+  "helpAgent.setup.waysLabel": "Two ways",
+  "helpAgent.setup.lead": "The ? button opens an agent that answers questions about {app} from its built-in help. No agent CLI or local model is set up on this machine yet — pick one of two ways:",
+  "helpAgent.setup.cloudTitle": "Cloud agent",
+  "helpAgent.setup.cloudLead": "An agent CLI such as Claude Code or Codex: it runs on this machine and thinks on its provider's servers. Install it in one click, then sign in once in your web browser. Claude and Codex use the help tools on their own.",
+  "helpAgent.setup.localTitle": "Local model",
+  "helpAgent.setup.localLead": "A model that runs entirely on this machine through Ollama: no account, and nothing leaves the computer. Install Ollama, pull a model that fits your memory and use it for tabs. Questions about {app} work best with a model that supports tool calling and wears the MCP chip in the Models & agents menu.",
+  "helpAgent.setup.askAgain": "Ask the help agent",
+  "helpAgent.setup.stillNone": "Still no agent found — finish the install (and the sign-in) first.",
+  "helpAgent.setup.localFailed": "The local model would not start. Check that Ollama is running and the model is pulled.",

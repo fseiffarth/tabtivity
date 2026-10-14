@@ -1,7 +1,7 @@
 ---
 id: ask-tabtivity
 title: Ask Tabtivity — the built-in help for agents
-keywords: [help, ask, question, mcp, tabtivity-help, documentation, how to, agent tools, search help]
+keywords: [help, ask, question, help button, question mark, install agent, mcp, tabtivity-help, documentation, how to, agent tools, search help]
 related: [getting-started, troubleshooting, root-console]
 ---
 
@@ -11,7 +11,24 @@ Tabtivity and it looks the answer up here instead of guessing.
 
 ## How to use it
 
-Just ask in an agent tab, in plain words:
+The quickest way is the **?** button in the top bar, beside the gear. It opens
+your default agent in a **Help** tab in the root console (the floating window
+over your projects), already told to answer from this help. Ask your question
+there; a second click brings the same Help tab back while it is running. If
+the default agent is not installed, the button picks Claude or Codex if one
+is, then any installed agent, then your local model (through Mistral Vibe).
+
+If no agent CLI and no local model is set up, the button shows how to install
+one, two ways:
+
+- **Cloud agent** — an agent CLI such as Claude Code or Codex: one click
+  installs it in a terminal tab, then you sign in once in your web browser.
+- **Local model** — Ollama runs a model entirely on this machine, no account
+  needed: install Ollama, pull a recommended model and use it for tabs.
+
+When the install is done, press **Ask the help agent** in that dialog.
+
+You can also just ask in any agent tab, in plain words:
 
 - "How do I install a local model in Tabtivity?"
 - "Using the tabtivity-help tools: how do I sync a remote project?"

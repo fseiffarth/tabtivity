@@ -766,3 +766,4 @@ export function isUntested(id: UntestedId | string | undefined | null | false): 
 export function untestedEntries(): (UntestedEntry & { id: string })[] {
   return Object.entries(UNTESTED as Record<string, UntestedEntry>).map(([id, e]) => ({ id, ...e }));
 }
+  "desktop.helpAgent": { area: "shell", what: "Header ? button · opens the default agent as a Help tab in the root console (reused while live); no agent → cloud/local install dialog" },

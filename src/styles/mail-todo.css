@@ -78,6 +78,7 @@
 .todo-indicator-btn,
 .inbox-indicator-btn,
 .local-model-btn,
+.help-agent-btn,
 .global-apps-menu-btn:has(> .settings-menu-icon) {
   min-width: 40px;
   height: 40px;
@@ -93,6 +94,7 @@
 .calendar-indicator-icon,
 .todo-indicator-icon,
 .inbox-indicator-icon,
+.help-agent-icon,
 .settings-menu-icon {
   width: 20px;
   height: 20px;
