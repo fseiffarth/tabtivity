@@ -243,6 +243,21 @@ Claude's `/fast` — different thing.
   transcript records `<command-message>` before `<command-name>` with no
   `<command-args>`, which the last-prompt reader still shows as `/name`. Its
   exit line now prints `claude --resume <id>`; Tabtivity reads none of it.
+  Re-checked against 2.1.300 (2026-10-14, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.299 run of the same dump: keys
+  identical on all 17 payloads, `session_id` equal to the `--session-id`
+  passed, `sed` matching `jq` throughout; `-p --resume` of a `plan` session
+  still reports the default; `/usage` three meters, every reset resolved;
+  `--help` and the notification-type/mode-label strings unchanged). 2.1.300
+  writes three new transcript record types, interactive and `-p` alike:
+  `api-request-shape` (system prompt + tools, once per shape),
+  `api-request` (per API call, `params.model`) and `api-request-blob`
+  (`{hash, message:{role, content[]}}` — a `message` without `usage`,
+  `timestamp` or a `user`/`assistant` `type`). They took 55% of a live
+  session's bytes. Every reader here gates on `type` (or on `usage` +
+  `timestamp`, or `toolUseResult`), so none counts a blob as a turn; the
+  model tag's 512 KiB tail is unaffected (the records precede the answer),
+  the prompt reader's growing tail just reaches further.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
