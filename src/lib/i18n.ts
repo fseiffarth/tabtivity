@@ -10095,3 +10095,5 @@ export function useT() {
   "helpAgent.setup.askAgain": "Ask the help agent",
   "helpAgent.setup.stillNone": "Still no agent found — finish the install (and the sign-in) first.",
   "helpAgent.setup.localFailed": "The local model would not start. Check that Ollama is running and the model is pulled.",
+  "mobile.transcript.questionUnread": "This question can't be shown in the chat — answer it in the Terminal view.",
+  "mobile.transcript.toTerminal": "Switch to Terminal",

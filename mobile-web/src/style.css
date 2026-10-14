@@ -1824,3 +1824,6 @@ span.files-close { background:transparent; }
   .print-page:last-child { break-after:auto; }
   .print-page img { display:block; max-width:100%; max-height:98vh; margin:0 auto; }
 }
+/* A dialog the chat could not read: what to do instead, and the way there. */
+.transcript-screen-note { margin:0; padding:0 4px; color:#d9dce7; font-size:.86rem; line-height:1.4; }
+.transcript-screen-action { justify-self:start; }

@@ -229,6 +229,28 @@ function readContinuation(
   return { label: text.slice(0, descriptionColumn).trim(), description: text.slice(descriptionColumn).trim() };
 }
 
+/** Claude Code's preview layout (AskUserQuestion with `preview`, 2.1.300)
+ * prints no notes, and wraps a label too long for its column one column left
+ * of where it started — under the space after `1.` — beside the panel:
+ *
+ *   ❯ 1. Full-screen library          ┌──────────────┐
+ *       (Recommended)                 │ ┌──────────┐ │
+ *     2. Keep the side drawer         │ │ Library  │ │
+ *
+ * Read as ordinary text, the wrap ended the run, `2.` started one of its own,
+ * and the question reached the chat as nothing at all. Held to that shape:
+ * text no more than a column short of the label's, the panel's frame beside
+ * it. Returns the label's next words, or `null` when the line is not one. */
+function readPanelWrap(text: string, labelColumn: number): string | null {
+  const indent = text.length - text.trimStart().length;
+  if (indent < labelColumn - 1) return null;
+  const split = COLUMN_SPLIT.exec(text.slice(indent));
+  if (!split) return null;
+  if (!PANEL_COLUMN.test(text.slice(indent + split.index + split[0].length))) return null;
+  const label = text.slice(indent, indent + split.index).trim();
+  return PANEL_COLUMN.test(label) ? null : label;
+}
+
 /** Whether `next` continues the label on `above` rather than starting the
  * row's note under it: its first word would not have fit on `above` in a pane
  * `columns` wide. Unknown width reads every such line as a note, as before. */
@@ -335,7 +357,32 @@ function readContext(lines: readonly SelectLineLike[], start: number): { questio
     // not a block of context: what it labels is the agent's message above.
     if (from === top && readQuestionTabs(lines[top].text)) block -= 1;
   }
-  return { question, context };
+  return { question, context: fencedContext(lines, question, context) };
+}
+
+/** Where a block fenced off between two rules starts, when the question sits
+ * right under the lower one. Claude Code 2.1.300's plan approval draws the
+ * plan that way —
+ *
+ *     Here is Claude's plan:
+ *     ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ *     Plan: Move the file list
+ *
+ *     1. Extract the data …
+ *     2. Build the view …    ↓
+ *     ────────────────────────
+ *     Claude has written up a plan and is ready to execute. …
+ *
+ * — with blanks inside, so read block by block it was its last paragraph's
+ * last lines: the phone showed a plan from the middle of item 1. This only
+ * ever moves `context` up, to the upper rule, never down. */
+function fencedContext(lines: readonly SelectLineLike[], question: number, context: number): number {
+  if (!lines[question]?.afterRule) return context;
+  for (let index = question - 1; index >= 0 && question - index <= DIALOG_LINES; index -= 1) {
+    if (busyRow(lines[index].text)) break;
+    if (lines[index].afterRule) return Math.min(index, context);
+  }
+  return context;
 }
 
 function readRow(text: string, option: RegExp): ReadRow | null {
@@ -411,6 +458,11 @@ export function readSelectPrompt(
     }
     if (!row) {
       const last = run?.options[run.options.length - 1];
+      const panelWrap = run && last ? readPanelWrap(text, run.labelColumn) : null;
+      if (panelWrap !== null && last) {
+        last.label = `${last.label} ${panelWrap}`.slice(0, MAX_LABEL);
+        continue;
+      }
       const labelWrap = last !== undefined && !last.description && wrapsLabel(lines[index - 1].text, text, columns);
       const more = run ? readContinuation(text, run.labelColumn, run.column, labelWrap) : null;
       if (more && last) {
@@ -465,6 +517,29 @@ export function readSelectPrompt(
     }
   }
   return readUnnumberedPrompt(lines, first, columns);
+}
+
+/** The key hints a select dialog prints under its rows: Claude Code's
+ * `Enter to select · ↑/↓ to navigate`, its `Enter to confirm`, Codex's
+ * `Press enter to confirm`. The input box's own hints name none of these. */
+const DIALOG_FOOTER = /\benter to (?:select|confirm|submit)\b|↑\s*\/?\s*↓\s+to\s+(?:navigate|move|select)\b/iu;
+/** Non-blank lines from the bottom the footer may sit above: a status line or
+ * two the CLI keeps drawing under a dialog. */
+const FOOTER_REACH = 4;
+
+/** Whether the bottom of the screen holds a select dialog's footer — a dialog
+ * is waiting on an answer, whether or not `readSelectPrompt` could read its
+ * rows. A reader that could not is to send the reader to the screen, never to
+ * show nothing. */
+export function dialogFooterShown(lines: readonly { text: string }[]): boolean {
+  let seen = 0;
+  for (let index = lines.length - 1; index >= 0 && seen < FOOTER_REACH; index -= 1) {
+    const text = lines[index].text;
+    if (!text.trim()) continue;
+    if (DIALOG_FOOTER.test(text)) return true;
+    seen += 1;
+  }
+  return false;
 }
 
 /** The highlighted row of a list that prints no numbers. No `>`: without a

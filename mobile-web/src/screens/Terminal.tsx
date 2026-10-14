@@ -87,6 +87,7 @@ import {
   questionTabKeys,
   readReviewStep,
   readSelectPrompt,
+  dialogFooterShown,
   revealSelectRow,
   sameSelectStep,
   selectKeys,
@@ -3632,6 +3633,13 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   const startWaiting = preSessionWait && !liveQuestion && (!cliReady || promptOnScreen);
   useEffect(() => {
     if (!startWaiting) return;
+  /** A dialog the session is waiting on whose rows `readSelectPrompt` could
+   * not read: the chat says so and offers the screen, rather than showing
+   * nothing while the session waits. */
+  const unreadQuestion = useMemo(
+    () => sessionShown && !liveQuestion && dialogFooterShown(liveScreen),
+    [sessionShown, liveQuestion, liveScreen],
+  );
     const timer = window.setTimeout(() => setStartGaveUp(true), STARTING_GRACE);
     return () => window.clearTimeout(timer);
   }, [startWaiting]);
@@ -4178,7 +4186,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           {sessionShown && openStep
             ? subagentView
             : sessionShown
-            ? ((transcript || preSessionWait) && sessionEntries.length === 0 && !liveQuestion && !sessionBusy
+            ? ((transcript || preSessionWait) && sessionEntries.length === 0 && !liveQuestion && !unreadQuestion && !sessionBusy
               ? (undoing
                 ? <div className="readable-empty" role="status" aria-busy="true"><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span><strong>{t("mobile.transcript.undoing")}</strong></div>
                 // A fresh tab while its CLI starts: the banner it draws is not
@@ -4214,6 +4222,11 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
                       {workFacts.join(" · ")}
                       {isUntested("mobile.focus.workingFacts") && <em> · {t("mobile.focus.untested")}</em>}
                     </small>}
+                  {unreadQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")} data-testid="question-unread">
+                    <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.questionUnread") && <> · {t("mobile.focus.untested")}</>}</small>
+                    <p className="transcript-screen-note">{t("mobile.transcript.questionUnread")}</p>
+                    <button type="button" className="transcript-screen-action" onClick={() => chooseView("terminal")}>{t("mobile.transcript.toTerminal")}</button>
+                  </div>}
                   </div>}
                   {/* A prompt sent while the agent worked waits below its work
                       until the desktop types it in: not taken yet. */}

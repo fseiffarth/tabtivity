@@ -9828,3 +9828,5 @@ export const dict: Dict = {
   "helpAgent.setup.askAgain": "Chiedi all’agente di aiuto",
   "helpAgent.setup.stillNone": "Ancora nessun agente trovato: completa prima l’installazione (e l’accesso).",
   "helpAgent.setup.localFailed": "Il modello locale non si è avviato. Verifica che Ollama sia in esecuzione e il modello scaricato.",
+  "mobile.transcript.questionUnread": "La chat non può mostrare questa domanda: rispondi nella vista Terminale.",
+  "mobile.transcript.toTerminal": "Passa al Terminale",

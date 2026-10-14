@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
+import { dialogFooterShown, freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
 import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agentModes";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { BRAND } from "../../lib/brand";
@@ -257,6 +257,97 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
       { index: 0, number: 1, label: "Restore it too", description: undefined },
       { index: 1, number: 2, label: "Just the question", description: undefined },
     ]);
+  });
+
+  it("reads a preview question whose label wraps beside the panel", () => {
+    // Claude Code 2.1.300's AskUserQuestion with previews, captured off an
+    // 80-column pty and read back through `readableScreen`. A label too long
+    // for its column wraps one column LEFT of the label's own, beside the
+    // panel; that ended the run, `2.` started one of its own, and the chat
+    // showed no question at all.
+    const screen = lines(
+      "←  ☐ Placement  ☐ Thumbnails  ✔ Submit  →",
+      "",
+      "Where should the GoodNotes-style file library live?",
+      "",
+      "❯ 1. Full-screen library          ┌──────────────────────────────────────────┐",
+      "    (Recommended)                 │ ┌──────────────────────┐",
+      "  2. Keep the side drawer         │ │ Library        + ⋯   │",
+      "                                  │ │ │file│ │file│ │file│ │",
+      "                                  │ │ │file│ │file│ │file│ │",
+      "",
+      "                                  Notes: press n to add notes",
+      "",
+      "  Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions ·",
+      "Esc to cancel",
+    );
+    const prompt = readSelectPrompt(screen, "Claude Code", 80);
+    expect(prompt?.title).toBe("Where should the GoodNotes-style file library live?");
+    expect(prompt?.current).toBe(0);
+    expect(prompt?.options).toEqual([
+      { index: 0, number: 1, label: "Full-screen library (Recommended)", description: undefined },
+      { index: 1, number: 2, label: "Keep the side drawer", description: undefined },
+    ]);
+    // Narrower, the panel's own frame wraps too; the rows read the same.
+    expect(readSelectPrompt(lines(
+      "❯ 1. Full-screen library       ┌────────────────────┐",
+      "    (Recommended)              │ ┌─────────────────",
+      "  2. Keep the side drawer      │ ──┐",
+      "                               │ │ Library      [+]",
+    ), "Claude Code", 56)?.options.map((option) => option.label)).toEqual(["Full-screen library (Recommended)", "Keep the side drawer"]);
+    // Text a column shallower without a panel beside it is still not a row's.
+    expect(readSelectPrompt(lines("❯ 1. Red", "    (said twice)", "  2. Green"))).toBeNull();
+  });
+
+  it("shows a fenced plan from its top, blanks and all", () => {
+    // Claude Code 2.1.300's plan approval, captured off a 56-column pty and
+    // read through `readableScreen` (`R` = the line under a dropped rule). The
+    // plan's paragraphs are blank-separated, so read block by block the
+    // context was its last 8 lines: the phone's plan began inside item 1.
+    const screen = [
+      "R  Ready to code?",
+      "",
+      "  Here is Claude's plan:",
+      "R  Plan: Move the Phone File List into a Library View",
+      "",
+      "  This plan describes how to take the file list",
+      "  currently shown for a connected phone.",
+      "",
+      "  1. Extract the phone file list data into a",
+      "     standalone source that the library can consume.",
+      "     Separate the code that enumerates files on the",
+      "     phone from any UI code that currently displays",
+      "     them.",
+      "  2. Build the library view that renders those items",
+      "     in a browsable layout. Reuse the existing",
+      "     library components for grids, sorting, and",
+      "     filtering wherever possible. Add the     ↓",
+      "R  Claude has written up a plan and is ready to",
+      "  execute. Would you like to proceed?",
+      "",
+      "  ❯ 1. Yes, and use auto mode",
+      "    2. Yes, manually approve edits",
+      "    3. Tell Claude what to change",
+      "       shift+tab to approve with this feedback",
+      "",
+      "  ctrl+g to edit in Vim ·",
+    ].map((row) => (row.startsWith("R") ? { text: row.slice(1), afterRule: true } : { text: row }));
+    const prompt = readSelectPrompt(screen, "Claude Code", 56);
+    expect(prompt?.question).toBe(17);
+    expect(screen[prompt!.context].text.trim()).toBe("Plan: Move the Phone File List into a Library View");
+    expect(prompt?.options.map((option) => option.label)).toEqual(["Yes, and use auto mode", "Yes, manually approve edits", "Tell Claude what to change"]);
+  });
+
+  it("tells a dialog on screen by its footer, read or not", () => {
+    expect(dialogFooterShown(lines("❯ 1. A", "  2. B", "", "Enter to select · ↑/↓ to navigate · n to add notes ·", "Esc to cancel", ""))).toBe(true);
+    expect(dialogFooterShown(lines("Accessing workspace:", "❯ No, exit", "", "Enter to confirm · Esc to cancel"))).toBe(true);
+    expect(dialogFooterShown(lines("Press enter to confirm or esc to go back"))).toBe(true);
+    // The input box's own hints, and a footer scrolled up past the screen's
+    // bottom, are not a dialog waiting.
+    expect(dialogFooterShown(lines("❯ ", "? for shortcuts", "⏵⏵ auto mode on (shift+tab to cycle)"))).toBe(false);
+    expect(dialogFooterShown(lines("Enter to select · ↑/↓ to navigate", "● Done.", "Next answer", "more", "and more", "❯ "))).toBe(false);
   });
 
   it("offers a multi-select question's unnumbered Submit row", () => {

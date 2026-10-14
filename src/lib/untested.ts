@@ -767,3 +767,4 @@ export function untestedEntries(): (UntestedEntry & { id: string })[] {
   return Object.entries(UNTESTED as Record<string, UntestedEntry>).map(([id, e]) => ({ id, ...e }));
 }
   "desktop.helpAgent": { area: "shell", what: "Header ? button · opens the default agent as a Help tab in the root console (reused while live); no agent → cloud/local install dialog" },
+  "mobile.composer.uncommitted": { area: "mobile", what: "Terminal · on a Claude, Codex or OpenCode tab the Commit chip carries a count of the files this chat edited that git still lists as changed (gone once committed, from the phone or the desk); its sheet lists them (path, changed/new/deleted, the worktree when not the project folder) above the commit choices; edits made through shell commands are not counted" },
