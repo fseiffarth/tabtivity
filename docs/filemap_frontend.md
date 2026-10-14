@@ -68,7 +68,7 @@ stores stay at the top. No `index.ts` barrels.
 | `SettingsPanel.tsx` | Settings dialog + sub-panels: five left-hand topic groups (`SETTINGS_GROUPS`), one page per entry (including VM prerequisites and root-tab QEMU install), a label-index search (`SEARCH_KEYS` — add a new control's label key or the search will not find it), Mobile deep links and per-page scroll restoration. Built entirely out of `settingsUi.tsx` — do not hand-roll a row, a card or a header here. |
 | `TabCostList.tsx` | Settings → Power & performance → "What open tabs hold" (main window only): every loaded scope's tabs ranked by their `lib/tabCost` estimate, Show (current scope: `setActive` + close Settings) / Close (`closeTabInScope`), collapsed lines for tabs with nothing loaded and PDFs outside a tab. Read on mount and Refresh — no timer. |
 | `settingsUi.tsx` | The settings design system (`SettingsNavigation` (grouped rail + search box, dropdown on narrow windows)`/Header/Section/Card/SettingRow/ToggleRow/ToggleCard/SettingsList`, CSS under "Settings design system"). Every settings surface is built only from these. |
-| `HowToStart.tsx` | First-run intro wizard in the Settings navigation frame: step rail, Back/Skip/Next, ←/→, page remembered in localStorage; Welcome (`HOW_TO_START_STEPS`) and What-next pages inline. |
+| `HowToStart.tsx` | First-run intro wizard in the Settings navigation frame: step rail, Back/Skip/Next, ←/→, page remembered in localStorage; Welcome (typed greeting on the first run, `HOW_TO_START_STEPS`) and What-next pages inline. |
 | `intro/introData.ts` | Pure intro data: page order + remembered page, featured agent CLIs and sign-in commands, model recommendation by RAM/VRAM (mirrors `docs/help/local-models.md`). |
 | `intro/{Projects,Agents,LocalModels,AskTabtivity}Page.tsx` + `intro/introUi.tsx` | Intro pages: live state + one-click actions via existing flows (`openProjectDialog`, `runInstallInTab`, Ollama commands, `root_mcp_status().help`, `help_search`); mounted only while shown. |
 | `ThemeCustomizer.tsx` | Theme Customizer: the whole palette as one editable token list (swatch, name, example, hex, reset) + corner style and saved presets; rendered instead of the Settings dialog. |
@@ -270,6 +270,7 @@ stores stay at the top. No `index.ts` barrels.
 | `common/PageStrip.tsx` | **The** page-thumbnail strip: drag-reorder, shift-select, turn, delete, right-click. Used twice — horizontally by the print preview, vertically as the PDF viewer's page rail. |
 | `common/mountPageStrip.tsx` | `createRoot` adapter letting the imperative print modal host `PageStrip`. |
 | `common/Dropdown.tsx`, `common/OrbitSpinner.tsx` | Shared primitives. |
+| `common/Typewriter.tsx` | A line that types itself out with a caret (first-run greeting, welcome-back); click/key completes, reduced motion shows it whole, screen readers get the full text. |
 | `common/MenuShortcut.tsx` | The muted chord at a menu row's end ("Close   Ctrl+W"); resolves rebinds like `useChordHint`. Only on rows whose chord does the same thing. |
 | `common/icons/{Icon,FileIcon}.tsx` | The shared line-icon set (24-grid, 1.4 stroke, `currentColor`, `em`-sized) that replaces colour emoji in the chrome; `FileIcon` renders `fileIconKind()` for every file list. New icons go here, not as emoji — and not as typed symbols with the Unicode Emoji property (↗ ⬆ ⚠ ⚙ ✉ ☑ ▶ …), which a font fallback can hand to the colour-emoji font. |
 | `common/ConnLamp.tsx` | Red/orange/green SSH/OpenVPN status lamp (dialog + header). |
@@ -285,7 +286,7 @@ stores stay at the top. No `index.ts` barrels.
 | `common/UnfencedPlatformDialog.tsx` + `stores/unfencedPlatformPrompt.ts` | Windows: the once-per-machine "agents run with your full rights" acceptance a refused agent spawn (`TABTIVITY_FENCE_PLATFORM_UNACCEPTED`) asks for; concurrent tabs share one prompt, accepting writes `agent_fence_platform_accepted` before any is released, no host → refuse. Mounted per window. |
 | `common/LocalLossDialog.tsx` | Warns that lockstep or sync **destroyed something in the local mirror** (#28q). Mounted at the shell, like the alarm popup: a background pass can delete a file while the user is three tabs away. It reports, it does not confirm — the write has already happened; the gates that prevent one live upstream. |
 | `stats/StatsRecap.tsx` | Usage recap dialog: agents/models used, prompts asked, agent tokens per CLI/model (`usage_token_stats`), autocomplete accept/dismiss by mode/model, file churn, commits, time per project, Day/Week/Month. |
-| `stats/StatsRecapHost.tsx` | Decides when the recap is on screen: once per day at launch (anchored on *yesterday*), or on demand via the `tabtivity:open-stats` event. Mounted in `AppShell`. |
+| `stats/StatsRecapHost.tsx` | Decides when the recap is on screen: once per day at launch (anchored on the last day with tracked time, with the welcome-back line from `lib/welcomeBack`; never on a fresh install), or on demand via the `tabtivity:open-stats` event. Mounted in `AppShell`. |
 
 **Stores (`src/stores/`), hooks, lib**
 
@@ -429,6 +430,7 @@ stores stay at the top. No `index.ts` barrels.
 | `lib/viewers/pdfPrintLayout.ts` | `layoutPrintPdf`: the print preview's sheets (order, turns, selection, copies, paper, margins, scale, page numbers) rebuilt as a vector PDF from pdf-lib form XObjects, for `printPdfNative`. Geometry mirrors `buildOptionsCss`. |
 | `lib/viewers/pdfNotes.ts` | PDF remarks, pure half (sticky notes and highlights; `isHighlight` = has `quads`); `quadsAnchor` places a highlight's card. |
 | `lib/viewers/redact.ts` | PDF blackout marks, pure half: a mark is geometry in rotated big points, never the covered text; `snapToText` only grows a box. Burn-in is in `pdfDoc.ts`. |
+| `lib/welcomeBack.ts` | Pure picks over the time log for the startup recap: the last active day, that day's top project, up to two recent alternatives. |
 | `lib/usageRollup.ts` | Folds UTC day/hour buckets into today/week/month windows. Generic over the payload — shared by `NetworkTrafficPane` (bytes) and the recap (counters). |
 | `lib/gpu.ts` | GPU-memory arithmetic (pure) for header, monitor and model menu: memory = dedicated VRAM + shared pool; `gpuTone` tones by ratio. |
 | `lib/usageMetrics.ts` | The metric keys (mirrors `schema::usage_stats::metric`) + how a tab maps to an agent or a local model. |

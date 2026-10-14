@@ -416,6 +416,9 @@ export function AppShell() {
   const [resizingPanel, setResizingPanel] = useState(false);
   const latestPanelWidth = useRef(SIDE_PANEL_DEFAULT);
   const [showHowToStart, setShowHowToStart] = useState(false);
+  // The fresh-install open, where the Welcome greeting types itself out; a
+  // re-open from Settings shows it complete.
+  const [howToStartFirstRun, setHowToStartFirstRun] = useState(false);
   const [showRemoteFeaturesPrompt, setShowRemoteFeaturesPrompt] = useState(false);
   // Set only on the fresh-install path, where HowToStart takes the screen
   // first — this defers the remote-features ask until HowToStart closes
@@ -548,6 +551,7 @@ export function AppShell() {
     if (!settingsLoaded || !projectsLoaded) return;
     if (!onboardingSeen && projectCount === 0) {
       setShowHowToStart(true);
+      setHowToStartFirstRun(true);
       if (!remoteFeaturesPrompted) {
         setPendingRemoteFeaturesPrompt(true);
         void updateSettings({ onboarding_seen: true, remote_features_prompted: true });
@@ -571,7 +575,10 @@ export function AppShell() {
 
   // Let the Settings dialog / gear menu re-open the welcome on demand.
   useEffect(() => {
-    const open = () => setShowHowToStart(true);
+    const open = () => {
+      setHowToStartFirstRun(false);
+      setShowHowToStart(true);
+    };
     window.addEventListener("app:open-how-to-start", open);
     return () => window.removeEventListener("app:open-how-to-start", open);
   }, []);
@@ -1561,8 +1568,10 @@ export function AppShell() {
       )}
       <LazyWhen when={showHowToStart}>
         <HowToStart
+          firstRun={howToStartFirstRun}
           onClose={() => {
             setShowHowToStart(false);
+            setHowToStartFirstRun(false);
             if (pendingRemoteFeaturesPrompt) {
               setPendingRemoteFeaturesPrompt(false);
               setShowRemoteFeaturesPrompt(true);

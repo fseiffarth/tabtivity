@@ -1,5 +1,6 @@
 import { useModalFocus, isInActiveModal } from "../../hooks/useModalFocus";
 import { UntestedTag } from "../common/UntestedTag";
+import { Typewriter } from "../common/Typewriter";
 import { Dropdown } from "../common/Dropdown";
 import { useEffect, useState } from "react";
 import { HOW_TO_START_STEPS, focusModeTip } from "../../lib/shortcuts/hints";
@@ -32,13 +33,20 @@ import { AskAppPage } from "./intro/AskAppPage";
  * visible and stop when the user moves on. ←/→ page, Esc closes (shared modal
  * focus), and the page it was left on is remembered for the next open.
  */
-export function HowToStart({ onClose }: { onClose: () => void }) {
+export function HowToStart({ onClose, firstRun = false }: {
+  onClose: () => void;
+  /** The fresh-install open: the Welcome greeting types itself out, once.
+   *  Re-opened from Settings it shows complete. */
+  firstRun?: boolean;
+}) {
   const t = useT();
   const [page, setPage] = useState<IntroPage>(readIntroPage);
+  const [greet, setGreet] = useState(firstRun);
   const index = INTRO_PAGES.indexOf(page);
   const last = index === INTRO_PAGES.length - 1;
   const go = (next: IntroPage) => {
     setPage(next);
+    setGreet(false);
     writeIntroPage(next);
   };
   const step = (delta: number) => {
@@ -122,7 +130,7 @@ export function HowToStart({ onClose }: { onClose: () => void }) {
             onClose={close}
           />
           <div className="dialog-scroll" key={page}>
-            {page === "welcome" && <WelcomePage />}
+            {page === "welcome" && <WelcomePage greet={greet} />}
             {page === "projects" && <ProjectsPage onClose={onClose} />}
             {page === "agents" && <AgentsPage onClose={onClose} />}
             {page === "localModels" && <LocalModelsPage onClose={onClose} />}
@@ -158,9 +166,10 @@ export function HowToStart({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Page 1: what Tabtivity is, and the four basics — `HOW_TO_START_STEPS`, the same
- *  copy the Feature Guide shows, so the two stay in lockstep. */
-function WelcomePage() {
+/** Page 1: the greeting (typed out on the first run), what Tabtivity is, and the
+ *  four basics — `HOW_TO_START_STEPS`, the same copy the Feature Guide shows, so
+ *  the two stay in lockstep. */
+function WelcomePage({ greet }: { greet: boolean }) {
   const t = useT();
   // On Linux the panel key depends on the desktop (Super, or F9 where the shell
   // owns Super), and that answer is a backend probe. This dialog opens on the
@@ -181,7 +190,8 @@ function WelcomePage() {
 
   return (
     <>
-      <p className="settings-help">{t("howToStart.intro")}</p>
+      <Typewriter text={t("howToStart.greeting")} animate={greet} />
+      <p className="settings-help">{t("howToStart.intro")} <UntestedTag id="howToStart.greeting" /></p>
       <ol className="how-to-start-steps">
         {HOW_TO_START_STEPS.map((step, i) => (
           <li key={step.titleKey} className="how-to-start-step">

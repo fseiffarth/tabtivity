@@ -89,6 +89,30 @@ describe("How to start intro wizard", () => {
     expect(heading()).toContain(`Ask ${BRAND.display}`);
   });
 
+  it("types the Welcome greeting only on the first run, and only once", async () => {
+    const greeting = `Hi there — I'm ${BRAND.display}.`;
+    const typed = () => document.querySelector(".typewriter [aria-hidden='true']")?.textContent ?? "";
+
+    // Re-opened from Settings: complete at once.
+    let unmount = () => {};
+    await act(async () => {
+      ({ unmount } = render(<HowToStart onClose={() => {}} />));
+    });
+    expect(typed()).toContain(greeting);
+    unmount();
+
+    // First run: it starts empty (screen readers still get the whole line) …
+    await act(async () => {
+      render(<HowToStart onClose={() => {}} firstRun />);
+    });
+    expect(typed()).not.toContain(greeting);
+    expect(document.querySelector(".typewriter-sr")?.textContent).toContain(greeting);
+    // … and coming back to Welcome does not type it again.
+    next();
+    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+    expect(typed()).toContain(greeting);
+  });
+
   it("finishing on the last page resets to Welcome; Skip keeps the page", () => {
     const onClose = vi.fn();
     const { unmount } = render(<HowToStart onClose={onClose} />);
