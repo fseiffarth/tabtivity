@@ -1063,8 +1063,22 @@ Shipping both costs one backend fetch path we need for F1 anyway.
 
 A memory-safety bug in WebKitGTK or WebView2 gives an attacker code execution in the
 **renderer process**, and from there Tabtivity's process boundary is whatever the engine's
-own sandbox provides — which on WebKitGTK is a real bubblewrap sandbox and on WebView2 is
-the browser sandbox, in both cases outside our control.
+own sandbox provides — on WebView2 the browser sandbox, outside our control.
+
+> **Correction (2026-10-14): on Linux there is no renderer sandbox.** This section used
+> to say WebKitGTK provides "a real bubblewrap sandbox". On the GTK3 API Tauri uses
+> (`webkit2gtk-4.1`) it is **off** unless the app calls
+> `webkit_web_context_set_sandbox_enabled(TRUE)` before the context spawns its first web
+> process. wry 0.57 never calls it, and builds the incognito context function-locally in
+> `new_gtk`, so Tabtivity has no point to set it at (setting it after a web process exists
+> aborts). A renderer RCE in a live window therefore runs as the user with no escape step.
+> GNOME Web is sandboxed only because it uses the GTK4 API (`webkitgtk-6.0`), where the
+> sandbox is mandatory. **Consequence:** `LIVE_SUPPORTED` is false on Linux
+> (`commands/browser.rs`); the `browser_live_pages` setting cannot open a live window
+> there. Reader mode is unaffected (no renderer runs page content). The way back is a
+> separate helper process on `webkitgtk-6.0`, inside Tabtivity's own bubblewrap with no
+> home or project mounts and no Tauri IPC in it — which also removes the §2.1–§2.4 bridge
+> risk instead of guarding it. Tauri's own GTK4 port (tauri#12561) is unreleased.
 
 What this plan does about it:
 
