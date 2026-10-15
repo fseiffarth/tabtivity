@@ -789,6 +789,12 @@ pub fn route_forget_sleep(id: &str) {
     }
 }
 
+/// Whether spawn `seq` of `id` still runs: its route is open and its reader
+/// has not closed it yet ([`route_close`] zeroes or drops the route first).
+pub fn route_spawn_live(id: &str, seq: u64) -> bool {
+    routes().lock_ok().get(id).is_some_and(|r| r.seq == seq)
+}
+
 /// Task-end cleanup, guarded by generation so an old spawn's exit can never
 /// remove the route a respawn under the same id just opened. Returns whether
 /// this was the current spawn, which makes the lifecycle notification obey the
@@ -1152,6 +1158,13 @@ pub struct PtyOptions {
     /// Chooses a home only; it grants nothing — both homes are fenced alike.
     #[serde(default)]
     pub local_model: bool,
+    /// A **login PTY** (`commands::credentials`): the backend runs the ssh /
+    /// OpenVPN login for this target as the PTY's own program, ignoring `cmd`,
+    /// `args`, `env` and `cwd`, and only such a PTY may receive a saved secret
+    /// (`credential_paste_to_pty`). Refused together with anything that would
+    /// make it more than a plain local root PTY.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<crate::commands::credentials::LoginTarget>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1842,6 +1855,7 @@ pub fn join_tab(
     };
     route_move_window_views(&opts.id, &attach_id, client.as_str());
     let attach = PtyOptions {
+        login: None,
         id: attach_id.clone(),
         cmd: "tmux".to_string(),
         local_model: false,
@@ -2060,6 +2074,8 @@ fn launch(
             if is_tab {
                 crate::services::agent_fence::on_tab_gone(&id, route_seq);
             }
+            // A login PTY whose login ended is no paste target any more.
+            crate::commands::credentials::forget_login_pty_spawn(&id, route_seq);
             if let Some(token) = help_token {
                 crate::services::root_mcp::revoke_token(&token);
             }
@@ -3313,6 +3329,7 @@ mod tests {
         // The respawn begins and claims the Codex session it resumes.
         let new = agent_fence::begin_spawn(id);
         let mut opts = PtyOptions {
+            login: None,
             id: id.into(), cmd: "codex".into(), args: vec!["resume".into(), "0199aaaa-0000-7000-8000-00000000c0de".into()],
             env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false, agent: true,
             project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
@@ -3776,6 +3793,7 @@ mod client_tests {
     #[cfg(unix)]
     fn test_opts() -> PtyOptions {
         PtyOptions {
+            login: None,
             id: String::new(),
             cmd: "sh".to_string(),
             local_model: false,
@@ -3873,6 +3891,7 @@ mod client_tests {
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
         let policy = crate::services::tmux_local::window_size_policy(true);
         let opts = |cols: u16, rows: u16| PtyOptions {
+            login: None,
             id: tab.to_string(),
             cmd: "tmux".to_string(),
             local_model: false,

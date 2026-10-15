@@ -50,6 +50,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::services::ssh_common::validate_arg;
+#[cfg(any(target_os = "macos", test))]
 use crate::services::ssh_exec::shell_quote;
 use crate::storage;
 
@@ -84,7 +85,7 @@ fn registry() -> &'static Mutex<HashMap<String, VpnProc>> {
 /// Without this, an interactive tunnel was invisible and unkillable: absent from
 /// [`registry`], it could not be seen by [`is_connected`] / [`active_configs`], nor
 /// killed by [`disconnect`] / [`disconnect_all`] — so it **outlived Tabtivity with the
-/// machine's routing still changed**. [`interactive_connect_command`] now appends a
+/// machine's routing still changed**. [`interactive_connect_argv`] now appends a
 /// `--writepid` we own and registers it here, which closes all four gaps at once.
 ///
 /// Not cfg-gated (unlike [`registry`]) so the bookkeeping unit-tests run anywhere.
@@ -439,69 +440,84 @@ fn display_name(file_name: &str) -> String {
         .unwrap_or_else(|| file_name.to_string())
 }
 
-/// Build a ready-to-run shell command string that brings up the OpenVPN tunnel
-/// for `config` **interactively**, so the encrypted-key passphrase is typed
-/// directly into a visible terminal (no `--askpass` temp file, nothing for Tabtivity
-/// to handle). Typed into a root-scope shell tab (see the frontend
-/// `openConnectionInRoot`) when headless connections are turned off.
+/// The argv that brings up the OpenVPN tunnel for `config` **interactively**, so
+/// the encrypted-key passphrase is typed directly into a visible terminal (no
+/// `--askpass` temp file, nothing for Tabtivity to handle). It is the program of a
+/// root-console **login PTY** (`pty_spawn` with `login: vpn`, see
+/// `commands::credentials`), spawned as this argv directly — no shell runs before
+/// or after it — when headless connections are turned off.
 ///
 /// Linux launches it elevated via `pkexec` (the tun device / routing need root);
 /// the polkit prompt comes first, then OpenVPN prompts for the passphrase on the
 /// same tty. `--auth-nocache` keeps the passphrase out of OpenVPN's memory across
-/// re-keys. Windows runs `openvpn.exe` directly (it must be started elevated).
-/// The config path is validated and shell-quoted as a single argument.
+/// re-keys. Windows runs `openvpn.exe` directly (it must be started elevated);
+/// macOS runs it under `sudo` on the visible tty. Each item is one argv entry, so
+/// no quoting is involved and a path with spaces stays one argument on every OS.
 ///
 /// **Side effect (deliberate):** every variant appends `--writepid <pidfile>` and
 /// registers that pidfile in [`interactive_registry`] via [`arm_interactive`]. The
-/// tunnel this command starts is not Tabtivity's child, so the pid it records is the
-/// *only* handle on a root process that is rerouting the whole machine. Without it,
-/// the tunnel is invisible to [`is_connected`] / [`active_configs`] and unkillable
-/// by [`disconnect`] / [`disconnect_all`] — it outlives the app with the routing
-/// still changed. Building the command is therefore also *claiming* it.
+/// tunnel this argv starts is not Tabtivity's child process handle, so the pid it
+/// records is the *only* handle on a root process that is rerouting the whole
+/// machine. Without it, the tunnel is invisible to [`is_connected`] /
+/// [`active_configs`] and unkillable by [`disconnect`] / [`disconnect_all`] — it
+/// outlives the app with the routing still changed. Building the argv is therefore
+/// also *claiming* it.
+pub fn interactive_connect_argv(config: &str) -> Result<Vec<String>, String> {
+    // The launcher first: a missing `openvpn.exe` must not leave a claim behind.
+    let mut argv = interactive_launcher()?;
+    let arm = arm_interactive(config)?;
+    argv.extend([
+        "--config".to_string(),
+        arm.config,
+        "--script-security".to_string(),
+        "1".to_string(),
+        "--auth-nocache".to_string(),
+        "--writepid".to_string(),
+        arm.pidfile.to_string_lossy().into_owned(),
+    ]);
+    argv.extend(arm.management);
+    Ok(argv)
+}
+
+/// How each OS starts the elevated `openvpn` of [`interactive_connect_argv`].
 #[cfg(target_os = "linux")]
-pub fn interactive_connect_command(config: &str) -> Result<String, String> {
-    let arm = arm_interactive(config)?;
-    Ok(format!(
-        "pkexec openvpn --config {} --script-security 1 --auth-nocache --writepid {}{}",
-        shell_quote(&arm.config),
-        shell_quote(&arm.pidfile.to_string_lossy()),
-        arm.management
-    ))
+fn interactive_launcher() -> Result<Vec<String>, String> {
+    Ok(vec!["pkexec".to_string(), "openvpn".to_string()])
 }
 
-/// Windows variant: no `pkexec`; `openvpn.exe` must already be running elevated.
+/// Windows: no `pkexec`; `openvpn.exe` must already be running elevated. Resolved
+/// like a headless connect's, since a GUI app's `PATH` usually omits its dir.
 #[cfg(target_os = "windows")]
-pub fn interactive_connect_command(config: &str) -> Result<String, String> {
-    let arm = arm_interactive(config)?;
-    Ok(format!(
-        "openvpn --config {} --script-security 1 --auth-nocache --writepid {}{}",
-        shell_quote(&arm.config),
-        shell_quote(&arm.pidfile.to_string_lossy()),
-        arm.management
-    ))
+fn interactive_launcher() -> Result<Vec<String>, String> {
+    let exe = resolve_openvpn().ok_or_else(|| OPENVPN_MISSING.to_string())?;
+    Ok(vec![exe.to_string_lossy().into_owned()])
 }
 
-/// macOS variant: `sudo` on the visible tty (no `pkexec`/polkit on macOS; the
-/// interactive root-tab path types the password straight into the terminal).
+/// macOS: `sudo` on the visible tty (no `pkexec`/polkit on macOS; the user types
+/// the password straight into the terminal). The binary is resolved to an absolute
+/// path because a GUI app's `PATH` lacks the Homebrew prefixes.
 #[cfg(target_os = "macos")]
-pub fn interactive_connect_command(config: &str) -> Result<String, String> {
-    let arm = arm_interactive(config)?;
-    Ok(format!(
-        "sudo openvpn --config {} --script-security 1 --auth-nocache --writepid {}{}",
-        shell_quote(&arm.config),
-        shell_quote(&arm.pidfile.to_string_lossy()),
-        arm.management
-    ))
+fn interactive_launcher() -> Result<Vec<String>, String> {
+    let exe = resolve_openvpn()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "openvpn".to_string());
+    Ok(vec!["sudo".to_string(), exe])
+}
+
+/// Any other OS has no interactive tunnel.
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+fn interactive_launcher() -> Result<Vec<String>, String> {
+    Err("OpenVPN is not supported on this platform".to_string())
 }
 
 /// Validate `config` and claim an interactive tunnel for it: pick the pidfile,
 /// delete any stale one (a leftover from a previous run would otherwise read as a
 /// live tunnel), ensure the runtime dir exists for root to write into, and register
-/// the claim. Returns the trimmed config and the pidfile the command must use.
+/// the claim. Returns the trimmed config and the pidfile the argv must use.
 ///
-/// Shared by all three [`interactive_connect_command`] variants so a platform
-/// cannot forget the `--writepid` bookkeeping. Compiled cfg-free so the claim logic
-/// is unit-testable on any host.
+/// Called by [`interactive_connect_argv`] on every platform so none can forget the
+/// `--writepid` bookkeeping. Compiled cfg-free so the claim logic is unit-testable
+/// on any host.
 fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
     let config = config.trim();
     validate_arg("OpenVPN config", config)?;
@@ -516,19 +532,11 @@ fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
         .insert(config.to_string(), pidfile.clone());
     // A terminal-started tunnel gets the same management socket a headless one does,
     // so stopping it costs no second elevation either. Best-effort: if no endpoint
-    // can be armed the fragment is empty and the command is exactly what it was.
+    // can be armed there are no extra items and the argv is exactly what it was.
     #[cfg(unix)]
-    let management = arm_management(config)
-        .map(|a| match a.as_slice() {
-            // Shape is fixed by `management_args`: flag, ip, port, pwfile. Only the
-            // last can contain shell metacharacters, and leaving the first three bare
-            // keeps the command legible in the terminal tab the user actually reads.
-            [flag, ip, port, pwfile] => format!(" {flag} {ip} {port} {}", shell_quote(pwfile)),
-            _ => String::new(),
-        })
-        .unwrap_or_default();
+    let management = arm_management(config).unwrap_or_default();
     #[cfg(not(unix))]
-    let management = String::new();
+    let management = Vec::new();
     Ok(InteractiveArm {
         config: config.to_string(),
         pidfile,
@@ -536,14 +544,13 @@ fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
     })
 }
 
-/// What [`arm_interactive`] hands each platform's [`interactive_connect_command`]:
-/// the validated config, the pidfile the command must `--writepid` to, and the
-/// pre-quoted `--management …` fragment (leading space included, empty when none
-/// could be armed) to append verbatim.
+/// What [`arm_interactive`] hands [`interactive_connect_argv`]: the validated
+/// config, the pidfile the argv must `--writepid` to, and the `--management …`
+/// argv items (empty when none could be armed) to append.
 struct InteractiveArm {
     config: String,
     pidfile: PathBuf,
-    management: String,
+    management: Vec<String>,
 }
 
 /// True if `openvpn` and `pkexec` are both available on `PATH` (both are needed:
@@ -2816,11 +2823,11 @@ mod tests {
         let cfg = "/store/test-claims.ovpn";
         forget_interactive(cfg);
 
-        let cmd = interactive_connect_command(cfg).unwrap();
+        let argv = interactive_connect_argv(cfg).unwrap();
         let pidfile = interactive_pidfile(cfg);
 
-        assert!(cmd.contains("--writepid"));
-        assert!(cmd.contains(&shell_quote(&pidfile.to_string_lossy())));
+        let at = argv.iter().position(|a| a == "--writepid").expect("--writepid");
+        assert_eq!(argv[at + 1], pidfile.to_string_lossy());
         // Claimed, but OpenVPN hasn't written a pid yet — the user is still at the
         // polkit prompt. Pending is NOT dead: reaping here would forget a tunnel in
         // the seconds before it comes up.
@@ -2837,7 +2844,7 @@ mod tests {
     fn interactive_tunnel_with_a_live_pid_is_up() {
         let cfg = "/store/test-live.ovpn";
         forget_interactive(cfg);
-        let _ = interactive_connect_command(cfg).unwrap();
+        let _ = interactive_connect_argv(cfg).unwrap();
 
         // Our own pid is, definitionally, alive.
         let me = std::process::id();
@@ -2858,7 +2865,7 @@ mod tests {
     fn interactive_tunnel_with_a_dead_pid_is_reaped() {
         let cfg = "/store/test-dead.ovpn";
         forget_interactive(cfg);
-        let _ = interactive_connect_command(cfg).unwrap();
+        let _ = interactive_connect_argv(cfg).unwrap();
 
         // A pid that is *certainly* dead: spawn a process and reap it.
         let mut child = std::process::Command::new("true").spawn().unwrap();
@@ -2887,7 +2894,7 @@ mod tests {
         let _ = std::fs::create_dir_all(runtime_dir());
         std::fs::write(&pidfile, format!("{}\n", std::process::id())).unwrap();
 
-        let _ = interactive_connect_command(cfg).unwrap();
+        let _ = interactive_connect_argv(cfg).unwrap();
 
         assert!(!pidfile.exists());
         assert_eq!(interactive_state(cfg), Interactive::Pending);
@@ -2958,21 +2965,20 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn interactive_connect_command_linux_shape() {
-        let cmd = interactive_connect_command("/home/u/work.ovpn").unwrap();
+    fn interactive_connect_argv_linux_shape() {
+        let cfg = "/home/u/my work.ovpn";
+        let argv = interactive_connect_argv(cfg).unwrap();
         // Elevated via pkexec; passphrase typed interactively (no --askpass file).
-        assert!(cmd.starts_with("pkexec openvpn --config "));
-        assert!(cmd.contains("'/home/u/work.ovpn'"));
+        assert_eq!(&argv[..4], ["pkexec", "openvpn", "--config", cfg]);
         // #868: the config's own scripts never run as root — and the override
         // follows the config, so the file's `script-security 2` cannot win.
-        assert!(
-            cmd.contains("--config '/home/u/work.ovpn' --script-security 1 "),
-            "{cmd}"
-        );
-        assert!(cmd.contains("--auth-nocache"));
-        assert!(!cmd.contains("--askpass"));
+        assert_eq!(&argv[4..6], ["--script-security", "1"]);
+        assert!(argv.iter().any(|a| a == "--auth-nocache"));
+        assert!(!argv.iter().any(|a| a == "--askpass"));
+        // An argv, not a shell line: nothing is quoted.
+        assert!(!argv.iter().any(|a| a.contains('\'')), "{argv:?}");
 
-        forget_interactive("/home/u/work.ovpn");
+        forget_interactive(cfg);
     }
 
     /// The whole point of the management socket: a terminal-started tunnel carries
@@ -2980,23 +2986,24 @@ mod tests {
     /// interactive flavour would silently keep the old double-password teardown.
     #[cfg(target_os = "linux")]
     #[test]
-    fn interactive_connect_command_arms_a_management_socket() {
+    fn interactive_connect_argv_arms_a_management_socket() {
         // Skipped while the A/B kill switch is on (no `--management` is appended).
         if MANAGEMENT_SOCKET_DISABLED {
             return;
         }
         let cfg = "/home/u/mgmt-interactive.ovpn";
         forget_interactive(cfg);
-        let cmd = interactive_connect_command(cfg).unwrap();
-        assert!(
-            cmd.contains("--management 127.0.0.1 "),
-            "interactive tunnels need a management socket too: {cmd}"
-        );
+        let argv = interactive_connect_argv(cfg).unwrap();
+        let at = argv
+            .iter()
+            .position(|a| a == "--management")
+            .unwrap_or_else(|| panic!("interactive tunnels need a management socket too: {argv:?}"));
+        assert_eq!(argv[at + 1], "127.0.0.1");
         // The endpoint it armed is the one teardown will read back.
         let (port, password) = management_endpoint(cfg).expect("endpoint recorded");
         assert!(port > 0);
         assert!(!password.is_empty());
-        assert!(cmd.contains(&port.to_string()));
+        assert_eq!(argv[at + 2], port.to_string());
 
         forget_interactive(cfg);
     }
@@ -3177,10 +3184,10 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn interactive_connect_command_rejects_bad_config() {
-        assert!(interactive_connect_command("-evil").is_err());
-        assert!(interactive_connect_command("/a\nb.ovpn").is_err());
-        assert!(interactive_connect_command("   ").is_err());
+    fn interactive_connect_argv_rejects_bad_config() {
+        assert!(interactive_connect_argv("-evil").is_err());
+        assert!(interactive_connect_argv("/a\nb.ovpn").is_err());
+        assert!(interactive_connect_argv("   ").is_err());
     }
 
     #[test]

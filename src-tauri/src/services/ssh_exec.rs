@@ -1126,32 +1126,21 @@ pub fn remote_git_init(spec: &RemoteSpec) -> Result<(), String> {
     }
 }
 
-/// Build a ready-to-run shell command string that opens an **interactive** ssh
-/// login to `[user@]host[:port]`, sharing the same multiplexing master socket
-/// (`ControlPath`) the terminal/agent tabs use.
+/// The argv that opens an **interactive** ssh login to `[user@]host[:port]`,
+/// sharing the same multiplexing master socket (`ControlPath`) the terminal/agent
+/// tabs use.
 ///
-/// Typed into a root-scope shell tab (see the frontend `openConnectionInRoot`)
-/// when the user has turned **off** headless connections: the password is entered
-/// directly in the visible terminal — Tabtivity never handles it — and because the
-/// login shares `cm-%C` with [`ssh_pty_args`], the pooled SFTP session, file
-/// browse, and git-over-ssh all ride the authenticated master without a second
-/// prompt. On Unix this enables `ControlMaster=auto`; on Windows
-/// multiplexing is unavailable so the login simply opens its own connection. The
-/// control-socket dir is created here so ssh can bind the master. Each argv item
-/// is shell-quoted before being joined, so spaces/metacharacters stay inert.
-pub fn interactive_login_command(
-    user: &Option<String>,
-    host: &str,
-    port: Option<u16>,
-) -> Result<String, String> {
-    Ok(quote_join(&interactive_login_args(user, host, port)?))
-}
-
-/// The argv behind [`interactive_login_command`], before quoting — so a caller
-/// that needs to append to it (a remote command to run in that same login, see
-/// [`interactive_exec_command`]) builds on one definition of "how Tabtivity opens
-/// an interactive ssh" rather than a second copy of the option list.
-fn interactive_login_args(
+/// It is the program of a root-console **login PTY** (`pty_spawn` with `login:
+/// ssh`, see `commands::credentials`), spawned as this argv directly — no shell
+/// runs before or after it — when the user has turned **off** headless
+/// connections: the password is entered directly in the visible terminal —
+/// Tabtivity never handles it — and because the login shares `cm-%C` with
+/// [`ssh_pty_args`], the pooled SFTP session, file browse, and git-over-ssh all
+/// ride the authenticated master without a second prompt. On Unix this enables
+/// `ControlMaster=auto`; on Windows multiplexing is unavailable so the login
+/// simply opens its own connection. The control-socket dir is created here so ssh
+/// can bind the master. [`interactive_exec_command`] builds on the same list.
+pub(crate) fn interactive_login_args(
     user: &Option<String>,
     host: &str,
     port: Option<u16>,
@@ -1182,7 +1171,7 @@ fn interactive_login_args(
     Ok(args)
 }
 
-/// [`interactive_login_command`] with a command to **run** on the host instead of
+/// [`interactive_login_args`] with a command to **run** on the host instead of
 /// a login shell — the visible-terminal counterpart of a headless
 /// `run_ssh_auth`, for a one-off the user is meant to watch (the explicit
 /// "install this agent CLI on that machine, in a terminal" action).
@@ -1973,44 +1962,46 @@ mod tests {
         assert_eq!(args.last().unwrap(), "alice@host.example");
     }
 
-    // ── interactive_login_command ──────────────────────────────────────────
+    // ── interactive_login_args ─────────────────────────────────────────────
 
     #[test]
-    fn interactive_login_command_shape() {
-        let cmd =
-            interactive_login_command(&Some("alice".to_string()), "host.example", None).unwrap();
-        // Starts with a (quoted) ssh and ends with the (quoted) target.
-        assert!(cmd.starts_with("'ssh' "));
-        assert!(cmd.contains("'alice@host.example'"));
+    fn interactive_login_args_shape() {
+        let args =
+            interactive_login_args(&Some("alice".to_string()), "host.example", None).unwrap();
+        // The program is ssh itself and the target is the last item — an argv,
+        // nothing quoted.
+        assert_eq!(args[0], "ssh");
+        assert_eq!(args.last().unwrap(), "alice@host.example");
         // Multiplexing master is SHARED with ssh_pty_args (same cm-%C socket), so a
         // root-terminal login's auth is reused by the headless mount/check.
         #[cfg(not(target_os = "windows"))]
         {
-            assert!(cmd.contains("ControlMaster=auto"));
-            assert!(cmd.contains("cm-%C"));
-            assert!(cmd.contains("ControlPersist="));
+            assert!(args.iter().any(|a| a == "ControlMaster=auto"));
+            assert!(args.iter().any(|a| a.contains("cm-%C")));
+            assert!(args.iter().any(|a| a.starts_with("ControlPersist=")));
         }
         #[cfg(target_os = "windows")]
-        assert!(!cmd.contains("ControlMaster=auto"));
+        assert!(!args.iter().any(|a| a == "ControlMaster=auto"));
     }
 
     #[test]
-    fn interactive_login_command_includes_port() {
-        let cmd = interactive_login_command(&None, "h", Some(2222)).unwrap();
-        assert!(cmd.contains("'-p' '2222'"));
-        assert!(cmd.trim_end().ends_with("'h'"));
+    fn interactive_login_args_include_port() {
+        let args = interactive_login_args(&None, "h", Some(2222)).unwrap();
+        assert!(args.windows(2).any(|w| w == ["-p", "2222"]));
+        assert_eq!(args.last().unwrap(), "h");
     }
 
     #[test]
-    fn interactive_login_command_rejects_bad_target() {
-        assert!(interactive_login_command(&None, "-evil", None).is_err());
-        assert!(interactive_login_command(&Some("-evil".to_string()), "h", None).is_err());
+    fn interactive_login_args_reject_bad_target() {
+        assert!(interactive_login_args(&None, "-evil", None).is_err());
+        assert!(interactive_login_args(&Some("-evil".to_string()), "h", None).is_err());
     }
 
     // ── wrap_pty_options detection ─────────────────────────────────────────
 
     fn local_opts(cwd: &str, project_id: Option<&str>) -> PtyOptions {
         PtyOptions {
+            login: None,
             id: "t".to_string(),
             cmd: "bash".to_string(),
             args: vec![],

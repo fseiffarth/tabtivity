@@ -3762,6 +3762,7 @@ mod tests {
 
     fn opts(cmd: &str, args: &[&str], project_id: Option<&str>) -> PtyOptions {
         PtyOptions {
+            login: None,
             cmd: cmd.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
             project_id: project_id.map(str::to_string),

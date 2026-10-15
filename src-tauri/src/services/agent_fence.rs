@@ -1791,6 +1791,7 @@ fn platform_reason() -> &'static str {
 
 pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
     let mut opts = PtyOptions {
+        login: None,
         id: "agent-fence-status".to_string(),
         cmd: "claude".to_string(),
         args: Vec::new(),
@@ -2773,6 +2774,7 @@ mod tests {
 
     fn opts(cmd: &str) -> PtyOptions {
         PtyOptions {
+            login: None,
             id: "p:t".into(),
             cmd: cmd.into(),
             args: Vec::new(),

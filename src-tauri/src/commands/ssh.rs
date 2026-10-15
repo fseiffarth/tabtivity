@@ -464,28 +464,6 @@ fn run_one_secret_attempt(
     }
 }
 
-/// Build the shell command that opens an **interactive** ssh login to
-/// `[user@]host[:port]`, sharing the multiplexing master the mount/check paths
-/// reuse. Returned for the frontend to type into a root-scope shell tab when
-/// headless connections are off, so the password is entered in the visible
-/// terminal and never handled by Tabtivity (see `ssh_exec::interactive_login_command`).
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn remote_login_command(
-    user: Option<String>,
-    host: String,
-    port: Option<u16>,
-) -> Result<String, String> {
-    let command = crate::services::ssh_exec::interactive_login_command(&user, &host, port)?;
-    // Remember which login this command line opens, so `credential_paste_to_pty`
-    // can later verify that the PTY it is asked to type this host's saved password
-    // into is actually running *this* login (see `commands::credentials`).
-    crate::commands::credentials::note_minted_login(
-        &command,
-        crate::commands::credentials::LoginTarget::Ssh { user, host, port },
-    );
-    Ok(command)
-}
-
 /// Verify the remote host is reachable over SSH (non-interactive). With a
 /// non-empty `password`, authenticates by feeding it to ssh (via `SSH_ASKPASS` on
 /// Unix, `sshpass` on Windows); otherwise uses key/agent auth. Returns the trimmed
