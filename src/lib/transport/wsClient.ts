@@ -91,7 +91,7 @@ export class WsClient {
   /** Subscription reference counts, re-sent after every hello. */
   private readonly subs = new Map<string, number>();
   private readonly handlers = new Set<EventHandler>();
-  private readyWaiters: Array<(hello: Hello) => void> = [];
+  private readyWaiters: Pending[] = [];
   private closed = false;
   private attempt = 0;
   private readonly options: Required<Pick<WsClientOptions, "url" | "protocol" | "reconnectMinMs" | "reconnectMaxMs">> & WsClientOptions;
@@ -106,16 +106,33 @@ export class WsClient {
     this.open();
   }
 
+  /**
+   * Stop for good. Settles everything waiting on this client here, before the
+   * socket is dropped: the socket's own `onclose` arrives later (a real
+   * WebSocket fires it asynchronously) and then finds a different `socket`
+   * and returns early, so it cannot be the one to reject them.
+   */
   close(): void {
     this.closed = true;
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
+    this.hello = null;
+    socket?.close();
+    setLinkState("down");
+    const error = new DisconnectedError();
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    const waiters = this.readyWaiters;
+    this.readyWaiters = [];
+    for (const waiter of waiters) waiter.reject(error);
   }
 
-  /** Resolves with the first `hello` (or the last one received). */
+  /** Resolves with the first `hello` (or the last one received); rejects
+   * with `DisconnectedError` once the client is closed. */
   whenReady(): Promise<Hello> {
     if (this.hello) return Promise.resolve(this.hello);
-    return new Promise((resolve) => this.readyWaiters.push(resolve));
+    if (this.closed) return Promise.reject(new DisconnectedError());
+    return new Promise((resolve, reject) => this.readyWaiters.push({ resolve: resolve as (value: unknown) => void, reject }));
   }
 
   get up(): boolean {
@@ -195,7 +212,11 @@ export class WsClient {
     socket.onopen = () => {
       // `up` waits for the hello frame.
     };
-    socket.onmessage = (event) => this.receive(event.data);
+    socket.onmessage = (event) => {
+      // A frame still arriving on a socket `close()` dropped is not this
+      // client's any more (a late hello would mark a closed link "up").
+      if (this.socket === socket) this.receive(event.data);
+    };
     socket.onerror = () => {
       // The close that follows does the work.
     };
@@ -238,7 +259,7 @@ export class WsClient {
           setLinkState("up");
           const waiters = this.readyWaiters;
           this.readyWaiters = [];
-          for (const resolve of waiters) resolve(this.hello);
+          for (const waiter of waiters) waiter.resolve(this.hello);
           return;
         }
         case "ret": {

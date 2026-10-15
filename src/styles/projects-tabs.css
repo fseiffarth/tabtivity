@@ -117,10 +117,16 @@
 
 /* Alt-drag over a pill: the drop will box the two together (not reorder).
    Suppress the reorder insertion bar and show a breathing "absorb" pulse that
-   reads as the target swelling to pull the dragged pill into a new box. */
+   reads as the target swelling to pull the dragged pill into a new box. The
+   glow is ::after's static blurred shadow; only its opacity and the pill's
+   transform animate (WebKitGTK software-renders animated blurred
+   box-shadows). The pill's `overflow: hidden` would clip a pseudo-element's
+   outer shadow, so it is lifted while the pulse runs. */
 .project-pill.drag-group {
   margin-left: 0;
   border-color: var(--accent);
+  overflow: visible;
+  box-shadow: 0 0 0 1px var(--accent);
   transform-origin: center;
   animation: drag-group-absorb 0.7s ease-in-out infinite;
 }
@@ -129,15 +135,34 @@
   content: none;
 }
 
+.project-pill.drag-group::after {
+  content: "";
+  position: absolute;
+  /* The border box: the pill's 3px top border sits outside the padding box. */
+  inset: -3px 0 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 4px var(--accent), 0 0 18px var(--accent);
+  animation: drag-group-glow 0.7s ease-in-out infinite;
+}
+
 @keyframes drag-group-absorb {
   0%,
   100% {
-    box-shadow: 0 0 0 1px var(--accent), 0 0 5px var(--accent);
     transform: scale(1);
   }
   50% {
-    box-shadow: 0 0 0 4px var(--accent), 0 0 18px var(--accent);
     transform: scale(1.07);
+  }
+}
+
+@keyframes drag-group-glow {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
   }
 }
 
@@ -1737,6 +1762,7 @@
    made. Class selectors, so they outrank the `*` rule above at equal
    importance. */
 :root[data-blurred] .tab.landing,
+:root[data-blurred] .tab.landing::before,
 :root[data-blurred] .tab-drop-placeholder {
   animation-play-state: running !important;
 }
@@ -2191,8 +2217,11 @@ button.tab-todo-link {
    A tab dropped into a DIFFERENT tab bar (cross-group move / split) mounts
    fresh in its destination bar and plays this one-shot "settle" so it's clear
    where the dragged tab landed: it drops in from slightly above, overshoots,
-   and settles, ringed by a fading accent glow. The animation overrides the
-   active tab's inset shadow for its duration, then the inline style resumes. */
+   and settles, ringed by a fading accent glow. The glow is ::before's static
+   blurred shadow whose opacity rises and fades with the settle — never an
+   animated blurred box-shadow (WebKitGTK software path). `::before`, because
+   `::after` is the status ring's; an install-pending tab's own breathing
+   `::before` ring wins over the glow. */
 .tab.landing {
   animation: tab-land 0.34s cubic-bezier(0.2, 0.7, 0.3, 1);
   /* Lift above neighbours so the overshoot/glow isn't clipped by adjacent tabs. */
@@ -2200,21 +2229,42 @@ button.tab-todo-link {
   z-index: 12;
 }
 
+.tab.landing:not(.install-pending)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  opacity: 0;
+  animation: tab-land-glow 0.34s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
 @keyframes tab-land {
   0% {
     transform: translateY(-10px) scale(1.14);
     opacity: 0;
-    box-shadow: 0 0 0 2px var(--accent);
   }
   55% {
     transform: translateY(2px) scale(0.97);
     opacity: 1;
-    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--accent) 55%, transparent);
   }
   100% {
     transform: translateY(0) scale(1);
     opacity: 1;
-    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@keyframes tab-land-glow {
+  0% {
+    opacity: 0;
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
   }
 }
 
@@ -2222,6 +2272,9 @@ button.tab-todo-link {
 @media (prefers-reduced-motion: reduce) {
   .tab.landing {
     animation: tab-land-fade 0.2s ease-out;
+  }
+  .tab.landing:not(.install-pending)::before {
+    animation: none;
   }
   @keyframes tab-land-fade {
     0% { opacity: 0; }

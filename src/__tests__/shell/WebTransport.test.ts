@@ -226,6 +226,52 @@ describe("the browser transport", () => {
     expect(next.textFrames()).toEqual([{ t: "sub", name: "terminal-output" }]);
   });
 
+  it("close() settles in-flight calls and ready waiters itself, before the socket's late onclose", async () => {
+    // A real WebSocket fires `onclose` asynchronously, after `close()` has
+    // already dropped the socket: hold it back the way the browser does.
+    const { client, socket, invoke, scheduled } = connected();
+    let lateClose: (() => void) | null = null;
+    socket.close = () => {
+      socket.readyState = 3;
+      lateClose = () => socket.onclose?.({});
+    };
+    const pending = invoke("pty_scrollback", { id: "p" });
+    const raw = client.callRaw("write_file_bytes", { path: "/srv/a" }, new Uint8Array([1]));
+    client.close();
+    await expect(pending).rejects.toBeInstanceOf(DisconnectedError);
+    await expect(raw).rejects.toBeInstanceOf(DisconnectedError);
+    expect(client.up).toBe(false);
+    expect(client.hello).toBeNull();
+    expect(linkState()).toBe("down");
+    // A waiter registered while closed is refused at once, not parked forever.
+    await expect(client.whenReady()).rejects.toBeInstanceOf(DisconnectedError);
+    // The late onclose and a late frame on the dropped socket change nothing.
+    lateClose!();
+    socket.hello();
+    expect(client.hello).toBeNull();
+    expect(linkState()).toBe("down");
+    expect(scheduled).toHaveLength(0);
+  });
+
+  it("close() rejects a whenReady() waiting for the first hello", async () => {
+    const client = new WsClient({
+      url: "ws://127.0.0.1:8742/api/v1/desktop/ws",
+      protocol: "x-desktop.v1",
+      socket: (url, protocol) => {
+        const socket = new FakeSocket(url, protocol);
+        socket.close = () => {
+          socket.readyState = 3;
+        };
+        return socket;
+      },
+      schedule: () => {},
+    });
+    client.connect();
+    const ready = client.whenReady();
+    client.close();
+    await expect(ready).rejects.toBeInstanceOf(DisconnectedError);
+  });
+
   it("pauses interval pollers while the link is down", () => {
     const { socket, scheduled } = connected();
     vi.useFakeTimers();

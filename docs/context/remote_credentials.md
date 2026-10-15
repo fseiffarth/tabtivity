@@ -51,12 +51,13 @@ Referenced from `AGENTS.md`.
   per tunnel, whichever menu saved it. Hence the toggle is *pre-ticked* when the target
   already has one (an untick is an explicit delete, so connecting with it unticked
   would clear another project's saved password), and a blank password field means "use
-  the saved one", not "authenticate with nothing". The credential a create/extend
-  dialog authenticated with is also handed to that project's **first pooled connect**
-  (`stashRemotePassword`, single-use, never written to disk): connecting it
-  password-less would work — it rides the ControlMaster the dialog left up — but the
-  backend reads "no password given, none saved" as *key* auth and would record
-  `key_auth: true` on a password host, which auto-connect later believes.
+  the saved one", not "authenticate with nothing". The extend dialog hands the
+  credential it authenticated with straight to its `remote_connect` (never written to
+  disk, never parked in the frontend — the old `stashRemotePassword` map was
+  write-only and was deleted, screen 2026-10-15 #11): connecting it password-less
+  would work — it rides the ControlMaster the dialog left up — but the backend reads
+  "no password given, none saved" as *key* auth and would record `key_auth: true` on
+  a password host, which auto-connect later believes.
   That inference is now the caller's to disclaim, because handing over the password is
   only one of several ways a connect ends up credential-less. `remote_connect` takes
   **`via_login`**: "this may be riding a master somebody else authenticated" — the
@@ -83,8 +84,9 @@ Referenced from `AGENTS.md`.
   password/passphrase row is rendered from *both* halves of the section (`sshSaveRow` /
   `vpnSaveRow`), because the secret belongs to the host, not to how you happened to
   sign in this time, and only an explicit untick ever deletes one. A terminal login
-  leaves nothing to stash, so the dialogs mark that connect `stashRemoteViaLogin` —
-  otherwise its credential-less success is read as key auth by the `via_login` rule above.
+  leaves no credential, so its connect must go out with `via_login` — otherwise its
+  credential-less success is read as key auth by the rule above. (The dialogs' old
+  `stashRemoteViaLogin` mark had no reader and was deleted with `stashRemotePassword`.)
   - The **add-a-machine** form (`RemoteMachinesWindow`) had no terminal login at all —
     only the password field, in *both* modes — so it now grows the same one, and its
     switch **defaults to on in non-headless mode**, where a password field was never

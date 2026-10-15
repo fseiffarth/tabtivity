@@ -76,55 +76,7 @@ function vpnToast(name: string): string {
   return `VPN up · ${name} — this computer's traffic now routes through the tunnel`;
 }
 
-/**
- * The password a create/extend dialog authenticated its SSH session with, handed
- * over for that project's **first** pooled connect and forgotten the moment it is
- * used (or the connect gives up). Never persisted — persisting is what the dialog's
- * "Save password" toggle is for, and a user who declined it must not have the
- * secret written anywhere.
- *
- * Without this, the first `remote_connect` for a just-created remote project ran
- * with `password: null` and only succeeded because the dialog's ControlMaster was
- * still up. Two things came out wrong: the pool depended on a master it doesn't own,
- * and the backend — which reads "no password given, none saved" as *key* auth —
- * recorded `key_auth: true` on a host that in fact needs a password, so the project
- * then advertised itself as auto-connect-eligible and the auto-connect failed on the
- * next launch.
- *
- * **Currently write-only.** The reader was `ensureRemotePool`, reachable only from
- * `reconnectRemote`, which nothing has called for some time; both were deleted with
- * the auto-connect audit rather than left as an ungated retry loop waiting to be
- * re-wired. The dialogs still stash, so the hand-over is one call away — but until a
- * caller exists, a just-created project's first pooled connect gets its credential
- * from the keychain or the dialog's own master, exactly as it did before.
- */
-const pendingRemotePassword = new Map<string, string>();
 const deactivatingProjects = new Set<string>();
-
-/** Hand `projectId`'s first pooled connect the password the dialog just used. */
-export function stashRemotePassword(projectId: string, password: string): void {
-  if (password) pendingRemotePassword.set(projectId, password);
-}
-
-/**
- * Projects whose first pooled connect will be riding a **login terminal's**
- * ControlMaster rather than a credential of its own.
- *
- * Normally that is implied by the mode — `connections_headless: false` means every
- * login is a terminal. But the dialogs now offer "Sign in in a terminal" for a single
- * connect *while headless*, and in that case there is no password to stash and the
- * mode says the opposite of what happened. Without this, that connect succeeds
- * credential-less and `record_key_auth` (commands/remote.rs) reads it as key auth —
- * stamping `key_auth: true` onto a password host, which then advertises a promptless
- * auto-connect that fails on every launch. The frontend is the only side that knows,
- * so it has to say.
- */
-const pendingViaLogin = new Set<string>();
-
-/** Mark `projectId`'s first pooled connect as riding a login terminal's master. */
-export function stashRemoteViaLogin(projectId: string): void {
-  pendingViaLogin.add(projectId);
-}
 
 /** Projects with an auto-connect attempt in flight, so a switch away and back
  *  (or a launch racing an activation) can't start a second one. */

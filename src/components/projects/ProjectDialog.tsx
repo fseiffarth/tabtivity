@@ -26,11 +26,7 @@ import {
 } from "./scaffold";
 import { useRemoteSession, type RemoteStep } from "./useRemoteSession";
 import { RemoteProjectSection } from "./RemoteProjectSection";
-import {
-  stashRemotePassword,
-  stashRemoteViaLogin,
-  useProjectsStore,
-} from "../../stores/projects";
+import { useProjectsStore } from "../../stores/projects";
 import { Dropdown } from "../common/Dropdown";
 import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL } from "../../lib/installCommand";
 import { UntestedTag } from "../common/UntestedTag";
@@ -200,7 +196,6 @@ export function ProjectDialog({
     remoteChosenPath,
     setRemoteChosenPath,
     rememberChosenPath,
-    remotePassword,
     toggleRemoteProject,
     buildRemoteSpec,
   } = remote;
@@ -932,16 +927,6 @@ export function ProjectDialog({
       }
       if (isRemoteProject) {
         rememberChosenPath();
-        // The new project's pooled connect happens on activation, inside `onProject`
-        // below — hand it the credential this dialog authenticated with, so that leg
-        // doesn't have to ride the master we happen to have left up (and so a
-        // password host isn't recorded as key-auth). Single-use; not persisted —
-        // persisting is what the "Save password" toggle is for.
-        stashRemotePassword(project.id, remotePassword);
-        // A login the user typed into the embedded terminal leaves no password to
-        // stash, and in headless mode the mode alone doesn't say so — mark it, or the
-        // credential-less first connect is recorded as key auth on a password host.
-        if (remote.sshTerm) stashRemoteViaLogin(project.id);
       }
       await onProject(created);
       await openScaffoldAgentTabs(created, scaffoldAgentFills);
