@@ -8,7 +8,7 @@
 // @ts-expect-error node:child_process has no type declarations in this project (no @types/node)
 import { execFileSync, spawnSync } from "node:child_process";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 // @ts-expect-error node:os has no type declarations in this project (no @types/node)
 import { tmpdir } from "node:os";
 // @ts-expect-error node:path has no type declarations in this project (no @types/node)
@@ -29,7 +29,22 @@ const lines = (out: string) => out.split("\n").filter(Boolean).sort();
 
 // The hook itself, as tracked in this repo.
 const hook = join(repoRoot, ".githooks", "pre-push");
-const BUMP_FILES = ["Cargo.lock", "package.json", "src-tauri/Cargo.toml", "src-tauri/tauri.conf.json"];
+const BUMP_FILES = ["Cargo.lock", "package-lock.json", "package.json", "src-tauri/Cargo.toml", "src-tauri/tauri.conf.json"];
+
+/** An npm v3 lockfile as npm writes it: the root's version twice, and a
+ * dependency at the same version that must not move with it. */
+const npmLock = (version: string) => JSON.stringify({
+  name: "x", version, lockfileVersion: 3, requires: true,
+  packages: {
+    "": { name: "x", version, dependencies: { dep: "^0.1.2" } },
+    "node_modules/dep": { version: "0.1.2", license: "MIT" },
+  },
+}, null, 2) + "\n";
+/** The lockfile's root version, both copies, and the dependency's. */
+const lockVersions = (work: string) => {
+  const lock = JSON.parse(readFileSync(join(work, "package-lock.json"), "utf8"));
+  return [lock.version, lock.packages[""].version, lock.packages["node_modules/dep"].version];
+};
 
 /** A throwaway repo at v0.1.2 with two commits; the remote "has" the first. */
 function throwawayRepo() {
@@ -41,9 +56,11 @@ function throwawayRepo() {
     writeFileSync(join(work, "scripts", script), readFileSync(join(repoRoot, "scripts", script)), { mode: 0o755 });
   }
   writeFileSync(join(work, "package.json"), JSON.stringify({ name: "x", version: "0.1.2" }, null, 2) + "\n");
+  writeFileSync(join(work, "package-lock.json"), npmLock("0.1.2"));
   writeFileSync(join(work, "src-tauri", "Cargo.toml"), `[package]\nname = "${BRAND.slug}"\nversion = "0.1.2"\n`);
   writeFileSync(join(work, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "0.1.2" }, null, 2) + "\n");
   writeFileSync(join(work, "Cargo.lock"), `[[package]]\nname = "${BRAND.slug}"\nversion = "0.1.2"\n`);
+  for (const file of BUMP_FILES) chmodSync(join(work, file), 0o644);
   writeFileSync(join(work, "hello.txt"), "hello\n");
   git(work, "add", "-A");
   git(work, "commit", "-q", "-m", "one");
@@ -71,6 +88,13 @@ describe.skipIf(process.platform === "win32" || !hasTool("git") || !hasTool("jq"
     expect(run.stderr).not.toContain("failed to push");
     expect(git(work, "log", "-1", "--format=%s")).toBe("chore: bump version to v0.1.3");
     expect(JSON.parse(readFileSync(join(work, "package.json"), "utf8")).version).toBe("0.1.3");
+    // The lockfile's root moves with it, in place (npm's own formatting kept),
+    // and the bump commit carries it.
+    expect(lockVersions(work)).toEqual(["0.1.3", "0.1.3", "0.1.2"]);
+    expect(readFileSync(join(work, "package-lock.json"), "utf8")).toBe(npmLock("0.1.3"));
+    expect(lines(git(work, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))).toEqual(BUMP_FILES);
+    // Rewritten in place: a bump never leaves a version file owner-only.
+    for (const file of BUMP_FILES) expect((statSync(join(work, file)).mode & 0o777).toString(8), file).toBe("644");
     expect(git(work, "status", "--porcelain")).toBe("");
     // Without the variable the hook still re-pushes itself (and aborts the
     // original push): with a remote that "has" the same version it bumps
@@ -111,6 +135,7 @@ describe.skipIf(process.platform === "win32" || !hasTool("git") || !hasTool("jq"
     expect(git(work, "rev-parse", "HEAD")).toBe(localSha);
     expect(JSON.parse(readFileSync(join(work, "package.json"), "utf8")).version).toBe("0.1.2");
     expect(readFileSync(join(work, "Cargo.lock"), "utf8")).toContain('version = "0.1.2"');
+    expect(lockVersions(work)).toEqual(["0.1.2", "0.1.2", "0.1.2"]);
     expect(git(work, "status", "--porcelain")).toBe("");
     expect(readdirSync(join(work, ".git")).filter((f: string) => f.startsWith("bump-index"))).toEqual([]);
     expect(readdirSync(join(work, "src-tauri")).filter((f: string) => f.includes("pre-push-restore"))).toEqual([]);
@@ -149,5 +174,15 @@ describe.skipIf(process.platform === "win32" || !hasTool("git") || !hasTool("jq"
     expect(run.stderr).toContain("src-tauri/Cargo.toml");
     expect(git(work, "rev-parse", "HEAD")).toBe(localSha);
     expect(JSON.parse(readFileSync(join(work, "package.json"), "utf8")).version).toBe("0.1.2");
+  });
+
+  it("counts package-lock.json among the version files", () => {
+    const { work, remoteSha, localSha } = throwawayRepo();
+    writeFileSync(join(work, "package-lock.json"), npmLock("0.1.2").replace('"dep": "^0.1.2"', '"dep": "^0.2.0"'));
+    const run = preflight(work, localSha, remoteSha);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("package-lock.json");
+    expect(git(work, "rev-parse", "HEAD")).toBe(localSha);
+    expect(lockVersions(work)).toEqual(["0.1.2", "0.1.2", "0.1.2"]);
   });
 });
