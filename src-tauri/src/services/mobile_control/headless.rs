@@ -388,12 +388,12 @@ fn default_agent(state_dir: &Path) -> String {
 pub fn agents(state_dir: &Path, host_key: &[u8], installed: &dyn Fn(&str) -> bool) -> Vec<AgentChoice> {
     let disabled = disabled_agents(state_dir);
     let default = default_agent(state_dir);
-    super::discovery::RESUMABLE_BUILTINS
-        .iter()
+    super::discovery::resumable_builtins()
+        .into_iter()
         .filter_map(|bin| {
             let label = crate::commands::agents::agent_label_for_bin(bin)?;
             let id = crate::commands::agents::agent_id_for_bin(bin)?;
-            if disabled.contains(id) || disabled.contains(*bin) || !installed(bin) {
+            if disabled.contains(id) || disabled.contains(bin) || !installed(bin) {
                 return None;
             }
             Some(AgentChoice {
@@ -401,7 +401,7 @@ pub fn agents(state_dir: &Path, host_key: &[u8], installed: &dyn Fn(&str) -> boo
                     id: key_id(host_key, "agent", &[bin]),
                     label: label.to_string(),
                     modes: Vec::new(),
-                    default: default == *bin || default == id,
+                    default: default == bin || default == id,
                 },
                 bin,
             })
@@ -863,19 +863,13 @@ pub fn closed_tabs(state_dir: &Path, raw_id: &str) -> Vec<super::protocol::Close
         .collect()
 }
 
-/// `RESUMABLE_AGENTS` (`stores/tabs.ts`): the launch args that bring a
-/// resumable agent tab's conversation back. Claude's `--resume <launch id>`
-/// is upgraded to the live id by `launch_prep` as at every restart; Codex
-/// resolves its own from `<UPPER>_TAB_UID`; the rest continue their latest.
+/// The launch args that bring a resumable agent tab's conversation back — the
+/// registry's `Resume` (`commands::agents`, the frontend's `RESUMABLE_AGENTS`).
+/// Claude's `--resume <launch id>` is upgraded to the live id by `launch_prep`
+/// as at every restart; Codex resolves its own from `<UPPER>_TAB_UID`; the
+/// rest continue their latest.
 pub(super) fn resume_args(cmd: &str, session_id: &str) -> Vec<String> {
-    match cmd {
-        "claude" => vec!["--resume".into(), session_id.into()],
-        "codex" => Vec::new(),
-        "qwen" | "opencode" | "copilot" | "cursor-agent" | "grok" | "agy" | "vibe" => vec!["--continue".into()],
-        "droid" => vec!["--resume".into()],
-        "gemini" => vec!["--resume".into(), "latest".into()],
-        _ => Vec::new(),
-    }
+    crate::commands::agents::resume_args_for_bin(cmd, session_id).unwrap_or_default()
 }
 
 /// `ReopenTab` with no window: the closed record comes back as a new tab

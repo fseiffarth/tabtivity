@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { reseedDetached } from "../detached";
+import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
-  RESUMABLE_AGENTS,
   allGroups,
   findGroup,
   findGroupOfTab,

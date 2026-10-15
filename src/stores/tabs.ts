@@ -6094,23 +6094,12 @@ export function mapGroup(
   };
 }
 
-// Commands that launch an AI coding agent (mirrors TabBar's AGENT_ITEMS and the
-// backend agent registry in commands::agents). Used to classify a tab by its cmd.
-const AGENT_CMDS = new Set([
-  "claude",
-  "codex",
-  "gemini",
-  "agy",
-  "vibe",
-  "aider",
-  "opencode",
-  "cursor-agent",
-  "copilot",
-  "grok",
-  "qwen",
-  "openclaw",
-  "droid",
-]);
+// The built-in agent CLIs (`lib/agents/agentClis`, generated from the backend
+// registry in commands::agents): a tab is classified as an agent by its cmd,
+// and a resumable one relaunches on `RESUMABLE_AGENTS`. Imported here, inside
+// this block, so the store's import list (another change's region) stays as it
+// is; ES imports are hoisted.
+import { AGENT_BINS, RESUMABLE_AGENTS } from "../lib/agents/agentClis";
 
 export function cmdToKind(cmd: string): TabKind {
   if (cmd === FILES_TAB_CMD) return "files";
@@ -6124,7 +6113,7 @@ export function cmdToKind(cmd: string): TabKind {
   if (cmd === PRINTING_TAB_CMD) return "printing";
   if (cmd === SKILLSLIBRARY_TAB_CMD) return "skillslibrary";
   if (cmd === PROMPTCHART_TAB_CMD) return "promptchart";
-  if (AGENT_CMDS.has(cmd)) return "agent";
+  if (AGENT_BINS.has(cmd)) return "agent";
   return "shell";
 }
 
@@ -6208,56 +6197,6 @@ export function isPtyTabKind(kind: TabKind): boolean {
   return kind === "agent" || kind === "local_agent" || kind === "shell";
 }
 
-/**
- * Agents whose prior session can be resumed, mapping `cmd` → the launch args to
- * relaunch with that session. Two resume styles are wired:
- *
- *  - id-based: Claude (`--resume <id>`), Codex (`codex resume`) and Vibe
- *    (`--resume <id>`) resume a captured session; the backend injects the
- *    latter two from their per-tab hook records.
- *  - cwd "continue last": Qwen, OpenCode, Copilot, Cursor, Gemini, Grok,
- *    Google Antigravity have no caller-supplied launch id, so
- *    Tabtivity re-launches with their "continue the most recent session" flag.
- *    Because each agent tab
- *    launches in the project directory, that most-recent session IS the tab's
- *    prior conversation. These ignore the minted id (it only satisfies the
- *    persistence gate below and is set as TABTIVITY_TAB_UID). Caveat: two tabs of
- *    the same agent in one project both resume that project's single latest
- *    session, so they can't be told apart on restore. Aider stays excluded — it
- *    has no per-session resume (only `--restore-chat-history`).
- */
-export const RESUMABLE_AGENTS: Record<string, (id: string) => string[]> = {
-  // Claude: `--resume <launch-id>`; the backend upgrades the id to the live one
-  // after `/clear`.
-  claude: (id) => ["--resume", id],
-  // Codex mints its own session id, so the tab's `sessionId` is only the
-  // TABTIVITY_TAB_UID key (not a Codex id) → no frontend resume args. The backend
-  // reads the hook-recorded live id and injects `codex resume <live-id>` at spawn
-  // (terminal::resolve_codex_session).
-  codex: () => [],
-  // cwd "continue last session" — no captured id needed (see note above).
-  qwen: () => ["--continue"],
-  opencode: () => ["--continue"],
-  copilot: () => ["--continue"],
-  "cursor-agent": () => ["--continue"],
-  // Grok Build (xAI's own CLI, which replaced the third-party `grok-cli` this
-  // registry used to install): `-c/--continue` takes the most recent session
-  // of the current directory. Its `--resume <id>` wants Grok's own session id,
-  // which a launch cannot supply, so it is continue-last like the others.
-  grok: () => ["--continue"],
-  // Droid: `--resume` with no id loads the most recent session of the
-  // current directory (its `~/.factory/sessions` are filed by cwd).
-  droid: () => ["--resume"],
-  // Gemini's `--resume` takes "latest" (or an index), not a uuid, so it can only
-  // continue the project's most-recent session — not the specific one its launch
-  // `--session-id <uuid>` minted. That makes it continue-last like the others.
-  gemini: () => ["--resume", "latest"],
-  // Antigravity CLI: `-c`/`--continue` resumes the most recent conversation.
-  agy: () => ["--continue"],
-  // Vibe mints its own ID. The backend replaces this legacy fallback with
-  // `--resume <live-id>` once its post-agent hook has recorded a turn.
-  vibe: () => ["--continue"],
-};
 
 /**
  * Whether a tab is a resumable agent: an agent/local-agent tab that minted a

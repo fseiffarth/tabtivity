@@ -10,6 +10,7 @@
 // Type-only, so this stays free of a runtime import cycle: `tabs.ts` imports
 // *this* module to count tab opens.
 import type { TabKind } from "../stores/tabs";
+import { AGENT_CLI_ROWS } from "./agents/agentClis";
 import { envName } from "./brand";
 
 export const METRIC = {
@@ -68,8 +69,8 @@ export function sub(prefix: string, leaf: string): string {
  * fallback for the vibe route. Returns `null` for a tab that is not an agent.
  *
  * `kind === "agent"` is itself the test for "this cmd is a known agent" —
- * `cmdToKind` only assigns that kind to a cmd in its `AGENT_CMDS` set — so there
- * is no second registry to keep in step here.
+ * `cmdToKind` only assigns that kind to a built-in agent's cmd (`AGENT_BINS`,
+ * `lib/agents/agentClis`) — so there is no second registry to keep in step here.
  */
 export function agentMetricLeaf(tab: {
   kind: TabKind;
@@ -108,42 +109,14 @@ export function agentPromptLeaf(tab: {
 
 /** Human labels for the well-known agent commands; unknown leaves render as-is. */
 const AGENT_LABELS: Record<string, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  gemini: "Google Gemini",
-  agy: "Google Antigravity",
-  vibe: "Mistral",
-  // Kiro's executable was renamed `kiro-cli`; the old leaf stays so
-  // counters written before the rename still decode.
-  "kiro-cli": "Kiro",
+  // Leaves no built-in writes any more, kept so old counters still decode:
+  // Kiro's executable was renamed `kiro-cli`, and these CLIs left the registry.
   kiro: "Kiro",
-  cline: "Cline",
-  aider: "Aider",
-  opencode: "OpenCode",
-  "cursor-agent": "Cursor",
-  copilot: "Copilot",
-  grok: "Grok",
-  qwen: "Qwen",
-  openclaw: "OpenClaw",
-  goose: "Goose",
   openhands: "OpenHands",
-  pi: "Pi",
-  plandex: "Plandex",
-  sweagent: "SWE-agent",
-  mini: "mini-SWE-agent",
   mentat: "Mentat",
   gpte: "GPT Engineer",
-  droid: "Droid",
-  auggie: "Auggie",
-  kilo: "Kilo Code",
-  cn: "Continue.dev",
-  junie: "JetBrains Junie",
-  codebuddy: "CodeBuddy",
-  crush: "Crush",
-  amp: "Amp",
-  kimi: "Kimi Code",
-  qoder: "Qoder",
-  muse: "Meta Muse Code",
+  // Every built-in agent, by the command its tabs are counted under.
+  ...Object.fromEntries(AGENT_CLI_ROWS.map((row) => [row.bin, row.label])),
 };
 
 /** Display name for a metric leaf (`claude` → "Claude", `local.qwen3:8b` → "qwen3:8b"). */

@@ -3,8 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
+import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
-  RESUMABLE_AGENTS,
   ROOT_SCOPE,
   refreshWorkspaceScope,
   useTabsStore,

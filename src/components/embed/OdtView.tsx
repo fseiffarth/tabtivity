@@ -1,13 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ViewerHeader, useViewerState } from "./FileViewerPane";
-import { useFileScope, usePaneVisible, readFileBytes, fileMtime } from "./fileAccess";
+import { useFileScope, readFileBytes } from "./fileAccess";
+import { useDiskReloadPoll } from "../../lib/useDiskReloadPoll";
 import { extractOdt, renderOdtDocument } from "../../lib/viewers/odt";
 import { unzipOdt } from "../../lib/viewers/odtArchive";
 import { useT } from "../../lib/i18n";
-
-// Re-read the file this long after an external change is detected (mirrors the
-// other viewers' diff-aware reload cadence).
-const RELOAD_POLL_MS = 1500;
 
 /**
  * Read-only in-app viewer for OpenDocument Text (`.odt`) files (#51, lightweight
@@ -34,11 +31,9 @@ export function OdtView({
   // tabKey accepted for call-site parity; no persisted reader position yet.
   useViewerState(tabKey);
   const scope = useFileScope();
-  const paneVisible = usePaneVisible();
 
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const lastMtime = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -53,36 +48,15 @@ export function OdtView({
     }
   }, [path, scope]);
 
-  // Initial load + mtime baseline.
+  // Initial load.
   useEffect(() => {
     setHtml(null);
     setError(null);
-    lastMtime.current = null;
     void load();
-    fileMtime(path, scope)
-      .then((m) => { lastMtime.current = m; })
-      .catch(() => {});
   }, [path, scope, load]);
 
-  // Diff-aware reload: poll mtime; re-render on an external advance. Visible
-  // panes only (hidden ones stay mounted forever); the immediate check on
-  // re-show catches a change made while the pane was hidden.
-  useEffect(() => {
-    if (html == null || !paneVisible) return;
-    let cancelled = false;
-    const check = () => {
-      fileMtime(path, scope)
-        .then((m) => {
-          if (cancelled || lastMtime.current == null || m <= lastMtime.current) return;
-          lastMtime.current = m;
-          void load();
-        })
-        .catch(() => {});
-    };
-    check();
-    const id = setInterval(check, RELOAD_POLL_MS);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [path, scope, html, paneVisible, load]);
+  // Diff-aware reload: re-render on an external write, once the first render landed.
+  useDiskReloadPoll(path, scope, () => void load(), { enabled: html != null });
 
   const loaded = html != null;
   return (

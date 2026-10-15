@@ -129,6 +129,7 @@ import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { basename } from "../../../lib/paths";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
+import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
 import { ArrowUpRightIcon, PlayIcon } from "../../common/icons/Icon";
 
 /** Bounds for the rail's user-resizable width (px). Wide enough at the max that
@@ -143,7 +144,7 @@ export function clampRailWidth(w: number): number {
 
 /** How often a TeX-figure's compiled PDF is checked for a newer mtime — i.e. a
  *  recompile the author ran from the source tab this view opened. Matches the
- *  PDF viewer's own external-change poll (`PdfViewer.RELOAD_POLL_MS`); there is
+ *  viewers' own external-change poll (`DISK_RELOAD_POLL_MS`); there is
  *  no reason for a deck's figures to notice a recompile any slower. */
 const TEX_FIGURE_POLL_MS = 1500;
 
@@ -488,27 +489,23 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
 
   // Notice a foreign write to the sidecar itself — two deck tabs on one file
   // (main window + popout), or the JSON edited in a text tab beside it. Until now
-  // that was last-writer-wins with no warning (TODO V #116). Visible panes only
-  // (hidden ones stay mounted forever); re-show re-arms the interval, whose
-  // first tick then reconciles anything written while hidden.
-  useEffect(() => {
-    if (!deck || !paneVisible) return;
-    const id = setInterval(() => {
-      if (presentingRef.current) return;
-      void (async () => {
-        const mt = await fileMtime(path, scope).catch(() => null);
-        if (mt == null || deckMtimeRef.current == null || mt === deckMtimeRef.current) return;
-        deckMtimeRef.current = mt;
-        if (dirtyRef.current) {
-          setHold(t("deckView.externalChangeHeld"));
-        } else {
-          setReloadNonce((n) => n + 1);
-          setNotice(t("deckView.externalChangeReloaded"));
-        }
-      })();
-    }, TEX_FIGURE_POLL_MS);
-    return () => clearInterval(id);
-  }, [deck, path, scope, paneVisible]);
+  // that was last-writer-wins with no warning (TODO V #116). The viewers' own
+  // poll (`useDiskReloadPoll`): visible panes only, and it stands down during a
+  // talk; the baseline is the load's and our own saves' (`deckMtimeRef`), and
+  // the first tick after a re-show reconciles anything written while hidden.
+  useDiskReloadPoll(
+    path,
+    scope,
+    () => {
+      if (dirtyRef.current) {
+        setHold(t("deckView.externalChangeHeld"));
+      } else {
+        setReloadNonce((n) => n + 1);
+        setNotice(t("deckView.externalChangeReloaded"));
+      }
+    },
+    { enabled: deck != null && !presenting, baseline: deckMtimeRef, seed: false, immediate: false },
+  );
 
   // --- editing -----------------------------------------------------------
   //
