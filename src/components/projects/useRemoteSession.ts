@@ -18,6 +18,12 @@ import {
   markConnectionOpened,
   resolveRemoteStartDir,
 } from "../../lib/remote/remoteConnect";
+import {
+  loginDedupeKey,
+  sshLogin,
+  vpnLogin,
+  type LoginTarget,
+} from "../../lib/remote/loginTarget";
 import { useSettingsStore } from "../../stores/settings";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import type { LogLine } from "../common/ConnectionLog";
@@ -160,8 +166,9 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   // In non-headless mode the OpenVPN tunnel and SSH login are interactive: the
   // user types the passphrase/password into a live terminal. Rather than
   // deferring those to a root-terminal tab at activation (the old flow), we
-  // embed the live terminal right here in the dialog. Each holds `{ id, command }`
-  // for an embedded `TerminalView` that runs `command` in a shell. The PTY is
+  // embed the live terminal right here in the dialog. Each holds `{ id, login }`
+  // for an embedded `TerminalView` whose PTY runs that login (`TabEntry.login`'s
+  // embedded twin — no shell around it). The PTY is
   // spawned with `persistOnUnmount`, so closing the dialog leaves the
   // tunnel/login up for the new project to use; we also pre-mark the activation
   // dedupe key (see `markConnectionOpened`) so the root-tab flow is skipped.
@@ -169,10 +176,10 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   // so the matching `stopX` forgets *that* key — not one rebuilt from current
   // render state, which may have drifted (e.g. the config/address changed while
   // the terminal was up), leaving a stale mark that suppresses the real connect.
-  const [vpnTerm, setVpnTerm] = useState<{ id: string; command: string; key: string } | null>(
+  const [vpnTerm, setVpnTerm] = useState<{ id: string; login: LoginTarget; key: string } | null>(
     null,
   );
-  const [sshTerm, setSshTerm] = useState<{ id: string; command: string; key: string } | null>(
+  const [sshTerm, setSshTerm] = useState<{ id: string; login: LoginTarget; key: string } | null>(
     null,
   );
 
@@ -505,18 +512,20 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   };
 
   // Non-headless: bring the OpenVPN tunnel up in a terminal embedded in the
-  // dialog. The connect command (`pkexec openvpn … --auth-nocache`) runs
-  // interactively so the user types the passphrase in that visible terminal —
+  // dialog. The connect (`pkexec openvpn … --auth-nocache`) is the PTY's own
+  // program, so the user types the passphrase in that visible terminal —
   // Tabtivity never handles it. The PTY persists past the dialog so the tunnel
   // stays up for the new project; we pre-mark the dedupe key so activation's
   // root-terminal fallback (`ensureVpnIfNeeded`) is suppressed.
   const startVpnTerm = async () => {
     if (!vpnConfig || vpnTerm) return;
     try {
-      const command = await invoke<string>("openvpn_login_command", { config: vpnConfig });
-      const key = `vpn:${vpnConfig}`;
+      // A config the backend cannot build a login for is the terminal's spawn
+      // error now (it used to throw here, before the lamp moved).
+      const login = vpnLogin(vpnConfig);
+      const key = loginDedupeKey(login);
       markConnectionOpened(key);
-      setVpnTerm({ id: nextDialogTermId("vpn"), command, key });
+      setVpnTerm({ id: nextDialogTermId("vpn"), login, key });
       // The handshake is now in flight in the terminal below — light the lamp
       // orange until the readiness watcher (below) sees the ready marker.
       setVpnStatus("connecting");
@@ -661,15 +670,10 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
       return;
     }
     try {
-      const command = await invoke<string>("remote_login_command", {
-        user: parsed.user ?? null,
-        host: parsed.host,
-        port: parsed.port ?? null,
-      });
-      const target = `${parsed.user ? `${parsed.user}@` : ""}${parsed.host}`;
-      const key = `ssh:${target}:${parsed.port ?? ""}`;
+      const login = sshLogin(parsed.user, parsed.host, parsed.port);
+      const key = loginDedupeKey(login);
       markConnectionOpened(key);
-      setSshTerm({ id: nextDialogTermId("ssh"), command, key });
+      setSshTerm({ id: nextDialogTermId("ssh"), login, key });
       setSshError("");
       // The user committed to this host by opening its login — remember it so it
       // shows up in the recents dropdown next time (covers non-headless + winManual).

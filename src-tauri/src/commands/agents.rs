@@ -594,11 +594,13 @@ pub async fn install_agent_remote(agent_id: String, machine_id: String) -> Resul
 /// into a root-scope shell tab, where the user reads the output and answers what
 /// it asks.
 ///
-/// Deliberately **not** registered with `credentials::note_minted_login`: this
-/// command line does not stop at a login prompt, it goes on to run an installer,
-/// so a "type my saved password" paste aimed at it could land in whatever prompt
-/// the installer happens to be showing. The interactive login is still typed by
-/// hand, or ridden for free off the shared ControlMaster.
+/// Deliberately **not** a login PTY (`commands::credentials`, `pty_spawn`'s
+/// `login`): this command line does not stop at a login prompt, it goes on to run
+/// an installer, so a "type my saved password" paste aimed at it could land in
+/// whatever prompt the installer happens to be showing. The tab it is typed into
+/// is an ordinary shell, never marked, so no saved secret can be pasted there; the
+/// interactive login is still typed by hand, or ridden for free off the shared
+/// ControlMaster.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn install_agent_remote_command(
     agent_id: String,

@@ -10,6 +10,7 @@ import {
 import { canConnectVpnSilently, connectVpnSilently } from "./vpnConnect";
 import { keyringState } from "../../keyring";
 import { openConnectionInRoot } from "../remoteConnect";
+import { loginDedupeKey, vpnLogin } from "../loginTarget";
 import { translate, useI18nStore } from "../../i18n";
 
 /**
@@ -187,26 +188,30 @@ export async function autoConnectVpnOnLaunch(): Promise<void> {
  * how the user wants Tabtivity to behave, not something a failed handshake gets to
  * decide for them.
  *
- * Building the command also **arms** the tunnel backend-side (the pidfile +
- * `--writepid` + management socket `interactive_connect_command` appends), so a
- * tunnel authenticated in the terminal is as visible and as killable as a headless
- * one — which is also what makes the `pollVpnUp` below able to observe it at all.
+ * The tab is a login terminal (`TabEntry.login`): the backend builds the OpenVPN
+ * argv from the config and runs it as the PTY's program, and building it also
+ * **arms** the tunnel (the pidfile + `--writepid` + management socket
+ * `interactive_connect_argv` adds), so a tunnel authenticated in the terminal is as
+ * visible and as killable as a headless one — which is also what makes the
+ * `pollVpnUp` below able to observe it at all.
  *
- * Throws if the command can't be built; the lamp is only moved once it can, so a
- * failed handoff leaves no phantom "connecting" behind.
+ * A config the backend cannot build a login for (missing, unreadable, no
+ * `openvpn` on Windows) is the tab's spawn error now, not a throw here; the lamp
+ * this moved to "connecting" is not stranded, because `pollVpnUp` runs to its
+ * bound and ends it on a terminal mark either way.
  */
 export async function openVpnLoginInTerminal(
   config: string,
   opts?: { label?: string; projectId?: string | null },
 ): Promise<void> {
   const name = opts?.label ?? fileOf(config);
-  const command = await invoke<string>("openvpn_login_command", { config });
+  const login = vpnLogin(config);
   if (opts?.projectId) markVpnConnecting(opts.projectId, config);
   else useVpnStatusStore.getState().setState(config, "connecting");
   openConnectionInRoot({
     label: `OpenVPN · ${name}`,
-    command,
-    dedupeKey: `vpn:${config}`,
+    login,
+    dedupeKey: loginDedupeKey(login),
   });
   pollVpnUp(config, { projectId: opts?.projectId, name });
 }

@@ -61,14 +61,19 @@ const backend = (opts: { silent?: boolean; active?: string[]; connect?: "ok" | "
  * own instance of *those*. Seeding must therefore happen inside this graph, not
  * outside it. Returns the store the assertions read.
  */
+/** The tabs store of the last `launch`'s module graph (where a root login lands). */
+let launchedTabs: typeof import("../../stores/tabs").useTabsStore | null = null;
+
 async function launch(seed: Partial<Settings>) {
   vi.resetModules();
-  const [{ autoConnectVpnOnLaunch }, { useSettingsStore }, { useVpnStatusStore }] =
+  const [{ autoConnectVpnOnLaunch }, { useSettingsStore }, { useVpnStatusStore }, tabs] =
     await Promise.all([
       import("../../lib/remote/vpn/vpnAutoConnect"),
       import("../../stores/settings"),
       import("../../stores/remote/vpn/vpnStatus"),
+      import("../../stores/tabs"),
     ]);
+  launchedTabs = tabs.useTabsStore;
   useSettingsStore.setState({ settings: seed as Settings, loaded: true });
   await autoConnectVpnOnLaunch();
   return useVpnStatusStore.getState().byConfig;
@@ -131,12 +136,18 @@ describe("VPN auto-connect (machine-level)", () => {
 
   /** Non-headless: Tabtivity handles no passwords, so "connect on launch" can only mean
    *  "the connect command is waiting in the root terminal" — never a silent connect. */
-  it("opens the connect command in the root terminal when headless connections are off", async () => {
+  it("opens the login in a root terminal when headless connections are off", async () => {
     backend({ silent: true });
     const byConfig = await launch({ vpn_auto_connect: CONFIG, connections_headless: false });
 
     expect(calls("openvpn_connect")).toHaveLength(0);
-    expect(calls("openvpn_login_command")).toHaveLength(1);
     expect(byConfig[CONFIG]).toBe("connecting");
+    // A login tab: its PTY runs OpenVPN for this config, nothing typed into a shell.
+    await vi.waitFor(() => {
+      const root = launchedTabs?.getState().tabsByScope.root ?? [];
+      expect(root.map((t) => t.login)).toContainEqual({ kind: "vpn", config: CONFIG });
+    });
+    const root = launchedTabs?.getState().tabsByScope.root ?? [];
+    expect(root.every((t) => t.initialInput === undefined)).toBe(true);
   });
 });

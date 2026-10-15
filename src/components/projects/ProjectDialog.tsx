@@ -31,6 +31,7 @@ import { Dropdown } from "../common/Dropdown";
 import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL } from "../../lib/installCommand";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_MAC, IS_HOST_WINDOWS } from "../../lib/platform";
+import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
@@ -929,6 +930,10 @@ export function ProjectDialog({
         rememberChosenPath();
       }
       await onProject(created);
+      // The new project's first pooled connect, carrying how this dialog signed in:
+      // the typed password, or `viaLogin` when it rides the login terminal's master —
+      // never a bare credential-less connect the backend would read as key auth.
+      if (isRemoteProject) void connectCreatedRemoteProject(created.id, remote.remotePassword);
       await openScaffoldAgentTabs(created, scaffoldAgentFills);
       await openDescriptionAgentTab(created, descriptionAgent);
       // Last, because it is the one step that can fail with the project already

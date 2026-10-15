@@ -54,6 +54,7 @@ import { useConnectDialogStore } from "./remote/connectDialog";
 import { useBoxesStore } from "./boxes";
 import { useStopProjectStore } from "./stopProjectPrompt";
 import { connectionStillOpen, openConnectionInRoot } from "../lib/remote/remoteConnect";
+import { loginDedupeKey, sshLogin, vpnLogin } from "../lib/remote/loginTarget";
 import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../components/projects/scaffold";
 import type { SavedPasswordState } from "../components/projects/useSavedCredential";
 import { IS_HOST_WINDOWS } from "../lib/platform";
@@ -165,10 +166,10 @@ async function autoConnectInteractive(
     // Password host (or one whose key auth just failed): hand the login to the root
     // terminal and wait for its master. Deduped by target, so a login the Connect
     // dialog or a previous activation already opened is reused, never duplicated.
-    const command = await invoke<string>("remote_login_command", sshArgs);
+    const login = sshLogin(sshArgs.user, sshArgs.host, sshArgs.port);
     const target = `${sshArgs.user ? `${sshArgs.user}@` : ""}${sshArgs.host}`;
-    const dedupeKey = `ssh:${target}:${sshArgs.port ?? ""}`;
-    openConnectionInRoot({ label: `ssh · ${target}`, command, dedupeKey });
+    const dedupeKey = loginDedupeKey(login);
+    openConnectionInRoot({ label: `ssh · ${target}`, login, dedupeKey });
     const ready = await pollRootLoginReady(projectId, sshArgs, dedupeKey);
     if (!stillActive()) return abandonAutoConnect(projectId, hostId);
     if (ready === "closed") {
@@ -181,8 +182,8 @@ async function autoConnectInteractive(
     }
     if (ready === "timeout") {
       // Never authenticated within the window. Red lamp, no retry loop — the user
-      // finishes the login and connects from the pill's lamp (the tab is still
-      // sitting there with the command in it).
+      // finishes the login and connects from the pill's lamp (the login tab is still
+      // there, unless the user closed it or the login ended).
       status().setSsh(projectId, "error", hostId);
       return;
     }
@@ -346,16 +347,13 @@ async function autoConnectPrimary(projectId: string): Promise<void> {
         // resets the red SSH lamp below and re-runs this connect — now reachable.
         const up = await invoke<boolean>("openvpn_status", { config }).catch(() => false);
         if (!up) {
-          try {
-            const command = await invoke<string>("openvpn_login_command", { config });
-            openConnectionInRoot({
-              label: `OpenVPN · ${project!.name}`,
-              command,
-              dedupeKey: `vpn:${config}`,
-            });
-          } catch (error) {
-            console.warn("auto-connect: VPN root-terminal login failed", error);
-          }
+          // A bad config now surfaces as the login tab's spawn error.
+          const login = vpnLogin(config);
+          openConnectionInRoot({
+            label: `OpenVPN · ${project!.name}`,
+            login,
+            dedupeKey: loginDedupeKey(login),
+          });
         }
         if (!stillActive()) return abandon();
         // Red, not "connecting": the host is unreachable until the tunnel is up, and a

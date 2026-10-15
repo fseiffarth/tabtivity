@@ -42,6 +42,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { resolveProjectDirectory, resolveLocalMirror, type ProjectEntry } from "../../types";
 import { basename } from "../../lib/paths";
+import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
 import { writeFileText } from "../embed/fileAccess";
 import { UntestedTag } from "../common/UntestedTag";
 import {
@@ -276,8 +277,11 @@ function HpcPipelineWizard({ onClose }: { onClose: () => void }) {
         },
       });
       rememberChosenPath();
-      await addProject(project); // adds + activates (which connects)
+      await addProject(project); // adds + activates
       setCreated(project);
+      // Its first pooled connect, with the password typed here or, with none,
+      // `viaLogin` (it rides the login terminal's master) — see the helper.
+      void connectCreatedRemoteProject(project.id, remotePassword);
       // The "keep it in $HOME" layout still wants the workspace reachable from
       // the project — a symlink the host's own tools (job scripts, `cd`) follow.
       // Best-effort: a failed link must not undo a created project, so it only

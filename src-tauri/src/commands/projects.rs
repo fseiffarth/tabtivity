@@ -2266,7 +2266,7 @@ pub fn set_project_remote_label(
 /// user — or with the wrong one — authenticated as the *local* account name with
 /// no way to correct it short of recreating the project. Every login surface needs
 /// it, not just the headless one: it is what `ssh_connect`/`remote_connect` send
-/// **and** what `remote_login_command` types into the interactive login terminal.
+/// **and** what the interactive login PTY (`pty_spawn` with `login: ssh`) runs.
 ///
 /// A blank/whitespace-only string clears it (ssh then falls back to the local
 /// account name / `~/.ssh/config`). Returns the resulting user (`None` = cleared).

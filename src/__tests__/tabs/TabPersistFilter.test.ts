@@ -324,6 +324,31 @@ describe("saveLayout — persists restorable tabs (incl. resumable agents)", () 
     expect(JSON.stringify(arg.groups)).not.toContain("agent");
   });
 
+  it("drops a login terminal (TabEntry.login): it is never saved, so never restored", async () => {
+    // A restored login would raise a pkexec/ssh prompt at launch, and auto-connect
+    // must never prompt. It is a shell tab by kind, so only `login` keeps it out.
+    const store = useTabsStore.getState();
+    store.setScope("p");
+    store.addTab({
+      label: "ssh · alice@h.example",
+      cmd: "",
+      cwd: "/p",
+      kind: "shell",
+      login: { kind: "ssh", user: "alice", host: "h.example", port: null },
+    });
+    store.addTab({ label: "bash", cmd: "bash", cwd: "/p", kind: "shell" });
+
+    await useTabsStore.getState().saveLayout("/p/project.json");
+
+    const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
+    const arg = call![1] as { tabs: { label: string; login?: unknown }[] };
+    expect(arg.tabs.map((t) => t.label)).toEqual(["bash"]);
+    expect(JSON.stringify(arg)).not.toContain("h.example");
+    expect(
+      isRestorableTab({ kind: "shell", cmd: "", login: { kind: "vpn", config: "/x.ovpn" } }),
+    ).toBe(false);
+  });
+
   it("writes a browser tab's committed URL to disk", async () => {
     // The bug this locks: `loadFromLayout` read `url`, and the in-memory
     // project-switch snapshot carried live TabEntries through unchanged — so a

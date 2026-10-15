@@ -629,12 +629,12 @@ function RemoteConnectDialogInner({
                     <div className="dialog-connect-terminal-host">
                       {/* A re-adopted terminal (tunnel still running from an earlier
                           open of this dialog) attaches to its live PTY instead of
-                          spawning a second one — and so must not re-type the command. */}
+                          spawning a second one — and so never starts the login twice. */}
                       <TerminalView
                         id={vpnTerm.id}
                         cmd=""
                         cwd=""
-                        initialInput={vpnTerm.adopted ? undefined : vpnTerm.command}
+                        login={vpnTerm.login}
                         attachOnly={vpnTerm.adopted}
                         visible
                         focused
@@ -857,7 +857,7 @@ function RemoteConnectDialogInner({
                       id={sshTerm.id}
                       cmd=""
                       cwd=""
-                      initialInput={sshTerm.adopted ? undefined : sshTerm.command}
+                      login={sshTerm.login}
                       attachOnly={sshTerm.adopted}
                       visible
                       focused

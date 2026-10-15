@@ -12,6 +12,7 @@ import { rememberArg, useSavedCredential } from "./useSavedCredential";
 import { CredentialPasteBar, sshPasteEntries } from "./CredentialPasteBar";
 import { TerminalView } from "../terminal/TerminalView";
 import { forgetConnection, markConnectionOpened, resolveRemoteStartDir } from "../../lib/remote/remoteConnect";
+import { loginDedupeKey, sshLogin, type LoginTarget } from "../../lib/remote/loginTarget";
 import { formatBytes } from "../../lib/formatBytes";
 import { withHostKeyConfirm } from "../../lib/remote/hostKey";
 import { sameTarget } from "../../lib/remote/machineSync";
@@ -279,7 +280,7 @@ export function RemoteMachinesWindow({
   // is the mode, and only here was it missing.
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
   const [viaTerminal, setViaTerminal] = useState(!headless);
-  const [loginTerm, setLoginTerm] = useState<{ id: string; command: string; key: string } | null>(
+  const [loginTerm, setLoginTerm] = useState<{ id: string; login: LoginTarget; key: string } | null>(
     null,
   );
   const loginPoll = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -425,23 +426,14 @@ export function RemoteMachinesWindow({
     }
     setAddError("");
     browse.setError("");
-    try {
-      const command = await invoke<string>("remote_login_command", {
-        user: parsed.user,
-        host: parsed.host,
-        port: parsed.port,
-      });
-      // Pre-mark the activation dedupe key this login satisfies, so the project's
-      // own root-terminal login isn't opened a second time for the same target.
-      const target = `${parsed.user ? `${parsed.user}@` : ""}${parsed.host}`;
-      const key = `ssh:${target}:${parsed.port ?? ""}`;
-      markConnectionOpened(key);
-      setLoginTerm({ id: nextMachineTermId(), command, key });
-      setBrowseConnecting(true);
-      pollLoginReady(parsed);
-    } catch (e) {
-      setAddError(String(e));
-    }
+    const login = sshLogin(parsed.user, parsed.host, parsed.port);
+    // Pre-mark the activation dedupe key this login satisfies, so the project's
+    // own root-terminal login isn't opened a second time for the same target.
+    const key = loginDedupeKey(login);
+    markConnectionOpened(key);
+    setLoginTerm({ id: nextMachineTermId(), login, key });
+    setBrowseConnecting(true);
+    pollLoginReady(parsed);
   };
 
   /** Re-arm the readiness poll — for a login finished after the bound ran out. */
@@ -1031,7 +1023,7 @@ export function RemoteMachinesWindow({
                       id={loginTerm.id}
                       cmd=""
                       cwd=""
-                      initialInput={loginTerm.command}
+                      login={loginTerm.login}
                       visible
                       focused
                       persistOnUnmount

@@ -65,6 +65,13 @@ Referenced from `AGENTS.md`.
   global machine's master. `commands::remote::record_key_auth` then answers `None`
   ("this proves nothing, write nothing down") instead of `Some(true)`. A *password*
   is still recorded either way: that is an observation, not an inference.
+  The create dialogs (`ProjectDialog`, `HpcPipelineWizard`) now open the new
+  project's first pooled connect themselves, as the extend dialog does
+  (`lib/remote/remoteConnect`'s `connectCreatedRemoteProject`): the typed password if
+  there is one, else `via_login` — a credential-less first connect there can only be
+  riding the dialog's login master. Before, nothing connected a new project until the
+  lamp was clicked, and that connect (blank password, riding the dialog's master)
+  could record `key_auth: true` on a password host.
 - **Headless is a default, not a trap: every login section can be switched to a
   terminal, for one connect.** Tabtivity's own login can only ask what it has fields for —
   an SSH password, an OpenVPN password and key passphrase. A host or tunnel is free to
@@ -92,7 +99,7 @@ Referenced from `AGENTS.md`.
     switch **defaults to on in non-headless mode**, where a password field was never
     supposed to be. It cannot reuse the dialogs' plumbing (that lives in
     `useRemoteSession`/`useRemoteReconnect`, which are per-project), so it drives the
-    shared browse hook directly: open `remote_login_command` in an embedded terminal,
+    shared browse hook directly: open an ssh login PTY in an embedded terminal,
     poll a credential-less `ssh_connect` until the login's ControlMaster answers, then
     `useRemoteBrowse.openSession` — freeze the session the user just authenticated,
     with no second login. Its "Save password" row is *disabled* rather than hidden in
@@ -117,7 +124,29 @@ Referenced from `AGENTS.md`.
   was retyped into every login. `components/projects/CredentialPasteBar` is the way
   in: a **"Type it for me"** row above each embedded login terminal, with a button per
   credential the target actually has (`sshPasteEntries`/`vpnPasteEntries`, one
-  definition for all three surfaces). Four things keep it inside the policy above.
+  definition for all three surfaces). Five things keep it inside the policy above.
+  The secret **only reaches a login the backend itself is running**: a login
+  terminal is a *login PTY* — `pty_spawn` with `login: {kind: "ssh", user, host,
+  port}` / `{kind: "vpn", config}` — whose program is the ssh / OpenVPN argv the
+  backend builds for that target (`ssh_exec::interactive_login_args`,
+  `openvpn::interactive_connect_argv`), spawned directly with the caller's
+  `cmd`/`args`/`env` discarded and no shell before or after it. Only such a spawn
+  marks its PTY as a paste target, for that target's own accounts; the mark goes
+  when the login's child exits, when the PTY is killed, and on any respawn of the
+  id. A login cannot ride with a project, agent, container, Host session, tmux or
+  schedule flag, and a VPN login is refused for a browser client (the tunnel is the
+  desktop's). Accepted residual: after a successful ssh login the PTY *is* the
+  remote shell of the account the credential authenticates, and a paste there
+  stays allowed — same trust domain. (It replaced a gate that marked a shell PTY
+  once a backend-minted login command line was typed into it, which left a
+  shell running before and after the login — a paste target the login no longer
+  held.) The frontend asks for one with `TabEntry.login` (the root console's login
+  tabs, `lib/remote/remoteConnect`'s `openConnectionInRoot`) or `TerminalView`'s
+  `login` prop (the dialogs' embedded logins); target type and dedupe key live in
+  `lib/remote/loginTarget`. A login tab is never persisted or restored (a restored
+  one would prompt at launch), never tmux-wrapped, and once its login exits it no
+  longer counts as the connection's open terminal, so the next request opens a
+  fresh one.
   The secret **never enters the frontend**: `credential_paste_to_pty`
   (`commands::credentials`) reads the keychain and writes the bytes into the PTY
   *inside the backend* — no field, no component state, no event payload; only the

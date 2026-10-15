@@ -1,5 +1,6 @@
 import { cmdToKind, effectiveTabLocation, remoteHostIdOf, type TabEntry, type TabKind } from "../../stores/tabs";
 import { envName } from "../brand";
+import type { LoginTarget } from "../remote/loginTarget";
 
 /**
  * The kind a `TerminalView` acts as: its declared `kind` prop, else a
@@ -27,6 +28,7 @@ export interface TerminalSpawnInputs {
   args?: string[];
   env?: Record<string, string>;
   initialInput?: string;
+  login?: LoginTarget | null;
   cwd: string;
   localOnly?: boolean;
   projectId?: string | null;
@@ -56,6 +58,7 @@ export function terminalSpawnKey(p: TerminalSpawnInputs): string {
     p.args ?? [],
     p.env ?? {},
     p.initialInput ?? null,
+    p.login ?? null,
     p.cwd,
     !!p.localOnly,
     p.projectId ?? null,
@@ -100,17 +103,21 @@ export function tabTerminalSpawn(
     // A popout is attach-only and never spawns, and its `terminal-ready`
     // never fires, so it takes no initialInput (matches its old behavior).
     initialInput: derived.attachOnly ? undefined : tab.initialInput,
+    // A login terminal runs its login as the PTY's program (the backend builds
+    // it from this target) and is a plain local PTY: never tmux-wrapped or
+    // containered, which the backend would refuse.
+    login: tab.login ?? null,
     cwd: derived.terminalCwd,
     localOnly: location === "local",
     projectId: scope === "root" ? null : scope,
     // Multi-host: the worker id (or "primary") this tab runs on, so the
     // backend resolves the right host's RemoteSpec (null for a local tab).
     remoteHostId: remoteHostIdOf(location),
-    sandbox: !!derived.sandbox,
+    sandbox: !tab.login && !!derived.sandbox,
     // Persistent remote session (TODO #85). An explicit attach (opened from
     // the Sessions view) wins over the tab's own persistent session.
-    tmuxSession: derived.tmuxSession ?? null,
-    tmuxAttach: tab.tmuxAttach ?? null,
+    tmuxSession: tab.login ? null : (derived.tmuxSession ?? null),
+    tmuxAttach: tab.login ? null : (tab.tmuxAttach ?? null),
     hostBoundUid: tab.hostBoundUid ?? null,
     hostSession: !!tab.hostSession,
     kind: tab.kind,

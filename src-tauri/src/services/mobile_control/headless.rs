@@ -761,6 +761,7 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
     let tmux = crate::services::workspace::tmux_of(tab).unwrap_or_default().to_string();
     let kind = tab.extra.get("kind").and_then(serde_json::Value::as_str);
     PtyOptions {
+        login: None,
         id: format!("{LAUNCH_ID_PREFIX}{tmux}"),
         cmd: tab.cmd.clone(),
         args: strings("args"),
