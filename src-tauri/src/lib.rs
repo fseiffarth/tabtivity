@@ -1734,7 +1734,6 @@ pub fn run() {
             commands::projects::get_projects,
             commands::projects::save_projects,
             commands::projects::load_project,
-            commands::projects::save_project,
             commands::projects::set_project_description,
             commands::projects::set_project_name,
             commands::projects::plan_project_dir_rename,
