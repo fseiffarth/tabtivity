@@ -282,6 +282,10 @@ pub fn compute_fence_roots(
     scope_id: &str,
     local_only: bool,
 ) -> Option<Vec<PathBuf>> {
+    // Before any lookup: a record with the assistant's id yields nothing.
+    if is_assistant_scope(scope_id) {
+        return Some(Vec::new());
+    }
     if let Some(box_id) = crate::commands::boxes::box_id_of_scope(scope_id) {
         return crate::commands::boxes::compute_box_allowed_roots(boxes, projects, box_id)
             .map(dedupe_paths);
@@ -323,7 +327,7 @@ pub fn attach_roots(
     id: &str,
     state_dir: &Path,
 ) -> Option<Vec<PathBuf>> {
-    if crate::commands::boxes::box_id_of_scope(id).is_some() {
+    if crate::commands::boxes::box_id_of_scope(id).is_some() || is_assistant_scope(id) {
         return None;
     }
     let mut roots = compute_fence_roots(boxes, projects, id, true)?;
@@ -364,6 +368,95 @@ fn read_lists() -> (BoxesList, ProjectsList) {
 /// spawn (`project_id` is `None`); a project id is a UUID, a box scope is
 /// `box:<id>`, so the literal collides with neither.
 pub const ROOT_SCOPE: &str = "root";
+
+/// Whether `scope_id` is the chat assistant's scope (`storage::ASSISTANT_SCOPE`,
+/// `docs/assistant_plan.md`), under any spelling that names the same directory
+/// (`Assistant`, `assistant `: the id becomes a path under the state dir, and a
+/// case-folding filesystem or the key reduction would otherwise let it share
+/// the scope's state). The assistant has no fence roots at all: it is neither a
+/// project nor a box, so every place that turns a scope id into roots meets this
+/// first, before any `projects.json` lookup (a planted entry with that id must
+/// never yield a directory).
+pub(crate) fn is_assistant_scope(scope_id: &str) -> bool {
+    storage::project_key(scope_id.trim()).eq_ignore_ascii_case(storage::ASSISTANT_SCOPE)
+}
+
+/// The read-only host paths a scope's fence shows on top of its home:
+/// `configured` is the user's `agent_fence_paths` toolchain allowlist, read
+/// lazily. The assistant gets none of it (and `configured` is not even read).
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn read_only_for_scope(scope_id: &str, configured: impl FnOnce() -> Vec<String>) -> Vec<String> {
+    if is_assistant_scope(scope_id) {
+        Vec::new()
+    } else {
+        configured()
+    }
+}
+
+/// The assistant's one writable support mount: `<state_dir>/assistant/work`,
+/// holding a folder per chat. A support mount rather than a fence root because
+/// `mask_private_state` hides the state dir after the roots are bound and only
+/// support mounts are re-bound through it (and the Seatbelt `writable` list is
+/// built from the same mounts). Created `0700` when missing; refused when the
+/// name is a link.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+pub(crate) fn assistant_work_mount(state_dir: &Path) -> std::io::Result<BindMount> {
+    let work = crate::services::assistant::work_root(state_dir);
+    if std::fs::symlink_metadata(&work).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other("the work folder is a link"));
+    }
+    crate::services::agent_home::create_private_dir(&work)?;
+    let path = work.to_string_lossy().into_owned();
+    Ok(BindMount { src: path.clone(), dst: path, read_only: false })
+}
+
+/// The writable mounts a scope gets beyond the common ones of
+/// [`agent_state_mounts`]: none, except the assistant's chat folders. Like the
+/// live-session slice they are re-bound after the state mask.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn scope_extra_mounts(scope_id: &str, state_dir: &Path) -> Result<Vec<BindMount>, String> {
+    if !is_assistant_scope(scope_id) {
+        return Ok(Vec::new());
+    }
+    let work = assistant_work_mount(state_dir).map_err(|e| format!("Agent sandbox: the assistant's work folder: {e}"))?;
+    Ok(vec![work])
+}
+
+/// Fail-closed shape check for an assistant spawn, before either wrapper
+/// builds anything: no roots, the scope home is the assistant's own (or its
+/// local-model twin) and the working directory is a plain path below the
+/// `work` folder. Anything else is a bug upstream, never widened or guessed.
+/// Other scopes pass untouched.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn check_assistant_spawn(
+    scope_id: &str,
+    roots: &[PathBuf],
+    scope_home: &Path,
+    cwd: &str,
+    state_dir: &Path,
+) -> Result<(), String> {
+    if !is_assistant_scope(scope_id) {
+        return Ok(());
+    }
+    let refuse = |why: &str| Err(format!("Agent sandbox: the assistant scope {why}; it was not started."));
+    if !roots.is_empty() {
+        return refuse("takes no project or box roots");
+    }
+    let own_homes = [
+        crate::services::agent_home::scope_home_in(state_dir, storage::ASSISTANT_SCOPE),
+        crate::services::agent_home::local_model_home_in(state_dir, storage::ASSISTANT_SCOPE),
+    ];
+    if !own_homes.iter().any(|home| home == scope_home) {
+        return refuse("was given another scope's home");
+    }
+    let cwd = Path::new(cwd);
+    let work = crate::services::assistant::work_root(state_dir);
+    let plain = cwd.components().all(|c| !matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir));
+    if !plain || cwd == work || !cwd.starts_with(&work) {
+        return refuse("must work in a chat folder below its work folder");
+    }
+    Ok(())
+}
 
 /// `Settings::root_fence_projects_readable`: what a **root** agent's fence
 /// exposes read-only on top of `~/tabtivity/root` — every local project's
@@ -443,6 +536,11 @@ pub fn roots_for_scope(scope_id: Option<&str>, local_only: bool) -> Option<Vec<P
     let Some(scope_id) = scope_id else {
         return Some(vec![storage::root_work_dir()]);
     };
+    // The assistant has no roots (its work folder is a support mount, see
+    // `assistant_work_mount`), matched before `projects.json` is read.
+    if is_assistant_scope(scope_id) {
+        return Some(Vec::new());
+    }
     let (boxes, projects) = read_lists();
     let mut roots = compute_fence_roots(&boxes, &projects, scope_id, local_only)?;
 
@@ -965,6 +1063,7 @@ fn agent_state_mounts(
         dst: live_root.to_string_lossy().into_owned(),
         read_only: false,
     }];
+    mounts.extend(scope_extra_mounts(scope_id, &state_dir)?);
     mounts.extend(
         crate::services::sandbox::ro_mounts_for_hooks(&state_dir.join("hooks"))
             .into_iter()
@@ -1325,6 +1424,7 @@ pub fn wrap_pty_options_bwrap(
     // instructions from other members this user has not reviewed (plan
     // §6.5 gate 2); a no-op everywhere else.
     crate::services::server::share::spawn_gate(roots)?;
+    check_assistant_spawn(scope_id, roots, scope_home, &opts.cwd, &storage::state_dir())?;
     // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
@@ -1332,7 +1432,8 @@ pub fn wrap_pty_options_bwrap(
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env)?;
     let support_mounts = mounts.clone();
-    let mut extra_ro = configured_read_only_paths();
+    // The user's toolchain allowlist, except in the assistant's fence.
+    let mut extra_ro = read_only_for_scope(scope_id, configured_read_only_paths);
     // A root agent's read-only view of the projects (a switch, default off):
     // the same channel as the allowlist, so the state mask below still wins.
     extra_ro.extend(root_project_read_only_paths_for(&opts.id, scope_id));
@@ -1602,6 +1703,56 @@ pub(crate) fn one_shot_seatbelt_inputs(
     inputs
 }
 
+/// The writable and read-only paths a list of support mounts means for
+/// Seatbelt, which cannot substitute a path: the agent reaches the store dirs
+/// through the symlinks `agent_auth` puts in its home, so the sources are what
+/// needs allowing.
+#[cfg(any(target_os = "macos", test))]
+fn seatbelt_mount_paths(mounts: &[BindMount]) -> (Vec<String>, Vec<String>) {
+    let (read_only, writable): (Vec<&BindMount>, Vec<&BindMount>) = mounts.iter().partition(|m| m.read_only);
+    (
+        writable.into_iter().map(|m| m.src.clone()).collect(),
+        read_only.into_iter().map(|m| m.src.clone()).collect(),
+    )
+}
+
+/// The pure assembly of a scope's Seatbelt inputs from what the planners
+/// resolved: the roots, the writable and read-only paths, the protected ones
+/// and the hidden Cargo credentials. Hides the private state children and the
+/// whole `agent-homes/` tree, then allows the scope's own home last. Roots may
+/// be empty (the assistant's profile): the profile then names the home, the
+/// writable support mounts and nothing else under the user's home.
+#[cfg(any(target_os = "macos", test))]
+#[allow(clippy::too_many_arguments)]
+fn seatbelt_scope_inputs(
+    home: String,
+    state_dir: &Path,
+    scope_home: &Path,
+    roots: &[PathBuf],
+    writable: Vec<String>,
+    readable: Vec<String>,
+    protected: Vec<String>,
+    cargo_hidden: Vec<String>,
+) -> SeatbeltInputs {
+    let homes_root = crate::services::agent_home::homes_root_in(state_dir);
+    SeatbeltInputs {
+        home,
+        roots: roots.iter().map(|r| r.to_string_lossy().into_owned()).collect(),
+        writable,
+        readable,
+        protected,
+        pinned: Vec::new(),
+        hidden: cargo_hidden.into_iter().chain(
+            private_state_paths(state_dir).into_iter().filter(|p| {
+                // Deny private children on macOS: Seatbelt cannot restore a
+                // tool mount through a final deny of the whole state directory.
+                p != state_dir && state_dir.canonicalize().as_ref().ok() != Some(p)
+            }).map(|p| p.to_string_lossy().into_owned())
+        ).chain(std::iter::once(homes_root.to_string_lossy().into_owned())).collect(),
+        own_home: Some(scope_home.to_string_lossy().into_owned()),
+    }
+}
+
 /// Resolve the profile inputs for a scope from the same mount planners the
 /// bubblewrap fence uses, so the two fences agree on what an agent may touch.
 #[cfg(target_os = "macos")]
@@ -1613,20 +1764,10 @@ fn sandbox_exec_inputs(
 ) -> Result<(SeatbeltInputs, Vec<ControlPin>), String> {
     let home = paths::home_dir_string();
     let state_dir = storage::state_dir();
+    check_assistant_spawn(scope_id, roots, scope_home, &opts.cwd, &state_dir)?;
     let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env)?;
-    let mut writable: Vec<String> = Vec::new();
-    let mut readable: Vec<String> = Vec::new();
+    let (mut writable, mut readable) = seatbelt_mount_paths(&mounts);
     let mut protected: Vec<String> = Vec::new();
-    for mount in &mounts {
-        // Seatbelt cannot substitute a path: the agent reaches the store dirs
-        // through the symlinks `agent_auth` puts in its home, so the sources
-        // are what needs allowing.
-        if mount.read_only {
-            readable.push(mount.src.clone());
-        } else {
-            writable.push(mount.src.clone());
-        }
-    }
     protected.push(state_dir.join("hooks").to_string_lossy().into_owned());
     // A local-model home is writable, its control files are not (gap 7):
     // Seatbelt has no mount order, so a read-only path inside a writable one
@@ -1636,7 +1777,7 @@ fn sandbox_exec_inputs(
     writable.extend(seatbelt_temp_dirs(
         std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
     ));
-    readable.extend(configured_read_only_paths());
+    readable.extend(read_only_for_scope(scope_id, configured_read_only_paths));
     readable.extend(root_project_read_only_paths_for(&opts.id, scope_id));
     readable.extend(crate::services::agent_install::fence_read_only_paths());
     let search_dirs = command_search_dirs(opts);
@@ -1649,23 +1790,16 @@ fn sandbox_exec_inputs(
         &paths::home_dir(),
         &visible,
     ));
-    let homes_root = crate::services::agent_home::homes_root_in(&state_dir);
-    let mut inputs = SeatbeltInputs {
+    let mut inputs = seatbelt_scope_inputs(
         home,
-        roots: roots.iter().map(|r| r.to_string_lossy().into_owned()).collect(),
+        &state_dir,
+        scope_home,
+        roots,
         writable,
         readable,
         protected,
-        pinned: Vec::new(),
-        hidden: hidden_cargo_credentials(opts).into_iter().chain(
-            private_state_paths(&state_dir).into_iter().filter(|p| {
-                // Deny private children on macOS: Seatbelt cannot restore a
-                // tool mount through a final deny of the whole state directory.
-                p != &state_dir && state_dir.canonicalize().as_ref().ok() != Some(p)
-            }).map(|p| p.to_string_lossy().into_owned())
-        ).chain(std::iter::once(homes_root.to_string_lossy().into_owned())).collect(),
-        own_home: Some(scope_home.to_string_lossy().into_owned()),
-    };
+        hidden_cargo_credentials(opts),
+    );
     // The repo's git control files, as the bubblewrap fence re-mounts them.
     seatbelt_git_guard(
         &mut inputs,
@@ -1741,6 +1875,10 @@ pub fn wrap_pty_options_sandbox_exec(
     Ok(())
 }
 
+/// What [`one_shot_command`] answers for the assistant's scope: push hooks and
+/// mail attach never run inside it.
+const ASSISTANT_NO_ONE_SHOT: &str = "Agent sandbox: the assistant scope runs no one-shot commands.";
+
 /// Whether an agent launch runs one of the CLI's subcommands (`claude auth
 /// login`, a sign-in tab) rather than a session: its first argument is not a
 /// flag. The session flags Tabtivity adds (`--add-dir`, `--remote-control`,
@@ -1790,6 +1928,17 @@ fn platform_reason() -> &'static str {
 }
 
 pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
+    // Not a project: no roots to compute, and no pill to draw for it.
+    if is_assistant_scope(scope_id) {
+        let available = bwrap_available();
+        return AgentFenceStatus {
+            enforced: false,
+            reason: "assistant scope".to_string(),
+            roots: Vec::new(),
+            bwrap_available: available,
+            install_cmd: if available { None } else { fence_install_cmd() },
+        };
+    }
     let mut opts = PtyOptions {
         login: None,
         assistant: None,
@@ -2001,6 +2150,9 @@ pub(crate) fn fenced_scope_of_tab(tab_id: &str) -> Option<String> {
 /// command. Windows has no fence and answers the same refusal.
 #[cfg(target_os = "linux")]
 pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) -> Result<std::process::Command, String> {
+    if is_assistant_scope(scope_id) {
+        return Err(ASSISTANT_NO_ONE_SHOT.to_string());
+    }
     if !bwrap_available() {
         return Err(fence_unavailable_message());
     }
@@ -2042,6 +2194,9 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
 /// allowlist, as the Linux one-shot's empty home shows only the allowlist).
 #[cfg(target_os = "macos")]
 pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) -> Result<std::process::Command, String> {
+    if is_assistant_scope(scope_id) {
+        return Err(ASSISTANT_NO_ONE_SHOT.to_string());
+    }
     if !bwrap_available() {
         return Err(fence_unavailable_message());
     }
@@ -2069,7 +2224,10 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn one_shot_command(_scope_id: &str, _cmd: &str, _args: &[String], _cwd: &Path) -> Result<std::process::Command, String> {
+pub fn one_shot_command(scope_id: &str, _cmd: &str, _args: &[String], _cwd: &Path) -> Result<std::process::Command, String> {
+    if is_assistant_scope(scope_id) {
+        return Err(ASSISTANT_NO_ONE_SHOT.to_string());
+    }
     Err(fence_unavailable_message())
 }
 
@@ -3420,4 +3578,216 @@ mod tests {
         assert!(!runs_subcommand(&["--resume".to_string(), "id".to_string()]));
         assert!(!runs_subcommand(&[]));
     }
+
+    // ── the assistant scope (docs/assistant_plan.md, S1b) ───────────────────
+
+    fn planted(id: &str, dir: &str) -> (BoxesList, ProjectsList) {
+        let boxes: BoxesList =
+            serde_json::from_value(json!([{"id": "b1", "name": "Box", "member_ids": [id], "position": 0, "folder": "/w/box"}])).unwrap();
+        (boxes, vec![project(id, dir)])
+    }
+
+    #[test]
+    fn the_assistant_scope_yields_no_root_whatever_projects_json_holds() {
+        for id in ["assistant", "Assistant", " assistant", "ASSISTANT\n"] {
+            assert!(is_assistant_scope(id), "{id:?}");
+            // A hand-written or imported record with the id: never its directory.
+            let (boxes, projects) = planted(id, "/w/planted");
+            assert_eq!(compute_fence_roots(&boxes, &projects, id, true), Some(Vec::new()), "{id:?}");
+            assert_eq!(compute_fence_roots(&boxes, &projects, id, false), Some(Vec::new()), "{id:?}");
+            assert_eq!(attach_roots(&boxes, &projects, id, Path::new("/state")), None, "{id:?}");
+            assert_eq!(roots_for_scope(Some(id), true), Some(Vec::new()), "{id:?}");
+            assert_eq!(roots_for_scope(Some(id), false), Some(Vec::new()), "{id:?}");
+        }
+        for id in ["root", "assistants", "my-assistant", "box:assistant", "p1", ""] {
+            assert!(!is_assistant_scope(id), "{id:?}");
+        }
+        // Another id still resolves from the lists, and an unknown one is refused.
+        let (boxes, projects) = planted("p1", "/w/alpha");
+        assert_eq!(compute_fence_roots(&boxes, &projects, "p1", true), Some(vec![PathBuf::from("/w/alpha"), PathBuf::from("/w/box")]));
+        assert_eq!(compute_fence_roots(&boxes, &projects, "ghost", true), None);
+        assert_eq!(roots_for_scope(None, true), Some(vec![storage::root_work_dir()]));
+    }
+
+    #[test]
+    fn the_assistant_gets_no_toolchain_allowlist_and_no_root_project_view() {
+        let configured = || vec!["/home/u/.cargo".to_string()];
+        assert!(read_only_for_scope("assistant", || panic!("the allowlist is not even read")).is_empty());
+        assert!(read_only_for_scope("Assistant", || panic!("the allowlist is not even read")).is_empty());
+        assert_eq!(read_only_for_scope("p1", configured), ["/home/u/.cargo"]);
+        assert_eq!(read_only_for_scope("root", configured), ["/home/u/.cargo"]);
+        // The root console's read-only project view is empty for any other
+        // scope, whatever the switch says.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        for scope in [storage::ASSISTANT_SCOPE, "Assistant", "p1"] {
+            assert!(root_project_read_only_paths_for("assistant-tab", scope).is_empty(), "{scope}");
+        }
+    }
+
+    #[test]
+    fn the_assistant_work_folder_is_a_private_writable_support_mount() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        assert!(scope_extra_mounts("p1", &state).unwrap().is_empty());
+        assert!(scope_extra_mounts("root", &state).unwrap().is_empty());
+        assert!(!state.join("assistant").exists(), "another scope creates nothing");
+        let mounts = scope_extra_mounts("assistant", &state).unwrap();
+        let work = crate::services::assistant::work_root(&state);
+        let want = work.to_string_lossy().into_owned();
+        assert_eq!(mounts, vec![BindMount { src: want.clone(), dst: want, read_only: false }]);
+        assert!(work.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&work).unwrap().permissions().mode() & 0o777, 0o700);
+            // A link at the name is refused, never bound.
+            let linked = tmp.path().join("linked");
+            std::fs::create_dir_all(linked.join("assistant")).unwrap();
+            std::fs::create_dir_all(tmp.path().join("elsewhere")).unwrap();
+            std::os::unix::fs::symlink(tmp.path().join("elsewhere"), linked.join("assistant/work")).unwrap();
+            assert!(scope_extra_mounts("assistant", &linked).is_err());
+        }
+    }
+
+    /// The bubblewrap argv of an assistant spawn built from the same pieces the
+    /// wrapper uses (no roots, no allowlist, the support mounts, the state
+    /// mask): no project, box, `agent-global` or `agent_fence_paths` path is
+    /// bound, and the work folder is re-bound read-write after the mask.
+    #[test]
+    fn the_assistant_bwrap_argv_binds_only_its_home_and_the_work_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        for dir in ["agent-global", "sessions", "remote-projects", "hooks"] {
+            std::fs::create_dir_all(state.join(dir)).unwrap();
+        }
+        std::fs::write(state.join("projects.json"), "[]").unwrap();
+        std::fs::create_dir_all(state.join("agent-homes/assistant")).unwrap();
+        let chat = crate::services::assistant::chat_dir(&state, "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10").unwrap();
+        let home = crate::services::agent_home::scope_home_in(&state, "assistant");
+        let live = BindMount { src: state.join("live/assistant").to_string_lossy().into_owned(), dst: state.join("live").to_string_lossy().into_owned(), read_only: false };
+        let mut mounts = vec![live];
+        mounts.extend(scope_extra_mounts("assistant", &state).unwrap());
+        let allowlist = ["/home/u/.cargo", "/home/u/.rustup"].map(String::from).to_vec();
+        let extra_ro = read_only_for_scope("assistant", || allowlist.clone());
+        assert!(extra_ro.is_empty());
+        let roots = compute_fence_roots(&Vec::new(), &vec![project("assistant", "/w/planted")], "assistant", true).unwrap();
+        assert!(roots.is_empty());
+        let mut args = bwrap_args(
+            "/home/u",
+            Some(&home.to_string_lossy()),
+            &chat.to_string_lossy(),
+            "claude",
+            &["--tools".into(), "WebSearch".into()],
+            &roots,
+            &extra_ro,
+            &mounts,
+        );
+        mask_private_state(&mut args, &state, &mounts);
+        let sep = args.iter().position(|a| a == "--").unwrap();
+        // Only `--tmpfs` may name the private folders; nothing is bound from them.
+        let binds: Vec<&[String]> = args[..sep]
+            .windows(3)
+            .filter(|w| ["--bind", "--ro-bind", "--bind-try", "--ro-bind-try"].contains(&w[0].as_str()))
+            // `/dev/null` over a private file is the mask, not an exposure.
+            .filter(|w| w[1] != "/dev/null")
+            .collect();
+        let work = crate::services::assistant::work_root(&state).to_string_lossy().into_owned();
+        for w in &binds {
+            for forbidden in ["agent-global", "projects.json", "/w/planted", "/w/box", ".cargo", ".rustup", "remote-projects", "sessions"] {
+                assert!(!w[1].contains(forbidden) && !w[2].contains(forbidden), "{w:?} binds {forbidden}");
+            }
+        }
+        assert!(!args.iter().any(|a| a == "--bind-try"), "no root is bound: {args:?}");
+        // The home is the assistant's own.
+        assert!(args.windows(3).any(|w| w[0] == "--bind" && w[1] == home.to_string_lossy() && w[2] == "/home/u"));
+        // The mask hides the state dir, then the work folder comes back writable.
+        let mask = args.windows(2).rposition(|w| w[0] == "--tmpfs" && w[1] == state.to_string_lossy()).unwrap();
+        let rebound = args.windows(3).rposition(|w| w[0] == "--bind" && w[1] == work && w[2] == work).unwrap();
+        assert!(mask < rebound && rebound < sep, "{args:?}");
+        assert!(!args.windows(3).any(|w| w[0] == "--ro-bind" && w[2] == work));
+        // The chat folder is the working directory, inside the re-bound work folder.
+        let chdir = args.iter().position(|a| a == "--chdir").unwrap();
+        assert_eq!(args[chdir + 1], chat.to_string_lossy());
+        assert!(chat.starts_with(&work));
+    }
+
+    /// Seatbelt: an empty `roots` list still renders, names the assistant's home
+    /// and the work folder (writable), and no root, allowlist path or other
+    /// scope's home.
+    #[test]
+    fn the_assistant_seatbelt_profile_names_the_home_and_the_work_folder_and_no_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let mut mounts = vec![BindMount { src: state.join("live/assistant").to_string_lossy().into_owned(), dst: state.join("live").to_string_lossy().into_owned(), read_only: false }];
+        mounts.extend(scope_extra_mounts("assistant", &state).unwrap());
+        mounts.push(BindMount { src: state.join("hooks").to_string_lossy().into_owned(), dst: state.join("hooks").to_string_lossy().into_owned(), read_only: true });
+        let (mut writable, readable) = seatbelt_mount_paths(&mounts);
+        writable.extend(seatbelt_temp_dirs(None));
+        let home = crate::services::agent_home::scope_home_in(&state, "assistant");
+        let inputs = seatbelt_scope_inputs(
+            "/Users/a".into(),
+            &state,
+            &home,
+            &[],
+            writable,
+            readable.into_iter().chain(read_only_for_scope("assistant", || vec!["/Users/a/.cargo".into()])).collect(),
+            vec![],
+            vec![],
+        );
+        assert!(inputs.roots.is_empty());
+        assert!(!inputs.readable.iter().any(|p| p.contains(".cargo")));
+        let profile = sandbox_exec_profile(&inputs);
+        let work = crate::services::assistant::work_root(&state).to_string_lossy().into_owned();
+        assert!(profile.starts_with("(version 1)\n(allow default)\n"));
+        assert!(profile.contains(&format!("(allow file-write* (subpath {}))", sbpl_string(&work))), "{profile}");
+        assert!(profile.contains(&format!("(allow file-read* file-write* (subpath {}))", sbpl_string(&home.to_string_lossy()))));
+        assert!(profile.contains(&format!("(deny file-read* file-write* (subpath {}))", sbpl_string(&crate::services::agent_home::homes_root_in(&state).to_string_lossy()))));
+        assert!(!profile.contains(".cargo") && !profile.contains("/w/planted"));
+        // Every write allow is the work folder, the live slice or a temp dir.
+        let mut allowed = vec![work.clone(), state.join("live/assistant").to_string_lossy().into_owned()];
+        allowed.extend(seatbelt_temp_dirs(None));
+        let allowed: Vec<String> = allowed.iter().map(|p| format!("(allow file-write* (subpath {}))", sbpl_string(p))).collect();
+        for line in profile.lines().filter(|l| l.starts_with("(allow file-write*") && !l.contains("literal")) {
+            assert!(allowed.iter().any(|ok| ok == line), "{line}");
+        }
+    }
+
+    #[test]
+    fn an_assistant_spawn_with_roots_a_foreign_home_or_a_stray_cwd_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let work = crate::services::assistant::work_root(state);
+        let chat = work.join("0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10");
+        let chat_s = chat.to_string_lossy().into_owned();
+        let own = crate::services::agent_home::scope_home_in(state, "assistant");
+        let local = crate::services::agent_home::local_model_home_in(state, "assistant");
+        let check = |scope: &str, roots: &[PathBuf], home: &Path, cwd: &str| check_assistant_spawn(scope, roots, home, cwd, state);
+        check("assistant", &[], &own, &chat_s).unwrap();
+        check("assistant", &[], &local, &chat_s).unwrap();
+        assert!(check("assistant", &[PathBuf::from("/w/p")], &own, &chat_s).unwrap_err().contains("no project or box roots"));
+        for foreign in [crate::services::agent_home::scope_home_in(state, "p1"), crate::services::agent_home::scope_home_in(state, "root"), state.to_path_buf(), crate::services::agent_home::host_home_in(state)] {
+            assert!(check("assistant", &[], &foreign, &chat_s).is_err(), "{}", foreign.display());
+        }
+        let outside = state.join("elsewhere").to_string_lossy().into_owned();
+        let dotted = work.join("..").join("x").to_string_lossy().into_owned();
+        for cwd in [work.to_string_lossy().as_ref(), outside.as_str(), dotted.as_str(), "", "relative/dir"] {
+            assert!(check("assistant", &[], &own, cwd).is_err(), "{cwd:?}");
+        }
+        // Not the assistant: untouched.
+        check("p1", &[PathBuf::from("/w/p")], &crate::services::agent_home::scope_home_in(state, "p1"), "/w/p").unwrap();
+        check("root", &[], &own, "").unwrap();
+    }
+
+    #[test]
+    fn the_assistant_scope_has_no_fence_status_and_no_one_shot_command() {
+        for id in ["assistant", "Assistant", " assistant"] {
+            let status = status_for_scope(id);
+            assert!(!status.enforced, "{id:?}");
+            assert_eq!(status.reason, "assistant scope");
+            assert!(status.roots.is_empty());
+            let err = one_shot_command(id, "git", &["status".to_string()], Path::new("/tmp")).unwrap_err();
+            assert!(err.contains("assistant"), "{err}");
+        }
+    }
+
 }
