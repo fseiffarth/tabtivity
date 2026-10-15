@@ -378,7 +378,8 @@ that had Debug mode on before this change keeps the ones it was showing, ticked.
   `Ctrl+P`, and the preview follows its submitted job through the queue.
 - **Agent Skills library**: browse `SKILL.md` catalogs from git sources and
   one-click install a skill into a project's `.claude/skills/` or into the
-  machine's personal `~/.claude/skills/`, which every project here sees.
+  personal scope — the Tabtivity-wide agent layer (`<state_dir>/agent-global`),
+  laid into every agent home, so every project here sees it.
   Claude-only.
 - **Deck presenter**: lay slides over a PDF or a LaTeX base, then present with
   speaker notes, a timer, and a second audience display or window.

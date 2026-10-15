@@ -232,8 +232,8 @@ enum Kind {
     LocalFileOpt,
     /// A `SkillTarget` (`{kind: "project", dir}` / `{kind: "personal"}`): a
     /// project's `dir` is held like [`Kind::UserPath`]; the personal target —
-    /// the real home's `~/.claude/skills`, outside every root and seen by no
-    /// agent tab (they run in Tabtivity's agent homes) — is refused.
+    /// the Tabtivity-wide agent layer (`<state_dir>/agent-global`), outside
+    /// every root and laid into every agent home — is refused.
     SkillTarget,
     /// A list of folders the body only looks inside (`resolve_text_paths`'s
     /// `bases`): each one outside the user's roots is dropped from the list.

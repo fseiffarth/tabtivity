@@ -39,7 +39,8 @@ pub async fn skills_get_detail(source_id: String, rel_path: String) -> Result<Sk
 }
 
 /// The install trio takes a `SkillTarget`, never a bare path: the personal
-/// scope (`~/.claude/skills/`, read by every project on this machine) is a
+/// scope (the Tabtivity-wide agent layer's `.claude/skills/`, laid into every
+/// agent home on this machine) is a
 /// variant with no fields, so the frontend can *ask* for it without being able
 /// to say where it is. See `schema::skills::SkillTarget`.
 #[cfg_attr(feature = "desktop", tauri::command)]

@@ -200,7 +200,7 @@ loops against one mirror and one `sync.json`. Now:
   symlink that sits inside a root (the user could have planted it after
   registering — `git_checkout`, `move_path`) and never when it resolves to
   the home folder, app home or state dir or above. Skills go only into a
-  held project (the personal `~/.claude/skills` is refused); a formatter's
+  held project (the personal scope, the Tabtivity-wide agent layer, is refused); a formatter's
   file path or a link-lookup base outside the roots is dropped (it only
   says where to look). Rows marked `BodyConfined` (viewer
   I/O, `relPath`s), `Remote` (host paths, sync `relPath`s) or `NotAPath`

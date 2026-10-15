@@ -10,9 +10,13 @@
 //! list and every cached clone live in `state_dir()`, shared by every project —
 //! which is why a skill can be installed into a project (`.claude/skills/`,
 //! travelling with the repo, reaching a container through the identical-path
-//! mount and a remote host through lockstep) or into the machine's personal
-//! `~/.claude/skills/`, which every project here sees and no other machine ever
-//! does. `SkillTarget` is that choice and nothing more: it is resolved by
+//! mount and a remote host through lockstep) or into the personal scope: the
+//! Tabtivity-wide agent layer's `.claude/skills/` (`services::agent_global`,
+//! `<state_dir>/agent-global`), which is copied into every agent home at every
+//! spawn — every project here sees it and no other machine ever does. The
+//! user's own `~/.claude/skills` belongs to their own Claude Code and is never
+//! written (agent tabs do not read it anyway: they run in Tabtivity's agent
+//! homes). `SkillTarget` is that choice and nothing more: it is resolved by
 //! [`target_skills_dir`] and by no caller, so the personal target — the one
 //! with the widest blast radius — is the one whose path never crosses the IPC
 //! boundary.
@@ -20,7 +24,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::paths;
 use crate::schema::skills::{
     InstalledSkill, SkillCatalogEntry, SkillDetail, SkillSource, SkillTarget,
 };
@@ -346,9 +349,10 @@ fn project_skills_dir(project_dir: &str) -> PathBuf {
     Path::new(project_dir).join(".claude").join("skills")
 }
 
-/// The `.claude/skills/` directory a target names. `Personal` resolves against
-/// this process's own idea of home — the frontend never says where that is, so
-/// no caller can turn the personal scope into an arbitrary destination.
+/// The `.claude/skills/` directory a target names. `Personal` resolves to the
+/// Tabtivity-wide agent layer (`agent_global::global_dir()`), never the user's
+/// own `~/.claude` — the frontend never says where that is, so no caller can
+/// turn the personal scope into an arbitrary destination.
 ///
 /// An empty project dir is refused rather than silently resolving to a relative
 /// `.claude/skills` under whatever the working directory happens to be: a
@@ -362,7 +366,9 @@ fn target_skills_dir(target: &SkillTarget) -> Result<PathBuf, String> {
             }
             Ok(project_skills_dir(dir))
         }
-        SkillTarget::Personal => Ok(project_skills_dir(&paths::home_dir_string())),
+        SkillTarget::Personal => Ok(crate::services::agent_global::global_dir()
+            .join(".claude")
+            .join("skills")),
     }
 }
 
@@ -564,11 +570,19 @@ mod tests {
             Path::new("/tmp/proj").join(".claude").join("skills")
         );
 
-        // Personal resolves against this process's own home — the point being
-        // that no argument reached it, so no caller can aim it elsewhere.
+        // Personal resolves to the Tabtivity-wide agent layer, which every
+        // agent home is laid from — never the user's own `~/.claude/skills`
+        // (another app's config). No argument reached it, so no caller can aim
+        // it elsewhere.
         let personal = target_skills_dir(&SkillTarget::Personal).unwrap();
-        assert!(personal.ends_with(Path::new(".claude").join("skills")));
-        assert!(personal.starts_with(paths::home_dir_string()));
+        assert_eq!(
+            personal,
+            crate::services::agent_global::global_dir()
+                .join(".claude")
+                .join("skills")
+        );
+        let home_skills = Path::new(&crate::paths::home_dir_string()).join(".claude").join("skills");
+        assert_ne!(personal, home_skills);
     }
 
     #[test]
