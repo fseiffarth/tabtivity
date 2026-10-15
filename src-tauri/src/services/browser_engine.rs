@@ -750,6 +750,12 @@ enum FetchOrigin {
     /// particular address, so hop 0 is judged as though a server had chosen it —
     /// no loopback, no private network — and every hop must be `https`.
     Document,
+    /// Chosen by a *model* reading untrusted pages (the assistant's web lane,
+    /// [`fetch_for_agent`]): judged like [`FetchOrigin::Document`] on hop 0 —
+    /// no loopback, no private network, every address a name resolves to must
+    /// be globally routable — but `http` is allowed as well as `https`, and a
+    /// URL carrying userinfo is refused on every hop.
+    Agent,
 }
 
 fn hop_allowed(url: &Url, previous: Option<&Url>, hop: usize, origin: FetchOrigin) -> Result<(), String> {
@@ -760,6 +766,11 @@ fn hop_allowed(url: &Url, previous: Option<&Url>, hop: usize, origin: FetchOrigi
     if url.scheme() != "https" && (https_only || url.scheme() != "http") {
         return Err(BlockReason::Scheme(url.scheme().to_ascii_lowercase()).token());
     }
+    // Credentials in a URL would be sent as Basic auth to whatever host the
+    // page (or a redirect) names; a model has no business holding any.
+    if origin == FetchOrigin::Agent && (!url.username().is_empty() || url.password().is_some()) {
+        return Err(AGENT_USERINFO.to_string());
+    }
     let ctx = NavContext {
         current: previous.cloned(),
         redirects: hop,
@@ -769,7 +780,7 @@ fn hop_allowed(url: &Url, previous: Option<&Url>, hop: usize, origin: FetchOrigi
         NavDecision::Block(r) => Err(r.token()),
         NavDecision::Confirm(r) => match (origin, hop) {
             (FetchOrigin::User, 0) => Ok(()),
-            (FetchOrigin::Document, 0) => Err(r.token().to_string()),
+            (FetchOrigin::Document | FetchOrigin::Agent, 0) => Err(r.token().to_string()),
             _ => Err(format!("redirect-to-{}", r.token())),
         },
     }
@@ -861,7 +872,28 @@ async fn fetch_raw_from(raw: &str, origin: FetchOrigin) -> Result<(Vec<u8>, Stri
 /// surrounding code — a stray log, a devtools hook, a refactor that renders
 /// before it sanitizes — is app-origin XSS with a live IPC bridge.
 pub async fn fetch_reader(raw: &str) -> Result<FetchedPage, String> {
-    let (body, content_type, final_url, over_cap) = fetch_raw(raw).await?;
+    fetch_page(raw, FetchOrigin::User).await
+}
+
+/// The reason token for a URL with a user name or password, on any hop of an
+/// agent fetch. Not shown to a user, so it is not in `REASON_TOKENS`.
+pub const AGENT_USERINFO: &str = "userinfo";
+
+/// The assistant web lane's page fetch (`services::web_lane`). The URL is a
+/// *model's* choice, made after reading untrusted pages, so it gets the
+/// strictest address rule this module has: [`FetchOrigin::Agent`] judges hop 0
+/// like any later hop (a literal or resolved loopback, private, link-local,
+/// CGNAT or ULA address is refused, a name with one non-public answer too),
+/// follows at most [`MAX_READER_REDIRECTS`] redirects, each re-judged and
+/// DNS-pinned, and caps the body at [`MAX_READER_BYTES`] and the time at
+/// [`READER_TIMEOUT`] per request. `http` is allowed; userinfo is not. The
+/// result is the reader's sanitised HTML, which the lane turns to plain text.
+pub async fn fetch_for_agent(raw: &str) -> Result<FetchedPage, String> {
+    fetch_page(raw.trim(), FetchOrigin::Agent).await
+}
+
+async fn fetch_page(raw: &str, origin: FetchOrigin) -> Result<FetchedPage, String> {
+    let (body, content_type, final_url, over_cap) = fetch_raw_from(raw, origin).await?;
     let is_html = readable_content_type(&content_type)
         .ok_or_else(|| format!("unsupported-content-type:{content_type}"))?;
 
@@ -1040,8 +1072,9 @@ fn reader_client(pin: Option<&(String, Vec<SocketAddr>)>) -> Result<reqwest::Cli
 /// Returns `None` when the URL's host is already an IP literal — there is no
 /// name for DNS to change its mind about, and `reader_hop_allowed` has judged it.
 ///
-/// A [`FetchOrigin::Document`] fetch gets the later-hop rule on hop 0 as well:
-/// the address came out of a file, not from the user.
+/// A [`FetchOrigin::Document`] or [`FetchOrigin::Agent`] fetch gets the
+/// later-hop rule on hop 0 as well: the address came out of a file or a
+/// model, not from the user.
 async fn resolve_hop(
     url: &Url,
     hop: usize,
@@ -1061,8 +1094,17 @@ async fn resolve_hop(
     if addrs.is_empty() {
         return Err("fetch-failed: name resolved to no address".to_string());
     }
-    if hop > 0 || origin == FetchOrigin::Document {
-        for addr in &addrs {
+    judge_resolved(&addrs, hop, origin)?;
+    Ok(Some((name, addrs)))
+}
+
+/// The address half of one hop's judgement: every address a name resolved to
+/// must be globally routable — every, not any — once the hop is server- or
+/// model-chosen. Split from [`resolve_hop`] so a mixed answer is testable
+/// without a resolver.
+fn judge_resolved(addrs: &[SocketAddr], hop: usize, origin: FetchOrigin) -> Result<(), String> {
+    if hop > 0 || origin != FetchOrigin::User {
+        for addr in addrs {
             if !address_is_global(addr.ip()) {
                 // Reuses the existing `redirect-to-*` vocabulary rather than
                 // minting a token for "resolved somewhere private": to the user
@@ -1078,7 +1120,7 @@ async fn resolve_hop(
             }
         }
     }
-    Ok(Some((name, addrs)))
+    Ok(())
 }
 
 /// IPv4-mapped IPv6 (`::ffff:127.0.0.1`) is the same address as its IPv4 form
@@ -1648,6 +1690,127 @@ mod tests {
         assert!(!msg.contains("evil.example"), "{msg}");
         assert!(!msg.contains('\u{202E}'), "{msg}");
         assert!(msg.contains("connection refused"), "{msg}");
+    }
+
+    // ── The assistant's web fetch ───────────────────────────────────────────
+
+    /// Hop 0 of an agent fetch is judged like a later hop: every address form
+    /// of this machine and its network is refused before a socket opens.
+    #[test]
+    fn an_agent_fetch_refuses_every_non_public_literal_on_hop_zero() {
+        let agent = FetchOrigin::Agent;
+        for (url, reason) in [
+            ("http://127.0.0.1/", "loopback"),
+            ("http://127.1/", "loopback"),
+            ("http://localhost:8742/", "loopback"),
+            ("http://[::1]/", "loopback"),
+            ("http://0.0.0.0/", "loopback"), // privacy-check: ok — address literal in an SSRF test/rule
+            ("http://10.1.2.3/", "private-network"), // privacy-check: ok — address literal in an SSRF test/rule
+            ("http://172.16.0.1/", "private-network"), // privacy-check: ok — address literal in an SSRF test/rule
+            ("http://192.168.1.1/", "private-network"), // privacy-check: ok — address literal in an SSRF test/rule
+            ("http://100.64.0.1/", "private-network"), // privacy-check: ok — address literal in an SSRF test/rule
+            ("http://169.254.169.254/latest/meta-data/", "link-local"),
+            ("http://[fe80::1]/", "link-local"),
+            ("http://[fd12:3456::1]/", "private-network"),
+            ("http://[::ffff:192.168.1.1]/", "private-network"), // privacy-check: ok — address literal in an SSRF test/rule
+            ("http://[::ffff:127.0.0.1]/", "loopback"),
+            ("http://[64:ff9b::c0a8:101]/", "private-network"),
+            ("http://[64:ff9b::7f00:1]/", "loopback"),
+            ("http://[2002:a00:1::1]/", "private-network"),
+            ("http://[2002:7f00:1::]/", "loopback"),
+            ("http://router.local/", "internal-name"),
+            ("http://2130706433/", "loopback"),
+        ] {
+            assert_eq!(hop_allowed(&u(url), None, 0, agent), Err(reason.to_string()), "{url}");
+        }
+    }
+
+    #[test]
+    fn an_agent_fetch_allows_http_and_https_only_and_no_userinfo() {
+        let agent = FetchOrigin::Agent;
+        assert!(hop_allowed(&u("http://example.com/a"), None, 0, agent).is_ok(), "http is allowed");
+        assert!(hop_allowed(&u("https://example.com/a"), None, 0, agent).is_ok());
+        for scheme in ["file:///etc/passwd", "ftp://example.com/x", "data:text/html,x", "javascript:1", "gopher://example.com/"] {
+            assert!(hop_allowed(&u(scheme), None, 0, agent).is_err(), "{scheme}");
+        }
+        for url in ["https://user@example.com/", "https://user:pw@example.com/", "http://:pw@example.com/"] {
+            assert_eq!(hop_allowed(&u(url), None, 0, agent), Err(AGENT_USERINFO.into()), "{url}");
+        }
+        // The same rule on a redirect's target.
+        assert_eq!(
+            hop_allowed(&u("https://a:b@example.org/"), Some(&u("https://example.com/")), 1, agent),
+            Err(AGENT_USERINFO.into())
+        );
+        assert_eq!(
+            hop_allowed(&u("http://192.168.0.1/"), Some(&u("https://example.com/")), 1, agent), // privacy-check: ok — address literal in an SSRF test/rule
+            Err("redirect-to-private-network".into())
+        );
+        // The other origins keep their rules: a typed URL may carry userinfo
+        // (the readout strips it) and still reaches loopback on hop 0.
+        assert!(hop_allowed(&u("https://user@example.com/"), None, 0, FetchOrigin::User).is_ok());
+        assert!(hop_allowed(&u("http://127.0.0.1:3000/"), None, 0, FetchOrigin::User).is_ok());
+        assert_eq!(hop_allowed(&u("http://example.com/"), None, 0, FetchOrigin::Document), Err("scheme:http".into()));
+    }
+
+    #[test]
+    fn an_agent_fetch_stops_after_three_redirects() {
+        let agent = FetchOrigin::Agent;
+        let from = u("https://example.com/");
+        assert!(hop_allowed(&u("https://example.org/"), Some(&from), MAX_READER_REDIRECTS, agent).is_ok());
+        assert_eq!(
+            hop_allowed(&u("https://example.org/"), Some(&from), MAX_READER_REDIRECTS + 1, agent),
+            Err("redirect-loop".into())
+        );
+    }
+
+    /// A name with one public and one private answer is refused whole, on hop
+    /// 0 of an agent fetch and on any later hop; the user's own typed URL
+    /// keeps its hop-0 allowance.
+    #[test]
+    fn a_dns_answer_mixing_public_and_private_addresses_is_refused() {
+        let sock = |ip: &str| SocketAddr::new(ip.parse().unwrap(), 443);
+        let public = [sock("93.184.216.34"), sock("2606:2800:220:1::1")]; // privacy-check: ok — address literal in an SSRF test/rule
+        assert_eq!(judge_resolved(&public, 0, FetchOrigin::Agent), Ok(()));
+        for private in ["127.0.0.1", "10.0.0.7", "192.168.1.1", "169.254.169.254", "100.64.0.9", "fd00::1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "2002:c0a8:101::"] { // privacy-check: ok — address literal in an SSRF test/rule
+            let mixed = [public[0], sock(private), public[1]];
+            assert!(judge_resolved(&mixed, 0, FetchOrigin::Agent).is_err(), "{private}");
+            assert!(judge_resolved(&mixed, 1, FetchOrigin::Agent).unwrap_err().starts_with("redirect-to-"), "{private}");
+            assert!(judge_resolved(&mixed, 0, FetchOrigin::Document).is_err(), "{private}");
+            assert_eq!(judge_resolved(&mixed, 0, FetchOrigin::User), Ok(()), "{private}: hop 0 of a typed URL");
+        }
+    }
+
+    /// End to end against a real loopback socket: an agent fetch of it is
+    /// refused before any connection (the listener never accepts), and a
+    /// redirect from a reachable first hop to a private address is refused at
+    /// the hop, not followed.
+    #[tokio::test]
+    async fn an_agent_fetch_never_connects_to_loopback_and_a_redirect_into_it_is_refused() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = hits.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let reply = format!("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/next\r\nContent-Length: 0\r\n\r\n");
+                let _ = socket.write_all(reply.as_bytes()).await;
+            }
+        });
+        let url = format!("http://127.0.0.1:{port}/");
+        assert_eq!(fetch_for_agent(&url).await.unwrap_err(), "loopback");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0, "no connection was made");
+        // A typed URL may start on loopback; the redirect back into it is a
+        // server-chosen hop and stops there.
+        assert_eq!(fetch_reader(&url).await.unwrap_err(), "redirect-to-loopback");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "only the first hop was fetched");
+        assert_eq!(fetch_for_agent("file:///etc/passwd").await.unwrap_err(), "scheme:file");
+        assert_eq!(fetch_for_agent("ftp://example.com/x").await.unwrap_err(), "scheme:ftp");
+        assert_eq!(fetch_for_agent("https://u:p@example.com/").await.unwrap_err(), AGENT_USERINFO);
     }
 
     // ── The security readout ────────────────────────────────────────────────

@@ -312,8 +312,7 @@ pub struct ToolPolicy {
     /// no other class: the three markup tools set it and nothing else.
     marker: bool,
     /// Served to [`Caller::Web`] (`services::web_lane`) — and then to no
-    /// other class. No tool sets it yet (S2 registers `web_fetch` and
-    /// `web_search`).
+    /// other class: `web_fetch` and `web_search` set it and nothing else.
     web: bool,
 }
 impl ToolPolicy {
@@ -373,6 +372,13 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         // through `/mcp`.
         "markup_ask" | "markup_withdraw" | "markup_done" => {
             return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true, web: false });
+        }
+        // The chat assistant's web lane (`services::web_lane`): a guarded page
+        // fetch and a search, served to the web identity alone on `/mcp/web`
+        // — never to a root or reader tab through `/mcp`. Family `web` is on
+        // no `Access` list, so the handler gates on `serves(Caller::Web)`.
+        "web_fetch" | "web_search" => {
+            return Some(ToolPolicy { family: "web", write: false, destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: true });
         }
         "mail_draft_create" => ("mail", true, false, true, true),
         "mail_draft_update" | "mail_draft_delete" => ("mail", true, true, true, true),
@@ -488,9 +494,9 @@ mod tests {
     }
 
     /// The web lane's class is on no list the root registry reads from: not
-    /// the endpoint, not the mail switches, not one tool's policy — whatever
-    /// the settings say. Until a tool sets its `web` flag (S2) it reaches
-    /// nothing, and the access it starts with grants nothing. (S2 registers the web tools; its test then asserts they serve `Web` and nothing else.)
+    /// the endpoint, not the mail switches, not one root tool's policy —
+    /// whatever the settings say. Its two tools are served to it and to no
+    /// other class, and the access it starts with grants nothing.
     #[test]
     fn the_web_class_is_served_nothing_by_the_root_policy() {
         let open = Policy { enabled: true, local_only: false, mail: true, mail_local_only: false, mail_local_read: true, review: "off".into() };
@@ -504,6 +510,20 @@ mod tests {
         let access = Access::initial(Caller::Web);
         assert!(access.validate().is_ok() && access.families.is_empty() && !access.write);
         assert!(!access.calendars.contains("x") && !access.projects.contains("x") && !access.accounts.contains("x"));
+        assert!(!access.allows(Caller::Web, "projects_list") && !access.allows(Caller::Web, "web_fetch"), "Access is the root registry's: the lane gates on the tool row");
+    }
+
+    /// `web_fetch` and `web_search` serve the web identity and nothing else.
+    #[test]
+    fn the_web_tools_serve_only_the_web_class() {
+        for name in ["web_fetch", "web_search"] {
+            let tool = tool(name).unwrap_or_else(|| panic!("{name}"));
+            assert!(!tool.write && !tool.destructive, "{name}");
+            for caller in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher, Caller::Helper, Caller::Marker] {
+                assert!(!tool.serves(caller), "{name} must not serve {caller:?}");
+            }
+            assert!(tool.serves(Caller::Web), "{name}");
+        }
     }
 
     #[test]
