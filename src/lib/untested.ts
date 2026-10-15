@@ -678,6 +678,7 @@ export const UNTESTED = {
   "boxChip.onRowLabel": { area: "projects", what: "BoxScopeChip · Dropdown checkboxes choosing which boxes get a pill on the row", tested: "2026-09-28" },
   "carefulHost.label": { area: "projects", what: "CarefulHostToggle · Go easy on this machine" },
   "credentialPasteBar.1": { area: "projects", what: "CredentialPasteBar · Type it for me above an embedded login terminal: pastes the saved login name/password, accepted only while that terminal's own ssh/openvpn login runs (refused after it exits)" },
+  "credentialPasteBar.rootLogin": { area: "projects", what: "Root-console login tab (connections not headless) · the Type it for me bar above it when its ssh/OpenVPN target has a saved password: pastes the login name/password into that tab's running login (screen 2026-10-15 follow-up F-c)" },
   "extendToRemoteDialog.1": { area: "projects", what: "ExtendToRemoteDialog · Your machines" },
   "hpcHost.label": { area: "projects", what: "HpcHostToggle · HPC cluster (login node)" },
   "hpcWizard.title": { area: "projects", what: "HpcPipelineWizard · HPC pipeline" },

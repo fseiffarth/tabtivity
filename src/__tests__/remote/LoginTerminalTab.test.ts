@@ -36,6 +36,7 @@ import {
   openConnectionInRoot,
 } from "../../lib/remote/remoteConnect";
 import { loginDedupeKey, sshLogin, vpnLogin } from "../../lib/remote/loginTarget";
+import { noteTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
 import { tabTerminalSpawn, terminalSpawnKey } from "../../lib/terminal/terminalSpawn";
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
@@ -115,6 +116,31 @@ describe("openConnectionInRoot — a login terminal, not a typed command", () =>
     expect(connectionStillOpen(key)).toBe(true);
     exitPty(`root:${second.key}`);
     expect(connectionStillOpen(key)).toBe(false);
+  });
+
+  it("a login whose spawn failed is no longer an open connection: a retry opens a fresh tab", () => {
+    // A bad .ovpn, a tunnel already up, no ssh on the machine: the tab shows its
+    // `[spawn error: …]` and no PTY ever exists, so no exit will ever come.
+    const login = vpnLogin("/bad.ovpn");
+    const key = loginDedupeKey(login);
+    forgetConnection(key);
+
+    openConnectionInRoot({ label: "VPN", login, dedupeKey: key });
+    const first = rootTabs()[0];
+    expect(connectionStillOpen(key)).toBe(true);
+
+    noteTerminalSpawnFailed(`root:${first.key}`);
+    expect(connectionStillOpen(key)).toBe(false);
+    expect(rootTabs()).toHaveLength(1);
+
+    openConnectionInRoot({ label: "VPN", login, dedupeKey: key });
+    expect(rootTabs()).toHaveLength(2);
+    expect(connectionStillOpen(key)).toBe(true);
+    // The failed tab's signal is spent: a stray repeat never clears the new mark.
+    noteTerminalSpawnFailed(`root:${first.key}`);
+    exitPty(`root:${first.key}`);
+    expect(connectionStillOpen(key)).toBe(true);
+    forgetConnection(key);
   });
 
   it("an exit never clears a mark another surface owns (an embedded dialog login)", () => {

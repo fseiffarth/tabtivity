@@ -7,6 +7,7 @@ import { FileViewerPane } from "../embed/FileViewerPane";
 import { RemotePaneHold } from "../projects/RemotePaneHold";
 import { HostSessionHold } from "./HostSessionHold";
 import { tabTerminalSpawn } from "../../lib/terminal/terminalSpawn";
+import { LoginTabPasteBar } from "../projects/CredentialPasteBar";
 
 // Code-split (perf plan §6): the terminal, the Files tabs and the file viewer
 // are what nearly every window shows at launch, so they stay in the startup
@@ -254,7 +255,7 @@ function TabPaneImpl({
           visible={visible}
         />
       );
-    default:
+    default: {
       // Remote terminal pane while the pool is down (main window only): show a
       // Connect placeholder rather than mount TerminalView, which would spawn
       // `ssh -tt` and block on the dead pool.
@@ -268,18 +269,24 @@ function TabPaneImpl({
       }
       // The tab itself rides along for the pane's prompt strip, Chat and
       // Diffs: a popout's tabs store has no entry to look it up in.
+      // The spawn inputs, mapped once (`tabTerminalSpawn`): the pane layer
+      // reads the same identity to tell when a sleeping tab must wake.
+      const spawn = tabTerminalSpawn(tab, scope, { terminalCwd, sandbox, tmuxSession, vmProject, attachOnly });
       return (
         <PaneTabContext.Provider value={{ scope, tab }}>
         <TerminalView
-          // The spawn inputs, mapped once (`tabTerminalSpawn`): the pane layer
-          // reads the same identity to tell when a sleeping tab must wake.
-          {...tabTerminalSpawn(tab, scope, { terminalCwd, sandbox, tmuxSession, vmProject, attachOnly })}
+          {...spawn}
           visible={visible}
           focused={focused}
           attachOnly={attachOnly}
         />
+        {/* A login tab's "Type it for me" row, when its target has a saved
+            credential. After the terminal in the DOM (the pane's first child
+            stays its xterm host), drawn above it by `order` in the stylesheet. */}
+        {tab.login && <LoginTabPasteBar ptyId={spawn.id} login={tab.login} visible={visible} />}
         </PaneTabContext.Provider>
       );
+    }
   }
 }
 

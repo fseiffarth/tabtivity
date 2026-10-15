@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { onTerminalExit } from "../terminal/terminalBus";
+import { onTerminalSpawnFailed } from "../terminal/terminalSpawnFailed";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { withHostKeyConfirm } from "./hostKey";
 import type { LoginTarget } from "./loginTarget";
@@ -136,11 +137,17 @@ export function openConnectionInRoot(opts: {
       // The login ending (ssh/openvpn exited — a failed or a logged-out session)
       // ends the connection this key stands for: the tab stays, showing its
       // exited state, but a new request must open a fresh login rather than
-      // point at a dead one. Only while the key still maps to THIS tab.
-      const unsubscribe = onTerminalExit(`root:${tab.key}`, () => {
-        unsubscribe();
+      // point at a dead one. So does a login that never started (its spawn
+      // refused or failed — the tab shows `[spawn error: …]`, and no exit ever
+      // comes for a PTY that never was). Only while the key still maps to THIS tab.
+      const ptyId = `root:${tab.key}`;
+      const release = () => {
+        offExit();
+        offSpawnFailed();
         if (openedConnections.get(dedupeKey) === tab.key) openedConnections.delete(dedupeKey);
-      });
+      };
+      const offExit = onTerminalExit(ptyId, release);
+      const offSpawnFailed = onTerminalSpawnFailed(ptyId, release);
     },
   );
 }
