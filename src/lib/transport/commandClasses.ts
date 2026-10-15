@@ -569,7 +569,6 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["restore_archived_project", "core"],
   ["root_work_dir", "core"],
   ["sandbox_preflight", "core"],
-  ["save_project", "core"],
   ["save_projects", "core"],
   ["save_tab_layout", "off"],
   ["set_project_auto_connect", "core"],

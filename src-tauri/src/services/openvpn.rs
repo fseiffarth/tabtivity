@@ -1508,10 +1508,55 @@ pub fn connect_streaming(
             Ok(())
         }
         Err(msg) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_failed_connect(config, child, pidfile);
             // Say which secret was wrong; fall back to the raw handshake tail.
             Err(explain_openvpn_error(&msg).unwrap_or(msg))
+        }
+    }
+}
+
+/// How long a teardown waits for the tunnel's child to exit before it stops
+/// waiting and keeps the child registered instead.
+#[cfg(target_os = "linux")]
+const REAP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Stop a connect that timed out or failed. Once polkit has authorized it, the
+/// child (`pkexec` execs `openvpn`) is **root**: our plain `kill` gets EPERM, so
+/// a bare `kill(); wait()` blocked the connect thread forever on a tunnel that
+/// was still running. So: the management socket first (no elevation), then the
+/// elevated kill by the pidfile — a no-op if OpenVPN has not written it yet —
+/// then our own `kill` (enough while `pkexec` still waits on its prompt), and a
+/// bounded reap. A child still alive after that is registered like an up tunnel,
+/// so `disconnect`/`disconnect_all` can still end it: a root tunnel is never left
+/// running unregistered.
+#[cfg(target_os = "linux")]
+fn stop_failed_connect(config: &str, mut child: Child, pidfile: PathBuf) {
+    management_shutdown(config);
+    let _ = kill_pidfile(&pidfile);
+    let _ = child.kill();
+    reap_or_register(config, VpnProc { child, pidfile }, REAP_TIMEOUT);
+}
+
+/// Wait up to `timeout` for `proc`'s child to exit, polling `try_wait` — never an
+/// unbounded `wait` on a child we may not be allowed to signal. Reaped: its
+/// pidfile is removed. Still running: it goes (back) into [`registry`] under
+/// `config`, visible to `is_connected`/`active_configs` and killable by the next
+/// teardown. Returns whether it was reaped.
+#[cfg(target_os = "linux")]
+fn reap_or_register(config: &str, mut proc: VpnProc, timeout: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        match proc.child.try_wait() {
+            // Exited, or no longer ours to wait for (already reaped): done.
+            Ok(Some(_)) | Err(_) => {
+                let _ = std::fs::remove_file(&proc.pidfile);
+                return true;
+            }
+            Ok(None) if start.elapsed() >= timeout => {
+                registry().lock_ok().insert(config.to_string(), proc);
+                return false;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
         }
     }
 }
@@ -1608,9 +1653,12 @@ fn wait_for_ready(child: &mut Child, on_line: &dyn Fn(&str)) -> Result<(), Strin
     }
 }
 
-/// Tear down the tunnel for `config` if it is up. Best-effort: signals the root
-/// OpenVPN process via `pkexec kill` (reading the pid OpenVPN wrote), then reaps
-/// our child. A missing/already-dead tunnel is treated as success.
+/// Tear down the tunnel for `config` if it is up: signals the root OpenVPN process
+/// via `pkexec kill` (reading the pid OpenVPN wrote), then reaps our child within
+/// [`REAP_TIMEOUT`]. A missing/already-dead tunnel is treated as success. A
+/// refused elevated kill (a dismissed polkit prompt) leaves the tunnel up, so it
+/// stays registered — visible and killable — and is reported as an error; the
+/// child is not waited on, since nothing we may send would end it.
 #[cfg(target_os = "linux")]
 pub fn disconnect(config: &str) -> Result<(), String> {
     // First ask the daemon to stop over its own management socket — no elevation,
@@ -1620,14 +1668,23 @@ pub fn disconnect(config: &str) -> Result<(), String> {
     management_shutdown(config);
     // An interactive tunnel has no child of ours — kill it by the pid it wrote.
     disconnect_interactive(config);
-    let proc = registry().lock_ok().remove(config);
-    let Some(mut proc) = proc else {
+    // Peek, don't remove: a refused kill must leave the entry in place.
+    let pidfile = registry()
+        .lock_ok()
+        .get(config)
+        .map(|p| p.pidfile.clone());
+    let Some(pidfile) = pidfile else {
         return Ok(());
     };
-    let _ = kill_pidfile(&proc.pidfile);
-    let _ = proc.child.kill();
-    let _ = proc.child.wait();
-    let _ = std::fs::remove_file(&proc.pidfile);
+    if !kill_pidfile(&pidfile) {
+        return Err("openvpn teardown was not authorized".into());
+    }
+    // Bound first: the guard must be gone before `reap_or_register` relocks.
+    let proc = registry().lock_ok().remove(config);
+    if let Some(mut proc) = proc {
+        let _ = proc.child.kill();
+        reap_or_register(config, proc, REAP_TIMEOUT);
+    }
     Ok(())
 }
 
@@ -1714,11 +1771,12 @@ pub fn disconnect_checked(config: &str) -> Result<(), String> {
         mark_declined(config);
         return Err("openvpn teardown was not authorized".into());
     }
-    // TERM delivered — now reap our child and forget it.
-    if let Some(mut proc) = registry().lock_ok().remove(config) {
+    // TERM delivered — now reap our child (bounded) and forget it.
+    // Bound first: the guard must be gone before `reap_or_register` relocks.
+    let proc = registry().lock_ok().remove(config);
+    if let Some(mut proc) = proc {
         let _ = proc.child.kill();
-        let _ = proc.child.wait();
-        let _ = std::fs::remove_file(&proc.pidfile);
+        reap_or_register(config, proc, REAP_TIMEOUT);
     }
     Ok(())
 }
@@ -3849,5 +3907,42 @@ mod tests {
         );
         assert!(result.is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failed connect's child that will not exit in time (the root `openvpn`
+    /// our `kill` cannot reach) is never waited on unboundedly: the reap gives up
+    /// after its timeout and keeps the child registered, visible and killable.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_child_that_outlives_the_reap_stays_registered() {
+        let cfg = "/store/test-reap-timeout.ovpn";
+        let dir = tempfile::tempdir().unwrap();
+        let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let start = Instant::now();
+        let proc = VpnProc { child, pidfile: dir.path().join("t.pid") };
+        assert!(!reap_or_register(cfg, proc, Duration::from_millis(200)));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(is_connected(cfg), "a still-running tunnel child stays registered");
+
+        let mut proc = registry().lock_ok().remove(cfg).expect("registered");
+        let _ = proc.child.kill();
+        let _ = proc.child.wait();
+    }
+
+    /// The timeout path of `connect_streaming`: with no pidfile written yet (the
+    /// polkit prompt was never answered) and no management endpoint, the stop
+    /// raises no elevated kill, our own kill ends the child, and it is reaped —
+    /// not registered.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_connect_child_we_can_kill_is_reaped_not_registered() {
+        let cfg = "/store/test-failed-connect.ovpn";
+        let dir = tempfile::tempdir().unwrap();
+        let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let start = Instant::now();
+        stop_failed_connect(cfg, child, dir.path().join("never-written.pid"));
+        assert!(start.elapsed() < REAP_TIMEOUT);
+        assert!(registry().lock_ok().get(cfg).is_none());
+        assert!(!is_connected(cfg));
     }
 }

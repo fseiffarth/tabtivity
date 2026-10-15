@@ -2774,12 +2774,6 @@ pub fn adopt_folder_tab_layout(
     crate::services::terminal_service::adopt_project_tree_session(&project_id, &local_file)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn save_project(local_file: String, project: Project) -> Result<(), String> {
-    let path = PathBuf::from(&local_file);
-    storage::write_json(&path, &project).map_err(|e| e.to_string())
-}
-
 /// Save only the tab layout — into `<state_dir>/sessions/<project_id>/`, plus the
 /// export copy in the project folder. `project_id` is what it is keyed by; the
 /// root scope passes the literal `"root"` (persisted like any project, minus the

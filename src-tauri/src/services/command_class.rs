@@ -791,7 +791,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("restore_archived_project", Core),
     ("root_work_dir", Core),
     ("sandbox_preflight", Core),
-    ("save_project", Core),
     ("save_projects", Core),
     ("save_tab_layout", Off(OffReason::WholeDocumentSave)),
     ("set_project_auto_connect", Core),
