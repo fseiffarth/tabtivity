@@ -191,10 +191,18 @@ loops against one mirror and one `sync.json`. Now:
   must lie under `fs::user_roots` — the root work dir, the projects and
   remote-mirror parents, every project folder and mirror override, every box
   folder; a `localFile` must be a known project's `project.json`; a new
-  project's own folder is held unless its site is remote or a VM (so a user
-  cannot register `/` and widen their roots), a scan root unless its
-  project is remote. A formatter's file path outside them is dropped (it
-  only says where to look for a config). Rows marked `BodyConfined` (viewer
+  project's own folder is held unless its request takes the remote path
+  (`remote`, or `vm.enabled` on `create_project` only — an import has no
+  VM, so `vm` there must not wave the folder through), so a user cannot
+  register `/` and widen their roots; a scan root unless its project is
+  remote; a Git panel worktree selection unless it is on a remote host. A
+  registered root is counted by where it resolves, but never through a
+  symlink that sits inside a root (the user could have planted it after
+  registering — `git_checkout`, `move_path`) and never when it resolves to
+  the home folder, app home or state dir or above. Skills go only into a
+  held project (the personal `~/.claude/skills` is refused); a formatter's
+  file path or a link-lookup base outside the roots is dropped (it only
+  says where to look). Rows marked `BodyConfined` (viewer
   I/O, `relPath`s), `Remote` (host paths, sync `relPath`s) or `NotAPath`
   (lookup keys such as a tab folder in a CLI's session store) pass;
   `ollama_models_dir_plan` is refused. A test fails when a
