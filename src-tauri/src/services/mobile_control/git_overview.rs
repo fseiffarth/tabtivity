@@ -142,8 +142,11 @@ fn real_branch(branch: &GitBranch) -> bool {
 /// dir, macOS's `/var`); when that matches nothing the raw spellings are
 /// compared, for a folder that no longer resolves.
 pub fn worktree_matcher<'a>(paths: impl IntoIterator<Item = &'a str>) -> impl Fn(&str) -> Option<usize> {
+    // A missing path (a deleted file) resolves through its deepest existing
+    // ancestor, so it still meets its checkout under a symlinked or
+    // non-canonical spelling (macOS's `/var`, a Windows temp path).
     fn canonical(path: &str) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
+        crate::commands::fs::canonical_or_new(Path::new(path)).unwrap_or_else(|_| PathBuf::from(path))
     }
     fn best(roots: &[PathBuf], cwd: &Path) -> Option<usize> {
         roots

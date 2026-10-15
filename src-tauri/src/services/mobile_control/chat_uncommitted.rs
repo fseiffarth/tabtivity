@@ -160,14 +160,12 @@ fn checkouts_of(roots: &[PathBuf]) -> Vec<(String, Option<TabWorktree>)> {
 }
 
 /// `path` relative to `checkout`, `/`-separated — both canonicalized first
-/// (a symlinked folder, macOS's `/var`), a deleted file through its parent,
-/// and compared as spelled when that does not place it. `None` outside it.
+/// (a symlinked folder, macOS's `/var`), a deleted file through its deepest
+/// existing ancestor, and compared as spelled when that does not place it.
+/// `None` outside it.
 fn relative_to(checkout: &Path, path: &Path) -> Option<String> {
     fn resolved(path: &Path) -> PathBuf {
-        std::fs::canonicalize(path)
-            .ok()
-            .or_else(|| Some(std::fs::canonicalize(path.parent()?).ok()?.join(path.file_name()?)))
-            .unwrap_or_else(|| path.to_path_buf())
+        crate::commands::fs::canonical_or_new(path).unwrap_or_else(|_| path.to_path_buf())
     }
     let relative = resolved(path)
         .strip_prefix(resolved(checkout))
@@ -279,8 +277,12 @@ mod tests {
         std::fs::create_dir_all(checkout.join("src")).expect("dirs");
         std::fs::write(checkout.join("src").join("a.ts"), "a").expect("file");
         assert_eq!(relative_to(&checkout, &checkout.join("src").join("a.ts")).as_deref(), Some("src/a.ts"));
-        // A deleted file is placed through its parent.
+        // A deleted file is placed through its parent, or a deleted folder's.
         assert_eq!(relative_to(&checkout, &checkout.join("src").join("gone.ts")).as_deref(), Some("src/gone.ts"));
+        assert_eq!(
+            relative_to(&checkout, &checkout.join("gone").join("deep.ts")).as_deref(),
+            Some("gone/deep.ts")
+        );
         assert_eq!(relative_to(&checkout, &tmp.path().join("elsewhere.ts")), None);
         assert_eq!(relative_to(&checkout, &checkout), None);
     }
@@ -290,8 +292,10 @@ mod tests {
         if !crate::commands::git::git_available() {
             return;
         }
-        let tmp = tempfile::tempdir().expect("tmp");
-        let root = tmp.path().join("proj");
+        // Reached through a symlink, as macOS's temp dir is: git reports the
+        // checkouts by their real path, a deleted file has none of its own.
+        let (_tmp, base) = crate::test_util::tempdir_via_symlink();
+        let root = base.join("proj");
         std::fs::create_dir_all(&root).expect("root");
         git(&root, &["init", "-q"]);
         // As the desktop keeps its own folder (worktrees included) out of git.
@@ -322,7 +326,7 @@ mod tests {
             root.join("d.txt"),
             root.join("run.log"),
             topic.join("b.txt"),
-            tmp.path().join("outside.txt"),
+            base.join("outside.txt"),
         ]
         .iter()
         .map(|path| path.to_string_lossy().into_owned())
