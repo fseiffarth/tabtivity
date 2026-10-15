@@ -12,6 +12,7 @@ import { forgetPty } from "../lib/agents/promptCount";
 import { forgetPromptTrail } from "./agents/promptTrail";
 import { BOX_SCOPE_PREFIX, splitPtyId } from "../lib/terminal/ptyId";
 import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
+import { AGENT_BINS, RESUMABLE_AGENTS } from "../lib/agents/agentClis";
 import { useLinkRoutingStore } from "./linkRouting";
 import { bumpUsage } from "./usage";
 import { translate, useI18nStore } from "../lib/i18n";
@@ -6247,11 +6248,7 @@ export function mapGroup(
 
 // The built-in agent CLIs (`lib/agents/agentClis`, generated from the backend
 // registry in commands::agents): a tab is classified as an agent by its cmd,
-// and a resumable one relaunches on `RESUMABLE_AGENTS`. Imported here, inside
-// this block, so the store's import list (another change's region) stays as it
-// is; ES imports are hoisted.
-import { AGENT_BINS, RESUMABLE_AGENTS } from "../lib/agents/agentClis";
-
+// and a resumable one relaunches on `RESUMABLE_AGENTS`.
 export function cmdToKind(cmd: string): TabKind {
   if (cmd === FILES_TAB_CMD) return "files";
   if (cmd === PROJECT_FILES_TAB_CMD) return "projectfiles";

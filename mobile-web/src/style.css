@@ -1452,7 +1452,7 @@ span.files-close { background:transparent; }
 /* The status/code pair, for reading back into a bug report. */
 .splash-detail { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.7rem; color:#6a6e7f; letter-spacing:.04em; }
 .connect-trace { max-width:100%; margin:0; white-space:pre-wrap; text-align:left; letter-spacing:0; }
-/* The running bundle's version and build time, to check the phone is on the
+/* The running bundle's version and entry hash, to check the phone is on the
    desktop's current bundle. */
 .splash-version { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.72rem; color:#767a8b; letter-spacing:.04em; }
 .splash-progress { width:148px; height:2px; overflow:hidden; border-radius:999px; background:rgba(56,60,77,.8); }

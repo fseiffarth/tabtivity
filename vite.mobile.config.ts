@@ -18,8 +18,10 @@ const ASSETS_PLACEHOLDER = "__APP_ASSETS__";
  * never fingerprints it. That left the browser with an unchanging `sw.js` — no
  * new worker was ever installed, its `activate` never purged the old cache,
  * and a phone could keep booting a superseded bundle out of it. Giving the
- * cache a per-build name fixes both halves at once: the bytes change, so the
- * browser installs; the name changes, so `activate` drops what came before.
+ * cache a per-bundle name (the entry chunk's content hash) fixes both halves
+ * at once: a new bundle changes the bytes, so the browser installs; the name
+ * changes, so `activate` drops what came before. An unchanged bundle keeps
+ * its name, so a rebuild never makes phones re-download.
  *
  * The asset list is what the worker precaches, so the shell can boot offline
  * after the first visit — the worker only sees the page's asset requests once
