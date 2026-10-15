@@ -21,16 +21,16 @@ import {
   type SshProbe,
 } from "../types";
 import {
-  cmdToKind,
   effectiveTabLocation,
   hydrateScopeFromDisk,
   isPtyTabKind,
-  isRestorableTab,
   isRelaunchableLocalTab,
   isResumableAgentTab,
   isSavedWhileLive,
   remoteHostIdOf,
+  restorableSavedTabs,
   ROOT_SCOPE,
+  savedLayoutTreeOf,
   toSavedTabEntry,
   useTabsStore,
   type LocalLaunch,
@@ -1874,23 +1874,17 @@ export function listenProjectRuntimeSwitched(): Promise<() => void> {
     const tabsStore = useTabsStore.getState();
     // Keep shell/files/network tabs, resumable agent tabs (Claude with a sessionId), and
     // in-app file-viewer embeds; other agent tabs (and external-app embeds) are
-    // dropped (no session to restore). Newer snapshots carry `kind`/`sessionId`;
-    // fall back to deriving the kind from the command. The saved groups tree
-    // self-heals — loadFromLayout drops any tree key absent from the (filtered)
-    // tab list.
-    const restorable = payload.tabLayout.filter((t) =>
-      isRestorableTab({
-        kind: t.kind ?? cmdToKind(t.cmd),
-        cmd: t.cmd,
-        sessionId: t.sessionId,
-        // A custom agent is restorable only via `resumeArgs?.length` — omitting
-        // it here dropped such tabs on a runtime switch (the same drift the
-        // root/box restore copies had before `hydrateScopeFromDisk`).
-        resumeArgs: t.resumeArgs,
-        viewer: t.viewer,
-        localLaunch: t.localLaunch,
-      }),
-    );
+    // dropped (no session to restore). Through the one shared filter
+    // (`restorableSavedTabs`), so this copy cannot drift from the other restores
+    // again. The saved groups tree self-heals — loadFromLayout drops any tree
+    // key absent from the (filtered) tab list.
+    const restorable = restorableSavedTabs(payload.tabLayout);
+    // The side-panel folder is a stored path, not a listing: restoring it needs
+    // no connection, so it lands before the disconnected-remote return below —
+    // otherwise a remote project opened offline came back at its root.
+    if (payload.projectId && payload.sidePanelFolder !== null) {
+      useProjectsStore.getState().setSidePanelFolder(payload.projectId, payload.sidePanelFolder);
+    }
     // Mount-free remote: defer restoring a remote project's tabs until its pooled
     // SSH/SFTP connection is up. Restoring them while disconnected spawns `ssh -tt`
     // PTYs and SFTP listings that block on the dead pool (the "hang"). The
@@ -1913,11 +1907,8 @@ export function listenProjectRuntimeSwitched(): Promise<() => void> {
         restorable,
         resolveProjectDirectory(project),
         scopeKey,
-        payload.tabGroups ?? undefined,
+        savedLayoutTreeOf(payload.tabGroups),
       );
-    }
-    if (payload.projectId && payload.sidePanelFolder !== null) {
-      useProjectsStore.getState().setSidePanelFolder(payload.projectId, payload.sidePanelFolder);
     }
   });
 }

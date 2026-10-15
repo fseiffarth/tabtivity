@@ -858,12 +858,15 @@ export function AppShell() {
       // Files (Project) tab into a subfolder (or any tab/split change) would drop
       // it and the tab would reopen at the project root. The side-panel folder
       // is saved eagerly and needs no flush; only the tab layout is debounced.
+      // The scope is named explicitly — the active project's id, whose own
+      // `local_file` goes with it — never the tab store's live `scope` paired
+      // with a file resolved elsewhere (`saveLayout`'s hazard: the two drift).
       const { activeId, projects } = useProjectsStore.getState();
       const localFile = activeId
         ? projects.find((p) => p.id === activeId)?.local_file
         : undefined;
-      if (localFile) {
-        await useTabsStore.getState().saveLayout(localFile).catch(() => {});
+      if (activeId && localFile) {
+        await useTabsStore.getState().persistScope(activeId, localFile).catch(() => {});
       }
       // A clean Tabtivity quit ends only the local tmux sessions named and owned by
       // Tabtivity. It runs after the layout flush so an abnormal close still has a
@@ -1079,6 +1082,15 @@ export function AppShell() {
     const t = setTimeout(clearConnToast, 3200);
     return () => clearTimeout(t);
   }, [connToast, clearConnToast]);
+
+  // A failed tab-layout autosave (the tab store raises this once per session)
+  // shows through the same toast as the other background notices.
+  const layoutPersistNotice = useTabsStore((s) => s.layoutPersistNotice);
+  useEffect(() => {
+    if (!layoutPersistNotice) return;
+    useProjectsStore.setState({ connToast: layoutPersistNotice });
+    useTabsStore.getState().clearLayoutPersistNotice();
+  }, [layoutPersistNotice]);
 
   const reveal = (
     timer: MutableRefObject<number | null>,
