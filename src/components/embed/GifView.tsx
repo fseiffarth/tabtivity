@@ -9,7 +9,8 @@ import {
   MAX_SCALE,
   ZOOM_STEP,
 } from "./FileViewerPane";
-import { useFileScope, usePaneVisible, readFileBytes, fileMtime } from "./fileAccess";
+import { useFileScope, usePaneVisible, readFileBytes } from "./fileAccess";
+import { useDiskReloadPoll } from "../../lib/useDiskReloadPoll";
 import { openGif, effectiveDelayMs } from "../../lib/viewers/gif";
 import { Dropdown } from "../common/Dropdown";
 import { useT } from "../../lib/i18n";
@@ -42,9 +43,6 @@ import { LoopIcon, PauseIcon, PlayIcon, SkipBackIcon, SkipForwardIcon } from "..
  * "annotate the CURRENT frame → PNG copy".)
  */
 
-/** Mirrors FileViewerPane's RELOAD_POLL_MS (#68 auto-reload). */
-const RELOAD_POLL_MS = 1500;
-
 /** Bound the accumulator so a long-hidden tab (rAF suspended) fast-forwards at
  *  most this much wall-clock time instead of spinning the advance loop. */
 const MAX_CARRY_MS = 60_000;
@@ -62,10 +60,8 @@ const SPEED_OPTIONS = [0.25, 0.5, 1, 1.5, 2, 4].map((s) => ({
  */
 function useGifBytes(path: string) {
   const scope = useFileScope();
-  const paneVisible = usePaneVisible();
   const [bytes, setBytes] = useState<Uint8Array<ArrayBuffer> | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const lastMtime = useRef<number | null>(null);
   // Bumped whenever the file's mtime advances on disk, forcing a byte reload.
   const [diskVersion, setDiskVersion] = useState(0);
 
@@ -73,7 +69,6 @@ function useGifBytes(path: string) {
   useEffect(() => {
     setBytes(null);
     setError(null);
-    lastMtime.current = null;
   }, [path]);
 
   useEffect(() => {
@@ -90,42 +85,8 @@ function useGifBytes(path: string) {
     };
   }, [path, scope, diskVersion]);
 
-  // Seed the mtime baseline once per file, visible or not, so it pairs with the
-  // bytes the load effect read — the re-show catch-up below compares against it.
-  useEffect(() => {
-    let cancelled = false;
-    fileMtime(path, scope)
-      .then((m) => {
-        if (!cancelled) lastMtime.current = m;
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [path, scope]);
-
-  // Poll mtime; on an external advance, bump diskVersion to re-read fresh bytes.
-  // Visible panes only (hidden ones stay mounted forever); the immediate check
-  // on re-show catches a change made while the pane was hidden.
-  useEffect(() => {
-    if (!paneVisible) return;
-    let cancelled = false;
-    const check = () => {
-      fileMtime(path, scope)
-        .then((m) => {
-          if (cancelled || lastMtime.current == null || m <= lastMtime.current) return;
-          lastMtime.current = m;
-          setDiskVersion((v) => v + 1);
-        })
-        .catch(() => {});
-    };
-    check();
-    const id = setInterval(check, RELOAD_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [path, scope, paneVisible]);
+  // On an external write, bump diskVersion to re-read fresh bytes (#68).
+  useDiskReloadPoll(path, scope, () => setDiskVersion((v) => v + 1));
 
   return { bytes, error };
 }

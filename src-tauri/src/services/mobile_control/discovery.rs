@@ -652,26 +652,20 @@ fn expected_tmux_for(pair: &crate::brand::Pair, project_id: &str, kind: &str, na
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// The built-in agent CLIs whose tabs resume across a relaunch (the frontend's
-/// `RESUMABLE_AGENTS`): what the phone may come back to, and — with no
-/// window — what it may start (`headless::agents`).
-pub(super) const RESUMABLE_BUILTINS: &[&str] = &[
-    "claude",
-    "codex",
-    "qwen",
-    "opencode",
-    "copilot",
-    "cursor-agent",
-    "grok",
-    "gemini",
-    "agy",
-    "vibe",
-    "droid",
-];
+/// The built-in agent CLIs whose tabs resume across a relaunch, in registry
+/// order (`commands::agents`' `Resume`, the frontend's `RESUMABLE_AGENTS`):
+/// what the phone may come back to, and — with no window — what it may start
+/// (`headless::agents`).
+pub(super) fn resumable_builtins() -> Vec<&'static str> {
+    crate::commands::agents::agent_bins()
+        .into_iter()
+        .filter(|bin| crate::commands::agents::is_resumable_bin(bin))
+        .collect()
+}
 
 fn resumable(tab: &SavedTab) -> bool {
     tab.session_id.is_some()
-        && (RESUMABLE_BUILTINS.contains(&tab.cmd.as_str())
+        && (crate::commands::agents::is_resumable_bin(&tab.cmd)
             || tab.resume_args.as_ref().is_some_and(|v| !v.is_empty()))
 }
 

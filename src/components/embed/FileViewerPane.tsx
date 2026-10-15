@@ -29,7 +29,7 @@ import {
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { openTabInScope } from "../tabs/tabScopeContext";
 import { useSettingsStore } from "../../stores/settings";
-import { saverInterval, useQuiesce } from "../../stores/power";
+import { useDiskReloadPoll } from "../../lib/useDiskReloadPoll";
 import { useTexViewPrefStore, texViewScopeKey } from "../../stores/viewers/texViewPref";
 import { useExperimental } from "../../lib/experimental";
 import { useProjectsStore } from "../../stores/projects";
@@ -1414,9 +1414,6 @@ function useEditHistory(initial: string) {
   };
 }
 
-// Poll interval for the diff-aware auto-reload (#43), ~1.5s.
-const RELOAD_POLL_MS = 1500;
-
 /** How long Source-mode typing in a YAML/JSON file must pause before the Cards
  *  toggle re-asks whether the file nests anything to card (a whole-file parse). */
 const GRID_PROBE_SETTLE_MS = 400;
@@ -1441,10 +1438,6 @@ const GRID_PROBE_SETTLE_MS = 400;
 export function useEditableFile(path: string, enabled = true) {
   const scope = useFileScope();
   const t = useT();
-  const paneVisible = usePaneVisible();
-  // Widens the reload poll below while this window is unfocused (or Energy
-  // Saver is on), the same way every other always-on timer site does.
-  const quiesce = useQuiesce();
   const loadedIdentity = useRef<string | null>(null);
   const identity = JSON.stringify([path, scope]);
   const [content, setContent] = useState<string | null>(null);
@@ -1462,8 +1455,9 @@ export function useEditableFile(path: string, enabled = true) {
   const { value: draft, setValue: setDraftValue, undo, redo, reset, canUndo, canRedo } =
     useEditHistory("");
 
-  // mtime we last saw on disk, to detect external writes (#43). Our own saves
-  // bump it so they don't trip the watcher.
+  // mtime we last saw on disk, to detect external writes (#43): the reload
+  // poll's baseline (`useDiskReloadPoll`, below), seeded here with the load.
+  // Our own saves bump it so they don't trip the watcher.
   const lastMtime = useRef<number | null>(null);
 
   // The line ending the FILE uses, remembered at load and re-applied at save.
@@ -1584,59 +1578,43 @@ export function useEditableFile(path: string, enabled = true) {
   }, [saver, draft, baseline, loaded, enabled, autosave]);
   const save = useCallback(() => saver.flush(), [saver]);
 
-  // #43 diff-aware reload: poll mtime; on an external advance, re-read into a
-  // clean buffer silently, or flag a banner if the buffer is dirty. Only while
-  // the pane is on screen — every tab of every scope stays mounted, so a hidden
-  // viewer's poll would otherwise run forever (an SFTP round trip per tick for a
-  // remote project). The immediate check on re-show catches whatever changed on
-  // disk while the pane was hidden, against the baseline seeded at load time.
-  // While the window is unfocused the poll is widened, not stopped: a viewer
-  // left open on a second screen as a live preview of a file edited in another
-  // app must still follow it. `quiesce` is a dependency, so regaining focus
-  // re-runs the effect — whose immediate `check()` is the catch-up.
-  useEffect(() => {
-    if (!loaded || !paneVisible) return;
-    let cancelled = false;
-    const check = () => {
-      fileMtime(path, scope)
-        .then((m) => {
-          if (cancelled || lastMtime.current == null) return;
-          if (m <= lastMtime.current) return;
-          lastMtime.current = m;
-          if (isDirtyRef.current) {
-            // Don't clobber unsaved edits — surface a reconcile banner.
-            setExternalChange(true);
-            return;
-          }
-          // Clean buffer → silently re-read + reseed baseline/draft.
-          //
-          // …but NOT when the bytes are the ones already in the buffer. An mtime
-          // advance is not a content change: a latexmk run that rewrote an
-          // identical file, a `touch`, a formatter that made no difference, a
-          // checkout of the same content all land here, and `seedFromDisk`
-          // `reset()`s the history — clearing `past` AND `future`. So an
-          // untouched recompile in the background silently threw away the
-          // reader's whole undo stack, with nothing on screen to say it had
-          // happened. The banner case at least asks; this one never did.
-          //
-          // The comparison is made in BUFFER space, not against the raw bytes:
-          // the draft is LF by construction (see `fileEol`), so a CRLF file read
-          // back from disk would never compare equal and the skip would never
-          // fire on exactly the platform that needs it.
-          readFileText(path, scope)
-            .then((text) => {
-              if (cancelled || isDirtyRef.current) return;
-              if (applyLineEnding(text, "\n") === baselineRef.current) return;
-              seedFromDisk(text);
-            })
-            .catch(() => {});
-        })
-        .catch(() => {});
-    };
-    check();
-    const id = setInterval(check, saverInterval(RELOAD_POLL_MS, quiesce));
-    return () => { cancelled = true; clearInterval(id); };
-  }, [path, scope, loaded, paneVisible, seedFromDisk, quiesce]);
+  // #43 diff-aware reload: on an external write, re-read into a clean buffer
+  // silently, or flag a banner if the buffer is dirty. `useDiskReloadPoll` only
+  // polls while the pane is on screen (the catch-up on re-show compares against
+  // the baseline seeded at load time) and widens rather than stops while the
+  // window is unfocused: a viewer left open on a second screen as a live
+  // preview of a file edited in another app must still follow it.
+  const onDiskChange = useCallback(() => {
+    if (isDirtyRef.current) {
+      // Don't clobber unsaved edits — surface a reconcile banner.
+      setExternalChange(true);
+      return;
+    }
+    // Clean buffer → silently re-read + reseed baseline/draft.
+    //
+    // …but NOT when the bytes are the ones already in the buffer. An mtime
+    // advance is not a content change: a latexmk run that rewrote an
+    // identical file, a `touch`, a formatter that made no difference, a
+    // checkout of the same content all land here, and `seedFromDisk`
+    // `reset()`s the history — clearing `past` AND `future`. So an
+    // untouched recompile in the background silently threw away the
+    // reader's whole undo stack, with nothing on screen to say it had
+    // happened. The banner case at least asks; this one never did.
+    //
+    // The comparison is made in BUFFER space, not against the raw bytes:
+    // the draft is LF by construction (see `fileEol`), so a CRLF file read
+    // back from disk would never compare equal and the skip would never
+    // fire on exactly the platform that needs it.
+    const readIdentity = identity;
+    readFileText(path, scope)
+      .then((text) => {
+        if (loadedIdentity.current !== readIdentity || isDirtyRef.current) return;
+        if (applyLineEnding(text, "\n") === baselineRef.current) return;
+        seedFromDisk(text);
+      })
+      .catch(() => {});
+  }, [path, scope, identity, seedFromDisk]);
+  useDiskReloadPoll(path, scope, onDiskChange, { enabled: loaded, baseline: lastMtime, seed: false });
 
   // Banner actions (#43): take the disk version, or keep mine (dismiss banner +
   // adopt current mtime so the next external change re-triggers).
@@ -2152,50 +2130,37 @@ const INDENT_GUIDE_LANGS = (lang: Lang) => lang !== "plain" && lang !== "markdow
 export function useReadonlyFile(path: string) {
   const t = useT();
   const scope = useFileScope();
-  const paneVisible = usePaneVisible();
+  // Which file is on screen, so a re-read that lands after a switch is dropped.
+  const identity = JSON.stringify([path, scope]);
+  const current = useRef(identity);
+  current.current = identity;
   const [content, setContent] = useState<string | null>(null);
   // The failure is held as a translation KEY, not a sentence: the read effects
   // must not depend on `t` (a language flip would re-run them and discard an
   // unsaved draft), and holding the key makes the message follow the language.
   const [errorKey, setErrorKey] = useState<TranslationKey | null>(null);
   const error = errorKey ? t(errorKey) : null;
-  const lastMtime = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setContent(null);
     setErrorKey(null);
-    lastMtime.current = null;
     readFileText(path, scope)
       .then((text) => { if (!cancelled) setContent(text); })
       .catch((e) => { if (!cancelled) setErrorKey(describeFileErrorKey(e)); });
-    fileMtime(path, scope)
-      .then((m) => { if (!cancelled) lastMtime.current = m; })
-      .catch(() => {});
     return () => { cancelled = true; };
   }, [path, scope]);
 
-  // Diff-aware reload: poll mtime and silently re-read on an external advance.
-  // Visible panes only (hidden ones stay mounted forever); the immediate check
-  // on re-show catches a change made while the pane was hidden.
-  useEffect(() => {
-    if (content == null || !paneVisible) return;
-    let cancelled = false;
-    const check = () => {
-      fileMtime(path, scope)
-        .then((m) => {
-          if (cancelled || lastMtime.current == null || m <= lastMtime.current) return;
-          lastMtime.current = m;
-          readFileText(path, scope)
-            .then((text) => { if (!cancelled) setContent(text); })
-            .catch(() => {});
-        })
-        .catch(() => {});
-    };
-    check();
-    const id = setInterval(check, RELOAD_POLL_MS);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [path, scope, content, paneVisible]);
+  // Diff-aware reload: silently re-read on an external write, once loaded. The
+  // read is dropped if the file was switched meanwhile.
+  const onDiskChange = useCallback(() => {
+    readFileText(path, scope)
+      .then((text) => {
+        if (current.current === identity) setContent(text);
+      })
+      .catch(() => {});
+  }, [path, scope, identity]);
+  useDiskReloadPoll(path, scope, onDiskChange, { enabled: content != null });
 
   return { content, error, loaded: content != null };
 }
@@ -8537,7 +8502,6 @@ function MarkdownView({
 function useBlobUrl(path: string, type: string) {
   const scope = useFileScope();
   const t = useT();
-  const paneVisible = usePaneVisible();
   const [url, setUrl] = useState<string | null>(null);
   // The failure is held as a translation KEY, not a sentence: the read effects
   // must not depend on `t` (a language flip would re-run them and discard an
@@ -8545,7 +8509,6 @@ function useBlobUrl(path: string, type: string) {
   const [errorKey, setErrorKey] = useState<TranslationKey | null>(null);
   const error = errorKey ? t(errorKey) : null;
   const urlRef = useRef<string | null>(null);
-  const lastMtime = useRef<number | null>(null);
   // Bumped whenever the file's mtime advances on disk, forcing a byte reload.
   const [diskVersion, setDiskVersion] = useState(0);
 
@@ -8555,7 +8518,6 @@ function useBlobUrl(path: string, type: string) {
   useEffect(() => {
     setUrl(null);
     setErrorKey(null);
-    lastMtime.current = null;
   }, [path]);
 
   // Load on mount, path switch, or on-disk change; revoke the previous URL only
@@ -8587,34 +8549,8 @@ function useBlobUrl(path: string, type: string) {
     [],
   );
 
-  // Seed the mtime baseline once per file, visible or not, so it pairs with the
-  // bytes the load effect read — the re-show catch-up below compares against it.
-  useEffect(() => {
-    let cancelled = false;
-    fileMtime(path, scope)
-      .then((m) => { if (!cancelled) lastMtime.current = m; })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [path, scope]);
-
-  // Poll mtime; on an external advance, bump diskVersion to re-read fresh bytes.
-  // Visible panes only; the immediate check on re-show catches a hidden-time change.
-  useEffect(() => {
-    if (!paneVisible) return;
-    let cancelled = false;
-    const check = () => {
-      fileMtime(path, scope)
-        .then((m) => {
-          if (cancelled || lastMtime.current == null || m <= lastMtime.current) return;
-          lastMtime.current = m;
-          setDiskVersion((v) => v + 1);
-        })
-        .catch(() => {});
-    };
-    check();
-    const id = setInterval(check, RELOAD_POLL_MS);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [path, scope, paneVisible]);
+  // On an external write, bump diskVersion to re-read fresh bytes.
+  useDiskReloadPoll(path, scope, () => setDiskVersion((v) => v + 1));
 
   return { url, error };
 }

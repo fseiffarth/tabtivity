@@ -302,25 +302,17 @@ const PANE_MARKER_CMDS: &[&str] = &[
     crate::app_tab_command!("promptchart"),
 ];
 
-/// Agent CLIs a persisted tab may relaunch. Mirrors the frontend's `AGENT_CMDS`
-/// plus the local-model drivers (`commands::ollama::LOCAL_DRIVERS`), because those
-/// are the only commands `loadFromLayout` can legitimately have written.
-const AGENT_CMDS: &[&str] = &[
-    "claude",
-    "codex",
-    "gemini",
-    "agy",
-    "vibe",
-    "aider",
-    "opencode",
-    "cursor-agent",
-    "copilot",
-    "grok",
-    "qwen",
-    "openclaw",
-    "droid",
-    "ollama",
-];
+/// Agent CLIs a persisted tab may relaunch: every built-in agent's binary
+/// (`commands::agents`' registry, which the frontend's generated
+/// `agentCliTable.ts` mirrors, so `cmdToKind` writes each as an agent tab) plus
+/// `ollama`, the local-model launcher (`commands::ollama::LOCAL_DRIVERS`),
+/// because those are the only commands `loadFromLayout` can legitimately have
+/// written.
+fn agent_cmds() -> Vec<&'static str> {
+    let mut cmds = crate::commands::agents::agent_bins();
+    cmds.push("ollama");
+    cmds
+}
 
 /// Script interpreters a Run tab persists as its `cmd` (`lib/terminal/shellScriptRun.ts`'s
 /// `ScriptShell`, plus bare `sh`). A Python Run tab persists `cmd: ""` and types
@@ -337,7 +329,7 @@ fn known_tab_commands(custom: &HashMap<String, CustomAgentSpec>) -> HashSet<Stri
     set.insert(String::new());
     for c in PANE_MARKER_CMDS
         .iter()
-        .chain(AGENT_CMDS)
+        .chain(agent_cmds().iter())
         .chain(SCRIPT_INTERP_CMDS)
     {
         set.insert((*c).to_string());
@@ -880,7 +872,7 @@ mod tests {
         set.insert(String::new());
         for c in PANE_MARKER_CMDS
             .iter()
-            .chain(AGENT_CMDS)
+            .chain(agent_cmds().iter())
             .chain(SCRIPT_INTERP_CMDS)
         {
             set.insert((*c).to_string());
@@ -1092,6 +1084,20 @@ mod tests {
         );
         sanitize_tab_layout(&mut tabs, &known(), &no_custom());
         assert_eq!(tabs[0].extra.get("env"), Some(&serde_json::json!({ "Keep_Me": "yes" })));
+    }
+
+    #[test]
+    fn every_registry_agent_restores_as_itself_not_as_a_shell() {
+        // The set used to be a hand copy of 13 CLIs, so a tab of any agent added
+        // to the registry later (Kiro, Goose, Amp, …) came back as a plain shell.
+        let set = known_tab_commands(&no_custom());
+        for bin in crate::commands::agents::agent_bins() {
+            let mut tabs = vec![entry(bin)];
+            sanitize_tab_layout(&mut tabs, &set, &no_custom());
+            assert_eq!(tabs[0].cmd, bin, "{bin} restored as a shell");
+            assert!(tabs[0].session_id.is_some(), "{bin} lost its session");
+        }
+        assert!(set.contains("ollama"));
     }
 
     #[test]

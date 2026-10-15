@@ -612,8 +612,8 @@ pub fn is_host_bound_local_agent(cmd: &str, marker: bool) -> bool {
 
 /// Whether a spawn's command launches an AI coding agent — the question
 /// [`SandboxScope::Agents`] turns on. Mirrors `commands::agents::AGENTS` (the
-/// registry the + menu lists) and the frontend's `AGENT_CMDS`; the three are the
-/// same set by construction and `agent_registry_matches_classifier` fails if the
+/// registry the + menu lists, and the frontend's generated `agentCliTable.ts`
+/// that classifies a tab); `agent_registry_matches_classifier` fails if the
 /// registry grows an entry this misses.
 ///
 /// **Classified by the command that actually executes**, deliberately, and not by
@@ -2680,9 +2680,8 @@ mod tests {
 
     #[test]
     fn agent_registry_matches_classifier() {
-        // `is_agent_cmd` reads `commands::agents::AGENTS`; this is the tripwire for
-        // the frontend's `AGENT_CMDS`, which is a hand-kept copy of the same set.
-        // An agent missing from the classifier runs OUTSIDE the container under
+        // `is_agent_cmd` reads `commands::agents::AGENTS`, as the frontend's
+        // generated `agentCliTable.ts` does; this is the tripwire. An agent missing from the classifier runs OUTSIDE the container under
         // agents-only scope, which is exactly the silent failure worth a test.
         for bin in crate::commands::agents::agent_bins() {
             assert!(
