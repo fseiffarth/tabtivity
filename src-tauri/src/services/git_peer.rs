@@ -103,8 +103,10 @@ pub struct PeerSnapshot {
     /// True only for staged/unstaged **tracked** changes (blocks a clean checkout);
     /// untracked/ignored files never count (they remain file-sync's domain).
     pub dirty_tracked: bool,
-    /// True when the repo check could not be *executed* over an existing tree
-    /// (git missing / spawn failure), as opposed to a clean "not a repo" answer.
+    /// True when the peer could not be *read* — the repo check could not run over an
+    /// existing tree (git missing, spawn failure, ssh's exit 255, any exit but git's
+    /// explicit not-a-repo), or a later query a repo always answers failed — as
+    /// opposed to a clean "not a repo" answer (#10).
     /// A side with `probe_error` must never be treated as an empty pairing dest —
     /// a transient failure must not license a `reset --hard` that wipes a real repo.
     pub probe_error: bool,
@@ -1079,22 +1081,78 @@ pub fn save_state(project_id: &str, state: &GitPeerState) -> Result<(), String> 
 pub fn probe(peer: &Peer) -> PeerSnapshot {
     if let Peer::Remote(spec) = peer {
         match ssh_exec::run_remote_script(spec, PROBE_SCRIPT) {
-            Ok(out) => {
-                if let Some(snap) = parse_probe_block(&String::from_utf8_lossy(&out.stdout)) {
-                    return snap;
-                }
+            Ok(out) => match classify_batched_probe(
+                out.status.code(),
+                &String::from_utf8_lossy(&out.stdout),
+            ) {
+                BatchedProbe::Answer(snap) => return snap,
+                BatchedProbe::Error => return probe_error_snapshot(),
                 // Unrecognizable output → fall through to the per-command probe, which
                 // classifies `probe_error` itself.
-            }
-            Err(_) => {
-                return PeerSnapshot {
-                    probe_error: true,
-                    ..Default::default()
-                }
-            }
+                BatchedProbe::Fallback => {}
+            },
+            Err(_) => return probe_error_snapshot(),
         }
     }
     probe_per_command(peer)
+}
+
+/// A peer that could not be read: never an empty side (#28p D3.4, #10).
+fn probe_error_snapshot() -> PeerSnapshot {
+    PeerSnapshot {
+        probe_error: true,
+        ..Default::default()
+    }
+}
+
+/// What the batched remote probe's outcome means (#10).
+#[derive(Debug)]
+enum BatchedProbe {
+    Answer(PeerSnapshot),
+    /// The link failed: no reading at all, and no point re-dialling it.
+    Error,
+    /// Something else went wrong: ask again, one command at a time.
+    Fallback,
+}
+
+/// Classify [`PROBE_SCRIPT`]'s run by its exit status and output. The script always
+/// exits 0 once it ran (`|| true`, `printf` last), so only a 0 exit carries its answer;
+/// ssh's own exit 255 (link refused or dropped — output possibly truncated mid-section)
+/// or death by a signal is a [`BatchedProbe::Error`], never "an empty host". Any other
+/// exit (a failed `cd`, a shell that could not run the script) falls back to the
+/// per-command probe, which classifies the exact cause. Pure.
+fn classify_batched_probe(code: Option<i32>, stdout: &str) -> BatchedProbe {
+    match code {
+        Some(0) => parse_probe_block(stdout).map_or(BatchedProbe::Fallback, BatchedProbe::Answer),
+        Some(SSH_FAILED) | None => BatchedProbe::Error,
+        Some(_) => BatchedProbe::Fallback,
+    }
+}
+
+/// ssh's own exit status for a failure of ssh itself (connect, auth, a dropped link),
+/// as opposed to the remote command's status, which it passes through.
+const SSH_FAILED: i32 = 255;
+
+/// Whether a `rev-parse --is-inside-work-tree` that did **not** succeed means the peer
+/// could not be read (`true`) rather than that there is cleanly no repo (#10). `exit` is
+/// `None` when it could not be spawned, `Some(None)` when killed by a signal.
+///
+/// "Empty" needs an explicit answer: git's not-a-repo exit (128), or — remote only,
+/// where it runs as `cd <path> && git …` — a failed `cd` (exit 1 in bash, 2 in dash),
+/// the missing dir pairing may create. ssh's 255 and every other status (a missing
+/// `git`'s 127, a signal) is a probe error: reading it as empty would let pairing
+/// `reset --hard` over a real repo. A missing local dir is never an error — there is no
+/// repo there to destroy. Pure.
+fn failed_repo_check_is_probe_error(remote: bool, local_dir_exists: bool, exit: Option<Option<i32>>) -> bool {
+    if !remote && !local_dir_exists {
+        return false;
+    }
+    match exit {
+        None | Some(None) => true,
+        Some(Some(128)) => false,
+        Some(Some(1 | 2)) => !remote,
+        Some(Some(_)) => true,
+    }
 }
 
 /// The original one-command-per-field probe. Still the path for the local mirror (six
@@ -1105,18 +1163,17 @@ fn probe_per_command(peer: &Peer) -> PeerSnapshot {
     let is_repo = res.as_ref().map(|o| o.status.success()).unwrap_or(false);
     if !is_repo {
         // Distinguish a clean "not a repo" (git ran, said no — a legitimately empty
-        // side we may safely initialize) from a probe that could not run at all. A
-        // missing local dir is *not* an error: there is no repo there to destroy, so
-        // pairing may create the mirror. But an execution failure over an existing
-        // tree must NOT read as "empty" — that would let a `reset --hard` wipe a real
-        // repo on a transient git hiccup. `remote_target_for`-side connection drops
-        // surface as a non-zero ssh exit (Ok), so only a true spawn error flags here.
-        let probe_error = match peer {
-            Peer::Local(dir) => dir.exists() && res.is_err(),
-            Peer::Remote(_) => res.is_err(),
+        // side we may safely initialize) from a probe that could not run at all. An
+        // execution failure over an existing tree must NOT read as "empty" — that
+        // would let a `reset --hard` wipe a real repo on a transient git hiccup. A
+        // dropped ssh link is an `Ok` with exit 255, so the exit status decides.
+        let (remote, local_dir_exists) = match peer {
+            Peer::Local(dir) => (false, dir.exists()),
+            Peer::Remote(_) => (true, true),
         };
+        let exit = res.as_ref().ok().map(|o| o.status.code());
         return PeerSnapshot {
-            probe_error,
+            probe_error: failed_repo_check_is_probe_error(remote, local_dir_exists, exit),
             ..Default::default()
         };
     }
@@ -1136,26 +1193,34 @@ fn probe_per_command(peer: &Peer) -> PeerSnapshot {
         .unwrap_or_default();
     let head = Some(parse_head(&symbolic, &rev));
 
-    let branches = peer
-        .run(&[
+    // These three must answer: a failed one (a link that dropped mid-probe) would
+    // read as "no branches" / "clean tree", and a tree read as clean is one a
+    // `reset --hard` may overwrite. Unlike `symbolic-ref` / `rev-parse --verify`
+    // (which fail on a detached / unborn HEAD), they succeed in every repo.
+    let answered = |args: &[&str]| -> Option<String> {
+        peer.run(args)
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let (Some(heads), Some(tag_refs), Some(status)) = (
+        answered(&[
             "for-each-ref",
             "--format=%(objectname) %(refname:short)",
             "refs/heads",
-        ])
-        .map(|o| parse_refs(&String::from_utf8_lossy(&o.stdout)))
-        .unwrap_or_default();
-    let tags = peer
-        .run(&[
+        ]),
+        answered(&[
             "for-each-ref",
             "--format=%(objectname) %(refname:short)",
             "refs/tags",
-        ])
-        .map(|o| parse_refs(&String::from_utf8_lossy(&o.stdout)))
-        .unwrap_or_default();
-    let dirty_tracked = peer
-        .run(&["status", "--porcelain"])
-        .map(|o| is_dirty_tracked(&String::from_utf8_lossy(&o.stdout)))
-        .unwrap_or(false);
+        ]),
+        answered(&["status", "--porcelain"]),
+    ) else {
+        return probe_error_snapshot();
+    };
+    let branches = parse_refs(&heads);
+    let tags = parse_refs(&tag_refs);
+    let dirty_tracked = is_dirty_tracked(&status);
     let head_subject = peer
         .run(&["log", "-1", "--format=%s", "HEAD"])
         .ok()
@@ -2408,7 +2473,8 @@ async fn reconcile_with(
     let prior = load_state(project_id);
 
     // #28p D4: with no pooled SSH session, every remote git command would exit non-zero
-    // — which `probe` reads as "the host is a clean, empty side", which pairs into it,
+    // — which `probe` used to read as "the host is a clean, empty side" (it is a
+    // `probe_error` since #10, but an unreachable host still must not), which pairs into it,
     // which fails, which computes to Synchronized. A green pill for a host we cannot
     // see. So: no connection, no claim, no writes.
     if !connected(pool, project_id).await {
@@ -3620,6 +3686,47 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn a_failed_repo_check_reads_empty_only_on_an_explicit_no() {
+        let remote = |exit| failed_repo_check_is_probe_error(true, true, exit);
+        let local = |exit| failed_repo_check_is_probe_error(false, true, exit);
+        // Explicit answers: git's not-a-repo, or (remote) the `cd` that failed.
+        assert!(!remote(Some(Some(128))));
+        assert!(!remote(Some(Some(1))), "bash: cd failed");
+        assert!(!remote(Some(Some(2))), "dash: cd failed");
+        assert!(!local(Some(Some(128))));
+        // ssh's own failure is never an empty host (#10).
+        assert!(remote(Some(Some(255))));
+        assert!(local(Some(Some(255))));
+        // Nor is anything else: no git (127), a signal, a spawn failure.
+        for exit in [Some(Some(127)), Some(Some(3)), Some(None), None] {
+            assert!(remote(exit), "{exit:?}");
+            assert!(local(exit), "{exit:?}");
+        }
+        // Locally there is no `cd`: 1/2 are not an answer.
+        assert!(local(Some(Some(1))));
+        // A missing local dir has no repo to destroy, whatever happened.
+        assert!(!failed_repo_check_is_probe_error(false, false, None));
+        assert!(!failed_repo_check_is_probe_error(false, false, Some(Some(255))));
+    }
+
+    #[test]
+    fn the_batched_probe_trusts_only_a_clean_exit() {
+        let block = "repo\u{1e}main\n\u{1e}abc\n\u{1e}abc main\n\u{1e}\u{1e}\u{1e}";
+        assert!(matches!(classify_batched_probe(Some(0), block), BatchedProbe::Answer(s) if s.is_repo));
+        assert!(matches!(classify_batched_probe(Some(0), "norepo"), BatchedProbe::Answer(s) if !s.is_repo && !s.probe_error));
+        assert!(matches!(classify_batched_probe(Some(0), "garbage"), BatchedProbe::Fallback));
+        // ssh exit 255: an error outright — even with parseable (maybe truncated)
+        // output, and never re-dialled into an "empty" reading.
+        for out in ["", "garbage", "norepo", block] {
+            assert!(matches!(classify_batched_probe(Some(255), out), BatchedProbe::Error), "{out:?}");
+            assert!(matches!(classify_batched_probe(None, out), BatchedProbe::Error), "{out:?}");
+        }
+        // A failed `cd` (or a shell that could not run the script): ask per command.
+        assert!(matches!(classify_batched_probe(Some(1), ""), BatchedProbe::Fallback));
+        assert!(matches!(classify_batched_probe(Some(2), ""), BatchedProbe::Fallback));
     }
 
     #[test]
