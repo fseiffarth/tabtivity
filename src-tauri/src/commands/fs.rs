@@ -1933,11 +1933,70 @@ pub fn file_size_local(path: &str, scope_id: Option<&str>) -> Result<u64, String
 /// scope resolves to no project (e.g. first run), which makes every absolute-path
 /// command fail closed. See REVIEW.md Security #1.
 fn allowed_roots(scope_id: Option<&str>) -> Vec<PathBuf> {
-    static PROJECTS: StateJsonCache<ProjectsList> = StateJsonCache::new();
-    static BOXES: StateJsonCache<BoxesList> = StateJsonCache::new();
     let projects = PROJECTS.get("projects.json");
     let boxes = BOXES.get("boxes.json");
     compute_allowed_roots(&projects, &boxes, scope_id, &storage::root_work_dir())
+}
+
+/// The parsed registries every confinement check reads (see [`StateJsonCache`]).
+static PROJECTS: StateJsonCache<ProjectsList> = StateJsonCache::new();
+static BOXES: StateJsonCache<BoxesList> = StateJsonCache::new();
+
+/// Every folder a server **user** (`core_dispatch::Role::User`) may name to a
+/// command that takes a local path (`core_dispatch::confine_for_user`): the
+/// root work dir, the parents new projects and remote mirrors are created
+/// under, every project's directory and mirror override, and every box
+/// folder. Wider than [`allowed_roots`] on purpose — that one isolates a
+/// viewer to its own project; this one is the whole of what the user's
+/// projects are, so a folder outside every project (`/`, `/etc`, another
+/// account's home) is refused while switching projects is not.
+pub(crate) fn user_roots() -> Vec<PathBuf> {
+    let projects = PROJECTS.get("projects.json");
+    let boxes = BOXES.get("boxes.json");
+    let base = [
+        storage::root_work_dir(),
+        crate::paths::projects_root(),
+        crate::paths::projects_ssh_root(),
+    ];
+    compute_user_roots(&projects, &boxes, &base)
+}
+
+/// Pure core of [`user_roots`]. Each root is resolved as a confinement
+/// candidate is (`canonical_or_new`), so a root that does not exist yet still
+/// compares equal to a path under it.
+fn compute_user_roots(projects: &ProjectsList, boxes: &BoxesList, base: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = base.to_vec();
+    roots.extend(projects.iter().filter_map(project_dir));
+    roots.extend(projects.iter().filter_map(mirror_override_dir));
+    roots.extend(boxes.iter().filter_map(|b| b.folder.as_deref()).map(str::trim).filter(|f| !f.is_empty()).map(PathBuf::from));
+    roots
+        .into_iter()
+        // A relative entry would resolve against the process's cwd: never a root.
+        .filter(|r| r.is_absolute())
+        .map(|r| canonical_or_new(&r).unwrap_or(r))
+        .collect()
+}
+
+/// Whether `local_file` is a known project's `project.json` (`local_file` in
+/// `projects.json`), by its spelling or, failing that, by where it resolves.
+pub(crate) fn is_project_local_file(local_file: &str) -> bool {
+    is_local_file_in(&PROJECTS.get("projects.json"), local_file)
+}
+
+fn is_local_file_in(projects: &ProjectsList, local_file: &str) -> bool {
+    if local_file.trim().is_empty() {
+        return false;
+    }
+    if projects.iter().any(|e| !e.local_file.is_empty() && e.local_file == local_file) {
+        return true;
+    }
+    let Ok(wanted) = fs::canonicalize(local_file) else {
+        return false;
+    };
+    projects
+        .iter()
+        .filter(|e| !e.local_file.is_empty())
+        .any(|e| fs::canonicalize(&e.local_file).is_ok_and(|known| known == wanted))
 }
 
 /// The last parse of one state file, reused while the file's bytes are unchanged.
@@ -2334,11 +2393,25 @@ pub(crate) fn confine_project_path(p: &Path, scope_id: Option<&str>) -> Result<(
 }
 
 /// Confine a path a server **user** (not the box's admin) names to a command
-/// that has no confinement of its own because it stands in for an OS file
-/// dialog on the desktop — `list_dir_all`, the browser's file tickets and
-/// grants (`services::core_dispatch::user_path`). The same roots as a read.
+/// with no confinement of its own — `list_dir_all` (on the desktop it stands
+/// in for an OS file dialog), every path argument `core_dispatch`'s user table
+/// holds, the browser's file tickets and grants
+/// (`services::core_dispatch::user_path`) — to [`user_roots`]. A relative path
+/// is refused: it would resolve against the server process's cwd.
 pub(crate) fn confine_user_path(p: &Path) -> Result<(), String> {
-    confine_abs_read(p, None)
+    if !p.is_absolute() {
+        return Err(format!("path '{}' is not absolute", p.display()));
+    }
+    confine_abs_within(p, &user_roots()).map_err(|_| outside_user_roots(p))
+}
+
+/// The refusal for a path outside every one of a user's roots. Keeps the
+/// "not in the current project" wording the other refusals use.
+fn outside_user_roots(p: &Path) -> String {
+    format!(
+        "path '{}' is not in the current project or any other of your projects",
+        p.display()
+    )
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -3748,6 +3821,42 @@ mod tests {
             folder: folder.map(|s| s.to_string()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn user_roots_cover_every_project_mirror_box_folder_and_base_and_nothing_else() {
+        let tmp = tempfile::tempdir().unwrap();
+        let at = |rel: &str| tmp.path().join(rel);
+        let dir = |rel: &str| at(rel).to_string_lossy().into_owned();
+        let mut y = entry("y", "inactive", &dir("code-y"));
+        y.extra.insert("mirror".to_string(), Value::String(dir("mirror-y")));
+        let projects = vec![entry("x", "current", &dir("code-x")), y, entry("rel", "inactive", "relative/dir")];
+        let boxes = vec![mk_box("b1", &["x"], Some(dir("box-b1").as_str())), mk_box("b2", &[], None)];
+        let roots = compute_user_roots(&projects, &boxes, &[at("work")]);
+        let held = |p: PathBuf| confine_abs_within(&p, &roots).is_ok();
+        for inside in ["work/a", "code-x/src/main.rs", "code-y", "mirror-y/f", "box-b1/notes.md"] {
+            assert!(held(at(inside)), "{inside} is a user's");
+        }
+        assert!(!held(at("elsewhere/f")), "a sibling of the roots is not");
+        assert!(!held(tmp.path().to_path_buf()), "nor their parent");
+        assert!(!held(at("code-x/../elsewhere")), "a `..` never passes");
+        assert!(roots.iter().all(|r| r.is_absolute()), "a relative entry is never a root");
+    }
+
+    #[test]
+    fn a_local_file_must_be_a_known_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("p");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("project.json"), "{}").unwrap();
+        let projects = vec![entry("p", "current", &dir.to_string_lossy())];
+        let known = dir.join("project.json");
+        assert!(is_local_file_in(&projects, &known.to_string_lossy()));
+        // The same file under another spelling resolves to it.
+        let spelled = tmp.path().join("p").join(".").join("project.json");
+        assert!(is_local_file_in(&projects, &spelled.to_string_lossy()));
+        assert!(!is_local_file_in(&projects, &tmp.path().join("other.json").to_string_lossy()));
+        assert!(!is_local_file_in(&projects, ""));
     }
 
     #[test]

@@ -50,8 +50,11 @@
 //! (`core_dispatch::Role`), fixed at login and never read from a frame: the
 //! token login is the box owner's `Admin`; a gateway-verified account's is
 //! what the gateway's handshake names. A user's calls are confined where an
-//! admin's are not (`core_dispatch::user_path`: `list_dir_all`, file tickets
-//! and grants), and every transport-level command passes the class check too.
+//! admin's are not: every path argument of a `core` command is held to the
+//! user's roots by `core_dispatch`'s table (project folders, absolute paths,
+//! `project.json` files; `list_dir_all`'s empty start is the root work dir),
+//! as are file tickets and grants here (`core_dispatch::user_path`), and
+//! every transport-level command passes the class check too.
 //!
 //! **Backpressure.** Each client has a bounded event queue. A full queue drops
 //! the event — terminal output is shed oldest-first the way `pty_bridge` sheds
@@ -1849,7 +1852,8 @@ mod tests {
 
     /// A user's socket: admin commands refused, a ticket or grant for a path
     /// outside the user's roots refused, `list_dir_all` confined — the P2
-    /// review's items 6 and 8.
+    /// review's items 6 and 8 — and a project folder outside them (`/`, a
+    /// foreign folder) refused before any body runs.
     #[tokio::test]
     async fn a_user_session_is_confined_and_denied_admin_commands() {
         use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as WsMessage};
@@ -1886,6 +1890,9 @@ mod tests {
             json!({ "t": "call", "id": 3, "cmd": FILE_GRANT_CMD, "args": { "path": outside.to_string_lossy() } }),
             json!({ "t": "call", "id": 4, "cmd": "list_dir_all", "args": { "path": dir.path().to_string_lossy() } }),
             json!({ "t": "call", "id": 5, "cmd": "read_file_bytes", "args": { "path": outside.to_string_lossy() } }),
+            // A project folder of `/` would make every relative path a whole-disk one.
+            json!({ "t": "call", "id": 6, "cmd": "list_dir", "args": { "projectDir": if cfg!(windows) { "C:\\" } else { "/" }, "relPath": "" } }),
+            json!({ "t": "call", "id": 7, "cmd": "git_status", "args": { "projectDir": dir.path().to_string_lossy() } }),
         ];
         for call in &calls {
             ws.send(WsMessage::Text(call.to_string().into())).await.unwrap();
