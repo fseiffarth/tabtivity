@@ -743,6 +743,11 @@ pub enum MobileMailView {
         messages: Vec<MobileMailHeader>,
         total: u32,
         offset: u32,
+        /// The folder is still being fetched from the server for this
+        /// request; the phone asks again. Defaulted so an older desktop still
+        /// answers.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        syncing: bool,
     },
     Message {
         message: MobileMailHeader,
@@ -2555,6 +2560,22 @@ mod tests {
         let response = serde_json::to_value(DesktopResponse::Prompts { prompts: vec![] })
             .expect("serialize prompts response");
         assert_eq!(response["status"], "prompts");
+    }
+
+    #[test]
+    fn mail_folder_syncing_flag_relays_and_defaults_off() {
+        let page = |syncing: &str| {
+            serde_json::from_str::<MobileMailView>(&format!(
+                r#"{{"view":"folder","folder":{{"id":"f","name":"Archive","kind":"archive","unread":0,"total":0}},
+                    "messages":[],"total":0,"offset":0{syncing}}}"#
+            ))
+            .expect("parse folder view")
+        };
+        // An older desktop sends no flag; the phone sees none either.
+        let quiet = serde_json::to_value(page("")).expect("serialize");
+        assert!(quiet.get("syncing").is_none());
+        let busy = serde_json::to_value(page(r#","syncing":true"#)).expect("serialize");
+        assert_eq!(busy["syncing"], true);
     }
 
     #[test]

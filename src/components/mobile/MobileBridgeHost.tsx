@@ -45,8 +45,10 @@ import {
   mailFlag,
   mailFolders,
   mailHeaders,
+  mailSync,
   stripFormatControls,
 } from "../../lib/mail";
+import { useMailStore } from "../../stores/mail";
 import {
   AGENT_ITEMS,
   SHELL_ITEMS,
@@ -194,7 +196,7 @@ interface MobileMailAttachment { filename: string; mime: string; size: number }
 type MailMarkAction = "seen" | "unseen" | "flag" | "unflag";
 type MobileMailView =
   | { view: "overview"; accounts: MobileMailAccount[]; actions: boolean; reply: boolean }
-  | { view: "folder"; folder: MobileMailFolder; messages: MobileMailHeader[]; total: number; offset: number }
+  | { view: "folder"; folder: MobileMailFolder; messages: MobileMailHeader[]; total: number; offset: number; syncing?: boolean }
   | { view: "message"; message: MobileMailHeader; body: string; truncated: boolean; attachments: MobileMailAttachment[] };
 type TodoAction =
   | { type: "create"; task: TodoTaskInput }
@@ -1937,9 +1939,55 @@ async function resolveMailFolder(folderId: string): Promise<MailFolder | null> {
   return null;
 }
 
-async function mailFolderPage(folderId: string, offset: number): Promise<DesktopResponse> {
-  const folder = await resolveMailFolder(folderId);
+/** How long a folder request waits for its folder's sync before answering
+ * with what the index already holds (and `syncing`, so the phone asks again).
+ * Under the 8 s desktop deadline of a `MailFolder` request. */
+const MAIL_FOLDER_SYNC_WAIT_MS = 5_000;
+/** A folder the phone opens again within this is not fetched again. */
+const MAIL_FOLDER_SYNC_EVERY_MS = 60_000;
+const mailFolderSyncs = new Map<string, { started: number; running: boolean; done: Promise<void> }>();
+
+/** The index holds only what a sync fetched, and the background sync fetches
+ * Inbox, Sent and Drafts; every other folder fills when it is checked on its
+ * own — the desktop's Check mail with that folder open. The phone has no such
+ * button, so opening a folder is that check: without it Archive, Trash and
+ * every user folder read as empty and all mail looks like it is in the inbox.
+ * One fetch per folder at a time, at most once a minute. */
+function syncMailFolder(folder: MailFolder) {
+  const last = mailFolderSyncs.get(folder.id);
+  if (last && (last.running || Date.now() - last.started < MAIL_FOLDER_SYNC_EVERY_MS)) return last;
+  const entry = { started: Date.now(), running: true, done: Promise.resolve() };
+  entry.done = mailSync(folder.account_id, folder.id)
+    .then(async () => {
+      // Keep the desktop's folder rail counting what the phone just fetched.
+      if (useMailStore.getState().foldersByAccount[folder.account_id]) {
+        await useMailStore.getState().loadFolders(folder.account_id, false);
+      }
+    })
+    .catch(() => {})
+    .finally(() => { entry.running = false; });
+  mailFolderSyncs.set(folder.id, entry);
+  return entry;
+}
+
+/** `fetch` is the phone opening the folder; a write re-reading its page after
+ * the change does not fetch. */
+export async function mailFolderPage(folderId: string, offset: number, fetch = false): Promise<DesktopResponse> {
+  let folder = await resolveMailFolder(folderId);
   if (!folder) return { status: "error", code: "folder_not_found", message: "Mail folder is unavailable" };
+  let syncing = false;
+  // Only the first page fetches: paging on through a folder reads the index.
+  if (fetch && offset === 0) {
+    const sync = syncMailFolder(folder);
+    if (sync.running) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waited = new Promise<"waiting">((resolve) => { timer = setTimeout(() => resolve("waiting"), MAIL_FOLDER_SYNC_WAIT_MS); });
+      syncing = (await Promise.race([sync.done.then(() => "done" as const), waited])) === "waiting";
+      clearTimeout(timer);
+      // The sync recounted the folder; answer with those counts.
+      if (!syncing) folder = (await resolveMailFolder(folderId)) ?? folder;
+    }
+  }
   const page = await mailHeaders(folder.id, offset, MAIL_PAGE_SIZE, null);
   return {
     status: "mail",
@@ -1949,6 +1997,7 @@ async function mailFolderPage(folderId: string, offset: number): Promise<Desktop
       messages: await Promise.all(page.items.map(publicMailHeader)),
       total: page.total,
       offset,
+      ...(syncing ? { syncing: true } : {}),
     },
   };
 }
@@ -2463,7 +2512,7 @@ async function handleRequest(
     case "calendar_mutate": return calendarMutate(request.month, request.action);
     case "todo_mutate": return todoMutate(request.action);
     case "mail_overview": return mailReadAllowed() ? mailOverview() : MAIL_READ_DISABLED;
-    case "mail_folder": return mailReadAllowed() ? mailFolderPage(request.folder_id, request.offset) : MAIL_READ_DISABLED;
+    case "mail_folder": return mailReadAllowed() ? mailFolderPage(request.folder_id, request.offset, true) : MAIL_READ_DISABLED;
     case "mail_message": return mailReadAllowed() ? mailMessage(request.folder_id, request.message_id, request.offset) : MAIL_READ_DISABLED;
     case "mail_mark": return mailReadAllowed() ? mailMark(request.folder_id, request.message_id, request.offset, request.action) : MAIL_READ_DISABLED;
     case "mail_reply": return mailReadAllowed() ? mailReply(request.folder_id, request.message_id, request.offset, request.body, t) : MAIL_READ_DISABLED;
