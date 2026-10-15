@@ -934,7 +934,9 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
         // Root is listed above, by its own switch and gate, and is not a
         // project: this refuses a hand-edited record that would borrow its
         // session directory — and walk past that gate — by taking its id.
-        if is_root_scope_id(&project.id) {
+        // The same for any scope the app keeps for itself (the chat
+        // assistant's has its own source, listed by its own switch).
+        if is_root_scope_id(&project.id) || crate::storage::is_reserved_scope(&project.id) {
             continue;
         }
         let Some(root_raw) = project.directory.as_deref() else {
@@ -1703,6 +1705,37 @@ mod tests {
 
         assert!(is_root_scope_id("root"));
         assert!(!is_root_scope_id("rooted"));
+    }
+
+    /// A `projects.json` record that takes the chat assistant's id — or root's
+    /// in another spelling — is listed by nobody: the catalog has no such
+    /// source (until the assistant's own switch lists it), and the record does
+    /// not borrow its session folder.
+    #[test]
+    fn a_project_record_cannot_borrow_a_reserved_scope() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let folder = state.join("folder");
+        fs::create_dir_all(&folder).expect("folder");
+        let records: Vec<serde_json::Value> = ["assistant", "Assistant", "assistant ", "ASSISTANT", "Root"]
+            .iter()
+            .map(|id| {
+                serde_json::json!({
+                    "id": id, "name": "Borrowed", "status": "active",
+                    "directory": folder.to_string_lossy(),
+                    concat!(crate::app_slug!(), "_mobile_access"): true,
+                })
+            })
+            .chain(std::iter::once(serde_json::json!({
+                "id": "p1", "name": "Real", "status": "active",
+                "directory": folder.to_string_lossy(),
+                concat!(crate::app_slug!(), "_mobile_access"): true,
+            })))
+            .collect();
+        fs::write(state.join("projects.json"), serde_json::to_vec(&records).expect("projects")).expect("write projects");
+        let env = RootEnv { dir: folder, fenced: || true };
+        let sources = scope_sources(state, &env).expect("sources");
+        assert_eq!(sources.iter().map(|s| s.raw_id.as_str()).collect::<Vec<_>>(), ["p1"]);
     }
 
     /// A tab a headless create stamped reads only sessions begun since its

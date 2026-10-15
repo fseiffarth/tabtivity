@@ -35,6 +35,12 @@ pub fn plan(cli: &str, env: &HashMap<String, String>) -> Result<(Option<String>,
         .ok_or_else(|| {
             concat!("agent shim: not a ", crate::app_name!(), " tab (no ", crate::app_upper!(), "_SCOPE); open the CLI from a ", crate::app_name!(), " tab").to_string()
         })?;
+    // The chat assistant's tabs run only the profile Tabtivity builds for them
+    // (`services::assistant`): a typed CLI would be seeded from, and run with,
+    // the scope's `agent_global` layer, tools and all.
+    if crate::storage::is_reserved_scope(scope) && scope != crate::storage::ROOT_SCOPE {
+        return Err(concat!("agent shim: not available in this ", crate::app_name!(), " scope").into());
+    }
     let project_id = (scope != crate::storage::ROOT_SCOPE).then(|| scope.clone());
     let cwd = std::env::current_dir().map_err(|e| format!("agent shim: cwd: {e}"))?;
     Ok((project_id, cwd))
@@ -188,5 +194,18 @@ mod tests {
         assert!(plan("/usr/bin/claude", &env).is_err());
         env.insert(crate::app_env!("AGENT_FENCE").into(), "1".into());
         assert!(plan("claude", &env).is_err());
+    }
+    #[test]
+    fn the_shim_refuses_the_chat_assistants_scope() {
+        // A typed CLI would be seeded from and run with the scope's global
+        // layer; the scope runs only the profile Tabtivity builds for it.
+        for scope in [crate::storage::ASSISTANT_SCOPE, "Assistant", "assistant "] {
+            let mut env = HashMap::new();
+            env.insert(crate::app_env!("SCOPE").into(), scope.into());
+            assert!(plan("claude", &env).is_err(), "{scope:?}");
+        }
+        let mut env = HashMap::new();
+        env.insert(crate::app_env!("SCOPE").into(), "assistant2".into());
+        assert!(plan("claude", &env).is_ok());
     }
 }

@@ -401,7 +401,7 @@ pub(crate) fn codex_sessions_root(project_id: Option<&str>) -> PathBuf {
 /// `<projects>/<encoded-cwd>/<uuid>.jsonl`; since uuids are globally unique we
 /// scan the project dirs for `<uuid>.jsonl` rather than re-deriving the cwd
 /// encoding.
-fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> bool {
+pub(crate) fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> bool {
     claude_session_log(projects, uuid).is_some()
 }
 

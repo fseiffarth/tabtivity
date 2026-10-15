@@ -891,12 +891,22 @@ pub fn archive(
     Ok(file.projects.get(project_id).cloned().unwrap_or_default())
 }
 
+/// Whether the scope keeps no prompt history. The chat assistant's chat lives
+/// in the CLI's own transcript; its words are not a project's prompts, and
+/// the history is where prompts are kept for re-use and for the user's review.
+fn records_nothing_for(scope_id: &str) -> bool {
+    scope_id == storage::ASSISTANT_SCOPE
+}
+
 /// Record one delivery straight onto the history. Returns the project's
 /// history, since — unlike `archive` — nothing on the active list moved.
 pub fn record(
     project_id: &str,
     entry: RecordedAgentPromptInput,
 ) -> Result<Vec<SentAgentPrompt>, String> {
+    if records_nothing_for(project_id) {
+        return Ok(Vec::new());
+    }
     let (entry, input, head, roll) = prepare_record(project_id, entry)?;
     let _guard = lock();
     let mut file = read()?;
@@ -915,6 +925,9 @@ pub fn record_at(
     project_id: &str,
     entry: RecordedAgentPromptInput,
 ) -> Result<Vec<SentAgentPrompt>, String> {
+    if records_nothing_for(project_id) {
+        return Ok(Vec::new());
+    }
     let (entry, input, head, roll) = prepare_record(project_id, entry)?;
     let path = file_path(state_dir);
     let _lock = storage::FileLock::exclusive(&path).ok();
@@ -1669,5 +1682,16 @@ mod tests {
         assert!(validate_input(input("a", &"x".repeat(MAX_MESSAGE_BYTES + 1))).is_err());
         let clean = validate_input(input("a", "one\r\ntwo\u{1b}[31m  ")).unwrap();
         assert_eq!(clean.message, "one\ntwo[31m");
+    }
+    #[test]
+    fn the_assistant_scope_keeps_no_prompt_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrote = record_at(dir.path(), crate::storage::ASSISTANT_SCOPE, recorded("a", "what is a monad", "delivered")).unwrap();
+        assert!(wrote.is_empty());
+        assert!(!file_path(dir.path()).exists(), "nothing was written for the chat assistant");
+        // Another scope still records.
+        let kept = record_at(dir.path(), "p1", recorded("b", "hello", "delivered")).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert!(list_at(dir.path(), crate::storage::ASSISTANT_SCOPE).unwrap().is_empty());
     }
 }

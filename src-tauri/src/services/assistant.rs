@@ -4,10 +4,10 @@
 //! the spawn branch in `services::launch_prep`, the web lane in
 //! `services::web_lane`.
 //!
-//! **Skeleton (step S0b).** The types, constants and signatures below are
-//! final; [`launch_line`] and [`new_chat_record`] answer
-//! [`Refusal::NotBuilt`] until S1a fills them in. Nothing outside this module
-//! calls them yet, so the assistant is unreachable and behaviour is as before.
+//! [`launch_line`] builds the whole launch of a chat (command, argv, env) from
+//! an [`AssistantLaunch`], and [`new_chat_record`] mints the tab record both
+//! the desktop command and the phone's headless create persist. The spawn
+//! branch that calls them is `services::launch_prep::prepare`.
 //!
 //! The rule everything here serves: the renderer (or the phone) names only an
 //! [`AssistantLaunch`] — a CLI and a model. The backend builds the whole argv
@@ -139,7 +139,7 @@ pub struct AssistantLaunch {
 /// token or anything a client sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// The skeleton's answer until S1a builds the profile.
+    /// Kept for callers written against the skeleton; nothing returns it now.
     NotBuilt,
     /// The profile is not offered ([`is_offered`]).
     NotOffered,
@@ -155,6 +155,8 @@ pub enum Refusal {
     /// Decision 13: Codex's model catalog could not be built and checked, so
     /// its file tool could not be removed. Fail closed.
     CodexCatalog,
+    /// The profile's config (OpenCode's inline config) could not be built.
+    Config,
 }
 
 impl Refusal {
@@ -168,6 +170,7 @@ impl Refusal {
             Self::BadUid => "bad_uid",
             Self::NoLane => "no_lane",
             Self::CodexCatalog => "codex_catalog",
+            Self::Config => "config",
         }
     }
 }
@@ -183,6 +186,7 @@ impl std::fmt::Display for Refusal {
             Self::BadUid => write!(f, "That {name} chat has an invalid id."),
             Self::NoLane => write!(f, "{name}'s web tools are not available right now."),
             Self::CodexCatalog => write!(f, "Codex couldn't be started without its file tool, so {name} did not start it."),
+            Self::Config => write!(f, "{name} could not set up its tools for this chat."),
         }
     }
 }
@@ -238,6 +242,16 @@ pub struct LaunchCtx<'a> {
     /// [`Refusal::NoLane`] without one; cloud profiles run on their native
     /// search alone.
     pub lane: Option<&'a LaneGrant>,
+    /// The path the agent process sees [`Self::home`] at: the real home's path
+    /// inside a Linux fence (the fence binds the agent home there), the home
+    /// itself where `HOME` is redirected by environment (macOS, Windows). The
+    /// only path an argv may name inside the home (Codex's catalog file).
+    pub visible_home: &'a Path,
+    /// A local OpenCode profile's `ollama` provider config
+    /// (`commands::ollama::opencode_assistant_provider`), which the profile's
+    /// own settings are merged into. The caller reads it (it asks Ollama); a
+    /// profile without it refuses with [`Refusal::Config`].
+    pub opencode_provider: Option<&'a str>,
 }
 
 /// The program, argv and env a chat is spawned with. Replaces the client's
@@ -257,32 +271,373 @@ pub fn is_offered(cli: AssistantCli) -> bool {
     matches!(cli, AssistantCli::Claude | AssistantCli::Codex | AssistantCli::OpenCodeLocal | AssistantCli::ClaudeLocal)
 }
 
+impl AssistantCli {
+    /// Whether the profile talks to the web lane at all. A local profile has
+    /// no search or fetch of its own and needs it ([`Refusal::NoLane`]
+    /// without); cloud Claude fetches pages through it and searches natively;
+    /// Codex has only its native `web_search` and wires no MCP server, so the
+    /// grant (`root_mcp::grant_lanes`' assistant arm) need not mint it one.
+    pub fn uses_lane(self) -> bool {
+        !matches!(self, Self::Codex)
+    }
+}
+
+/// The lane's tool names reach a CLI under this MCP server name
+/// (`mcp__web__web_fetch` in Claude, `web_web_search` in OpenCode).
+const LANE_SERVER: &str = "web";
+
+/// Check what a client chose: the CLI is offered, a local profile names a
+/// model, and any model is a plain name that cannot read as a flag. The one
+/// validation [`launch_line`] and [`new_chat_record`] share.
+pub fn validate_launch(launch: &AssistantLaunch) -> Result<(), Refusal> {
+    if !is_offered(launch.cli) {
+        return Err(Refusal::NotOffered);
+    }
+    match launch.model.as_deref() {
+        None | Some("") if launch.cli.is_local() => Err(Refusal::ModelRequired),
+        None => Ok(()),
+        Some(model) if crate::commands::ollama::model_name_ok(model) => Ok(()),
+        Some(_) => Err(Refusal::BadModel),
+    }
+}
+
+/// `{"mcpServers":{"web":{...}}}` for Claude: the lane over HTTP, its token
+/// named by env (`Bearer ${VAR}`, which Claude expands), never written in.
+fn claude_mcp_config(url: &str) -> String {
+    serde_json::json!({
+        "mcpServers": {
+            LANE_SERVER: {
+                "type": "http",
+                "url": url,
+                "headers": { "Authorization": format!("Bearer ${{{}}}", crate::services::root_mcp::WEB_TOKEN_ENV) },
+            }
+        }
+    })
+    .to_string()
+}
+
+/// Whether `url` is a lane address the spawn path can have granted: a
+/// loopback http origin with a port, and exactly the lane's path.
+fn lane_url_ok(url: &str) -> bool {
+    let Some(rest) = ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"]
+        .iter()
+        .find_map(|prefix| url.strip_prefix(prefix))
+    else {
+        return false;
+    };
+    let Some(port) = rest.strip_suffix("/mcp/web") else {
+        return false;
+    };
+    (1..=5).contains(&port.len()) && port.chars().all(|c| c.is_ascii_digit())
+}
+
+/// The args local Claude gets behind `ollama launch claude --model <m> --`:
+/// `session` (`--session-id <uid>`, or `--continue` for a chat that has a
+/// transcript), then the pinned tool set (plan decisions 6 and 14): no
+/// built-in tool, the lane as the only MCP server, no slash commands or
+/// skills, the system prompt, and the lane's two tools pre-allowed (the
+/// auto-mode check runs on the local model and timed out).
+fn claude_local_tail(session: &[String], url: &str) -> Vec<String> {
+    let mut tail = session.to_vec();
+    tail.extend(
+        ["--tools", "", "--strict-mcp-config", "--mcp-config"].map(str::to_string),
+    );
+    tail.push(claude_mcp_config(url));
+    tail.extend(["--disable-slash-commands", "--append-system-prompt"].map(str::to_string));
+    tail.push(SYSTEM_PROMPT.to_string());
+    tail.extend(["--allowedTools".to_string(), format!("mcp__{LANE_SERVER}")]);
+    tail
+}
+
+/// Whether `tail` (what follows `--` in `ollama launch claude --model <m> --`)
+/// is exactly the tail [`launch_line`] builds for local Claude: the one
+/// `--` tail `commands::ollama::local_launch_line_ok` accepts. Rebuilt from
+/// its two variable parts — the session form and the lane's url — and
+/// compared whole, so nothing can be added, dropped or reordered.
+pub(crate) fn claude_local_tail_ok(tail: &[String]) -> bool {
+    let (session, rest) = match tail {
+        [flag, rest @ ..] if flag == "--continue" => (vec![flag.clone()], rest),
+        [flag, uid, rest @ ..] if flag == "--session-id" && crate::services::agent_session::is_uuid_shaped(uid) => {
+            (vec![flag.clone(), uid.clone()], rest)
+        }
+        _ => return false,
+    };
+    // `--tools "" --strict-mcp-config --mcp-config <config> …`
+    let Some(config) = rest.get(4).filter(|_| rest.get(3).map(String::as_str) == Some("--mcp-config")) else {
+        return false;
+    };
+    let Some(url) = serde_json::from_str::<serde_json::Value>(config)
+        .ok()
+        .and_then(|v| v["mcpServers"][LANE_SERVER]["url"].as_str().map(str::to_string))
+    else {
+        return false;
+    };
+    lane_url_ok(&url) && claude_local_tail(&session, &url) == tail
+}
+
+/// The tools OpenCode hides from the model (`"tools": { name: false }`); a
+/// hidden tool is not offered, not merely asked about. `permission` is left
+/// alone on purpose: `{"*": "deny"}` hides MCP tools too (plan, A0).
+const OPENCODE_TOOLS_OFF: [&str; 15] = [
+    "bash", "edit", "write", "read", "grep", "glob", "list", "patch", "webfetch", "websearch", "task", "todowrite",
+    "todoread", "skill", "lsp",
+];
+
+/// OpenCode's inline config for a local chat: `provider` (the `ollama`
+/// provider block, `commands::ollama::opencode_assistant_provider`) with the
+/// profile merged in — every built-in tool off, the lane as the one MCP
+/// server (its token named by `{env:VAR}`, which OpenCode substitutes in
+/// headers, A0: the token stays in the spawn env only), and the system prompt
+/// as the `build` agent's. Pure.
+fn opencode_inline_config(provider: &str, url: &str) -> Result<String, Refusal> {
+    let mut config: serde_json::Value = serde_json::from_str(provider).map_err(|_| Refusal::Config)?;
+    let object = config.as_object_mut().ok_or(Refusal::Config)?;
+    let tools: serde_json::Map<String, serde_json::Value> =
+        OPENCODE_TOOLS_OFF.iter().map(|name| ((*name).to_string(), serde_json::Value::Bool(false))).collect();
+    object.insert("tools".into(), tools.into());
+    object.insert(
+        "mcp".into(),
+        serde_json::json!({
+            LANE_SERVER: {
+                "type": "remote",
+                "url": url,
+                "headers": { "Authorization": format!("Bearer {{env:{}}}", crate::services::root_mcp::WEB_TOKEN_ENV) },
+            }
+        }),
+    );
+    object.insert("agent".into(), serde_json::json!({ "build": { "prompt": SYSTEM_PROMPT } }));
+    Ok(config.to_string())
+}
+
+/// The file Codex's built model catalog is written to, in the assistant
+/// home's `.codex` folder (decision 13).
+const CODEX_CATALOG_FILE: &str = "assistant_models.json";
+/// Codex's own cache of the model list, the catalog's source.
+const CODEX_MODELS_CACHE: &str = "models_cache.json";
+/// The most of `models_cache.json` read (it is about 400 KB).
+const CODEX_CACHE_CAP: u64 = 16 * 1024 * 1024;
+
+/// `{"models":[…]}` from Codex's `models_cache.json`, every entry's
+/// `apply_patch_tool_type` set to `null` — Codex has no switch for that tool,
+/// and a model with no type has none (decision 13). `None` for any shape
+/// but an object with a non-empty `models` array of objects. Pure.
+fn build_codex_catalog(cache: &[u8]) -> Option<Vec<u8>> {
+    let mut cache: serde_json::Value = serde_json::from_slice(cache).ok()?;
+    let models = cache.get_mut("models")?.as_array_mut().filter(|models| !models.is_empty())?;
+    for model in models.iter_mut() {
+        model.as_object_mut()?.insert("apply_patch_tool_type".into(), serde_json::Value::Null);
+    }
+    serde_json::to_vec(&serde_json::json!({ "models": models })).ok()
+}
+
+/// Whether `catalog` is one [`build_codex_catalog`] makes: models, each with
+/// the field present and `null`. The check run on the file as written.
+fn codex_catalog_ok(catalog: &[u8]) -> bool {
+    let Ok(catalog) = serde_json::from_slice::<serde_json::Value>(catalog) else {
+        return false;
+    };
+    catalog["models"].as_array().is_some_and(|models| {
+        !models.is_empty()
+            && models.iter().all(|model| model.as_object().and_then(|m| m.get("apply_patch_tool_type")).is_some_and(serde_json::Value::is_null))
+    })
+}
+
+/// Build the catalog from the home's `models_cache.json`, write it into the
+/// home through `home_io` (every operation relative to a directory handle: a
+/// fenced agent owns that tree) and check what was written. Any failure —
+/// no cache, an unreadable one, an unknown shape, a failed check — is
+/// [`Refusal::CodexCatalog`]: the spawn is refused, never run with the file
+/// tool.
+fn write_codex_catalog(home: &Path) -> Result<(), Refusal> {
+    use std::io::Read;
+    let cache = crate::services::home_io::HomeFile::open_existing(home, &format!(".codex/{CODEX_MODELS_CACHE}"))
+        .and_then(|file| file.open_read())
+        .and_then(|file| {
+            let mut bytes = Vec::new();
+            file.take(CODEX_CACHE_CAP + 1).read_to_end(&mut bytes).ok()?;
+            (bytes.len() as u64 <= CODEX_CACHE_CAP).then_some(bytes)
+        })
+        .ok_or(Refusal::CodexCatalog)?;
+    let catalog = build_codex_catalog(&cache).ok_or(Refusal::CodexCatalog)?;
+    let target = crate::services::home_io::HomeFile::open(home, &format!(".codex/{CODEX_CATALOG_FILE}"))
+        .ok_or(Refusal::CodexCatalog)?;
+    target.write(&catalog).map_err(|_| Refusal::CodexCatalog)?;
+    let written = target.read().ok_or(Refusal::CodexCatalog)?;
+    if codex_catalog_ok(&written) {
+        Ok(())
+    } else {
+        Err(Refusal::CodexCatalog)
+    }
+}
+
+/// The `-c` overrides that take Codex's shell, file and device tools away and
+/// turn live web search on (plan decisions 4, 9 and 13). `catalog` is the
+/// built model catalog as the process sees it. No `-s` and no MCP entry.
+fn codex_pinned_args(catalog: &Path) -> Vec<String> {
+    let mut args = Vec::new();
+    for key in [
+        "features.shell_tool=false",
+        "features.view_image=false",
+        "features.goals=false",
+        "features.apps=false",
+        "features.plugins=false",
+        "features.browser_use=false",
+        "features.computer_use=false",
+        "features.image_generation=false",
+    ] {
+        args.extend(["-c".to_string(), key.to_string()]);
+    }
+    args.extend(crate::commands::ollama::catalog_arg_pair(catalog));
+    args.extend(["-c".to_string(), "web_search=\"live\"".to_string()]);
+    args.extend(["-c".to_string(), format!("developer_instructions=\"{SYSTEM_PROMPT}\"")]);
+    args
+}
+
 /// Build the whole launch of a chat from `launch` and nothing else: command,
 /// argv (tools pinned, MCP limited to the lane, system prompt appended,
 /// `--session-id <uid>` for Claude) and env. Never reads a client's `cmd`,
-/// `args` or `env`. **Skeleton: [`Refusal::NotBuilt`].**
+/// `args` or `env`. The table is the plan's "What the pinning looks like".
+///
+/// Resume: Claude's `--session-id <uid>` is turned into `--resume` by
+/// `agent_session::resolve_agent_session` as for every Claude tab; Codex's
+/// `resume <id>` is put behind these args by the caller (the resolver replaces
+/// Codex's whole argv); OpenCode gets `--continue` iff the chat's folder
+/// existed; local Claude gets `--continue` iff it has a transcript.
 pub fn launch_line(launch: &AssistantLaunch, ctx: &LaunchCtx<'_>) -> Result<AssistantSpawn, Refusal> {
-    let _ = (launch, ctx);
-    Err(Refusal::NotBuilt)
+    validate_launch(launch)?;
+    if !crate::services::agent_session::is_uuid_shaped(ctx.tab_uid) {
+        return Err(Refusal::BadUid);
+    }
+    let model = launch.model.as_deref();
+    let uid = ctx.tab_uid.to_string();
+    match launch.cli {
+        AssistantCli::Claude => {
+            let mut args = vec!["--session-id".to_string(), uid];
+            if let Some(model) = model {
+                args.push(format!("--model={model}"));
+            }
+            // `--tools` and `--mcp-config` are variadic: the session and model
+            // come first, and a flag follows each.
+            args.extend(["--tools", "WebSearch", "--strict-mcp-config"].map(str::to_string));
+            if let Some(lane) = ctx.lane {
+                args.extend(["--mcp-config".to_string(), claude_mcp_config(&lane.url)]);
+            }
+            args.extend(["--disable-slash-commands", "--append-system-prompt"].map(str::to_string));
+            args.push(SYSTEM_PROMPT.to_string());
+            Ok(AssistantSpawn { cmd: "claude".into(), args, env: HashMap::new() })
+        }
+        AssistantCli::Codex => {
+            write_codex_catalog(ctx.home)?;
+            let catalog = ctx.visible_home.join(".codex").join(CODEX_CATALOG_FILE);
+            let mut args = Vec::new();
+            if let Some(model) = model {
+                args.push(format!("--model={model}"));
+            }
+            args.extend(codex_pinned_args(&catalog));
+            Ok(AssistantSpawn { cmd: "codex".into(), args, env: HashMap::new() })
+        }
+        AssistantCli::OpenCodeLocal => {
+            let model = model.ok_or(Refusal::ModelRequired)?;
+            let lane = ctx.lane.ok_or(Refusal::NoLane)?;
+            let provider = ctx.opencode_provider.ok_or(Refusal::Config)?;
+            let spec = local_line("opencode", model, "opencode")?;
+            let mut args = spec.args;
+            if ctx.chat_dir_existed {
+                args.push("--continue".to_string());
+            }
+            let env = HashMap::from([
+                ("OPENCODE_CONFIG_CONTENT".to_string(), opencode_inline_config(provider, &lane.url)?),
+                (crate::app_env!("LOCAL_MODEL").to_string(), model.to_string()),
+            ]);
+            Ok(AssistantSpawn { cmd: spec.cmd, args, env })
+        }
+        AssistantCli::ClaudeLocal => {
+            let model = model.ok_or(Refusal::ModelRequired)?;
+            let lane = ctx.lane.ok_or(Refusal::NoLane)?;
+            let spec = local_line("claude", model, "ollama")?;
+            let transcript = crate::services::agent_session::claude_session_exists(&ctx.home.join(".claude").join("projects"), ctx.tab_uid);
+            let session = if transcript { vec!["--continue".to_string()] } else { vec!["--session-id".to_string(), uid] };
+            let mut args = spec.args;
+            args.push("--".to_string());
+            args.extend(claude_local_tail(&session, &lane.url));
+            // The line must be one `local_launch_line_ok` accepts: the check
+            // that this is the driver's own builder plus the one pinned tail.
+            if !crate::commands::ollama::local_launch_line_ok("claude", model, &spec.cmd, &args) {
+                return Err(Refusal::Config);
+            }
+            let env = HashMap::from([
+                (crate::app_env!("LOCAL_MODEL").to_string(), model.to_string()),
+                (crate::services::agent_session::TAB_AGENT_ENV.to_string(), "claude".to_string()),
+            ]);
+            Ok(AssistantSpawn { cmd: spec.cmd, args, env })
+        }
+    }
+}
+
+/// The driver's own launch line for `model` (`commands::ollama`'s builder,
+/// not a copy of its table), checked with `local_launch_line_ok` and the
+/// program it must start.
+fn local_line(driver: &str, model: &str, cmd: &str) -> Result<crate::commands::ollama::LocalLaunchSpec, Refusal> {
+    let spec = crate::commands::ollama::pinned_local_line(driver, model).ok_or(Refusal::BadModel)?;
+    if spec.cmd != cmd || !crate::commands::ollama::local_launch_line_ok(driver, model, &spec.cmd, &spec.args) {
+        return Err(Refusal::BadModel);
+    }
+    Ok(spec)
 }
 
 /// The tab record of a new chat — the entry both the desktop command
 /// (`assistant_new_chat`) and the phone's headless create mint through
 /// `workspace::create_tab_in`, so there is one path. An agent tab in the
 /// assistant scope: `cmd` is [`AssistantCli::bin`], `cwd` is
-/// [`chat_dir`]`(state_dir, uid)`, `sessionId` and the tab uid are `uid`, and
-/// the validated `launch` is persisted as the record's `assistant` block.
-/// `request_hash` is the phone's idempotency key (`mobileRequestHash`).
-/// Validates `launch` and `uid` and creates nothing on disk.
-/// **Skeleton: [`Refusal::NotBuilt`].**
+/// [`chat_dir`]`(state_dir, uid)`, `sessionId` is `uid`, and the validated
+/// `launch` is persisted as the record's `assistant` block. It carries no
+/// `args`, `env` or `scheduleTargetId` (the scope's layout rules drop them
+/// anyway; the spawn rebuilds `TAB_UID` from `sessionId`). `request_hash` is
+/// the phone's idempotency key (`mobileRequestHash`). Validates `launch` and
+/// `uid` and creates nothing on disk.
 pub fn new_chat_record(
     state_dir: &Path,
     launch: &AssistantLaunch,
     uid: &str,
     request_hash: Option<&str>,
 ) -> Result<TabEntry, Refusal> {
-    let _ = (state_dir, launch, uid, request_hash);
-    Err(Refusal::NotBuilt)
+    validate_launch(launch)?;
+    let cwd = chat_dir(state_dir, uid)?;
+    let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
+    extra.insert("kind".into(), serde_json::json!("agent"));
+    extra.insert(ASSISTANT_KEY.into(), serde_json::to_value(launch).map_err(|_| Refusal::Config)?);
+    // The window's `launchedAt` (tells this tab's own OpenCode session from a
+    // folder's older ones); a headless create stamps the same.
+    extra.insert("launchedAt".into(), serde_json::json!(crate::clock::now_ms() as i64));
+    if let Some(hash) = request_hash {
+        extra.insert("mobileRequestHash".into(), serde_json::json!(hash));
+    }
+    let label = match launch.model.as_deref().filter(|_| launch.cli.is_local()) {
+        Some(model) => format!("{} · {model}", launch.cli.label()),
+        None => launch.cli.label().to_string(),
+    };
+    Ok(TabEntry {
+        key: format!("assistant-{uid}"),
+        label,
+        cmd: launch.cli.bin().to_string(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        session_id: Some(uid.to_string()),
+        extra,
+    })
+}
+
+/// The tab record's key for its [`AssistantLaunch`].
+pub const ASSISTANT_KEY: &str = "assistant";
+
+/// The validated launch a persisted tab record carries, or `None` for a tab
+/// the scope must not keep: no `assistant` block, one that fails the strict
+/// parse, a profile that is not offered, a bad model, a `cmd` other than the
+/// profile's binary, or a `sessionId` that is not a uuid.
+pub fn record_launch(tab: &TabEntry) -> Option<AssistantLaunch> {
+    let launch: AssistantLaunch = serde_json::from_value(tab.extra.get(ASSISTANT_KEY)?.clone()).ok()?;
+    validate_launch(&launch).ok()?;
+    let shaped = tab.session_id.as_deref().is_some_and(crate::services::agent_session::is_uuid_shaped);
+    (shaped && tab.cmd == launch.cli.bin()).then_some(launch)
 }
 
 /// `<state_dir>/assistant`: everything the assistant keeps outside the agent
@@ -349,14 +704,372 @@ mod tests {
         }
     }
 
+    const LANE_URL: &str = "http://127.0.0.1:43111/mcp/web";
+    const TOKEN: &str = "web-secret-token-0123456789";
+
+    fn lane() -> LaneGrant {
+        LaneGrant { url: LANE_URL.into(), token: TOKEN.into() }
+    }
+
+    fn ctx<'a>(home: &'a Path, lane: Option<&'a LaneGrant>) -> LaunchCtx<'a> {
+        LaunchCtx { tab_uid: UID, chat_dir_existed: false, home, lane, visible_home: home, opencode_provider: Some(PROVIDER) }
+    }
+
+    /// What `opencode_assistant_provider` hands the profile.
+    const PROVIDER: &str = r#"{"provider":{"ollama":{"npm":"@ai-sdk/openai-compatible","name":"Ollama (local)","options":{"baseURL":"http://127.0.0.1:11434/v1"},"models":{"qwen3:8b":{"name":"qwen3:8b"}},"whitelist":["qwen3:8b"]}}}"#;
+
+    fn launch(cli: AssistantCli, model: Option<&str>) -> AssistantLaunch {
+        AssistantLaunch { cli, model: model.map(str::to_string) }
+    }
+
+    fn strs(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| a.to_string()).collect()
+    }
+
+    /// The args of `spec` with every flag followed by its value, for readable
+    /// assertions: the position of `flag`'s value.
+    fn value_of<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        let at = args.iter().position(|a| a == flag)?;
+        args.get(at + 1).map(String::as_str)
+    }
+
     #[test]
-    fn the_skeleton_builds_nothing_yet() {
-        let launch = AssistantLaunch { cli: AssistantCli::Claude, model: None };
-        let home = Path::new("home");
-        let ctx = LaunchCtx { tab_uid: UID, chat_dir_existed: false, home, lane: None };
-        assert_eq!(launch_line(&launch, &ctx), Err(Refusal::NotBuilt));
-        assert_eq!(new_chat_record(Path::new("state"), &launch, UID, None).unwrap_err(), Refusal::NotBuilt);
-        assert_eq!(Refusal::NotBuilt.code(), "not_built");
+    fn cloud_claude_is_pinned_to_search_and_the_lane() {
+        let home = tempfile::tempdir().unwrap();
+        let grant = lane();
+        let spec = launch_line(&launch(AssistantCli::Claude, None), &ctx(home.path(), Some(&grant))).unwrap();
+        assert_eq!(spec.cmd, "claude");
+        assert_eq!(
+            spec.args[..7].to_vec(),
+            strs(&["--session-id", UID, "--tools", "WebSearch", "--strict-mcp-config", "--mcp-config", &claude_mcp_config(LANE_URL)])
+        );
+        assert_eq!(spec.args[7..].to_vec(), strs(&["--disable-slash-commands", "--append-system-prompt", SYSTEM_PROMPT]));
+        // The token is named by env, never written into an argv.
+        assert!(spec.args.iter().all(|a| !a.contains(TOKEN)), "{:?}", spec.args);
+        assert!(claude_mcp_config(LANE_URL).contains(&format!("Bearer ${{{}}}", crate::services::root_mcp::WEB_TOKEN_ENV)));
+        // Decision 14 is local Claude's alone, and cloud Claude has no mode flag.
+        assert!(!spec.args.iter().any(|a| a == "--allowedTools" || a.starts_with("--permission") || a.contains("dangerously")));
+        assert!(spec.env.is_empty());
+        // Without a lane it runs on its native search alone.
+        let bare = launch_line(&launch(AssistantCli::Claude, None), &ctx(home.path(), None)).unwrap();
+        assert!(!bare.args.iter().any(|a| a == "--mcp-config") && bare.args.iter().any(|a| a == "--strict-mcp-config"));
+    }
+
+    #[test]
+    fn a_cloud_model_rides_in_the_equals_form_before_the_variadic_flags() {
+        let home = tempfile::tempdir().unwrap();
+        let spec = launch_line(&launch(AssistantCli::Claude, Some("claude-opus-5")), &ctx(home.path(), None)).unwrap();
+        assert_eq!(spec.args[..3].to_vec(), strs(&["--session-id", UID, "--model=claude-opus-5"]));
+        let tools = spec.args.iter().position(|a| a == "--tools").unwrap();
+        assert!(spec.args.iter().position(|a| a.starts_with("--model=")).unwrap() < tools);
+    }
+
+    #[test]
+    fn a_model_that_could_read_as_a_flag_or_break_a_string_is_refused() {
+        let home = tempfile::tempdir().unwrap();
+        for bad in ["--dangerously-skip-permissions", "-x", "a b", " m", "m ", "m\"x", "m;rm", "m\nx", "../m", "a//b", "m'", "m$(x)", "m`x`", ""] {
+            for cli in AssistantCli::ALL {
+                let wanted = launch(cli, Some(bad));
+                let grant = lane();
+                let refused = launch_line(&wanted, &ctx(home.path(), Some(&grant))).unwrap_err();
+                assert!(matches!(refused, Refusal::BadModel | Refusal::ModelRequired), "{cli:?} {bad:?} {refused:?}");
+                assert!(new_chat_record(Path::new("state"), &wanted, UID, None).is_err(), "{cli:?} {bad:?}");
+            }
+        }
+        // A local profile needs a model; a cloud one does not.
+        for cli in [AssistantCli::OpenCodeLocal, AssistantCli::ClaudeLocal] {
+            assert_eq!(validate_launch(&launch(cli, None)), Err(Refusal::ModelRequired));
+        }
+        assert_eq!(validate_launch(&launch(AssistantCli::Codex, None)), Ok(()));
+        assert_eq!(validate_launch(&launch(AssistantCli::OpenCodeLocal, Some("hf.co/org/m-GGUF:Q4_K_M"))), Ok(()));
+    }
+
+    #[test]
+    fn a_launch_needs_a_uuid_shaped_tab_uid() {
+        let home = tempfile::tempdir().unwrap();
+        for bad in ["", "..", "../x", "root", "a/b", "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a1"] {
+            let mut context = ctx(home.path(), None);
+            context.tab_uid = bad;
+            assert_eq!(launch_line(&launch(AssistantCli::Claude, None), &context), Err(Refusal::BadUid), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn local_claude_goes_through_ollama_launch_with_the_pinned_tail() {
+        let home = tempfile::tempdir().unwrap();
+        let grant = lane();
+        let spec = launch_line(&launch(AssistantCli::ClaudeLocal, Some("qwen3:8b")), &ctx(home.path(), Some(&grant))).unwrap();
+        assert_eq!(spec.cmd, "ollama");
+        assert_eq!(spec.args[..6].to_vec(), strs(&["launch", "claude", "--model", "qwen3:8b", "--", "--session-id"]));
+        let tail = &spec.args[5..];
+        assert_eq!(value_of(tail, "--tools"), Some(""));
+        assert_eq!(value_of(tail, "--allowedTools"), Some("mcp__web"), "decision 14");
+        assert_eq!(value_of(tail, "--append-system-prompt"), Some(SYSTEM_PROMPT));
+        assert!(tail.iter().any(|a| a == "--strict-mcp-config") && tail.iter().any(|a| a == "--disable-slash-commands"));
+        assert!(spec.args.iter().all(|a| !a.contains(TOKEN)));
+        // The line is one `local_launch_line_ok` accepts, and the tail alone is `claude_local_tail_ok`.
+        assert!(crate::commands::ollama::local_launch_line_ok("claude", "qwen3:8b", &spec.cmd, &spec.args));
+        assert!(claude_local_tail_ok(tail));
+        assert_eq!(spec.env[crate::app_env!("LOCAL_MODEL")], "qwen3:8b");
+        // No lane, no local chat: the model has no tool of its own.
+        assert_eq!(launch_line(&launch(AssistantCli::ClaudeLocal, Some("qwen3:8b")), &ctx(home.path(), None)), Err(Refusal::NoLane));
+    }
+
+    #[test]
+    fn local_claude_continues_a_chat_that_has_a_transcript() {
+        let home = tempfile::tempdir().unwrap();
+        let grant = lane();
+        let project = home.path().join(".claude").join("projects").join("-state-assistant-work-chat");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join(format!("{UID}.jsonl")), "{}\n").unwrap();
+        let spec = launch_line(&launch(AssistantCli::ClaudeLocal, Some("qwen3:8b")), &ctx(home.path(), Some(&grant))).unwrap();
+        assert_eq!(spec.args[5], "--continue");
+        assert!(!spec.args.iter().any(|a| a == "--session-id"), "a used --session-id is a hard error in Claude");
+        assert!(crate::commands::ollama::local_launch_line_ok("claude", "qwen3:8b", &spec.cmd, &spec.args));
+    }
+
+    #[test]
+    fn local_launch_line_ok_takes_exactly_the_pinned_claude_tail() {
+        let m = "qwen3:8b";
+        let line = |tail: &[String]| {
+            let mut args = strs(&["launch", "claude", "--model", m, "--"]);
+            args.extend(tail.iter().cloned());
+            crate::commands::ollama::local_launch_line_ok("claude", m, "ollama", &args)
+        };
+        let session = strs(&["--session-id", UID]);
+        let good = claude_local_tail(&session, LANE_URL);
+        assert!(line(&good));
+        assert!(line(&claude_local_tail(&strs(&["--continue"]), "http://localhost:80/mcp/web")));
+        // Nothing added, dropped, reordered or changed.
+        let mut longer = good.clone();
+        longer.push("--dangerously-skip-permissions".into());
+        assert!(!line(&longer));
+        let mut other_tool = good.clone();
+        let at = other_tool.iter().position(|a| a == "--tools").unwrap();
+        other_tool[at + 1] = "Bash".into();
+        assert!(!line(&other_tool));
+        let mut allow_all = good.clone();
+        let at = allow_all.iter().position(|a| a == "--allowedTools").unwrap();
+        allow_all[at + 1] = "mcp__web,Bash".into();
+        assert!(!line(&allow_all));
+        let mut no_strict = good.clone();
+        no_strict.retain(|a| a != "--strict-mcp-config");
+        assert!(!line(&no_strict));
+        let mut swapped = good.clone();
+        swapped.swap(2, 3);
+        assert!(!line(&swapped));
+        // The lane is a loopback http origin and its own path.
+        for url in ["http://attacker.example:80/mcp/web", "https://127.0.0.1:80/mcp/web", "http://127.0.0.1:80/mcp", "http://127.0.0.1:80/mcp/web/x", "http://127.0.0.1:/mcp/web", "http://127.0.0.1:123456/mcp/web", "http://127.0.0.1.evil.example:80/mcp/web", "http://127.0.0.1:80@evil.example/mcp/web"] {
+            assert!(!line(&claude_local_tail(&session, url)), "{url}");
+        }
+        // A session id that is not a uuid, and a bare tail.
+        assert!(!line(&claude_local_tail(&strs(&["--session-id", "../x"]), LANE_URL)));
+        assert!(!line(&[]));
+        // The plain form stays valid, and so does only this driver's tail.
+        assert!(crate::commands::ollama::local_launch_line_ok("claude", m, "ollama", &strs(&["launch", "claude", "--model", m])));
+        let mut codex = strs(&["launch", "codex", "--model", m, "--"]);
+        codex.extend(good.iter().cloned());
+        assert!(!crate::commands::ollama::local_launch_line_ok("codex", m, "ollama", &codex));
+    }
+
+    #[test]
+    fn local_opencode_hides_every_builtin_tool_and_carries_no_token_in_its_config() {
+        let home = tempfile::tempdir().unwrap();
+        let grant = lane();
+        let spec = launch_line(&launch(AssistantCli::OpenCodeLocal, Some("qwen3:8b")), &ctx(home.path(), Some(&grant))).unwrap();
+        assert_eq!(spec.cmd, "opencode");
+        assert_eq!(spec.args, strs(&["--model", "ollama/qwen3:8b"]));
+        assert!(crate::commands::ollama::local_launch_line_ok("opencode", "qwen3:8b", &spec.cmd, &spec.args));
+        let config: serde_json::Value = serde_json::from_str(&spec.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
+        for tool in OPENCODE_TOOLS_OFF {
+            assert_eq!(config["tools"][tool], serde_json::json!(false), "{tool}");
+        }
+        assert_eq!(config["tools"].as_object().unwrap().len(), OPENCODE_TOOLS_OFF.len());
+        assert!(config.get("permission").is_none(), "a `*: deny` permission hides MCP too");
+        assert_eq!(config["mcp"]["web"]["type"], "remote");
+        assert_eq!(config["mcp"]["web"]["url"], LANE_URL);
+        assert_eq!(config["agent"]["build"]["prompt"], SYSTEM_PROMPT);
+        // The provider block survives the merge.
+        assert_eq!(config["provider"]["ollama"]["models"]["qwen3:8b"]["name"], "qwen3:8b");
+        // The token is substituted by OpenCode from the env (A0): neither the
+        // config nor the argv holds it.
+        let header = config["mcp"]["web"]["headers"]["Authorization"].as_str().unwrap();
+        assert_eq!(header, format!("Bearer {{env:{}}}", crate::services::root_mcp::WEB_TOKEN_ENV));
+        assert!(spec.env.values().chain(spec.args.iter()).all(|v| !v.contains(TOKEN)));
+        assert_eq!(spec.env[crate::app_env!("LOCAL_MODEL")], "qwen3:8b");
+    }
+
+    #[test]
+    fn local_opencode_continues_only_when_the_chat_folder_existed() {
+        let home = tempfile::tempdir().unwrap();
+        let grant = lane();
+        let mut context = ctx(home.path(), Some(&grant));
+        let first = launch_line(&launch(AssistantCli::OpenCodeLocal, Some("m")), &context).unwrap();
+        assert!(!first.args.iter().any(|a| a == "--continue"));
+        context.chat_dir_existed = true;
+        let again = launch_line(&launch(AssistantCli::OpenCodeLocal, Some("m")), &context).unwrap();
+        assert_eq!(again.args, strs(&["--model", "ollama/m", "--continue"]));
+        // No lane or no provider config: the profile is not started.
+        context.lane = None;
+        assert_eq!(launch_line(&launch(AssistantCli::OpenCodeLocal, Some("m")), &context), Err(Refusal::NoLane));
+        context.lane = Some(&grant);
+        context.opencode_provider = None;
+        assert_eq!(launch_line(&launch(AssistantCli::OpenCodeLocal, Some("m")), &context), Err(Refusal::Config));
+        context.opencode_provider = Some("not json");
+        assert_eq!(launch_line(&launch(AssistantCli::OpenCodeLocal, Some("m")), &context), Err(Refusal::Config));
+    }
+
+    fn home_with_models_cache(models: serde_json::Value) -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".codex")).unwrap();
+        let cache = serde_json::json!({ "fetched_at": "2026-10-15T21:10:09Z", "etag": "W/x", "models": models });
+        std::fs::write(home.path().join(".codex").join(CODEX_MODELS_CACHE), cache.to_string()).unwrap();
+        home
+    }
+
+    #[test]
+    fn codex_loses_its_shell_and_file_tools_and_gets_a_built_catalog() {
+        let home = home_with_models_cache(serde_json::json!([
+            { "slug": "gpt-a", "apply_patch_tool_type": "freeform", "shell_type": "unified_exec" },
+            { "slug": "gpt-b", "apply_patch_tool_type": "function" },
+            { "slug": "gpt-c" }
+        ]));
+        let visible = Path::new("/visible/home");
+        let mut context = ctx(home.path(), None);
+        context.visible_home = visible;
+        let spec = launch_line(&launch(AssistantCli::Codex, None), &context).unwrap();
+        assert_eq!(spec.cmd, "codex");
+        let overrides: Vec<&str> = spec.args.chunks(2).filter(|c| c[0] == "-c").map(|c| c[1].as_str()).collect();
+        for want in [
+            "features.shell_tool=false",
+            "features.view_image=false",
+            "features.goals=false",
+            "features.apps=false",
+            "features.plugins=false",
+            "features.browser_use=false",
+            "features.computer_use=false",
+            "features.image_generation=false",
+            "web_search=\"live\"",
+        ] {
+            assert!(overrides.contains(&want), "{want} in {overrides:?}");
+        }
+        let instructions = format!("developer_instructions=\"{SYSTEM_PROMPT}\"");
+        assert!(overrides.contains(&instructions.as_str()));
+        // The catalog is named as the process sees the home, and holds every
+        // model with `apply_patch_tool_type` present and null.
+        let expected_path = visible.join(".codex").join(CODEX_CATALOG_FILE);
+        assert!(overrides.contains(&format!("model_catalog_json={}", serde_json::Value::from(expected_path.to_string_lossy().as_ref())).as_str()), "{overrides:?}");
+        let written = std::fs::read(home.path().join(".codex").join(CODEX_CATALOG_FILE)).unwrap();
+        assert!(codex_catalog_ok(&written));
+        let catalog: serde_json::Value = serde_json::from_slice(&written).unwrap();
+        assert_eq!(catalog["models"].as_array().unwrap().len(), 3);
+        assert_eq!(catalog["models"][0]["slug"], "gpt-a");
+        assert_eq!(catalog["models"][0]["shell_type"], "unified_exec");
+        assert!(catalog["models"][2].as_object().unwrap().contains_key("apply_patch_tool_type"));
+        // No sandbox-mode flag, no MCP entry, no model unless chosen.
+        assert!(!spec.args.iter().any(|a| a == "-s" || a == "--sandbox" || a.starts_with("mcp_servers.") || a.starts_with("--model")));
+        let with_model = launch_line(&launch(AssistantCli::Codex, Some("gpt-a")), &context).unwrap();
+        assert_eq!(with_model.args[0], "--model=gpt-a");
+    }
+
+    #[test]
+    fn codex_fails_closed_without_a_usable_catalog_source() {
+        let grant = lane();
+        let spawn = |home: &Path| launch_line(&launch(AssistantCli::Codex, None), &ctx(home, Some(&grant)));
+        // No cache at all (a home Codex never ran in).
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(spawn(empty.path()), Err(Refusal::CodexCatalog));
+        // An unknown shape, an empty list, an entry that is not an object.
+        for cache in ["[]", "{}", "{\"models\":[]}", "{\"models\":{}}", "{\"models\":[1]}", "{\"models\":[\"x\"]}", "not json"] {
+            let home = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(home.path().join(".codex")).unwrap();
+            std::fs::write(home.path().join(".codex").join(CODEX_MODELS_CACHE), cache).unwrap();
+            assert_eq!(spawn(home.path()), Err(Refusal::CodexCatalog), "{cache}");
+            assert!(!home.path().join(".codex").join(CODEX_CATALOG_FILE).exists(), "{cache}");
+        }
+        // The check on the written file: a field left in place fails it.
+        assert!(!codex_catalog_ok(br#"{"models":[{"apply_patch_tool_type":"freeform"}]}"#));
+        assert!(!codex_catalog_ok(br#"{"models":[{"slug":"x"}]}"#));
+        assert!(!codex_catalog_ok(br#"{"models":[]}"#));
+        assert!(codex_catalog_ok(br#"{"models":[{"apply_patch_tool_type":null}]}"#));
+        assert!(build_codex_catalog(br#"{"models":[{"apply_patch_tool_type":"freeform"}]}"#).is_some_and(|b| codex_catalog_ok(&b)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_never_writes_through_a_link_in_the_home() {
+        let outside = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        // The agent swapped `.codex` for a link to a folder outside the home.
+        std::fs::write(outside.path().join(CODEX_MODELS_CACHE), r#"{"models":[{"slug":"x"}]}"#).unwrap();
+        std::os::unix::fs::symlink(outside.path(), home.path().join(".codex")).unwrap();
+        assert_eq!(launch_line(&launch(AssistantCli::Codex, None), &ctx(home.path(), None)), Err(Refusal::CodexCatalog));
+        assert!(!outside.path().join(CODEX_CATALOG_FILE).exists());
+    }
+
+    #[test]
+    fn every_profile_appends_the_one_prompt_and_nothing_a_client_chose() {
+        let home = home_with_models_cache(serde_json::json!([{ "slug": "x" }]));
+        let grant = lane();
+        for (cli, model) in [(AssistantCli::Claude, None), (AssistantCli::Codex, None), (AssistantCli::OpenCodeLocal, Some("m")), (AssistantCli::ClaudeLocal, Some("m"))] {
+            let spec = launch_line(&launch(cli, model), &ctx(home.path(), Some(&grant))).unwrap();
+            let all: Vec<&str> = spec.args.iter().map(String::as_str).chain(spec.env.values().map(String::as_str)).collect();
+            assert!(all.iter().any(|v| v.contains(SYSTEM_PROMPT)), "{cli:?}");
+            assert!(spec.args.iter().all(|a| !a.contains("--dangerously") && !a.contains("bypass")), "{cli:?}");
+            assert_eq!(spec.cmd == "ollama", cli == AssistantCli::ClaudeLocal);
+        }
+    }
+
+    #[test]
+    fn a_new_chat_record_is_an_agent_tab_with_a_validated_launch() {
+        let state = Path::new("state");
+        let wanted = launch(AssistantCli::OpenCodeLocal, Some("qwen3:8b"));
+        let tab = new_chat_record(state, &wanted, UID, Some("hash-1")).unwrap();
+        assert_eq!(tab.cmd, "opencode");
+        assert_eq!(tab.cwd, chat_dir(state, UID).unwrap().to_string_lossy());
+        assert_eq!(tab.session_id.as_deref(), Some(UID));
+        assert_eq!(tab.extra["kind"], "agent");
+        assert_eq!(tab.extra["assistant"], serde_json::json!({ "cli": "opencode_local", "model": "qwen3:8b" }));
+        assert_eq!(tab.extra["mobileRequestHash"], "hash-1");
+        for forbidden in ["args", "env", "scheduleTargetId", "location", "localLaunch", "sandbox", "tmuxAttach", "hostBoundUid", "login"] {
+            assert!(!tab.extra.contains_key(forbidden), "{forbidden}");
+        }
+        assert_eq!(record_launch(&tab), Some(wanted.clone()));
+        assert!(tab.label.contains("OpenCode") && tab.label.contains("qwen3:8b"));
+        // Cloud: the CLI's own model, the binary named after the profile.
+        assert_eq!(new_chat_record(state, &launch(AssistantCli::ClaudeLocal, Some("m")), UID, None).unwrap().cmd, "claude");
+        let cloud = new_chat_record(state, &launch(AssistantCli::Codex, None), UID, None).unwrap();
+        assert_eq!((cloud.cmd.as_str(), cloud.label.as_str()), ("codex", "Codex"));
+        assert!(!cloud.extra.contains_key("mobileRequestHash"));
+        // Refusals: a bad uid, a bad model, a missing local model. Nothing is created.
+        assert_eq!(new_chat_record(state, &wanted, "../x", None).unwrap_err(), Refusal::BadUid);
+        assert_eq!(new_chat_record(state, &launch(AssistantCli::OpenCodeLocal, None), UID, None).unwrap_err(), Refusal::ModelRequired);
+        assert!(!state.exists());
+    }
+
+    #[test]
+    fn a_stored_record_keeps_a_launch_only_when_it_still_validates() {
+        let state = Path::new("state");
+        let good = new_chat_record(state, &launch(AssistantCli::Claude, Some("claude-opus-5")), UID, None).unwrap();
+        assert!(record_launch(&good).is_some());
+        let mutate = |f: &dyn Fn(&mut TabEntry)| {
+            let mut tab = good.clone();
+            f(&mut tab);
+            record_launch(&tab)
+        };
+        assert!(mutate(&|t| { t.extra.remove("assistant"); }).is_none());
+        assert!(mutate(&|t| { t.extra.insert("assistant".into(), serde_json::json!({ "cli": "claude", "args": ["--x"] })); }).is_none());
+        assert!(mutate(&|t| { t.extra.insert("assistant".into(), serde_json::json!({ "cli": "gemini" })); }).is_none());
+        assert!(mutate(&|t| { t.extra.insert("assistant".into(), serde_json::json!({ "cli": "claude", "model": "--x" })); }).is_none());
+        assert!(mutate(&|t| t.cmd = "bash".into()).is_none());
+        assert!(mutate(&|t| t.session_id = None).is_none());
+        assert!(mutate(&|t| t.session_id = Some("../x".into())).is_none());
+    }
+
+    #[test]
+    fn only_the_local_profiles_and_cloud_claude_ask_for_the_lane() {
+        let wants: Vec<_> = AssistantCli::ALL.into_iter().filter(|cli| cli.uses_lane()).collect();
+        assert_eq!(wants, vec![AssistantCli::Claude, AssistantCli::OpenCodeLocal, AssistantCli::ClaudeLocal]);
     }
 
     #[test]

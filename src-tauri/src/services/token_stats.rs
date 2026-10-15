@@ -1009,12 +1009,16 @@ pub fn scan_with(state_dir: &Path, scopes: &[String], limits: Limits, now_ms: i6
     let _guard = SCAN_LOCK.lock_ok();
     let path = state_dir.join(CACHE_FILE);
     let mut cache = load_cache(&path);
-    // A scope's local-model home counts toward the scope, like its own.
+    // A scope's local-model home counts toward the scope, like its own. The
+    // chat assistant's is always one, whoever called: its homes are not a
+    // removed project's and must not read as the root console's.
     let by_home: HashMap<PathBuf, &str> = scopes
         .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(storage::ASSISTANT_SCOPE))
         .flat_map(|id| {
             [agent_home::scope_home_in(state_dir, id), agent_home::local_model_home_in(state_dir, id)]
-                .map(|home| (home, id.as_str()))
+                .map(|home| (home, id))
         })
         .collect();
     let host = agent_home::host_home_in(state_dir);
@@ -1659,5 +1663,20 @@ mod tests {
         assert_eq!(rollout_thread_id(&format!("a/b/{ROLLOUT}")).as_deref(), Some(ROLLOUT_ID));
         assert_eq!(rollout_thread_id("rollout-short.jsonl"), None);
         assert_eq!(rollout_thread_id("rollout-2026-09-30T10-00-00-zzzzzzzz-bfa7-72f2-ae4b-de4b5d33e12f.jsonl"), None);
+    }
+    /// The chat assistant's homes are its own scope's, even when the caller's
+    /// list of known scopes does not name it: never the root console's.
+    #[test]
+    fn the_assistant_scope_counts_apart_from_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        for home in [
+            agent_home::scope_home_in(tmp.path(), storage::ASSISTANT_SCOPE),
+            agent_home::local_model_home_in(tmp.path(), storage::ASSISTANT_SCOPE),
+        ] {
+            write(&home.join(".claude/projects/-state-assistant-work-x/s.jsonl"), &[claude("m1", "r1", OPUS, T1, [1, 0, 0, 7])]);
+        }
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, storage::ASSISTANT_SCOPE, &ck(metric::TOKENS_OUT, OPUS)), 14);
+        assert_eq!(total(&stats, storage::ROOT_SCOPE, &ck(metric::TOKENS_OUT, OPUS)), 0);
     }
 }
