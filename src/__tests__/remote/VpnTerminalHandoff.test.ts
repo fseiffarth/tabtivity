@@ -6,8 +6,8 @@
  * its own) is unanswerable from the modal, and the symptom is a loop the user cannot
  * get out of: the saved credentials fail, the prompt opens, the password typed into
  * it fails too. So the prompt can hand *that one connect* to the non-headless flow —
- * the connect command goes to a root-terminal tab and OpenVPN asks its own questions
- * there.
+ * a root-terminal login tab runs OpenVPN itself (`TabEntry.login`) and OpenVPN asks
+ * its own questions there.
  *
  * Two things are load-bearing, and both are asserted here.
  *
@@ -31,18 +31,13 @@ vi.mock("@tauri-apps/api/webview", () => ({
 const invokeMock = vi.mocked(invoke);
 
 const CONFIG = "/store/office.ovpn";
-const COMMAND = "pkexec openvpn --config /store/office.ovpn";
 
-/** A backend that can build the login command (the only call the handoff makes on
- *  its way to the terminal) — or, with `build: "fail"`, one that cannot. */
-const backend = (opts: { build?: "ok" | "fail" } = {}) => {
+/** The backend as the handoff sees it: it builds no command line any more (the
+ *  login tab's PTY runs OpenVPN, built backend-side from the config at spawn). */
+const backend = () => {
   invokeMock.mockReset();
   invokeMock.mockImplementation((cmd: string) => {
     switch (cmd) {
-      case "openvpn_login_command":
-        return opts.build === "fail"
-          ? Promise.reject(new Error("no openvpn on PATH"))
-          : Promise.resolve(COMMAND);
       case "openvpn_status":
         return Promise.resolve(false);
       case "openvpn_active":
@@ -82,15 +77,19 @@ describe("VPN terminal handoff", () => {
     const rejected = request.catch((e) => e);
     await g.useVpnPromptStore.getState().handoffToTerminal();
 
-    // The command was built (which is also what arms the tunnel backend-side) and
-    // typed into a freshly-spawned root tab.
-    expect(calls("openvpn_login_command")).toHaveLength(1);
-    // The tab lands once root has been restored (`openTabInRootConsole`): a root
-    // never opened this session is hydrated before anything is added to it.
+    // A root login tab for the config — its PTY runs OpenVPN (the spawn is what
+    // builds the argv and arms the tunnel backend-side); nothing is typed into a
+    // shell. The tab lands once root has been restored (`openTabInRootConsole`): a
+    // root never opened this session is hydrated before anything is added to it.
     await vi.waitFor(() => {
       const rootTabs = g.useTabsStore.getState().tabsByScope.root ?? [];
-      expect(rootTabs[rootTabs.length - 1]).toMatchObject({ kind: "shell", initialInput: COMMAND });
+      expect(rootTabs[rootTabs.length - 1]).toMatchObject({
+        kind: "shell",
+        login: { kind: "vpn", config: CONFIG },
+      });
     });
+    const rootTabs = g.useTabsStore.getState().tabsByScope.root ?? [];
+    expect(rootTabs[rootTabs.length - 1].initialInput).toBeUndefined();
 
     // The tunnel is coming up, not failed: amber, with the poll behind it.
     expect(g.useVpnStatusStore.getState().byConfig[CONFIG]).toBe("connecting");
@@ -125,22 +124,9 @@ describe("VPN terminal handoff", () => {
     g.useVpnPromptStore.setState({ status: "connecting" });
     await g.useVpnPromptStore.getState().handoffToTerminal();
 
-    expect(calls("openvpn_login_command")).toHaveLength(0);
-    expect(g.useVpnPromptStore.getState().pending).not.toBeNull();
-  });
-
-  /** A handoff that could not even be built opened nothing and moved no lamp, so the
-   *  modal must stay exactly where it was — the user still needs somewhere to be. */
-  it("keeps the modal open when the login command can't be built", async () => {
-    backend({ build: "fail" });
-    const g = await graph();
-
-    void g.useVpnPromptStore.getState().request(CONFIG, "office", null).catch(() => {});
-    await g.useVpnPromptStore.getState().handoffToTerminal();
-
-    expect(g.useVpnPromptStore.getState().pending).not.toBeNull();
-    expect(g.useVpnPromptStore.getState().status).toBe("error");
+    // No login opened: the handoff moves the machine lamp before it opens the tab.
     expect(g.useVpnStatusStore.getState().byConfig[CONFIG]).toBeUndefined();
     expect(g.useTabsStore.getState().tabsByScope.root ?? []).toHaveLength(0);
+    expect(g.useVpnPromptStore.getState().pending).not.toBeNull();
   });
 });

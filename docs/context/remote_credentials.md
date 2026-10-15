@@ -51,12 +51,13 @@ Referenced from `AGENTS.md`.
   per tunnel, whichever menu saved it. Hence the toggle is *pre-ticked* when the target
   already has one (an untick is an explicit delete, so connecting with it unticked
   would clear another project's saved password), and a blank password field means "use
-  the saved one", not "authenticate with nothing". The credential a create/extend
-  dialog authenticated with is also handed to that project's **first pooled connect**
-  (`stashRemotePassword`, single-use, never written to disk): connecting it
-  password-less would work — it rides the ControlMaster the dialog left up — but the
-  backend reads "no password given, none saved" as *key* auth and would record
-  `key_auth: true` on a password host, which auto-connect later believes.
+  the saved one", not "authenticate with nothing". The extend dialog hands the
+  credential it authenticated with straight to its `remote_connect` (never written to
+  disk, never parked in the frontend — the old `stashRemotePassword` map was
+  write-only and was deleted, screen 2026-10-15 #11): connecting it password-less
+  would work — it rides the ControlMaster the dialog left up — but the backend reads
+  "no password given, none saved" as *key* auth and would record `key_auth: true` on
+  a password host, which auto-connect later believes.
   That inference is now the caller's to disclaim, because handing over the password is
   only one of several ways a connect ends up credential-less. `remote_connect` takes
   **`via_login`**: "this may be riding a master somebody else authenticated" — the
@@ -64,6 +65,13 @@ Referenced from `AGENTS.md`.
   global machine's master. `commands::remote::record_key_auth` then answers `None`
   ("this proves nothing, write nothing down") instead of `Some(true)`. A *password*
   is still recorded either way: that is an observation, not an inference.
+  The create dialogs (`ProjectDialog`, `HpcPipelineWizard`) now open the new
+  project's first pooled connect themselves, as the extend dialog does
+  (`lib/remote/remoteConnect`'s `connectCreatedRemoteProject`): the typed password if
+  there is one, else `via_login` — a credential-less first connect there can only be
+  riding the dialog's login master. Before, nothing connected a new project until the
+  lamp was clicked, and that connect (blank password, riding the dialog's master)
+  could record `key_auth: true` on a password host.
 - **Headless is a default, not a trap: every login section can be switched to a
   terminal, for one connect.** Tabtivity's own login can only ask what it has fields for —
   an SSH password, an OpenVPN password and key passphrase. A host or tunnel is free to
@@ -83,8 +91,9 @@ Referenced from `AGENTS.md`.
   password/passphrase row is rendered from *both* halves of the section (`sshSaveRow` /
   `vpnSaveRow`), because the secret belongs to the host, not to how you happened to
   sign in this time, and only an explicit untick ever deletes one. A terminal login
-  leaves nothing to stash, so the dialogs mark that connect `stashRemoteViaLogin` —
-  otherwise its credential-less success is read as key auth by the `via_login` rule above.
+  leaves no credential, so its connect must go out with `via_login` — otherwise its
+  credential-less success is read as key auth by the rule above. (The dialogs' old
+  `stashRemoteViaLogin` mark had no reader and was deleted with `stashRemotePassword`.)
   - The **add-a-machine** form (`RemoteMachinesWindow`) had no terminal login at all —
     only the password field, in *both* modes — so it now grows the same one, and its
     switch **defaults to on in non-headless mode**, where a password field was never
@@ -131,7 +140,13 @@ Referenced from `AGENTS.md`.
   stays allowed — same trust domain. (It replaced a gate that marked a shell PTY
   once a backend-minted login command line was typed into it, which left a
   shell running before and after the login — a paste target the login no longer
-  held.)
+  held.) The frontend asks for one with `TabEntry.login` (the root console's login
+  tabs, `lib/remote/remoteConnect`'s `openConnectionInRoot`) or `TerminalView`'s
+  `login` prop (the dialogs' embedded logins); target type and dedupe key live in
+  `lib/remote/loginTarget`. A login tab is never persisted or restored (a restored
+  one would prompt at launch), never tmux-wrapped, and once its login exits it no
+  longer counts as the connection's open terminal, so the next request opens a
+  fresh one.
   The secret **never enters the frontend**: `credential_paste_to_pty`
   (`commands::credentials`) reads the keychain and writes the bytes into the PTY
   *inside the backend* — no field, no component state, no event payload; only the

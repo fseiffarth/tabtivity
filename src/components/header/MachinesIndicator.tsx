@@ -17,6 +17,7 @@ import { useHostBusyStore, busyReading, busyLabel } from "../../stores/remote/ho
 import { parseSshAddress } from "../projects/scaffold";
 import { TerminalSignInToggle } from "../projects/TerminalSignInToggle";
 import { openConnectionInRoot } from "../../lib/remote/remoteConnect";
+import { loginDedupeKey, sshLogin } from "../../lib/remote/loginTarget";
 import { isHpcHost, mayAutoTouch, setHpcPatch, targetOfSpec } from "../../lib/remote/hpc/hpcHost";
 import { isCarefulHost } from "../../lib/remote/carefulHost";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
@@ -1029,24 +1030,12 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
       port: parsed.port ?? null,
     };
     setAddError("");
-    try {
-      const command = await invoke<string>("remote_login_command", {
-        user: target.user,
-        host: target.host,
-        port: target.port,
-      });
-      const tabLabel = `ssh · ${target.user ? `${target.user}@` : ""}${target.host}`;
-      openConnectionInRoot({
-        label: tabLabel,
-        command,
-        dedupeKey: `ssh:${target.user ? `${target.user}@` : ""}${target.host}:${target.port ?? ""}`,
-      });
-      setAddWaiting(true);
-      clearAddPoll();
-      pollAddLogin(target);
-    } catch (e) {
-      setAddError(String(e));
-    }
+    const login = sshLogin(target.user, target.host, target.port);
+    const tabLabel = `ssh · ${target.user ? `${target.user}@` : ""}${target.host}`;
+    openConnectionInRoot({ label: tabLabel, login, dedupeKey: loginDedupeKey(login) });
+    setAddWaiting(true);
+    clearAddPoll();
+    pollAddLogin(target);
   };
 
   /** Re-arm the poll — for a login finished after the bound ran out. */
@@ -1240,24 +1229,12 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
       port: parsed.port ?? null,
     };
     setEditError("");
-    try {
-      const command = await invoke<string>("remote_login_command", {
-        user: target.user,
-        host: target.host,
-        port: target.port,
-      });
-      const tabLabel = `ssh · ${target.user ? `${target.user}@` : ""}${target.host}`;
-      openConnectionInRoot({
-        label: tabLabel,
-        command,
-        dedupeKey: `ssh:${target.user ? `${target.user}@` : ""}${target.host}:${target.port ?? ""}`,
-      });
-      setEditWaiting(true);
-      clearEditPoll();
-      pollEditLogin(id, target);
-    } catch (e) {
-      setEditError(String(e));
-    }
+    const login = sshLogin(target.user, target.host, target.port);
+    const tabLabel = `ssh · ${target.user ? `${target.user}@` : ""}${target.host}`;
+    openConnectionInRoot({ label: tabLabel, login, dedupeKey: loginDedupeKey(login) });
+    setEditWaiting(true);
+    clearEditPoll();
+    pollEditLogin(id, target);
   };
 
   /** Re-arm the poll — for a login finished after the bound ran out (add's twin). */

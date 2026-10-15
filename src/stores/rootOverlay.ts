@@ -329,6 +329,7 @@ export function openProjectShellInRootConsole(): void {
         tab.kind === "shell" &&
         !tab.cmd &&
         !tab.initialInput &&
+        !tab.login &&
         !tab.tmuxAttach &&
         tab.cwd === cwd,
     );

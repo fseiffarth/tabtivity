@@ -35,6 +35,7 @@ import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { asleepPty, killAsleepPty, parkPty, takeAsleepPty } from "../../lib/terminal/sleepingPtys";
 import { terminalSpawnKey, terminalViewKind } from "../../lib/terminal/terminalSpawn";
+import type { LoginTarget } from "../../lib/remote/loginTarget";
 import { scrollbackRowsFor } from "../../lib/terminal/scrollback";
 import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
@@ -116,6 +117,10 @@ interface Props {
   args?: string[];
   env?: Record<string, string>;
   initialInput?: string;
+  // A login terminal (`lib/remote/loginTarget`): the backend runs this ssh/OpenVPN
+  // login as the PTY's own program and ignores `cmd`/`args`/`env`/`cwd`. Only such
+  // a PTY, while the login runs, accepts a pasted saved credential.
+  login?: LoginTarget | null;
   cwd: string;
   // When true, never run this tab over ssh even for remote projects (e.g.
   // locally-bound Ollama agents). Forwarded to the backend spawn.
@@ -261,7 +266,7 @@ function sweepXtermElements(container: HTMLElement) {
   }
 }
 
-export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, relaunchSeq = 0 }: Props) {
+export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, relaunchSeq = 0 }: Props) {
   const viewerId = useRef(crypto.randomUUID()).current;
   const viewerUpdateSeq = useRef(0);
   const colorScheme = useSettingsStore((s) => s.settings?.color_scheme);
@@ -417,6 +422,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   scrollbackRowsRef.current = scrollbackRows;
   const argsKey = JSON.stringify(args);
   const envKey = JSON.stringify(env);
+  // By value, like args/env: a caller rebuilding the same target each render
+  // must not respawn the login.
+  const loginKey = JSON.stringify(login);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -431,7 +439,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // Mode's synthetic cleanup, which therefore still sees the PTY parked.
     const spawnKey = attachOnly
       ? null
-      : terminalSpawnKey({ id, cmd, args, env, initialInput, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
+      : terminalSpawnKey({ id, cmd, args, env, initialInput, login: JSON.parse(loginKey) as LoginTarget | null, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
     const parked = attachOnly ? undefined : asleepPty(id);
     const waking = !!parked && parked.spawnKey !== null && parked.spawnKey === spawnKey;
     // This lifecycle runs (spawned) or took over the PTY: only then does its
@@ -1544,7 +1552,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
-          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession },
+          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, login: JSON.parse(loginKey) as LoginTarget | null },
           sessionName: launchName,
         });
         // An older backend answers nothing: `named` absent types the line as before.
@@ -2032,7 +2040,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       fitRef.current = null;
       openedRef.current = false;
     };
-  }, [id, cmd, cwd, initialInput, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, relaunchSeq]);
+  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, relaunchSeq]);
 
   // Re-theme a LIVE, OPEN terminal. Both halves of that guard are load-bearing,
   // and `termRef.current` alone was neither: assigning `options.theme` makes

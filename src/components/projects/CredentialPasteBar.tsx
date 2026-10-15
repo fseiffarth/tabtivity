@@ -26,8 +26,13 @@ import { writePtyInput } from "../../lib/terminal/terminalInput";
  *
  * Nothing is submitted: the credential lands at the cursor and the user presses Enter.
  * A paste is not a login, and a wrong one should be correctable on the line rather than
- * committed on the user's behalf — the same reason the login command itself is typed
- * into a visible terminal instead of run behind it.
+ * committed on the user's behalf — the same reason the login itself runs in a visible
+ * terminal instead of behind it.
+ *
+ * The backend takes a paste only into a **login terminal** (`TerminalView`'s `login`
+ * prop / `TabEntry.login`) whose login is still running: the PTY's program is the
+ * ssh/OpenVPN login it built from the target, so a saved secret never lands in a
+ * shell, and once the login exits the paste is refused (shown here as the note).
  */
 
 /** A saved credential, named by *what it is* — the keychain account spelling stays

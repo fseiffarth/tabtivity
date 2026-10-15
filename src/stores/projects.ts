@@ -54,6 +54,7 @@ import { useConnectDialogStore } from "./remote/connectDialog";
 import { useBoxesStore } from "./boxes";
 import { useStopProjectStore } from "./stopProjectPrompt";
 import { connectionStillOpen, openConnectionInRoot } from "../lib/remote/remoteConnect";
+import { loginDedupeKey, sshLogin, vpnLogin } from "../lib/remote/loginTarget";
 import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../components/projects/scaffold";
 import type { SavedPasswordState } from "../components/projects/useSavedCredential";
 import { IS_HOST_WINDOWS } from "../lib/platform";
@@ -76,55 +77,7 @@ function vpnToast(name: string): string {
   return `VPN up · ${name} — this computer's traffic now routes through the tunnel`;
 }
 
-/**
- * The password a create/extend dialog authenticated its SSH session with, handed
- * over for that project's **first** pooled connect and forgotten the moment it is
- * used (or the connect gives up). Never persisted — persisting is what the dialog's
- * "Save password" toggle is for, and a user who declined it must not have the
- * secret written anywhere.
- *
- * Without this, the first `remote_connect` for a just-created remote project ran
- * with `password: null` and only succeeded because the dialog's ControlMaster was
- * still up. Two things came out wrong: the pool depended on a master it doesn't own,
- * and the backend — which reads "no password given, none saved" as *key* auth —
- * recorded `key_auth: true` on a host that in fact needs a password, so the project
- * then advertised itself as auto-connect-eligible and the auto-connect failed on the
- * next launch.
- *
- * **Currently write-only.** The reader was `ensureRemotePool`, reachable only from
- * `reconnectRemote`, which nothing has called for some time; both were deleted with
- * the auto-connect audit rather than left as an ungated retry loop waiting to be
- * re-wired. The dialogs still stash, so the hand-over is one call away — but until a
- * caller exists, a just-created project's first pooled connect gets its credential
- * from the keychain or the dialog's own master, exactly as it did before.
- */
-const pendingRemotePassword = new Map<string, string>();
 const deactivatingProjects = new Set<string>();
-
-/** Hand `projectId`'s first pooled connect the password the dialog just used. */
-export function stashRemotePassword(projectId: string, password: string): void {
-  if (password) pendingRemotePassword.set(projectId, password);
-}
-
-/**
- * Projects whose first pooled connect will be riding a **login terminal's**
- * ControlMaster rather than a credential of its own.
- *
- * Normally that is implied by the mode — `connections_headless: false` means every
- * login is a terminal. But the dialogs now offer "Sign in in a terminal" for a single
- * connect *while headless*, and in that case there is no password to stash and the
- * mode says the opposite of what happened. Without this, that connect succeeds
- * credential-less and `record_key_auth` (commands/remote.rs) reads it as key auth —
- * stamping `key_auth: true` onto a password host, which then advertises a promptless
- * auto-connect that fails on every launch. The frontend is the only side that knows,
- * so it has to say.
- */
-const pendingViaLogin = new Set<string>();
-
-/** Mark `projectId`'s first pooled connect as riding a login terminal's master. */
-export function stashRemoteViaLogin(projectId: string): void {
-  pendingViaLogin.add(projectId);
-}
 
 /** Projects with an auto-connect attempt in flight, so a switch away and back
  *  (or a launch racing an activation) can't start a second one. */
@@ -213,10 +166,10 @@ async function autoConnectInteractive(
     // Password host (or one whose key auth just failed): hand the login to the root
     // terminal and wait for its master. Deduped by target, so a login the Connect
     // dialog or a previous activation already opened is reused, never duplicated.
-    const command = await invoke<string>("remote_login_command", sshArgs);
+    const login = sshLogin(sshArgs.user, sshArgs.host, sshArgs.port);
     const target = `${sshArgs.user ? `${sshArgs.user}@` : ""}${sshArgs.host}`;
-    const dedupeKey = `ssh:${target}:${sshArgs.port ?? ""}`;
-    openConnectionInRoot({ label: `ssh · ${target}`, command, dedupeKey });
+    const dedupeKey = loginDedupeKey(login);
+    openConnectionInRoot({ label: `ssh · ${target}`, login, dedupeKey });
     const ready = await pollRootLoginReady(projectId, sshArgs, dedupeKey);
     if (!stillActive()) return abandonAutoConnect(projectId, hostId);
     if (ready === "closed") {
@@ -229,8 +182,8 @@ async function autoConnectInteractive(
     }
     if (ready === "timeout") {
       // Never authenticated within the window. Red lamp, no retry loop — the user
-      // finishes the login and connects from the pill's lamp (the tab is still
-      // sitting there with the command in it).
+      // finishes the login and connects from the pill's lamp (the login tab is still
+      // there, unless the user closed it or the login ended).
       status().setSsh(projectId, "error", hostId);
       return;
     }
@@ -394,16 +347,13 @@ async function autoConnectPrimary(projectId: string): Promise<void> {
         // resets the red SSH lamp below and re-runs this connect — now reachable.
         const up = await invoke<boolean>("openvpn_status", { config }).catch(() => false);
         if (!up) {
-          try {
-            const command = await invoke<string>("openvpn_login_command", { config });
-            openConnectionInRoot({
-              label: `OpenVPN · ${project!.name}`,
-              command,
-              dedupeKey: `vpn:${config}`,
-            });
-          } catch (error) {
-            console.warn("auto-connect: VPN root-terminal login failed", error);
-          }
+          // A bad config now surfaces as the login tab's spawn error.
+          const login = vpnLogin(config);
+          openConnectionInRoot({
+            label: `OpenVPN · ${project!.name}`,
+            login,
+            dedupeKey: loginDedupeKey(login),
+          });
         }
         if (!stillActive()) return abandon();
         // Red, not "connecting": the host is unreachable until the tunnel is up, and a

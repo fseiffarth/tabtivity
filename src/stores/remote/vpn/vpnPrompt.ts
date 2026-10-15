@@ -255,8 +255,9 @@ export const useVpnPromptStore = create<VpnPromptState>((set, get) => ({
         projectId: p.projectId,
       });
     } catch (e) {
-      // The command couldn't even be built — nothing was opened and no lamp moved, so
-      // keep the modal (and its password fields) exactly where they were.
+      // The handoff itself failed — keep the modal (and its password fields) exactly
+      // where they were. (A config the backend cannot build a login for no longer
+      // lands here: that is the login tab's own spawn error.)
       set({ status: "error", error: String(e) });
       return;
     }

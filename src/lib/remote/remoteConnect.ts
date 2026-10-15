@@ -2,6 +2,10 @@ import { openTabInRootConsole } from "../../stores/rootOverlay";
 import { invoke } from "@tauri-apps/api/core";
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
+import { onTerminalExit } from "../terminal/terminalBus";
+import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
+import { withHostKeyConfirm } from "./hostKey";
+import type { LoginTarget } from "./loginTarget";
 
 /**
  * The directory a fresh connect/browse should open in for `host`: the standard
@@ -28,9 +32,10 @@ export async function resolveRemoteStartDir(
 
 /**
  * Non-headless remote-connection support: instead of Tabtivity handling the
- * SSH/OpenVPN password itself, the actual connecting command is launched as an
- * interactive shell tab in the Tabtivity **root** scope, where the user types the
- * password directly into the live terminal. Tabtivity never sees or stores it.
+ * SSH/OpenVPN password itself, the login runs in a terminal tab in the Tabtivity
+ * **root** scope, where the user types the password directly into the live
+ * terminal. Tabtivity never sees it (a saved one can be pasted in from the
+ * keychain by the backend — `credential_paste_to_pty`).
  *
  * Gated by the `connections_headless` setting (default ON = old headless flow).
  */
@@ -45,9 +50,11 @@ export async function resolveRemoteStartDir(
  * connection some other surface owns (`markConnectionOpened` — the Connect dialog's
  * embedded terminal). That distinction is what makes the dedupe self-healing rather
  * than sticky: a tab the user closed is not a connection, so the mark expires with
- * it. Without that, closing the login tab left the key claimed for the rest of the
- * session and every later request — an activation, an auto-connect — silently opened
- * nothing and then waited on a master that was never coming.
+ * it — as it does when its login ends (ssh/openvpn exited: the tab only shows its
+ * exited state, with nothing left to authenticate in). Without that, closing the
+ * login tab left the key claimed for the rest of the session and every later
+ * request — an activation, an auto-connect — silently opened nothing and then
+ * waited on a master that was never coming.
  */
 const openedConnections = new Map<string, string | null>();
 
@@ -80,10 +87,11 @@ export function markConnectionOpened(dedupeKey: string): void {
 }
 
 /**
- * Open `command` as an interactive shell tab in the **root** scope. `command` is
- * typed into the freshly-spawned shell via the tab's `initialInput` (see
- * TerminalView), so a password prompt it raises is answered in that visible
- * terminal — Tabtivity never handles the password.
+ * Open a login terminal for `login` in the **root** scope: a tab whose PTY runs
+ * the ssh/OpenVPN login itself as its program, built by the backend from the
+ * target (`TabEntry.login`) — no shell before or after it, and no command line
+ * typed into one. A password prompt it raises is answered in that visible
+ * terminal (or by the paste bar, which only a login PTY accepts).
  *
  * The active project is deliberately NOT changed (this is called mid-activation,
  * where switching scope would undo the activation in progress); instead a brief
@@ -97,10 +105,10 @@ export function markConnectionOpened(dedupeKey: string): void {
  */
 export function openConnectionInRoot(opts: {
   label: string;
-  command: string;
+  login: LoginTarget;
   dedupeKey?: string | null;
 }): void {
-  const { label, command, dedupeKey } = opts;
+  const { label, login, dedupeKey } = opts;
   if (dedupeKey != null && connectionStillOpen(dedupeKey)) return;
   const rootDir = useProjectsStore.getState().rootDir ?? "";
   // Claimed before the tab exists: root may have to be restored first, and a
@@ -115,13 +123,70 @@ export function openConnectionInRoot(opts: {
   openTabInRootConsole(
     {
       label,
-      cmd: "", // empty → backend default_shell()
-      cwd: rootDir, // empty resolves to ~/tabtivity/root on the backend
+      // Ignored by the backend for a login tab (it runs the login's own argv in
+      // the root work dir); kept so the tab reads like any other root shell.
+      cmd: "",
+      cwd: rootDir,
       kind: "shell",
-      initialInput: command,
+      login,
     },
     (tab) => {
-      if (dedupeKey != null) openedConnections.set(dedupeKey, tab.key);
+      if (dedupeKey == null) return;
+      openedConnections.set(dedupeKey, tab.key);
+      // The login ending (ssh/openvpn exited — a failed or a logged-out session)
+      // ends the connection this key stands for: the tab stays, showing its
+      // exited state, but a new request must open a fresh login rather than
+      // point at a dead one. Only while the key still maps to THIS tab.
+      const unsubscribe = onTerminalExit(`root:${tab.key}`, () => {
+        unsubscribe();
+        if (openedConnections.get(dedupeKey) === tab.key) openedConnections.delete(dedupeKey);
+      });
     },
   );
+}
+
+/**
+ * The first pooled connect of a remote project a create dialog just made — opened by
+ * the dialog, the way `ExtendToRemoteDialog` carries its session over.
+ *
+ * Reaching "Create" took a live, authenticated session (the folder was browsed or
+ * made over it), so the new project comes up connected rather than on a Connect
+ * prompt. And this connect says **how** it authenticated, which only the dialog
+ * knows: the password it was typed (handed over, never stored — saving is the "Save
+ * password" toggle's job), or, with none, that it rides the master the dialog's
+ * login terminal left up (`viaLogin`). Without that flag a credential-less connect
+ * reads backend-side as key auth and stamps `key_auth: true` onto a password host
+ * (`record_key_auth`), which then advertises a promptless auto-connect it cannot
+ * deliver. (A key host created without a password is sent `viaLogin` too: that only
+ * records nothing, and its next connect from the lamp records the key auth.)
+ *
+ * Fire-and-forget for the dialog; never fights a lamp already moving. A failure with
+ * a typed password is red; one with none (no master to ride — e.g. Windows, which
+ * has no control socket) leaves the project disconnected, as it was before.
+ */
+export async function connectCreatedRemoteProject(
+  projectId: string,
+  password: string | null | undefined,
+): Promise<void> {
+  const status = () => useRemoteStatusStore.getState();
+  const current = status().byProject[projectId]?.ssh ?? "off";
+  if (current === "connected" || current === "connecting") return;
+  const typed = password || null;
+  status().setSsh(projectId, "connecting");
+  try {
+    await withHostKeyConfirm(() =>
+      invoke("remote_connect", {
+        projectId,
+        password: typed,
+        viaLogin: typed === null,
+        // The user clicked Create and is watching the lamp; `remote_connect`
+        // defaults to background, which a host tagged HPC refuses.
+        background: false,
+      }),
+    );
+    status().setSsh(projectId, "connected");
+  } catch (error) {
+    console.warn("first connect of the new remote project failed", error);
+    status().setSsh(projectId, typed === null ? "off" : "error");
+  }
 }

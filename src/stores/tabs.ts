@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { InternalViewer } from "../lib/viewers/fileUtils";
 import type { AutocompleteMode } from "../types";
+import type { LoginTarget } from "../lib/remote/loginTarget";
 import { forgetPty } from "../lib/agents/promptCount";
 import { forgetPromptTrail } from "./agents/promptTrail";
 import { BOX_SCOPE_PREFIX, splitPtyId } from "../lib/terminal/ptyId";
@@ -45,7 +46,10 @@ function withTmuxSession(
   if (
     (next.kind === "shell" || next.kind === "agent" || next.kind === "local_agent") &&
     !next.tmuxSession &&
-    !next.tmuxAttach
+    !next.tmuxAttach &&
+    // A login terminal is a plain PTY running ssh/openvpn — the backend refuses
+    // one wrapped in tmux, and a login has nothing to outlive a crash for.
+    !next.login
   ) {
     return { ...next, tmuxSession: newTmuxSessionName(scope, next.kind === "shell" ? "shell" : "agent") };
   }
@@ -795,6 +799,13 @@ export interface TabEntry {
   args?: string[];
   env?: Record<string, string>;
   initialInput?: string;
+  // A login terminal (`lib/remote/loginTarget`): the backend runs this ssh/OpenVPN
+  // login as the PTY's own program — `cmd`/`args`/`env`/`cwd` are ignored — and
+  // only such a PTY, while its login runs, takes a pasted saved credential.
+  // Session-only: never persisted (`toSavedTabEntry` leaves it out) and never
+  // restored (`isRestorableTab`) — a restored login would raise a pkexec/ssh
+  // prompt at launch, and auto-connect never prompts.
+  login?: LoginTarget;
   cwd: string;
   kind: TabKind;
   // For agents that support a deterministic session id (currently Claude, via
@@ -1232,6 +1243,9 @@ export interface SavedTabEntry {
  *    re-wrapped in tmux and leaks a `tail -F` daemon on the login node.
  *  - `hostBoundUid` (#150): a restored local-model tab must still resolve to
  *    its registered marker in the state dir.
+ *
+ * Deliberately left out: `login`. A login terminal is never restored
+ * (`isRestorableTab`), and no saved layout may carry one.
  */
 export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
   return {
@@ -6316,7 +6330,7 @@ export function isRestorableEmbedTab(
  * Tab-level restorability (supersedes bare `isRestorableKind` at call sites that
  * have the full tab): a tab survives a restart if its kind is restorable, it is
  * a resumable agent tab, a relaunchable local-model tab, or an in-app
- * file-viewer embed.
+ * file-viewer embed — and never when it is a login terminal (`TabEntry.login`).
  */
 export function isRestorableTab(
   tab: {
@@ -6326,8 +6340,13 @@ export function isRestorableTab(
     resumeArgs?: string[];
     viewer?: TabEntry["viewer"];
     localLaunch?: LocalLaunch;
+    login?: LoginTarget;
   },
 ): boolean {
+  // A login terminal is a live ssh/OpenVPN prompt, not a place: bringing it back
+  // would prompt at launch (and it would come back as a bare shell anyway, since
+  // the login itself is never saved).
+  if (tab.login) return false;
   return (
     isRestorableKind(tab.kind) ||
     isResumableAgentTab(tab) ||
