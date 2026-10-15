@@ -64,6 +64,7 @@ import {
   TabAgentModeMarks,
   TabSourceBadge,
   TabStatusMark,
+  statusMarkSlots,
   TabTexLinkBadge,
   TabLocalityBadge,
   LocalityMenu,
@@ -353,7 +354,7 @@ const TabItem = memo(function TabItem({
           : undefined
       }
     >
-      <TabStatusMark stateClass={stateClass} />
+      <TabStatusMark stateClass={stateClass} slots={statusMarkSlots(tab.kind)} />
       {editing ? (
         <input
           className="tab-label-edit"

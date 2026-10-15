@@ -916,3 +916,28 @@ correctness/UX work atop the same layout model #42 detaches.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+    - **Fix (2026-10-15): the marks no longer resize the tab.** Reported as
+      the strip "flickering": a command mark coming and going, or a tab swapping
+      `?` for ▶, changed the tab's width and shifted every tab after it. Only
+      the working state kept a spare slot; `?`, ✓, ■ and the command-only state
+      drew one mark and an idle tab none. In a tab strip `TabStatusMark` now lays
+      out fixed cells whether or not anything is in them (`statusMarkSlots`:
+      agent tabs two — the turn, then the command, always the second cell — shell
+      tabs one), used by the docked strip, the root console and the stack chip
+      and its menu. Idle terminal tabs are that much wider for good.
+      *Files: `src/components/tabs/{TabLocalityBadges,TabBar,TabStackChip}.tsx`,
+      `src/components/layout/RootOverlay.tsx`, `src/styles/projects-tabs.css`.*
+      - [x] 🤖 Automated test — `TabStatusMark` (each state's cells, idle cells kept)
+      - [ ] 🖐️ Manual test — have an agent work through several Bash calls and
+        a permission prompt while other tabs sit to its right: the tabs after it
+        never move, whether the mark is ▶, ?, ✓, two ▶ or none. A shell tab
+        running `for i in 1 2 3 4 5; do echo $i; sleep 2; done` keeps its width
+        as its mark comes and goes.
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS

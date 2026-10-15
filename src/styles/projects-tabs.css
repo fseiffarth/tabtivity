@@ -1552,10 +1552,23 @@
 .tab-status-mark.working.shell {
   color: var(--status-shell-working);
 }
-/* That mark's slot on an agent tab working without a command: held empty so
-   the mark coming and going does not resize the tab. */
-.tab-status-mark.reserved {
-  visibility: hidden;
+/* The marks' fixed cells in a tab strip (`TabStatusMark`'s `slots`): an agent
+   tab keeps two, a shell tab one, laid out empty while the tab is idle. A mark
+   appearing, going or swapping (`?` ↔ ▶, a command on/off) changes no width,
+   so the tabs after it never shift. Each glyph is centred in its cell, and one
+   wider than the cell overflows it rather than growing it. */
+.tab-status-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.tab-status-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  overflow: visible;
 }
 
 /* A root-console tab a one-click install opened (`runInstallInTab`): an accent
