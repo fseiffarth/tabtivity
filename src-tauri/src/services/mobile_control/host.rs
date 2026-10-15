@@ -2209,7 +2209,6 @@ async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap, body:
     let keys = state.auth.lock_ok().secrets_device_keys();
     match vault.set_up(&keys) {
         Ok(code) => {
-            eprintln!("secrets: key set up from device {device_id} ({} device wraps)", keys.len());
             let mut response = Json(json!({ "code": code.as_str() })).into_response();
             response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response

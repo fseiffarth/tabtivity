@@ -56,7 +56,7 @@ use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::pkcs8::{DecodePublicKey, EncodePublicKey};
 use p256::PublicKey;
-use rand::RngCore;
+use rand::{distributions::{Distribution, Standard}, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -222,10 +222,11 @@ fn unb64(text: &str) -> Result<Vec<u8>, String> {
     Base64UrlUnpadded::decode_vec(text).map_err(|_| "not base64url".to_string())
 }
 
-fn random<const N: usize>() -> [u8; N] {
-    let mut out = [0u8; N];
-    rand::rngs::OsRng.fill_bytes(&mut out);
-    out
+fn random<const N: usize>() -> [u8; N]
+where
+    Standard: Distribution<[u8; N]>,
+{
+    rand::rngs::OsRng.r#gen()
 }
 
 /// HKDF-SHA256 to 32 bytes; what the browser's `deriveKey({name: "HKDF"})`
