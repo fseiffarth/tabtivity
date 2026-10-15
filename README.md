@@ -43,10 +43,15 @@ Tabtivity is a project-centric desktop layer that swaps your entire working cont
 3. **Start working.** Opening a project gives you a tab running your default
    agent. Set that command in **Settings**; any new tab can pick another
    installed agent CLI or a plain shell.
-4. **Switch projects.** Click another project pill: its windows, tabs, files,
+4. **Add your favorite CLI.** Missing from the list? Open a tab's **+** menu and
+   choose **＋ Add agent…**: give it a label and its command (a binary name or
+   full path), optionally arguments, a resume flag so the tab survives a
+   restart, and an install command. It then appears in the Agents group next to
+   the built-ins ([details](docs/guide/features.md#agent-clis-resume-and-tools)).
+5. **Switch projects.** Click another project pill: its windows, tabs, files,
    and layout come back, and the previous project's desktop is parked until you
    return.
-5. **Go further when you need it.** Point a project at an
+6. **Go further when you need it.** Point a project at an
    [SSH host or HPC cluster](docs/guide/features.md#remote-machines--hpc-clusters-the-second-differentiator),
    or opt a project into [Tabtivity Mobile](docs/guide/features.md#every-agent-from-your-phone-the-third-differentiator)
    (**Settings**, needs Tailscale) to answer your agents from your phone or iPad.
