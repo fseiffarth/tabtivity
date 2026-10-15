@@ -17,7 +17,13 @@
 //! read by the camelCase keys Tauri uses and reported with Tauri's own wording
 //! (``invalid args `key` for command `cmd`: …``). The server-side model
 //! allowlist (`services::model_allowlist`) runs between the class check and the
-//! call for the commands that reach the shared Ollama.
+//! call for the commands that reach the shared Ollama, and then, for a
+//! [`Role::User`], the path confinement: every path-named argument of every
+//! `core` command is classified in one table (`USER_CONFINED`) and held to the
+//! user's roots (`commands::fs::user_roots`) before the body runs — a project
+//! folder, an absolute path, a project's `project.json` — or is named as
+//! confined by its body, remote, refused or not a path. A test fails when a
+//! command grows a path-named argument the table does not classify.
 //!
 //! Nothing here knows a WebSocket or a window: the transport hands in a
 //! `CoreCtx` built for the caller and gets JSON back.
@@ -177,41 +183,556 @@ pub async fn dispatch(ctx: &CoreCtx, role: Role, cmd: &str, mut args: Value) -> 
     run(ctx.clone(), args).await
 }
 
-/// The `core` commands that take a path with no confinement of their own,
-/// because on the desktop they stand in for an OS file dialog (`list_dir_all`
-/// is the server-side picker's directory listing). An admin keeps that parity
-/// — the box is theirs — a user is held to the roots every file command is
-/// bound by (`fs::confine_user_path`): an empty start path becomes the
-/// user's projects root instead of their home.
-const USER_CONFINED_PATH: &[(&str, &str)] = &[("list_dir_all", "path")];
+/// How [`confine_for_user`] holds one path-named argument of a `core`
+/// command for a [`Role::User`] (hosted plan §6; the screen's fixed decision
+/// #6). An admin is never held: the box is theirs.
+///
+/// Defence in depth, not the uid boundary: a user's daemon runs under their
+/// own uid and serves them unfenced shell tabs (`pty_spawn` is `core`). What
+/// it buys is consistency — no file command reaches past the user's projects
+/// because a path argument was trusted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// The server-side folder picker's start (`list_dir_all`, `list_dirs`):
+    /// empty is the root work dir, anything else is held like [`Kind::UserPath`].
+    Picker,
+    /// An absolute local path, held to the user's roots (`fs::user_roots`).
+    /// Empty or relative is refused; absent (`null`) is left to the body.
+    UserPath,
+    /// [`Kind::UserPath`] for an `Option` argument whose body reads empty as
+    /// absent: an empty value becomes `null`.
+    UserPathOpt,
+    /// An output folder (`compile_tex.outDir`): a relative value is taken
+    /// against the folder of the named sibling path, as the body does, and
+    /// the result held like [`Kind::UserPath`]; empty is absent.
+    OutDirOf(&'static str),
+    /// An optional path the body only looks near (the formatter's config and
+    /// `node_modules` beside a file): one outside the user's roots — a remote
+    /// file's host path, say — becomes `null`, as if none was given, instead
+    /// of failing the call.
+    Hint,
+    /// A path on the host when the named sibling (a `projectId`) is a remote
+    /// project's — the body then walks it over SSH — else held like
+    /// [`Kind::UserPath`].
+    LocalUnlessRemote(&'static str),
+    /// A new or imported project's own folder. Held like [`Kind::UserPath`]
+    /// unless the request names a remote site (a non-null `remote`) — then
+    /// the body ignores it and keeps the project in the server's state dir.
+    /// Without this a user could register `/` as a project and widen their
+    /// own roots. Only what the request type itself honours lets the folder
+    /// through: a key the body's type does not have (`vm` on an import) is
+    /// dropped by serde, and the folder is used after all.
+    LocalSite,
+    /// [`Kind::LocalSite`] for `create_project`, whose request also honours
+    /// `vm.enabled` (a VM project is a remote one; the body synthesizes its
+    /// `remote`).
+    LocalSiteOrVm,
+    /// [`Kind::LocalFile`] where the body reads empty as "no project file"
+    /// (`workspace_sync` of the root or a box scope): empty passes, as empty.
+    LocalFileOpt,
+    /// A `SkillTarget` (`{kind: "project", dir}` / `{kind: "personal"}`): a
+    /// project's `dir` is held like [`Kind::UserPath`]; the personal target —
+    /// the real home's `~/.claude/skills`, outside every root and seen by no
+    /// agent tab (they run in Tabtivity's agent homes) — is refused.
+    SkillTarget,
+    /// A list of folders the body only looks inside (`resolve_text_paths`'s
+    /// `bases`): each one outside the user's roots is dropped from the list.
+    HintEach,
+    /// A `GitWorktreeSelection` (`{path, site}`) beside the named
+    /// `projectDir`: its `path` is where git then runs. On a remote project's
+    /// host side it is a host path; anywhere else it is held like
+    /// [`Kind::UserPath`] — the body accepts any checkout the repository's own
+    /// worktree list names, and that list is files in the user's project.
+    WorktreeOf(&'static str),
+    /// A project folder the body then confines a relative path within
+    /// (`fs::enforce_confinement`): the folder itself is held to the user's
+    /// roots, or `"/"` would make every relative path a whole-disk one.
+    ProjectDir,
+    /// A project's `project.json`: must be a known project's `local_file`.
+    LocalFile,
+    /// The body confines it already (`open_confined`, `confine_abs_read`,
+    /// `confine_project_path`, `sqlite::confine`, `enforce_confinement`
+    /// within a held [`Kind::ProjectDir`], a worktree root) or never touches
+    /// the filesystem with it. Listed so the coverage test knows it was looked at.
+    BodyConfined,
+    /// A path on an SSH/HPC host or in a remote project's tree, resolved from
+    /// the project: not this server's filesystem. Governed by the host
+    /// allow-list, not by roots.
+    Remote,
+    /// Not served to a user at all.
+    Refuse,
+    /// Not a filesystem path; the key only looks like one (a mail folder id,
+    /// a CalDAV href, a git ref, a flag, a catalog path).
+    NotAPath,
+}
 
-/// Confine the path argument of a [`USER_CONFINED_PATH`] command for a user.
-/// Nothing for an admin, nothing for any other command.
+use Kind::*;
+
+/// Every path-named argument of every `core` command, by `(command, key,
+/// kind)`. A key with a `.` names a field inside a struct argument
+/// (`req.directory`); a missing parent is absent. The test
+/// `every_path_named_core_argument_is_classified` fails on any argument of a
+/// dispatchable `core` command whose key reads like a path
+/// ([`PATH_NAMED`]) and has no row, so a new command cannot slip past.
+/// Struct fields are listed by hand: the test sees only top-level keys.
+const USER_CONFINED: &[(&str, &str, Kind)] = &[
+    // ── The server-side picker ──────────────────────────────────────────
+    ("list_dir_all", "path", Picker),
+    ("list_dirs", "path", Picker),
+    // ── Absolute local paths ────────────────────────────────────────────
+    ("calendar_read_ics", "path", UserPath),
+    ("calendar_write_ics", "path", UserPath),
+    ("compile_tex", "path", UserPath),
+    ("compile_tex", "outDir", OutDirOf("path")),
+    ("disk_usage_scan", "root", LocalUnlessRemote("projectId")),
+    ("exec_trust_approve", "dir", UserPath),
+    ("export_project", "req.destPath", UserPath),
+    ("git_clone", "dest", UserPath),
+    ("git_fork_clone", "dest", UserPath),
+    ("git_merge_sides", "path", UserPath),
+    ("import_external_file", "sourcePath", UserPath),
+    ("import_project_export", "req.bundlePath", UserPath),
+    ("import_project_export", "req.targetParent", UserPathOpt),
+    ("import_project_export", "req.mirrorParent", UserPathOpt),
+    ("inspect_project_export", "bundlePath", UserPath),
+    ("move_remote_mirror", "parentDir", UserPath),
+    ("preview_project_scaffold", "sourceDir", UserPath),
+    ("project_folder_exists", "directory", UserPath),
+    ("remote_download_to", "destDir", UserPath),
+    ("remote_upload_file", "localPath", UserPath),
+    ("resolve_tex_root", "path", UserPath),
+    ("set_remote_mirror_dir", "path", UserPath),
+    ("skills_install", "target", SkillTarget),
+    ("skills_list_installed", "target", SkillTarget),
+    ("skills_uninstall", "target", SkillTarget),
+    // Viewers pass a local PDF; every caller reads a refusal as "no map".
+    ("synctex_edit", "pdf", UserPath),
+    ("synctex_page_lines", "pdf", UserPath),
+    ("synctex_status", "pdf", UserPath),
+    ("synctex_view", "pdf", UserPath),
+    ("resolve_text_paths", "bases", HintEach),
+    ("tex_auto_engine", "path", UserPath),
+    ("tex_preview_snippet", "dir", UserPath),
+    ("watch_dir", "path", UserPath),
+    ("watch_dir", "repoDir", UserPathOpt),
+    ("format_source", "path", Hint),
+    ("formatter_available", "path", Hint),
+    ("create_project", "req.mirrorParent", UserPathOpt),
+    ("import_project", "req.mirrorParent", UserPathOpt),
+    // ── A new project's own folder ──────────────────────────────────────
+    ("create_project", "req.directory", LocalSiteOrVm),
+    ("import_project", "req.sourceDir", LocalSite),
+    // ── Project folders ─────────────────────────────────────────────────
+    ("copy_path", "srcProjectDir", ProjectDir),
+    ("copy_path", "destProjectDir", ProjectDir),
+    ("create_dir", "projectDir", ProjectDir),
+    ("create_file", "projectDir", ProjectDir),
+    ("delete_dir", "projectDir", ProjectDir),
+    ("delete_file", "projectDir", ProjectDir),
+    ("dir_size", "projectDir", ProjectDir),
+    ("dir_size_breakdown", "projectDir", ProjectDir),
+    ("extract_archive", "projectDir", ProjectDir),
+    ("git_add_all", "projectDir", ProjectDir),
+    ("git_add_path", "projectDir", ProjectDir),
+    ("git_blame", "projectDir", ProjectDir),
+    ("git_branches", "projectDir", ProjectDir),
+    ("git_change_stats", "projectDir", ProjectDir),
+    ("git_checkout", "projectDir", ProjectDir),
+    ("git_commit", "projectDir", ProjectDir),
+    ("git_commit_message", "projectDir", ProjectDir),
+    ("git_diff_file", "projectDir", ProjectDir),
+    ("git_dirty_probe", "projectDir", ProjectDir),
+    ("git_fetch", "projectDir", ProjectDir),
+    ("git_file_at_rev", "projectDir", ProjectDir),
+    ("git_file_log", "projectDir", ProjectDir),
+    ("git_file_statuses", "projectDir", ProjectDir),
+    ("git_generate_commit_message", "projectDir", ProjectDir),
+    ("git_log", "projectDir", ProjectDir),
+    ("git_log_search", "projectDir", ProjectDir),
+    ("git_merge_abort", "projectDir", ProjectDir),
+    ("git_merge_commit", "projectDir", ProjectDir),
+    ("git_merge_state", "projectDir", ProjectDir),
+    ("git_pull_apply", "projectDir", ProjectDir),
+    ("git_pull_preview", "projectDir", ProjectDir),
+    ("git_push", "projectDir", ProjectDir),
+    ("git_release_preview", "projectDir", ProjectDir),
+    ("git_release_tag", "projectDir", ProjectDir),
+    ("git_repo_root", "projectDir", ProjectDir),
+    ("git_reword_head", "projectDir", ProjectDir),
+    ("git_status", "projectDir", ProjectDir),
+    ("git_unpushed_commits", "projectDir", ProjectDir),
+    ("git_worktree_add", "projectDir", ProjectDir),
+    ("git_worktree_list", "projectDir", ProjectDir),
+    ("git_worktree_lock", "projectDir", ProjectDir),
+    ("git_worktree_prune", "projectDir", ProjectDir),
+    ("git_worktree_remove", "projectDir", ProjectDir),
+    ("git_worktree_unlock", "projectDir", ProjectDir),
+    ("hpc_ws_link", "projectDir", ProjectDir),
+    // `HpcWsTarget`: a project's folder (a login node it runs on runs the
+    // script there) or a bare host (`host`/`user`/`port`, the allow-list's).
+    ("hpc_scratch_candidates", "target.projectDir", ProjectDir),
+    ("hpc_ws_allocate", "target.projectDir", ProjectDir),
+    ("hpc_ws_anchor", "target.projectDir", ProjectDir),
+    ("hpc_ws_available", "target.projectDir", ProjectDir),
+    ("hpc_ws_extend", "target.projectDir", ProjectDir),
+    ("hpc_ws_list", "target.projectDir", ProjectDir),
+    ("hpc_ws_release", "target.projectDir", ProjectDir),
+    ("import_external_file", "projectDir", ProjectDir),
+    ("list_dir", "projectDir", ProjectDir),
+    ("list_project_endings", "projectDir", ProjectDir),
+    ("list_project_paths", "projectDir", ProjectDir),
+    ("move_path", "srcProjectDir", ProjectDir),
+    ("move_path", "destProjectDir", ProjectDir),
+    ("project_generated_dir", "projectDir", ProjectDir),
+    ("project_path_exists", "projectDir", ProjectDir),
+    ("project_search", "projectDir", ProjectDir),
+    ("python_interpreter_for", "projectDir", ProjectDir),
+    ("python_interpreters", "projectDir", ProjectDir),
+    ("rename_path", "projectDir", ProjectDir),
+    ("slurm_available", "projectDir", ProjectDir),
+    ("slurm_cancel", "projectDir", ProjectDir),
+    ("slurm_job_out", "projectDir", ProjectDir),
+    ("slurm_queue", "projectDir", ProjectDir),
+    ("slurm_submit", "projectDir", ProjectDir),
+    ("update_gitignore_rule", "projectDir", ProjectDir),
+    ("usage_git_stats", "projectDir", ProjectDir),
+    ("write_project_file", "projectDir", ProjectDir),
+    ("write_project_file_bytes", "projectDir", ProjectDir),
+    // A checkout of the held project's repository, picked in the Git panel.
+    ("git_add_all", "worktree", WorktreeOf("projectDir")),
+    ("git_branches", "worktree", WorktreeOf("projectDir")),
+    ("git_change_stats", "worktree", WorktreeOf("projectDir")),
+    ("git_checkout", "worktree", WorktreeOf("projectDir")),
+    ("git_commit", "worktree", WorktreeOf("projectDir")),
+    ("git_commit_message", "worktree", WorktreeOf("projectDir")),
+    ("git_fetch", "worktree", WorktreeOf("projectDir")),
+    ("git_generate_commit_message", "worktree", WorktreeOf("projectDir")),
+    ("git_log", "worktree", WorktreeOf("projectDir")),
+    ("git_log_search", "worktree", WorktreeOf("projectDir")),
+    ("git_merge_abort", "worktree", WorktreeOf("projectDir")),
+    ("git_merge_commit", "worktree", WorktreeOf("projectDir")),
+    ("git_merge_state", "worktree", WorktreeOf("projectDir")),
+    ("git_pull_apply", "worktree", WorktreeOf("projectDir")),
+    ("git_pull_preview", "worktree", WorktreeOf("projectDir")),
+    ("git_push", "worktree", WorktreeOf("projectDir")),
+    ("git_release_preview", "worktree", WorktreeOf("projectDir")),
+    ("git_release_tag", "worktree", WorktreeOf("projectDir")),
+    ("git_reword_head", "worktree", WorktreeOf("projectDir")),
+    ("git_status", "worktree", WorktreeOf("projectDir")),
+    ("git_unpushed_commits", "worktree", WorktreeOf("projectDir")),
+    // ── A project's project.json ────────────────────────────────────────
+    ("adopt_folder_tab_layout", "localFile", LocalFile),
+    ("get_project_panel_prefs", "localFile", LocalFile),
+    ("load_project", "localFile", LocalFile),
+    ("load_side_panel_folder", "localFile", LocalFile),
+    ("save_side_panel_folder", "localFile", LocalFile),
+    ("set_project_panel_prefs", "localFile", LocalFile),
+    ("workspace_sync", "localFile", LocalFileOpt),
+    // ── Confined by the body ────────────────────────────────────────────
+    // Viewer I/O by absolute path, scoped to the viewer's project
+    // (`open_confined` / `confine_abs_read` / `confine_project_path` /
+    // `sqlite::confine`; a remote project's path is held to its remote root).
+    ("copilot_complete", "path", BodyConfined), // `policy::authorize_document` under the project root
+    ("detect_mime", "path", BodyConfined),
+    ("file_mtime", "path", BodyConfined),
+    ("file_size", "path", BodyConfined),
+    ("file_source", "path", BodyConfined), // only says which side holds it
+    ("markup_mcp_list", "path", BodyConfined), // resolved under the project or "elsewhere"
+    ("markup_mcp_ticks", "path", BodyConfined),
+    ("pdf_markup_submit", "path", BodyConfined), // `resolve_local_source` under the project root
+    ("read_file_text", "path", BodyConfined),
+    ("read_spreadsheet", "path", BodyConfined),
+    ("sqlite_page", "path", BodyConfined),
+    ("sqlite_tables", "path", BodyConfined),
+    ("write_file_text", "path", BodyConfined),
+    // Relative paths inside a held `ProjectDir` (`enforce_confinement`, or a
+    // pathspec git resolves inside the repo).
+    ("copy_path", "destRel", BodyConfined),
+    ("create_dir", "relPath", BodyConfined),
+    ("create_file", "relPath", BodyConfined),
+    ("delete_dir", "relPath", BodyConfined),
+    ("delete_file", "relPath", BodyConfined),
+    ("dir_size", "relPath", BodyConfined),
+    ("dir_size_breakdown", "relPath", BodyConfined),
+    ("extract_archive", "relPath", BodyConfined),
+    ("git_add_path", "relPath", BodyConfined),
+    ("git_blame", "relPath", BodyConfined),
+    ("git_diff_file", "relPath", BodyConfined),
+    ("git_file_at_rev", "relPath", BodyConfined),
+    ("git_file_log", "relPath", BodyConfined),
+    ("git_file_statuses", "relPath", BodyConfined),
+    ("git_repo_root", "relPath", BodyConfined),
+    ("import_external_file", "destRel", BodyConfined),
+    ("import_external_file", "destName", BodyConfined),
+    ("list_dir", "relPath", BodyConfined),
+    ("move_path", "destRel", BodyConfined),
+    ("project_path_exists", "relPath", BodyConfined),
+    ("update_gitignore_rule", "relPath", BodyConfined),
+    ("write_project_file", "relPath", BodyConfined),
+    ("write_project_file_bytes", "relPath", BodyConfined),
+    // A skill catalog's folder, a source's cache and an installed skill's
+    // name: `services::skills` takes each as plain components inside the
+    // source's clone or the target's `.claude/skills` (for every caller).
+    ("skills_get_detail", "relPath", BodyConfined),
+    ("skills_get_detail", "sourceId", BodyConfined),
+    ("skills_install", "relPath", BodyConfined),
+    ("skills_install", "sourceId", BodyConfined),
+    ("skills_list_catalog", "sourceId", BodyConfined),
+    ("skills_refresh_source", "id", BodyConfined),
+    ("skills_remove_source", "id", BodyConfined),
+    ("skills_uninstall", "name", BodyConfined),
+    // `services::sandbox::resolve_spec_dockerfile`: relative, no `..`,
+    // canonically inside the project, checked at build time.
+    ("set_project_sandbox_spec", "spec.dockerfile", BodyConfined),
+    // Worktrees: `resolve_worktree_path` keeps a new one under the held
+    // project's worktrees root; remove/lock/unlock name one git already lists.
+    ("git_worktree_add", "path", BodyConfined),
+    ("git_worktree_lock", "path", BodyConfined),
+    ("git_worktree_remove", "path", BodyConfined),
+    ("git_worktree_unlock", "path", BodyConfined),
+    // ── On a remote host ────────────────────────────────────────────────
+    ("hpc_ws_anchor", "mirrorPath", Remote),
+    ("hpc_ws_anchor", "workspacePath", Remote),
+    ("hpc_ws_link", "workspacePath", Remote),
+    ("hpc_ws_move_root", "newRoot", Remote),
+    ("hpc_ws_pull_logs", "logsDir", Remote), // read over SFTP into the mirror
+    ("remote_download_size", "relPath", Remote),
+    ("remote_download_to", "relPath", Remote),
+    ("remote_remember_path", "path", Remote),
+    ("remote_set_default_path", "path", Remote),
+    ("remote_upload_file", "destRel", Remote),
+    ("slurm_job_out", "logDir", Remote),
+    ("ssh_list_dir", "path", Remote),
+    ("ssh_mkdir", "path", Remote),
+    ("sync_apply_delete", "relPath", Remote),
+    ("sync_auto_preview", "relPath", Remote),
+    ("sync_diff", "relPath", Remote),
+    ("sync_file_meta", "relPath", Remote),
+    ("sync_mark_selected", "relPaths", Remote),
+    ("sync_pull", "relPath", Remote),
+    ("sync_push", "relPath", Remote),
+    ("sync_resolve_if_identical", "relPath", Remote),
+    ("sync_set_auto", "relPaths", Remote),
+    ("sync_set_excluded", "relPaths", Remote),
+    ("sync_transfer_preview", "relPath", Remote),
+    ("sync_transfer_preview", "relPaths", Remote),
+    // ── Refused ─────────────────────────────────────────────────────────
+    // The server-wide Ollama models dir. Classed `core`, arguably `admin`
+    // (a class review's call, not this table's): refused for a user here.
+    ("ollama_models_dir_plan", "path", Refuse),
+    // ── Not paths ───────────────────────────────────────────────────────
+    ("agent_schedule_claim", "scheduleTargetId", NotAPath),
+    ("agent_schedule_complete", "scheduleTargetId", NotAPath),
+    ("agent_schedule_delete", "scheduleTargetId", NotAPath),
+    ("agent_schedule_upsert", "scheduleTargetId", NotAPath),
+    ("agent_schedules_delete_target", "scheduleTargetId", NotAPath),
+    ("agent_schedules_list", "scheduleTargetId", NotAPath),
+    ("markup_mcp_answer", "scheduleTargetId", NotAPath),
+    ("markup_mcp_dismiss", "scheduleTargetId", NotAPath),
+    ("markup_mcp_list", "scheduleTargetId", NotAPath),
+    ("markup_mcp_reopen", "scheduleTargetId", NotAPath),
+    ("markup_mcp_ticks", "scheduleTargetId", NotAPath),
+    // Keys into a CLI's own stores (OpenCode's sessions by folder, Claude's
+    // trust list by folder), compared, never opened; a remote tab's are
+    // host paths.
+    ("agent_tab_changes", "tabDir", NotAPath),
+    ("agent_tab_transcript", "tabDir", NotAPath),
+    ("claude_folder_trusted", "cwd", NotAPath),
+    ("agent_tab_changes", "localModel", NotAPath),
+    ("agent_tab_transcript", "localModel", NotAPath),
+    ("claude_folder_trusted", "localOnly", NotAPath),
+    ("copilot_set_project_policy", "localOnly", NotAPath),
+    ("caldav_delete", "resourceHref", NotAPath),
+    ("caldav_push", "resourceHref", NotAPath),
+    ("caldav_resource_etag", "resourceHref", NotAPath),
+    ("compile_tex", "ownFolderUnlinked", NotAPath),
+    ("credential_paste_to_pty", "target", NotAPath), // which credential, which PTY
+    ("git_checkout", "target", NotAPath),            // a ref
+    ("git_peer_checkout", "target", NotAPath),       // a branch
+    ("hpc_ws_extend", "filesystem", NotAPath),       // a workspace filesystem's name
+    ("hpc_ws_release", "filesystem", NotAPath),
+    ("mail_agent_mark_folder", "folderId", NotAPath),
+    ("mail_headers", "folderId", NotAPath),
+    ("mail_mark_folder_read", "folderId", NotAPath),
+    ("mail_move", "destFolderId", NotAPath),
+    ("mail_search", "folderId", NotAPath),
+    ("mail_sync", "folderId", NotAPath),
+    ("save_side_panel_folder", "folder", NotAPath), // a view setting relative to the project; never opened here
+    ("set_project_git_hosting", "profileUrl", NotAPath),
+    ("set_project_sandbox", "sourceDecision", NotAPath),
+    ("sync_mark_selected", "isDir", NotAPath),
+    ("sync_set_auto", "isDir", NotAPath),
+    ("sync_transfer_preview", "direction", NotAPath),
+    ("update_gitignore_rule", "isDir", NotAPath),
+];
+
+/// The words that make an argument key read like a path (case-insensitive
+/// substrings): what the coverage test requires a [`USER_CONFINED`] row for.
+#[cfg(test)]
+const PATH_NAMED: &[&str] = &["path", "dir", "file", "folder", "dest", "root", "cwd", "source", "target", "local"];
+
+/// Hold every path argument of `cmd` per [`USER_CONFINED`] for a user,
+/// rewriting the few a kind normalises (an empty picker path, an empty
+/// optional). Nothing for an admin, nothing for a command with no rows.
 fn confine_for_user(role: Role, cmd: &str, args: &mut Value) -> Result<(), Value> {
     if role == Role::Admin {
         return Ok(());
     }
-    let Some((_, key)) = USER_CONFINED_PATH.iter().find(|(name, _)| *name == cmd) else {
-        return Ok(());
-    };
-    let path = args.get(*key).and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let path = user_path(&path).map_err(Value::String)?;
-    if let Some(map) = args.as_object_mut() {
-        map.insert((*key).to_string(), Value::String(path));
-    } else {
-        *args = serde_json::json!({ *key: path });
+    for (_, key, kind) in USER_CONFINED.iter().filter(|(name, _, _)| *name == cmd) {
+        confine_arg(cmd, args, key, *kind).map_err(Value::String)?;
     }
     Ok(())
 }
 
-/// A path a user may list or hand out: empty → the projects root; anything
-/// else must lie under one of the user's allowed roots.
+/// One row of [`confine_for_user`].
+fn confine_arg(cmd: &str, args: &mut Value, key: &str, kind: Kind) -> Result<(), String> {
+    match kind {
+        BodyConfined | Remote | NotAPath => return Ok(()),
+        Refuse => return Err(format!("`{cmd}` is not served to a user account")),
+        _ => {}
+    }
+    let (parent_path, leaf) = key.rsplit_once('.').map_or(("", key), |(p, l)| (p, l));
+    // The object holding the argument; a missing or `null` parent is absent.
+    let mut parent = &mut *args;
+    if !parent_path.is_empty() {
+        for part in parent_path.split('.') {
+            match parent.get_mut(part) {
+                Some(next) if !next.is_null() => parent = next,
+                _ => return Ok(()),
+            }
+        }
+    }
+    if kind == Picker {
+        let path = parent.get(leaf).and_then(Value::as_str).unwrap_or("").to_string();
+        let path = user_path(&path)?;
+        set_arg(parent, leaf, Value::String(path));
+        return Ok(());
+    }
+    if let LocalUnlessRemote(sibling) = kind {
+        let project = parent.get(sibling).and_then(Value::as_str).unwrap_or("");
+        if !project.is_empty() && crate::services::remote::remote_target_for(project).is_some() {
+            return Ok(());
+        }
+    }
+    if matches!(kind, LocalSite | LocalSiteOrVm) {
+        let remote = parent.get("remote").is_some_and(|r| !r.is_null());
+        let vm = parent.get("vm").and_then(|v| v.get("enabled")).and_then(Value::as_bool) == Some(true);
+        if remote || (kind == LocalSiteOrVm && vm) {
+            return Ok(());
+        }
+    }
+    if kind == SkillTarget {
+        let Some(target) = parent.get(leaf).filter(|t| !t.is_null()) else {
+            return Ok(());
+        };
+        if target.get("kind").and_then(Value::as_str) != Some("project") {
+            return Err(format!("`{cmd}` into the personal skills folder is not served to a user account"));
+        }
+        return confine_arg(cmd, args, &format!("{key}.dir"), UserPath);
+    }
+    if kind == HintEach {
+        if let Some(list) = parent.get_mut(leaf).and_then(Value::as_array_mut) {
+            list.retain(|v| v.as_str().is_some_and(|p| hold_path(p).is_ok()));
+        }
+        return Ok(());
+    }
+    if let WorktreeOf(sibling) = kind {
+        let Some(selection) = parent.get(leaf).filter(|s| !s.is_null()) else {
+            return Ok(());
+        };
+        let path = selection.get("path").and_then(Value::as_str).unwrap_or("");
+        if path.is_empty() {
+            return Ok(());
+        }
+        // The body's own reading (`git::worktree_ctx`): a local project has one
+        // side whatever `site` says; a remote one's is the host unless `mirror`.
+        let project_dir = parent.get(sibling).and_then(Value::as_str).unwrap_or("");
+        let site = selection.get("site").and_then(Value::as_str);
+        let on_host = !matches!(site, Some("mirror" | "local"))
+            && crate::services::remote::remote_target_for_dir(project_dir).is_some();
+        return if on_host { Ok(()) } else { hold_path(path) };
+    }
+    // The body gets exactly the spelling that was held: some bodies trim and
+    // some do not, and ` /x` is relative to one and absolute to the other.
+    let value = match parent.get(leaf) {
+        None | Some(Value::Null) => return Ok(()),
+        Some(Value::String(s)) => s.clone(),
+        Some(_) => return Err(format!("invalid args `{key}` for command `{cmd}`: expected a path")),
+    };
+    let value = if value.trim() == value {
+        value
+    } else {
+        let trimmed = value.trim().to_string();
+        set_arg(parent, leaf, Value::String(trimmed.clone()));
+        trimmed
+    };
+    match kind {
+        UserPathOpt | OutDirOf(_) | Hint if value.is_empty() => {
+            set_arg(parent, leaf, Value::Null);
+            Ok(())
+        }
+        Hint => {
+            if hold_path(&value).is_err() {
+                set_arg(parent, leaf, Value::Null);
+            }
+            Ok(())
+        }
+        LocalFileOpt if value.is_empty() => Ok(()),
+        LocalFile | LocalFileOpt => {
+            if crate::commands::fs::is_project_local_file(&value) {
+                Ok(())
+            } else {
+                Err(format!("'{value}' is not the file of any of your projects"))
+            }
+        }
+        OutDirOf(sibling) if !std::path::Path::new(&value).is_absolute() => {
+            let base = parent.get(sibling).and_then(Value::as_str).unwrap_or("").trim();
+            let Some(folder) = source_folder(base) else {
+                return Err(format!("invalid args `{key}` for command `{cmd}`: a relative folder needs `{sibling}`"));
+            };
+            hold_path(&folder.join(&value).to_string_lossy())
+        }
+        _ => hold_path(&value),
+    }
+}
+
+/// The folder a relative output folder is taken against, as `compile_tex`
+/// takes it: the parent of the source's *canonical* path — a source that is
+/// a link writes beside its target, so that is the folder to hold. A source
+/// that does not resolve fails the body; its spelled parent is held then.
+fn source_folder(source: &str) -> Option<std::path::PathBuf> {
+    if source.is_empty() {
+        return None;
+    }
+    let real = std::fs::canonicalize(source).unwrap_or_else(|_| std::path::PathBuf::from(source));
+    real.parent().map(std::path::Path::to_path_buf)
+}
+
+fn set_arg(parent: &mut Value, key: &str, value: Value) {
+    if let Some(map) = parent.as_object_mut() {
+        map.insert(key.to_string(), value);
+    } else {
+        *parent = serde_json::json!({ key: value });
+    }
+}
+
+/// A non-empty absolute path inside the user's roots.
+fn hold_path(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("an empty path is not one of your folders".to_string());
+    }
+    crate::commands::fs::confine_user_path(std::path::Path::new(path))
+}
+
+/// A path a user may list or hand out: empty → the root work dir (the
+/// projects root's sibling the root terminal opens in); anything else must
+/// be absolute and lie under one of the user's roots (`fs::user_roots`).
 pub fn user_path(path: &str) -> Result<String, String> {
     let path = path.trim();
     if path.is_empty() {
         return Ok(crate::storage::root_work_dir().to_string_lossy().into_owned());
     }
-    crate::commands::fs::confine_user_path(std::path::Path::new(path))?;
+    hold_path(path)?;
     Ok(path.to_string())
 }
 
@@ -363,6 +884,303 @@ mod tests {
         assert!(err.as_str().unwrap().contains("not in the current project"), "{err}");
         let mut other = serde_json::json!({ "path": outside.path().to_string_lossy() });
         confine_for_user(Role::User, "read_dir", &mut other).unwrap();
+    }
+
+    /// `/`, a folder outside every root, and a relative path: what each test
+    /// below hands a user's call.
+    fn outside_paths() -> (tempfile::TempDir, Vec<String>) {
+        let outside = tempfile::tempdir().unwrap();
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        let paths = vec![root.to_string(), outside.path().to_string_lossy().into_owned(), "relative/dir".to_string()];
+        (outside, paths)
+    }
+
+    /// A path inside the user's roots that every machine has: under the root
+    /// work dir (which need not exist).
+    fn inside_path(leaf: &str) -> String {
+        crate::storage::root_work_dir().join(leaf).to_string_lossy().into_owned()
+    }
+
+    /// Run `confine_for_user` for both roles over `args` with `key` (a dotted
+    /// struct path) set to each outside path: the user is refused, the admin
+    /// passes untouched.
+    fn assert_held(cmd: &str, args: Value, key: &str) {
+        let (_keep, paths) = outside_paths();
+        assert_held_for(cmd, args, key, paths);
+    }
+
+    fn assert_held_for(cmd: &str, args: Value, key: &str, paths: Vec<String>) {
+        for path in paths {
+            let mut call = args.clone();
+            let mut slot = &mut call;
+            for part in key.split('.') {
+                slot = &mut slot[part];
+            }
+            *slot = Value::String(path.clone());
+            let mut user = call.clone();
+            let err = confine_for_user(Role::User, cmd, &mut user).unwrap_err();
+            assert!(err.is_string(), "{cmd}.{key} = {path}: {err}");
+            let mut admin = call.clone();
+            confine_for_user(Role::Admin, cmd, &mut admin).unwrap();
+            assert_eq!(admin, call, "an admin's {cmd} is untouched");
+        }
+    }
+
+    #[test]
+    fn a_users_absolute_paths_are_held_to_their_roots() {
+        assert_held("git_clone", serde_json::json!({ "url": "https://example.invalid/r.git" }), "dest");
+        assert_held("calendar_read_ics", serde_json::json!({}), "path");
+        assert_held("export_project", serde_json::json!({ "req": { "projectId": "p" } }), "req.destPath");
+        assert_held("skills_install", serde_json::json!({ "target": { "kind": "project" } }), "target.dir");
+        let mut ok = serde_json::json!({ "dest": inside_path("clone") });
+        confine_for_user(Role::User, "git_clone", &mut ok).unwrap();
+        // Absent is the body's business; empty is refused.
+        confine_for_user(Role::User, "skills_install", &mut serde_json::json!({ "target": null })).unwrap();
+        assert!(confine_for_user(Role::User, "git_clone", &mut serde_json::json!({ "dest": "" })).is_err());
+        assert!(confine_for_user(Role::User, "git_clone", &mut serde_json::json!({ "dest": 7 })).is_err());
+        // The body sees the spelling that was held: a body that trims must
+        // not turn a vouched-for relative ` /x` into an absolute `/x`.
+        let mut spaced = serde_json::json!({ "path": inside_path("doc.tex"), "outDir": " /" });
+        assert!(confine_for_user(Role::User, "compile_tex", &mut spaced).is_err());
+        let mut padded = serde_json::json!({ "dest": format!(" {} ", inside_path("clone")) });
+        confine_for_user(Role::User, "git_clone", &mut padded).unwrap();
+        assert_eq!(padded["dest"], inside_path("clone").as_str());
+    }
+
+    #[test]
+    fn a_users_optional_paths_are_held_and_empty_is_absent() {
+        assert_held("watch_dir", serde_json::json!({ "path": inside_path("w") }), "repoDir");
+        assert_held("import_project_export", serde_json::json!({ "req": { "bundlePath": inside_path("b.zip") } }), "req.targetParent");
+        let mut args = serde_json::json!({ "path": inside_path("w"), "repoDir": "  " });
+        confine_for_user(Role::User, "watch_dir", &mut args).unwrap();
+        assert!(args["repoDir"].is_null(), "{args}");
+    }
+
+    #[test]
+    fn a_users_scan_root_is_held_unless_it_is_a_remote_projects() {
+        assert_held("disk_usage_scan", serde_json::json!({ "scanId": "s" }), "root");
+        // An unknown or local project id does not make the root a host path.
+        assert_held("disk_usage_scan", serde_json::json!({ "scanId": "s", "projectId": "no-such-project" }), "root");
+    }
+
+    #[test]
+    fn a_users_hint_path_outside_their_roots_is_dropped() {
+        let (_keep, paths) = outside_paths();
+        for path in paths {
+            let mut args = serde_json::json!({ "lang": "typescript", "path": path });
+            confine_for_user(Role::User, "formatter_available", &mut args).unwrap();
+            assert!(args["path"].is_null(), "{args}");
+            let mut admin = serde_json::json!({ "lang": "typescript", "path": path });
+            confine_for_user(Role::Admin, "formatter_available", &mut admin).unwrap();
+            assert_eq!(admin["path"], path.as_str());
+        }
+        let inside = inside_path("a.ts");
+        let mut args = serde_json::json!({ "lang": "typescript", "path": inside });
+        confine_for_user(Role::User, "format_source", &mut args).unwrap();
+        assert_eq!(args["path"], inside.as_str());
+    }
+
+    #[test]
+    fn a_users_output_folder_is_taken_against_its_source() {
+        let source = inside_path("doc.tex");
+        // Relative is not "outside" here: it is taken against the source's folder.
+        let (_keep, paths) = outside_paths();
+        let absolute = paths.into_iter().filter(|p| std::path::Path::new(p).is_absolute()).collect();
+        assert_held_for("compile_tex", serde_json::json!({ "path": source }), "outDir", absolute);
+        let mut args = serde_json::json!({ "path": source, "outDir": "build" });
+        confine_for_user(Role::User, "compile_tex", &mut args).unwrap();
+        assert_eq!(args["outDir"], "build", "a relative folder stays as the body reads it");
+        let mut up = serde_json::json!({ "path": source, "outDir": "../../.." });
+        assert!(confine_for_user(Role::User, "compile_tex", &mut up).is_err(), "`..` never passes");
+        let mut empty = serde_json::json!({ "path": source, "outDir": "" });
+        confine_for_user(Role::User, "compile_tex", &mut empty).unwrap();
+        assert!(empty["outDir"].is_null());
+    }
+
+    #[test]
+    fn a_users_new_project_folder_is_held_unless_the_site_is_remote() {
+        assert_held("create_project", serde_json::json!({ "req": { "name": "n" } }), "req.directory");
+        assert_held("import_project", serde_json::json!({ "req": { "name": "n" } }), "req.sourceDir");
+        assert_held("create_project", serde_json::json!({ "req": { "name": "n" } }), "req.mirrorParent");
+        // A remote or VM project's `directory` is never used: the body keeps
+        // the project in the state dir.
+        let mut remote = serde_json::json!({ "req": { "directory": "/srv/remote/p", "remote": { "host": "h", "remotePath": "/srv/remote/p" } } });
+        confine_for_user(Role::User, "create_project", &mut remote).unwrap();
+        let mut vm = serde_json::json!({ "req": { "directory": "/x", "vm": { "enabled": true } } });
+        confine_for_user(Role::User, "create_project", &mut vm).unwrap();
+        // An import has no VM: serde drops `vm` and the body registers the
+        // folder, so `vm` must not let it through the hold.
+        assert_held("import_project", serde_json::json!({ "req": { "name": "n", "mode": "keep", "vm": { "enabled": true } } }), "req.sourceDir");
+    }
+
+    #[test]
+    fn a_users_skills_go_into_a_held_project_never_the_personal_folder() {
+        assert_held("skills_uninstall", serde_json::json!({ "target": { "kind": "project" }, "name": "s" }), "target.dir");
+        assert_held("skills_list_installed", serde_json::json!({ "target": { "kind": "project" } }), "target.dir");
+        for cmd in ["skills_install", "skills_uninstall", "skills_list_installed"] {
+            let mut personal = serde_json::json!({ "target": { "kind": "personal" }, "name": "s" });
+            let err = confine_for_user(Role::User, cmd, &mut personal).unwrap_err();
+            assert!(err.as_str().unwrap().contains("personal"), "{err}");
+            confine_for_user(Role::Admin, cmd, &mut personal).unwrap();
+        }
+        let mut ok = serde_json::json!({ "target": { "kind": "project", "dir": inside_path("p") }, "name": "s" });
+        confine_for_user(Role::User, "skills_uninstall", &mut ok).unwrap();
+    }
+
+    #[test]
+    fn a_users_link_lookup_bases_outside_their_roots_are_dropped() {
+        let (_keep, paths) = outside_paths();
+        let inside = inside_path("p");
+        let mut bases = paths.clone();
+        bases.push(inside.clone());
+        let mut args = serde_json::json!({ "bases": bases, "candidates": ["etc/passwd"] });
+        confine_for_user(Role::User, "resolve_text_paths", &mut args).unwrap();
+        assert_eq!(args["bases"], serde_json::json!([inside]));
+        let mut admin = serde_json::json!({ "bases": paths, "candidates": [] });
+        let before = admin.clone();
+        confine_for_user(Role::Admin, "resolve_text_paths", &mut admin).unwrap();
+        assert_eq!(admin, before);
+    }
+
+    #[test]
+    fn a_users_synctex_pdf_is_held() {
+        for cmd in ["synctex_edit", "synctex_status", "synctex_view", "synctex_page_lines"] {
+            assert_held(cmd, serde_json::json!({ "page": 1, "x": 0.0, "y": 0.0, "input": "a.tex", "line": 1 }), "pdf");
+        }
+    }
+
+    #[test]
+    fn a_users_selected_worktree_is_held_unless_it_is_on_a_remote_host() {
+        let project = inside_path("p");
+        for site in ["mirror", "host"] {
+            // A local project has one side, whatever `site` says.
+            assert_held("git_status", serde_json::json!({ "projectDir": project, "worktree": { "site": site } }), "worktree.path");
+        }
+        let mut ok = serde_json::json!({ "projectDir": project, "worktree": { "site": "mirror", "path": inside_path("p/wt") } });
+        confine_for_user(Role::User, "git_log", &mut ok).unwrap();
+        let mut none = serde_json::json!({ "projectDir": project, "worktree": { "site": "host", "path": "" } });
+        confine_for_user(Role::User, "git_commit", &mut none).unwrap();
+        confine_for_user(Role::User, "git_commit", &mut serde_json::json!({ "projectDir": project, "worktree": null })).unwrap();
+    }
+
+    /// `compile_tex` takes a relative `outDir` against the folder its source
+    /// resolves into, so that is the folder held.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_output_folder_is_taken_against_the_sources_real_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("doc.tex"), "x").unwrap();
+        let shown = tmp.path().join("shown");
+        std::fs::create_dir_all(&shown).unwrap();
+        std::os::unix::fs::symlink(real.join("doc.tex"), shown.join("doc.tex")).unwrap();
+        let folder = source_folder(&shown.join("doc.tex").to_string_lossy()).unwrap();
+        assert_eq!(folder, real.canonicalize().unwrap());
+        assert_eq!(source_folder(&shown.join("missing.tex").to_string_lossy()).unwrap(), shown);
+        assert!(source_folder("").is_none());
+    }
+
+    #[test]
+    fn a_users_project_folder_is_held_to_their_roots() {
+        assert_held("list_dir", serde_json::json!({ "relPath": "" }), "projectDir");
+        assert_held("write_project_file", serde_json::json!({ "relPath": "a", "content": "x" }), "projectDir");
+        assert_held("git_status", serde_json::json!({}), "projectDir");
+        assert_held("copy_path", serde_json::json!({ "srcProjectDir": inside_path("a"), "srcRel": "f", "destRel": "" }), "destProjectDir");
+        assert_held("hpc_ws_list", serde_json::json!({ "target": { "hostId": "primary" } }), "target.projectDir");
+        let mut ok = serde_json::json!({ "projectDir": crate::storage::root_work_dir().to_string_lossy(), "relPath": "" });
+        confine_for_user(Role::User, "list_dir", &mut ok).unwrap();
+        // A bare-host HPC target names no folder.
+        confine_for_user(Role::User, "hpc_ws_list", &mut serde_json::json!({ "target": { "host": "h" } })).unwrap();
+    }
+
+    #[test]
+    fn a_users_local_file_must_be_a_known_projects() {
+        assert_held("load_project", serde_json::json!({}), "localFile");
+        assert_held("save_side_panel_folder", serde_json::json!({ "folder": null }), "localFile");
+        let mut args = serde_json::json!({ "localFile": inside_path("not-a-project.json") });
+        assert!(confine_for_user(Role::User, "workspace_sync", &mut args).is_err());
+        // The root and box scopes have no project.json: their layout save
+        // sends an empty `localFile`, which the body skips.
+        for empty in ["", "  "] {
+            let mut root = serde_json::json!({ "projectId": "root", "localFile": empty });
+            confine_for_user(Role::User, "workspace_sync", &mut root).unwrap();
+            assert_eq!(root["localFile"], "", "the body still gets a string");
+            assert!(confine_for_user(Role::User, "load_project", &mut serde_json::json!({ "localFile": empty })).is_err());
+        }
+        assert_held("workspace_sync", serde_json::json!({ "projectId": "p" }), "localFile");
+    }
+
+    #[test]
+    fn a_refused_command_is_refused_for_a_user_only() {
+        let err = confine_for_user(Role::User, "ollama_models_dir_plan", &mut serde_json::json!({ "path": null })).unwrap_err();
+        assert!(err.as_str().unwrap().contains("not served to a user"), "{err}");
+        confine_for_user(Role::Admin, "ollama_models_dir_plan", &mut serde_json::json!({ "path": null })).unwrap();
+    }
+
+    #[test]
+    fn body_confined_remote_and_non_path_arguments_pass_untouched() {
+        let (_keep, paths) = outside_paths();
+        for path in paths {
+            for (cmd, key) in [("read_file_text", "path"), ("ssh_list_dir", "path"), ("mail_headers", "folderId"), ("list_dir", "relPath")] {
+                let mut args = serde_json::json!({ key: path });
+                let before = args.clone();
+                confine_for_user(Role::User, cmd, &mut args).unwrap_or_else(|e| panic!("{cmd}.{key}: {e}"));
+                assert_eq!(args, before);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_users_project_dir_of_root_never_reaches_the_body() {
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        let err = dispatch(&ctx(), Role::User, "list_dir", serde_json::json!({ "projectDir": root, "relPath": "" })).await.unwrap_err();
+        assert!(err.as_str().unwrap().contains("not in the current project"), "{err}");
+    }
+
+    fn path_named(key: &str) -> bool {
+        let key = key.to_ascii_lowercase();
+        PATH_NAMED.iter().any(|word| key.contains(word))
+    }
+
+    /// Every argument of a dispatchable `core` command whose key reads like a
+    /// path has a `USER_CONFINED` row (a struct argument counts as classified
+    /// when a row names a field of it), and every row names a real command
+    /// and, where the build has its wrapper, one of its argument keys.
+    #[test]
+    fn every_path_named_core_argument_is_classified() {
+        let mut missing = Vec::new();
+        for name in dispatchable_names() {
+            if command_class::class_of(name) != Some(CommandClass::Core) {
+                continue;
+            }
+            for key in super::generated::arg_keys(name).unwrap_or(&[]) {
+                let covered = USER_CONFINED.iter().any(|(cmd, row, _)| {
+                    *cmd == name && (*row == *key || row.strip_prefix(*key).is_some_and(|rest| rest.starts_with('.')))
+                });
+                if path_named(key) && !covered {
+                    missing.push(format!("{name}.{key}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "path-named arguments with no confinement row (classify each in USER_CONFINED):\n{}", missing.join("\n"));
+        let mut stale = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (cmd, key, _) in USER_CONFINED {
+            if !seen.insert((cmd, key)) {
+                stale.push(format!("{cmd}.{key} (twice)"));
+            }
+            if command_class::class_of(cmd) != Some(CommandClass::Core) {
+                stale.push(format!("{cmd}.{key} (not a core command)"));
+            }
+            let head = key.split('.').next().unwrap_or(key);
+            if let Some(keys) = super::generated::arg_keys(cmd) {
+                if !keys.contains(&head) {
+                    stale.push(format!("{cmd}.{key} (no such argument)"));
+                }
+            }
+        }
+        assert!(stale.is_empty(), "stale USER_CONFINED rows:\n{}", stale.join("\n"));
     }
 
     #[test]

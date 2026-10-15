@@ -174,13 +174,41 @@ loops against one mirror and one `sync.json`. Now:
   entry points with the same confinement as the IPC shapes.
 - **The file picker browses the server.** A browser `<input type=file>` would
   pick from the laptop, the wrong machine. `ServerFilePicker` browses the
-  server's filesystem through `list_dir_all` (unconfined, like the folder
-  picker's `list_dirs` — the OS dialog it replaces was not confined either).
+  server's filesystem through `list_dir_all` — for the box's admin
+  unconfined, like the folder picker's `list_dirs` (the OS dialog it
+  replaces was not confined either); for a user account both are held to
+  the user's roots, an empty start being the root work dir.
   `commands::mail` names no location the frontend controls (its rule 2, held
   by `no_command_takes_a_path`), so a mail pick is turned into a single-use
   **grant** the transport mints for that path (`desktop_file_grant`,
   `services::pick_grants`) and the `*_grant` mail commands redeem it: the
   mail subsystem's reach stays "what the user picked a moment ago".
+- **A user account's paths are held at the dispatcher.** Every path-named
+  argument of every `core` command has a row in
+  `core_dispatch::USER_CONFINED` (`confine_for_user`, run for a `Role::User`
+  after the class check, before the body): an absolute path or a project
+  folder (`projectDir`, which the bodies then confine a `relPath` within)
+  must lie under `fs::user_roots` — the root work dir, the projects and
+  remote-mirror parents, every project folder and mirror override, every box
+  folder; a `localFile` must be a known project's `project.json`; a new
+  project's own folder is held unless its request takes the remote path
+  (`remote`, or `vm.enabled` on `create_project` only — an import has no
+  VM, so `vm` there must not wave the folder through), so a user cannot
+  register `/` and widen their roots; a scan root unless its project is
+  remote; a Git panel worktree selection unless it is on a remote host. A
+  registered root is counted by where it resolves, but never through a
+  symlink that sits inside a root (the user could have planted it after
+  registering — `git_checkout`, `move_path`) and never when it resolves to
+  the home folder, app home or state dir or above. Skills go only into a
+  held project (the personal `~/.claude/skills` is refused); a formatter's
+  file path or a link-lookup base outside the roots is dropped (it only
+  says where to look). Rows marked `BodyConfined` (viewer
+  I/O, `relPath`s), `Remote` (host paths, sync `relPath`s) or `NotAPath`
+  (lookup keys such as a tab folder in a CLI's session store) pass;
+  `ollama_models_dir_plan` is refused. A test fails when a
+  `core` command grows a path-named argument with no row; struct fields
+  (`req.directory`) are rows by hand. Defence in depth, not the uid
+  boundary: the daemon runs as the user and serves them a shell.
 - **`HOST_OS` vs `CLIENT_OS`.** `lib/platform.ts` keeps `IS_WINDOWS`/`IS_MAC`/
   `IS_LINUX`/`PLATFORM` as the client's OS and adds `HOST_OS`/`IS_HOST_*`
   for the backend's. The web entry awaits the server's `hello` and stores
