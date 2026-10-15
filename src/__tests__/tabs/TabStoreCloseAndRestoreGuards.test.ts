@@ -22,6 +22,7 @@ vi.mock("../../lib/agents/promptCount", async (importOriginal) => {
 
 import { forgetPty } from "../../lib/agents/promptCount";
 import {
+  activeLayoutPersistTarget,
   allGroups,
   isSavedTabEntry,
   orderedTabKeys,
@@ -106,6 +107,41 @@ describe("closing a tab for good forgets its PTY state on every path", () => {
     expect(useTabsStore.getState().tabs.map((t) => t.key)).toEqual([b.key]);
     const left = useTabsStore.getState().detachedGroupsByScope.p ?? [];
     expect(orderedTabKeys(left[0].subtree)).toEqual([b.key]);
+  });
+
+  it("closeDetachedGroup (a popout's WM ×) forgets every closed tab's PTY", () => {
+    const a = useTabsStore.getState().addTab(shell("a"));
+    const b = useTabsStore.getState().addTab(shell("b"));
+    const entry: DetachedGroup = {
+      id: "d1",
+      label: "popout-d1",
+      subtree: { type: "group", id: "dg", tabKeys: [a.key, b.key], activeKey: a.key },
+    } as DetachedGroup;
+    useTabsStore.setState({ detachedGroupsByScope: { p: [entry] } });
+
+    useTabsStore.getState().closeDetachedGroup("p", "d1");
+
+    expect(useTabsStore.getState().tabs).toEqual([]);
+    expect(forgetPtyMock).toHaveBeenCalledWith(`p:${a.key}`);
+    expect(forgetPtyMock).toHaveBeenCalledWith(`p:${b.key}`);
+  });
+});
+
+describe("activeLayoutPersistTarget (CenterPanel's save and AppShell's quit flush)", () => {
+  it("names an open box's own scope with no file, not the active project", () => {
+    expect(activeLayoutPersistTarget("box:b1", "proj", "/p/project.json")).toEqual({
+      scope: "box:b1",
+      localFile: "",
+    });
+  });
+
+  it("names the active project with its own file, root without one, and waits for a file", () => {
+    expect(activeLayoutPersistTarget("proj", "proj", "/p/project.json")).toEqual({
+      scope: "proj",
+      localFile: "/p/project.json",
+    });
+    expect(activeLayoutPersistTarget("root", null, undefined)).toEqual({ scope: "root", localFile: "" });
+    expect(activeLayoutPersistTarget("proj", "proj", undefined)).toBeNull();
   });
 });
 

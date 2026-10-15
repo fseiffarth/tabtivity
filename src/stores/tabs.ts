@@ -2441,6 +2441,26 @@ function regenIds(node: LayoutNode): LayoutNode {
 
 // ── Scope persistence helpers ───────────────────────────────────────────────
 
+/**
+ * Which scope a save of the window's ACTIVE view writes, and with which
+ * project file: an open box under its own `box:<id>` scope with no file (the
+ * backend then skips the export copy), else the active project under its id
+ * with that project's own `local_file`, else the root scope with no file.
+ * Null while the active project has no `local_file` yet (not ready to
+ * persist). The one rule CenterPanel's debounced save and AppShell's quit
+ * flush share: a flush that paired the active project's id with its file
+ * whatever the tab store was showing dropped an open box's last change.
+ */
+export function activeLayoutPersistTarget(
+  scope: string,
+  activeId: string | null,
+  localFile: string | undefined,
+): { scope: string; localFile: string } | null {
+  if (scope.startsWith(BOX_SCOPE_PREFIX)) return { scope, localFile: "" };
+  if (activeId && !localFile) return null;
+  return { scope: activeId ?? ROOT_SCOPE, localFile: localFile ?? "" };
+}
+
 /** Whether this session already told the user a layout save failed (see
  *  `persistScope`'s non-strict catch). Module-level: once per session. */
 let layoutPersistFailureReported = false;
@@ -5009,14 +5029,14 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
 
     const keys = orderedTabKeys(entry.subtree);
     const byKey = new Map((get().tabsByScope[scope] ?? []).map((t) => [t.key, t] as const));
-    // Tear down each tab BEFORE the store mutation: discard its session-only
-    // link routes (#50) and kill its PTY. Files/embed tabs have no PTY; terminal
+    // Tear down each tab BEFORE the store mutation: forget its session-only
+    // link routes (#50) and prompt state (`forgetClosedTab`, like every other
+    // close path) and kill its PTY. Files/embed tabs have no PTY; terminal
     // tabs (shell/agent/local_agent) do, and since the popout's pane isn't
     // mounted in the main window (it left the layout on detach) and the detached
     // viewer is attach-only, nothing else would ever kill it — do it explicitly.
-    const purge = useLinkRoutingStore.getState().purgeForTab;
     for (const key of keys) {
-      purge(key);
+      forgetClosedTab(scope, key);
       const tab = byKey.get(key);
       if (tab && isPtyTabKind(tab.kind)) {
         invoke("pty_kill", { id: `${scope}:${key}` }).catch(() => {});
