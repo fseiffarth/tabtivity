@@ -34,6 +34,7 @@
 #       stopped VM is kept and a running one refused.
 #
 #   scripts/fresh-vm.sh boot               open the VM, install nothing
+#   scripts/fresh-vm.sh repair             repair/start the running VM's desktop
 #   scripts/fresh-vm.sh reset              back to a clean desktop
 #   scripts/fresh-vm.sh status             what is installed, disk sizes
 #   scripts/fresh-vm.sh base --rebuild     build the base image again
@@ -48,6 +49,7 @@
 #
 # Files: ~/.local/share/<slug>-fresh-vm (override: <PREFIX>FRESH_VM_DIR).
 # Guest size: <PREFIX>FRESH_VM_MEM (MiB, 6144), <PREFIX>FRESH_VM_CPUS (4).
+# Guest login: tester / tester. Boot output: <VM folder>/serial.log.
 
 set -euo pipefail
 
@@ -72,6 +74,12 @@ CACHE="$DIR/packages"
 # The guest's network is QEMU's user-mode NAT; a fixed MAC keeps the netplan
 # config cloud-init wrote at bake time matching on every later boot.
 NIC="user,model=virtio-net-pci,mac=52:54:00:4e:f0:01"
+# Keep the baked image's standard VGA on the same PCI slot at every boot.
+# An explicit `-device virtio-vga` replaces QEMU's implicit VGA and moves the
+# NIC as well: a different GPU/adapter name can strand GDM or network-online.
+# Use the same hardware for the headless bake and the desktop, including old
+# bases which were baked with QEMU's default standard VGA.
+VIDEO=(-vga std -global VGA.xres=1600 -global VGA.yres=1000)
 PKG_LABEL="FRESHPKG"
 LAUNCHER="$DIR/launcher"
 DESKTOP_DIR="$HOME/.local/share/applications"
@@ -154,12 +162,15 @@ stop_vm() {
 # Run a program in the guest, as root, through the QEMU guest agent; prints
 # its output and exits with its status (or 1 when the agent does not answer).
 qga_exec() {
-  python3 -I - "$QGA_SOCK" "$@" <<'PY_QGA'
+  local timeout=60
+  if [ "${1:-}" = --timeout ]; then timeout="$2"; shift 2; fi
+  python3 -I - "$QGA_SOCK" "$timeout" "$@" <<'PY_QGA'
 import base64, json, socket, sys, time
 
-path, argv = sys.argv[1], sys.argv[2:]
+path, timeout, argv = sys.argv[1], float(sys.argv[2]), sys.argv[3:]
 sock = socket.socket(socket.AF_UNIX)
 sock.settimeout(10)
+submitted = False
 try:
     sock.connect(path)
     f = sock.makefile("rwb")
@@ -172,7 +183,7 @@ try:
         while True:
             line = f.readline()
             if not line:
-                sys.exit("the guest agent closed the connection")
+                raise OSError("the guest agent closed the connection")
             r = json.loads(line)
             if "error" in r:
                 sys.exit("guest agent: " + str(r["error"].get("desc")))
@@ -188,8 +199,9 @@ try:
     send("guest-sync", id=sync)
     while reply() != sync:
         pass
+    submitted = True
     pid = call("guest-exec", path=argv[0], arg=argv[1:], **{"capture-output": True})["pid"]
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + timeout
     while True:
         status = call("guest-exec-status", pid=pid)
         if status.get("exited"):
@@ -198,7 +210,10 @@ try:
             sys.exit("the program in the guest did not finish")
         time.sleep(0.3)
 except (OSError, ValueError) as e:
-    sys.exit(f"the guest agent does not answer ({e})")
+    print(f"the guest agent does not answer ({e})", file=sys.stderr)
+    if not submitted:
+        print("no command was submitted to the guest", file=sys.stderr)
+    sys.exit(1 if submitted else 69)
 for key in ("out-data", "err-data"):
     if status.get(key):
         sys.stdout.write(base64.b64decode(status[key]).decode(errors="replace"))
@@ -275,6 +290,64 @@ sh "\$mnt/install.sh" "\$mnt"
 EOF
 }
 
+# Register the guest's display manager explicitly. A cloud image can have
+# gdm3 fully installed without the display-manager.service alias; checking
+# dpkg's status alone then accepts a base that boots to a text login.
+# Emitted into both the bake and each package disc so old bases heal too.
+# Do not start GDM here: the package hook runs Before=display-manager.service.
+desktop_setup() {
+  cat <<'EOF'
+#!/bin/sh
+set -eu
+
+# Keep the VM's prewritten GDM config without a conffile prompt. Package
+# scripts must not wait for GDM to start while our boot hook runs Before it.
+# The subshell restores an existing service policy on success or failure.
+apt_install() (
+  work=$(mktemp -d)
+  policy=/usr/sbin/policy-rc.d
+  if [ -e "$policy" ] || [ -L "$policy" ]; then
+    cp -a "$policy" "$work/original"
+  fi
+  trap 'rc=$?; rm -f "$policy"; if [ -e "$work/original" ] || [ -L "$work/original" ]; then mv "$work/original" "$policy"; fi; rm -rf "$work"; exit "$rc"' EXIT
+  trap 'exit 1' HUP INT TERM
+  printf '#!/bin/sh\nexit 101\n' > "$work/block"
+  chmod 755 "$work/block"
+  mv -f "$work/block" "$policy"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+)
+
+# Older images can contain unpacked but unconfigured desktop packages.
+# Repair those before registration, including on an unchanged package stamp.
+repair=0
+for package in gdm3 ubuntu-desktop-minimal qemu-guest-agent; do
+  [ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null || true)" = "ii " ] || repair=1
+done
+[ -z "$(dpkg --audit)" ] || repair=1
+if [ "$repair" = 1 ]; then
+  apt-get update
+  apt_install --fix-broken ubuntu-desktop-minimal qemu-guest-agent
+fi
+[ -x /usr/sbin/gdm3 ] || { echo "the base has no gdm3 after desktop repair" >&2; exit 1; }
+unit=$(systemctl show gdm3.service --property=FragmentPath --value)
+[ -n "$unit" ] && [ -f "$unit" ] || { echo "the base has no GDM service unit; rebuild the base image" >&2; exit 1; }
+mkdir -p /etc/X11 /etc/systemd/system
+printf '/usr/sbin/gdm3\n' > /etc/X11/default-display-manager
+printf 'gdm3 shared/default-x-display-manager select gdm3\n' | debconf-set-selections
+ln -sfn "$unit" /etc/systemd/system/display-manager.service
+systemctl daemon-reload
+systemctl set-default graphical.target
+# The headless bake has no agent device. Enable it for subsequent boots;
+# with a channel present, recover its service after repairing the packages.
+systemctl add-wants multi-user.target qemu-guest-agent.service
+if [ -e /dev/virtio-ports/org.qemu.guest_agent.0 ]; then
+  systemctl reset-failed qemu-guest-agent.service
+  systemctl --no-block start qemu-guest-agent.service
+fi
+EOF
+}
+
 # The disc's install.sh: once per package (a stamp of its file name), install
 # a .deb with apt — Recommends included, as a user's `apt install` does, a
 # downgrade allowed — or put an AppImage into the home folder in place of the
@@ -282,9 +355,12 @@ EOF
 # to the dock and started at every login, so the one host call ends with it
 # open.
 install_script() {
+  # Repair registration even when this package's stamp already matches.
+  desktop_setup
   cat <<'EOF'
-#!/bin/sh
-set -eu
+# An old image may have had no display-manager unit when graphical.target
+# was queued. Enqueue it now without waiting on this Before= hook itself.
+systemctl --no-block start display-manager.service
 mnt="$1"
 state=/var/lib/fresh-vm
 mkdir -p "$state"
@@ -309,7 +385,7 @@ for f in "$mnt"/*.deb; do
   [ -e "$f" ] || continue
   cp "$f" /tmp/
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades "/tmp/$(basename "$f")"
+  apt_install --allow-downgrades "/tmp/$(basename "$f")"
   entry=$(dpkg -L "$(dpkg-deb -f "$f" Package)" | grep '^/usr/share/applications/.*\.desktop$' | head -n 1 || true)
   [ -z "$entry" ] || present "$entry"
 done
@@ -351,6 +427,10 @@ write_files:
     permissions: '0755'
     encoding: b64
     content: $(boot_hook | base64 -w0)
+  - path: /usr/local/sbin/fresh-vm-desktop
+    permissions: '0755'
+    encoding: b64
+    content: $(desktop_setup | base64 -w0)
   - path: /etc/systemd/system/fresh-vm-install.service
     content: |
       [Unit]
@@ -387,13 +467,13 @@ runcmd:
   - DEBIAN_FRONTEND=noninteractive apt-get purge -y gnome-initial-setup
   - dconf update
   - systemctl enable fresh-vm-install.service
-  - systemctl set-default graphical.target
+  - /usr/local/sbin/fresh-vm-desktop
   - apt-get clean
   - touch /etc/cloud/cloud-init.disabled
   # runcmd goes on past a failed step: tell the host whether the desktop is
   # really there — installed and configured, logging in by itself (the marker
   # is computed so no echo of this line matches it).
-  - '[ -x /usr/bin/gnome-shell ] && [ -x /usr/sbin/qemu-ga ] && [ "\$(dpkg-query -W -f=''\${db:Status-Abbrev}'' gdm3)" = "ii " ] && [ -z "\$(dpkg --audit)" ] && grep -qx "AutomaticLogin=tester" /etc/gdm3/custom.conf && echo "BAKE-\$((40 + 2))-OK" > /dev/ttyS0'
+  - '[ -x /usr/bin/gnome-shell ] && [ -x /usr/sbin/qemu-ga ] && [ "\$(dpkg-query -W -f=''\${db:Status-Abbrev}'' gdm3)" = "ii " ] && [ -z "\$(dpkg --audit)" ] && grep -qx "AutomaticLogin=tester" /etc/gdm3/custom.conf && [ "\$(systemctl show display-manager.service --property=LoadState --value)" = loaded ] && [ "\$(systemctl get-default)" = graphical.target ] && echo "BAKE-\$((40 + 2))-OK" > /dev/ttyS0'
 power_state:
   mode: poweroff
   condition: true
@@ -443,7 +523,7 @@ cmd_base() {
     -machine q35,accel=kvm -cpu host -smp "$CPUS" -m "$MEM" \
     -drive "file=$BASE.part,if=virtio,format=qcow2" \
     -drive "file=$work/seed.iso,media=cdrom,readonly=on" \
-    -nic "$NIC" -nographic | tee "$work/bake.log"
+    -nic "$NIC" "${VIDEO[@]}" -nographic | tee "$work/bake.log"
 
   grep -q "BAKE-42-OK" "$work/bake.log" ||
     die "the bake did not finish (no desktop in the image); $BASE.part kept for a look; run the script again"
@@ -568,18 +648,56 @@ cmd_run() {
     say "installed: $(cat "$INSTALLED" 2>/dev/null || echo nothing)"
   fi
 
+  say "guest login: tester / tester; boot log: $DIR/serial.log"
   say "close the QEMU window (or power off inside the VM) to stop it"
   rm -f "$QGA_SOCK"
   qemu-system-x86_64 \
-    -name "$APP_DISPLAY fresh VM" \
+    -name "$APP_DISPLAY fresh VM (login: tester / tester)" \
     -machine q35,accel=kvm -cpu host -smp "$CPUS" -m "$MEM" \
     -drive "file=$VM,if=virtio,format=qcow2" \
     "${disc[@]}" \
     -nic "$NIC" \
     -chardev "socket,id=qga0,path=$QGA_SOCK,server=on,wait=off" \
     -device virtio-serial-pci -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0 \
-    -device virtio-vga,xres=1600,yres=1000 -display gtk \
+    "${VIDEO[@]}" -display gtk \
+    -serial "file:$DIR/serial.log" \
     -device qemu-xhci -device usb-tablet
+}
+
+# Repair a running guest from a host terminal: no typing in QEMU's console,
+# no new disk and no VM restart. The package output is returned by the agent.
+guest_repair() {
+  cat <<'EOF'
+#!/bin/sh
+set -eu
+case $(systemctl show fresh-vm-install.service --property=ActiveState --value) in
+  activating|deactivating) echo 'the boot installer is still running; try repair once it finishes' >&2; exit 1 ;;
+esac
+EOF
+  desktop_setup
+  cat <<'EOF'
+systemctl reset-failed display-manager.service
+if ! systemctl start display-manager.service; then
+  systemctl --no-pager -l status display-manager.service || true
+  journalctl -b -u gdm.service -u gdm3.service --no-pager -n 40
+  exit 1
+fi
+systemctl --no-pager -l status display-manager.service
+EOF
+}
+
+cmd_repair() {
+  need python3
+  vm_running || die "the VM is not running; open it first"
+  [ -S "$QGA_SOCK" ] || die "the running VM has no guest agent channel; power it off and run this script again to repair at boot"
+  say "repairing the running VM's desktop; package output follows when finished (up to 15 min)"
+  local rc=0
+  qga_exec --timeout 900 /bin/sh -c "$(guest_repair)" || rc=$?
+  if [ "$rc" = 69 ]; then
+    die "the guest agent is unavailable, so live repair could not start. Close the QEMU window yourself, then run: bash '$ROOT/scripts/fresh-vm.sh' latest — choose Start it to keep the VM; the package disc repairs the desktop at boot without the guest agent"
+  fi
+  [ "$rc" = 0 ] || die "desktop repair failed; see the guest output above"
+  say "desktop repair finished; check the QEMU window"
 }
 
 # --- status / reset --------------------------------------------------------
@@ -687,6 +805,7 @@ sub="${1:-}"
 case "$sub" in
   base) cmd_base "$@" ;;
   boot) cmd_run ;;
+  repair) cmd_repair ;;
   run) exec "${BASH_SOURCE[0]}" "$@" ;; # the earlier spelling
   status) cmd_status ;;
   reset) cmd_reset ;;
