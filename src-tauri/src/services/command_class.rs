@@ -287,6 +287,13 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("set_project_default_apps", Core),
     ("start_file_drag", Client),
     ("untrack_window", Client),
+    // commands/assistant.rs — all `core`: the chat assistant is the user's own
+    // feature (the server case is handled by not offering it), and
+    // `assistant_set_search` is their own setting, which `admin` would lock a
+    // hosted server's users out of.
+    ("assistant_new_chat", Core),
+    ("assistant_options", Core),
+    ("assistant_set_search", Core),
     // commands/app_update.rs
     ("app_update_releases_url", Admin),
     ("app_update_staged", Admin),
