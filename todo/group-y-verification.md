@@ -332,7 +332,13 @@ missing capability — is the project's dominant risk.
        - [ ] ❌ Doesn't work on macOS
      - [ ] Not built: the NSIS hook that removes the old Windows install (it
        cannot be verified here); the webview-data copy on Windows and macOS
-       (paths unknown); a retake of `screenshots/eldrun-current.png`.
+       (paths unknown); a retake of the window screenshot as
+       `screenshots/tabtivity-current.png` (`scripts/take-screenshot.sh`). The
+       old `eldrun-current.png` showed private data and was removed from the
+       repo and the Pages site (2026-10-15; history not rewritten): review
+       the new one, add its blob to `scripts/privacy-reviewed-binaries.txt`,
+       `git add -f` it, and restore the hero image in `site/index.md` and the
+       copy in `.github/workflows/pages.yml`.
 
 ---
 
