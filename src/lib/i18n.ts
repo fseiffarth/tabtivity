@@ -812,6 +812,7 @@ export const enSource = {
   "mobile.mail.replyTooLong": "The reply is longer than the phone may send; finish it on the desktop.",
   "mobile.mail.folder": "Folder",
   "mobile.mail.noMessages": "No messages in this page.",
+  "mobile.mail.syncing": "Fetching this folder from the server…",
   "mobile.mail.previous": "Previous",
   "mobile.mail.pageOf": "{range} of {total}",
   "mobile.mail.folderCounts": "{unread} unread · {total}",

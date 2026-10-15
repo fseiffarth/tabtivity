@@ -748,6 +748,7 @@ export const dict: Dict = {
   "mobile.mail.replyTooLong": "La réponse dépasse ce que le téléphone peut envoyer ; terminez-la sur le bureau.",
   "mobile.mail.folder": "Dossier",
   "mobile.mail.noMessages": "Aucun message sur cette page.",
+  "mobile.mail.syncing": "Récupération du dossier depuis le serveur…",
   "mobile.mail.previous": "Précédent",
   "mobile.mail.pageOf": "{range} sur {total}",
   "mobile.mail.folderCounts": "{unread} non lus · {total}",

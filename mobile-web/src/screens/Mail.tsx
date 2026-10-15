@@ -136,13 +136,27 @@ export function Mail() {
 
   /** A folder page carries the folder's own fresh counts; they replace the
    * overview's copy, so the pickers and the way back show what was just read. */
-  const takeFolder = (page: Extract<MobileMailView, { view: "folder" }>) => {
+  const takeFolder = useCallback((page: Extract<MobileMailView, { view: "folder" }>) => {
     setFolder(page);
     setAccounts((current) => current?.map((item) => ({
       ...item,
       folders: item.folders.map((entry) => entry.id === page.folder.id ? page.folder : entry),
     })) ?? current);
-  };
+  }, []);
+
+  // Opening a folder makes the desktop fetch it from the server; a page that
+  // came back before that fetch finished says `syncing`, so ask again quietly
+  // until it is done. Another folder, a refresh or the way back cancels it.
+  useEffect(() => {
+    if (!folder?.syncing) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api<{ mail: MobileMailView }>(`/api/v1/mail/folders/${encodeURIComponent(folder.folder.id)}?offset=${folder.offset}`)
+        .then(({ mail }) => { if (!cancelled && mail.view === "folder") takeFolder(mail); })
+        .catch(() => { if (!cancelled) setFolder((current) => current && { ...current, syncing: false }); });
+    }, 1_500);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [folder, takeFolder]);
 
   /** Picking an account from inside a folder opens that account's inbox; from
    * the overview it only changes whose folders are listed. */
@@ -306,7 +320,9 @@ export function Mail() {
           <b>{safeText(item.subject) || t("mobile.mail.noSubject")}{item.has_attachments ? <> <PaperclipIcon /></> : null}</b>
           <span>{safeText(item.preview)}</span>
         </button>)}
-        {!busy && folder.messages.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noMessages")}</p>}
+        {folder.syncing
+          ? <p className="mail-mobile-empty">{t("mobile.mail.syncing")}</p>
+          : !busy && folder.messages.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noMessages")}</p>}
       </section>
       <div className="mail-mobile-pager">
         <button disabled={busy || folder.offset === 0} onClick={() => void loadFolder(folder.folder, Math.max(0, folder.offset - PAGE_SIZE))}>{t("mobile.mail.previous")}</button>

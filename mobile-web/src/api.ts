@@ -322,7 +322,8 @@ export type MailMarkAction = "seen" | "unseen" | "flag" | "unflag";
 export interface MobileMailWrites { actions?: boolean; reply?: boolean }
 export type MobileMailView =
   | ({ view: "overview"; accounts: MobileMailAccount[] } & MobileMailWrites)
-  | { view: "folder"; folder: MobileMailFolder; messages: MobileMailHeader[]; total: number; offset: number }
+  /** `syncing`: the desktop is still fetching the folder from the server; ask again. */
+  | { view: "folder"; folder: MobileMailFolder; messages: MobileMailHeader[]; total: number; offset: number; syncing?: boolean }
   | { view: "message"; message: MobileMailHeader; body: string; truncated: boolean; attachments: MobileMailAttachment[] };
 
 export class ApiError extends Error {
