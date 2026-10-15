@@ -1666,6 +1666,16 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       >
         ⠿
       </div>
+      <button
+        className="tab-scroll-btn tab-popout-btn"
+        title={t("tabBar.popOutTitle")}
+        aria-label={t("tabBar.popOutTitle")}
+        // Keep the button out of the bar's detach-drag and tab pointer flow.
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => detachGroup(groupId, { allowLastGroup: true })}
+      >
+        ⧉
+      </button>
       {canScrollLeft && (
         <button
           className="tab-scroll-btn left"

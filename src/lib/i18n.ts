@@ -5576,6 +5576,7 @@ export const enSource = {
   "newTabMenu.loadLocalModelGpuFailed": "Couldn't load onto GPU — retry",
   "newTabMenu.addAgent": "Add agent…",
   "tabBar.dragGripTitle": "Drag to pop this subwindow into its own window",
+  "tabBar.popOutTitle": "Pop this subwindow out into its own window",
   "tabBar.scrollLeftTitle": "Scroll tabs left",
   "tabBar.scrollRightTitle": "Scroll tabs right",
   "tabBar.newTabTitle": "New tab",
