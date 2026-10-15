@@ -14,4 +14,4 @@ pub mod rt;
 pub mod services;
 pub mod sync;
 
-pub use ctx::{Caller, ClientId, CoreCtx, CoreState, EventSink, NullEvents, RecordingEvents, Role};
+pub use ctx::{Caller, ClientId, CoreCtx, CoreState, EventSink, NullEvents, RecordingEvents};

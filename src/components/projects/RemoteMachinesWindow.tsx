@@ -705,9 +705,6 @@ export function RemoteMachinesWindow({
                 {ssh === "connected" ? t("remoteMachines.connectedDot") : t("remoteMachines.notConnectedDot")}
                 {mirror ? ` ${t("remoteMachines.localMirrorLabel")} ${mirror}` : ""}
               </div>
-              {project.remote?.added_by_client === true && (
-                <ClientHostApproval projectId={project.id} hostId={PRIMARY_HOST} />
-              )}
               <div className="remote-machine-actions">
                 <button onClick={() => openConnect(project.id, "primary")}>
                   {ssh === "connected" ? t("remoteMachines.manage") : t("remoteMachines.connectEllipsis")}
@@ -816,9 +813,6 @@ export function RemoteMachinesWindow({
               <div className={`remote-machine-status${rep?.error && !shared ? " error" : ""}`}>
                 {statusText}
               </div>
-              {w.added_by_client === true && (
-                <ClientHostApproval projectId={project.id} hostId={w.id} />
-              )}
               <div className="remote-machine-actions">
                 <button onClick={() => openConnect(project.id, w.id)}>
                   {ssh === "connected" ? t("remoteMachines.manage") : t("remoteMachines.connectEllipsis")}
@@ -1170,54 +1164,5 @@ export function RemoteMachinesWindow({
       </div>
     </div>,
     document.body,
-  );
-}
-
-/**
- * A host a non-admin browser account stored (`RemoteSpec.added_by_client`): browser
- * clients get no ssh login terminal to it until the desktop or an admin allows it
- * here (`approve_client_ssh_host`, an admin-class command — a user account is
- * refused). The desktop's own logins never needed it.
- */
-function ClientHostApproval({ projectId, hostId }: { projectId: string; hostId: string }) {
-  const t = useT();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const approve = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await invoke("approve_client_ssh_host", { projectId, hostId });
-      useProjectsStore.setState((s) => ({
-        projects: s.projects.map((p) => {
-          if (p.id !== projectId) return p;
-          if (hostId === PRIMARY_HOST) {
-            return p.remote ? { ...p, remote: { ...p.remote, added_by_client: undefined } } : p;
-          }
-          return {
-            ...p,
-            compute_hosts: (p.compute_hosts ?? []).map((h) =>
-              h.id === hostId ? { ...h, added_by_client: undefined } : h,
-            ),
-          };
-        }),
-      }));
-    } catch (e) {
-      setError(t("remoteMachines.allowClientLoginsFailed", { error: String(e) }));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="remote-machine-status">
-      <span className="remote-machine-tag" title={t("remoteMachines.clientAddedTitle")}>
-        {t("remoteMachines.clientAddedTag")}
-      </span>
-      <UntestedTag id="remoteMachines.allowClientLogins" />
-      <button type="button" disabled={busy} onClick={() => void approve()}>
-        {t("remoteMachines.allowClientLogins")}
-      </button>
-      {error && <ErrorNote className="project-dialog-error" error={error} />}
-    </div>
   );
 }

@@ -197,49 +197,24 @@ pub fn compute_hosts_for(project_id: &str) -> Vec<ComputeHost> {
 pub(crate) type SshAddress = (Option<String>, String, Option<u16>);
 
 /// Every ssh address a `projects.json` list configures: each remote project's
-/// primary host and its worker hosts, as stored, each with whether it counts
-/// for a client's login — `false` while a non-admin client stored it and
-/// nobody approved it ([`RemoteSpec::awaits_approval`]). Pure over the list.
-pub(crate) fn ssh_addresses_of(list: &ProjectsList) -> Vec<(SshAddress, bool)> {
+/// primary host and its worker hosts, as stored. Pure over the list.
+pub(crate) fn ssh_addresses_of(list: &ProjectsList) -> Vec<SshAddress> {
     list.iter()
         .flat_map(|entry| {
             spec_from_entry(entry)
                 .into_iter()
                 .chain(compute_hosts_from_entry(entry).into_iter().map(|h| h.spec))
         })
-        .map(|spec| {
-            let counts = !spec.awaits_approval();
-            ((spec.user, spec.host, spec.port), counts)
-        })
+        .map(|spec| (spec.user, spec.host, spec.port))
         .collect()
 }
 
 /// [`ssh_addresses_of`] over the always-local `projects.json`; `[]` when it is
 /// missing or unreadable.
-pub(crate) fn configured_project_ssh_addresses() -> Vec<(SshAddress, bool)> {
+pub(crate) fn configured_project_ssh_addresses() -> Vec<SshAddress> {
     read_projects_list()
         .map(|list| ssh_addresses_of(&list))
         .unwrap_or_default()
-}
-
-/// Whether two specs name the same ssh address — user, host and port compared
-/// as the keychain account spells them (`remote_credentials::ssh_account`).
-pub(crate) fn same_ssh_address(a: &RemoteSpec, b: &RemoteSpec) -> bool {
-    use crate::services::remote_credentials::ssh_account;
-    ssh_account(&a.user, &a.host, a.port) == ssh_account(&b.user, &b.host, b.port)
-}
-
-/// Set `spec`'s provenance ([`RemoteSpec::added_by_client`]) as a writer of it
-/// must: from **who is calling**, never from the incoming value. `stored` is
-/// the entry being replaced, if any. An unchanged address keeps the provenance
-/// it had; a new or changed one is stamped when `untrusted` (a non-admin server
-/// client, `CoreCtx::is_untrusted_client`) and unstamped otherwise (the
-/// desktop, an admin, the host itself chose it).
-pub(crate) fn carry_provenance(spec: &mut RemoteSpec, stored: Option<&RemoteSpec>, untrusted: bool) {
-    spec.added_by_client = match stored {
-        Some(old) if same_ssh_address(spec, old) => old.added_by_client.filter(|&v| v),
-        _ => untrusted.then_some(true),
-    };
 }
 
 /// Whether [`remote_target_for_host`] would find a target, over one
@@ -732,7 +707,6 @@ mod tests {
             persist_sessions: None,
             vm: None,
             label: None,
-            added_by_client: None,
             extra: HashMap::new(),
         }
     }
@@ -758,50 +732,6 @@ mod tests {
             local_file: format!("/state/{id}.json"),
             extra,
         }
-    }
-
-    /// #12: provenance comes from the caller, never the incoming value. A new
-    /// address is stamped for an untrusted client and unstamped for the
-    /// desktop/an admin; an unchanged one (same account, spelled any way) keeps
-    /// what it had; a changed one is re-decided.
-    #[test]
-    fn provenance_is_the_callers_and_follows_the_address() {
-        let with = |user: &str, host: &str, port: Option<u16>, stamp: Option<bool>| RemoteSpec {
-            user: Some(user.to_string()),
-            host: host.to_string(),
-            port,
-            added_by_client: stamp,
-            ..spec()
-        };
-        // New: the caller decides; a client's own `false`/`true` is ignored.
-        for incoming in [None, Some(false), Some(true)] {
-            let mut s = with("alice", "h.example", None, incoming);
-            carry_provenance(&mut s, None, true);
-            assert_eq!(s.added_by_client, Some(true), "untrusted, incoming {incoming:?}");
-            let mut s = with("alice", "h.example", None, incoming);
-            carry_provenance(&mut s, None, false);
-            assert_eq!(s.added_by_client, None, "trusted, incoming {incoming:?}");
-        }
-        // Unchanged address (case, whitespace, port 22): keeps the stored stamp,
-        // whatever the caller sends or who it is.
-        let stored_desktop = with("alice", "h.example", None, None);
-        let stored_client = with("alice", "h.example", None, Some(true));
-        let mut s = with("alice", " H.Example", Some(22), Some(true));
-        carry_provenance(&mut s, Some(&stored_desktop), true);
-        assert_eq!(s.added_by_client, None, "a user's edit of a desktop host keeps it the desktop's");
-        let mut s = with("alice", "h.example", None, Some(false));
-        carry_provenance(&mut s, Some(&stored_client), true);
-        assert_eq!(s.added_by_client, Some(true), "a client cannot clear its own stamp");
-        let mut s = with("alice", "h.example", None, None);
-        carry_provenance(&mut s, Some(&stored_client), false);
-        assert_eq!(s.added_by_client, Some(true), "a desktop edit of a label is no approval");
-        // Changed address: re-decided by the caller.
-        let mut s = with("root", "h.example", None, None);
-        carry_provenance(&mut s, Some(&stored_desktop), true);
-        assert_eq!(s.added_by_client, Some(true), "a user's new login name is a new address");
-        let mut s = with("alice", "h.example", Some(2222), Some(true));
-        carry_provenance(&mut s, Some(&stored_client), false);
-        assert_eq!(s.added_by_client, None, "the desktop's new address is its own");
     }
 
     #[test]
@@ -843,7 +773,6 @@ mod tests {
                 persist_sessions: None,
                 vm: None,
                 label: None,
-                added_by_client: None,
                 extra: HashMap::new(),
             },
         }

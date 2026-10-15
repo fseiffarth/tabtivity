@@ -1296,7 +1296,6 @@ mod tests {
             persist_sessions: None,
             vm: None,
             label: None,
-            added_by_client: None,
             extra: HashMap::new(),
         }
     }

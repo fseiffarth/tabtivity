@@ -1,5 +1,3 @@
-import { envName } from "../brand";
-
 /**
  * The login a login terminal runs — mirrors the backend's
  * `commands::credentials::LoginTarget`, the payload of `PtyOptions.login`.
@@ -34,16 +32,4 @@ export function vpnLogin(config: string): LoginTarget {
 export function loginDedupeKey(login: LoginTarget): string {
   if (login.kind === "vpn") return `vpn:${login.config}`;
   return `ssh:${login.user ? `${login.user}@` : ""}${login.host}:${login.port ?? ""}`;
-}
-
-/** The marker a browser client's refused ssh login carries when the host was
- *  stored by a non-admin browser account and nobody approved it yet. Mirrors
- *  `commands::credentials::SSH_LOGIN_UNAPPROVED`. */
-export const SSH_LOGIN_UNAPPROVED = envName("SSH_LOGIN_UNAPPROVED");
-
-/** Whether a `pty_spawn` error is that refusal — said in the user's language,
- *  naming the approval, rather than printed as it is. */
-export function loginHostUnapproved(e: unknown): boolean {
-  const text = e instanceof Error ? e.message : String(e);
-  return text.includes(SSH_LOGIN_UNAPPROVED);
 }

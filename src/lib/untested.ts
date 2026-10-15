@@ -723,7 +723,6 @@ export const UNTESTED = {
   "remoteMachinesWindow.2": { area: "projects", what: "RemoteMachinesWindow · Your machines" },
   "remoteMachinesWindow.3": { area: "projects", what: "RemoteMachinesWindow · Username" },
   "remoteMachinesWindow.4": { area: "projects", what: "RemoteMachinesWindow · Remote path for this machine's copy" },
-  "remoteMachines.allowClientLogins": { area: "projects", what: "RemoteMachinesWindow · 'Added from a browser' tag + Allow browser logins: a host a non-admin browser account stored gets no ssh login terminal in a browser client until the desktop or an admin allows it; a browser login to it before then says so in the pane (screen 2026-10-15 #12)" },
   "savePasswordRow.1": { area: "projects", what: "SavePasswordRow · A terminal login is one Tabtivity never sees, so it stores nothing new — and deletes nothing…" },
   "terminalSignIn.label": { area: "projects", what: "TerminalSignInToggle · Sign in in a terminal: the embedded terminal runs the ssh/openvpn login itself, no shell before or after it (screen 2026-10-15 #1)" },
   "transfer.export": { area: "projects", what: "ProjectExportDialog · Export project…" },

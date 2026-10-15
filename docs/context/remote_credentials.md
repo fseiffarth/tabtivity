@@ -139,20 +139,13 @@ Referenced from `AGENTS.md`.
   (primary or worker) or a global machine already stores — same user, host and port,
   compared as the keychain account spells them — so a client cannot make the server
   dial any host; the desktop window keeps any host, since adding a machine or project
-  logs in before it is stored. Only hosts the **desktop or an admin** stored count: a
-  user account can store a host itself through `core` commands (`create_project`,
-  `import_project`, `extend_project_to_remote`, `add_compute_host`, a login-name
-  change, a bundle import), and storing one must not be a way to a login tab. So
-  every writer of a host address records who wrote it — `RemoteSpec.added_by_client`,
-  set from the call's context (`CoreCtx::is_untrusted_client`, the session role the
-  transport fixed at login), never from the incoming value; an unchanged address
-  keeps what it had (`services::remote::carry_provenance`), and an entry without the
-  field (everything older) is the desktop's. A stamped host gets no client login
-  until the desktop or an admin approves it (`approve_client_ssh_host`, admin-class;
-  the Remote machines window's **Allow browser logins**), and the refusal carries
-  `SSH_LOGIN_UNAPPROVED` so the pane says why. The login then runs to the **stored**
-  spelling of the matched entry, not the caller's, which only had to compare equal.
-  Global machines need no stamp: only admin commands write them. Not covered: the
+  logs in before it is stored. The login then runs to the **stored** spelling of the
+  matched entry, not the caller's, which only had to compare equal (a case fold such
+  as KELVIN SIGN → `k` never reaches ssh). On a per-user server daemon the account
+  owns the hosts it stores — a non-admin client exists only there, with no desktop
+  window to approve anything and with unfenced shell tabs of its own — so the list is
+  a typo guard, not an approval (a provenance stamp was tried and dropped, 2026-10-15;
+  an `added_by_client` key it wrote rides in `RemoteSpec.extra`). Not covered: the
   non-login `core` ssh commands (`ssh_connect`, `ssh_probe`, `ssh_list_dir`, …) still
   dial a host a user names — that is how a project is set up, and no saved secret is
   pasted there. Accepted residual: after a successful ssh login the PTY *is* the

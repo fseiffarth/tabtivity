@@ -220,11 +220,6 @@ loops against one mirror and one `sync.json`. Now:
 - **One user, role admin.** P2's user owns the box: every web session runs
   with `Role::Admin`, so admin commands (model pulls, CLI installs) are
   served. P3's gateway assigns roles per account; the gate already exists.
-  The role also rides in each call's `CoreCtx` (`with_client`, fixed at
-  login like the role itself), so a body can tell a user's write from the
-  owner's: `is_untrusted_client` is what stamps a host a user stored as
-  awaiting approval before it gets a client ssh login
-  (`docs/context/remote_credentials.md`).
 - **`switch_project_runtime` is split, not reclassified.** It hides and shows
   OS windows (client) *and* runs the project's name migration, layout save,
   session load and event (backend). `switch_project_session` is the backend

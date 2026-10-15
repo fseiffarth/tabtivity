@@ -145,27 +145,8 @@ pub struct RemoteSpec {
     /// share this one field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// Provenance of this address (user/host/port), recorded by the backend:
-    /// `Some(true)` = a **non-admin server client** stored it and neither the
-    /// desktop window nor an admin has approved it since; absent/`false` = the
-    /// desktop or an admin added it (every entry older than the field reads as
-    /// that). The client ssh login allow-list (`commands::credentials`) skips a
-    /// stamped host — a browser user must not be able to store a host and then
-    /// open a login tab to it. Never taken from a caller: every writer sets it
-    /// from who is calling (`services::remote::carry_provenance`), and
-    /// `approve_client_ssh_host` clears it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub added_by_client: Option<bool>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
-}
-
-impl RemoteSpec {
-    /// Whether a non-admin server client stored this address and nobody
-    /// approved it yet ([`RemoteSpec::added_by_client`]).
-    pub fn awaits_approval(&self) -> bool {
-        self.added_by_client == Some(true)
-    }
 }
 
 fn default_true() -> bool {
@@ -653,37 +634,32 @@ mod tests {
         assert!(out.get("compute_hosts").is_none());
     }
 
-    /// #12: a host stored before provenance existed has no `added_by_client`,
-    /// loads as the desktop's (never awaiting approval) and is written back
-    /// without the key; a stamped one round-trips its stamp, primary and worker.
+    /// A build of 2026-10-15 marked hosts a browser account stored with
+    /// `added_by_client` (both spellings below). The field is gone; such a file
+    /// still loads and writes the key back through `extra` — in
+    /// `project.json` and in the `projects.json` entry the same spec comes from.
     #[test]
-    fn host_provenance_is_optional_and_round_trips() {
-        let legacy = r#"{"id":"p1","name":"One","directory":"/s/p1",
-            "remote":{"user":"alice","host":"build.example","remote_path":"/srv/p1"},
-            "compute_hosts":[{"id":"w1","host":"gpu.example","remote_path":"/srv/p1"}]}"#;
-        let p: Project = parse(legacy);
+    fn a_host_marked_added_by_client_loads_and_round_trips() {
+        let marked = r#"{"id":"p1","name":"One","directory":"/s/p1",
+            "remote":{"user":"alice","host":"build.example","remote_path":"/srv/p1","added_by_client":true},
+            "compute_hosts":[{"id":"w1","host":"gpu.example","remote_path":"/srv/p1","addedByClient":true}]}"#;
+        let p: Project = parse(marked);
         let remote = p.remote.as_ref().unwrap();
-        assert_eq!(remote.added_by_client, None);
-        assert!(!remote.awaits_approval() && !p.compute_hosts[0].spec.awaits_approval());
+        assert_eq!(remote.host, "build.example");
+        assert_eq!(remote.extra.get("added_by_client"), Some(&Value::Bool(true)));
+        assert_eq!(p.compute_hosts[0].spec.host, "gpu.example");
         let out = json(&p);
-        assert!(out["remote"].get("added_by_client").is_none());
-        assert!(out["compute_hosts"][0].get("added_by_client").is_none());
-        assert_eq!(out["remote"], serde_json::from_str::<Value>(legacy).unwrap()["remote"]);
+        let input = serde_json::from_str::<Value>(marked).unwrap();
+        assert_eq!(out["remote"], input["remote"]);
+        assert_eq!(out["compute_hosts"][0]["addedByClient"], true);
+        assert_eq!(json(&parse::<Project>(&out.to_string())), out, "stable once written");
 
-        let stamped = r#"{"id":"p1","name":"One","directory":"/s/p1",
-            "remote":{"host":"build.example","remote_path":"/srv/p1","added_by_client":true},
-            "compute_hosts":[{"id":"w1","host":"gpu.example","remote_path":"/srv/p1","added_by_client":true}]}"#;
-        let p: Project = parse(stamped);
-        assert!(p.remote.as_ref().unwrap().awaits_approval());
-        assert!(p.compute_hosts[0].spec.awaits_approval());
-        let out = json(&p);
-        assert_eq!(out["remote"]["added_by_client"], true);
-        assert_eq!(out["compute_hosts"][0]["added_by_client"], true);
-        assert!(p.remote.as_ref().unwrap().extra.is_empty(), "a known field, not an extra");
-
-        // `false` is the desktop's too.
-        let spec: RemoteSpec = parse(r#"{"host":"h","remote_path":"/p","added_by_client":false}"#);
-        assert!(!spec.awaits_approval());
+        let entries = format!(r#"[{{"id":"p1","name":"One","status":"active","position":0,"local_file":"","remote":{}}}]"#,
+            serde_json::to_string(&json(&p)["remote"]).unwrap());
+        let list: crate::schema::projects::ProjectsList = parse(&entries);
+        assert_eq!(json(&list), serde_json::from_str::<Value>(&entries).unwrap());
+        let spec: RemoteSpec = serde_json::from_value(list[0].extra["remote"].clone()).unwrap();
+        assert_eq!(spec.host, "build.example");
     }
 
     /// Fields the Python app wrote and the Rust model never learned about ride

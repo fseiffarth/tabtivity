@@ -1825,34 +1825,6 @@ fn drop_imported_openvpn(value: &mut Value) -> bool {
     dropped
 }
 
-/// Set the provenance of every host an imported registry entry or
-/// `project.json` body names — the primary's `remote` spec and each
-/// `compute_hosts` worker — from who is importing, dropping whatever the bundle
-/// said (`RemoteSpec::added_by_client`): stamped for a non-admin server client
-/// (`untrusted`), unstamped for the desktop or an admin.
-fn stamp_imported_hosts(value: &mut Value, untrusted: bool) {
-    fn stamp(spec: &mut Value, untrusted: bool) {
-        let Some(spec) = spec.as_object_mut() else {
-            return;
-        };
-        spec.remove("added_by_client");
-        if untrusted {
-            spec.insert("added_by_client".to_string(), Value::Bool(true));
-        }
-    }
-    let Some(map) = value.as_object_mut() else {
-        return;
-    };
-    if let Some(remote) = map.get_mut("remote") {
-        stamp(remote, untrusted);
-    }
-    if let Some(hosts) = map.get_mut("compute_hosts").and_then(Value::as_array_mut) {
-        for host in hosts {
-            stamp(host, untrusted);
-        }
-    }
-}
-
 /// The registry keys that open a project to phones: the switch, its per-phone
 /// list, and the switch under the name an older build wrote (the migrator
 /// would rename that one into place). None of them travels in a bundle, either
@@ -2244,16 +2216,6 @@ fn import_agent_history(
 pub fn import_project_export_blocking(
     req: ImportBundleRequest,
 ) -> Result<ImportBundleResult, String> {
-    import_project_export_as(req, false)
-}
-
-/// [`import_project_export_blocking`] for a caller that may be a non-admin
-/// server client (`untrusted`): every host the bundle names is then stored as
-/// awaiting approval ([`stamp_imported_hosts`]).
-fn import_project_export_as(
-    req: ImportBundleRequest,
-    untrusted: bool,
-) -> Result<ImportBundleResult, String> {
     let (mut zip, manifest) = open_bundle(&req.bundle_path)?;
     // Validate the registry before a single byte is unpacked: a corrupt
     // projects.json must fail closed rather than leave an orphan tree on disk.
@@ -2400,9 +2362,6 @@ fn import_project_export_as(
     // without the user switching it on here.
     drop_mobile_keys(&mut entry_value);
     drop_mobile_keys(&mut project_value);
-    // Nor is the bundle's word on who stored its hosts: the importer did.
-    stamp_imported_hosts(&mut entry_value, untrusted);
-    stamp_imported_hosts(&mut project_value, untrusted);
 
     let mut entry: ProjectEntry =
         serde_json::from_value(entry_value).map_err(|e| format!("bundle entry: {e}"))?;
@@ -2595,11 +2554,9 @@ fn import_project_export_as(
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_project_export(
-    ctx: crate::tauri_host::Ctx,
     req: ImportBundleRequest,
 ) -> Result<ImportBundleResult, String> {
-    let untrusted = ctx.is_untrusted_client();
-    app_core::rt::try_blocking("import", move || import_project_export_as(req, untrusted)).await
+    app_core::rt::try_blocking("import", move || import_project_export_blocking(req)).await
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -2607,35 +2564,6 @@ pub async fn import_project_export(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// #12: who stored an imported host is the importer, never the bundle.
-    #[test]
-    fn imported_hosts_take_the_importers_provenance() {
-        let bundle = || {
-            serde_json::json!({
-                "remote": { "host": "build.example", "remote_path": "/srv/p", "added_by_client": false },
-                "compute_hosts": [
-                    { "id": "w1", "host": "gpu.example", "remote_path": "/srv/p", "added_by_client": true },
-                    { "id": "w2", "host": "cpu.example", "remote_path": "/srv/p" },
-                ],
-            })
-        };
-        let mut by_user = bundle();
-        stamp_imported_hosts(&mut by_user, true);
-        assert_eq!(by_user["remote"]["added_by_client"], true);
-        assert_eq!(by_user["compute_hosts"][0]["added_by_client"], true);
-        assert_eq!(by_user["compute_hosts"][1]["added_by_client"], true);
-        let mut by_owner = bundle();
-        stamp_imported_hosts(&mut by_owner, false);
-        assert!(by_owner["remote"].get("added_by_client").is_none());
-        assert!(by_owner["compute_hosts"][0].get("added_by_client").is_none());
-        assert!(by_owner["compute_hosts"][1].get("added_by_client").is_none());
-        // A local project, or a non-object, is left alone.
-        let mut local = serde_json::json!({ "remote": null });
-        stamp_imported_hosts(&mut local, true);
-        assert_eq!(local, serde_json::json!({ "remote": null }));
-        stamp_imported_hosts(&mut Value::Null, true);
-    }
 
     #[test]
     fn imported_entries_drop_every_openvpn_tunnel() {

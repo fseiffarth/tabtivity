@@ -76,35 +76,6 @@ pub enum Caller {
     Client(ClientId),
 }
 
-/// Who a server client is to the server as a whole (hosted plan §3.3
-/// `admin`). The single-user sidecar's token login is the box's admin; on a
-/// multi-user server the gateway names the account's role in the
-/// connection's handshake. Fixed at login, never read from a frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Role {
-    User,
-    Admin,
-}
-
-impl Role {
-    /// The wire token (`server_capabilities.role`, the gateway's handshake).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Role::User => "user",
-            Role::Admin => "admin",
-        }
-    }
-
-    /// `as_str` undone; anything else is a user — the role fails closed.
-    pub fn parse(token: &str) -> Role {
-        if token == "admin" {
-            Role::Admin
-        } else {
-            Role::User
-        }
-    }
-}
-
 impl Caller {
     /// The client behind the call, if any.
     pub fn client(&self) -> Option<&ClientId> {
@@ -278,11 +249,6 @@ pub struct CoreCtx {
     pub events: Arc<dyn EventSink>,
     /// Which client is asking; [`Caller::System`] for the host's own work.
     pub caller: Caller,
-    /// A [`Caller::Client`]'s session role, set only by [`CoreCtx::with_client`]
-    /// (the transport, from the session it authenticated). `None` for the
-    /// host's own work and the desktop's windows — and for a client context
-    /// built any other way, which then counts as a user (fails closed).
-    client_role: Option<Role>,
 }
 
 impl CoreCtx {
@@ -291,7 +257,6 @@ impl CoreCtx {
             state,
             events,
             caller,
-            client_role: None,
         }
     }
 
@@ -307,34 +272,7 @@ impl CoreCtx {
             state: self.state.clone(),
             events: self.events.clone(),
             caller,
-            client_role: None,
         }
-    }
-
-    /// The same host, a server client's call: [`Caller::Client`] with the
-    /// session's role, which the transport fixed at login. A command body
-    /// asks [`CoreCtx::is_untrusted_client`], never the role directly.
-    pub fn with_client(&self, client: ClientId, role: Role) -> Self {
-        Self {
-            client_role: Some(role),
-            ..self.with_caller(Caller::Client(client))
-        }
-    }
-
-    /// The session role of a [`Caller::Client`]; `None` for any other caller.
-    pub fn client_role(&self) -> Option<Role> {
-        match self.caller {
-            Caller::Client(_) => Some(self.client_role.unwrap_or(Role::User)),
-            Caller::System | Caller::Local(_) => None,
-        }
-    }
-
-    /// A server client that is not the box's admin — whose own writes (a
-    /// host it stored, say) the host does not vouch for. The host itself
-    /// ([`Caller::System`]) and the desktop's windows ([`Caller::Local`]) are
-    /// trusted; a client context with no role counts as a user.
-    pub fn is_untrusted_client(&self) -> bool {
-        self.client_role() == Some(Role::User)
     }
 
     /// The managed `T` (see [`CoreState::get`]).
@@ -366,7 +304,6 @@ impl fmt::Debug for CoreCtx {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CoreCtx")
             .field("caller", &self.caller)
-            .field("client_role", &self.client_role)
             .field("managed", &self.state.items.len())
             .finish()
     }
@@ -441,25 +378,6 @@ mod tests {
             Some("ws-3")
         );
         assert_eq!(ClientId::main().to_string(), "main");
-    }
-
-    #[test]
-    fn only_a_users_client_is_untrusted() {
-        let system = ctx(Arc::new(NullEvents), Caller::System);
-        assert!(!system.is_untrusted_client());
-        assert_eq!(system.client_role(), None);
-        assert!(!system.with_caller(Caller::Local(ClientId::main())).is_untrusted_client());
-        let admin = system.with_client("web-1".into(), Role::Admin);
-        assert!(!admin.is_untrusted_client());
-        assert_eq!(admin.client_role(), Some(Role::Admin));
-        assert!(system.with_client("web-2".into(), Role::User).is_untrusted_client());
-        // A client context built without a role fails closed …
-        assert!(system.with_caller(Caller::Client("web-3".into())).is_untrusted_client());
-        // … and re-deriving a caller never carries a role over.
-        assert!(admin.with_caller(Caller::Client("web-1".into())).is_untrusted_client());
-        assert_eq!(Role::parse("admin"), Role::Admin);
-        assert_eq!(Role::parse("Admin"), Role::User);
-        assert_eq!(Role::Admin.as_str(), "admin");
     }
 
     #[test]
