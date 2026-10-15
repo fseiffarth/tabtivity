@@ -47,11 +47,16 @@ else
   esac
 fi
 
+# Writes a rewritten copy back over the file in place. Never `mv`: mktemp's
+# file is 0600, and moved over the original it made every version file
+# owner-only after the first bump.
+overwrite() { cat "$1" >"$2" && rm -f "$1"; }
+
 # package.json + tauri.conf.json — top-level "version" via jq (preserves formatting/order).
 tmp="$(mktemp)"
-jq --arg v "$new" '.version = $v' "$pkg" >"$tmp" && mv "$tmp" "$pkg"
+jq --arg v "$new" '.version = $v' "$pkg" >"$tmp" && overwrite "$tmp" "$pkg"
 tmp="$(mktemp)"
-jq --arg v "$new" '.version = $v' "$tauri" >"$tmp" && mv "$tmp" "$tauri"
+jq --arg v "$new" '.version = $v' "$tauri" >"$tmp" && overwrite "$tmp" "$tauri"
 
 # package-lock.json — the root's two copies of the version: the top-level one
 # and packages[""] (the root package). Edited in place rather than through jq,
@@ -68,7 +73,7 @@ if [ -f "$npm_lock" ]; then
     root && !rooted && /^      "version":/ { sub(/"version": "[^"]*"/, "\"version\": \"" v "\""); rooted = 1 }
     root && /^    \}/ { root = 0 }
     { print }
-  ' "$npm_lock" >"$tmp" && mv "$tmp" "$npm_lock"
+  ' "$npm_lock" >"$tmp" && overwrite "$tmp" "$npm_lock"
   jq -e --arg v "$new" '.version == $v and .packages[""].version == $v' "$npm_lock" >/dev/null || {
     echo "bump-version: could not set the root version in $npm_lock" >&2; exit 1; }
 fi
@@ -81,7 +86,7 @@ awk -v v="$new" '
     sub(/"[^"]*"/, "\"" v "\""); done = 1
   }
   { print }
-' "$cargo" >"$tmp" && mv "$tmp" "$cargo"
+' "$cargo" >"$tmp" && overwrite "$tmp" "$cargo"
 
 # Cargo.lock — only the app's own [[package]] block's version line (the block
 # named like Cargo.toml's [package]). Matched on the
@@ -102,7 +107,7 @@ if [ -f "$lock" ]; then
       sub(/"[^"]*"/, "\"" v "\""); done = 1
     }
     { print }
-  ' "$lock" >"$tmp" && mv "$tmp" "$lock"
+  ' "$lock" >"$tmp" && overwrite "$tmp" "$lock"
 fi
 
 echo "$new"

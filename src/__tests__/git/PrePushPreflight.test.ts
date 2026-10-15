@@ -8,7 +8,7 @@
 // @ts-expect-error node:child_process has no type declarations in this project (no @types/node)
 import { execFileSync, spawnSync } from "node:child_process";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 // @ts-expect-error node:os has no type declarations in this project (no @types/node)
 import { tmpdir } from "node:os";
 // @ts-expect-error node:path has no type declarations in this project (no @types/node)
@@ -60,6 +60,7 @@ function throwawayRepo() {
   writeFileSync(join(work, "src-tauri", "Cargo.toml"), `[package]\nname = "${BRAND.slug}"\nversion = "0.1.2"\n`);
   writeFileSync(join(work, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "0.1.2" }, null, 2) + "\n");
   writeFileSync(join(work, "Cargo.lock"), `[[package]]\nname = "${BRAND.slug}"\nversion = "0.1.2"\n`);
+  for (const file of BUMP_FILES) chmodSync(join(work, file), 0o644);
   writeFileSync(join(work, "hello.txt"), "hello\n");
   git(work, "add", "-A");
   git(work, "commit", "-q", "-m", "one");
@@ -92,6 +93,8 @@ describe.skipIf(process.platform === "win32" || !hasTool("git") || !hasTool("jq"
     expect(lockVersions(work)).toEqual(["0.1.3", "0.1.3", "0.1.2"]);
     expect(readFileSync(join(work, "package-lock.json"), "utf8")).toBe(npmLock("0.1.3"));
     expect(lines(git(work, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))).toEqual(BUMP_FILES);
+    // Rewritten in place: a bump never leaves a version file owner-only.
+    for (const file of BUMP_FILES) expect((statSync(join(work, file)).mode & 0o777).toString(8), file).toBe("644");
     expect(git(work, "status", "--porcelain")).toBe("");
     // Without the variable the hook still re-pushes itself (and aborts the
     // original push): with a remote that "has" the same version it bumps
