@@ -50,6 +50,7 @@ import {
   SubwindowFilesSidebar,
 } from "../files/SubwindowFilesSidebar";
 import { useWindowFocused } from "../../hooks/useWindowFocused";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { TabHoverCard } from "../tabs/TabHoverCard";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { WindowControls } from "../header/WindowControls";
@@ -330,11 +331,13 @@ export function DetachedCenterPanel({
         void useAgentSchedulesStore.getState().load(scope, tab.scheduleTargetId).catch(() => []);
       }
     }
-    let stop: (() => void) | undefined;
-    void listen("agent-schedules-changed", () => {
-      void useAgentSchedulesStore.getState().refreshLoaded();
-    }).then((unlisten) => { stop = unlisten; });
-    return () => stop?.();
+    // `subscribeTauri`: a cleanup that runs before `listen` settles (unmount,
+    // or `tabs` changing on the next render) still drops the listener.
+    return subscribeTauri(() =>
+      listen("agent-schedules-changed", () => {
+        void useAgentSchedulesStore.getState().refreshLoaded();
+      }),
+    );
   }, [scope, tabs]);
   const landedNonce = useTabLandStore((s) => s.landed?.nonce ?? 0);
   const clearLanded = useTabLandStore((s) => s.clear);

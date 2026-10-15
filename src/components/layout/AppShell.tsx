@@ -104,7 +104,7 @@ import { listenTexCenter } from "../../stores/viewers/texCenter";
 import { listenSourceJump } from "../embed/FileViewerPane";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
 import { listenSettingsChanged, useSettingsStore } from "../../stores/settings";
-import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
+import { ROOT_SCOPE, activeLayoutPersistTarget, useTabsStore } from "../../stores/tabs";
 import { useTimerStore } from "../../stores/timer";
 import { useMailStore } from "../../stores/mail";
 import { useTodoStore } from "../../stores/todo";
@@ -858,12 +858,18 @@ export function AppShell() {
       // Files (Project) tab into a subfolder (or any tab/split change) would drop
       // it and the tab would reopen at the project root. The side-panel folder
       // is saved eagerly and needs no flush; only the tab layout is debounced.
+      // The scope and file are resolved together by the rule CenterPanel's
+      // debounced save uses (`activeLayoutPersistTarget`: an open box, else the
+      // active project with its own `local_file`, else root) — never the tab
+      // store's live `scope` paired with a file resolved elsewhere
+      // (`saveLayout`'s hazard: the two drift).
       const { activeId, projects } = useProjectsStore.getState();
       const localFile = activeId
         ? projects.find((p) => p.id === activeId)?.local_file
         : undefined;
-      if (localFile) {
-        await useTabsStore.getState().saveLayout(localFile).catch(() => {});
+      const target = activeLayoutPersistTarget(useTabsStore.getState().scope, activeId, localFile);
+      if (target) {
+        await useTabsStore.getState().persistScope(target.scope, target.localFile).catch(() => {});
       }
       // A clean Tabtivity quit ends only the local tmux sessions named and owned by
       // Tabtivity. It runs after the layout flush so an abnormal close still has a
@@ -1079,6 +1085,15 @@ export function AppShell() {
     const t = setTimeout(clearConnToast, 3200);
     return () => clearTimeout(t);
   }, [connToast, clearConnToast]);
+
+  // A failed tab-layout autosave (the tab store raises this once per session)
+  // shows through the same toast as the other background notices.
+  const layoutPersistNotice = useTabsStore((s) => s.layoutPersistNotice);
+  useEffect(() => {
+    if (!layoutPersistNotice) return;
+    useProjectsStore.setState({ connToast: layoutPersistNotice });
+    useTabsStore.getState().clearLayoutPersistNotice();
+  }, [layoutPersistNotice]);
 
   const reveal = (
     timer: MutableRefObject<number | null>,
