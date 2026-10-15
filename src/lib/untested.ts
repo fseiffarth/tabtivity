@@ -47,6 +47,7 @@ export const UNTESTED = {
   "desktop.intro.forYou": { area: "shell", what: "How to start · For you page: lessons matched to the chosen goals, Walk me through it starts each" },
   "settings.vmPrerequisites": { area: "settings", what: "VM page · install missing QEMU prerequisites in a root terminal tab" },
   "settings.showUntestedTags": { area: "settings", what: "General page · show or hide every untested tag" },
+  "settings.headlessRemote": { area: "settings", what: "Remote page · Headless remote connections off: each SSH/OpenVPN login opens as a root-console login tab whose terminal runs ssh/openvpn itself (no shell before or after it); once the login exits the tab shows exited and the next request opens a fresh one; a login tab is never restored after a relaunch (screen 2026-10-15 #1)" },
 
   // --- agents — Agent sessions, schedules and the prompt chart ------
   "localDriver.pi": { area: "agents", what: "+ menu · Local Model → Pi: `ollama launch pi` drives the active local model" },
@@ -332,7 +333,7 @@ export const UNTESTED = {
   "theme.presets": { area: "layout", what: "ThemeCustomizer · Saved themes" },
   "theme.title": { area: "layout", what: "ThemeCustomizer · Theme colors" },
   "themeCustomizer.1": { area: "layout", what: "ThemeCustomizer · Top-bar and sub-window color groups" },
-  "vpnPrompt.logInTerminal": { area: "layout", what: "VpnPasswordPrompt · Log in in terminal" },
+  "vpnPrompt.logInTerminal": { area: "layout", what: "VpnPasswordPrompt · Log in in terminal: a root-console login tab running openvpn itself, no shell (screen 2026-10-15 #1)" },
 
   // --- lib — Keyboard shortcuts and printing ------------------------
   "print.copiesField": { area: "lib", what: "print · Copies field in the print dialog" },
@@ -676,7 +677,7 @@ export const UNTESTED = {
   "boxPill.colorGroup": { area: "projects", what: "BoxColorPicker · Box pill menu Colour row (palette, automatic, custom colour input)", tested: "2026-09-28" },
   "boxChip.onRowLabel": { area: "projects", what: "BoxScopeChip · Dropdown checkboxes choosing which boxes get a pill on the row", tested: "2026-09-28" },
   "carefulHost.label": { area: "projects", what: "CarefulHostToggle · Go easy on this machine" },
-  "credentialPasteBar.1": { area: "projects", what: "CredentialPasteBar · ))}" },
+  "credentialPasteBar.1": { area: "projects", what: "CredentialPasteBar · Type it for me above an embedded login terminal: pastes the saved login name/password, accepted only while that terminal's own ssh/openvpn login runs (refused after it exits)" },
   "extendToRemoteDialog.1": { area: "projects", what: "ExtendToRemoteDialog · Your machines" },
   "hpcHost.label": { area: "projects", what: "HpcHostToggle · HPC cluster (login node)" },
   "hpcWizard.title": { area: "projects", what: "HpcPipelineWizard · HPC pipeline" },
@@ -692,6 +693,7 @@ export const UNTESTED = {
   "projectDialog.2": { area: "projects", what: "ProjectDialog · Filled in from the repository you are cloning: {provider}. It could not be told whether t…" },
   "projectDialog.3": { area: "projects", what: "ProjectDialog · The repository is created on {provider} and the first commit pushed as soon as the projec…" },
   "projectDialog.4": { area: "projects", what: "ProjectDialog · Inside a virtual machine (strongest isolation)" },
+  "projectDialog.remoteToggleTitle": { area: "projects", what: "ProjectDialog · Remote (SSH) project: after Create the new project connects at once, with the typed password or, signed in in a terminal, riding that login (no key auth recorded on a password host); the HPC pipeline wizard does the same (screen 2026-10-15 #11)" },
   "projectPill.1": { area: "projects", what: "ProjectPill · Move project…" },
   "projectPill.10": { area: "projects", what: "ProjectPill · Unpublish (keep repo)…" },
   "projectPill.11": { area: "projects", what: "ProjectPill · Git hosting…" },
@@ -721,7 +723,7 @@ export const UNTESTED = {
   "remoteMachinesWindow.3": { area: "projects", what: "RemoteMachinesWindow · Username" },
   "remoteMachinesWindow.4": { area: "projects", what: "RemoteMachinesWindow · Remote path for this machine's copy" },
   "savePasswordRow.1": { area: "projects", what: "SavePasswordRow · A terminal login is one Tabtivity never sees, so it stores nothing new — and deletes nothing…" },
-  "terminalSignIn.label": { area: "projects", what: "TerminalSignInToggle · Sign in in a terminal" },
+  "terminalSignIn.label": { area: "projects", what: "TerminalSignInToggle · Sign in in a terminal: the embedded terminal runs the ssh/openvpn login itself, no shell before or after it (screen 2026-10-15 #1)" },
   "transfer.export": { area: "projects", what: "ProjectExportDialog · Export project…" },
   "transfer.import": { area: "projects", what: "ProjectImportBundleDialog · Import project file…" },
   "transfer.agentHistory": { area: "projects", what: "Export/Import project · agent conversations travel (Claude, Codex, Copilot, OpenCode, Gemini, … stores; databases stripped to conversation tables; folders re-pointed)" },

@@ -1934,7 +1934,7 @@ export function SettingsDialog({
             </SettingsCard>
 
             <ToggleCard
-              label={t("settings.headlessRemote")}
+              label={<>{t("settings.headlessRemote")} <UntestedTag id="settings.headlessRemote" /></>}
               checked={settings?.connections_headless ?? true}
               onChange={(e) => void updateSettings({ connections_headless: e.target.checked })}
               help={t("settings.headlessRemoteHelp")}

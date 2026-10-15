@@ -1093,7 +1093,7 @@ export function ProjectDialog({
 
         <label className={`toggle-card${isRemoteProject ? " is-on" : ""}`}>
           <span className="toggle-card-body">
-            <span className="toggle-card-title">{t("projectDialog.remoteToggleTitle")}</span>
+            <span className="toggle-card-title">{t("projectDialog.remoteToggleTitle")} <UntestedTag id="projectDialog.remoteToggleTitle" /></span>
             <span className="toggle-card-desc">
               {t("projectDialog.remoteToggleDesc")}
             </span>
