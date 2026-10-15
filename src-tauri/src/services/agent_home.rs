@@ -147,12 +147,37 @@ pub fn prepare_local_model_home(scope_id: &str, roots: &[PathBuf]) -> io::Result
 }
 
 /// The assistant scope's home (`agent-homes/assistant`, or `assistant.local`
-/// for a local-model chat): seeded with nothing, no `agent_global` layer,
-/// Tabtivity's hooks and the shared logins kept, folder trust written for
-/// `chat_dir`. Skeleton: refuses until S1b builds it.
+/// for a local-model chat), brought up to date for a chat working in
+/// `chat_dir`. Nothing is seeded (no transcript, no identity or trust of the
+/// user's), and **the `agent_global` layer is never applied**: the user's
+/// everywhere-layer carries MCP servers, skills and hooks, and the assistant
+/// may have none of them (plan decision 4). Kept from an ordinary home:
+/// Tabtivity's session hooks (turn state needs them) and the shared logins.
+/// Left out: the Copilot token setting. Written: Claude's and Codex's folder
+/// trust for `chat_dir`, and Claude's onboarding flag, so a fresh home starts
+/// without those dialogs.
+///
+/// `chat_dir` must be a folder below the assistant's `work` folder
+/// (`assistant::work_root`), or the call refuses. It is **not created here**
+/// (the spawn path decides whether a chat's folder already existed from it).
+/// Called at every assistant spawn.
 pub fn prepare_assistant_home(local: bool, chat_dir: &Path) -> io::Result<PreparedHome> {
-    let _ = (local, chat_dir);
-    Err(io::Error::other("assistant home not built"))
+    prepare_assistant_home_in(&storage::state_dir(), local, chat_dir)
+}
+
+/// [`prepare_assistant_home`] against an explicit state dir.
+fn prepare_assistant_home_in(state_dir: &Path, local: bool, chat_dir: &Path) -> io::Result<PreparedHome> {
+    let work = crate::services::assistant::work_root(state_dir);
+    let plain = chat_dir.components().all(|c| !matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir));
+    if !plain || chat_dir == work || !chat_dir.starts_with(&work) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "the chat folder is not below the assistant's work folder"));
+    }
+    let home = if local {
+        local_model_home_in(state_dir, storage::ASSISTANT_SCOPE)
+    } else {
+        scope_home_in(state_dir, storage::ASSISTANT_SCOPE)
+    };
+    prepare_home_with(state_dir, &home, storage::ASSISTANT_SCOPE, &[], Seed::Assistant, Some(chat_dir))
 }
 
 /// The Host session's home: same preparation, but nothing is seeded from a
@@ -172,6 +197,10 @@ enum Seed {
     LocalModel,
     /// The Host session's: nothing of a fenced scope's.
     Nothing,
+    /// The assistant scope's: nothing seeded, and unlike every other home
+    /// neither the `agent_global` layer nor the Copilot setting reaches it
+    /// ([`prepare_assistant_home`]).
+    Assistant,
 }
 
 fn prepare_home_in(
@@ -180,6 +209,21 @@ fn prepare_home_in(
     scope_id: &str,
     roots: &[PathBuf],
     seed: Seed,
+) -> io::Result<PreparedHome> {
+    prepare_home_with(state_dir, home, scope_id, roots, seed, None)
+}
+
+/// [`prepare_home_in`] plus, for the assistant home, the chat folder the CLIs
+/// are told to trust. Written inside the home's preparation lock: two chats
+/// starting at once must not lose each other's trust entry in the shared
+/// `.claude.json` / `config.toml`.
+fn prepare_home_with(
+    state_dir: &Path,
+    home: &Path,
+    scope_id: &str,
+    roots: &[PathBuf],
+    seed: Seed,
+    trust: Option<&Path>,
 ) -> io::Result<PreparedHome> {
     create_private_dir(&homes_root_in(state_dir))?;
     // One preparation of a home at a time, across processes too: the window
@@ -214,16 +258,25 @@ fn prepare_home_in(
         let _ = HomeDir::open(home, ".cache");
     }
     // The user's Tabtivity-wide instructions, skills, hooks and MCP servers,
-    // before Tabtivity's own hooks so a merge never displaces those.
-    if let Err(e) = crate::services::agent_global::apply_to_home(state_dir, home) {
-        eprintln!("agent_home: apply the global agent config to {}: {e}", home.display());
+    // before Tabtivity's own hooks so a merge never displaces those. Never
+    // into the assistant's home (plan decision 4).
+    if seed != Seed::Assistant {
+        if let Err(e) = crate::services::agent_global::apply_to_home(state_dir, home) {
+            eprintln!("agent_home: apply the global agent config to {}: {e}", home.display());
+        }
+    }
+    // Folder trust for the chat, before the hooks are registered: the
+    // assistant's CLIs must not stop at a dialog, and a trust that cannot be
+    // written refuses the spawn (nothing is started half-prepared).
+    if let Some(dir) = trust {
+        trust_chat_folder(home, dir)?;
     }
     crate::services::agent_session::register_hooks_in_home(home);
     // Copilot signs in through a keyring the fence hides: its home gets the
     // plain-text token setting Tabtivity's keeper collects from (`copilot_auth`).
     // That is the scope's own home; Copilot drives no local model.
     #[cfg(target_os = "linux")]
-    if seed != Seed::LocalModel {
+    if !matches!(seed, Seed::LocalModel | Seed::Assistant) {
         let _ = crate::services::copilot_auth::prepare_home(scope_id);
     }
     crate::services::agent_auth::link_into_home(state_dir, home);
@@ -252,6 +305,7 @@ fn prepare_home_in(
 fn seed_home(state_dir: &Path, home: &Path, scope_id: &str, roots: &[PathBuf], seed: Seed) {
     let user_home = crate::paths::home_dir();
     let root_strings = || roots.iter().map(|r| r.to_string_lossy().into_owned()).collect::<Vec<String>>();
+    // `Seed::Nothing` and `Seed::Assistant` bring in nothing.
     if seed == Seed::LocalModel {
         seed_claude_json(&user_home.join(".claude.json"), home, &root_strings());
     }
@@ -413,6 +467,121 @@ pub(crate) fn filtered_claude_json(value: &serde_json::Value, roots: &[String]) 
         }
     }
     serde_json::Value::Object(out)
+}
+
+/// The spellings of `dir` the CLIs may key their folder trust by: the path as
+/// the spawn gives it (the fence binds it at the same absolute path, so it is
+/// the CLI's cwd), plus its resolved form when a link in the state dir's path
+/// makes the two differ. Only existing parents resolve; the folder itself may
+/// not exist yet.
+fn trust_spellings(dir: &Path) -> Vec<String> {
+    let mut out = vec![dir.to_string_lossy().into_owned()];
+    let resolved = dir.canonicalize().ok().or_else(|| {
+        let (parent, name) = (dir.parent()?, dir.file_name()?);
+        Some(parent.canonicalize().ok()?.join(name))
+    });
+    if let Some(resolved) = resolved.map(|p| p.to_string_lossy().into_owned()) {
+        if !out.contains(&resolved) {
+            out.push(resolved);
+        }
+    }
+    out
+}
+
+/// Write Claude's and Codex's folder-trust entries for the assistant's chat
+/// folder into `home`, through directory handles. A config the CLI (or an
+/// agent) left unparsable is moved aside and started over: the home holds
+/// nothing of the user's.
+fn trust_chat_folder(home: &Path, chat_dir: &Path) -> io::Result<()> {
+    let dirs = trust_spellings(chat_dir);
+    let not_plain = |rel: &str| io::Error::other(format!("{rel} in {} is not a plain path", home.display()));
+    let claude = HomeFile::open(home, ".claude.json").ok_or_else(|| not_plain(".claude.json"))?;
+    trust_claude_json(&claude, &dirs)?;
+    let codex = HomeFile::open(home, ".codex/config.toml").ok_or_else(|| not_plain(".codex/config.toml"))?;
+    trust_codex_config(&codex, &dirs)
+}
+
+/// `.claude.json`: `projects.<dir>.hasTrustDialogAccepted = true` for each of
+/// `dirs`, and `hasCompletedOnboarding = true` unless the file says otherwise
+/// (the login keeper puts the user's own value in when it knows one). Every
+/// other key stays.
+fn trust_claude_json(file: &HomeFile, dirs: &[String]) -> io::Result<()> {
+    use serde_json::{json, Value};
+    let existing = file.read();
+    let mut value = match existing.as_deref().map(serde_json::from_slice::<Value>) {
+        Some(Ok(v)) if v.is_object() => v,
+        Some(_) => {
+            file.rename_aside(".unreadable")?;
+            json!({})
+        }
+        // Present but unreadable (not merely missing): never overwrite blind.
+        None if file.exists() => return Err(io::Error::other(".claude.json cannot be read")),
+        None => json!({}),
+    };
+    let Some(root) = value.as_object_mut() else { return Ok(()) };
+    root.entry("hasCompletedOnboarding").or_insert(Value::Bool(true));
+    if !root.get("projects").is_some_and(Value::is_object) {
+        root.insert("projects".into(), json!({}));
+    }
+    let Some(projects) = root.get_mut("projects").and_then(Value::as_object_mut) else { return Ok(()) };
+    for dir in dirs {
+        if !projects.get(dir).is_some_and(Value::is_object) {
+            projects.insert(dir.clone(), json!({}));
+        }
+        if let Some(entry) = projects.get_mut(dir).and_then(Value::as_object_mut) {
+            entry.insert("hasTrustDialogAccepted".into(), Value::Bool(true));
+        }
+    }
+    let body = serde_json::to_vec_pretty(&value).map_err(io::Error::other)?;
+    if existing.as_deref() == Some(body.as_slice()) {
+        return Ok(());
+    }
+    file.write(&body)
+}
+
+/// Codex's `config.toml`: `[projects."<dir>"] trust_level = "trusted"` for
+/// each of `dirs`, edited in place so the hook blocks and any other table keep
+/// their text and order (Codex keys a hook's trust by its position).
+fn trust_codex_config(file: &HomeFile, dirs: &[String]) -> io::Result<()> {
+    let text = match file.read() {
+        Some(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+        None if file.exists() => return Err(io::Error::other("config.toml cannot be read")),
+        None => None,
+    };
+    let edited = text.as_deref().and_then(|t| with_codex_trust(t, dirs));
+    let out = match (text.as_deref(), edited) {
+        (_, Some(out)) => out,
+        // Unparsable or an unexpected shape: start over from nothing.
+        (Some(_), None) => {
+            file.rename_aside(".unreadable")?;
+            with_codex_trust("", dirs).ok_or_else(|| io::Error::other("config.toml cannot be written"))?
+        }
+        (None, None) => with_codex_trust("", dirs).ok_or_else(|| io::Error::other("config.toml cannot be written"))?,
+    };
+    if text.as_deref() == Some(out.as_str()) {
+        return Ok(());
+    }
+    file.write(out.as_bytes())
+}
+
+/// Pure: `text` with every dir of `dirs` trusted; `None` when `text` is not
+/// TOML or `projects` is not a table.
+fn with_codex_trust(text: &str, dirs: &[String]) -> Option<String> {
+    use toml_edit::{value, DocumentMut, Item, Table};
+    let mut doc: DocumentMut = text.parse().ok()?;
+    if doc.get("projects").is_none() {
+        let mut projects = Table::new();
+        projects.set_implicit(true);
+        doc.insert("projects", Item::Table(projects));
+    }
+    let projects = doc.get_mut("projects")?.as_table_like_mut()?;
+    for dir in dirs {
+        if projects.get(dir).is_none() {
+            projects.insert(dir, Item::Table(Table::new()));
+        }
+        projects.get_mut(dir)?.as_table_like_mut()?.insert("trust_level", value("trusted"));
+    }
+    Some(doc.to_string())
 }
 
 /// Remove a scope's homes for good — a project forgotten or deleted: its own
@@ -612,5 +781,164 @@ mod tests {
         let again = prepare_home_in(state, &home, "p1", &[], Seed::Scope).unwrap();
         assert!(!again.fresh);
         assert!(existing_homes_in(state).contains(&home));
+    }
+
+    const CHAT: &str = "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10";
+
+    fn write_file(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// The Tabtivity-wide layer never reaches the assistant's home, not even
+    /// when the layer is non-empty and the same state dir just laid it into a
+    /// sibling scope's home; the sibling shows the layer was really there.
+    #[test]
+    fn the_global_layer_never_reaches_an_assistant_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let layer = crate::services::agent_global::global_dir_in(state);
+        write_file(&layer.join(".claude/CLAUDE.md"), "from the layer");
+        write_file(&layer.join(".claude/skills/s/SKILL.md"), "a skill");
+        write_file(&layer.join(".claude/settings.json"), r#"{"mcpServers":{"evil":{"command":"x"}},"env":{"LAYER":"1"}}"#);
+        write_file(&layer.join(".codex/config.toml"), "[mcp_servers.evil]\ncommand = \"x\"\n");
+        let sibling = scope_home_in(state, "p1");
+        std::fs::create_dir_all(&sibling).unwrap();
+        crate::services::agent_global::apply_to_home(state, &sibling).unwrap();
+        assert!(sibling.join(".claude/CLAUDE.md").is_file(), "the layer is live for a sibling");
+
+        let chat = crate::services::assistant::chat_dir(state, CHAT).unwrap();
+        for local in [false, true] {
+            let prepared = prepare_assistant_home_in(state, local, &chat).unwrap();
+            let home = prepared.dir;
+            assert_eq!(home, if local { local_model_home_in(state, "assistant") } else { scope_home_in(state, "assistant") });
+            for rel in [".claude/CLAUDE.md", ".claude/skills", ".claude/skills/s/SKILL.md"] {
+                assert!(!home.join(rel).exists(), "{rel} in {}", home.display());
+            }
+            // Nothing the layer merges, and no layer manifest either.
+            let settings = std::fs::read_to_string(home.join(".claude/settings.json")).unwrap();
+            assert!(!settings.contains("evil") && !settings.contains("LAYER"), "{settings}");
+            let claude_json = std::fs::read_to_string(home.join(".claude.json")).unwrap();
+            assert!(!claude_json.contains("evil"), "{claude_json}");
+            let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+            assert!(!codex.contains("mcp_servers") && !codex.contains("evil"), "{codex}");
+            assert!(!home.join(crate::brand::AGENT_GLOBAL_MANIFEST).exists());
+            // Tabtivity's own session hooks are kept.
+            assert!(settings.contains("hooks"), "{settings}");
+            assert!(codex.contains("[[hooks.SessionStart]]"), "{codex}");
+        }
+    }
+
+    #[test]
+    fn an_assistant_home_trusts_its_chat_folder_for_claude_and_codex() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let chat = crate::services::assistant::chat_dir(state, CHAT).unwrap();
+        let other = crate::services::assistant::chat_dir(state, "1c9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a11").unwrap();
+        let first = prepare_assistant_home_in(state, false, &chat).unwrap();
+        assert!(first.fresh);
+        assert!(!chat.exists(), "the chat folder is the spawn path's to create");
+        let home = &first.dir;
+        let key = chat.to_string_lossy().into_owned();
+        let claude: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(claude["hasCompletedOnboarding"], true);
+        assert_eq!(claude["projects"][&key]["hasTrustDialogAccepted"], true);
+        let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        let doc: toml_edit::DocumentMut = codex.parse().unwrap();
+        assert_eq!(doc["projects"][&key]["trust_level"].as_str(), Some("trusted"));
+        assert!(codex.contains("[[hooks.SessionStart]]"));
+
+        // A second chat adds its own entry and keeps the first's.
+        let again = prepare_assistant_home_in(state, false, &other).unwrap();
+        assert!(!again.fresh);
+        let claude: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(claude["projects"][&key]["hasTrustDialogAccepted"], true);
+        assert_eq!(claude["projects"][other.to_string_lossy().as_ref()]["hasTrustDialogAccepted"], true);
+        let doc: toml_edit::DocumentMut = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap().parse().unwrap();
+        assert_eq!(doc["projects"][other.to_string_lossy().as_ref()]["trust_level"].as_str(), Some("trusted"));
+        assert_eq!(doc["projects"][&key]["trust_level"].as_str(), Some("trusted"));
+        // Idempotent: Codex's hook blocks are written once.
+        let text = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        prepare_assistant_home_in(state, false, &other).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join(".codex/config.toml")).unwrap(), text);
+        assert_eq!(text.matches("[[hooks.SessionStart]]").count(), 1);
+    }
+
+    /// Existing keys stay (a signed-in identity, an onboarding flag the user
+    /// answered otherwise, Codex's other tables); a config left unparsable is
+    /// moved aside rather than trusted blind or left to break the spawn.
+    #[test]
+    fn trust_keeps_other_keys_and_replaces_only_what_cannot_be_parsed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let dirs = ["/s/assistant/work/c1".to_string()];
+        write_file(
+            &home.join(".claude.json"),
+            r#"{"oauthAccount":{"emailAddress":"a@b"},"hasCompletedOnboarding":false,"projects":{"/x":{"history":[1]},"/s/assistant/work/c1":{"allowedTools":["t"]}}}"#,
+        );
+        write_file(&home.join(".codex/config.toml"), "model = \"gpt-5\"\n\n[projects.\"/x\"]\ntrust_level = \"untrusted\"\n\n[projects.\"/s/assistant/work/c1\"]\ntrust_level = \"untrusted\"\n");
+        trust_chat_folder(&home, Path::new(&dirs[0])).unwrap();
+        let claude: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(claude["oauthAccount"]["emailAddress"], "a@b");
+        assert_eq!(claude["hasCompletedOnboarding"], false);
+        assert_eq!(claude["projects"]["/x"]["history"][0], 1);
+        assert_eq!(claude["projects"]["/s/assistant/work/c1"]["allowedTools"][0], "t");
+        assert_eq!(claude["projects"]["/s/assistant/work/c1"]["hasTrustDialogAccepted"], true);
+        let doc: toml_edit::DocumentMut = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap().parse().unwrap();
+        assert_eq!(doc["model"].as_str(), Some("gpt-5"));
+        assert_eq!(doc["projects"]["/x"]["trust_level"].as_str(), Some("untrusted"));
+        assert_eq!(doc["projects"]["/s/assistant/work/c1"]["trust_level"].as_str(), Some("trusted"));
+
+        std::fs::write(home.join(".claude.json"), "{not json").unwrap();
+        std::fs::write(home.join(".codex/config.toml"), "projects = 3\n[[").unwrap();
+        trust_chat_folder(&home, Path::new(&dirs[0])).unwrap();
+        let claude: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(claude["projects"]["/s/assistant/work/c1"]["hasTrustDialogAccepted"], true);
+        assert_eq!(std::fs::read_to_string(home.join(".claude.json.unreadable")).unwrap(), "{not json");
+        let doc: toml_edit::DocumentMut = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap().parse().unwrap();
+        assert_eq!(doc["projects"]["/s/assistant/work/c1"]["trust_level"].as_str(), Some("trusted"));
+        assert!(home.join(".codex/config.toml.unreadable").is_file());
+        // A well-formed file whose `projects` is not a table goes the same way.
+        write_file(&home.join(".codex/config.toml"), "projects = 3\n");
+        trust_chat_folder(&home, Path::new(&dirs[0])).unwrap();
+        assert!(std::fs::read_to_string(home.join(".codex/config.toml")).unwrap().contains("trust_level"));
+    }
+
+    #[test]
+    fn an_assistant_home_refuses_a_chat_folder_outside_the_work_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let work = crate::services::assistant::work_root(state);
+        for bad in [
+            work.clone(),
+            state.join("assistant"),
+            state.join("elsewhere").join(CHAT),
+            work.join("..").join("x"),
+            PathBuf::new(),
+        ] {
+            let err = prepare_assistant_home_in(state, false, &bad).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{}", bad.display());
+        }
+        assert!(!homes_root_in(state).join("assistant").exists(), "a refusal creates no home");
+    }
+
+    /// A link planted at a trust file by an agent in the home is replaced, not
+    /// written through.
+    #[cfg(unix)]
+    #[test]
+    fn trust_never_writes_through_a_planted_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let victim = tmp.path().join("victim.json");
+        std::fs::write(&victim, "{}").unwrap();
+        std::os::unix::fs::symlink(&victim, home.join(".claude.json")).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join(".codex")).unwrap();
+        // `.codex` is a link: not a plain path, so the preparation refuses.
+        assert!(trust_chat_folder(&home, Path::new("/s/c")).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}");
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
     }
 }
