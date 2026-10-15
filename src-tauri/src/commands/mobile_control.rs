@@ -31,22 +31,6 @@ use crate::{
 };
 
 pub const MOBILE_DESKTOP_EVENT: &str = crate::brand::MOBILE_DESKTOP_EVENT;
-#[cfg(not(windows))]
-const INSTALL_PHONE_SCRIPT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../scripts/install_phone.sh"
-));
-/// The PowerShell twin (same checks, same output) for Windows, where the root
-/// terminal has no bash/jq to run the POSIX script with.
-#[cfg(windows)]
-const INSTALL_PHONE_SCRIPT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../scripts/install_phone.ps1"
-));
-#[cfg(not(windows))]
-const INSTALL_PHONE_SCRIPT_NAME: &str = "install_phone.sh";
-#[cfg(windows)]
-const INSTALL_PHONE_SCRIPT_NAME: &str = "install_phone.ps1";
 
 #[derive(Clone, Default)]
 pub struct MobileDesktopState {
@@ -340,31 +324,6 @@ pub async fn phone_upload_undo(id: String) -> Result<(), String> {
     .await
     .map_err(|_| uploads::UploadError::Io(String::new()).code().to_string())?
     .map_err(|error| error.code().to_string())
-}
-
-/// Materialize the phone-install handoff where the root terminal can run it,
-/// returning the script's path — the state dir differs per OS, so the caller
-/// must not re-derive it. Keep the script embedded so this action also works
-/// from a packaged app, whose installation directory does not contain the
-/// source checkout. POSIX shell on Linux/macOS, PowerShell on Windows; the
-/// frontend picks the matching interpreter from the extension.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn mobile_prepare_phone_install_script() -> Result<String, String> {
-    let path = storage::state_dir()
-        .join("mobile-control")
-        .join(INSTALL_PHONE_SCRIPT_NAME);
-    let parent = path
-        .parent()
-        .ok_or("could not determine the Mobile control directory")?;
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    std::fs::write(&path, INSTALL_PHONE_SCRIPT).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(path.to_string_lossy().into_owned())
 }
 
 /// The paired phones, read off `mobile-control/devices.json` whether or not
@@ -1793,7 +1752,12 @@ mod stay_after_quit_tests {
 
 #[cfg(all(test, unix))]
 mod install_phone_script_tests {
-    use super::INSTALL_PHONE_SCRIPT;
+    // The app no longer materializes this script (the QR pairing flow replaced
+    // the install tab); the script stays tested while it ships in `scripts/`.
+    const INSTALL_PHONE_SCRIPT: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../scripts/install_phone.sh"
+    ));
     use std::{
         os::unix::fs::{symlink, PermissionsExt},
         path::{Path, PathBuf},

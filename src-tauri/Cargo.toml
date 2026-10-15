@@ -109,7 +109,6 @@ serde_json = "1"
 # losing its comments or layout (`services::agent_global`).
 toml_edit = "0.25"
 chrono = "0.4"
-chrono-tz = "0.10"
 regex = "1"
 # serde_yaml is deprecated (RUSTSEC-2025-0068); serde_norway is its maintained,
 # API-identical fork.
@@ -211,8 +210,6 @@ rustls-pki-types = "1"
 ammonia = "4"
 # Zero password buffers on drop; nothing in this crate's API can be logged.
 zeroize = { version = "1", features = ["derive"] }
-# Punycode/IDNA for the link-safety host comparison (plan B §2.5).
-idna = "1"
 # The public-suffix list, compiled in: CalDAV credentials may follow a redirect
 # or a server-named href to any https host under the account's registrable
 # domain (`caldav.example.com` → `p42-caldav.example.com`), and only a real
@@ -301,10 +298,6 @@ tokio-tungstenite = "0.29"
 # ephemeral key, never a counter. Already in the tree transitively.
 aes-gcm = "0.10"
 subtle = "2"
-# RFC 1918 / ULA / CGNAT / link-local classification for the loopback-and-intranet
-# navigation gate. `IpAddr::is_global()` is still unstable, so this is the stable
-# replacement rather than a convenience. Already in the tree transitively.
-ipnet = "2"
 # Reader mode fetches pages in the BACKEND, so the unsanitized bytes never exist
 # in a webview process (the mail client's structural argument, applied to the web).
 # `default-features = false` drops native-tls (no OpenSSL anywhere in the bundle,

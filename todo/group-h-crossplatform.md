@@ -73,8 +73,9 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
-    - [x] **30c — Native PID liveness.** ✅ Done. `check_pid_alive`
-      (`commands/apps.rs`) no longer shells out to `tasklist` on Windows; it uses
+    - [x] **30c — Native PID liveness.** ✅ Done. `pid_alive`
+      (`commands/apps.rs`; its uncalled IPC wrapper `check_pid_alive` was
+      removed 2026-10-15) no longer shells out to `tasklist` on Windows; it uses
       `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess`,
       treating `STILL_ACTIVE` (259) as alive (a handle to an exited process still
       opens, so the exit code must be inspected — not just OpenProcess success).

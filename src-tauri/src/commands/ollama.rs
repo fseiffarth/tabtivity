@@ -49,17 +49,6 @@ pub struct OllamaModelInfo {
     pub remote: bool,
 }
 
-/// An entry in the built-in catalog of installable models.
-#[derive(serde::Serialize, Clone)]
-pub struct CatalogEntry {
-    pub name: String,
-    pub description: String,
-    /// Available size tags e.g. ["1b", "3b", "7b"]
-    pub tags: Vec<String>,
-    /// Human-readable disk-size hint e.g. "1.3 GB – 2 GB"
-    pub size_hint: String,
-}
-
 // ── Where the server is ───────────────────────────────────────────────────
 
 /// The endpoint every request here uses when `Settings::ollama_host` says
@@ -2267,26 +2256,6 @@ fn fetch_registry_manifest(model: &str) -> Result<serde_json::Value, String> {
     serde_json::from_slice(&output.stdout).map_err(|e| format!("manifest json: {e}"))
 }
 
-/// Total download size in bytes for an installable model tag, read from the
-/// Ollama registry manifest. Used to show a model's size on hover before the
-/// user commits to a pull. Sums the manifest's config + layer sizes.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn ollama_registry_size(model: String) -> Result<u64, String> {
-    let v = fetch_registry_manifest(&model)?;
-
-    let layers_total: u64 = v["layers"]
-        .as_array()
-        .map(|arr| arr.iter().filter_map(|l| l["size"].as_u64()).sum())
-        .unwrap_or(0);
-    let config_size = v["config"]["size"].as_u64().unwrap_or(0);
-    let total = layers_total + config_size;
-
-    if total == 0 {
-        return Err(format!("no size info in manifest for {model}"));
-    }
-    Ok(total)
-}
-
 /// Fetch a registry blob (here: a manifest's config object) by digest. The
 /// `repo` comes from `registry_repo_tag` (already `validate_model_name`d) and the
 /// digest is checked to be a bare `sha256:<hex>`, so nothing user-typed reaches
@@ -2377,8 +2346,8 @@ pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, S
 // used to carry `x-test-*` hooks, but a 2026 redesign dropped them, so we now
 // key off the one anchor the page has always had: each result card's title
 // links to `/library/<name>`. We fetch it with `curl` (no TLS dep, same as
-// `ollama_registry_size`) and parse that. This surfaces *every*
-// model in the registry — far beyond the curated `list_installable_models` — and
+// `fetch_registry_manifest`) and parse that. This surfaces *every*
+// model in the registry and
 // supports Ollama's own filters: free-text query, capability filter, sort, and
 // pagination for lazy loading. NB: Ollama provides no country/year metadata, so
 // "recency" comes only from its relative `updated` label and the `newest` sort.
@@ -2566,198 +2535,6 @@ pub async fn search_ollama_registry(
 
     let html = String::from_utf8_lossy(&output.stdout);
     Ok(parse_search_html(&html))
-}
-
-/// Return the built-in catalog of popular installable models.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn list_installable_models() -> Vec<CatalogEntry> {
-    vec![
-        CatalogEntry {
-            name: "llama3.2".into(),
-            description: "Meta Llama 3.2 — fast, lightweight instruction model".into(),
-            tags: vec!["1b".into(), "3b".into()],
-            size_hint: "1.3 GB – 2.0 GB".into(),
-        },
-        CatalogEntry {
-            name: "llama3.1".into(),
-            description: "Meta Llama 3.1 — strong general-purpose model".into(),
-            tags: vec!["8b".into(), "70b".into(), "405b".into()],
-            size_hint: "4.7 GB – 229 GB".into(),
-        },
-        CatalogEntry {
-            name: "qwen2.5".into(),
-            description: "Alibaba Qwen 2.5 — multilingual, strong coding & reasoning".into(),
-            tags: vec![
-                "0.5b".into(),
-                "1.5b".into(),
-                "3b".into(),
-                "7b".into(),
-                "14b".into(),
-                "32b".into(),
-                "72b".into(),
-            ],
-            size_hint: "0.4 GB – 47 GB".into(),
-        },
-        CatalogEntry {
-            name: "qwen2.5-coder".into(),
-            description: "Alibaba Qwen 2.5 Coder — specialized code generation".into(),
-            tags: vec![
-                "0.5b".into(),
-                "1.5b".into(),
-                "3b".into(),
-                "7b".into(),
-                "14b".into(),
-                "32b".into(),
-            ],
-            size_hint: "397 MB – 20 GB".into(),
-        },
-        CatalogEntry {
-            name: "qwen3.5".into(),
-            description: "Alibaba Qwen 3.5 — current multimodal model family".into(),
-            tags: vec![
-                "0.8b".into(),
-                "2b".into(),
-                "4b".into(),
-                "9b".into(),
-                "27b".into(),
-                "35b".into(),
-                "122b".into(),
-            ],
-            size_hint: "1.0 GB – 81 GB".into(),
-        },
-        CatalogEntry {
-            name: "qwen3-coder".into(),
-            description: "Alibaba Qwen3 Coder — coding model for agentic workflows".into(),
-            tags: vec!["30b".into(), "480b".into()],
-            size_hint: "19 GB – 290 GB".into(),
-        },
-        CatalogEntry {
-            name: "qwen3-coder-next".into(),
-            description: "Alibaba Qwen3 Coder Next — coding-focused local development model".into(),
-            tags: vec!["q4_K_M".into(), "q8_0".into()],
-            size_hint: "52 GB – 85 GB".into(),
-        },
-        CatalogEntry {
-            name: "deepseek-r1".into(),
-            description: "DeepSeek R1 — chain-of-thought reasoning model".into(),
-            tags: vec![
-                "1.5b".into(),
-                "7b".into(),
-                "8b".into(),
-                "14b".into(),
-                "32b".into(),
-                "70b".into(),
-                "671b".into(),
-            ],
-            size_hint: "1.1 GB – 404 GB".into(),
-        },
-        CatalogEntry {
-            name: "deepseek-coder".into(),
-            description: "DeepSeek Coder — code model trained on code and natural language".into(),
-            tags: vec!["1.3b".into(), "6.7b".into(), "33b".into()],
-            size_hint: "776 MB – 18 GB".into(),
-        },
-        CatalogEntry {
-            name: "gemma3".into(),
-            description: "Google Gemma 3 — efficient open model from Google".into(),
-            tags: vec!["1b".into(), "4b".into(), "12b".into(), "27b".into()],
-            size_hint: "815 MB – 17 GB".into(),
-        },
-        CatalogEntry {
-            name: "gemma3n".into(),
-            description: "Google Gemma 3n — efficient multimodal model for low-resource devices"
-                .into(),
-            tags: vec!["e2b".into(), "e4b".into()],
-            size_hint: "5.6 GB – 7.5 GB".into(),
-        },
-        CatalogEntry {
-            name: "phi4".into(),
-            description: "Microsoft Phi-4 — small but capable reasoning model".into(),
-            tags: vec!["14b".into()],
-            size_hint: "9.1 GB".into(),
-        },
-        CatalogEntry {
-            name: "mistral".into(),
-            description: "Mistral 7B — fast European foundation model".into(),
-            tags: vec!["7b".into()],
-            size_hint: "4.1 GB".into(),
-        },
-        CatalogEntry {
-            name: "mistral-large".into(),
-            description: "Mistral Large 2 — flagship model for code, math, and reasoning".into(),
-            tags: vec!["123b".into()],
-            size_hint: "69 GB".into(),
-        },
-        CatalogEntry {
-            name: "ministral-3".into(),
-            description: "Mistral Ministral 3 — edge-oriented models with vision and tool support"
-                .into(),
-            tags: vec!["3b".into(), "8b".into(), "14b".into()],
-            size_hint: "3.0 GB – 9.1 GB".into(),
-        },
-        CatalogEntry {
-            name: "codellama".into(),
-            description: "Meta Code Llama — code generation and completion".into(),
-            tags: vec!["7b".into(), "13b".into(), "34b".into(), "70b".into()],
-            size_hint: "3.8 GB – 39 GB".into(),
-        },
-        CatalogEntry {
-            name: "granite3.3".into(),
-            description: "IBM Granite 3.3 — compact enterprise-oriented language model".into(),
-            tags: vec!["2b".into(), "8b".into()],
-            size_hint: "1.5 GB – 4.9 GB".into(),
-        },
-        CatalogEntry {
-            name: "olmo2".into(),
-            description: "Allen AI OLMo 2 — fully open model family".into(),
-            tags: vec!["7b".into(), "13b".into()],
-            size_hint: "4.5 GB – 8.2 GB".into(),
-        },
-        CatalogEntry {
-            name: "cogito".into(),
-            description: "Deep Cogito — hybrid reasoning models across small and large sizes"
-                .into(),
-            tags: vec![
-                "3b".into(),
-                "8b".into(),
-                "14b".into(),
-                "32b".into(),
-                "70b".into(),
-            ],
-            size_hint: "2.0 GB – 43 GB".into(),
-        },
-        CatalogEntry {
-            name: "smollm2".into(),
-            description: "HuggingFace SmolLM2 — ultra-small on-device model".into(),
-            tags: vec!["135m".into(), "360m".into(), "1.7b".into()],
-            size_hint: "90 MB – 1.8 GB".into(),
-        },
-        CatalogEntry {
-            name: "nomic-embed-text".into(),
-            description: "Nomic Embed Text — high-quality text embeddings".into(),
-            tags: vec!["latest".into()],
-            size_hint: "274 MB".into(),
-        },
-        CatalogEntry {
-            name: "mxbai-embed-large".into(),
-            description: "mxbai-embed-large — best-in-class English embeddings".into(),
-            tags: vec!["latest".into()],
-            size_hint: "670 MB".into(),
-        },
-        CatalogEntry {
-            name: "llava".into(),
-            description: "LLaVA — vision + language model for image understanding".into(),
-            tags: vec!["7b".into(), "13b".into(), "34b".into()],
-            size_hint: "4.5 GB – 20 GB".into(),
-        },
-    ]
-}
-
-/// True when the Ollama server is reachable on its default port. Cheap enough
-/// (200 ms TCP connect) to poll from the UI for a live status indicator.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn ollama_is_running() -> bool {
-    ollama_listening()
 }
 
 /// Three-state health of the local Ollama server for the header status lamp:
@@ -3403,21 +3180,9 @@ fn system_ollama_models_dir() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Query the Ollama REST API and return all installed model names.
-/// Returns Err("not_running") when the Ollama server is not reachable.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn list_ollama_models() -> Result<Vec<String>, String> {
-    installed_model_names()
-}
-
-/// The names `/api/tags` lists, synchronously — the dispatcher's model
-/// allowlist (`services::model_allowlist`) asks before a request is forwarded.
-pub(crate) fn installed_model_names() -> Result<Vec<String>, String> {
-    installed_model_names_within(Duration::from_secs(600))
-}
-
-/// [`installed_model_names`] answered within `read_timeout` (after the
-/// bounded connect), or an error.
+/// The names `/api/tags` lists, synchronously, answered within `read_timeout`
+/// (after the bounded connect), or an error — the dispatcher's model allowlist
+/// (`services::model_allowlist`) asks before a request is forwarded.
 pub(crate) fn installed_model_names_within(read_timeout: Duration) -> Result<Vec<String>, String> {
     let body = ollama_http_within("GET", "/api/tags", None, read_timeout)?;
     let v: serde_json::Value =

@@ -201,8 +201,8 @@ share files and context:
   `routeUri`, `:341` `openRoutedUri`, tests `src/__tests__/browser/LinkTarget.test.ts`).
   The in-app mail J#65 / browser #61 in the same group are the larger net-new
   surfaces, weigh security first and pair with #60. Real quick wins now:
-  R #64 (the liveness helper `commands/apps.rs:1669 check_pid_alive` already
-  exists and is simply never called from `src/`) and S #78.
+  R #64 (implemented 2026-08-30 in the backend: the window registry prunes
+  dead pids with `commands/apps.rs` `pid_alive`) and S #78.
 - **Then correctness/stability:** C (X11/KDE workspace switching) — the
   highest-risk area; do #15/#16/#17 together.
 - **Then larger features:**

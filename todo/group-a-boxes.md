@@ -62,7 +62,8 @@
       `RightPanel.tsx`/`FileTree.tsx`, and the runtime/spawn path that sets
       agent-tab cwd + env. Scope to be refined when picked.
     > **Phase 2 (#41 groundwork) DONE (🤖 covered):** full box schema stored
-    > (`folder`, `relations` via `set_box_relations`), lazy
+    > (`folder`, `relations`; the uncalled `set_box_relations` setter was
+    > removed 2026-10-15), lazy
     > `~/tabtivity/boxes/<name>/` creation (`ensure_box_folder`, idempotent +
     > name-collision-safe against reserved `folder`s and on-disk dirs), boxes in
     > the project search (`.project-search-row.is-box`, opt-in — members stay
@@ -99,9 +100,10 @@
     > picker is multi-root in a box scope; disconnected remote members gate
     > behind a connect prompt; local box shells get tmux persistence. See
     > `docs/context/project_boxes.md`.
-    > **Still deferred:** relation-graph *surfacing* (`set_box_relations` is
-    > registered at `lib.rs:712` but has **no frontend caller**; `relations`
-    > appears only in `src/types/index.ts:735`), dirty-source→dependent git
+    > **Still deferred:** relation-graph *surfacing* (`relations` is stored
+    > and round-trips, but nothing edits it: the uncalled `set_box_relations`
+    > command was removed 2026-10-15 — a surfacing UI adds a patch-style
+    > setter, e.g. a `BoxPatch` field), dirty-source→dependent git
     > markers, auto-detection, remote-member mirror fallback in the box file
     > view, box-level sandbox/VM.
     - [x] 🤖 Automated test — `commands/boxes.rs` cargo tests (reconcile drops

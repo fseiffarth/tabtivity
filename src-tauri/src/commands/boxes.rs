@@ -24,7 +24,7 @@ use serde_json::Value;
 
 use crate::commands::projects::{sanitize_name, uuid_v4};
 use crate::paths;
-use crate::schema::boxes::{BoxRelation, BoxesList, ProjectBox};
+use crate::schema::boxes::{BoxesList, ProjectBox};
 use crate::storage;
 use crate::tauri_host::Ctx;
 
@@ -884,20 +884,6 @@ pub fn refresh_box_agent_docs(box_id: String) -> Result<(), String> {
     // must not block the doc refresh, and vice versa.
     let _ = write_box_member_links(folder, &members);
     write_box_agent_docs(folder, &b.name, &members).map_err(|e| e.to_string())
-}
-
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn set_box_relations(
-    box_id: String,
-    relations: Vec<BoxRelation>,
-) -> Result<ProjectBox, String> {
-    let mut boxes = read_boxes()?;
-    let target = boxes
-        .iter_mut()
-        .find(|b| b.id == box_id)
-        .ok_or_else(|| format!("box '{box_id}' not found"))?;
-    target.relations = relations;
-    write_boxes_answering(&boxes, &box_id)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

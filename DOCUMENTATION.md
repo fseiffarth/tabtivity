@@ -1002,9 +1002,7 @@ returns true. The panel uses backend commands from `commands/ollama.rs`:
 | `ensure_ollama_running` | Starts the system `ollama` service when possible, otherwise falls back to `ollama serve`. |
 | `ensure_ollama_running_unattended` | `ensure_ollama_running` for the phone: `systemctl --no-ask-password start ollama` (fails instead of a polkit dialog), then the owned `ollama serve` fallback that quit stops. Runs off the async runtime. |
 | `ollama_server_kind` | Whether the configured Ollama server is on this machine (`"local"`) or another (`"remote"`); a bad `ollama_host` is an error. |
-| `list_ollama_models` | Lists installed model names for the Local Agents tab menu. |
 | `list_ollama_models_detailed` | Returns installed model names, disk sizes, family, parameter size, quantization, running state, and VRAM use. |
-| `list_installable_models` | Returns Tabtivity's built-in catalog of common model families and tags. |
 | `pull_ollama_model` | Pulls or updates a model through `/api/pull`. |
 | `load_ollama_model` | Loads a model into memory (`device`: `gpu` / `cpu`, default auto) with `keep_alive = -1` and waits; emits `ollama-load-progress` (`loading` → `success`/`error`). |
 | `load_installed_ollama_model` | The phone's load: only a name `/api/tags` lists (exact or `:latest`, never a prefix or a cloud model), Ollama picks the device, answers at once with the listed name and loads on a detached thread with the same events; refusals are bare codes (`ollama_not_running`, `model_not_installed`, `model_not_local`). |
@@ -1126,8 +1124,7 @@ merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
 `BoxEditorDialog.tsx`, `stores/boxes.ts`, `commands/boxes.rs`;
 `docs/context/project_boxes.md` holds the design rationale). Backend commands:
 `get_boxes`, `save_boxes`, `create_box`, `rename_box`, `delete_box`,
-`set_box_members`, `ensure_box_folder`, `refresh_box_agent_docs`,
-`set_box_relations`.
+`set_box_members`, `ensure_box_folder`, `refresh_box_agent_docs`.
 
 - **Data model (N:M).** Boxes live in their own `~/.local/share/tabtivity/boxes.json`
   (`Vec<ProjectBox>` = `{id, name, member_ids, position, folder?, relations}`)
