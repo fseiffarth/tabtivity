@@ -1497,6 +1497,16 @@ impl PtyRegistry {
         self.entries.get(id).map(|e| e.input_tx.clone())
     }
 
+    /// [`Self::input_sender`], only while `id` still runs spawn `seq`: a respawn of
+    /// the id is another program, whatever the spawn before it was.
+    pub fn input_sender_of_spawn(
+        &self,
+        id: &str,
+        seq: u64,
+    ) -> Option<tokio::sync::mpsc::Sender<Vec<u8>>> {
+        self.entries.get(id).filter(|e| e.seq == seq).map(|e| e.input_tx.clone())
+    }
+
     /// The registry id `caller` means by `id`: its own attach PTY onto that
     /// tab when it has one — or would get one, the tab being another client's
     /// tmux tab ([`Self::attachable`]): a pane registers its view before it
@@ -2295,6 +2305,12 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
 /// what owns a PTY (no output, no route, no tab bookkeeping).
 #[cfg(all(test, unix))]
 pub(crate) fn insert_test_pty(registry: &Arc<Mutex<PtyRegistry>>, id: &str, meta: PtyMeta) {
+    insert_test_pty_at(registry, id, meta, 0);
+}
+
+/// [`insert_test_pty`] as spawn `seq` of `id`.
+#[cfg(all(test, unix))]
+pub(crate) fn insert_test_pty_at(registry: &Arc<Mutex<PtyRegistry>>, id: &str, meta: PtyMeta, seq: u64) {
     let pair = NativePtySystem::default()
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
         .expect("openpty");
@@ -2305,7 +2321,7 @@ pub(crate) fn insert_test_pty(registry: &Arc<Mutex<PtyRegistry>>, id: &str, meta
     registry
         .lock()
         .unwrap()
-        .insert_with(id.to_string(), pair.master, writer, child, Arc::new(AtomicBool::new(false)), meta, 0);
+        .insert_with(id.to_string(), pair.master, writer, child, Arc::new(AtomicBool::new(false)), meta, seq);
 }
 
 /// End every PTY a test left in `registry`, without the tab cleanups.
