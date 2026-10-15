@@ -146,6 +146,15 @@ pub fn prepare_local_model_home(scope_id: &str, roots: &[PathBuf]) -> io::Result
     prepare_home_in(&state_dir, &home, scope_id, roots, Seed::LocalModel)
 }
 
+/// The assistant scope's home (`agent-homes/assistant`, or `assistant.local`
+/// for a local-model chat): seeded with nothing, no `agent_global` layer,
+/// Tabtivity's hooks and the shared logins kept, folder trust written for
+/// `chat_dir`. Skeleton: refuses until S1b builds it.
+pub fn prepare_assistant_home(local: bool, chat_dir: &Path) -> io::Result<PreparedHome> {
+    let _ = (local, chat_dir);
+    Err(io::Error::other("assistant home not built"))
+}
+
 /// The Host session's home: same preparation, but nothing is seeded from a
 /// fenced scope's state and no transcripts are copied in.
 pub fn prepare_host_home() -> io::Result<PreparedHome> {

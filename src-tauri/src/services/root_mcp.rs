@@ -878,6 +878,12 @@ fn help_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
 /// [`Runtime::serves_markup`]. Tokens go into `store`, the one that
 /// listener authenticates against. Returns whether the spawn is a root agent.
 pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Runtime>, store: &TokenStore, state: &Path) -> bool {
+    // An assistant chat gets the web lane and nothing else (plan "Call
+    // sites" row 5): no root, reader, schedule, push, help or markup lane.
+    if opts.assistant.is_some() {
+        grant_assistant(opts, runtime, store);
+        return false;
+    }
     let root_agent = is_root_agent(opts, agent_spawn);
     let Some(runtime) = runtime else { return root_agent };
     let trusted = Trusted::read(state, opts.project_id.as_deref());
@@ -925,6 +931,11 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     }
     root_agent
 }
+
+/// The assistant scope's one lane: the web lane's token and URL in the spawn
+/// env (`WEB_TOKEN_ENV`/`WEB_URL_ENV`) when `runtime.serves_web` and the
+/// profile wants it. Skeleton: grants nothing until S2 builds it.
+fn grant_assistant(_opts: &mut PtyOptions, _runtime: Option<&Runtime>, _store: &TokenStore) {}
 
 /// The root lane of [`grant_lanes`]: [`apply_to_spawn_with`] while the tools
 /// are switched on.
