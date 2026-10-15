@@ -522,7 +522,7 @@ pub struct RawEntry {
     pub size: u64,
     /// Last-modified time as whole seconds since the Unix epoch, when reported.
     pub modified_secs: Option<u64>,
-    /// Permission bits (`0o7777` mask) from the listing attrs, when reported —
+    /// Permission bits (`0o777` mask, no special bits) from the listing attrs, when reported —
     /// what a pull gives the mirror copy, so a host `0755` script stays
     /// executable locally.
     pub mode: Option<u32>,
@@ -924,7 +924,7 @@ pub async fn metadata_on(sftp: &Sftp, path: &str) -> Result<(u64, Option<u64>), 
         .map(|(size, modified, _)| (size, modified))
 }
 
-/// [`metadata_on`] plus the permission bits (`0o7777` mask), `None` when the
+/// [`metadata_on`] plus the permission bits (`0o777` mask), `None` when the
 /// server omits them — one stat for a pull that must carry the host's mode.
 pub async fn metadata_with_mode_on(
     sftp: &Sftp,
@@ -940,10 +940,11 @@ pub async fn metadata_with_mode_on(
     Ok((size, modified, permission_bits(&meta)))
 }
 
-/// The permission bits (`0o7777`: rwx for all three classes plus
-/// setuid/setgid/sticky) of SFTP attrs, `None` when the server sent none.
+/// The permission bits (`0o777`: rwx for the three classes) of SFTP attrs,
+/// `None` when the server sent none. Never setuid/setgid/sticky: the host is
+/// attacker-controlled, and a mirror copy must not carry them.
 fn permission_bits(meta: &openssh_sftp_client::metadata::MetaData) -> Option<u32> {
-    meta.permissions().map(|p| p.as_raw().bits() & 0o7777)
+    meta.permissions().map(|p| p.as_raw().bits() & 0o777)
 }
 
 /// Like [`metadata_on`], but the three outcomes stay distinct: `Ok(Some(..))`

@@ -164,7 +164,8 @@ only a regular file within the cap recorded afterwards. Any rsync error (an old
 or foreign rsync refusing a flag included) falls back to SFTP. The SFTP path
 gives each mirror copy the host file's permission bits through the umask (what
 rsync gives a new file), so a host `0755` script stays executable; with no host
-mode it keeps the mirror copy's own. Locally edited
+mode it keeps the mirror copy's own. Never a setuid/setgid/sticky bit, from
+either side. Locally edited
 files it overwrites are logged. Files over the 64 MiB cap stay on the host on
 either path; the pull returns them (`remote_sync::PullOutcome`:
 `pulled` + `skippedTooLarge`, path and size), and the result line under the

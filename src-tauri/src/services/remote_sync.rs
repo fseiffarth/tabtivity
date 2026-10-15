@@ -759,7 +759,7 @@ pub struct HostFile {
     pub rel: String,
     pub size: u64,
     pub mtime: Option<u64>,
-    /// The host's permission bits (`0o7777`), when the server reported them —
+    /// The host's permission bits (`0o777`), when the server reported them —
     /// what [`pull_file`] gives the mirror copy.
     pub mode: Option<u32>,
 }
@@ -913,10 +913,11 @@ pub fn write_mirror_file_with_mode(
 ///
 /// The mode (Unix): the staged file used to keep `NamedTempFile`'s `0600`, so
 /// every SFTP pull dropped a host script's executable bit (rsync's fast path
-/// never did). Now: the host's bits (`host_mode`, masked to `0o7777`) through
-/// the umask — what rsync gives a new file without `-p`, and never a
-/// world-writable mirror file because the host had one; with no host mode, the
-/// existing mirror file's exact mode; else the umask default for a new file.
+/// never did). Now: the host's permission bits (`host_mode`, masked to `0o777`
+/// — never setuid/setgid/sticky from the host) through the umask — what rsync
+/// gives a new file without `-p`, and never a world-writable mirror file
+/// because the host had one; with no host mode, the existing mirror file's
+/// permission bits exactly; else the umask default for a new file.
 fn replace_local_atomic(local: &Path, bytes: &[u8], host_mode: Option<u32>) -> Result<(), String> {
     let parent = local.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -941,16 +942,23 @@ fn staged_mirror_file(
     use std::os::unix::fs::PermissionsExt;
     // The file being replaced, never followed through a symlink: the rename
     // replaces a link itself, so a link's target says nothing about this file.
+    // Permission bits only (`0o777`), from either side: the host is
+    // attacker-controlled, and `open(2)` would honour a setuid/setgid/sticky bit
+    // in the create mode (only a later unprivileged write clears setuid/setgid —
+    // never for an empty file or a privileged process). Nor does a local special
+    // bit survive a replacement whose bytes are the host's. rsync without `-p`
+    // drops them the same way.
     let existing = std::fs::symlink_metadata(local)
         .ok()
         .filter(|m| m.file_type().is_file())
-        .map(|m| m.permissions().mode() & 0o7777);
-    let create_mode = host_mode.map(|m| m & 0o7777).or(existing).unwrap_or(0o666);
+        .map(|m| m.permissions().mode() & 0o777);
+    let create_mode = host_mode.map(|m| m & 0o777).or(existing).unwrap_or(0o666);
     let staged = tempfile::Builder::new()
         .permissions(std::fs::Permissions::from_mode(create_mode))
         .tempfile_in(parent)
         .map_err(|e| e.to_string())?;
-    // `open(2)` applied the umask; a kept local mode is the file's own, exactly.
+    // `open(2)` applied the umask; a kept local mode is the file's own permission
+    // bits, exactly.
     if let (None, Some(mode)) = (host_mode, existing) {
         staged
             .as_file()
@@ -1579,6 +1587,35 @@ mod tests {
         pull("new.txt", None).await.unwrap();
         assert_eq!(mode_of("new.txt"), 0o666 & !umask);
         assert_eq!(std::fs::read(mirror.path().join("run.sh")).unwrap(), b"#!x");
+    }
+
+    /// M4b review: the host is attacker-controlled, so its setuid/setgid/sticky
+    /// bits never reach the mirror (rsync without `-p` drops them too). `open(2)`
+    /// honours them in the create mode; only a later write by an unprivileged
+    /// process clears setuid/setgid — an empty file (no write) or a privileged
+    /// process kept a planted `06755`. Nor does a local special bit survive a
+    /// replacement whose bytes are the host's.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_sftp_pull_never_applies_the_hosts_special_mode_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        let mirror = tempfile::tempdir().unwrap();
+        let mode_of = |rel: &str| std::fs::metadata(mirror.path().join(rel)).unwrap().permissions().mode() & 0o7777;
+        let umask = process_umask();
+        let empty = |rel: &'static str, mode: Option<u32>| {
+            pull_file_with(rel, 0, mode, mirror.path(), rel, || async { Ok(Vec::new()) })
+        };
+        empty("planted", Some(0o6755)).await.unwrap();
+        assert_eq!(mode_of("planted") & 0o7000, 0, "no setuid/setgid/sticky from the host");
+        assert_eq!(mode_of("planted"), 0o755 & !umask);
+        pull_file_with("sticky", 3, Some(0o1777), mirror.path(), "sticky", || async { Ok(b"abc".to_vec()) })
+            .await
+            .unwrap();
+        assert_eq!(mode_of("sticky") & 0o7000, 0);
+        // A kept local mode carries its permission bits, not a special bit.
+        std::fs::set_permissions(mirror.path().join("planted"), std::fs::Permissions::from_mode(0o4750)).unwrap();
+        empty("planted", None).await.unwrap();
+        assert_eq!(mode_of("planted"), 0o750);
     }
 
     /// This process's umask, read without changing it (Linux `/proc`; the usual
