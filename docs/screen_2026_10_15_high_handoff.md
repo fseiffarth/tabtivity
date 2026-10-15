@@ -1019,3 +1019,312 @@ Also passing:
 The Windows and macOS cross-checks were not re-run here; the step agents ran
 them on their own branches. `npm run backend:stale` was not run here, since it
 needs the main checkout's running window. Run it after landing.
+
+---
+
+# Follow-up round
+
+---
+
+## Handoff B1 — follow-up round F-b, F-d, F-e(3)
+
+Branch `screen-high-b1` (worktree `.claude/worktrees/high-b1`), base 3cdf4637
+(develop HEAD at start; the plan said 9c0cd013, the worktree was already on its
+two-commit-later tip). Commit: **b1dbd490**
+`fix(security): keep agent_tasks unknown fields, tie client ssh logins to configured hosts, fail closed inside a refused parent repo`.
+Hooks ran (privacy pre-commit passed). Not pushed.
+
+## F-b — agent_tasks round-trip
+- `schema/agent_tasks.rs`: `#[serde(flatten)] pub extra: BTreeMap<String, Value>` on
+  all six persisted structs (`AgentScheduleLastRun`, `ScheduledAgentPrompt`,
+  `ScheduleOrigin`, `AgentScheduleDelivery`, `AgentPromptTarget`, `AgentTasksFile`).
+  BTreeMap (stable key order on disk). IPC-only `AgentScheduleTargetBinding` untouched.
+  Module doc rewritten.
+- Choice: **unknown fields come only from the file, never from a caller.**
+  `services::agent_tasks::apply_upsert` (the pure core under `upsert`, `upsert_in`
+  and schedule_mcp) replaces the incoming row's `extra` with the stored row's (same
+  target, else the `expect_existing_on` source → a move carries it) and clears the
+  incoming `origin.extra` / `last.extra`. Reason: with flatten, a browser client or
+  phone could otherwise plant a field a newer build trusts (a runner-owned one, as
+  `last` is).
+- Sibling: `mobile_control::protocol::MobileSchedule::from` strips `last.extra`, so a
+  newer build's receipt fields never cross the browser API (host.rs test now seeds
+  extras and asserts the exact body).
+- Tests: `schema::agent_tasks::…a_file_from_a_newer_build_with_unknown_fields_round_trips`
+  inverted — load→save returns the whole file verbatim except the rule's unknown
+  `tz`; a plain file writes no trace. Strictness test
+  `schedule_rules_are_type_tagged_and_strict_about_the_type` kept unchanged.
+  New `services::agent_tasks::…unknown_fields_survive_writes_and_never_come_from_a_caller`
+  (on-disk edit / create / move through `upsert_in`).
+- todo/group-s-agents.md entry updated (unknown fields now kept; rule-internal fields
+  and unknown variants remain).
+
+## F-d — client ssh logins
+- `commands/credentials.rs`: `apply_login` → `apply_login_with(opts, caller, ssh_configured)`.
+  After `login_refusal`, a `Caller::Client` + `LoginTarget::Ssh` whose target is not
+  configured is refused: "a browser client may open an ssh login only to a host a
+  remote project or machine names" (backend text, same style as the others). The
+  closure is never called for the desktop window.
+- Match: `ssh_login_known` compares `creds::ssh_account(user, host, port)` strings —
+  i.e. "as stored" with the keychain's own normalization (trim, host lowercased,
+  no port = 22, blank user = none). User is **not** folded: login user must equal
+  the stored one (None ≠ Some).
+- Configured = `services::remote::configured_project_ssh_addresses()` (new; pure
+  `ssh_addresses_of(&ProjectsList)`: every entry's `extra["remote"]` primary +
+  `extra["compute_hosts"]` workers, via the cached projects list) + every
+  `global_machines.json` row (`commands::global_machines::load_all` made `pub(crate)`).
+- Tests: `a_clients_ssh_login_needs_a_configured_host` (refused leaves opts untouched;
+  allowed runs ssh argv and passes the target to the check; window never asks),
+  `a_configured_ssh_host_is_a_projects_or_a_machines` (primary, case/port-22
+  normalization, worker, machine, blank user; refused: other user/port/host, local
+  project, VPN, empty config). Existing client ssh tests moved to
+  `apply_login_with(.., |_| true)` (so no test reads the real state dir).
+- Doc: `docs/context/remote_credentials.md` login-PTY paragraph; module comment
+  in credentials.rs.
+
+## F-e(3) — git_peer refused parent repo
+- New `git_entry_up_sh!` macro: POSIX fragment walking `pwd -P` and each ancestor up
+  to `/`, `g=1` if any holds a `.git` entry (dir/file/link, dangling too) or `pwd`
+  fails; no `!` and no single quote.
+- `PROBE_SCRIPT` (now `concat!`): `norepo` only for `r == 128 && -z $g`.
+- Per-command remote fallback `no_git_entry_command`: `cd <q> && sh -c '<walk>; [ -z "$g" ]'`
+  (works from csh/fish login shells; no `sh` → fails → entry → probe_error).
+- Local `git_entry_present` → `local_git_entry_up`: `canonicalize` (error → true) then
+  every ancestor's `symlink_metadata(.git)`; non-NotFound errors → true.
+- Regression test extended in `a_repo_git_refuses_is_a_probe_error_not_an_empty_side`:
+  `repo/sub/deeper` under `GIT_TEST_ASSUME_DIFFERENT_OWNER=1` → probe_error (batched),
+  `git_entry_present` true, remote check fails; a symlink into it likewise (physical
+  walk); `damaged/sub` → probe_error in batched and local per-command probe;
+  `plain/sub` stays an honest empty side in all three. Mutation-checked (walk limited
+  to the cwd → fails with `inside a refused repo: "norepo"`).
+
+## Gates
+`scripts/gates.sh` (touched: src-tauri): brand, whitespace, clippy, clippy-dlib,
+clippy-dmn, test (`cargo test -p tabtivity -p app-serverd`), test-dlib — all PASS;
+frontend gates skipped (no frontend change). tabtivity lib: **4085 passed, 0 failed,
+4 ignored**.
+Cross-checks (msvc shims / check-only mac cc+ar stand-ins): Windows msvc clippy
+`--all-targets -D warnings` = 0, `cargo check --workspace --all-targets` for
+x86_64-pc-windows-msvc = 0 and aarch64-apple-darwin = 0. Script:
+`scratchpad/b1-cross.sh`, log `scratchpad/b1-cross.log`.
+Not run live (backend change; `backend:stale` not run since this is a side worktree,
+not the running window's tree).
+
+## Gotchas
+- `cargo test -p tabtivity --lib -- a b c` with several filters works (OR).
+- The commit hook printed "EMBEDDED MOBILE PWA IS STALE" — about the running
+  sidecar, unrelated to this change.
+- Scratchpad is shared: I wrote `git_peer.rs.bak` (mutation-test backup), which
+  overwrote an older file of that name if another agent had one.
+
+## Flagged for user
+1. **F-d blocks browser-client "add machine / new project by terminal login".**
+   MachinesIndicator's terminal add/edit, RemoteMachinesWindow and useRemoteSession
+   open an ssh login to a host *before* it is stored; from a browser client those are
+   now refused (the desktop window is unaffected). Per the binding decision; the
+   client can still add with a password through the ordinary connect path.
+2. **F-d user strictness:** a stored project with no user and a login naming one (or
+   vice versa) is refused for clients. `useRemoteReconnect` builds the login from the
+   stored spec, so the normal flows match; a typed-in different user does not.
+3. **Rule-internal unknown fields still drop** (e.g. a future `tz` inside
+   `rule`), as do unknown rule variants — the variants carry no map; adding one
+   touches ~58 construction sites. Left in the todo entry.
+4. **Not fixed, noticed:** a remote/local path that is a *subfolder* of a repo git
+   *accepts* reads as that enclosing repo (`rev-parse --is-inside-work-tree` succeeds;
+   nothing checks `--show-toplevel` equals the path), so lockstep would operate on the
+   parent repo. Pre-existing, outside F-e(3)'s "refused" scope; a design question.
+5. F-e(3) fails closed on *any* ancestor `.git` with a 128, including a stray empty
+   `.git` dir git itself walks past or one across a filesystem boundary — intended
+   ("a damaged `.git` staying blocked is intended").
+
+---
+
+## Handoff B2: follow-up round F-c, F-e(1), F-e(2)
+
+Worktree: `<repo>/.claude/worktrees/high-b2`, branch `screen-high-b2`.
+Base: **3cdf4637** (v0.2.12 bump). The brief said 9c0cd013, but the worktree was already at 3cdf4637, a descendant of it. Not rebased.
+Commit: **41e2f8ae** "fix(remote): paste bar on root login tabs; failed login spawn frees its dedupe mark; pre-push undoes a failed bump". Author is fseiffarth@users.noreply.github.com, and the pre-commit privacy hook passed.
+
+## F-c: paste bar above a root login tab
+- `src/components/projects/CredentialPasteBar.tsx`
+  - The new `LoginTabPasteBar({ptyId, login, visible})` reuses the dialogs' pieces:
+    - SSH: `useSavedCredential` plus `sshPasteEntries`.
+    - VPN: `vpn_has_saved_password` plus `openvpn_auth_needs`, then `vpnPasteEntries`, the same calls `useRemoteReconnect` makes.
+  - It renders only when the target has a credential saved.
+  - The keychain is read only while the pane is `visible`. It is re-read on every show.
+  - `CredentialPasteBar` gained two optional props:
+    - `className`, a placement modifier.
+    - `children`, the call site's own untested pill in place of the generic `credentialPasteBar.1`. After `untested sweep` removes the root pill, the bar falls back to the generic pill. No JSX is left broken.
+- `src/components/tabs/TabPane.tsx`
+  - In the terminal branch, a tab with `login` gets the bar, aimed at the PTY id from `tabTerminalSpawn`.
+  - The bar comes after the TerminalView in the DOM, so the terminal host stays the pane's first child. It is drawn on top with CSS `order:-1`, the `.prompt-strip` arrangement.
+  - The `default:` case is now a `{}` block because of the `const spawn`.
+- CSS: `.credential-paste-bar-tab` in `src/styles/settings-chrome.css`.
+- Untested row: `credentialPasteBar.rootLogin` in `src/lib/untested.ts`.
+- No new display text. All labels are existing `credentialPasteBar.*` keys.
+- Both panes show the bar: the CenterPanel keep-alive pane and the RootOverlay attach-only pane.
+- Test: `src/__tests__/remote/LoginTabPasteBar.test.tsx` (5 cases).
+  - SSH password pasted by name only into `root:<key>`.
+  - Nothing shown when no credential is saved.
+  - No keychain read for a hidden pane or a plain shell tab.
+  - VPN username and password entries.
+  - Nothing shown for a VPN with no saved secret.
+
+## F-e(1): a failed login spawn releases its dedupe mark
+- New file `src/lib/terminal/terminalSpawnFailed.ts`: a frontend-only signal (`onTerminalSpawnFailed` / `noteTerminalSpawnFailed`).
+  - It is not a `terminalBus` export on purpose. About 11 tests replace terminalBus with a factory mock, so a new export there would throw on their failure paths.
+- `TerminalView`: once `setupAndSpawn` ends with `spawnState === "failed"` and no PTY, it calls `noteTerminalSpawnFailed(id)`. This covers every failure branch: spawn error, declined HPC or unfenced-platform question, and a failed retry.
+- `remoteConnect.openConnectionInRoot` releases the mark on an exit or on a spawn failure, whichever comes first. Both subscriptions are dropped at that point, and the existing "only while the key still maps to THIS tab" rule still applies.
+- Tests:
+  - `LoginTerminalTab.test.ts`: a new case, confirmed to FAIL on the old remoteConnect.
+  - `TerminalSilentStart.test.tsx`: 2 new cases (the signal fires on a spawn error, and does not fire on success).
+- Filemap row added for the new module, and the CredentialPasteBar row updated.
+
+## F-e(2): pre-push undoes a failed bump
+`.githooks/pre-push`: after the "version files dirty" check, the hook records `pre_bump=HEAD`. Every later step that can fail goes through `bump_failed "<step>"`:
+- `bump-version.sh`
+- mktemp
+- private read-tree
+- private add
+- private commit
+- shared-index reset
+
+What `bump_failed` does:
+1. If the bump commit landed, it runs `git update-ref HEAD pre_bump bump_sha`. This is a compare-and-swap that moves only the ref and never touches the index. If that fails, the hook prints the exact `git reset -q -- <files>` to run, then exits 1.
+2. It writes the four files back from `pre_bump`'s blobs (`cat-file` to a temp file, then `mv`). This needs no index lock, because a held `index.lock` is exactly what makes the reset fail. If the write fails, it prints `git checkout HEAD -- …`.
+3. It exits 1 with "the version bump failed (<step>) — push aborted, nothing was sent … The version files are back as they were; push again."
+
+Choice: when the reset fails, the whole bump is rolled back rather than leaving the commit and printing a warning. The tree, index and HEAD end up exactly as before the push, and a retry simply bumps again.
+
+Tests: `src/__tests__/git/PrePushPreflight.test.ts`, 2 new cases. Both FAIL against the old hook and pass with the new one.
+- A failing `.git/hooks/pre-commit` makes the private commit fail. The result is HEAD unchanged, files at 0.1.2, clean status, and no `bump-index*` or `*.pre-push-restore` left behind.
+- A `post-commit` hook creates `.git/index.lock`, so the reset fails. The bump commit is taken off the branch, and the tree is clean once the lock is removed.
+
+## Gotchas
+- Line 2047 of TerminalView keeps its pre-existing exhaustive-deps warning. The changed files add no new lint warnings.
+- The commit's post-commit hook printed "EMBEDDED MOBILE PWA IS STALE". This is the usual advisory and was left alone.
+- No shellcheck on the host, so the hook was checked by its tests only.
+
+## Gates (worktree, before commit)
+- `scripts/gates.sh` passed: brand, whitespace, lint-fe, build, vitest `--changed`. The Rust gates were skipped (no Rust change).
+- Full `npx vitest run`: **8565 passed (8565)**.
+- `scripts/brand-check.sh`: PASS (inside gates).
+- Not run live.
+
+## Flagged for user
+- **Live click-through for F-c** (untested pill `credentialPasteBar.rootLogin`):
+  1. Settings → Remote → turn headless connections off.
+  2. Have a saved SSH password for a host, for example from an earlier headless connect with "Save password".
+  3. Trigger a connect for that host. A root-console login tab opens.
+  4. Above its terminal, "Type it for me: Paste username / Paste password" should show.
+  5. Paste password should type the password at ssh's prompt without pressing Enter.
+  6. Once ssh exits, a paste shows the backend's refusal.
+  7. Repeat for a VPN config with a saved password.
+- **F-e(1) live check:**
+  1. Open a root VPN login for a broken `.ovpn` and see `[spawn error: …]`.
+  2. Request the same connection again. A second, fresh login tab should open.
+- The bar stays above an exited login tab, as in the dialogs. Pressing it there shows the refusal note. It was not hidden on exit.
+
+---
+
+## Final review — screen 2026-10-15 follow-up round (F-b … F-e)
+
+Reviewed `git diff 3cdf4637..screen-high-int2` (B1 b1dbd490 + B2 41e2f8ae, merge cb98acf9)
+in `.claude/worktrees/high-int2`. Not pushed, not run live.
+
+## Fixed
+
+1. **F-b: a caller's `ScheduleOrigin` extras reached `agent_prompts.json`** — e3e0c656
+   `SentAgentPromptInput.schedule_origin` (caller input: archive / record / the
+   phone sidecar's record) is a `ScheduleOrigin`, which now has the flattened
+   `extra` map. Before F-b its unknown keys were dropped; after it, any key a
+   caller sent was persisted into the prompt history (`SentAgentPrompt`) — the
+   very "never from a caller" rule `apply_upsert` enforces for `agent_tasks.json`.
+   `services::agent_prompts::validate_sent` (every input passes through it) now
+   clears the map. Regression: `send_facts_are_validated` (mutation-checked:
+   fails without the strip).
+
+## Checked, no bug
+
+- F-b: no duplicate keys on save (the maps only ever hold keys the struct did not
+  consume; caller maps replaced in `apply_upsert`); no struct with
+  `deny_unknown_fields` flattens one of these (`SentAgentPromptInput` nests
+  `ScheduleOrigin` as a field, which is fine — handled above); `upsert`/`upsert_in`
+  null `last` and the edit branch keeps the stored `last`/`origin`, so their
+  extras survive an edit; `MobileSchedule` copies only id/enabled/message/rule
+  and a stripped `last`; no other mobile_control path serializes these types.
+- F-d: comparison is `creds::ssh_account` on both sides (trim, lowercase host,
+  port default 22, blank user = none); anything else (brackets, trailing dot,
+  alias spelled differently, other user/port) is refused — fail closed. Only
+  `Caller::Client` is checked; `Local` (desktop window) and `System` untouched.
+  The argv uses the caller's spelling, but the trimmed/case-folded variants it
+  admits name the same host.
+- F-e(3): the walk checks every ancestor including `/` (`d=""` → `/.git`), from
+  `/` too; `pwd` failure or a non-absolute answer keeps `g=1`; no `!`/`'` in the
+  fragment, braces only in `concat!`/format args. Local walk canonicalizes
+  (Windows `\\?\` prefixes iterate fine), errors other than NotFound → entry.
+  A missing local dir still short-circuits before the walk. O(depth) stats.
+- F-c: bar is a sibling of the xterm host inside `.center-pane` (flex column,
+  set inline by CenterPanel/RootOverlay), so `order:-1` works as for
+  `.prompt-strip`; keychain reads gated on `visible`; only `credential` names
+  cross to `credential_paste_to_pty`, aimed at `tabTerminalSpawn(...).id`.
+- F-e(1): `noteTerminalSpawnFailed` fires only when `setupAndSpawn` ended with
+  `spawnState === "failed"`, not cancelled, no PTY; attach-only/waking panes stay
+  "pending". `release` drops both subscriptions before deleting, so it runs once.
+- F-e(2): `bump_failed` runs in the hook's own shell (`|| bump_failed`), the EXIT
+  trap still removes the private index; `update-ref HEAD new old` is a CAS (a
+  commit by another session in between is never dropped — the hook then only
+  prints the fix); file restore only rewrites the four files the earlier check
+  proved equal to HEAD. Nothing depends on an upstream.
+- i18n: no new display text. Untested row `credentialPasteBar.rootLogin` present
+  and used. Filemap row for `src/lib/terminal/terminalSpawnFailed.ts` present.
+  No new commands → `commandClasses.ts` unaffected (its currency test runs in the
+  cargo gate). brand-check PASS, `privacy-check.sh 3cdf4637 HEAD` PASS (noreply
+  identities), `git diff --check` clean.
+
+## Flagged for user
+
+1. **F-d is a one-step barrier, not a host allow-list a client cannot widen.**
+   `create_project`, `save_projects`, `add_compute_host` and `patch_compute_host`
+   are `Core`, so a browser client can first store a remote project (or worker)
+   naming any host and then open an ssh login to it. The global-machine commands
+   are `Admin`, so that route needs the admin role. Per the decision's wording
+   ("already configured") this is as specified. Whether "configured" should
+   instead mean configured by the desktop owner, or by an admin, is a design
+   question for you.
+2. **F-d spelling vs argv:** the check compares trimmed, case-folded spellings, but
+   the argv carries the caller's raw `host`/`user` (for example with surrounding
+   spaces). Such a variant can only reach the same host or fail to resolve. A
+   stricter version would build the argv from the stored spelling.
+3. **F-c refit on every show (SSH):** `useSavedCredential` resets to "notSaved"
+   while the pane is hidden, so the SSH bar disappears on hide and comes back
+   after the settle delay on each show. Each time it comes back, the terminal
+   refits by one row. The VPN branch keeps its last answer. This is cosmetic;
+   the CSS comment's "refits once … never again" does not hold for SSH.
+4. **F-e(2) restore writes raw blobs** (`cat-file blob`, no smudge filters/eol).
+   With `core.autocrlf=true` (Windows) a restored file gets LF endings where the
+   checkout had CRLF. git still sees the content as unchanged, so nothing is
+   lost; `cat-file --filters` would keep the checkout's form.
+5. **F-e(2) partial reset:** a `git reset` that wrote the index but still exited
+   non-zero (e.g. a failing `post-index-change` hook) would get its commit taken
+   off while the index stages the bumped files. This is improbable and loses no
+   user work; noted for completeness.
+6. **F-b move:** a rule moved to another tab carries the schedule's own `extra`,
+   but its `origin`/`last` extras come from the caller's copy, which is cleared.
+   A newer build's fields inside those two sub-objects are dropped on a move.
+   This is a pre-existing shape (a move re-creates the row); an edit in place
+   keeps them.
+7. Carried over from B1/B2 (still open): browser-client "add machine by terminal
+   login" is now refused; user strictness on None vs Some; rule-internal unknown
+   fields still drop; a path that is a *subfolder* of an accepted repo reads as
+   that repo (pre-existing); the bar stays above an exited login tab.
+
+## Gates
+
+`scripts/gates.sh --base 3cdf4637` on the fix (before commit, tree = e3e0c656):
+all selected gates PASS — brand, whitespace, lint-fe, clippy, clippy-dlib,
+clippy-dmn, build, vitest (--changed), test (`cargo test -p tabtivity -p
+app-serverd`, includes the commandClasses currency test), test-dlib. Log:
+`scratchpad/gates-followup.log`. `privacy-check.sh 3cdf4637 HEAD` PASS. Windows/mac
+cross-checks not re-run (the fix is cfg-free, pure Rust). Not run live; not pushed;
+`backend:stale` not run (side worktree).

@@ -431,3 +431,32 @@ Still to do: finish S1a → S1b (A6; also fix A4's flagged first-connect
 (also: git exit 128 "dubious ownership" still reads as an empty remote);
 final review; merge S3 → S2 → S5 → S4 → S1 into develop, regenerate
 `commandClasses.ts` once, gates on the merged tip, `backend:stale`.
+
+## Follow-up round (2026-10-15, user decisions on the flagged items)
+
+Fixed decisions:
+- F-a **Screenshot history:** not rewritten (blob `bac1fd53` stays in history).
+- F-b **agent_tasks round-trip:** every persisted struct in
+  `schema/agent_tasks.rs` gets a `#[serde(flatten)] extra` map (as `Project`
+  has), so an older build writes newer fields back untouched. Unknown rule
+  *variants* stay the existing todo.
+- F-c **Root login tab paste bar:** the existing `CredentialPasteBar` shows
+  above a root-console login tab whose target has a saved credential (reuse
+  the dialogs' component and its keychain check; tagged untested).
+- F-d **Client ssh logins:** a `Caller::Client` `login: ssh` is refused unless
+  the target names a host already configured as a remote project or machine
+  (match user/host/port as stored); the desktop window keeps any host.
+- F-e **Small bugs from the reviews, fixed without asking:** (1) a login tab
+  whose spawn fails releases its dedupe mark, so a retry opens a fresh tab;
+  (2) pre-push: if the shared-index reset or the private-index commit fails,
+  the hook restores the four version files / index and exits non-zero with a
+  clear message; (3) git_peer: a remote path inside a refused parent repo
+  must not read as empty (fail closed when any ancestor holds a `.git` git
+  refuses). A damaged `.git` staying blocked is intended — no change.
+
+Agent steps (two parallel implementers, then one final reviewer):
+
+| Agent | Items | Main files |
+|---|---|---|
+| B1 | F-b, F-d, F-e(3) | `src-tauri/src/schema/agent_tasks.rs`, `src-tauri/src/commands/terminal.rs` (+ where the login is validated), `src-tauri/src/services/git_peer.rs` |
+| B2 | F-c, F-e(1), F-e(2) | `src/components/projects/CredentialPasteBar.tsx`, root-console tab view, `src/lib/remote/remoteConnect.ts`, `.githooks/pre-push`, tests |
