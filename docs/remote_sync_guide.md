@@ -65,6 +65,14 @@ Both engines run only while the project's pooled SSH session is up
 | `auto_off` | carve-out: overrides an ancestor's (or the project-wide) `auto_sync` |
 | `excluded` | out of byte-sync entirely — skipped by auto-sync **and** by *Sync all* / *Push all* |
 
+A transfer whose record cannot be saved (`sync.json` unwritable, or rewritten
+by the app's other process meanwhile) never leaves a base that reads clean:
+`remote_sync::save_manifest_or_mark_stale` forgets the moved files' bases, in
+the cache and, where it can, in the file, so they read as moved on both sides
+(amber; auto-sync skips them; a push asks) until a status pass verifies their
+bytes or they are transferred again. A manual pull, push or delete reports the
+failure; the background engines log it.
+
 Divergence is always judged **side against its own base**, never host mtime
 against local mtime (clocks differ). For one file:
 
@@ -153,7 +161,11 @@ what SFTP would: `-t -c --no-links --no-devices --no-specials
 --max-size=<64 MiB>`, no `-a` and no recursion past the list
 (`remote_sync::rsync_pull_flags`), files over the cap left out of the list, and
 only a regular file within the cap recorded afterwards. Any rsync error (an old
-or foreign rsync refusing a flag included) falls back to SFTP. Locally edited
+or foreign rsync refusing a flag included) falls back to SFTP. The SFTP path
+gives each mirror copy the host file's permission bits through the umask (what
+rsync gives a new file), so a host `0755` script stays executable; with no host
+mode it keeps the mirror copy's own. Never a setuid/setgid/sticky bit, from
+either side. Locally edited
 files it overwrites are logged. Files over the 64 MiB cap stay on the host on
 either path; the pull returns them (`remote_sync::PullOutcome`:
 `pulled` + `skippedTooLarge`, path and size), and the result line under the
@@ -306,7 +318,11 @@ altogether.
 
 Extra compute hosts receive the **mirror's** current HEAD one way
 (`worker_sync`): bundle → SFTP → `git fetch` → `reset --hard FETCH_HEAD`,
-never `git clean`, so their untracked outputs survive. Triggered on worker
+never `git clean`, so their untracked outputs survive. An incremental bundle
+excludes the worker's last synced commit; when that comes out empty although
+the mirror's HEAD is a different commit (the mirror was reset backwards), the
+full bundle is sent, so the worker moves back with it and its record stays
+true. Triggered on worker
 connect, on every commit the lockstep watcher sees (so it needs lockstep
 enabled), and by *Sync code now*. A shared-filesystem worker gets nothing —
 it already sees the primary's folder. *Pull outputs* is the only worker → local
