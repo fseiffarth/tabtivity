@@ -1036,6 +1036,7 @@ mod frame_tests {
                 last: None,
                 origin: None,
                 phone_device: phone.map(str::to_string),
+                extra: Default::default(),
             };
             crate::services::agent_tasks::upsert_in(&tasks, "p", "t", rule, None).unwrap();
         }

@@ -329,7 +329,9 @@ impl From<ScheduledAgentPrompt> for MobileSchedule {
             enabled: schedule.enabled,
             message: schedule.message,
             rule: schedule.rule,
-            last: schedule.last,
+            // A newer build's unknown receipt fields are the file's, not the
+            // phone's: only the fields this build knows cross.
+            last: schedule.last.map(|last| AgentScheduleLastRun { extra: Default::default(), ..last }),
         }
     }
 }

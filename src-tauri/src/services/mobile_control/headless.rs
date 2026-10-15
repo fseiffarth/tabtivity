@@ -1125,6 +1125,7 @@ pub fn schedule_mutate(
                 last: None,
                 origin: None,
                 phone_device: phone.map(str::to_string),
+                extra: Default::default(),
             };
             agent_tasks::upsert_in(&path, project_id, schedule_target_id, prompt, None)?;
         }
@@ -1142,6 +1143,7 @@ pub fn schedule_mutate(
                 last: None,
                 origin: None,
                 phone_device: phone.map(str::to_string),
+                extra: Default::default(),
             };
             agent_tasks::upsert_in(&path, project_id, schedule_target_id, prompt, None)?;
         }
@@ -1256,6 +1258,7 @@ fn queue_prompt(
         last: None,
         origin: None,
         phone_device: phone.map(str::to_string),
+        extra: Default::default(),
     };
     agent_tasks::upsert_in(&path, project_id, target_id, rule, None)?;
     Ok(id)
@@ -1692,6 +1695,7 @@ mod tests {
             last: None,
             origin: None,
             phone_device: None,
+            extra: Default::default(),
         };
         agent_tasks::upsert_in(&agent_tasks::file_path(dir.path()), "p1", "target-gemini", desk, None).unwrap();
         schedule_mutate(dir.path(), "p1", "target-gemini", ScheduleMutation::Update { schedule_id: "desk-rule".into(), schedule: input("nightly, phone words") }, phone, Local::now()).unwrap();

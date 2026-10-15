@@ -728,13 +728,13 @@ unchanged; the new agents are additive.
   (Medium, residual of the 2026-10-15 screen #7). `AgentScheduleRule` is an
   internally tagged enum (`type`), so a rule kind a newer build adds (e.g.
   `"type":"hourly"`) still makes an older build reject all of
-  `agent_tasks.json` — every schedule disappears from view. Unknown *fields* load
-  since that screen, but are dropped when the older build writes the file back
-  (no `flatten` catch-all), so a newer build's extra field does not survive a
-  round trip through an older one. Fix idea: deserialize `rule` leniently (an
-  `Unknown(serde_json::Value)` fallback via a custom `Deserialize` or a raw-value
-  wrapper), never fire an unknown rule, and write it back verbatim; keep unknown
-  fields with a `#[serde(flatten)]` map.
+  `agent_tasks.json` — every schedule disappears from view. Unknown *fields* on
+  the persisted structs load and are written back untouched (a `#[serde(flatten)]
+  extra` map on each, follow-up F-b); an unknown field *inside* a rule is still
+  dropped, since the rule variants carry no map. Fix idea: deserialize `rule`
+  leniently (an `Unknown(serde_json::Value)` fallback via a custom `Deserialize`
+  or a raw-value wrapper), never fire an unknown rule, and write it back
+  verbatim, unknown fields included.
 
 - [~] **Agent Schedule MCP** (2026-09-20; ✅ desktop v1 code-complete, ❌ never
   live-verified — `UntestedTag` id `scheduleMcp`): project agents propose rows

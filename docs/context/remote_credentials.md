@@ -135,7 +135,11 @@ Referenced from `AGENTS.md`.
   when the login's child exits, when the PTY is killed, and on any respawn of the
   id. A login cannot ride with a project, agent, container, Host session, tmux or
   schedule flag, and a VPN login is refused for a browser client (the tunnel is the
-  desktop's). Accepted residual: after a successful ssh login the PTY *is* the
+  desktop's). A browser client's ssh login must name a host a remote project
+  (primary or worker) or a global machine already stores — same user, host and port,
+  compared as the keychain account spells them — so a client cannot make the server
+  dial any host; the desktop window keeps any host, since adding a machine or project
+  logs in before it is stored. Accepted residual: after a successful ssh login the PTY *is* the
   remote shell of the account the credential authenticates, and a paste there
   stays allowed — same trust domain. (It replaced a gate that marked a shell PTY
   once a backend-minted login command line was typed into it, which left a

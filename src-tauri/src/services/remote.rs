@@ -193,6 +193,30 @@ pub fn compute_hosts_for(project_id: &str) -> Vec<ComputeHost> {
         .unwrap_or_default()
 }
 
+/// An ssh login's address as a project or machine stores it: user, host, port.
+pub(crate) type SshAddress = (Option<String>, String, Option<u16>);
+
+/// Every ssh address a `projects.json` list configures: each remote project's
+/// primary host and its worker hosts, as stored. Pure over the list.
+pub(crate) fn ssh_addresses_of(list: &ProjectsList) -> Vec<SshAddress> {
+    list.iter()
+        .flat_map(|entry| {
+            spec_from_entry(entry)
+                .into_iter()
+                .chain(compute_hosts_from_entry(entry).into_iter().map(|h| h.spec))
+        })
+        .map(|spec| (spec.user, spec.host, spec.port))
+        .collect()
+}
+
+/// [`ssh_addresses_of`] over the always-local `projects.json`; `[]` when it is
+/// missing or unreadable.
+pub(crate) fn configured_project_ssh_addresses() -> Vec<SshAddress> {
+    read_projects_list()
+        .map(|list| ssh_addresses_of(&list))
+        .unwrap_or_default()
+}
+
 /// Whether [`remote_target_for_host`] would find a target, over one
 /// `projects.json` entry already read (`root_mcp::grant_lanes` reads its
 /// entry from an explicit state dir).

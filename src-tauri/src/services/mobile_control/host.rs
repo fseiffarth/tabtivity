@@ -8649,15 +8649,19 @@ mod tests {
                     occurrence: "2026-09-24T09:00".into(),
                     result: AgentScheduleResult::Delivered,
                     at: "2026-09-24T09:01:00Z".into(),
+                    // A newer build's unknown fields stay in the file.
+                    extra: [("future_receipt".to_string(), serde_json::json!("x"))].into(),
                 }),
                 origin: Some(crate::schema::agent_tasks::ScheduleOrigin {
                     by: crate::schema::agent_tasks::ScheduleAuthor::Agent,
                     session: "raw-session-id".into(),
                     at: "2026-09-23T08:00:00Z".into(),
                     from_delivery: None,
+                    extra: [("future_origin".to_string(), serde_json::json!(1))].into(),
                 }),
                 // The phone that made a rule never crosses the browser API.
                 phone_device: Some("device-that-made-it".into()),
+                extra: [("future_rule".to_string(), serde_json::json!(true))].into(),
             }],
             time_zone: "Europe/Berlin".into(),
             next_runs: Default::default(),

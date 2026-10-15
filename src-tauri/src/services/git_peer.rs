@@ -621,6 +621,21 @@ pub fn blocked_detail(branch: &str, stderr: &str) -> String {
 
 // ── Batched probe (#28p D5) ─────────────────────────────────────────────────
 
+/// A POSIX `sh` fragment that leaves `g` empty only when neither the current folder
+/// nor any folder above it (the physical path, `pwd -P`, as git walks it) holds a
+/// `.git` entry — a dir, a pointer file, a link, even a dangling one. git looks for a
+/// repo upward, so a folder inside a repo it refuses fails exactly like one holding
+/// it. Fails toward `g=1`: a `pwd` that cannot answer is an entry not ruled out. No
+/// `!` and no single quote, so [`no_git_entry_command`] can hand it to `sh -c '…'`
+/// from any login shell (csh expands `!` even inside single quotes).
+macro_rules! git_entry_up_sh {
+    () => {
+        "g=1; d=$(pwd -P) && case $d in /*) g=; while :; do \
+if [ -e \"$d/.git\" ] || [ -L \"$d/.git\" ]; then g=1; break; fi; \
+if [ -z \"$d\" ]; then break; fi; d=${d%/*}; done;; esac"
+    };
+}
+
 /// One `sh` script emitting every field [`probe`] needs, as `\x1e`-separated sections
 /// — replacing **7 SSH round trips with 1**. Sections, in order: the literal `repo`
 /// marker, `symbolic-ref HEAD`, `rev-parse HEAD`, branches, tags, `status --porcelain`,
@@ -647,13 +662,14 @@ pub fn blocked_detail(branch: &str, stderr: &str) -> String {
 /// literal `HEAD` to stdout and fails only in its status, which this script discards.
 ///
 /// "No repo here" needs an explicit no: `rev-parse`'s not-a-repo exit (128) **and** no
-/// `.git` entry in the folder. git also exits 128 for a real repo it refuses (another
-/// owner's — `safe.directory`) or cannot read (a damaged `.git`), and its message for
-/// that may be localized; read as empty, pairing would `git init` + `reset --hard` over
-/// it. Every other outcome (a `.git` it refused, no `git` on the host's PATH) prints
-/// [`PROBE_UNREADABLE`], a `probe_error`.
-const PROBE_SCRIPT: &str = "\
-git rev-parse --is-inside-work-tree >/dev/null 2>&1; r=$?; \
+/// `.git` entry in the folder or any folder above it (`git_entry_up_sh!`). git also
+/// exits 128 for a real repo it refuses (another owner's — `safe.directory`) or cannot
+/// read (a damaged `.git`) — the folder's own, or an enclosing one it found walking up —
+/// and its message for that may be localized; read as empty, pairing would `git init` +
+/// `reset --hard` over it. Every other outcome (a `.git` it refused, no `git` on the
+/// host's PATH) prints [`PROBE_UNREADABLE`], a `probe_error`.
+const PROBE_SCRIPT: &str = concat!("\
+git rev-parse --is-inside-work-tree >/dev/null 2>&1; r=$?; ", git_entry_up_sh!(), "; \
 if [ \"$r\" -eq 0 ]; then \
 printf 'repo\\036'; \
 git symbolic-ref --quiet --short HEAD 2>/dev/null; printf '\\036'; \
@@ -663,8 +679,8 @@ git for-each-ref --format='%(objectname) %(refname:short)' refs/tags 2>/dev/null
 git status --porcelain 2>/dev/null; printf '\\036'; \
 git log -1 --format=%s HEAD 2>/dev/null; printf '\\036'; \
 git worktree list --porcelain 2>/dev/null || true; \
-elif [ \"$r\" -eq 128 ] && [ ! -e .git ] && [ ! -L .git ]; then printf 'norepo'; \
-else printf 'unreadable'; fi";
+elif [ \"$r\" -eq 128 ] && [ -z \"$g\" ]; then printf 'norepo'; \
+else printf 'unreadable'; fi");
 
 /// What [`PROBE_SCRIPT`] prints when the folder holds a `.git` git would not read, or
 /// git did not run at all: never an empty side.
@@ -1179,15 +1195,13 @@ fn failed_repo_check_is_probe_error(
     }
 }
 
-/// Whether `peer`'s folder holds a `.git` entry — a dir, a pointer file, a link (even a
-/// dangling one). Fails toward `true`: an entry we could not rule out is one pairing
-/// must not overwrite.
+/// Whether `peer`'s folder, or any folder above it, holds a `.git` entry — a dir, a
+/// pointer file, a link (even a dangling one). git looks for a repo upward, so a
+/// folder inside a repo it refuses answers 128 just like one holding it. Fails toward
+/// `true`: an entry we could not rule out is one pairing must not overwrite.
 fn git_entry_present(peer: &Peer) -> bool {
     match peer {
-        Peer::Local(dir) => match std::fs::symlink_metadata(dir.join(".git")) {
-            Ok(_) => true,
-            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
-        },
+        Peer::Local(dir) => local_git_entry_up(dir),
         Peer::Remote(spec) => {
             if crate::services::ssh_common::validate_arg("remote path", &spec.remote_path).is_err() {
                 return true;
@@ -1198,13 +1212,29 @@ fn git_entry_present(peer: &Peer) -> bool {
     }
 }
 
-/// The remote command that exits 0 only when `remote_path` holds no `.git` entry.
-/// Plain `test`s and `&&` (no `{ }`), so a host whose shell could not run
-/// [`PROBE_SCRIPT`] — the reason the per-command probe runs at all — runs it too.
+/// The local half of [`git_entry_present`]: the folder's physical path (as git walks
+/// it) and every folder above it, checked for a `.git` entry. A path that cannot be
+/// resolved, or an entry whose lookup fails other than "not found", counts as one.
+fn local_git_entry_up(dir: &Path) -> bool {
+    let Ok(real) = std::fs::canonicalize(dir) else {
+        return true;
+    };
+    real.ancestors().any(|folder| match std::fs::symlink_metadata(folder.join(".git")) {
+        Ok(_) => true,
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    })
+}
+
+/// The remote command that exits 0 only when neither `remote_path` nor any folder
+/// above it holds a `.git` entry. The walk (`git_entry_up_sh!`) runs in `sh -c`, and
+/// the line around it is a plain `cd` and `&&` (no `{ }`), so a host whose login shell
+/// could not run [`PROBE_SCRIPT`] — the reason the per-command probe runs at all —
+/// runs it too; a host without `sh` fails it, which reads as an entry.
 fn no_git_entry_command(remote_path: &str) -> String {
     format!(
-        "cd {} && test ! -e .git && test ! -L .git",
-        ssh_exec::shell_quote(remote_path)
+        "cd {} && sh -c '{}; [ -z \"$g\" ]'",
+        ssh_exec::shell_quote(remote_path),
+        git_entry_up_sh!()
     )
 }
 
@@ -3858,6 +3888,38 @@ mod tests {
         assert!(!no_entry(&damaged));
         assert!(!no_entry(&linked));
         assert!(!no_entry(&tmp.path().join("missing")), "a failed cd is never \"no entry\"");
+
+        // F-e(3): a folder *inside* a repo git refuses gets the same 128 from git's
+        // upward search, with no `.git` of its own — still never empty. The walk is
+        // over the physical path, so a link into such a repo is caught too.
+        let sub = repo.join("sub").join("deeper");
+        std::fs::create_dir_all(&sub).unwrap();
+        let out = refused(&sub);
+        let snap = parse_probe_block(&out).expect("parses");
+        assert!(snap.probe_error && !snap.is_repo, "inside a refused repo: {out:?}");
+        assert!(git_entry_present(&Peer::Local(sub.clone())));
+        assert!(!no_entry(&sub));
+        let alias = tmp.path().join("alias");
+        std::os::unix::fs::symlink(&sub, &alias).unwrap();
+        assert!(parse_probe_block(&refused(&alias)).expect("parses").probe_error);
+        assert!(git_entry_present(&Peer::Local(alias.clone())));
+        assert!(!no_entry(&alias));
+        // Inside a damaged `.git`'s folder: git walks past the unreadable dir and
+        // answers 128 — both probes refuse to call it empty.
+        let damaged_sub = damaged.join("sub");
+        std::fs::create_dir_all(&damaged_sub).unwrap();
+        assert!(parse_probe_block(&run_sh(&damaged_sub, PROBE_SCRIPT)).expect("parses").probe_error);
+        let snap = probe(&Peer::Local(damaged_sub.clone()));
+        assert!(snap.probe_error && !snap.is_repo, "{snap:?}");
+        assert!(!no_entry(&damaged_sub));
+        // A folder below a plain one stays an honest empty side, in every probe.
+        let plain_sub = plain.join("sub");
+        std::fs::create_dir_all(&plain_sub).unwrap();
+        let snap = parse_probe_block(&refused(&plain_sub)).expect("parses");
+        assert!(!snap.is_repo && !snap.probe_error, "below a plain folder is empty");
+        assert!(!git_entry_present(&Peer::Local(plain_sub.clone())));
+        assert!(!probe(&Peer::Local(plain_sub.clone())).probe_error);
+        assert!(no_entry(&plain_sub));
     }
 
     /// #10: a transfer never runs against a side whose probe failed — its empty branch

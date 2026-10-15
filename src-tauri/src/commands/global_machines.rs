@@ -46,7 +46,7 @@ pub struct MachineExportFile {
     pub machines: Vec<MachineIo>,
 }
 
-fn load_all() -> Vec<GlobalMachine> {
+pub(crate) fn load_all() -> Vec<GlobalMachine> {
     storage::read_json(&global_machines_path()).unwrap_or_default()
 }
 

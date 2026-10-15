@@ -141,7 +141,7 @@ fn apply_create(file: &mut AgentTasksFile, session: &Session, args: Create, leve
     let id = format!("agent-{}", super::root_mcp::mint_token().ok_or("entropy unavailable")?);
     let enabled = level == Level::Apply && !recurring;
     let row = ScheduledAgentPrompt { id: id.clone(), enabled, message, rule, preface: vec![], last: None,
-        origin: Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: session.id.clone(), at: now.to_rfc3339(), from_delivery }), phone_device: None };
+        origin: Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: session.id.clone(), at: now.to_rfc3339(), from_delivery, extra: Default::default() }), phone_device: None, extra: Default::default() };
     agent_tasks::apply_upsert(file, project, &binding.target, row, None)?;
     Ok(json!({"id":id, "state":if enabled {"scheduled"} else {"proposed"}, "fires_at":fires_at.to_rfc3339()}))
 }
@@ -338,7 +338,7 @@ mod tests {
         assert_eq!(apply_create(&mut file, &s, daily(), Level::Apply, now(), None).unwrap()["state"], "proposed");
         assert!(apply_create(&mut file, &s, daily(), Level::Apply, now(), None).unwrap_err().starts_with("recurring_limit"));
         let target = file.projects.get_mut("p").unwrap().get_mut("t").unwrap();
-        target.agent_deliveries = (0..6).map(|i| AgentScheduleDelivery { id: i.to_string(), day: "2026-09-20".into(), at: now().to_rfc3339(), result: Some(AgentScheduleResult::Delivered) }).collect();
+        target.agent_deliveries = (0..6).map(|i| AgentScheduleDelivery { id: i.to_string(), day: "2026-09-20".into(), at: now().to_rfc3339(), result: Some(AgentScheduleResult::Delivered), extra: Default::default() }).collect();
         // Retiring/cancelling every row and a full disk round-trip cannot reset the budget.
         target.schedules.clear();
         let mut file: AgentTasksFile = serde_json::from_value(serde_json::to_value(file).unwrap()).unwrap();
