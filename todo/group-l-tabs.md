@@ -941,3 +941,21 @@ correctness/UX work atop the same layout model #42 detaches.*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+    - **Fix (2026-10-15): a new tab off the strip's right edge scrolls into
+      view.** With the strip overflowing, an agent tab added at its far end
+      became active but stayed hidden past the right chevron; only a click
+      revealed a tab. `TabBar` now reveals the active tab whenever it changes
+      or the tab count does (the popout's `ScrollingTabStrip` already did).
+      *Files: `src/components/tabs/TabBar.tsx`.*
+      - [ ] 🖐️ Manual test — open enough tabs that the strip shows its right
+        chevron, scroll it to the left end, then add an agent tab from +
+        (and with Ctrl+1): the strip slides right and the new tab shows whole.
+        Switching by keyboard to a tab hidden left or right does the same.
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS

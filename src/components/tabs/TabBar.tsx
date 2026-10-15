@@ -784,6 +784,15 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     updateScrollState();
   }, [tabs, updateScrollState]);
 
+  // A tab that becomes active off-screen — one just added at the strip's far
+  // end, or switched to by keyboard — scrolls into view (mirrors the popout's
+  // `ScrollingTabStrip`); clicks reveal through `revealTab` in the commit path.
+  useEffect(() => {
+    if (!activeKey) return;
+    const tabEl = stripRef.current?.querySelector<HTMLElement>(".tab.active");
+    if (tabEl) revealTab(tabEl);
+  }, [activeKey, tabs.length, revealTab]);
+
   function openAddMenu() {
     if (menuPos) { setMenuPos(null); return; }
     const r = addBtnRef.current?.getBoundingClientRect();
