@@ -461,7 +461,9 @@ fn display_name(file_name: &str) -> String {
 /// machine. Without it, the tunnel is invisible to [`is_connected`] /
 /// [`active_configs`] and unkillable by [`disconnect`] / [`disconnect_all`] — it
 /// outlives the app with the routing still changed. Building the argv is therefore
-/// also *claiming* it.
+/// also *claiming* it — and is refused while a tunnel for `config` is up, whose
+/// claim a second one would overwrite. A login whose PTY then fails to spawn hands
+/// the claim back ([`release_interactive_claim`]).
 pub fn interactive_connect_argv(config: &str) -> Result<Vec<String>, String> {
     // The launcher first: a missing `openvpn.exe` must not leave a claim behind.
     let mut argv = interactive_launcher()?;
@@ -524,6 +526,14 @@ fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
     if config.is_empty() {
         return Err("OpenVPN config path must not be empty".to_string());
     }
+    // A tunnel for this config that is already up (either flavour, or one adopted
+    // from a previous run) keeps its claim. Arming again would delete its pidfile
+    // and rewrite its management endpoint, so a root tunnel still rerouting the
+    // machine would drop out of `is_connected` and `disconnect_all`, and outlive
+    // the app. (A Pending claim is re-armed: a cancelled login leaves one behind.)
+    if tunnel_up(config) {
+        return Err("this VPN is already connected; disconnect it before signing in again".to_string());
+    }
     let pidfile = interactive_pidfile(config);
     prepare_root_pidfile(&pidfile)?;
     let _ = std::fs::remove_file(&pidfile);
@@ -542,6 +552,39 @@ fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
         pidfile,
         management,
     })
+}
+
+/// Whether a tunnel for `config` is up, whichever flavour started it.
+fn tunnel_up(config: &str) -> bool {
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    {
+        is_connected(config)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        interactive_connected(config)
+    }
+}
+
+/// Drop the claim [`interactive_connect_argv`] made for a login that never ran (its
+/// PTY failed to spawn): the registry entry, the pidfile slot and the management
+/// endpoint. Only a still-Pending claim is dropped, never one whose tunnel is up.
+pub fn release_interactive_claim(config: &str) {
+    let config = config.trim();
+    if interactive_state(config) != Interactive::Pending {
+        return;
+    }
+    if let Some(pidfile) = interactive_registry().lock_ok().remove(config) {
+        let _ = std::fs::remove_file(pidfile);
+    }
+    #[cfg(unix)]
+    clear_management(config);
+}
+
+/// Whether an interactive claim (Pending or up) is recorded for `config`.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn has_interactive_claim(config: &str) -> bool {
+    interactive_registry().lock_ok().contains_key(config.trim())
 }
 
 /// What [`arm_interactive`] hands [`interactive_connect_argv`]: the validated
@@ -2956,6 +2999,73 @@ mod tests {
 
         assert!(!pidfile.exists());
         assert_eq!(interactive_state(cfg), Interactive::Pending);
+
+        forget_interactive(cfg);
+    }
+
+    /// A second login for a config whose tunnel is up is refused and leaves the live
+    /// tunnel's claim alone: re-arming deleted its pidfile (so `is_connected` and
+    /// `disconnect_all` lost a root tunnel still rerouting the machine) and rewrote
+    /// its management endpoint.
+    #[cfg(unix)]
+    #[test]
+    fn a_second_login_for_a_live_tunnel_is_refused() {
+        let cfg = "/store/test-relogin-live.ovpn";
+        forget_interactive(cfg);
+        let _ = interactive_connect_argv(cfg).unwrap();
+        let pidfile = interactive_pidfile(cfg);
+        let me = std::process::id();
+        std::fs::write(&pidfile, format!("{me}\n")).unwrap();
+        let endpoint = management_endpoint(cfg);
+        assert_eq!(interactive_state(cfg), Interactive::Alive(me as i32));
+
+        let err = interactive_connect_argv(cfg).unwrap_err();
+        assert!(err.contains("already connected"), "{err}");
+        assert!(pidfile.exists(), "the live tunnel's pidfile must survive");
+        assert_eq!(interactive_state(cfg), Interactive::Alive(me as i32));
+        assert_eq!(management_endpoint(cfg), endpoint, "its management endpoint too");
+        // Releasing a claim never touches a live tunnel either.
+        release_interactive_claim(cfg);
+        assert!(is_connected(cfg));
+
+        forget_interactive(cfg);
+    }
+
+    /// A tunnel adopted from a previous run (its headless pidfile seated in the
+    /// interactive registry) is just as live: a login for it is refused too.
+    #[cfg(unix)]
+    #[test]
+    fn a_login_for_an_adopted_tunnel_is_refused() {
+        let cfg = "/store/test-relogin-adopted.ovpn";
+        forget_interactive(cfg);
+        let headless = runtime_dir().join(format!("{}.pid", safe_stem(cfg)));
+        let _ = std::fs::create_dir_all(runtime_dir());
+        std::fs::write(&headless, format!("{}\n", std::process::id())).unwrap();
+        assert!(adopt_config(cfg));
+
+        assert!(interactive_connect_argv(cfg).is_err());
+        assert!(headless.exists());
+        assert!(is_connected(cfg));
+
+        forget_interactive(cfg);
+        let _ = std::fs::remove_file(&headless);
+    }
+
+    /// A Pending claim (a login that never authenticated) is re-armed, and a claim
+    /// whose login never ran is handed back whole.
+    #[cfg(unix)]
+    #[test]
+    fn a_pending_claim_is_rearmed_and_released() {
+        let cfg = "/store/test-relogin-pending.ovpn";
+        forget_interactive(cfg);
+        let _ = interactive_connect_argv(cfg).unwrap();
+        assert_eq!(interactive_state(cfg), Interactive::Pending);
+        let _ = interactive_connect_argv(cfg).expect("a pending claim is no live tunnel");
+
+        release_interactive_claim(cfg);
+        assert_eq!(interactive_state(cfg), Interactive::None);
+        assert!(!interactive_registry().lock().unwrap().contains_key(cfg));
+        assert_eq!(management_endpoint(cfg), None);
 
         forget_interactive(cfg);
     }

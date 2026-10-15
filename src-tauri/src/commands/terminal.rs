@@ -64,6 +64,9 @@ pub async fn pty_spawn(
         ));
     }
     let login = crate::commands::credentials::apply_login(&mut opts, &ctx.caller)?;
+    // Building a VPN login's argv claimed its tunnel: every way out of here short
+    // of the login running hands that claim back.
+    let claim = crate::commands::credentials::LoginClaim::of(login.as_ref());
     // A server client opening a tab another client already runs in local
     // tmux gets a tmux client of its own instead of replacing that one's
     // (TODO #2347). Every desktop window takes the ordinary spawn below.
@@ -107,6 +110,7 @@ pub async fn pty_spawn(
         prepared.spawn_seq(),
     );
     if result.is_ok() {
+        claim.keep();
         if let Some(target) = login {
             crate::commands::credentials::note_login_pty(
                 &prepared.opts.id,

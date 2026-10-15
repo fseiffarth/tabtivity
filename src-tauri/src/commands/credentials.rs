@@ -46,6 +46,13 @@ use crate::tauri_host::Ctx;
 // Accepted residual: after a successful ssh login the PTY is the remote shell of
 // the very account the credential authenticates; a paste there stays allowed
 // (same trust domain).
+//
+// Ceiling: the gate is no same-user boundary. The genuine ssh/openvpn read the
+// user's own `~/.ssh/config`, `known_hosts`, the `.ovpn` and `PATH`, which any
+// process running as the user can rewrite (and such a process can usually read an
+// unlocked keyring directly). It stops a caller of the commands, nothing more. A
+// server client's ssh login may dial any host and port from the server, as
+// `remote_login_command` let it; only that host's own credential is pasted there.
 
 /// Which login a login PTY runs — i.e. which saved credentials may be typed into
 /// it. Also `PtyOptions::login`'s payload, tagged by `kind`:
@@ -84,11 +91,39 @@ impl LoginTarget {
     fn argv(&self) -> Result<Vec<String>, String> {
         match self {
             Self::Ssh { user, host, port } => {
-                crate::services::ssh_exec::interactive_login_args(user, host, *port)
+                #[allow(unused_mut)]
+                let mut argv = crate::services::ssh_exec::interactive_login_args(user, host, *port)?;
+                #[cfg(windows)]
+                pin_program(&mut argv, |bin| {
+                    crate::paths::helper_program(std::ffi::OsStr::new(bin))
+                        .or_else(|| crate::paths::resolve_executable(&format!("{bin}.exe")))
+                })?;
+                Ok(argv)
             }
             Self::Vpn { config } => crate::services::openvpn::interactive_connect_argv(config),
         }
     }
+}
+
+/// Pin a login argv's program to the absolute path `resolve` finds for it.
+///
+/// Windows needs this for `ssh`: the PTY layer (portable-pty) looks a bare name up
+/// on `PATH` only, and one it cannot find there goes to `CreateProcessW` as the
+/// module name, which completes a partial name from the app's current directory —
+/// so a file named `ssh` planted there would be the login a secret is pasted into.
+/// The admin-installed copy is preferred, then `PATH` (as `openvpn.exe` is
+/// resolved for a VPN login); none found refuses the login.
+#[cfg(any(windows, test))]
+fn pin_program(
+    argv: &mut [String],
+    resolve: impl FnOnce(&str) -> Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    let program = argv.first_mut().ok_or_else(|| "empty login command".to_string())?;
+    let path = resolve(program.as_str())
+        .filter(|p| p.is_absolute())
+        .ok_or_else(|| format!("{program} was not found; install the OpenSSH client"))?;
+    *program = path.to_string_lossy().into_owned();
+    Ok(())
 }
 
 /// PTY id → the login its current spawn runs, and that spawn's sequence number
@@ -193,12 +228,53 @@ pub fn forget_login_pty_spawn(pty: &str, seq: u64) {
 }
 
 /// Whether `account` may be typed into `pty` — i.e. `pty` is running a login whose
-/// own credentials include that account.
+/// own credentials include that account. (The paste itself also checks that the
+/// PTY still runs the marked spawn — see [`marked_spawn`].)
+#[cfg(test)]
 fn paste_allowed(pty: &str, account: &str) -> bool {
+    marked_spawn(pty, account).is_some()
+}
+
+/// The spawn of `pty` that runs a login whose own credentials include `account`.
+/// The paste still checks that `pty` runs that very spawn: a respawn of the id
+/// that began before the login's mark went in (its own `forget_login_pty` already
+/// ran) replaces the PTY without dropping the mark, and the replaced reader's
+/// exit is not the current spawn's, so it drops nothing either.
+fn marked_spawn(pty: &str, account: &str) -> Option<u64> {
     login_ptys()
         .lock_ok()
         .get(pty)
-        .is_some_and(|(t, _)| t.accounts().iter().any(|a| a == account))
+        .filter(|(t, _)| t.accounts().iter().any(|a| a == account))
+        .map(|(_, seq)| *seq)
+}
+
+/// A VPN login's tunnel claim (`openvpn::interactive_connect_argv` arms it while
+/// [`apply_login`] builds the argv) until the login's PTY runs: dropped without
+/// [`LoginClaim::keep`] — any `pty_spawn` error after the argv was built — it is
+/// handed back (`openvpn::release_interactive_claim`), so no Pending claim and
+/// management endpoint stay recorded with no process behind them.
+pub(crate) struct LoginClaim(Option<String>);
+
+impl LoginClaim {
+    pub(crate) fn of(target: Option<&LoginTarget>) -> Self {
+        Self(match target {
+            Some(LoginTarget::Vpn { config }) => Some(config.clone()),
+            _ => None,
+        })
+    }
+
+    /// The login runs: its claim is the tunnel's now.
+    pub(crate) fn keep(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for LoginClaim {
+    fn drop(&mut self) {
+        if let Some(config) = self.0.take() {
+            crate::services::openvpn::release_interactive_claim(&config);
+        }
+    }
 }
 
 /// Whether the OS credential store is readable right now (see [`KeyringState`]).
@@ -293,12 +369,14 @@ pub async fn credential_paste_to_pty(
     // The destination must be a PTY the backend itself spawned running the login
     // this credential belongs to, still running (see "Login PTYs" above). Without
     // this the caller picks the process the secret is written into.
-    if !paste_allowed(&pty, &account) {
-        return Err(
-            "that terminal is not a login for this credential — open the connection's login \
-             terminal and try again"
-                .to_string(),
-        );
+    let not_a_login = || {
+        "that terminal is not a login for this credential — open the connection's login \
+         terminal and try again"
+            .to_string()
+    };
+    let seq = marked_spawn(&pty, &account).ok_or_else(not_a_login)?;
+    if registry.lock_ok().input_sender_of_spawn(&pty, seq).is_none() {
+        return Err(not_a_login());
     }
     let Some(secret) = app_core::rt::blocking("credential read", move || creds::get(&account))
         .await?
@@ -311,7 +389,7 @@ pub async fn credential_paste_to_pty(
     }
     let sender = registry
         .lock_ok()
-        .input_sender(&pty)
+        .input_sender_of_spawn(&pty, seq)
         .ok_or_else(|| "the login terminal is no longer running".to_string())?;
     sender
         .send(bytes)
@@ -559,5 +637,95 @@ mod tests {
         assert!(crate::commands::terminal::pty_spawn(ctx, opts, None).await.is_err());
         assert!(!paste_allowed("t-spawn:proj", &account));
         assert!(registry.lock_ok().input_sender("t-spawn:proj").is_none(), "nothing spawned");
+    }
+
+    /// Verifier finding (S1): a respawn of the id that began before the login's
+    /// mark went in (its `forget_login_pty` already ran) replaces the login PTY and
+    /// leaves the mark, and the replaced reader's exit is not the current spawn's,
+    /// so it drops nothing. The mark names its spawn; a PTY running another spawn
+    /// takes no secret — refused before the keychain is read.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_paste_into_a_respawn_of_a_login_id_is_refused() {
+        use std::sync::Arc;
+        let registry: RegistryState = Arc::default();
+        let events = Arc::new(crate::services::mobile_control::web_client::WebEvents::default());
+        let core = app_core::CoreCtx::system(
+            Arc::new(app_core::CoreState::new().manage(registry.clone())),
+            events,
+        );
+        let host = format!("race-{}", std::process::id());
+        let id = "t-race:login";
+        // The login ran as spawn 41 and was marked; a racing spawn 42 of the same
+        // id (say `sh -c 'cat > /tmp/loot'`) now holds the PTY.
+        note_login_pty_if(id, ssh(&host), 41, || true);
+        crate::terminal::insert_test_pty_at(&registry, id, crate::terminal::PtyMeta::default(), 42);
+        assert!(paste_allowed(id, &creds::ssh_account(&Some("alice".to_string()), &host, None)));
+        assert!(registry.lock_ok().input_sender_of_spawn(id, 41).is_none());
+        assert!(registry.lock_ok().input_sender_of_spawn(id, 42).is_some());
+
+        let target = PasteCredential::SshPassword {
+            user: Some("alice".to_string()),
+            host: host.clone(),
+            port: None,
+        };
+        let ctx = Ctx(core.with_caller(window()));
+        let err = credential_paste_to_pty(ctx, id.to_string(), target, None).await.unwrap_err();
+        assert!(err.contains("not a login"), "{err}");
+
+        crate::terminal::kill_test_ptys(&registry);
+        forget_login_pty(id);
+    }
+
+    /// A VPN login's claim goes back when its PTY never ran, and stays with a
+    /// login that did; an ssh login holds no claim.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_vpn_login_that_never_ran_hands_its_claim_back() {
+        let config = format!(concat!("/tmp/", crate::app_slug!(), "-claim-{}.ovpn"), std::process::id());
+        let target = LoginTarget::Vpn { config: config.clone() };
+        let connected = || crate::services::openvpn::has_interactive_claim(&config);
+
+        // Spawn failed after the argv was built: the claim is dropped.
+        target.argv().unwrap();
+        assert!(connected(), "building the argv claimed the tunnel");
+        drop(LoginClaim::of(Some(&target)));
+        assert!(!connected(), "a login that never ran leaves no claim");
+
+        // The login runs: the claim stays (the tunnel's teardown needs it).
+        target.argv().unwrap();
+        LoginClaim::of(Some(&target)).keep();
+        assert!(connected());
+        crate::services::openvpn::release_interactive_claim(&config);
+        assert!(!connected());
+
+        // Nothing to hand back for an ssh login.
+        drop(LoginClaim::of(Some(&ssh("claim-ssh"))));
+        drop(LoginClaim::of(None));
+    }
+
+    /// F6: the login's program is pinned to the absolute path found for it; a
+    /// bare or missing one refuses the login rather than leave the lookup to the
+    /// PTY layer.
+    #[test]
+    fn a_login_program_is_pinned_to_an_absolute_path() {
+        let abs = if cfg!(windows) {
+            std::path::PathBuf::from(r"C:\Windows\System32\OpenSSH\ssh.exe")
+        } else {
+            std::path::PathBuf::from("/usr/bin/ssh")
+        };
+        let mut argv = vec!["ssh".to_string(), "alice@h".to_string()];
+        pin_program(&mut argv, |bin| {
+            assert_eq!(bin, "ssh");
+            Some(abs.clone())
+        })
+        .unwrap();
+        assert_eq!(argv, [abs.to_string_lossy().into_owned(), "alice@h".to_string()]);
+
+        let mut argv = vec!["ssh".to_string()];
+        assert!(pin_program(&mut argv, |_| None).is_err());
+        assert!(pin_program(&mut argv, |_| Some(std::path::PathBuf::from("ssh.exe"))).is_err());
+        assert_eq!(argv, ["ssh"], "a refused pin changes nothing");
+        assert!(pin_program(&mut [], |_| Some(abs.clone())).is_err());
     }
 }
