@@ -61,6 +61,7 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
         .map_err(|e| format!("agent shim: prepare home: {e}"))?;
     let mut opts = crate::terminal::PtyOptions {
         login: None,
+        assistant: None,
         id: format!("shim:{}", std::process::id()),
         cmd: cli.to_string(),
         args: args.to_vec(),

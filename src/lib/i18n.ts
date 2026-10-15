@@ -1476,6 +1476,8 @@ export const enSource = {
   "settings.mdGraphHelp": "Adds a Graph mode to the markdown viewer: a clickable map of the files this document links to, followed link by link. Click a node to open that file.",
   "settings.projectRemarks": "Project file remarks",
   "settings.projectRemarksHelp": "Attach review notes to project files and optional line hints in a git-friendly REMARKS.md file.",
+  "settings.assistant": "{assistant}, the chat assistant",
+  "settings.assistantHelp": "Chats that can search and read the web with the CLI or local model you pick, and cannot see any file, project or setting on this computer. Turn it off to remove the header button and refuse its chats.",
   "settings.copilotCompletion": "GitHub Copilot autocomplete",
   "settings.copilotCompletionHelp": "Offer GitHub Copilot as a second autocomplete provider for code files. Ollama stays the default; nothing is sent until a project opts in below.",
   "settings.copilotCloudNotice": "Copilot is a cloud service: for a project that opts in, the code you edit leaves this machine. Its language server runs sandboxed and read-only, in that project only.",

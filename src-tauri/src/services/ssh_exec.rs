@@ -2002,6 +2002,7 @@ mod tests {
     fn local_opts(cwd: &str, project_id: Option<&str>) -> PtyOptions {
         PtyOptions {
             login: None,
+            assistant: None,
             id: "t".to_string(),
             cmd: "bash".to_string(),
             args: vec![],

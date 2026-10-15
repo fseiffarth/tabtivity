@@ -335,6 +335,7 @@ export function MobileSettings() {
           browser_client: stored?.browser_client,
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
+          assistant_access: stored?.assistant_access,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -418,6 +419,7 @@ export function MobileSettings() {
           browser_client: stored?.browser_client,
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
+          assistant_access: stored?.assistant_access,
         },
       });
     } catch (reason) {
@@ -452,6 +454,7 @@ export function MobileSettings() {
           // access too.
           shell_tabs: stored?.shell_tabs,
           local_models: stored?.local_models,
+          assistant_access: stored?.assistant_access,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });

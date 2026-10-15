@@ -8387,7 +8387,7 @@ mod tests {
             }))
             .expect("options")
         };
-        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true };
+        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: false };
         for project in [None, Some("vm-reader")] {
             let mut here = spawn("headless:c", project);
             root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);

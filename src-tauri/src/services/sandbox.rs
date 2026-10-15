@@ -2404,6 +2404,7 @@ mod tests {
     fn wrap_is_noop_when_sandbox_disabled() {
         let mut opts = PtyOptions {
             login: None,
+            assistant: None,
             id: "t".to_string(),
             cmd: "claude".to_string(),
             args: args(&["--session-id", "x"]),
@@ -2434,6 +2435,7 @@ mod tests {
         // before any state-dir read, so this is safe to exercise in a test.
         let mut opts = PtyOptions {
             login: None,
+            assistant: None,
             id: "t".to_string(),
             cmd: "claude".to_string(),
             args: vec![],

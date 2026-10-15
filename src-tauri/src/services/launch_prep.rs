@@ -1081,6 +1081,7 @@ mod tests {
     fn committed(tab: &str, fenced_scope: Option<String>, generation: SpawnGeneration) {
         let opts = PtyOptions {
             login: None,
+            assistant: None,
             id: tab.into(), cmd: "claude".into(), args: Vec::new(), env: HashMap::new(), cwd: "/p".into(),
             cols: 80, rows: 24, local_only: false, sandbox: false, agent: true, project_id: None,
             remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,

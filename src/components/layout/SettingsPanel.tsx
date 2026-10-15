@@ -2152,6 +2152,16 @@ export function SettingsDialog({
             />
             {experimentalEnabled(settings, "copilot_completion") && <CopilotCompletionCard />}
 
+            {/* The chat assistant: the switch the backend reads too
+                (`Settings::assistant_enabled`). Its other settings (CLI,
+                model, search backend) come with the overlay. */}
+            <ToggleCard
+              label={<>{t("settings.assistant")} <UntestedTag id="settings.assistant" /></>}
+              checked={experimentalEnabled(settings, "assistant")}
+              onChange={(e) => void updateSettings({ assistant: e.target.checked })}
+              help={t("settings.assistantHelp")}
+            />
+
             {/* Mail is ONE switch. It used to be two — this gate plus a
                 `mail_global_app` sub-toggle deciding whether the header button
                 appeared *as well as* the mail tab — but the tab is retired, so

@@ -71,6 +71,11 @@ pub const HELP_URL_ENV: &str = crate::app_env!("HELP_MCP_URL");
 /// project-agent tab with a schedule target while the server is on.
 pub const MARKUP_TOKEN_ENV: &str = crate::app_env!("MARKUP_MCP_TOKEN");
 pub const MARKUP_URL_ENV: &str = crate::app_env!("MARKUP_MCP_URL");
+/// The web lane's pair (`services::web_lane`), set for a chat-assistant tab
+/// only (`PtyOptions.assistant`), and the only MCP token such a tab gets.
+/// `services::assistant::LaneGrant::from_env` reads them back.
+pub const WEB_TOKEN_ENV: &str = crate::app_env!("WEB_MCP_TOKEN");
+pub const WEB_URL_ENV: &str = crate::app_env!("WEB_MCP_URL");
 /// The server name the agent CLIs list the tools under.
 pub const SERVER_NAME: &str = crate::brand::MCP_SERVER;
 
@@ -88,8 +93,13 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 /// window, and a server daemon, which has no window and answers both the
 /// browser client and the phone itself. A desktop's Mobile host does not:
 /// the window's markup view could never see its asks.
+/// `serves_web`: this process serves the chat assistant's web lane
+/// (`services::web_lane`, `/mcp/web`) and so grants its token
+/// ([`grant_lanes`]'s assistant arm). The window and the Mobile host will;
+/// the server daemon never does (the assistant is not offered on a hosted
+/// server in v1). **False everywhere until S2 sets it.**
 #[derive(Debug, Clone)]
-pub struct Runtime { pub port: u16, pub serves_root: bool, pub serves_markup: bool }
+pub struct Runtime { pub port: u16, pub serves_root: bool, pub serves_markup: bool, pub serves_web: bool }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -139,7 +149,7 @@ pub struct PushBinding {
 /// The lane a caller class occupies on its tab: a tab holds at most one
 /// session per lane, and a respawn replaces only the session of its own lane.
 /// Root, local-model and reader tokens share the root lane; the schedule,
-/// push, help and markup identities each ride beside it.
+/// push, help, markup and web identities each ride beside it.
 fn lane(caller: Caller) -> u8 {
     match caller {
         Caller::Agent | Caller::LocalModel | Caller::Reader => 0,
@@ -147,6 +157,7 @@ fn lane(caller: Caller) -> u8 {
         Caller::Pusher => 2,
         Caller::Helper => 3,
         Caller::Marker => 4,
+        Caller::Web => 5,
     }
 }
 /// One process's bearer tokens and the sessions they open, in memory only.
@@ -239,7 +250,7 @@ pub fn token_generations() -> Vec<(String, Vec<String>)> {
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
     for s in tokens().map().values() {
-        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker) {
+        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web) {
             *s.projects_grant.lock_ok() = grant.clone();
         }
     }
@@ -266,11 +277,11 @@ pub fn revoke_tab(tab: &str) -> bool {
     });
     held
 }
-/// Whether a spawn of `tab` still holds a root-lane session (the help and
-/// markup lanes own no sandbox view, so they never keep one alive).
+/// Whether a spawn of `tab` still holds a root-lane session (the help, markup
+/// and web lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
     tokens().map().values()
-        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker))
+        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web))
 }
 
 /// The on-disk half of the mail taint: an empty marker per tab under the root
@@ -407,6 +418,11 @@ pub enum Caller {
     /// `markup_ask` / `markup_withdraw` / `markup_done` on `/mcp/markup` and
     /// nothing else.
     Marker,
+    /// A chat-assistant tab's web identity (`services::web_lane`), bound at
+    /// spawn to the tab: served `web_fetch` / `web_search` on `/mcp/web` and
+    /// nothing else. **Refused on every path until S2 serves it**: the root
+    /// registry's route and policy are positive lists that do not name it.
+    Web,
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -518,10 +534,10 @@ pub struct SessionInfo {
     pub access: Access,
     pub project: Option<String>,
 }
-/// Help and markup sessions are left out: one per agent tab, nothing to
+/// Help, markup and web sessions are left out: one per agent tab, nothing to
 /// grant, and they end with their tab or their switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker)).map(|s| SessionInfo {
+    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web)).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
@@ -530,7 +546,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
     let mut map = tokens().map();
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
-    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker) { return Err("this session's scope is fixed at spawn".into()); }
+    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
     s.revoked = Arc::new(AtomicBool::new(false));
     s.access = access;
@@ -3763,6 +3779,7 @@ mod tests {
     fn opts(cmd: &str, args: &[&str], project_id: Option<&str>) -> PtyOptions {
         PtyOptions {
             login: None,
+            assistant: None,
             cmd: cmd.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
             project_id: project_id.map(str::to_string),
@@ -3786,7 +3803,7 @@ mod tests {
 
     #[test]
     fn schedule_wiring_is_disjoint_scoped_and_secret_free() {
-        let runtime = Runtime { port: 8765, serves_root: true, serves_markup: true };
+        let runtime = Runtime { port: 8765, serves_root: true, serves_markup: true, serves_web: false };
         for cli in WIRED_CLIS {
             let mut spawn = opts(cli, &[], Some("p"));
             apply_schedule_to_spawn_with(&mut spawn, &runtime, "secret", &[]);
@@ -3809,7 +3826,7 @@ mod tests {
     }
 
     fn rt() -> Runtime {
-        Runtime { port: 4321, serves_root: true, serves_markup: true }
+        Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: false }
     }
 
     /// Every agent CLI gets the help pair; Claude and Codex are also named the

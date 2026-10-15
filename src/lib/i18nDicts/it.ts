@@ -1181,6 +1181,8 @@ export const dict: Dict = {
 
   "settings.projectRemarks": "Annotazioni sui file del progetto",
   "settings.projectRemarksHelp": "Collega note di revisione e righe facoltative ai file del progetto in un REMARKS.md adatto a git.",
+  "settings.assistant": "{assistant}, l'assistente di chat",
+  "settings.assistantHelp": "Chat che possono cercare e leggere il web con la CLI o il modello locale scelti, senza vedere alcun file, progetto o impostazione di questo computer. Se disattivato, il pulsante nell'intestazione sparisce e le sue chat vengono rifiutate.",
   "settings.copilotCompletion": "Completamento automatico GitHub Copilot",
   "settings.copilotCompletionHelp": "Offre GitHub Copilot come secondo provider di completamento automatico per i file di codice. Ollama resta il predefinito; non viene inviato nulla finché un progetto non acconsente qui sotto.",
   "settings.copilotCloudNotice": "Copilot è un servizio cloud: per un progetto che aderisce, il codice che modifichi lascia questa macchina. Il suo language server gira in sandbox, in sola lettura e solo in quel progetto.",

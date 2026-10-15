@@ -22,6 +22,10 @@ export const BRAND = {
   upper: "TABTIVITY",
   /** Prefix of the app's environment variables. */
   envPrefix: "TABTIVITY_",
+  /** The chat assistant's user-facing name, short for the app's name
+   *  (`ASSISTANT_NAME` in brand.rs). Display text only: ids, settings keys
+   *  and commands say `assistant`. */
+  assistant: "Tabby",
 } as const;
 
 /** The old brand: what builds before the rename wrote. */
@@ -30,6 +34,9 @@ export const LEGACY_BRAND = {
   slug: "eldrun",
   upper: "ELDRUN",
   envPrefix: "ELDRUN_",
+  /** The assistant did not exist under the old name: same word, so a table
+   *  built from this brand has the key. Nothing older wrote it. */
+  assistant: "Tabby",
 } as const;
 
 /** The domain of the UID a calendar row without one is exported under
@@ -44,6 +51,7 @@ interface BrandForms {
   readonly slug: string;
   readonly upper: string;
   readonly envPrefix: string;
+  readonly assistant: string;
 }
 
 /** Every persisted or shared name, for one brand. */
@@ -104,6 +112,11 @@ function namesFor(b: BrandForms) {
     appTimerId: `__${b.slug}__`,
     /** The session hook script in `<state>/hooks` (POSIX). */
     sessionHookSh: `${b.slug}_session_start.sh`,
+
+    /** The chat assistant's display name. Not derived from the slug (so it is
+     *  exempt from the "moved with the rename" check): it moves when
+     *  `ASSISTANT_NAME` in brand.rs and `BRAND.assistant` are edited. */
+    assistant: b.assistant,
 
     // ── Frontend only ──────────────────────────────────────────────────────
     /** Prefix of the dotted localStorage keys (`<slug>.todo.collapsed`). */
@@ -166,10 +179,11 @@ export function tabCommand(view: string): string {
   return `${NAMES.tabCommandPrefix}${view}__`;
 }
 
-const PLACEHOLDER = /\{(app|slug)\}/g;
+const PLACEHOLDER = /\{(app|slug|assistant)\}/g;
 
-/** Fill a dictionary's brand placeholders: `{app}` with the display name and
- *  `{slug}` with the lowercase form (paths and file names the text mentions).
+/** Fill a dictionary's brand placeholders: `{app}` with the display name,
+ *  `{slug}` with the lowercase form (paths and file names the text mentions)
+ *  and `{assistant}` with the chat assistant's name.
  *  Done once where a dictionary is loaded, so `translate()` never has to
  *  know. */
 export function fillBrand<T extends Record<string, string | undefined>>(
@@ -179,9 +193,9 @@ export function fillBrand<T extends Record<string, string | undefined>>(
   for (const [key, value] of Object.entries(dict)) {
     if (value === undefined) continue;
     out[key] =
-      value.includes("{app}") || value.includes("{slug}")
+      value.includes("{app}") || value.includes("{slug}") || value.includes("{assistant}")
         ? value.replace(PLACEHOLDER, (_, which: string) =>
-            which === "app" ? BRAND.display : BRAND.slug,
+            which === "app" ? BRAND.display : which === "assistant" ? BRAND.assistant : BRAND.slug,
           )
         : value;
   }

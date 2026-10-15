@@ -2505,6 +2505,7 @@ mod tests {
     fn opts_with_args(args: &[&str]) -> PtyOptions {
         PtyOptions {
             login: None,
+            assistant: None,
             id: "t".to_string(),
             cmd: "claude".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),

@@ -497,6 +497,26 @@ pub fn home_share_dir() -> std::path::PathBuf {
 /// and it is in no project list".
 pub const ROOT_SCOPE: &str = "root";
 
+/// The scope id of the chat assistant's tabs (`docs/assistant_plan.md`): a
+/// scope of its own, neither root nor a project. Its session state is
+/// `<state_dir>/sessions/assistant/` and its agent home `agent-homes/assistant`
+/// (`project_key` is the identity on it). Unlike root its backend
+/// `project_id` is `Some("assistant")`, not `None`: every place that reads a
+/// `Some` id as a project has to meet this one first (`is_reserved_scope`).
+pub const ASSISTANT_SCOPE: &str = "assistant";
+
+/// Whether `id` names a scope the app owns — [`ROOT_SCOPE`] or
+/// [`ASSISTANT_SCOPE`] — and so can never be a project or box id. Compared
+/// through [`project_key`] and case-insensitively, because the id names a
+/// directory under the state dir and a case-folding filesystem or the key
+/// reduction would otherwise let `Assistant` or `assistant ` share the
+/// reserved scope's state. The one funnel the project/box registries, the
+/// layout sanitiser and the phone's discovery ask.
+pub fn is_reserved_scope(id: &str) -> bool {
+    let key = project_key(id.trim());
+    [ROOT_SCOPE, ASSISTANT_SCOPE].iter().any(|scope| key.eq_ignore_ascii_case(scope))
+}
+
 /// Working directory for terminals that are not attached to a project.
 pub fn root_work_dir() -> std::path::PathBuf {
     paths::root_work_dir()
@@ -928,6 +948,19 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, ["plain", "project.json", "settings.json"]);
+    }
+
+    // ── reserved scopes ───────────────────────────────────────────────────
+
+    #[test]
+    fn reserved_scopes_are_root_and_assistant_under_any_spelling() {
+        for id in ["root", "assistant", "Assistant", "ROOT", " assistant ", "assistant\n"] {
+            assert!(is_reserved_scope(id), "{id:?}");
+        }
+        for id in ["", "assistants", "my-assistant", "root2", "p1", "assistant/x", "box:assistant"] {
+            assert!(!is_reserved_scope(id), "{id:?}");
+        }
+        assert_eq!(project_key(ASSISTANT_SCOPE), ASSISTANT_SCOPE, "the id names its own directory");
     }
 
     // ── root_work_dir ─────────────────────────────────────────────────────

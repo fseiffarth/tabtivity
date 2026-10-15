@@ -1165,6 +1165,14 @@ pub struct PtyOptions {
     /// make it more than a plain local root PTY.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<crate::commands::credentials::LoginTarget>,
+    /// A **chat assistant** tab (`services::assistant`, scope
+    /// `storage::ASSISTANT_SCOPE`): the backend ignores `cmd`, `args` and `env`
+    /// and builds the whole launch from this `{ cli, model }`
+    /// (`assistant::launch_line`). Honoured only with `project_id ==
+    /// Some("assistant")`, and required there; any other combination is
+    /// refused at spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<crate::services::assistant::AssistantLaunch>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1866,6 +1874,7 @@ pub fn join_tab(
     route_move_window_views(&opts.id, &attach_id, client.as_str());
     let attach = PtyOptions {
         login: None,
+        assistant: None,
         id: attach_id.clone(),
         cmd: "tmux".to_string(),
         local_model: false,
@@ -3346,6 +3355,7 @@ mod tests {
         let new = agent_fence::begin_spawn(id);
         let mut opts = PtyOptions {
             login: None,
+            assistant: None,
             id: id.into(), cmd: "codex".into(), args: vec!["resume".into(), "0199aaaa-0000-7000-8000-00000000c0de".into()],
             env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false, agent: true,
             project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
@@ -3810,6 +3820,7 @@ mod client_tests {
     fn test_opts() -> PtyOptions {
         PtyOptions {
             login: None,
+            assistant: None,
             id: String::new(),
             cmd: "sh".to_string(),
             local_model: false,
@@ -3908,6 +3919,7 @@ mod client_tests {
         let policy = crate::services::tmux_local::window_size_policy(true);
         let opts = |cols: u16, rows: u16| PtyOptions {
             login: None,
+            assistant: None,
             id: tab.to_string(),
             cmd: "tmux".to_string(),
             local_model: false,

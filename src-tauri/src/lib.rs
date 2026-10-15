@@ -19,8 +19,8 @@
 // `crate::brand::…` and `crate::app_slug!()` resolve here unchanged.
 pub use app_core::brand;
 pub use app_core::{
-    app_env, app_name, app_repo, app_slug, app_tab_command, app_upper, legacy_name, legacy_slug,
-    legacy_upper,
+    app_env, app_name, app_repo, app_slug, app_tab_command, app_upper, assistant_name, legacy_name,
+    legacy_slug, legacy_upper,
 };
 pub mod clock;
 pub mod commands;

@@ -210,6 +210,13 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         security::audit_reason(&audit_session, "", "refused", started.elapsed(), Some("batch"));
         return Json(root_mcp::rpc_error(Value::Null, -32600, "batch requests are not supported: one message per request")).into_response();
     }
+    if session.identity.caller == root_mcp::Caller::Web {
+        // Unreachable today: `path_serves` routes no path to a web token, so
+        // `admit` has refused it already. Kept as the second wall until S2
+        // replaces it with the lane's own branch (`services::web_lane`), so a
+        // later route edit cannot hand a web token to the root registry below.
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if session.identity.caller == root_mcp::Caller::Helper {
         // The help identity (`services::help_mcp`): the compiled-in corpus and
         // nothing else. The switch is read per request, like the root one, so
@@ -576,7 +583,7 @@ fn serve(
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
     let serves = ctx.is_some();
-    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves });
+    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves, serves_web: false });
     let router = router(ServerState { ctx, port, store: root_mcp::tokens(), notify });
     let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
     Ok((port, async move {
@@ -867,9 +874,10 @@ pub(crate) async fn admission(store: &root_mcp::TokenStore, path: &str, token: &
 
 fn path_serves(path: &str, caller: root_mcp::Caller) -> bool {
     match path {
-        // A negative list: every lane class with its own route must be named
-        // here, or the root registry would serve it.
-        "/mcp" => !matches!(caller, root_mcp::Caller::Scheduler | root_mcp::Caller::Pusher | root_mcp::Caller::Helper | root_mcp::Caller::Marker),
+        // A positive list: only the classes that read the root registry are
+        // named, so a class added later (the web lane was the fifth) defaults
+        // to refused here instead of being served the root tools.
+        "/mcp" => matches!(caller, root_mcp::Caller::Agent | root_mcp::Caller::LocalModel | root_mcp::Caller::Reader),
         "/mcp/schedule" => caller == root_mcp::Caller::Scheduler,
         "/mcp/git" => caller == root_mcp::Caller::Pusher,
         "/mcp/help" => caller == root_mcp::Caller::Helper,
@@ -924,6 +932,29 @@ mod security_tests {
             root_mcp::revoke_tab(&session.identity.tab);
         }
     }
+    /// A web-lane token is served no path until S2 adds `/mcp/web`: refused at
+    /// admission, before the body, on the root registry and on every lane's
+    /// route. And every route is a positive list over the classes, so each
+    /// class reaches its own path and no other.
+    #[tokio::test]
+    async fn a_web_token_is_refused_on_every_mcp_path() {
+        let post = |path: &str, token: &str| Request::builder().method("POST").uri(path).header("host", "127.0.0.1:8765")
+            .header("content-type", "application/json").header("authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::from("not json")).unwrap();
+        let (token, web) = root_mcp::test_session(root_mcp::Caller::Web);
+        for path in ["/mcp", "/mcp/schedule", "/mcp/git", "/mcp/help", "/mcp/markup", "/mcp/web", "/mcp/other", "/"] {
+            assert!(!path_serves(path, root_mcp::Caller::Web), "{path}");
+            assert!(matches!(admit(post(path, &token), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "{path}");
+        }
+        root_mcp::revoke_tab(&web.identity.tab);
+        // The other direction: nobody else reaches `/mcp/web`, and the root
+        // route serves exactly the three root-registry classes.
+        for caller in [root_mcp::Caller::Agent, root_mcp::Caller::LocalModel, root_mcp::Caller::Reader, root_mcp::Caller::Scheduler, root_mcp::Caller::Pusher, root_mcp::Caller::Helper, root_mcp::Caller::Marker] {
+            assert!(!path_serves("/mcp/web", caller), "{caller:?}");
+            let root = matches!(caller, root_mcp::Caller::Agent | root_mcp::Caller::LocalModel | root_mcp::Caller::Reader);
+            assert_eq!(path_serves("/mcp", caller), root, "{caller:?}");
+        }
+    }
     /// The markup identity reaches `/mcp/markup` and nothing else — the root
     /// route's negative list names it — and no other class reaches
     /// `/mcp/markup`. Refused at admission, before the body.
@@ -962,7 +993,7 @@ mod security_tests {
     async fn a_token_is_admitted_only_by_the_listener_whose_process_minted_it() {
         let host: &'static root_mcp::TokenStore = Box::leak(Box::default());
         let window: &'static root_mcp::TokenStore = Box::leak(Box::default());
-        let runtime = Runtime { port: 8765, serves_root: false, serves_markup: false };
+        let runtime = Runtime { port: 8765, serves_root: false, serves_markup: false, serves_web: false };
         let mut opts: crate::terminal::PtyOptions = serde_json::from_value(serde_json::json!({
             "id": "headless:t", "cmd": "claude", "args": [], "env": {}, "cwd": "/w", "cols": 80, "rows": 24,
             "local_only": false, "sandbox": false, "agent": true, "project_id": "p", "schedule_target_id": "target-1",

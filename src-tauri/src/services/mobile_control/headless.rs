@@ -762,6 +762,7 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
     let kind = tab.extra.get("kind").and_then(serde_json::Value::as_str);
     PtyOptions {
         login: None,
+        assistant: None,
         id: format!("{LAUNCH_ID_PREFIX}{tmux}"),
         cmd: tab.cmd.clone(),
         args: strings("args"),

@@ -58,6 +58,9 @@ export const UNTESTED = {
   "calendar.alarms.headless": { area: "agents", what: "AgentScheduleDialog · note that calendar reminders reach a subscribed phone with no window open; the mechanism: reminders are claimed in `calendar-alarms-fired.json` before they show (window and sidecar), the sidecar pushes due ones through Web Push while no window holds the timer lease", tested: "2026-10-02" },
   "agentSchedule.leaseElsewhere": { area: "agents", what: "AgentScheduleDialog · note that another Tabtivity window holds the timer lease (schedules, auto-continue, reminders, CalDAV sync fire there); the lease itself: one window per state dir fires timers, heartbeat-renewed, 30 s TTL", tested: "2026-10-02" },
   "promptChart.heading": { area: "agents", what: "PromptChart · Prompt chart" },
+  "assistant.overlay": { area: "agents", what: "Header assistant button and overlay · chat list, the chat in Reader mode, first-run sign-in card; the chat sees no file, project or MCP server (docs/assistant_plan.md)" },
+  "assistant.newChat": { area: "agents", what: "Assistant overlay · New chat with the CLI/model picker (Claude, Codex, OpenCode · local model, Claude · local model)" },
+  "assistant.search": { area: "agents", what: "Settings · assistant · search backend (SearXNG URL or Ollama web search key) and the setup card local models show; web_search answers search_not_configured without one" },
   "howToStart.greeting": { area: "shell", what: "HowToStart Welcome · first-run greeting types itself out (~2.4 s, click/key completes, reduced motion shows it whole); a re-open from Settings shows it complete" },
   "welcomeBack.continue": { area: "shell", what: "StatsRecap startup · typed welcome-back line naming the last working day's project, Continue / Switch to buttons make it current and close; the recap anchors on the last day with tracked time and does not open on a fresh install" },
   "stats.sectionTokens": { area: "agents", what: "StatsRecap · Tokens section: per CLI fresh in / cache write / cache read / output and output share for the period, Per model expands; Codex total-only rows say no split reported; other used CLIs say not reported; a first long scan says still counting and asks again a few times" },
@@ -305,6 +308,7 @@ export const UNTESTED = {
   "settings.mailClient": { area: "layout", what: "SettingsPanel · Mail client" },
   "settings.mdGraph": { area: "layout", what: "SettingsPanel · Markdown link graph" },
   "settings.projectRemarks": { area: "layout", what: "SettingsPanel · Project file remarks" },
+  "settings.assistant": { area: "layout", what: "SettingsPanel · Experimental · assistant switch: on shows the header button and lets the backend serve chats, the web lane and the phone row; off refuses them (an open chat's lane answers off)" },
   "settings.rootMcp": { area: "layout", what: "SettingsPanel · Tabtivity's tools (MCP) for root-console agents" },
   "scheduleMcp": { area: "agents", what: "Schedule MCP · local agent proposals, approval, quotas and delivery" },
   "markupMcp": { area: "agents", what: "Settings → Manage CLIs · Markup questions MCP switch (on by default): new local Claude/Codex/MCP Vibe tabs get markup_ask / markup_withdraw / markup_done; off refuses running tabs' asks and ticks" },
@@ -418,6 +422,7 @@ export const UNTESTED = {
   "mailPdfPreview.1": { area: "mail", what: "MailPdfPreview · PDF, {count} pages" },
 
   // --- mobile — The phone PWA ---------------------------------------
+  "mobile.assistant": { area: "mobile", what: "Phone · Home row for the assistant, chat list, New chat sheet, Focus chat; the Mobile switch for it (on by default); works with no desktop window open" },
   "mobile.sheet.color": { area: "mobile", what: "Color sheet · tab colour picker" },
   "mobile.sheet.rename": { area: "mobile", what: "Rename sheet · tab label change" },
   "mobile.home.newProject": { area: "mobile", what: "Projects ＋ · New project by name, in the projects folder, open to this phone only" },

@@ -133,6 +133,23 @@ export type FilesPanelView =
   | "remarks"
   | "todo";
 
+/** `Settings.assistant_settings` (Rust `schema::settings::AssistantSettings`):
+ *  the chat assistant's options. Every key optional; an absent block is the
+ *  defaults. */
+export interface AssistantSettings {
+  /** The CLI a new chat starts with (an assistant CLI id). */
+  default_cli?: string;
+  /** The model a new chat starts with. */
+  default_model?: string;
+  /** Where the web lane's `web_search` looks (plan decision 7). Unset: none. */
+  search?: {
+    /** `"searxng"` or `"ollama"`. */
+    kind?: "searxng" | "ollama";
+    /** The SearXNG instance's base URL. The Ollama key is in the keychain. */
+    searxng_url?: string;
+  };
+}
+
 export interface Settings {
   /** The file's revision (headless owner plan, H1): every write moves it, and
    * the whole-document `save_settings` fallback is refused when the file moved
@@ -180,6 +197,12 @@ export interface Settings {
      * closes the routes. Read by the sidecar per request and repeated by the
      * desktop bridge (`lib/mobileLocalModels`). */
     local_models?: boolean;
+    /** A paired phone may use the chat assistant. Unset is ON; an explicit
+     * false closes it. Only in effect while the experimental `assistant` flag
+     * is on. Read by the sidecar per catalog load and repeated by the desktop
+     * bridge. Every writer of this block must carry it (a settings patch is
+     * shallow: a block that omits it drops it). */
+    assistant_access?: boolean;
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */
@@ -658,6 +681,15 @@ export interface Settings {
   md_graph?: boolean;
   /** EXPERIMENTAL, default OFF. Project-wide per-file remarks in REMARKS.md. */
   project_remarks?: boolean;
+  /** EXPERIMENTAL, default OFF. The chat assistant: chats in a scope of its
+   *  own that can search and read the web and see nothing else
+   *  (`docs/assistant_plan.md`). The backend reads the same flag
+   *  (`Settings::assistant_enabled`) and refuses its commands, the spawn and
+   *  the web lane while it is off. */
+  assistant?: boolean;
+  /** The assistant's options. Not `assistant`: that key is the flag's, and
+   *  `EXPERIMENTAL_FLAGS` are the `boolean | undefined` keys of `Settings`. */
+  assistant_settings?: AssistantSettings;
   /** Marker (tab cost plan step 3): this profile's experimental flags are
    *  explicit, so an unset one is off whatever `debug` says. Written once by
    *  `migrateExperimentalOnce` (`lib/experimental`), together with an explicit

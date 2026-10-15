@@ -61,6 +61,8 @@ pub mod api_usage;
 pub mod agent_global;
 pub mod agent_hint;
 pub mod agent_home;
+// The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).
+pub mod assistant;
 // Where each CLI keeps its conversations in an agent home, for export/import.
 pub mod agent_history;
 // Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.

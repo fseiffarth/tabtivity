@@ -1416,6 +1416,7 @@ mod tests {
     fn wrap_no_session_is_noop() {
         let mut opts = PtyOptions {
             login: None,
+            assistant: None,
             id: "t".into(),
             cmd: "bash".into(),
             args: vec![],
@@ -1442,6 +1443,7 @@ mod tests {
     fn detached_fixture(session: &str, cwd: &str) -> PtyOptions {
         PtyOptions {
             login: None,
+            assistant: None,
             id: format!("headless:{session}"),
             cmd: "sleep".into(),
             args: vec!["30".into()],

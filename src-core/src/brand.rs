@@ -70,6 +70,18 @@ macro_rules! app_repo {
     };
 }
 
+/// The chat assistant's user-facing name, as a literal: short for the app's
+/// name. A word of its own (not derived from [`app_name!`]), so it moves with
+/// a rename by editing it here and `BRAND.assistant` in `src/lib/brand.ts`
+/// (`BrandMirror.test.ts` holds the two together). Display text only: scope
+/// ids, settings keys, commands and untested ids say `assistant`.
+#[macro_export]
+macro_rules! assistant_name {
+    () => {
+        "Tabby"
+    };
+}
+
 /// The old display name, as a literal.
 #[macro_export]
 macro_rules! legacy_name {
@@ -105,6 +117,10 @@ pub const UPPER: &str = app_upper!();
 
 /// Prefix of the app's environment variables.
 pub const ENV_PREFIX: &str = concat!(app_upper!(), "_");
+
+/// The chat assistant's name as shown to the user. Nothing older wrote it, so
+/// it has no `LEGACY_*` twin.
+pub const ASSISTANT_NAME: &str = assistant_name!();
 
 /// The old display name.
 pub const LEGACY_DISPLAY: &str = legacy_name!();
@@ -601,6 +617,12 @@ mod tests {
         assert_eq!(LEGACY_SLUG, LEGACY_DISPLAY.to_lowercase());
         assert_eq!(LEGACY_UPPER, LEGACY_SLUG.to_uppercase());
         assert_eq!(LEGACY_ENV_PREFIX, format!("{LEGACY_UPPER}_"));
+    }
+
+    #[test]
+    fn the_assistant_name_is_a_word_of_its_own() {
+        assert_eq!(ASSISTANT_NAME, assistant_name!());
+        assert!(!ASSISTANT_NAME.is_empty() && ASSISTANT_NAME.chars().all(|c| c.is_ascii_alphabetic()));
     }
 
     #[test]

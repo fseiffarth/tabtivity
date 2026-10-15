@@ -21,6 +21,7 @@ import {
   MOBILE_HOST_KEY,
   NAMES,
   envName,
+  fillBrand,
   storageDashKey,
   tabCommand,
 } from "../../lib/brand";
@@ -45,6 +46,9 @@ const FRONTEND_ONLY = new Set([
   "mobileNotificationTagPrefix",
   // The gateway crate builds it from SERVER_ACCOUNT_PREFIX (`names::helper_binary`).
   "serverAdminHelper",
+  // Backed by `ASSISTANT_NAME` (a word of its own, no LEGACY_ twin): checked
+  // in its own test below.
+  "assistant",
 ]);
 
 describe("brand mirror", () => {
@@ -57,6 +61,14 @@ describe("brand mirror", () => {
     expect(LEGACY_BRAND.slug).toBe(rust.legacy.LEGACY_SLUG);
     expect(LEGACY_BRAND.upper).toBe(rust.legacy.LEGACY_UPPER);
     expect(LEGACY_BRAND.envPrefix).toBe(rust.legacy.LEGACY_ENV_PREFIX);
+  });
+
+  it("spells the assistant's name as the backend does", () => {
+    expect(BRAND.assistant).toBe(rust.current.ASSISTANT_NAME);
+    expect(NAMES.assistant).toBe(rust.current.ASSISTANT_NAME);
+    expect(fillBrand({ x: "Ask {assistant} in {app}" }).x).toBe(
+      `Ask ${rust.current.ASSISTANT_NAME} in ${BRAND.display}`,
+    );
   });
 
   it("builds every shared name exactly as the backend does", () => {
@@ -94,6 +106,8 @@ describe("brand mirror", () => {
       return;
     }
     for (const key of Object.keys(NAMES) as (keyof typeof NAMES)[]) {
+      // The assistant's name is not built from the slug: nothing to move.
+      if (key === "assistant") continue;
       expect(NAMES[key], key).not.toBe(LEGACY_NAMES[key]);
       expect(NAMES[key], key).toContain(BRAND.slug);
       expect(LEGACY_NAMES[key], key).toContain(LEGACY_BRAND.slug);
