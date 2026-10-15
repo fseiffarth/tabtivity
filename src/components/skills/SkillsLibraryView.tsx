@@ -22,6 +22,7 @@ import type {
   SkillSource,
 } from "../../types/skills";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 
 export interface SkillsLibraryViewProps {
   /** Absolute path to the project skills may install into, or `null` where
@@ -65,6 +66,7 @@ export interface SkillsLibraryViewProps {
  */
 export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryViewProps) {
   const t = useT();
+  const { confirmAction, dialogs } = useDialogs();
 
   const [scope, setScope] = useState<"project" | "personal">(
     projectDir ? "project" : "personal",
@@ -204,7 +206,13 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
   }
 
   async function handleRemoveSource(source: SkillSource) {
-    if (!window.confirm(t("skillsLibrary.confirmRemoveSource", { label: source.label }))) return;
+    const ok = await confirmAction({
+      title: t("skillsLibrary.removeSource"),
+      body: t("skillsLibrary.confirmRemoveSource", { label: source.label }),
+      confirmLabel: t("skillsLibrary.removeSource"),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await removeSkillSource(source.id);
       const remaining = sources.filter((s) => s.id !== source.id);
@@ -237,7 +245,12 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
   async function handleInstall() {
     if (!selectedEntry || !detail) return;
     if (installedNames.has(detail.name)) {
-      if (!window.confirm(t("skillsLibrary.confirmReinstall", { name: detail.name }))) return;
+      const ok = await confirmAction({
+        title: t("skillsLibrary.reinstall"),
+        body: t("skillsLibrary.confirmReinstall", { name: detail.name }),
+        confirmLabel: t("skillsLibrary.reinstall"),
+      });
+      if (!ok) return;
     }
     setInstalling(true);
     setError("");
@@ -259,7 +272,13 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
     const question = personal
       ? t("skillsLibrary.confirmUninstallPersonal", { name: skill.name })
       : t("skillsLibrary.confirmUninstall", { name: skill.name });
-    if (!window.confirm(question)) return;
+    const ok = await confirmAction({
+      title: t("skillsLibrary.uninstall"),
+      body: question,
+      confirmLabel: t("skillsLibrary.uninstall"),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await uninstallSkill(personal ? PERSONAL_SKILLS : target, skill.name);
       reloadInstalled();
@@ -525,6 +544,7 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
           )}
         </div>
       </div>
+      {dialogs}
     </div>
   );
 }

@@ -6,7 +6,7 @@
  * must each carry it — the first two carry Browser access too, which lockdown
  * leaves out on purpose.
  */
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -116,13 +116,14 @@ describe("Mobile settings — phone uploads switch", () => {
 
   it("survives Lock down now, which closes Browser access", async () => {
     running = true;
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     host({ project_files: true, project_uploads: true, browser_client: true });
     const user = userEvent.setup();
     render(<MobileSettings />);
     const lock = await screen.findByRole("button", { name: "Lock down now" });
     await waitFor(() => expect((lock as HTMLButtonElement).disabled).toBe(false));
     await user.click(lock);
+    const question = await screen.findByRole("dialog", { name: "Lock down now" });
+    await user.click(within(question).getByRole("button", { name: "Lock down now" }));
     await waitFor(() => expect(hostWrites()).toHaveLength(1));
     expect(hostWrites()[0]).toMatchObject({ enabled: false, project_uploads: true });
     expect(JSON.parse(JSON.stringify(hostWrites()[0]))).not.toHaveProperty("browser_client");

@@ -6,6 +6,7 @@ import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
+import { ConfirmSheet } from "../components/ConfirmSheet";
 import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
@@ -1083,6 +1084,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   const [addSheet, setAddSheet] = useState(false);
   /** The Commit chip's sheet: commit everything, or split it up. */
   const [commitSheet, setCommitSheet] = useState(false);
+  // The key row's Interrupt asks first, in the phone's own sheet.
+  const [interruptSheet, setInterruptSheet] = useState(false);
   /** The "From the desktop" list: `null` while the desktop is being asked. */
   const [desktopSheet, setDesktopSheet] = useState(false);
   const [desktopImages, setDesktopImages] = useState<DesktopImage[] | null>(null);
@@ -4437,7 +4440,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       </div>
       {keysShown && <div className="keys" id="terminal-keys">
       {isUntested("mobile.composer.keysToggle") && <em className="composer-untested keys-untested">{t("mobile.focus.untested")}</em>}
-      <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => window.confirm(t("mobile.keys.interruptConfirm")) && type("\u0003")}>{t("mobile.keys.interrupt")}</button>
+      <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => setInterruptSheet(true)}>{t("mobile.keys.interrupt")}</button>
       </div>}
     </div>
     {/* Lifted over a markup view, whose model chip opens it too. */}
@@ -4470,6 +4473,11 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       tiles={attachTiles}
       onPick={pickAdd}
       onClose={() => setAddSheet(false)}
+    />}
+    {interruptSheet && <ConfirmSheet
+      confirm={{ title: t("mobile.keys.interrupt"), note: t("mobile.keys.interruptConfirm"), label: t("mobile.keys.interrupt"), run: () => { type("\u0003"); } }}
+      busy={!connected}
+      onClose={() => setInterruptSheet(false)}
     />}
     {commitSheet && <OptionSheet
       title={t("mobile.commit.title")}

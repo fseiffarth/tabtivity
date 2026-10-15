@@ -9,6 +9,7 @@ import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_HOST_KEY } from "../../lib/brand";
 import { UntestedTag } from "../common/UntestedTag";
 import {
@@ -90,6 +91,9 @@ function MobileIcon({ tone }: { tone: StatusTone }) {
  */
 export function MobileIndicator() {
   const t = useT();
+  // Lockdown asks in the app's own dialog, mounted beside the hover anchor (not
+  // in it) so the pointer on the question cannot re-open the menu under it.
+  const { confirmAction, dialogs } = useDialogs();
   const mobileHost = useSettingsStore((s) => s.settings?.[MOBILE_HOST_KEY]);
   const mobileEnabled = useSettingsStore((s) => s.settings?.[MOBILE_HOST_KEY]?.enabled ?? false);
   const visible = useSettingsStore((s) => s.settings?.mobile_indicator ?? true);
@@ -214,7 +218,13 @@ export function MobileIndicator() {
 
   const lockDownNow = async () => {
     if (!mobileHost) return;
-    if (!window.confirm(tr("mobile.lockdownConfirm"))) return;
+    const ok = await confirmAction({
+      title: tr("mobile.lockdownNow"),
+      body: tr("mobile.lockdownConfirm"),
+      confirmLabel: tr("mobile.lockdownNow"),
+      danger: true,
+    });
+    if (!ok) return;
     setLockingDown(true);
     setError(null);
     try {
@@ -407,6 +417,7 @@ export function MobileIndicator() {
         )}
       </div>
       {setupGuide}
+      {dialogs}
       {accessFor && createPortal(<PairedDeviceDialog deviceId={accessFor} onClose={closeAccess} />, document.body)}
     </>
   );

@@ -9,6 +9,7 @@ import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
 import { ConnectToServer } from "../server/ConnectToServer";
@@ -136,6 +137,7 @@ function Hint({ help, children }: { help: string; children: ReactNode }) {
 
 export function MobileSettings() {
   const t = useT();
+  const { confirmAction, dialogs } = useDialogs();
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.updateSettings);
   const projects = useProjectsStore((state) => state.projects);
@@ -378,9 +380,14 @@ export function MobileSettings() {
     );
   };
 
-  const setUpInTerminal = () => {
+  const setUpInTerminal = async () => {
     const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
-    if (!window.confirm(tr("mobile.setUpConfirm", { command }))) return;
+    const ok = await confirmAction({
+      title: tr("mobile.setUpInTerminal"),
+      body: tr("mobile.setUpConfirm", { command }),
+      confirmLabel: tr("mobile.setUpInTerminal"),
+    });
+    if (!ok) return;
     runInstallInTab(tr("mobile.guideSummary"), command, "default");
   };
 
@@ -429,7 +436,13 @@ export function MobileSettings() {
   };
 
   const lockDownNow = async () => {
-    if (!window.confirm(tr("mobile.lockdownConfirm"))) return;
+    const ok = await confirmAction({
+      title: tr("mobile.lockdownNow"),
+      body: tr("mobile.lockdownConfirm"),
+      confirmLabel: tr("mobile.lockdownNow"),
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {
@@ -558,7 +571,7 @@ export function MobileSettings() {
             </li>
           </ol>
           <div className="mobile-settings-guide-actions">
-            <button type="button" className="settings-btn sm" title={t("mobile.setUpInTerminalHelp")} onClick={setUpInTerminal}>{t("mobile.setUpInTerminal")}</button>
+            <button type="button" className="settings-btn sm" title={t("mobile.setUpInTerminalHelp")} onClick={() => void setUpInTerminal()}>{t("mobile.setUpInTerminal")}</button>
             <a href="https://tailscale.com/docs/features/tailscale-serve" target="_blank" rel="noreferrer" title={t("mobile.guideOutro")}>{t("mobile.serveDocs")}</a>
           </div>
           <div className="settings-card-row">
@@ -748,7 +761,16 @@ export function MobileSettings() {
                 <button
                   type="button"
                   className="settings-btn sm danger"
-                  onClick={() => void invoke<AdminResponse>("mobile_admin", { request: { type: "revoke", device_id: device.id } }).then(refresh)}
+                  onClick={() => {
+                    // A refused or failed revoke says so: the row staying put
+                    // is otherwise the only sign, and it reads as "revoked".
+                    void invoke<AdminResponse>("mobile_admin", { request: { type: "revoke", device_id: device.id } })
+                      .then((response) => {
+                        if (response.status === "error") throw new Error(response.message);
+                        refresh();
+                      })
+                      .catch((reason) => setError(String(reason)));
+                  }}
                 >{t("mobile.revoke")}</button>
               </div>
               <PairedDeviceAccess
@@ -764,8 +786,14 @@ export function MobileSettings() {
       {devices.length > 0 && <button
         type="button"
         className="settings-btn sm danger"
-        onClick={() => {
-          if (!window.confirm(tr("mobile.forgetAllConfirm"))) return;
+        onClick={async () => {
+          const ok = await confirmAction({
+            title: tr("mobile.forgetAll"),
+            body: tr("mobile.forgetAllConfirm"),
+            confirmLabel: tr("mobile.forgetAll"),
+            danger: true,
+          });
+          if (!ok) return;
           void invoke<AdminResponse>("mobile_admin", { request: { type: "forget_all" } })
             .then((response) => {
               if (response.status === "error") throw new Error(response.message);
@@ -854,6 +882,7 @@ export function MobileSettings() {
         </div>
       )}
       <ConnectToServer />
+      {dialogs}
     </SettingsCard>
   );
 }
