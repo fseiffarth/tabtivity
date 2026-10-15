@@ -506,6 +506,14 @@ pub fn ppid(pid: u32) -> Option<u32> {
     platform::ppid(pid)
 }
 
+/// When a live process started, in the backend's own units (Linux clock
+/// ticks since boot, macOS microseconds, Windows `FILETIME`): with the pid it
+/// names one process across pid reuse. `None` when the process is gone or
+/// the backend cannot tell.
+pub fn process_start(pid: u32) -> Option<u64> {
+    platform::process_start(pid)
+}
+
 /// Command line for a live process, if resolvable on this backend.
 pub fn cmdline(pid: u32) -> Option<String> {
     platform::cmdline(pid)
@@ -1625,6 +1633,12 @@ mod platform {
         rest.split_whitespace().nth(1)?.parse().ok()
     }
 
+    /// Start time since boot in clock ticks (`stat` field 22).
+    pub fn process_start(pid: u32) -> Option<u64> {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        crate::services::proc_table::parse_stat(pid, &stat).map(|p| p.start).filter(|&start| start != 0)
+    }
+
     /// Command line for a live process, with NUL separators normalized to spaces.
     pub fn cmdline(pid: u32) -> Option<String> {
         let bytes = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
@@ -1892,6 +1906,20 @@ mod platform {
 
     pub fn ppid(pid: u32) -> Option<u32> {
         parent_map().get(&pid).copied()
+    }
+
+    /// Creation time in 100-ns units since 1601, via `GetProcessTimes`.
+    pub fn process_start(pid: u32) -> Option<u64> {
+        with_process(pid, |handle| {
+            let mut creation = FILETIME::default();
+            let mut exit = FILETIME::default();
+            let mut kernel = FILETIME::default();
+            let mut user = FILETIME::default();
+            // SAFETY: all four FILETIME out-params are valid for the call.
+            unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) }
+                .ok()?;
+            Some(filetime_units(creation))
+        })
     }
 
     /// The process's **image path** (`QueryFullProcessImageNameW`), standing in
@@ -2255,6 +2283,12 @@ mod platform {
     /// Parent pid for `pid` via the BSD-info flavor.
     pub fn ppid(pid: u32) -> Option<u32> {
         Some(bsd_info(pid)?.pbi_ppid)
+    }
+
+    /// Start time in microseconds since the epoch, via the BSD-info flavor.
+    pub fn process_start(pid: u32) -> Option<u64> {
+        let info = bsd_info(pid)?;
+        Some(info.pbi_start_tvsec.saturating_mul(1_000_000).saturating_add(info.pbi_start_tvusec))
     }
 
     /// The kernel's short process name via the BSD-info flavor (`pbi_comm`).
@@ -2680,6 +2714,10 @@ mod platform {
     }
 
     pub fn ppid(_pid: u32) -> Option<u32> {
+        None
+    }
+
+    pub fn process_start(_pid: u32) -> Option<u64> {
         None
     }
 

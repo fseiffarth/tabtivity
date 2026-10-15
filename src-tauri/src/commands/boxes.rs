@@ -110,7 +110,9 @@ pub const BOXES_STALE: &str = "boxes changed on disk since they were loaded; rel
 /// re-created; one the caller dropped is deleted. Answers the list as
 /// written, so the caller can adopt the revisions it stamped.
 fn save_boxes_at(path: &Path, boxes: &BoxesList) -> Result<BoxesList, String> {
-    let _lock = storage::FileLock::exclusive(path).map_err(|e| e.to_string())?;
+    // The per-box revision check below is what a file system without
+    // advisory locks falls back on (`FileLock::exclusive_or_unlocked`).
+    let _lock = storage::FileLock::exclusive_or_unlocked(path).map_err(|e| e.to_string())?;
     let current = read_boxes_at(path)?;
     for incoming in boxes {
         if let Some(held) = current.iter().find(|held| held.id == incoming.id) {

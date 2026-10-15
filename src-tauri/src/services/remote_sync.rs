@@ -328,7 +328,8 @@ fn save_manifest_at(path: &Path, manifest: &Manifest) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let _lock = crate::storage::FileLock::exclusive(path).map_err(|e| e.to_string())?;
+    // On a file system without advisory locks the stamp check alone guards.
+    let _lock = crate::storage::FileLock::exclusive_or_unlocked(path).map_err(|e| e.to_string())?;
     let mut stamps = stamps();
     if let Some(expected) = stamps.get(path) {
         if *expected != stamp_of(path) {
