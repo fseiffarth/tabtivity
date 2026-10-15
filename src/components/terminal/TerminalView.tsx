@@ -22,6 +22,7 @@ import {
   onTerminalReplay,
   type TerminalOutputRange,
 } from "../../lib/terminal/terminalBus";
+import { noteTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
 import { terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
@@ -1674,6 +1675,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       if (!attachOnly && !waking) holdForSpawn(true);
       void setupAndSpawn().finally(() => {
         if (ownsPty || cancelled) holdForSpawn(false);
+        // No PTY, so no `terminal-exit` will ever say this launch is over: say
+        // it here (a root login tab's dedupe mark waits on one or the other).
+        else if (spawnState === "failed") noteTerminalSpawnFailed(id);
       });
     });
 

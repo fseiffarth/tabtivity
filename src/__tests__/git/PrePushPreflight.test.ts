@@ -8,7 +8,7 @@
 // @ts-expect-error node:child_process has no type declarations in this project (no @types/node)
 import { execFileSync, spawnSync } from "node:child_process";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 // @ts-expect-error node:os has no type declarations in this project (no @types/node)
 import { tmpdir } from "node:os";
 // @ts-expect-error node:path has no type declarations in this project (no @types/node)
@@ -100,6 +100,45 @@ describe.skipIf(process.platform === "win32" || !hasTool("git") || !hasTool("jq"
     expect(lines(git(work, "status", "--porcelain"))).toEqual(["A  unrelated.txt", "M  hello.txt"]);
     // The private index is gone from the git dir.
     expect(readdirSync(join(work, ".git")).filter((f: string) => f.startsWith("bump-index"))).toEqual([]);
+  });
+
+  /** A git hook in the throwaway repo's own `.git/hooks` (no hooksPath there). */
+  const gitHook = (work: string, name: string, body: string) =>
+    writeFileSync(join(work, ".git", "hooks", name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+
+  /** The repo exactly as before the push: HEAD, version files, index, no leftovers. */
+  const expectUntouched = (work: string, localSha: string) => {
+    expect(git(work, "rev-parse", "HEAD")).toBe(localSha);
+    expect(JSON.parse(readFileSync(join(work, "package.json"), "utf8")).version).toBe("0.1.2");
+    expect(readFileSync(join(work, "Cargo.lock"), "utf8")).toContain('version = "0.1.2"');
+    expect(git(work, "status", "--porcelain")).toBe("");
+    expect(readdirSync(join(work, ".git")).filter((f: string) => f.startsWith("bump-index"))).toEqual([]);
+    expect(readdirSync(join(work, "src-tauri")).filter((f: string) => f.includes("pre-push-restore"))).toEqual([]);
+  };
+
+  it("puts the version files back when the private-index commit fails", () => {
+    const { work, remoteSha, localSha } = throwawayRepo();
+    gitHook(work, "pre-commit", "exit 1");
+    const run = preflight(work, localSha, remoteSha);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("the version bump failed (the bump commit)");
+    expect(run.stderr).toContain("version files are back as they were");
+    expectUntouched(work, localSha);
+  });
+
+  it("takes the bump commit back when the shared-index reset fails", () => {
+    const { work, remoteSha, localSha } = throwawayRepo();
+    // The commit lands, then the shared index is locked — what a concurrent git
+    // process holding `index.lock` does to the reset that follows.
+    gitHook(work, "post-commit", 'touch "$(git rev-parse --git-dir)/index.lock"');
+    const run = preflight(work, localSha, remoteSha);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("resetting the version files in the shared index");
+    expect(run.stderr).toContain("was taken back off the branch");
+    // The bump commit is off the branch; with the lock gone the tree is clean,
+    // and nothing stages the old version files over a bump commit.
+    rmSync(join(work, ".git", "index.lock"));
+    expectUntouched(work, localSha);
   });
 
   it("refuses to bump over uncommitted edits in the version files", () => {
