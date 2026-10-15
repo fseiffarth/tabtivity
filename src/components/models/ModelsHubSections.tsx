@@ -1271,7 +1271,7 @@ export function MachineMeters({ hub }: { hub: ModelsHub }) {
                 note={gpuNote}
                 detail={t("localModel.gpuFree", { free: formatBytes(Math.max(0, gpuTotal - gpuUsed)) })}
                 percent={gpuPercent(gpuUsed, gpuTotal)}
-                title={gpus.map(gpuAdapterTooltip).join("\n")}
+                title={gpus.map((gpu) => gpuAdapterTooltip(gpu)).join("\n")}
               />
             )}
           </div>

@@ -12,6 +12,7 @@
  * card the shared pool is 0 and it collapses to plain device VRAM, and on an APU
  * it becomes the number that answers "will this model fit?".
  */
+import { translate, useI18nStore, type Language } from "./i18n";
 
 /** One GPU, as sampled by the backend `gpustat::GpuSample`. */
 export interface GpuSample {
@@ -144,14 +145,43 @@ export function gpuLinkLabel(gpu: GpuSample): string | null {
   return parts.length > 0 ? parts.join(" ") : null;
 }
 
+/** The tooltip's row labels in the app language, padded to one column so the
+ *  values line up whichever of them a card reports (and in every language). */
+function tipLabels(lang: Language) {
+  const raw = {
+    vram: translate(lang, "gpu.tip.vram"),
+    shared: translate(lang, "gpu.tip.shared"),
+    temp: translate(lang, "gpu.tip.temp"),
+    power: translate(lang, "gpu.tip.power"),
+    clocks: translate(lang, "gpu.tip.clocks"),
+    link: translate(lang, "gpu.tip.link"),
+  };
+  const width = Math.max(...Object.values(raw).map((l) => l.length)) + 2;
+  const pad = (l: string) => `  ${l.padEnd(width)}`;
+  return {
+    vram: pad(raw.vram),
+    shared: pad(raw.shared),
+    temp: pad(raw.temp),
+    power: pad(raw.power),
+    clocks: pad(raw.clocks),
+    link: pad(raw.link),
+  };
+}
+
 /** One adapter, named and split back into its two pools, then its live sensors. */
-export function gpuAdapterTooltip(gpu: GpuSample): string {
+export function gpuAdapterTooltip(
+  gpu: GpuSample,
+  lang: Language = useI18nStore.getState().lang,
+): string {
+  const label = tipLabels(lang);
   const head =
-    gpu.busy_percent != null ? `${gpu.name} — ${Math.round(gpu.busy_percent)}% busy` : gpu.name;
-  const vram = `  VRAM    ${formatBytes(gpu.vram_used)} / ${formatBytes(gpu.vram_total)}`;
+    gpu.busy_percent != null
+      ? translate(lang, "gpu.tip.busy", { name: gpu.name, pct: Math.round(gpu.busy_percent) })
+      : gpu.name;
+  const vram = `${label.vram}${formatBytes(gpu.vram_used)} / ${formatBytes(gpu.vram_total)}`;
   const shared =
     gpu.shared_total > 0
-      ? `\n  Shared  ${formatBytes(gpu.shared_used)} / ${formatBytes(gpu.shared_total)}`
+      ? `\n${label.shared}${formatBytes(gpu.shared_used)} / ${formatBytes(gpu.shared_total)}`
       : "";
   // Append only the sensors the driver actually reported, so a card that exposes
   // none reads exactly as it did before these fields existed.
@@ -160,10 +190,10 @@ export function gpuAdapterTooltip(gpu: GpuSample): string {
   const power = formatWatts(gpu.power_w, gpu.power_cap_w);
   const clocks = [formatMhz(gpu.sclk_mhz), formatMhz(gpu.mclk_mhz)].filter(Boolean).join(" / ");
   const link = gpuLinkLabel(gpu);
-  if (temp) sensors.push(`  Temp    ${temp}`);
-  if (power) sensors.push(`  Power   ${power}`);
-  if (clocks) sensors.push(`  Clocks  ${clocks}`);
-  if (link) sensors.push(`  Link    ${link}`);
+  if (temp) sensors.push(`${label.temp}${temp}`);
+  if (power) sensors.push(`${label.power}${power}`);
+  if (clocks) sensors.push(`${label.clocks}${clocks}`);
+  if (link) sensors.push(`${label.link}${link}`);
   const tail = sensors.length > 0 ? `\n${sensors.join("\n")}` : "";
   return `${head}\n${vram}${shared}${tail}`;
 }
@@ -172,6 +202,13 @@ export function gpuAdapterTooltip(gpu: GpuSample): string {
  * The header's breakdown: every adapter's two pools, then Ollama's share of it
  * all — the figure this readout used to consist of, now one line of context.
  */
-export function gpuTooltip(gpus: GpuSample[], ollamaBytes: number): string {
-  return [...gpus.map(gpuAdapterTooltip), `Ollama models: ${formatBytes(ollamaBytes)}`].join("\n");
+export function gpuTooltip(
+  gpus: GpuSample[],
+  ollamaBytes: number,
+  lang: Language = useI18nStore.getState().lang,
+): string {
+  return [
+    ...gpus.map((gpu) => gpuAdapterTooltip(gpu, lang)),
+    translate(lang, "gpu.tip.ollama", { size: formatBytes(ollamaBytes) }),
+  ].join("\n");
 }

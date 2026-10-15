@@ -10,6 +10,10 @@
  * bundle ever served, and the offline fallback below could still boot a
  * months-old shell out of it long after the desktop had upgraded. */
 const CACHE = "tabtivity-mobile-shell-__APP_BUILD__";
+/* The page's language, kept by the page (`pushTitles.ts`) in a cache of its
+ * own — which is why `activate` below spares it. */
+const PREFS = "tabtivity-mobile-prefs";
+const PREFS_LANG = "/__push-lang";
 /* A stalled connection — the common mobile-data failure — is not a network
  * *error*, so a plain `.catch()` fallback left the user on a white screen for
  * the browser's full timeout with the cached shell sitting right there. */
@@ -48,7 +52,7 @@ self.addEventListener("activate", (event) =>
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE && key !== PREFS).map((key) => caches.delete(key))))
       .then(() => self.clients.claim()),
   ),
 );
@@ -113,9 +117,36 @@ self.addEventListener("fetch", (event) => {
  * shows the generic line. A phone that chose "no details" gets no title: the
  * line below is all it shows. Project and tab are the phone's own opaque ids. */
 const OPAQUE_ID = /^[A-Za-z0-9_-]{1,512}$/;
-function fallbackTitle(data) {
-  if (data.kind === "agent") return data.status === "done" ? "An agent finished its turn" : "An agent needs your answer";
-  return "Calendar reminder";
+/* The fallback titles in every language, stamped from the i18n dictionaries by
+ * the build (`stampServiceWorker`, `pushTitles.ts`): this file cannot import
+ * them. Unstamped (dev) the table is empty and English below stands in. */
+function readTitles(stamped) {
+  try {
+    const table = JSON.parse(stamped);
+    return table && typeof table === "object" ? table : {};
+  } catch {
+    return {};
+  }
+}
+const PUSH_TITLES = readTitles("__APP_PUSH_TITLES__");
+const ENGLISH_TITLES = { agentDone: "An agent finished its turn", agentQuestion: "An agent needs your answer", calendar: "Calendar reminder" };
+/* The page's language as it last wrote it; "" when it never did. */
+function pageLanguage() {
+  return caches
+    .open(PREFS)
+    .then((cache) => cache.match(PREFS_LANG))
+    .then((hit) => (hit ? hit.text() : ""))
+    .catch(() => "");
+}
+/* The page's language, else the browser's, else English. */
+function fallbackTitle(data, lang) {
+  const slot = data.kind === "agent" ? (data.status === "done" ? "agentDone" : "agentQuestion") : "calendar";
+  const browser = String((self.navigator && self.navigator.language) || "").toLowerCase().split("-")[0];
+  for (const code of [lang, browser, "en"]) {
+    const row = PUSH_TITLES[code];
+    if (row && typeof row[slot] === "string" && row[slot]) return row[slot];
+  }
+  return ENGLISH_TITLES[slot];
 }
 self.addEventListener("push", (event) => {
   let data = {};
@@ -125,20 +156,22 @@ self.addEventListener("push", (event) => {
     data = {};
   }
   if (!data || typeof data !== "object") data = {};
-  const title = typeof data.title === "string" && data.title ? data.title : fallbackTitle(data);
+  const title = typeof data.title === "string" && data.title
+    ? Promise.resolve(data.title)
+    : pageLanguage().then((lang) => fallbackTitle(data, lang));
   const body = typeof data.body === "string" ? data.body : "";
   const tag = typeof data.tag === "string" && OPAQUE_ID.test(data.tag) ? `tabtivity-${data.tag}` : undefined;
   const target = data.kind === "agent" && OPAQUE_ID.test(String(data.project)) && OPAQUE_ID.test(String(data.tab))
     ? { section: "projects", projectId: data.project, tabId: data.tab }
     : { section: data.kind === "agent" ? "projects" : "calendar" };
-  event.waitUntil(self.registration.showNotification(title, {
+  event.waitUntil(title.then((text) => self.registration.showNotification(text, {
     body,
     tag,
     // A question replacing an older notice for the same tab must still ring.
     renotify: tag !== undefined,
     icon: "/icons/icon-192.png",
     data: target,
-  }));
+  })));
 });
 /* A tap opens where the notice points — the Calendar, or the agent's tab: an
  * open window is focused and told where to go; otherwise a fresh one starts
