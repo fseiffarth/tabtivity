@@ -560,7 +560,15 @@ fn reconcile_home_step(state_dir: &Path, home: &Path, step: Step) {
     // shims): one adopt/place at a time, or two could each adopt a different
     // refresh and place the older one, or leave a login half-removed beside
     // the administrator's key (final review B4).
-    let _one_at_a_time = storage::FileLock::exclusive(&store_root_in(state_dir));
+    // No pass without the lock: a later pass (the keeper's next poll, the
+    // next spawn) retries, where an unguarded one could place a stale login.
+    let _one_at_a_time = match storage::FileLock::exclusive(&store_root_in(state_dir)) {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("agent_auth: lock {}: {e}; skipping this reconcile", store_root_in(state_dir).display());
+            return;
+        }
+    };
     reconcile_home_with(state_dir, home, step, &crate::services::server::agent_keys::holds_admin_key);
 }
 

@@ -72,20 +72,36 @@ pub fn install_crypto_provider() {
 /// that could be misconfigured. No custom cipher-suite list: rustls's defaults
 /// are the right answer, and hand-picking suites is how you end up maintaining
 /// a stale one.
-pub(crate) fn tls_config() -> std::sync::Arc<rustls::ClientConfig> {
+///
+/// Built once. When the OS trust store cannot be read the platform verifier
+/// cannot be made, and that is remembered too: every connection is then
+/// refused with the reason, rather than the first one panicking.
+pub(crate) fn tls_config() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
     use rustls_platform_verifier::BuilderVerifierExt;
-    static CFG: std::sync::OnceLock<std::sync::Arc<rustls::ClientConfig>> =
-        std::sync::OnceLock::new();
-    CFG.get_or_init(|| {
+    static CFG: TlsConfigCell = std::sync::OnceLock::new();
+    cached_tls_config(&CFG, || {
         install_crypto_provider();
-        let cfg = rustls::ClientConfig::builder_with_protocol_versions(&[
+        Ok(rustls::ClientConfig::builder_with_protocol_versions(&[
             &rustls::version::TLS13,
             &rustls::version::TLS12,
         ])
-        .with_platform_verifier()
-        .expect("the OS trust store must be readable to make any TLS connection")
-        .with_no_client_auth();
-        std::sync::Arc::new(cfg)
+        .with_platform_verifier()?
+        .with_no_client_auth())
+    })
+}
+
+type TlsConfigCell = std::sync::OnceLock<Result<std::sync::Arc<rustls::ClientConfig>, String>>;
+
+/// [`tls_config`]'s cache, with the builder passed in: the first answer,
+/// success or failure, is every caller's.
+fn cached_tls_config(
+    cell: &TlsConfigCell,
+    build: impl FnOnce() -> Result<rustls::ClientConfig, rustls::Error>,
+) -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
+    cell.get_or_init(|| {
+        build().map(std::sync::Arc::new).map_err(|e| {
+            format!("the system's certificate store could not be read, so no secure connection can be made: {e}")
+        })
     })
     .clone()
 }
@@ -1156,7 +1172,7 @@ async fn tls_stream(server: &MailServer) -> Result<TlsStream<TcpStream>, MailErr
     .map_err(|_| MailError::Timeout { op: "connect" })?
     .map_err(|e| MailError::Protocol(format!("could not reach {host}: {e}")))?;
 
-    let connector = tokio_rustls::TlsConnector::from(tls_config());
+    let connector = tokio_rustls::TlsConnector::from(tls_config().map_err(MailError::Protocol)?);
     let name = rustls_pki_types::ServerName::try_from(host.clone())
         .map_err(|_| MailError::Protocol(format!("'{host}' is not a valid server name")))?;
     let stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, connector.connect(name, tcp))
@@ -2432,6 +2448,19 @@ mod tests {
         install_crypto_provider();
         install_crypto_provider();
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
+
+    /// A platform verifier that cannot be built (an unreadable OS trust
+    /// store) is an error every connect answers with, not a panic — the
+    /// first time and every time after.
+    #[test]
+    fn a_broken_platform_verifier_is_an_error_not_a_panic() {
+        let cell = std::sync::OnceLock::new();
+        let first = cached_tls_config(&cell, || Err(rustls::Error::General("no trust store".into())));
+        let err = first.expect_err("a broken verifier is refused");
+        assert!(err.contains("no trust store"), "{err}");
+        let again = cached_tls_config(&cell, || panic!("built once"));
+        assert_eq!(again.expect_err("still refused"), err);
     }
 
     // ── Secrets ─────────────────────────────────────────────────────────────

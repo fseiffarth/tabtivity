@@ -193,7 +193,8 @@ fn on_disk_rev(path: &Path) -> u64 {
 /// check in between. The lock file is never removed: deleting one out from
 /// under a holder is how two processes end up holding "the" lock.
 pub(crate) fn write_data_cas(path: &Path, data: &CalendarData, expected_rev: u64) -> Result<Commit, String> {
-    let _lock = storage::FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
+    // On a file system without advisory locks the `rev` check alone guards.
+    let _lock = storage::FileLock::exclusive_or_unlocked(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
     if on_disk_rev(path) == expected_rev {
         write_data(path, data).map(|()| Commit::Committed)
     } else {
