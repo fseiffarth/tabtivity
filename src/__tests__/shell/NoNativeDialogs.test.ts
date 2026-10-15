@@ -26,7 +26,7 @@ const EXEMPT = new Set(["src/lib/transport/dialogAdapter.ts"]);
 /** Bare `alert(` calls a later step owns: `ProjectPill.tsx`'s in-folder layout
  *  block is rewritten by step M3 of the same plan, which turns its two alerts
  *  into a `PromptDialogs` message and must drop this entry with them. */
-const PENDING: Record<string, number> = { "src/components/projects/ProjectPill.tsx": 2 };
+const PENDING: Record<string, number> = {};
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true }) as Entry[]) {
