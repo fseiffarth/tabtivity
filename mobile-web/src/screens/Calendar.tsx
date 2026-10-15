@@ -1,30 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, reloadIfApplied, wasApplied, type CalendarAction, type MobileCalendar, type MobileCalendarEvent, type MobileCalendarEventInput, type MobileCalendarInfo } from "../api";
-import { OptionSheet } from "../components/OptionSheet";
+import { ConfirmSheet, type Confirm } from "../components/ConfirmSheet";
 import { describeFailure } from "../connection";
 import { NotificationsSheet } from "../components/NotificationsSheet";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
-
-/** A destructive act waiting on a second tap: the shared option sheet, with
- * one option, in place of `window.confirm` — the same sheet the composer's
- * choices and the calendar's edits use, so a delete looks like the rest of
- * the phone and cannot be reached by a stray tap. */
-type Confirm = { title: string; note: string; label: string; run: () => Promise<void> };
-
-function ConfirmSheet({ confirm, busy, onClose }: { confirm: Confirm; busy: boolean; onClose: () => void }) {
-  return <OptionSheet
-    title={confirm.title}
-    note={{ text: confirm.note }}
-    options={[{ key: "confirm", label: confirm.label, current: false }]}
-    waiting=""
-    busy={busy}
-    onPick={() => { void confirm.run().finally(onClose); }}
-    onClose={onClose}
-  />;
-}
 
 const NAMES: TranslationKey[] = ["agentSchedule.sun", "agentSchedule.mon", "agentSchedule.tue", "agentSchedule.wed", "agentSchedule.thu", "agentSchedule.fri", "agentSchedule.sat"];
 const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; };

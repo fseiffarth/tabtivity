@@ -20,6 +20,7 @@ import {
 } from "../../lib/todoBoard";
 import { useT } from "../../lib/i18n";
 import { TodoColumn } from "./TodoColumn";
+import { useDialogs } from "../common/PromptDialogs";
 
 interface Props {
   columns: TaskColumn[];
@@ -90,6 +91,7 @@ export function TodoBoard({
   onOpenMail,
 }: Props) {
   const t = useT();
+  const { promptText, confirmAction, dialogs } = useDialogs();
   const storedColumns = useCalendarStore((s) => s.taskColumns);
   const cardDrag = useTodoStore((s) => s.cardDrag);
   const boardRef = useRef<HTMLDivElement>(null);
@@ -365,13 +367,23 @@ export function TodoBoard({
   const renameColumn = (columnId: string, name: string) =>
     void setColumns(columns.map((c) => (c.id === columnId ? { ...c, name } : c)));
 
-  const deleteColumn = (column: TaskColumn, count: number) => {
+  // The column list as of the latest render, for the writes that follow a
+  // question: the board can change under an open dialog (an agent's to-do tool,
+  // another window), and writing the list captured before it would undo that.
+  const columnsRef = useRef(columns);
+  columnsRef.current = columns;
+
+  const deleteColumn = async (column: TaskColumn, count: number) => {
     if (columns.length <= 1) return;
-    const ok = window.confirm(
-      t("todoBoard.deleteColumnConfirm", { name: column.name, count }),
-    );
-    if (!ok) return;
-    void setColumns(columns.filter((c) => c.id !== column.id));
+    const ok = await confirmAction({
+      title: t("todoBoard.deleteColumn"),
+      body: t("todoBoard.deleteColumnConfirm", { name: column.name, count }),
+      confirmLabel: t("common.delete"),
+      danger: true,
+    });
+    const current = columnsRef.current;
+    if (!ok || current.length <= 1) return;
+    void setColumns(current.filter((c) => c.id !== column.id));
   };
 
   const moveColumn = (columnId: string, delta: -1 | 1) => {
@@ -383,15 +395,20 @@ export function TodoBoard({
     void setColumns(next.map((c, i) => ({ ...c, position: i })));
   };
 
-  const addColumn = () => {
-    const name = window.prompt(t("todoBoard.columnNamePlaceholder"));
-    if (!name?.trim()) return;
+  const addColumn = async () => {
+    const name = await promptText({
+      title: t("todoBoard.addColumn"),
+      label: t("todoBoard.columnNamePlaceholder"),
+      confirmLabel: t("common.add"),
+    });
+    if (!name) return;
+    const current = columnsRef.current;
     void setColumns([
-      ...columns,
+      ...current,
       {
         id: "",
-        name: name.trim(),
-        position: columns.length,
+        name,
+        position: current.length,
         done: false,
       },
       // The backend mints the id for an entry that carries none.
@@ -451,7 +468,7 @@ export function TodoBoard({
           onOpenMail={onOpenMail}
           onAddCard={addCard}
           onRename={renameColumn}
-          onDelete={deleteColumn}
+          onDelete={(col, count) => void deleteColumn(col, count)}
           onMove={moveColumn}
           canMoveLeft={i > 0}
           canMoveRight={i < columns.length - 1 && column.id !== doneId}
@@ -459,7 +476,7 @@ export function TodoBoard({
       ))}
 
       <div className="todo-column todo-column-add">
-        <button type="button" className="todo-add-column" onClick={addColumn}>
+        <button type="button" className="todo-add-column" onClick={() => void addColumn()}>
           + {t("todoBoard.addColumn")}
         </button>
       </div>
@@ -489,6 +506,7 @@ export function TodoBoard({
           )}
         </div>
       )}
+      {dialogs}
     </div>
   );
 }

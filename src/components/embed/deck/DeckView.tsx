@@ -130,6 +130,7 @@ import { basename } from "../../../lib/paths";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
 import { ArrowUpRightIcon, PlayIcon } from "../../common/icons/Icon";
+import { useDialogs } from "../../common/PromptDialogs";
 
 /** Bounds for the rail's user-resizable width (px). Wide enough at the max that
  *  a thumbnail is actually legible, narrow enough at the min to stay a rail. */
@@ -231,6 +232,7 @@ export interface DeckViewProps {
 
 export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewProps) {
   const t = useT();
+  const { confirmAction, dialogs } = useDialogs();
   const chordHint = useChordHint();
   const scope = useFileScope();
   const paneVisible = usePaneVisible();
@@ -723,20 +725,26 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
    *    load — which is why deleting a slide was impossible before (TODO V #106).
    */
   const deleteSlide = useCallback(
-    (index: number) => {
-      const cur = deckRef.current;
-      const victim = cur?.slides[index];
-      if (!cur || !victim) return;
+    async (index: number) => {
+      const victim = deckRef.current?.slides[index];
+      if (!victim) return;
       const hasContent =
         victim.objects.length > 0 || victim.notes.trim() !== "" || victim.after != null;
       if (
         hasContent &&
-        !window.confirm(
-          t("deckView.removeSlideConfirm", { n: index + 1, count: victim.objects.length }),
-        )
+        !(await confirmAction({
+          title: t("deckView.removeSlideHeading", { n: index + 1 }),
+          body: t("deckView.removeSlideConfirm", { n: index + 1, count: victim.objects.length }),
+          confirmLabel: t("common.remove"),
+        }))
       ) {
         return;
       }
+      // Re-read after the question: the deck may have been edited (or reloaded
+      // from disk) while it was open. The removal goes by id, so a slide that
+      // is gone by now is not "the slide at that index" by accident.
+      const cur = deckRef.current;
+      if (!cur?.slides.some((s) => s.id === victim.id)) return;
       commit((d) => ({
         ...d,
         slides: removeSlides(d.slides, [victim.id]),
@@ -750,7 +758,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       setSlideIndex((i) => Math.max(0, Math.min(i, cur.slides.length - 2)));
       setSelection(new Set());
     },
-    [commit],
+    [commit, confirmAction, t],
   );
 
   /** Add an empty slide after `index`, backed by the same base page. The only way
@@ -1850,7 +1858,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
                   title={t("deckView.removeSlideTitle")}
                   onClick={(e) => {
                     e.stopPropagation();
-                    deleteSlide(i);
+                    void deleteSlide(i);
                   }}
                 >
                   ␡
@@ -1978,6 +1986,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       </div>
 
       {picking && <IconPicker onPick={addIcon} onClose={() => setPicking(null)} />}
+      {dialogs}
 
       {presenting && (
         <DeckPresenter

@@ -395,7 +395,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
     {isText ? <div className="outbox-text-body">
       <pre>{text ?? (failure ? "" : t("mobile.outbox.loading"))}</pre>
       {file.size > INLINE_LIMIT && !whole && (file.size <= WHOLE_LIMIT || !strands) && <button className="outbox-open"
-        onClick={() => { if (file.size <= WHOLE_LIMIT) setWholeOf(url); else void openOutside(url); }}>{t("mobile.outbox.whole")}</button>}
+        onClick={() => { if (file.size <= WHOLE_LIMIT) setWholeOf(url); else void openOutside(url).then((opened) => { if (opened === "host_outdated") setFailure(t("mobile.open.hostOutdated")); }); }}>{t("mobile.outbox.whole")}</button>}
     </div> : isImage ? <div ref={stage} className={`outbox-viewer-stage${zoomed ? " zoomed" : ""}`}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
       <img ref={image} src={url} alt={sentName(file)} draggable={false}

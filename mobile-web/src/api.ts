@@ -1,4 +1,3 @@
-import { translate, useI18nStore } from "../../src/lib/i18n";
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
 
@@ -1077,8 +1076,12 @@ export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = f
  * exactly that file instead (`POST /api/v1/open-ticket`). If none can be had
  * the plain URL still opens — in a browser tab of the site the cookie rides.
  * The installed app on an iPhone or iPad cannot be got back to from there
- * (`openingOutsideStrands`): callers keep the file inside the app instead. */
-export async function openOutside(url: string): Promise<void> {
+ * (`openingOutsideStrands`): callers keep the file inside the app instead.
+ *
+ * Resolves `"host_outdated"` (nothing opened) when the host is too old to mint
+ * a ticket: the caller says so where the reader is looking
+ * (`mobile.open.hostOutdated`), in place of a browser `alert()`. */
+export async function openOutside(url: string): Promise<"opened" | "host_outdated"> {
   let target = url;
   try {
     const minted = await api<{ url?: unknown }>("/api/v1/open-ticket", { method: "POST", body: JSON.stringify({ url }) });
@@ -1088,11 +1091,11 @@ export async function openOutside(url: string): Promise<void> {
     // static GET: a bodiless 405 (or 404). The plain URL would only show the
     // browser `authentication_required` there, so say why instead.
     if (error instanceof ApiError && error.code === "request_failed" && (error.status === 404 || error.status === 405)) {
-      window.alert(translate(useI18nStore.getState().lang, "mobile.open.hostOutdated"));
-      return;
+      return "host_outdated";
     }
   }
   window.open(target, "_blank", "noopener");
+  return "opened";
 }
 
 /** One row of a project folder (`files.rs`): `token` is a sealed path the

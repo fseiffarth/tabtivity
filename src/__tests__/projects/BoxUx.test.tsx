@@ -6,7 +6,7 @@
  * dissolve replacing the old silent one).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act, fireEvent } from "@testing-library/react";
+import { render, act, fireEvent, screen, within } from "@testing-library/react";
 import type { ProjectBox, ProjectEntry } from "../../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(null) }));
@@ -262,7 +262,6 @@ describe("box editor dialog (3c)", () => {
     useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
     useBoxEditorStore.getState().openEditor("boxA");
 
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const onClose = vi.fn();
     await act(async () => {
       render(<BoxEditorDialog onClose={onClose} />);
@@ -274,10 +273,14 @@ describe("box editor dialog (3c)", () => {
     await act(async () => {
       fireEvent.click(dissolve);
     });
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(String(confirmSpy.mock.calls[0][0])).toContain("stay on disk");
+    // The app's own question (never `window.confirm`), over the editor.
+    expect(deleteBox).not.toHaveBeenCalled();
+    const question = await screen.findByRole("dialog", { name: "Dissolve box" });
+    expect(question.textContent).toContain("stay on disk");
+    await act(async () => {
+      fireEvent.click(within(question).getByRole("button", { name: "Dissolve box" }));
+    });
     expect(deleteBox).toHaveBeenCalledWith("boxA");
-    confirmSpy.mockRestore();
   });
 
   it("a declined confirm dissolves nothing", async () => {
@@ -285,7 +288,6 @@ describe("box editor dialog (3c)", () => {
     useBoxesStore.setState({ boxes: [box("boxA", [])], deleteBox });
     useBoxEditorStore.getState().openEditor("boxA");
 
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     await act(async () => {
       render(<BoxEditorDialog onClose={vi.fn()} />);
     });
@@ -295,7 +297,11 @@ describe("box editor dialog (3c)", () => {
     await act(async () => {
       fireEvent.click(dissolve);
     });
+    const question = await screen.findByRole("dialog", { name: "Dissolve box" });
+    await act(async () => {
+      fireEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    });
+    expect(screen.queryByRole("dialog", { name: "Dissolve box" })).toBeNull();
     expect(deleteBox).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 });

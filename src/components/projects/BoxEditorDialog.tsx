@@ -9,6 +9,7 @@ import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { UntestedTag } from "../common/UntestedTag";
 import { Dropdown } from "../common/Dropdown";
 import { useT } from "../../lib/i18n";
+import { useDialogs, type ConfirmSpec } from "../common/PromptDialogs";
 
 /**
  * The Box editor — the one surface where a box is managed wholesale: rename it,
@@ -27,9 +28,21 @@ import { useT } from "../../lib/i18n";
  * Portaled dialog: the chrome sets an explicit color (`.project-dialog` does),
  * since `body` has none and a portal would otherwise inherit black.
  */
+/** The one dissolve question, asked by the editor's Dissolve and by the box
+ *  pill's Delete alike — both say what survives (folder, agent docs, members). */
+export function dissolveBoxSpec(t: ReturnType<typeof useT>, name: string): ConfirmSpec {
+  return {
+    title: t("boxEditor.dissolve"),
+    body: t("boxEditor.dissolveConfirm", { name }),
+    confirmLabel: t("boxEditor.dissolve"),
+    danger: true,
+  };
+}
+
 export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
   const t = useT();
   const modalRef = useModalFocus(onClose);
+  const { confirmAction, dialogs } = useDialogs();
   const projects = useProjectsStore((s) => s.projects);
   const boxes = useBoxesStore((s) => s.boxes);
   const renameBox = useBoxesStore((s) => s.renameBox);
@@ -96,7 +109,7 @@ export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
   const dissolve = async () => {
     if (!box) return;
     // Explicit dissolve replaces the old silent one — say what is kept.
-    if (!window.confirm(t("boxEditor.dissolveConfirm", { name: box.name }))) return;
+    if (!(await confirmAction(dissolveBoxSpec(t, box.name)))) return;
     setSaving(true);
     try {
       await deleteBox(box.id);
@@ -201,6 +214,7 @@ export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         </div>
+        {dialogs}
       </div>
     </div>,
     document.body,

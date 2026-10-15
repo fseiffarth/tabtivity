@@ -31,6 +31,7 @@ import { formatRemoteTarget, resolveLocalMirror } from "../../types";
 import type { ComputeHost, GlobalMachine, ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { useDialogs } from "../common/PromptDialogs";
 
 /** Distinct PTY id per login terminal opened here — the id is the handle
  *  `pty_kill` and the output stream use, so it must never be reused. */
@@ -81,6 +82,7 @@ export function RemoteMachinesWindow({
 }) {
   const t = useT();
   const modalRef = useModalFocus(onClose);
+  const { confirmAction, dialogs } = useDialogs();
   const workers = project.compute_hosts ?? [];
   const openConnect = useConnectDialogStore((s) => s.open);
   const byHost = useRemoteStatusStore((s) => s.byHost[project.id]);
@@ -615,9 +617,11 @@ export function RemoteMachinesWindow({
         setPullNote((p) => ({ ...p, [hostId]: t("remoteMachines.noOutputFiles") }));
         return;
       }
-      const ok = window.confirm(
-        t("remoteMachines.pullConfirm", { files: preview.files, bytes: formatBytes(preview.bytes) }),
-      );
+      const ok = await confirmAction({
+        title: t("remoteMachines.pullConfirmTitle"),
+        body: t("remoteMachines.pullConfirm", { files: preview.files, bytes: formatBytes(preview.bytes) }),
+        confirmLabel: t("remoteMachines.pullConfirmTitle"),
+      });
       if (!ok) return;
       const rep = await invoke<{ pulled: number; bytes: number; dest: string; errors: string[] }>(
         "worker_pull_outputs",
@@ -1161,6 +1165,7 @@ export function RemoteMachinesWindow({
           )}
         </div>
         </div>
+        {dialogs}
       </div>
     </div>,
     document.body,
