@@ -519,10 +519,44 @@ fn surviving_denylisted_key(config_path: &Path) -> Result<Option<String>, String
 
 /// A command that runs nothing and fails with `message` on stderr — what a
 /// git call becomes when [`sanitize_repo_git_config_strict`] refuses it.
+/// The message is `sh`'s `$1`, so arguments a caller appends to the returned
+/// command (`worktree repair <paths>`) are only more ignored parameters.
 fn refusing_command(message: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new("/bin/sh");
+    let mut cmd = crate::paths::command_no_window(refusal_shell());
     cmd.args(["-c", "printf '%s\\n' \"$1\" >&2; exit 128", "sh", message]);
     cmd
+}
+
+#[cfg(not(windows))]
+fn refusal_shell() -> PathBuf {
+    PathBuf::from("/bin/sh")
+}
+
+/// Windows has no `/bin/sh` (the refusal used to surface as a spawn error,
+/// its message lost): Git for Windows' own `sh.exe`, from the install the
+/// git we run comes from. Not cmd or PowerShell: both re-parse appended
+/// arguments as code. With no Git for Windows `sh` the spawn still fails —
+/// still refused, only without the message.
+#[cfg(windows)]
+fn refusal_shell() -> PathBuf {
+    let git = crate::paths::helper_program(std::ffi::OsStr::new("git"))
+        .or_else(|| crate::paths::resolve_executable("git"));
+    git.into_iter()
+        .flat_map(|git| sh_beside_git(&git))
+        .find(|sh| sh.is_file())
+        .unwrap_or_else(|| PathBuf::from("sh"))
+}
+
+/// Where Git for Windows keeps `sh.exe` relative to a `git.exe` it ships —
+/// `<root>\cmd\git.exe`, `<root>\bin\git.exe` or
+/// `<root>\mingw64\bin\git.exe` — in lookup order. Pure.
+#[cfg(any(windows, test))]
+fn sh_beside_git(git: &Path) -> Vec<PathBuf> {
+    git.ancestors()
+        .skip(2)
+        .take(2)
+        .flat_map(|root| [root.join("bin").join("sh.exe"), root.join("usr").join("bin").join("sh.exe")])
+        .collect()
 }
 
 fn sanitize_git_config_file(config_path: &Path) {
@@ -5911,6 +5945,34 @@ mod shared_gate_tests {
         assert_eq!(out.status.code(), Some(128));
         assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "refused: because");
         assert!(out.stdout.is_empty());
+        // A caller appending arguments (`worktree repair <paths>`) adds nothing
+        // that runs: they are positional parameters, never code.
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("ran");
+        let out = refusing_command("refused")
+            .arg(format!("; touch {}", marker.display()))
+            .arg(format!("$(touch {})", marker.display()))
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(128));
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "refused");
+        assert!(!marker.exists());
+    }
+
+    /// Windows has no `/bin/sh`: the refusal runs Git for Windows' `sh.exe`,
+    /// found from the git it would have run, wherever that git lives.
+    #[test]
+    fn the_windows_refusal_shell_is_found_beside_git() {
+        let root = Path::new("C:").join("Program Files").join("Git");
+        let sh = root.join("bin").join("sh.exe");
+        for git in [
+            root.join("cmd").join("git.exe"),
+            root.join("bin").join("git.exe"),
+            root.join("mingw64").join("bin").join("git.exe"),
+        ] {
+            assert!(sh_beside_git(&git).contains(&sh), "{}: {:?}", git.display(), sh_beside_git(&git));
+        }
+        assert_eq!(sh_beside_git(&root.join("cmd").join("git.exe"))[0], sh, "the install's own bin first");
     }
 
     #[test]

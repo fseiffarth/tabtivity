@@ -645,8 +645,16 @@ pub fn blocked_detail(branch: &str, stderr: &str) -> String {
 /// Every `rev-parse` inside must likewise report an unborn HEAD by *printing nothing*
 /// (`--verify --quiet`), not by exiting non-zero: a bare `git rev-parse HEAD` prints the
 /// literal `HEAD` to stdout and fails only in its status, which this script discards.
+///
+/// "No repo here" needs an explicit no: `rev-parse`'s not-a-repo exit (128) **and** no
+/// `.git` entry in the folder. git also exits 128 for a real repo it refuses (another
+/// owner's — `safe.directory`) or cannot read (a damaged `.git`), and its message for
+/// that may be localized; read as empty, pairing would `git init` + `reset --hard` over
+/// it. Every other outcome (a `.git` it refused, no `git` on the host's PATH) prints
+/// [`PROBE_UNREADABLE`], a `probe_error`.
 const PROBE_SCRIPT: &str = "\
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+git rev-parse --is-inside-work-tree >/dev/null 2>&1; r=$?; \
+if [ \"$r\" -eq 0 ]; then \
 printf 'repo\\036'; \
 git symbolic-ref --quiet --short HEAD 2>/dev/null; printf '\\036'; \
 git rev-parse --verify --quiet HEAD 2>/dev/null; printf '\\036'; \
@@ -655,7 +663,12 @@ git for-each-ref --format='%(objectname) %(refname:short)' refs/tags 2>/dev/null
 git status --porcelain 2>/dev/null; printf '\\036'; \
 git log -1 --format=%s HEAD 2>/dev/null; printf '\\036'; \
 git worktree list --porcelain 2>/dev/null || true; \
-else printf 'norepo'; fi";
+elif [ \"$r\" -eq 128 ] && [ ! -e .git ] && [ ! -L .git ]; then printf 'norepo'; \
+else printf 'unreadable'; fi";
+
+/// What [`PROBE_SCRIPT`] prints when the folder holds a `.git` git would not read, or
+/// git did not run at all: never an empty side.
+const PROBE_UNREADABLE: &str = "unreadable";
 
 /// Parse [`PROBE_SCRIPT`]'s output into a snapshot. `None` means the output was not
 /// recognizable (a host with no POSIX `sh`, or a link that died mid-script), which
@@ -663,6 +676,9 @@ else printf 'norepo'; fi";
 pub fn parse_probe_block(stdout: &str) -> Option<PeerSnapshot> {
     if stdout.trim_start().starts_with("norepo") {
         return Some(PeerSnapshot::default());
+    }
+    if stdout.trim_start().starts_with(PROBE_UNREADABLE) {
+        return Some(probe_error_snapshot());
     }
     let rest = stdout.trim_start().strip_prefix("repo")?.strip_prefix(RS)?;
     let parts: Vec<&str> = rest.split(RS).collect();
@@ -1136,23 +1152,60 @@ const SSH_FAILED: i32 = 255;
 /// Whether a `rev-parse --is-inside-work-tree` that did **not** succeed means the peer
 /// could not be read (`true`) rather than that there is cleanly no repo (#10). `exit` is
 /// `None` when it could not be spawned, `Some(None)` when killed by a signal.
+/// `git_entry` is asked only for a 128: whether the folder holds a `.git` entry.
 ///
-/// "Empty" needs an explicit answer: git's not-a-repo exit (128), or — remote only,
-/// where it runs as `cd <path> && git …` — a failed `cd` (exit 1 in bash, 2 in dash),
-/// the missing dir pairing may create. ssh's 255 and every other status (a missing
-/// `git`'s 127, a signal) is a probe error: reading it as empty would let pairing
-/// `reset --hard` over a real repo. A missing local dir is never an error — there is no
-/// repo there to destroy. Pure.
-fn failed_repo_check_is_probe_error(remote: bool, local_dir_exists: bool, exit: Option<Option<i32>>) -> bool {
+/// "Empty" needs an explicit answer: git's not-a-repo exit (128) over a folder with no
+/// `.git`, or — remote only, where it runs as `cd <path> && git …` — a failed `cd` (exit
+/// 1 in bash, 2 in dash), the missing dir pairing may create. git exits 128 too for a
+/// repo it refuses (another owner's, `safe.directory`) or cannot read (a damaged
+/// `.git`), in a message that may be localized — so a `.git` beside a 128 is an error.
+/// ssh's 255 and every other status (a missing `git`'s 127, a signal) is a probe error:
+/// reading it as empty would let pairing `reset --hard` over a real repo. A missing local
+/// dir is never an error — there is no repo there to destroy. Pure but for `git_entry`.
+fn failed_repo_check_is_probe_error(
+    remote: bool,
+    local_dir_exists: bool,
+    exit: Option<Option<i32>>,
+    git_entry: impl FnOnce() -> bool,
+) -> bool {
     if !remote && !local_dir_exists {
         return false;
     }
     match exit {
         None | Some(None) => true,
-        Some(Some(128)) => false,
+        Some(Some(128)) => git_entry(),
         Some(Some(1 | 2)) => !remote,
         Some(Some(_)) => true,
     }
+}
+
+/// Whether `peer`'s folder holds a `.git` entry — a dir, a pointer file, a link (even a
+/// dangling one). Fails toward `true`: an entry we could not rule out is one pairing
+/// must not overwrite.
+fn git_entry_present(peer: &Peer) -> bool {
+    match peer {
+        Peer::Local(dir) => match std::fs::symlink_metadata(dir.join(".git")) {
+            Ok(_) => true,
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        },
+        Peer::Remote(spec) => {
+            if crate::services::ssh_common::validate_arg("remote path", &spec.remote_path).is_err() {
+                return true;
+            }
+            ssh_exec::run_remote_shell(spec, &no_git_entry_command(&spec.remote_path))
+                .map_or(true, |o| !o.status.success())
+        }
+    }
+}
+
+/// The remote command that exits 0 only when `remote_path` holds no `.git` entry.
+/// Plain `test`s and `&&` (no `{ }`), so a host whose shell could not run
+/// [`PROBE_SCRIPT`] — the reason the per-command probe runs at all — runs it too.
+fn no_git_entry_command(remote_path: &str) -> String {
+    format!(
+        "cd {} && test ! -e .git && test ! -L .git",
+        ssh_exec::shell_quote(remote_path)
+    )
 }
 
 /// The original one-command-per-field probe. Still the path for the local mirror (six
@@ -1173,7 +1226,9 @@ fn probe_per_command(peer: &Peer) -> PeerSnapshot {
         };
         let exit = res.as_ref().ok().map(|o| o.status.code());
         return PeerSnapshot {
-            probe_error: failed_repo_check_is_probe_error(remote, local_dir_exists, exit),
+            probe_error: failed_repo_check_is_probe_error(remote, local_dir_exists, exit, || {
+                git_entry_present(peer)
+            }),
             ..Default::default()
         };
     }
@@ -1335,6 +1390,17 @@ enum RefKind {
 /// `refs/tabtivity/backup/*` safety ref (a checked-out loser branch is `reset --hard`,
 /// moving ref + working tree). Tags conflicting on sha are likewise force-moved with
 /// a backup. `force` never widens what history *transfers*, only how `dest` applies it.
+/// `Err` when either side of a transfer is a `probe_error` snapshot (#10). Pure.
+fn unread_transfer_side(to_remote: bool, source: &PeerSnapshot, dest: &PeerSnapshot) -> Result<(), String> {
+    let (src_side, dst_side) = if to_remote { ("local mirror", "remote host") } else { ("remote host", "local mirror") };
+    for (snap, side) in [(source, src_side), (dest, dst_side)] {
+        if snap.probe_error {
+            return Err(format!("the {side}'s repository could not be read; nothing was transferred"));
+        }
+    }
+    Ok(())
+}
+
 async fn transfer_and_apply(
     pool: &RemotePoolState,
     manifest: &SyncManifestState,
@@ -1345,6 +1411,11 @@ async fn transfer_and_apply(
     dest: &PeerSnapshot,
     force: bool,
 ) -> Result<TransferResult, String> {
+    // #10: a side we could not read has no branches in its snapshot — every source
+    // ref would then be a `CreateOnDest` that `update-ref`s over the dest's real tips
+    // (no backup, no ancestry check), and an unread source would report a clean no-op.
+    // Never transfer against a side we could not see.
+    unread_transfer_side(to_remote, source, dest)?;
     let mut result = TransferResult::default();
     if !source.is_repo {
         return Ok(result);
@@ -2139,6 +2210,11 @@ async fn init_pairing(
     // `reset --hard` below can move them — so an unexpected non-empty dest is always
     // recoverable rather than silently wiped. Truly-empty dests probe clean and skip.
     let pre = probe(&dest_peer);
+    // #10: the caller saw an empty dest, but that was a probe ago. A dest that cannot be
+    // read now can neither be backed up nor shown empty — stop before `git init`.
+    if pre.probe_error {
+        return Err(format!("the {dest_label}'s repository could not be read; refusing to initialize it"));
+    }
     if !pre.branches.is_empty() {
         let ts = now_secs();
         for b in &pre.branches {
@@ -3690,9 +3766,10 @@ mod tests {
 
     #[test]
     fn a_failed_repo_check_reads_empty_only_on_an_explicit_no() {
-        let remote = |exit| failed_repo_check_is_probe_error(true, true, exit);
-        let local = |exit| failed_repo_check_is_probe_error(false, true, exit);
-        // Explicit answers: git's not-a-repo, or (remote) the `cd` that failed.
+        let remote = |exit| failed_repo_check_is_probe_error(true, true, exit, || false);
+        let local = |exit| failed_repo_check_is_probe_error(false, true, exit, || false);
+        // Explicit answers: git's not-a-repo over a folder with no `.git`, or (remote)
+        // the `cd` that failed.
         assert!(!remote(Some(Some(128))));
         assert!(!remote(Some(Some(1))), "bash: cd failed");
         assert!(!remote(Some(Some(2))), "dash: cd failed");
@@ -3708,8 +3785,117 @@ mod tests {
         // Locally there is no `cd`: 1/2 are not an answer.
         assert!(local(Some(Some(1))));
         // A missing local dir has no repo to destroy, whatever happened.
-        assert!(!failed_repo_check_is_probe_error(false, false, None));
-        assert!(!failed_repo_check_is_probe_error(false, false, Some(Some(255))));
+        assert!(!failed_repo_check_is_probe_error(false, false, None, || true));
+        assert!(!failed_repo_check_is_probe_error(false, false, Some(Some(255)), || true));
+        // A 128 over a `.git` is a repo git refused (another owner's, a damaged one) —
+        // never empty, on either side.
+        assert!(failed_repo_check_is_probe_error(true, true, Some(Some(128)), || true));
+        assert!(failed_repo_check_is_probe_error(false, true, Some(Some(128)), || true));
+        // The `.git` check runs only for a 128 (the other answers need no round trip).
+        failed_repo_check_is_probe_error(true, true, Some(Some(255)), || panic!("asked"));
+        failed_repo_check_is_probe_error(true, true, Some(Some(1)), || panic!("asked"));
+    }
+
+    /// git exits 128 for a repo it refuses — `safe.directory`'s "dubious ownership",
+    /// or a damaged `.git` — exactly as for "no repo here". Read as empty, pairing would
+    /// `git init` + `reset --hard` over a real repo. Driven through the real
+    /// [`PROBE_SCRIPT`] (git's own `GIT_TEST_ASSUME_DIFFERENT_OWNER` stands in for a
+    /// foreign owner) and the per-command probe.
+    #[cfg(unix)]
+    #[test]
+    fn a_repo_git_refuses_is_a_probe_error_not_an_empty_side() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping a_repo_git_refuses_is_a_probe_error_not_an_empty_side");
+            return;
+        }
+        let refused = |dir: &Path| -> String {
+            run_sh(
+                dir,
+                &format!("GIT_TEST_ASSUME_DIFFERENT_OWNER=1; export GIT_TEST_ASSUME_DIFFERENT_OWNER; {PROBE_SCRIPT}"),
+            )
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(&repo).status().unwrap().success());
+        // The same refusal over a folder with no `.git` is an honest "no repo here".
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        let snap = parse_probe_block(&refused(&plain)).expect("parses");
+        assert!(!snap.is_repo && !snap.probe_error, "a plain folder is empty");
+
+        let out = refused(&repo);
+        let snap = parse_probe_block(&out).expect("parses");
+        assert!(snap.probe_error, "a refused repo must not read as empty: {out:?}");
+        assert!(matches!(classify_batched_probe(Some(0), &out), BatchedProbe::Answer(s) if s.probe_error));
+
+        // A damaged `.git` (git cannot read it, exit 128): the batched and the
+        // per-command probe both refuse to call it empty.
+        let damaged = tmp.path().join("damaged");
+        std::fs::create_dir_all(damaged.join(".git")).unwrap();
+        assert!(parse_probe_block(&run_sh(&damaged, PROBE_SCRIPT)).expect("parses").probe_error);
+        let snap = probe(&Peer::Local(damaged.clone()));
+        assert!(snap.probe_error && !snap.is_repo, "{snap:?}");
+        // A dangling `.git` link counts as an entry too; a plain folder stays empty.
+        let linked = tmp.path().join("linked");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("gone"), linked.join(".git")).unwrap();
+        assert!(git_entry_present(&Peer::Local(linked.clone())));
+        assert!(!git_entry_present(&Peer::Local(plain.clone())));
+        assert!(!probe(&Peer::Local(plain.clone())).probe_error);
+
+        // The remote `.git` check, run by a real shell: exit 0 only with no entry.
+        let no_entry = |dir: &Path| {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(no_git_entry_command(dir.to_str().unwrap()))
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(no_entry(&plain));
+        assert!(!no_entry(&repo));
+        assert!(!no_entry(&damaged));
+        assert!(!no_entry(&linked));
+        assert!(!no_entry(&tmp.path().join("missing")), "a failed cd is never \"no entry\"");
+    }
+
+    /// #10: a transfer never runs against a side whose probe failed — its empty branch
+    /// list would turn every source ref into an unchecked `update-ref` over the dest.
+    #[test]
+    fn a_transfer_against_an_unread_side_is_refused() {
+        let seen = PeerSnapshot {
+            is_repo: true,
+            ..Default::default()
+        };
+        let unread = probe_error_snapshot();
+        assert!(unread_transfer_side(true, &seen, &seen).is_ok());
+        assert!(unread_transfer_side(true, &seen, &PeerSnapshot::default()).is_ok(), "an empty dest is a pairing dest");
+        let dest = unread_transfer_side(true, &seen, &unread).unwrap_err();
+        assert!(dest.contains("remote host"), "{dest}");
+        let source = unread_transfer_side(false, &unread, &seen).unwrap_err();
+        assert!(source.contains("remote host"), "{source}");
+        assert!(unread_transfer_side(false, &seen, &unread).unwrap_err().contains("local mirror"));
+    }
+
+    /// The guard sits in front of every git and ssh call: an unread side fails the
+    /// transfer before anything is bundled, fetched or `update-ref`ed.
+    #[tokio::test]
+    async fn transfer_and_apply_refuses_an_unread_side_before_any_git() {
+        let spec: RemoteSpec =
+            serde_json::from_value(serde_json::json!({"host": "unread.invalid", "remote_path": "/srv/p"})).unwrap();
+        let pool = crate::services::remote::new_pool();
+        let manifest = SyncManifestState::default();
+        let seen = PeerSnapshot {
+            is_repo: true,
+            branches: parse_refs("aaaa main\n"),
+            ..Default::default()
+        };
+        let unread = probe_error_snapshot();
+        for (source, dest) in [(&seen, &unread), (&unread, &seen)] {
+            let got = transfer_and_apply(&pool, &manifest, "unread-transfer-test", &spec, true, source, dest, true).await;
+            assert!(got.is_err_and(|e| e.contains("could not be read")));
+        }
     }
 
     #[test]
