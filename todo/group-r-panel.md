@@ -496,3 +496,21 @@
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+- [ ] 🖐️ Manual test — side panel as a VS Code-style bar (`docs/side_panel_ide_toggle_plan.md`).
+      Fresh settings: panel closed, rail visible. Click Files → docked, workspace
+      shrinks; click Files again → closes. Git while open → switches. Ctrl+B in
+      the empty area toggles; in a shell tab Ctrl+B reaches the shell and Alt+1
+      toggles the panel. Restart → state and view restored. Drag the sash to the
+      far edge → snaps closed, reopen → old width; double-click sash → 280 px.
+      Right-click rail → Auto-hide: resting on the rail opens an overlay, no
+      reflow, closes on leave; clicking the active icon of a hover-open keeps it.
+      Move to left mirrors everything. An install that had it pinned opens docked.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS (⌘B)
+      - [ ] ❌ Doesn't work on macOS (⌘B)

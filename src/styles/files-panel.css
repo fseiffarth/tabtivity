@@ -9,7 +9,8 @@
 .side-panel {
   position: absolute;
   top: 0;
-  right: 0;
+  /* Beside the always-present edge rail (`--side-rail-w`), never under it. */
+  right: var(--side-rail-w);
   bottom: 0;
   width: 280px;
   /* Its own token (themes.css), following --bg-panel until something sets it:
@@ -19,8 +20,10 @@
   border-left: 1px solid var(--side-panel-border);
   display: flex;
   flex-direction: column;
-  transform: translateX(calc(100% + 2px));
-  transition: transform var(--transition-slow);
+  transform: translateX(calc(100% + var(--side-rail-w) + 2px));
+  /* Docked (the default) opens and closes with no slide: the workspace reflows
+     at once. Only the Auto-hide overlay eases (`.overlay`, below). */
+  transition: none;
   /* Above all subwindow/tab-bar chrome (active tab 11, sticky ×/hide/files
      toggle/scroll chevrons 12, docked-sidebar resize grip 13) — which all
      resolve in this same stacking context — so the slid-out overlay fully
@@ -46,8 +49,12 @@
   --bg-panel: var(--bg-side-panel);
 }
 
+.side-panel.overlay {
+  transition: transform var(--transition-slow);
+}
+
 .side-panel:not(.open) {
-  transform: translateX(calc(100% + 2px));
+  transform: translateX(calc(100% + var(--side-rail-w) + 2px));
   border-left-color: transparent;
 }
 
@@ -61,14 +68,14 @@
    (inner) edge. Two-class selectors beat the base `.side-panel` rules. */
 .side-panel.left {
   right: auto;
-  left: 0;
+  left: var(--side-rail-w);
   border-left: none;
   border-right: 1px solid var(--side-panel-border);
-  transform: translateX(calc(-100% - 2px));
+  transform: translateX(calc(-100% - var(--side-rail-w) - 2px));
 }
 
 .side-panel.left:not(.open) {
-  transform: translateX(calc(-100% - 2px));
+  transform: translateX(calc(-100% - var(--side-rail-w) - 2px));
   border-right-color: transparent;
 }
 
@@ -1065,14 +1072,11 @@
   background: var(--bg-hover);
 }
 
-/* Pinned wakes the pin to full opacity AND paints it accent: the drawn pin is
-   currentColor line-art, so the colour alone says "pinned" at a glance where
-   the 0.55→1 step alone was too quiet next to the flip. Still no fill and no
-   frame, so nothing theme-dependent beyond the accent the hover already uses.
-   `aria-pressed` on the button carries the state for anyone colour misses. */
-.side-panel-pin.pinned {
-  opacity: 1;
-  color: var(--accent);
+/* The hide-panel chevron shares the pin's box (it replaced the 📌). */
+.side-panel-pin svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 /* The Files (Project) tab: the side panel's file view hosted in a pane. The

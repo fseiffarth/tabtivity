@@ -741,7 +741,17 @@ export interface Settings {
    *  Read through `shellScrollbackRows` (`lib/terminal/scrollback`), applied
    *  live to open terminals. */
   shell_scrollback_rows?: number;
-  /** When true, the side panel is docked open (reflows layout) instead of hover-revealed. */
+  /** Whether the side panel is open, docked beside the workspace (VS Code's
+   *  side bar). Unset → the legacy `side_panel_pinned ?? right_panel_pinned`, so a
+   *  user who had pinned the panel finds it open and a hover user finds it closed.
+   *  Ignored while {@link Settings.side_panel_auto_hide} is on. */
+  side_panel_open?: boolean;
+  /** Opt-in: the pre-IDE-toggle behaviour. The panel is an overlay that opens when
+   *  the pointer rests on the edge rail and closes on mouse-leave, with no reflow.
+   *  Unset → off. */
+  side_panel_auto_hide?: boolean;
+  /** @deprecated Read-only fallback for {@link Settings.side_panel_open}; nothing
+   *  writes it any more (it rides in the backend's `extra` catch-all). */
   side_panel_pinned?: boolean;
   /** Width of the side (files/git/search/sessions) panel in px. Set by dragging the
    *  panel's inner border; unset falls back to the default 280px. */

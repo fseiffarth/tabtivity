@@ -31,6 +31,7 @@ export type UntestedEntry = {
 
 /** Every tagged feature. One row per pill; `tested` retires it. */
 export const UNTESTED = {
+  "sidePanel.ideToggle": { area: "shell", what: "Side panel as a VS Code-style docked bar: always-on rail, click-to-toggle, Ctrl+B, snap-close sash, Auto-hide mode" },
   "desktop.settingsNavigation": { area: "shell", what: "Grouped settings pages, the left-hand search box and per-page scroll restoration" },
   "desktop.modalFocus": { area: "common", what: "Modal focus containment, restoration and nested Escape" },
   "desktop.projectForms": { area: "projects", what: "Project form sections, field guidance and pinned actions" },
@@ -336,6 +337,7 @@ export const UNTESTED = {
   // --- lib — Keyboard shortcuts and printing ------------------------
   "print.copiesField": { area: "lib", what: "print · Copies field in the print dialog" },
   "print.queueProgress": { area: "lib", what: "print · Print queue progress strip" },
+  "shortcut.toggleSidePanel": { area: "shell", what: "shortcuts · Ctrl+B / ⌘B toggles the side panel (never from a terminal; Alt+1 works there)" },
   "fixedKeys.osFullscreen.label": { area: "lib", what: "shortcuts · F11 and the window-controls fullscreen button: real fullscreen for the main window and every popout (Windows too, no longer maximize); a popout's stray-fullscreen guard leaves it alone" },
   "shortcut.cycleProjectBack": { area: "lib", what: "shortcuts · Cycle to previous project" },
   "shortcut.cycleBox": { area: "lib", what: "shortcuts · Cycle to next box" },

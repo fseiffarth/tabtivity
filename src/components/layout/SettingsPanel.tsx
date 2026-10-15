@@ -1441,6 +1441,14 @@ export function SettingsDialog({
                 />
               }
             />
+            <SettingsCard>
+              <ToggleRow
+                label={<>{t("settings.sidePanelAutoHide")} <UntestedTag id="sidePanel.ideToggle" /></>}
+                checked={settings?.side_panel_auto_hide ?? false}
+                onChange={(e) => void updateSettings({ side_panel_auto_hide: e.target.checked })}
+              />
+              <p className="settings-help">{t("settings.sidePanelAutoHideHelp")}</p>
+            </SettingsCard>
             {/* Both minimums answer one question, so one card holds them and
                 the help line that explains the pair sits at its foot. */}
             <SettingsCard>

@@ -1,7 +1,9 @@
 # Side panel: IDE-standard show/hide (VS Code model)
 
-Status: plan only. On approval this file is saved as
-`docs/side_panel_ide_toggle_plan.md`; no code changes now.
+Status: implemented 2026-10-15 (develop), not live-tested — see the QA box in
+`todo/group-r-panel.md`. Deviations: Alt chords reach the window from pane
+terminals only (not from other inputs); the rail menu has no `untested:` data
+(the Auto-hide entry wears the pill).
 
 ## Context
 

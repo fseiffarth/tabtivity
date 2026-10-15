@@ -1,22 +1,30 @@
 /**
- * The closed side panel's edge rail (#267).
+ * The side panel's always-present edge rail — VS Code's activity bar.
  *
- * With the panel closed the edge is the only way in, and it used to lead to one
- * place: Files. These pin the rail's contract — one tab per view the panel's own
- * switcher offers, and an activation that both *stores* that view (so the panel
- * paints it, per #252) and opens the panel. The hover-open is here too (#268):
- * the bar covers the window edge for its whole height, so resting on it opens
- * the panel only after a dwell. Resting on a tab opens the panel on THAT view
- * after the same dwell (#270) — never on some other view, which is what used to
- * unmount the rail out from under a click that had not landed yet.
+ * Docked (the default) the rail never unmounts: clicking an icon opens the panel
+ * on that view, clicking the icon of the view on show hides it, clicking another
+ * switches, and the state is the persisted `side_panel_open` (with the legacy
+ * `side_panel_pinned` as its fallback). Auto-hide (`side_panel_auto_hide`) keeps
+ * the old overlay: a dwell on the rail opens the panel on the tab's view, a
+ * hover-open the pointer walks away from closes again, and a click on the shown
+ * view's icon commits a hover-open instead of closing it.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 
-const shared = vi.hoisted(() => ({
-  updateSettings: vi.fn().mockResolvedValue(undefined) as ReturnType<typeof vi.fn>,
-  settings: { side_panel_view_by_project: { other: "git" } } as Record<string, unknown>,
-}));
+const shared = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const store = {
+    settings: {} as Record<string, unknown>,
+    listeners,
+    keyboard: null as null | { onToggleSidePanel?: () => void; onSidePanel?: (o: boolean) => void },
+  };
+  const updateSettings = vi.fn(async (patch: Record<string, unknown>) => {
+    store.settings = { ...store.settings, ...patch };
+    listeners.forEach((l) => l());
+  }) as ReturnType<typeof vi.fn>;
+  return { store, updateSettings };
+});
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
@@ -52,19 +60,25 @@ vi.mock("../../stores/projects", () => {
     listenProjectRuntimeSwitched: vi.fn().mockResolvedValue(() => {}),
   };
 });
-vi.mock("../../stores/settings", () => {
+vi.mock("../../stores/settings", async () => {
+  const React = await import("react");
   const state = {
     load: vi.fn(),
     loaded: false,
     get settings() {
-      return shared.settings;
+      return shared.store.settings;
     },
     updateSettings: shared.updateSettings,
   };
+  const subscribe = (l: () => void) => {
+    shared.store.listeners.add(l);
+    return () => shared.store.listeners.delete(l);
+  };
   return {
     useSettingsStore: Object.assign(
-      vi.fn((sel: (s: object) => unknown) => sel(state)),
-      { getState: () => state, subscribe: () => () => {} },
+      (sel: (s: object) => unknown) =>
+        React.useSyncExternalStore(subscribe, () => sel(state)),
+      { getState: () => state, subscribe },
     ),
     whenSettingsLoaded: () => Promise.resolve(),
     listenSettingsChanged: () => Promise.resolve(() => {}),
@@ -88,13 +102,36 @@ vi.mock("../../stores/timer", () => ({
 vi.mock("../../components/layout/HeaderBar", () => ({ HeaderBar: () => null }));
 vi.mock("../../components/layout/CenterPanel", () => ({ CenterPanel: () => null }));
 vi.mock("../../components/layout/SidePanel", () => ({
-  SidePanel: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="side-panel" className="side-panel" /> : null,
+  SidePanel: (p: {
+    open: boolean;
+    overlay?: boolean;
+    onHide?: () => void;
+    onResizeReset?: () => void;
+    onResizeStart?: (e: never) => void;
+    onResizeMove?: (e: never) => void;
+    onResizeEnd?: (e: never) => void;
+  }) =>
+    p.open ? (
+      <div data-testid="side-panel" className={`side-panel${p.overlay ? " overlay" : ""}`}>
+        <button title="hide-panel" onClick={p.onHide} />
+        <div
+          data-testid="sash"
+          onDoubleClick={p.onResizeReset}
+          onPointerDown={p.onResizeStart as never}
+          onPointerMove={p.onResizeMove as never}
+          onPointerUp={p.onResizeEnd as never}
+        />
+      </div>
+    ) : null,
 }));
 // Project-scoped hosts that fetch on mount: with a project active they run
 // against the blanket `invoke` mock above and have nothing to do with the rail.
 vi.mock("../../components/common/LocalLossDialog", () => ({ LocalLossDialog: () => null }));
-vi.mock("../../hooks/useKeyboard", () => ({ useKeyboard: vi.fn() }));
+vi.mock("../../hooks/useKeyboard", () => ({
+  useKeyboard: (opts: never) => {
+    shared.store.keyboard = opts;
+  },
+}));
 
 import { AppShell } from "../../components/layout/AppShell";
 
@@ -104,13 +141,24 @@ async function mount() {
   });
 }
 
-describe("side panel edge rail", () => {
-  beforeEach(() => {
-    shared.updateSettings.mockClear();
-    shared.settings = { side_panel_view_by_project: { other: "git" } };
+
+const reset = (settings: Record<string, unknown> = {}) => {
+  shared.updateSettings.mockClear();
+  shared.store.settings = { side_panel_view_by_project: { other: "git" }, ...settings };
+};
+const viewPatches = () =>
+  shared.updateSettings.mock.calls.filter(
+    (c: unknown[]) => (c[0] as Record<string, unknown>).side_panel_view !== undefined,
+  );
+const click = (title: string) =>
+  act(async () => {
+    fireEvent.click(screen.getByTitle(title));
   });
 
-  it("offers the chevron, one tab per panel view and the side switch while closed", async () => {
+describe("side panel rail — docked (default)", () => {
+  beforeEach(() => reset());
+
+  it("offers the chevron, one tab per panel view and the side switch, panel closed", async () => {
     await mount();
     expect(screen.getByTitle("Show the side panel")).toBeTruthy();
     for (const label of ["Files", "Git", "Apps", "Agents"]) {
@@ -120,46 +168,133 @@ describe("side panel edge rail", () => {
     expect(screen.queryByTestId("side-panel")).toBeNull();
   });
 
-  it("Apps maps to the panel's windows view, not a view of its own", async () => {
+  it("a view icon opens the panel on that view, storing the view and the open state", async () => {
     await mount();
-    await act(async () => {
-      fireEvent.click(screen.getByTitle("Show the Apps panel"));
+    await click("Show the Agents panel");
+    expect(shared.updateSettings).toHaveBeenCalledWith({
+      side_panel_view: "agents",
+      side_panel_view_by_project: { other: "git", "proj-1": "agents" },
     });
+    expect(shared.updateSettings).toHaveBeenCalledWith({ side_panel_open: true });
+    expect(screen.getByTestId("side-panel")).toBeTruthy();
+  });
+
+  it("Apps maps to the panel's windows view", async () => {
+    await mount();
+    await click("Show the Apps panel");
     expect(shared.updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({ side_panel_view: "windows" }),
     );
   });
 
-  it("stores the clicked view and opens the panel on it", async () => {
+  it("keeps the rail mounted while the panel is open and marks the shown view", async () => {
     await mount();
-    await act(async () => {
-      fireEvent.click(screen.getByTitle("Show the Agents panel"));
-    });
-
-    // Both keys: this project's own entry (untouched siblings preserved) and the
-    // seed a scope with no entry of its own opens on.
-    expect(shared.updateSettings).toHaveBeenCalledWith({
-      side_panel_view: "agents",
-      side_panel_view_by_project: { other: "git", "proj-1": "agents" },
-    });
-    expect(screen.getByTestId("side-panel")).toBeTruthy();
-    // Opening the panel takes the rail with it, so it can never overlap.
-    expect(screen.queryByTitle("Show the Agents panel")).toBeNull();
+    await click("Show the Agents panel");
+    const agents = screen.getByTitle("Show the Agents panel");
+    expect(agents.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTitle("Show the Git panel").getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("the chevron opens the panel on its remembered view, storing nothing", async () => {
+  it("clicking the shown view's icon hides the panel and persists it", async () => {
     await mount();
-    await act(async () => {
-      fireEvent.pointerDown(screen.getByTitle("Show the side panel"), { button: 0 });
-    });
-    expect(screen.getByTestId("side-panel")).toBeTruthy();
-    const patches = shared.updateSettings.mock.calls.filter(
-      (c: unknown[]) => (c[0] as Record<string, unknown>).side_panel_view !== undefined,
-    );
-    expect(patches).toHaveLength(0);
+    await click("Show the Agents panel");
+    await click("Show the Agents panel");
+    expect(shared.updateSettings).toHaveBeenLastCalledWith({ side_panel_open: false });
+    expect(screen.queryByTestId("side-panel")).toBeNull();
   });
 
-  it("the side switch moves the panel to the other edge without opening it", async () => {
+  it("another view's icon switches without closing", async () => {
+    await mount();
+    await click("Show the Agents panel");
+    await click("Show the Git panel");
+    expect(screen.getByTestId("side-panel")).toBeTruthy();
+    expect(shared.store.settings.side_panel_open).toBe(true);
+    expect(shared.store.settings.side_panel_view).toBe("git");
+  });
+
+  it("the chevron toggles on the remembered view, storing no view", async () => {
+    await mount();
+    await click("Show the side panel");
+    expect(screen.getByTestId("side-panel")).toBeTruthy();
+    expect(viewPatches()).toHaveLength(0);
+    await click("Hide the side panel");
+    expect(screen.queryByTestId("side-panel")).toBeNull();
+  });
+
+  it("the panel's own hide button closes it", async () => {
+    await mount();
+    await click("Show the Files panel");
+    await click("hide-panel");
+    expect(screen.queryByTestId("side-panel")).toBeNull();
+  });
+
+  it("grows the gutter to panel + rail when open and never overlays", async () => {
+    await mount();
+    const body = () => document.querySelector(".app-body") as HTMLElement;
+    expect(body().className).toContain("rail-docked");
+    expect(body().style.paddingRight).toBe("");
+    await click("Show the Files panel");
+    expect(body().className).toContain("right-docked");
+    expect(body().style.paddingRight).toContain("280px");
+    expect(body().style.paddingRight).toContain("--side-rail-w");
+  });
+
+  it("mirrors to the left edge", async () => {
+    reset({ side_panel_edge: "left" });
+    await mount();
+    expect(document.querySelector(".app-body")!.className).toContain("rail-docked-left");
+    expect(document.querySelector(".side-panel-reveal-rail.left")).toBeTruthy();
+    await click("Show the Files panel");
+    expect(
+      (document.querySelector(".app-body") as HTMLElement).style.paddingLeft,
+    ).toContain("280px");
+  });
+
+  it("migrates the legacy pin: pinned and no side_panel_open → open", async () => {
+    reset({ side_panel_pinned: true });
+    await mount();
+    expect(screen.getByTestId("side-panel")).toBeTruthy();
+    expect(document.querySelector(".app-body")!.className).toContain("right-docked");
+  });
+
+  it("an explicit side_panel_open wins over the legacy pin", async () => {
+    reset({ side_panel_pinned: true, side_panel_open: false });
+    await mount();
+    expect(screen.queryByTestId("side-panel")).toBeNull();
+  });
+
+  it("opens nothing by hovering", async () => {
+    vi.useFakeTimers();
+    try {
+      await mount();
+      await act(async () => {
+        fireEvent.mouseMove(screen.getByTitle("Show the Agents panel"));
+        vi.advanceTimersByTime(5000);
+      });
+      expect(screen.queryByTestId("side-panel")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Ctrl+B (the keyboard hook) toggles the panel", async () => {
+    await mount();
+    await act(async () => shared.store.keyboard!.onToggleSidePanel!());
+    expect(screen.getByTestId("side-panel")).toBeTruthy();
+    await act(async () => shared.store.keyboard!.onToggleSidePanel!());
+    expect(screen.queryByTestId("side-panel")).toBeNull();
+  });
+
+  it("double-clicking the sash resets the width to 280", async () => {
+    reset({ side_panel_open: true, side_panel_width: 400 });
+    await mount();
+    await act(async () => {
+      fireEvent.doubleClick(screen.getByTestId("sash"));
+    });
+    expect(shared.updateSettings).toHaveBeenCalledWith({ side_panel_width: 280 });
+  });
+
+  it("the side switch still commits on the press and moves the panel", async () => {
     await mount();
     await act(async () => {
       fireEvent.pointerDown(screen.getByTitle("Move panel to the left edge"), { button: 0 });
@@ -168,30 +303,37 @@ describe("side panel edge rail", () => {
     expect(screen.queryByTestId("side-panel")).toBeNull();
   });
 
-  it("reserves a gutter of its own instead of overlaying the workspace", async () => {
+  it("keeps the side switch at the top of the bar, outside the centred group", async () => {
     await mount();
-    const body = document.querySelector(".app-body")!;
-    expect(body.className).toContain("rail-docked");
+    const rail = document.querySelector(".side-panel-reveal-rail")!;
+    const sw = screen.getByTitle("Move panel to the left edge");
+    expect(sw.closest(".srr-group")).toBeNull();
+    expect(rail.firstElementChild).toBe(sw);
   });
 
-  it("keeps the gutter while the unpinned panel is open, so nothing reflows", async () => {
+  it("right-click on the rail turns Auto-hide on from its menu", async () => {
     await mount();
     await act(async () => {
-      fireEvent.click(screen.getByTitle("Show the Agents panel"));
+      fireEvent.contextMenu(document.querySelector(".side-panel-reveal-rail")!);
     });
-    // The rail itself is gone (the panel covers its strip) but the space it
-    // occupies is not released: giving it back would resize every terminal
-    // underneath on each hover-open and again on each close.
-    expect(screen.queryByTitle("Show the Agents panel")).toBeNull();
-    expect(document.querySelector(".app-body")!.className).toContain("rail-docked");
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Auto-hide/));
+    });
+    expect(shared.updateSettings).toHaveBeenCalledWith({ side_panel_auto_hide: true });
   });
+});
 
-  it("mirrors the gutter to the left edge when the panel docks there", async () => {
-    shared.settings = { ...shared.settings, side_panel_edge: "left" };
+describe("side panel rail — auto-hide", () => {
+  beforeEach(() => reset({ side_panel_auto_hide: true }));
+
+  it("a click opens the panel as an overlay without storing the open state", async () => {
     await mount();
-    const body = document.querySelector(".app-body")!;
-    expect(body.className).toContain("rail-docked-left");
-    expect(document.querySelector(".side-panel-reveal-rail.left")).toBeTruthy();
+    await click("Show the Agents panel");
+    expect(screen.getByTestId("side-panel").className).toContain("overlay");
+    expect(shared.updateSettings).not.toHaveBeenCalledWith({ side_panel_open: true });
+    // The overlay does not push the workspace.
+    expect(document.querySelector(".app-body")!.className).not.toContain("right-docked");
+    expect(document.querySelector(".app-body")!.className).toContain("rail-docked");
   });
 
   it("resting on a tab hover-opens the panel on that tab's view", async () => {
@@ -201,12 +343,7 @@ describe("side panel edge rail", () => {
       await act(async () => {
         fireEvent.mouseMove(screen.getByTitle("Show the Agents panel"));
       });
-      // Same dwell as the bar: a press that comes first still wins, and both
-      // land on the same view, so neither can rob the other.
       expect(screen.queryByTestId("side-panel")).toBeNull();
-      expect(shared.updateSettings).not.toHaveBeenCalledWith(
-        expect.objectContaining({ side_panel_view: "agents" }),
-      );
       await act(async () => {
         vi.advanceTimersByTime(400);
       });
@@ -229,17 +366,13 @@ describe("side panel edge rail", () => {
         fireEvent.mouseMove(screen.getByTitle("Show the Agents panel"));
         vi.advanceTimersByTime(300);
       });
-      // Git's dwell was restarted for Agents, not left to fire at 400ms.
       expect(screen.queryByTestId("side-panel")).toBeNull();
       await act(async () => {
         vi.advanceTimersByTime(100);
       });
-      expect(shared.updateSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ side_panel_view: "agents" }),
-      );
-      expect(shared.updateSettings).not.toHaveBeenCalledWith(
-        expect.objectContaining({ side_panel_view: "git" }),
-      );
+      expect(viewPatches().map((c) => (c[0] as { side_panel_view: string }).side_panel_view)).toEqual([
+        "agents",
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -257,33 +390,6 @@ describe("side panel edge rail", () => {
       expect(shared.updateSettings).not.toHaveBeenCalledWith(
         expect.objectContaining({ side_panel_edge: "left" }),
       );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps the side switch at the top of the bar, outside the centred group", async () => {
-    await mount();
-    const rail = document.querySelector(".side-panel-reveal-rail")!;
-    const sw = screen.getByTitle("Move panel to the left edge");
-    expect(sw.closest(".srr-group")).toBeNull();
-    expect(rail.firstElementChild).toBe(sw);
-  });
-
-  it("hover-opens once the pointer rests on the bar's empty run", async () => {
-    vi.useFakeTimers();
-    try {
-      await mount();
-      const rail = document.querySelector(".side-panel-reveal-rail")!;
-      await act(async () => {
-        fireEvent.mouseMove(rail);
-      });
-      // Deliberate, not instant — the dwell is what keeps the tabs clickable.
-      expect(screen.queryByTestId("side-panel")).toBeNull();
-      await act(async () => {
-        vi.advanceTimersByTime(400);
-      });
-      expect(screen.getByTestId("side-panel")).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
@@ -314,15 +420,11 @@ describe("side panel edge rail", () => {
         vi.advanceTimersByTime(400);
       });
       expect(screen.getByTestId("side-panel")).toBeTruthy();
-      // The pointer left while the panel was still sliding in: it never enters
-      // the panel, so the panel's own mouseleave can never close it.
       await act(async () => {
         fireEvent.mouseMove(document.body, { clientX: 10, clientY: 10 });
         vi.advanceTimersByTime(450);
       });
       expect(screen.queryByTestId("side-panel")).toBeNull();
-      // And the rail is back for the next approach.
-      expect(screen.getByTitle("Show the side panel")).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
@@ -338,8 +440,6 @@ describe("side panel edge rail", () => {
       });
       await act(async () => {
         fireEvent.mouseMove(screen.getByTestId("side-panel"), { clientX: 900, clientY: 300 });
-        // From here on only the panel's mouseleave closes it — a move elsewhere
-        // (a portaled menu opened from the panel lands there too) does not.
         fireEvent.mouseMove(document.body, { clientX: 10, clientY: 10 });
         vi.advanceTimersByTime(5000);
       });
@@ -354,7 +454,7 @@ describe("side panel edge rail", () => {
     try {
       await mount();
       await act(async () => {
-        fireEvent.pointerDown(screen.getByTitle("Show the Agents panel"), { button: 0 });
+        fireEvent.click(screen.getByTitle("Show the Agents panel"));
       });
       await act(async () => {
         fireEvent.mouseMove(document.body, { clientX: 10, clientY: 10 });
@@ -366,31 +466,32 @@ describe("side panel edge rail", () => {
     }
   });
 
-  it("commits on the press, so an unmount before the click cannot eat it", async () => {
-    await mount();
-    // pointerdown alone — no click follows, exactly as when the reveal takes the
-    // button away between press and release.
-    await act(async () => {
-      fireEvent.pointerDown(screen.getByTitle("Show the Agents panel"), { button: 0 });
-    });
-    expect(shared.updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ side_panel_view: "agents" }),
-    );
-    expect(screen.getByTestId("side-panel")).toBeTruthy();
-  });
-
-  it("does not act twice when a press is followed by its own click", async () => {
-    await mount();
-    const tab = screen.getByTitle("Show the Agents panel");
-    await act(async () => {
-      fireEvent.pointerDown(tab, { button: 0 });
-      fireEvent.click(tab);
-    });
-    // The hints store writes `hints_seen` through the same mock, so count the
-    // view patches rather than every settings write.
-    const patches = shared.updateSettings.mock.calls.filter(
-      (c: unknown[]) => (c[0] as Record<string, unknown>).side_panel_view !== undefined,
-    );
-    expect(patches).toHaveLength(1);
+  it("a click on the shown icon of a hover-open commits it instead of closing it", async () => {
+    vi.useFakeTimers();
+    try {
+      await mount();
+      await act(async () => {
+        fireEvent.mouseMove(screen.getByTitle("Show the Agents panel"));
+        vi.advanceTimersByTime(400);
+      });
+      expect(screen.getByTestId("side-panel")).toBeTruthy();
+      await act(async () => {
+        fireEvent.click(screen.getByTitle("Show the Agents panel"));
+      });
+      expect(screen.getByTestId("side-panel")).toBeTruthy();
+      // The guard is disarmed: walking away no longer closes it.
+      await act(async () => {
+        fireEvent.mouseMove(document.body, { clientX: 10, clientY: 10 });
+        vi.advanceTimersByTime(5000);
+      });
+      expect(screen.getByTestId("side-panel")).toBeTruthy();
+      // A second click closes it.
+      await act(async () => {
+        fireEvent.click(screen.getByTitle("Show the Agents panel"));
+      });
+      expect(screen.queryByTestId("side-panel")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -526,7 +526,7 @@
    border eats mousemove in the last few edge pixels, so the reveal band never
    fires and the in-panel pin can't be reached. This rail sits in that dead-zone
    and opens the panel on click (delivered even where mousemove isn't).
-   Unmounts as soon as the panel is open, so it never overlaps the panel. */
+   Always mounted: the panel opens beside it, never over it. */
 /* The closed panel's edge rail: one tab per view the panel can open on. Also the
    only marker of WHICH edge the unpinned panel lives on, so the tabs carry an
    accent-tinted body and a vertical label rather than a bare chevron — a 16px
@@ -636,6 +636,19 @@
   opacity: 1;
   color: var(--text-primary);
   background-color: color-mix(in srgb, var(--accent) 30%, var(--bg-panel));
+}
+
+/* The tab of the view on show: VS Code's active indicator — a static accent bar
+   on the rail's outer window edge (an inset shadow, not animated) and a fuller
+   fill. */
+.side-panel-reveal-handle.active {
+  opacity: 1;
+  color: var(--text-primary);
+  background-color: color-mix(in srgb, var(--accent) 30%, var(--bg-panel));
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+.side-panel-reveal-rail.left .side-panel-reveal-handle.active {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* Mirror the reveal rail and tour marker to the left edge when the panel docks
