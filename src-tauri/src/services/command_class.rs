@@ -753,6 +753,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("switch_project_session", Core),
     // commands/projects.rs
     ("add_compute_host", Core),
+    // A host a user account stored gets login tabs only once the owner says so.
+    ("approve_client_ssh_host", Admin),
     ("adopt_folder_tab_layout", Core),
     ("archived_mirror_unsynced", Core),
     ("archive_project", Core),

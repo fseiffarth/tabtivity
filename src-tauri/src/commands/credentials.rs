@@ -56,8 +56,13 @@ use crate::tauri_host::Ctx;
 // — a remote project's primary or worker host, or a global machine — matched on
 // user, host and port as the keychain account spells them
 // ([`ssh_login_configured`]); anything else would let a browser client make the
-// server dial any host and port. The desktop window keeps any host (adding a
-// machine or project logs in before it is stored).
+// server dial any host and port. "The owner" is the desktop window or an admin
+// client: a host a non-admin client stored itself (`RemoteSpec::added_by_client`)
+// does not count until one of them approves it (`approve_client_ssh_host`), or a
+// user could store any host through a `core` command and then log in to it. The
+// login runs to the matched entry's stored spelling, not the caller's. The
+// desktop window keeps any host (adding a machine or project logs in before it
+// is stored).
 
 /// Which login a login PTY runs — i.e. which saved credentials may be typed into
 /// it. Also `PtyOptions::login`'s payload, tagged by `kind`:
@@ -169,28 +174,56 @@ fn login_refusal(
     None
 }
 
-/// Whether `target` is an ssh login to one of `configured` — the same user, host
-/// and port, compared as the keychain account spells them
-/// ([`creds::ssh_account`]: trimmed, host case-folded, no port = 22).
-fn ssh_login_known(
-    target: &LoginTarget,
-    configured: impl IntoIterator<Item = crate::services::remote::SshAddress>,
-) -> bool {
-    let LoginTarget::Ssh { user, host, port } = target else {
-        return false;
-    };
-    let wanted = creds::ssh_account(user, host, *port);
-    configured
-        .into_iter()
-        .any(|(user, host, port)| creds::ssh_account(&user, &host, port) == wanted)
+/// What the allow-list says about a client's ssh login target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LoginHost {
+    /// A stored host that counts: the matched entry's own spelling of
+    /// user, host and port, which is what the login argv is built from.
+    Known(crate::services::remote::SshAddress),
+    /// Stored only by a non-admin client, and not approved since.
+    Unapproved,
+    /// Nothing stores it.
+    Unknown,
 }
 
-/// [`ssh_login_known`] against what the owner configured: every remote project's
-/// primary and worker hosts (`projects.json`) and every global machine.
-fn ssh_login_configured(target: &LoginTarget) -> bool {
+/// The marker a client's refused login to an unapproved host carries, so the
+/// frontend can say why in the user's language (`loginTarget.ts`).
+pub(crate) const SSH_LOGIN_UNAPPROVED: &str = crate::app_env!("SSH_LOGIN_UNAPPROVED");
+
+/// Where `target`, an ssh login, stands against `configured` — the stored
+/// addresses, each with whether it counts (`false` = a non-admin client stored
+/// it and nobody approved it). Compared as the keychain account spells them
+/// ([`creds::ssh_account`]: trimmed, host case-folded, no port = 22); a match
+/// that counts wins over one that does not.
+fn ssh_login_known(
+    target: &LoginTarget,
+    configured: impl IntoIterator<Item = (crate::services::remote::SshAddress, bool)>,
+) -> LoginHost {
+    let LoginTarget::Ssh { user, host, port } = target else {
+        return LoginHost::Unknown;
+    };
+    let wanted = creds::ssh_account(user, host, *port);
+    let mut found = LoginHost::Unknown;
+    for ((user, host, port), counts) in configured {
+        if creds::ssh_account(&user, &host, port) != wanted {
+            continue;
+        }
+        if counts {
+            return LoginHost::Known((user, host, port));
+        }
+        found = LoginHost::Unapproved;
+    }
+    found
+}
+
+/// [`ssh_login_known`] against what the owner configured: every remote
+/// project's primary and worker hosts (`projects.json`) — those a non-admin
+/// client stored not counting until approved — and every global machine
+/// (only the desktop or an admin writes those).
+fn ssh_login_configured(target: &LoginTarget) -> LoginHost {
     let machines = crate::commands::global_machines::load_all()
         .into_iter()
-        .map(|m| (m.user, m.host, m.port));
+        .map(|m| ((m.user, m.host, m.port), true));
     ssh_login_known(
         target,
         crate::services::remote::configured_project_ssh_addresses()
@@ -219,23 +252,33 @@ pub(crate) fn apply_login(
 fn apply_login_with(
     opts: &mut PtyOptions,
     caller: &app_core::Caller,
-    ssh_configured: impl FnOnce(&LoginTarget) -> bool,
+    ssh_configured: impl FnOnce(&LoginTarget) -> LoginHost,
 ) -> Result<Option<LoginTarget>, String> {
-    let Some(target) = opts.login.clone() else {
+    let Some(mut target) = opts.login.clone() else {
         return Ok(None);
     };
     if let Some(what) = login_refusal(opts, &target, caller) {
         return Err(format!("a login terminal cannot be {what}"));
     }
-    // A server client dials only hosts the owner configured (module comment).
-    if matches!(target, LoginTarget::Ssh { .. })
-        && matches!(caller, app_core::Caller::Client(_))
-        && !ssh_configured(&target)
-    {
-        return Err(
-            "a browser client may open an ssh login only to a host a remote project or machine names"
-                .to_string(),
-        );
+    // A server client dials only hosts the owner configured (module comment),
+    // and ssh gets the stored spelling of the one it matched — never the
+    // caller's, which only had to compare equal.
+    if matches!(target, LoginTarget::Ssh { .. }) && matches!(caller, app_core::Caller::Client(_)) {
+        match ssh_configured(&target) {
+            LoginHost::Known((user, host, port)) => target = LoginTarget::Ssh { user, host, port },
+            LoginHost::Unapproved => {
+                return Err(format!(
+                    "{SSH_LOGIN_UNAPPROVED} a browser account stored this host, so it gets no login \
+                     terminal until the desktop or an admin allows logins to it (Remote machines)"
+                ));
+            }
+            LoginHost::Unknown => {
+                return Err(
+                    "a browser client may open an ssh login only to a host a remote project or machine names"
+                        .to_string(),
+                );
+            }
+        }
     }
     let mut argv = target.argv()?.into_iter();
     let program = argv.next().ok_or_else(|| "empty login command".to_string())?;
@@ -474,6 +517,14 @@ mod tests {
         Caller::Local(ClientId::new("main"))
     }
 
+    /// The allow-list's answer when the caller's own spelling is what is stored.
+    fn as_stored(t: &LoginTarget) -> LoginHost {
+        match t {
+            LoginTarget::Ssh { user, host, port } => LoginHost::Known((user.clone(), host.clone(), *port)),
+            LoginTarget::Vpn { .. } => LoginHost::Unknown,
+        }
+    }
+
     /// A spawn as the renderer sends it — here a hostile one, whose command line
     /// would capture whatever is typed into it.
     fn hostile(id: &str, login: serde_json::Value) -> PtyOptions {
@@ -558,7 +609,7 @@ mod tests {
             serde_json::json!({ "kind": "ssh", "user": "alice", "host": "host.example", "port": 2222 }),
         );
         opts.remote_host_id = Some("worker".to_string());
-        let target = apply_login_with(&mut opts, &client(), |_| true).unwrap();
+        let target = apply_login_with(&mut opts, &client(), as_stored).unwrap();
         assert_eq!(
             target,
             Some(LoginTarget::Ssh {
@@ -628,7 +679,7 @@ mod tests {
     fn a_vpn_login_is_refused_for_a_client() {
         let vpn = serde_json::json!({ "kind": "vpn", "config": "/home/u/work.ovpn" });
         let mut opts = hostile("root:vpn", vpn);
-        let err = apply_login_with(&mut opts, &client(), |_| true).unwrap_err();
+        let err = apply_login_with(&mut opts, &client(), as_stored).unwrap_err();
         assert!(err.contains("client"), "{err}");
         assert_eq!(opts.cmd, "sh");
     }
@@ -640,15 +691,16 @@ mod tests {
     fn a_clients_ssh_login_needs_a_configured_host() {
         let ssh = serde_json::json!({ "kind": "ssh", "user": "alice", "host": "h.example", "port": 2222 });
         let mut opts = hostile("root:ssh", ssh.clone());
-        let err = apply_login_with(&mut opts, &client(), |_| false).unwrap_err();
+        let err = apply_login_with(&mut opts, &client(), |_| LoginHost::Unknown).unwrap_err();
         assert!(err.contains("browser client") && err.contains("machine"), "{err}");
+        assert!(!err.contains(SSH_LOGIN_UNAPPROVED), "{err}");
         assert_eq!(opts.cmd, "sh", "a refused login changes nothing");
 
         let mut opts = hostile("root:ssh", ssh.clone());
         let mut asked = None;
         assert!(apply_login_with(&mut opts, &client(), |t| {
             asked = Some(t.clone());
-            true
+            as_stored(t)
         })
         .unwrap()
         .is_some());
@@ -680,13 +732,13 @@ mod tests {
         ]))
         .unwrap();
         let mut known = crate::services::remote::ssh_addresses_of(&list);
-        known.push((None, "machine.example".into(), Some(2022)));
+        known.push(((None, "machine.example".into(), Some(2022)), true));
         let login = |user: Option<&str>, host: &str, port: Option<u16>| LoginTarget::Ssh {
             user: user.map(str::to_string),
             host: host.to_string(),
             port,
         };
-        let allowed = |t: LoginTarget| ssh_login_known(&t, known.clone());
+        let allowed = |t: LoginTarget| matches!(ssh_login_known(&t, known.clone()), LoginHost::Known(_));
 
         assert!(allowed(login(Some("alice"), "build.example", None)), "the primary, host case-folded");
         assert!(allowed(login(Some("alice"), " build.example ", Some(22))), "port 22 is no port");
@@ -699,8 +751,91 @@ mod tests {
         assert!(!allowed(login(Some("bob"), "gpu.example", None)), "the worker's port is part of it");
         assert!(!allowed(login(None, "evil.example", None)), "an unknown host");
         assert!(!allowed(login(Some("alice"), "machine.example", Some(2022))), "the machine's user is none");
-        assert!(!ssh_login_known(&LoginTarget::Vpn { config: "/a.ovpn".into() }, known.clone()));
-        assert!(!ssh_login_known(&login(None, "machine.example", Some(2022)), Vec::new()), "nothing configured");
+        assert_eq!(ssh_login_known(&LoginTarget::Vpn { config: "/a.ovpn".into() }, known.clone()), LoginHost::Unknown);
+        assert_eq!(ssh_login_known(&login(None, "machine.example", Some(2022)), Vec::new()), LoginHost::Unknown, "nothing configured");
+    }
+
+    /// #12: a host a non-admin browser client stored itself (`added_by_client`)
+    /// does not count until the desktop or an admin approves it; an entry
+    /// without the field (every older one) or with `false` counts as the
+    /// desktop's. The same address stored approved elsewhere still counts.
+    #[test]
+    fn a_host_a_user_client_stored_gets_no_login_until_approved() {
+        let entry = |id: &str, host: &str, stamp: serde_json::Value| {
+            let mut remote = serde_json::json!({ "user": "alice", "host": host, "remote_path": "/srv/x" });
+            if !stamp.is_null() {
+                remote["added_by_client"] = stamp;
+            }
+            serde_json::json!({ "id": id, "name": id, "status": "active", "position": 0, "local_file": "", "remote": remote })
+        };
+        let list = |entries: Vec<serde_json::Value>| -> crate::schema::projects::ProjectsList {
+            serde_json::from_value(serde_json::Value::Array(entries)).unwrap()
+        };
+        let target = LoginTarget::Ssh { user: Some("alice".into()), host: "new.example".into(), port: None };
+        let verdict = |l: &crate::schema::projects::ProjectsList| {
+            ssh_login_known(&target, crate::services::remote::ssh_addresses_of(l))
+        };
+
+        // A user client stored it: refused, and the refusal says why.
+        let stamped = list(vec![entry("p1", "new.example", serde_json::json!(true))]);
+        assert_eq!(verdict(&stamped), LoginHost::Unapproved);
+        let mut opts = hostile("root:unapproved", serde_json::to_value(&target).unwrap());
+        let err = apply_login_with(&mut opts, &client(), |t| {
+            ssh_login_known(t, crate::services::remote::ssh_addresses_of(&stamped))
+        })
+        .unwrap_err();
+        assert!(err.starts_with(SSH_LOGIN_UNAPPROVED), "{err}");
+        assert_eq!(opts.cmd, "sh", "a refused login changes nothing");
+        // An admin client is held to the same list: only an approval lifts it.
+        let admin = Caller::Client(ClientId::new("web-admin"));
+        let mut opts = hostile("root:unapproved", serde_json::to_value(&target).unwrap());
+        assert!(apply_login_with(&mut opts, &admin, |t| {
+            ssh_login_known(t, crate::services::remote::ssh_addresses_of(&stamped))
+        })
+        .is_err());
+
+        // Approved (the stamp cleared), legacy (no field) or `false`: allowed.
+        for stamp in [serde_json::Value::Null, serde_json::json!(false)] {
+            let l = list(vec![entry("p1", "new.example", stamp)]);
+            assert!(matches!(verdict(&l), LoginHost::Known(_)));
+        }
+        // The same address approved on another project counts.
+        let both = list(vec![
+            entry("p1", "new.example", serde_json::json!(true)),
+            entry("p2", "NEW.example", serde_json::Value::Null),
+        ]);
+        assert_eq!(verdict(&both), LoginHost::Known((Some("alice".into()), "NEW.example".into(), None)));
+    }
+
+    /// #12: ssh receives the **stored** spelling of the matched host, not the
+    /// caller's — which only had to compare equal (trimmed, case-folded, port
+    /// 22 = none).
+    #[test]
+    fn a_clients_login_runs_to_the_stored_spelling() {
+        let stored = vec![((Some("alice".to_string()), "host.example".to_string(), None), true)];
+        let mut opts = hostile(
+            "root:spelling",
+            serde_json::json!({ "kind": "ssh", "user": "alice", "host": "Host.Example ", "port": 22 }),
+        );
+        let target = apply_login_with(&mut opts, &client(), |t| ssh_login_known(t, stored.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            target,
+            LoginTarget::Ssh { user: Some("alice".into()), host: "host.example".into(), port: None }
+        );
+        assert_eq!(opts.args.last().map(String::as_str), Some("alice@host.example"));
+        assert!(!opts.args.iter().any(|a| a == "-p"), "{:?}", opts.args);
+
+        // The desktop window's login is never rewritten.
+        let mut opts = hostile(
+            "root:spelling",
+            serde_json::json!({ "kind": "ssh", "user": "alice", "host": "Host.Example", "port": 22 }),
+        );
+        let target = apply_login_with(&mut opts, &window(), |_| panic!("the desktop is never asked"))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(target, LoginTarget::Ssh { ref host, .. } if host == "Host.Example"));
     }
 
     /// The desktop window's VPN login runs the elevated connect argv itself.

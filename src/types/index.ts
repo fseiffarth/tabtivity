@@ -993,6 +993,11 @@ export interface RemoteSpec {
    *  forward. Written by the backend at creation/boot, never user-set. What a
    *  VM-aware surface (the pill glyph, the spawn guard) dispatches on. */
   vm?: boolean;
+  /** Recorded by the backend, never sent: a non-admin browser account stored this
+   *  address and neither the desktop nor an admin has approved it, so browser
+   *  clients get no ssh login terminal to it until someone does
+   *  (`approve_client_ssh_host`). Absent = the desktop or an admin added it. */
+  added_by_client?: boolean;
 }
 
 /** Egress policy for a project VM (`docs/vm_projects_plan.md`): `off` = the

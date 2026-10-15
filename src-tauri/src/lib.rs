@@ -1789,6 +1789,7 @@ pub fn run() {
             commands::projects::set_project_remote_label,
             commands::projects::set_project_remote_user,
             commands::projects::add_compute_host,
+            commands::projects::approve_client_ssh_host,
             commands::projects::remove_compute_host,
             commands::projects::patch_compute_host,
             commands::projects::set_project_run_host,

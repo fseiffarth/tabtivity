@@ -84,31 +84,10 @@ async fn blocking<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) 
 /// Who the caller is to the server as a whole (plan §3.3 `admin`). The
 /// single-user sidecar's token login is the box's admin; on a multi-user
 /// server the gateway names the account's role in the connection's handshake
-/// (`services::server`), and the daemon passes it in here per call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Role {
-    User,
-    Admin,
-}
-
-impl Role {
-    /// The wire token (`server_capabilities.role`, the gateway's handshake).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Role::User => "user",
-            Role::Admin => "admin",
-        }
-    }
-
-    /// `as_str` undone; anything else is a user — the role fails closed.
-    pub fn parse(token: &str) -> Role {
-        if token == "admin" {
-            Role::Admin
-        } else {
-            Role::User
-        }
-    }
-}
+/// (`services::server`), and the daemon passes it in here per call — and into
+/// the call's `CoreCtx` (`with_client`), so a body can ask
+/// `is_untrusted_client`. Defined in the core, which the context lives in.
+pub use app_core::Role;
 
 /// Why a command is not served, as the frontend sees it (`server_capabilities`
 /// rows and the error of a refused call). Wire shape `{code, reason?}`.

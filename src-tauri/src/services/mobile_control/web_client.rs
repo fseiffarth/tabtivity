@@ -49,7 +49,10 @@
 //! has moved to that page and is left alone. The role is the **session's**
 //! (`core_dispatch::Role`), fixed at login and never read from a frame: the
 //! token login is the box owner's `Admin`; a gateway-verified account's is
-//! what the gateway's handshake names. A user's calls are confined where an
+//! what the gateway's handshake names. It rides in the call's `CoreCtx`
+//! (`CoreCtx::with_client`), so a body can tell a user's write from the
+//! owner's (`is_untrusted_client`: a host a user stored gets no ssh login tab
+//! until the desktop or an admin approves it). A user's calls are confined where an
 //! admin's are not: every path argument of a `core` command is held to the
 //! user's roots by `core_dispatch`'s table (project folders, absolute paths,
 //! `project.json` files; `list_dir_all`'s empty start is the root work dir),
@@ -74,7 +77,7 @@ use std::{
 };
 use app_core::sync::LockExt;
 
-use app_core::{Caller, ClientId, CoreCtx, EventSink};
+use app_core::{ClientId, CoreCtx, EventSink};
 use axum::{
     body::Body,
     extract::{
@@ -1134,7 +1137,9 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: Session
         return;
     }
     let calls = Arc::new(Semaphore::new(MAX_CALLS_IN_FLIGHT));
-    let call_ctx = state.ctx.with_caller(Caller::Client(client.clone()));
+    // The session's role rides in the context too (`is_untrusted_client`), as
+    // fixed at login — never from a frame.
+    let call_ctx = state.ctx.with_client(client.clone(), role);
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.tick().await;
     let mut unanswered_pings: u8 = 0;

@@ -318,6 +318,7 @@ fn create_remote_project_enables_lockstep_when_git_backed() {
                 persist_sessions: None,
                 vm: None,
                 label: None,
+                added_by_client: None,
                 extra: Default::default(),
             }),
             mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
@@ -358,6 +359,7 @@ fn create_remote_project_leaves_lockstep_off_without_git() {
                 persist_sessions: None,
                 vm: None,
                 label: None,
+                added_by_client: None,
                 extra: Default::default(),
             }),
             mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
@@ -400,6 +402,7 @@ fn create_remote_project_scaffolds_the_local_mirror() {
                 persist_sessions: None,
                 vm: None,
                 label: None,
+                added_by_client: None,
                 extra: Default::default(),
             }),
             mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
@@ -1569,6 +1572,7 @@ fn set_project_auto_connect_writes_both_copies_and_clears() {
                 persist_sessions: None,
                 vm: None,
                 label: None,
+                added_by_client: None,
                 extra: Default::default(),
             }),
             mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
@@ -1687,5 +1691,204 @@ fn a_phone_creates_a_project_only_in_the_projects_folder() {
 
         assert_eq!(create_project_for_phone("my paper", &device), Err(PhoneProjectRefusal::Exists));
         assert_eq!(get_projects().expect("projects").len(), 1);
+    });
+}
+
+// ── #12: client ssh login provenance ─────────────────────────────────────────
+
+/// A context as the browser transport builds one (`CoreCtx::with_client`), or
+/// the desktop window's (`Caller::Local`).
+fn caller_ctx(who: Option<app_core::Role>) -> app_lib::tauri_host::Ctx {
+    use std::sync::Arc;
+    let state = app_core::CoreState::new()
+        .manage(app_lib::commands::terminal::RegistryState::default())
+        .manage(app_lib::services::remote_sync::SyncManifestState::default());
+    let system = app_core::CoreCtx::system(Arc::new(state), Arc::new(app_core::NullEvents));
+    app_lib::tauri_host::Ctx(match who {
+        Some(role) => system.with_client(app_core::ClientId::new("web-1"), role),
+        None => system.with_caller(app_core::Caller::Local(app_core::ClientId::main())),
+    })
+}
+
+fn spec_at(host: &str, stamp: Option<bool>) -> RemoteSpec {
+    serde_json::from_value(serde_json::json!({
+        "user": "alice", "host": host, "remote_path": "/home/alice/work",
+        "added_by_client": stamp,
+    }))
+    .expect("spec")
+}
+
+/// The stored `added_by_client` of a project's primary (`None` = host) or a
+/// worker, as `projects.json` holds it — what the login allow-list reads.
+fn stored_stamp(project_id: &str, worker: Option<&str>) -> Option<serde_json::Value> {
+    let entry = get_projects().expect("projects").into_iter().find(|p| p.id == project_id)?;
+    let spec = match worker {
+        None => entry.extra.get("remote")?.clone(),
+        Some(id) => entry.extra.get("compute_hosts")?.as_array()?.iter().find(|h| h["id"] == id)?.clone(),
+    };
+    spec.get("added_by_client").cloned()
+}
+
+/// A browser client's ssh login (`pty_spawn` with `login`) to `host`.
+fn client_login(rt: &tokio::runtime::Runtime, host: &str) -> Result<(), String> {
+    let opts: app_lib::terminal::PtyOptions = serde_json::from_value(serde_json::json!({
+        "id": "root:login-12", "cmd": "sh", "args": [], "cwd": "", "cols": 80, "rows": 24,
+        "login": { "kind": "ssh", "user": "alice", "host": host, "port": null },
+    }))
+    .expect("opts");
+    rt.block_on(app_lib::commands::terminal::pty_spawn(
+        caller_ctx(Some(app_core::Role::User)),
+        opts,
+        None,
+    ))
+    .map(|_| ())
+}
+
+/// #12, the bypass: a user account stores a host through a `core` command and
+/// then asks for a login to it — refused, naming the approval, until the
+/// desktop approves it. Whatever provenance the client sends is ignored; the
+/// desktop's and an admin's hosts are never stamped; `save_projects` cannot
+/// clear a stamp; a user cannot approve.
+#[test]
+fn a_host_a_user_client_stores_gets_no_login_until_approved() {
+    use app_core::Role;
+    use app_lib::commands::projects::{
+        add_compute_host, approve_client_ssh_host, create_project, extend_project_to_remote,
+        import_project, patch_compute_host, ExtendProjectRemoteRequest,
+    };
+    use app_lib::schema::project::ComputeHost;
+    with_isolated_home("client-host-home", |_| {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let mirror_parent = tempdir_in_test_projects("client-host-mirror");
+        let create = |who: Option<Role>, name: &str, host: &str, stamp: Option<bool>| {
+            rt.block_on(create_project(
+                caller_ctx(who),
+                CreateProjectRequest {
+                    name: name.to_string(),
+                    directory: String::new(),
+                    description: None,
+                    git_type: Some("none".to_string()),
+                    git_provider: None,
+                    skip_scaffold: true,
+                    remote: Some(spec_at(host, stamp)),
+                    mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
+                    vm: None,
+                },
+            ))
+            .expect("create remote project")
+        };
+
+        // A user's project: stamped although the client said `false`.
+        let mine = create(Some(Role::User), "users-host", "users.invalid", Some(false));
+        assert_eq!(stored_stamp(&mine.id, None), Some(serde_json::json!(true)));
+        // The desktop's and an admin's: never stamped, whatever they send.
+        let desk = create(None, "desktops-host", "desktop.invalid", Some(true));
+        assert_eq!(stored_stamp(&desk.id, None), None);
+        let adm = create(Some(Role::Admin), "admins-host", "admin.invalid", Some(true));
+        assert_eq!(stored_stamp(&adm.id, None), None);
+
+        // The bypass is closed, and the refusal says why; an unknown host is
+        // refused as before, without the approval marker.
+        let marker = app_core::brand::env_name("SSH_LOGIN_UNAPPROVED");
+        let err = client_login(&rt, "users.invalid").unwrap_err();
+        assert!(err.contains(&marker), "{err}");
+        let err = client_login(&rt, "never-stored.invalid").unwrap_err();
+        assert!(!err.contains(&marker) && err.contains("browser client"), "{err}");
+
+        // `save_projects` (pill status/order) cannot clear the stamp.
+        let mut list = get_projects().unwrap();
+        for p in &mut list {
+            if let Some(r) = p.extra.get_mut("remote") {
+                r["added_by_client"] = serde_json::json!(false);
+            }
+        }
+        save_projects(list).unwrap();
+        assert_eq!(stored_stamp(&mine.id, None), Some(serde_json::json!(true)));
+
+        // A user cannot approve (classed admin; the body refuses one too).
+        let user = caller_ctx(Some(Role::User));
+        assert!(approve_client_ssh_host(user, mine.id.clone(), "primary".into()).is_err());
+        assert_eq!(stored_stamp(&mine.id, None), Some(serde_json::json!(true)));
+        // The desktop approves: the stamp goes and the login is no longer
+        // refused by the allow-list.
+        approve_client_ssh_host(caller_ctx(None), mine.id.clone(), "primary".into()).unwrap();
+        assert_eq!(stored_stamp(&mine.id, None), None);
+
+        // Workers: a user's new machine is stamped (its `false` ignored), the
+        // desktop's is not; a user changing a desktop machine's login name makes
+        // it a new address, stamped; approval of an unknown worker fails.
+        let worker = |id: &str, host: &str, stamp: Option<bool>| ComputeHost {
+            id: id.to_string(),
+            sync_code: true,
+            pull_outputs: false,
+            shared_fs: true,
+            spec: spec_at(host, stamp),
+        };
+        add_compute_host(caller_ctx(Some(Role::User)), desk.id.clone(), worker("w-user", "wu.invalid", Some(false))).unwrap();
+        add_compute_host(caller_ctx(None), desk.id.clone(), worker("w-desk", "wd.invalid", Some(true))).unwrap();
+        assert_eq!(stored_stamp(&desk.id, Some("w-user")), Some(serde_json::json!(true)));
+        assert_eq!(stored_stamp(&desk.id, Some("w-desk")), None);
+        // A user re-adding the desktop's machine unchanged leaves it the desktop's.
+        add_compute_host(caller_ctx(Some(Role::User)), desk.id.clone(), worker("w-desk", "WD.invalid ", Some(true))).unwrap();
+        assert_eq!(stored_stamp(&desk.id, Some("w-desk")), None);
+        patch_compute_host(
+            caller_ctx(Some(Role::User)),
+            desk.id.clone(),
+            "w-desk".into(),
+            None, None, None, None, None,
+            Some("root".into()),
+        )
+        .unwrap();
+        assert_eq!(stored_stamp(&desk.id, Some("w-desk")), Some(serde_json::json!(true)));
+        approve_client_ssh_host(caller_ctx(Some(Role::Admin)), desk.id.clone(), "w-desk".into()).unwrap();
+        assert_eq!(stored_stamp(&desk.id, Some("w-desk")), None);
+        assert!(approve_client_ssh_host(caller_ctx(None), desk.id.clone(), "w-nope".into()).is_err());
+
+        // Import and extend as a user: stamped.
+        let source = tempdir_in_test_projects("client-host-import");
+        let imported = rt
+            .block_on(import_project(
+                caller_ctx(Some(Role::User)),
+                ImportProjectRequest {
+                    source_dir: source.path().to_string_lossy().to_string(),
+                    name: "imported-remote".to_string(),
+                    description: None,
+                    git_type: Some("none".to_string()),
+                    git_provider: None,
+                    mode: "keep".to_string(),
+                    scaffold_fill_modes: None,
+                    manual_validation_confirmed: None,
+                    skip_scaffold: true,
+                    remote: Some(spec_at("imported.invalid", Some(false))),
+                    mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
+                },
+            ))
+            .expect("import remote project");
+        assert_eq!(stored_stamp(&imported.id, None), Some(serde_json::json!(true)));
+
+        let local_dir = tempdir_in_test_projects("client-host-local");
+        let local = create_project_blocking(CreateProjectRequest {
+            name: "to-extend".to_string(),
+            directory: local_dir.path().join("to-extend").to_string_lossy().to_string(),
+            description: None,
+            git_type: Some("none".to_string()),
+            git_provider: None,
+            skip_scaffold: true,
+            remote: None,
+            mirror_parent: None,
+            vm: None,
+        })
+        .expect("create local project");
+        rt.block_on(extend_project_to_remote(
+            caller_ctx(Some(Role::User)),
+            ExtendProjectRemoteRequest {
+                project_id: local.id.clone(),
+                remote: spec_at("extended.invalid", None),
+            },
+        ))
+        .expect("extend");
+        assert_eq!(stored_stamp(&local.id, None), Some(serde_json::json!(true)));
+        let err = client_login(&rt, "extended.invalid").unwrap_err();
+        assert!(err.contains(&marker), "{err}");
     });
 }

@@ -36,7 +36,7 @@ import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { asleepPty, killAsleepPty, parkPty, takeAsleepPty } from "../../lib/terminal/sleepingPtys";
 import { terminalSpawnKey, terminalViewKind } from "../../lib/terminal/terminalSpawn";
-import type { LoginTarget } from "../../lib/remote/loginTarget";
+import { loginHostUnapproved, type LoginTarget } from "../../lib/remote/loginTarget";
 import { scrollbackRowsFor } from "../../lib/terminal/scrollback";
 import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
@@ -332,6 +332,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // What the pane says when the Windows "full rights" acceptance was declined.
   const unfencedDeclinedTextRef = useRef<() => string>(() => "");
   unfencedDeclinedTextRef.current = () => t("unfencedPlatform.declined");
+  // What a browser client's login pane says when its host awaits approval.
+  const loginUnapprovedTextRef = useRef<() => string>(() => "");
+  loginUnapprovedTextRef.current = () => t("terminal.loginHostUnapproved");
   // A clicked link never opens straight away: the user confirms the exact URL
   // first, since anything a program prints can be a link. Refs, because the
   // spawn effect below outlives renders.
@@ -1608,6 +1611,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           } catch (retryErr) {
             if (!cancelled) writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
           }
+          return;
+        }
+        // A browser account stored this host itself: no login until the desktop
+        // or an admin allows it (`approve_client_ssh_host`). Said, not dumped.
+        if (loginHostUnapproved(e)) {
+          writeTerm(`\r\n\x1b[33m[${loginUnapprovedTextRef.current()}]\x1b[0m\r\n`);
           return;
         }
         const refusal = hpcGuardRefusal(e);

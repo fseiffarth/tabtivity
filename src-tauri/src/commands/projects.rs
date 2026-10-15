@@ -2286,11 +2286,17 @@ pub fn set_project_remote_label(
 /// and certainly not licence to delete). If nothing came across, the target now
 /// has neither a saved password nor a proven key login, so `auto_connect` is
 /// cleared too — an armed auto-connect it cannot deliver is worse than none.
+///
+/// A new login name is a new address: from a non-admin server client it awaits
+/// approval before that client may open a login to it
+/// ([`crate::services::remote::carry_provenance`]).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_remote_user(
+    ctx: Ctx,
     project_id: String,
     user: Option<String>,
 ) -> Result<Option<String>, String> {
+    let untrusted = ctx.is_untrusted_client();
     let normalized = user
         .as_deref()
         .map(str::trim)
@@ -2306,11 +2312,13 @@ pub fn set_project_remote_user(
         .map(|t| move_saved_password(&current, &normalized, &t.spec.host, t.spec.port))
         .unwrap_or(false);
     patch_remote_spec(&project_id, |remote| {
+        let before = remote.clone();
         remote.user = normalized.clone();
         remote.key_auth = None;
         if !has_password {
             remote.auto_connect = None;
         }
+        crate::services::remote::carry_provenance(remote, Some(&before), untrusted);
     })?;
     Ok(normalized)
 }
@@ -2461,22 +2469,57 @@ pub fn set_project_run_host(
 /// Add an extra "worker" host to a remote project (the pill's "Add machine").
 /// Mints a stable `id` when the incoming spec has none, then appends it. Returns
 /// the full updated host list. The primary (`Project.remote`) is untouched.
+/// The host's provenance is the caller's, never the incoming field's
+/// ([`crate::services::remote::carry_provenance`]).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_compute_host(
+    ctx: Ctx,
     project_id: String,
     mut host: ComputeHost,
 ) -> Result<Vec<ComputeHost>, String> {
     if host.id.trim().is_empty() {
         host.id = uuid_v4();
     }
+    let untrusted = ctx.is_untrusted_client();
     patch_compute_hosts(&project_id, |hosts| {
+        let mut host = host.clone();
         // Replace in place when the id already exists (idempotent re-add), else push.
         if let Some(existing) = hosts.iter_mut().find(|h| h.id == host.id) {
-            *existing = host.clone();
+            crate::services::remote::carry_provenance(&mut host.spec, Some(&existing.spec), untrusted);
+            *existing = host;
         } else {
-            hosts.push(host.clone());
+            crate::services::remote::carry_provenance(&mut host.spec, None, untrusted);
+            hosts.push(host);
         }
     })
+}
+
+/// Let server clients open ssh login terminals to a host a non-admin client
+/// stored (`RemoteSpec::added_by_client`): the desktop's or an admin's approval
+/// of it. `host_id` is `primary` or a worker's id. Classed `admin`, so a user
+/// account never reaches the body; it refuses one anyway.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn approve_client_ssh_host(
+    ctx: Ctx,
+    project_id: String,
+    host_id: String,
+) -> Result<(), String> {
+    if ctx.is_untrusted_client() {
+        return Err("only the desktop or an admin can allow logins to a host".to_string());
+    }
+    if host_id == crate::services::remote::PRIMARY_HOST {
+        return patch_remote_spec(&project_id, |remote| remote.added_by_client = None);
+    }
+    let hosts = patch_compute_hosts(&project_id, |hosts| {
+        if let Some(h) = hosts.iter_mut().find(|h| h.id == host_id) {
+            h.spec.added_by_client = None;
+        }
+    })?;
+    if hosts.iter().any(|h| h.id == host_id) {
+        Ok(())
+    } else {
+        Err(format!("this project has no machine '{host_id}'"))
+    }
 }
 
 /// Remove a worker host from a remote project. The caller disconnects it and stops
@@ -2497,9 +2540,13 @@ pub fn remove_compute_host(
 ///
 /// `user` is the worker twin of [`set_project_remote_user`] — the SSH login name,
 /// editable from the same Connect dialog — and clears `key_auth` for the same
-/// reason: it was recorded for the account being replaced.
+/// reason: it was recorded for the account being replaced — and, from a
+/// non-admin server client, makes the new address await approval
+/// ([`crate::services::remote::carry_provenance`]).
 #[cfg_attr(feature = "desktop", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub fn patch_compute_host(
+    ctx: Ctx,
     project_id: String,
     host_id: String,
     sync_code: Option<bool>,
@@ -2509,6 +2556,7 @@ pub fn patch_compute_host(
     label: Option<String>,
     user: Option<String>,
 ) -> Result<Vec<ComputeHost>, String> {
+    let untrusted = ctx.is_untrusted_client();
     patch_compute_hosts(&project_id, |hosts| {
         if let Some(h) = hosts.iter_mut().find(|h| h.id == host_id) {
             if let Some(v) = &user {
@@ -2519,8 +2567,10 @@ pub fn patch_compute_host(
                     Some(t.to_string())
                 };
                 if h.spec.user != next {
+                    let before = h.spec.clone();
                     h.spec.user = next;
                     h.spec.key_auth = None;
+                    crate::services::remote::carry_provenance(&mut h.spec, Some(&before), untrusted);
                 }
             }
             if let Some(v) = shared_fs {
@@ -4046,11 +4096,20 @@ pub struct CreateProjectRequest {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn create_project(req: CreateProjectRequest) -> Result<ProjectEntry, String> {
-    app_core::rt::try_blocking("project", move || create_project_blocking(req)).await
+pub async fn create_project(ctx: Ctx, req: CreateProjectRequest) -> Result<ProjectEntry, String> {
+    let untrusted = ctx.is_untrusted_client();
+    app_core::rt::try_blocking("project", move || create_project_as(req, untrusted)).await
 }
 
-pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectEntry, String> {
+/// [`create_project`] for the host's own callers (the phone, tests): trusted.
+pub fn create_project_blocking(req: CreateProjectRequest) -> Result<ProjectEntry, String> {
+    create_project_as(req, false)
+}
+
+/// Create a project; `untrusted` = a non-admin server client asked
+/// (`CoreCtx::is_untrusted_client`), so the host it stores awaits approval
+/// before that client may open a login to it (`RemoteSpec::added_by_client`).
+fn create_project_as(mut req: CreateProjectRequest, untrusted: bool) -> Result<ProjectEntry, String> {
     let id = uuid_v4();
 
     // A VM project IS a remote project (the one architectural decision of
@@ -4075,8 +4134,14 @@ pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectE
             persist_sessions: None,
             vm: Some(true),
             label: Some("VM".to_string()),
+            added_by_client: None,
             extra: HashMap::new(),
         });
+    }
+
+    // Who stored the host is the caller, never the request's own field.
+    if let Some(remote) = req.remote.as_mut() {
+        crate::services::remote::carry_provenance(remote, None, untrusted);
     }
 
     // Refuse a site another project already owns — BEFORE any of the filesystem
@@ -4353,10 +4418,17 @@ pub struct ImportProjectRequest {
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn import_project(req: ImportProjectRequest) -> Result<ProjectEntry, String> {
+pub async fn import_project(ctx: Ctx, mut req: ImportProjectRequest) -> Result<ProjectEntry, String> {
+    // Who stored the host is the caller, never the request's own field.
+    if let Some(remote) = req.remote.as_mut() {
+        crate::services::remote::carry_provenance(remote, None, ctx.is_untrusted_client());
+    }
     app_core::rt::try_blocking("project", move || import_project_blocking(req)).await
 }
 
+/// [`import_project`]'s body. Its `remote` (if any) carries the provenance the
+/// caller set ([`crate::services::remote::carry_provenance`]); the host's own
+/// callers (`share_add`) import local folders only.
 pub fn import_project_blocking(req: ImportProjectRequest) -> Result<ProjectEntry, String> {
     if req.name.trim().is_empty() {
         return Err("Project name is invalid".to_string());
@@ -4656,8 +4728,10 @@ pub struct ExtendProjectRemoteRequest {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn extend_project_to_remote(
     ctx: Ctx,
-    req: ExtendProjectRemoteRequest,
+    mut req: ExtendProjectRemoteRequest,
 ) -> Result<ProjectEntry, String> {
+    // Who stored the host is the caller, never the request's own field.
+    crate::services::remote::carry_provenance(&mut req.remote, None, ctx.is_untrusted_client());
     let manifest = ctx.get::<SyncManifestState>();
     let list = read_projects_list()?;
 
@@ -5519,6 +5593,7 @@ mod tests {
             persist_sessions: None,
             vm: None,
             label: None,
+            added_by_client: None,
             extra: HashMap::new(),
         }
     }
