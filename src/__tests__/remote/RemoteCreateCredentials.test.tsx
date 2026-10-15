@@ -26,6 +26,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("../../components/terminal/TerminalView", () => ({ TerminalView: () => null }));
 
 import { ExtendToRemoteDialog } from "../../components/projects/ExtendToRemoteDialog";
+import * as projectsModule from "../../stores/projects";
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useSettingsStore } from "../../stores/settings";
@@ -242,5 +243,16 @@ describe("the credential the dialog used is the one the project connects with", 
         background: false,
       }),
     );
+  });
+});
+
+describe("no plaintext password is parked in the frontend", () => {
+  it("the projects store keeps no stash of dialog passwords or via-login marks", () => {
+    // `stashRemotePassword` kept the typed SSH password in a module Map that
+    // nothing read and nothing cleared (screen 2026-10-15 #11). The hand-over
+    // above goes straight into `remote_connect`; nothing may hold it after.
+    const exported = Object.keys(projectsModule);
+    expect(exported).not.toContain("stashRemotePassword");
+    expect(exported).not.toContain("stashRemoteViaLogin");
   });
 });

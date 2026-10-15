@@ -435,7 +435,10 @@
   font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
   will-change: transform;
-  transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+  /* No box-shadow here: .blob-node-active / -center carry blurred glows, and a
+     transitioned blurred box-shadow is software-repainted every frame on
+     WebKitGTK. The shadow switches with the class instead. */
+  transition: border-color var(--transition), background var(--transition);
 }
 .blob-node:hover {
   border-color: var(--accent);
