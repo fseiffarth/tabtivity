@@ -1,7 +1,5 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="src/assets/logo-wordmark-white.svg">
-  <img alt="Tabtivity logo" src="src/assets/logo-wordmark.svg">
-</picture>
+![Tabtivity logo](src/assets/logo-wordmark.svg#gh-light-mode-only)
+![Tabtivity logo](src/assets/logo-wordmark-white.svg#gh-dark-mode-only)
 
 **Tabtivity** — *A tab for each project. A tab for everything in it.*
 (Formerly Eldrun; an existing install is carried over on its first start.)
