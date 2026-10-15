@@ -74,7 +74,7 @@ function connectionsHeadless(): boolean {
  * on the auto-connect path, where this toast is the *only* thing the user sees.
  */
 function vpnToast(name: string): string {
-  return `VPN up · ${name} — this computer's traffic now routes through the tunnel`;
+  return translate(useI18nStore.getState().lang, "vpnAutoConnect.upToast", { config: name });
 }
 
 const deactivatingProjects = new Set<string>();
@@ -1258,7 +1258,10 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
             // (AppShell adds a `multiline` class when it sees the newline).
             const local =
               resolveLocalMirror(proj) || resolveProjectDirectory(proj) || proj.name;
-            toastPath = `local   ${local}\nremote  ${formatRemoteTarget(proj.remote)}`;
+            toastPath = translate(useI18nStore.getState().lang, "projectsStore.switchToastRemote", {
+              local,
+              remote: formatRemoteTarget(proj.remote),
+            });
           } else {
             toastPath = resolveProjectDirectory(proj) || proj.name;
           }
@@ -1467,7 +1470,11 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
           : [],
       );
       if (failures.length > 0) {
-        throw new Error(`Could not stop every persistent session:\n${failures.join("\n")}`);
+        throw new Error(
+          translate(useI18nStore.getState().lang, "projectsStore.stopSessionsFailed", {
+            failures: failures.join("\n"),
+          }),
+        );
       }
 
       // Belt-and-suspenders cleanup catches hidden, detached, and orphaned views,

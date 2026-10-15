@@ -5,6 +5,8 @@ import react from "@vitejs/plugin-react";
 import autoprefixer from "autoprefixer";
 import { manifestPath, PAGE_COLOR, type PaintedTheme } from "./mobile-web/src/pageColors.ts";
 import { shellAssets } from "./mobile-web/src/shellAssets.ts";
+import { pushTitleTable, stampPushTitles } from "./mobile-web/src/pushTitles.ts";
+import { TRANSLATIONS } from "./src/lib/i18nDicts/all.ts";
 import { themeColors } from "./mobile-web/src/themeColors.ts";
 
 const BUILD_PLACEHOLDER = "__APP_BUILD__";
@@ -22,6 +24,9 @@ const ASSETS_PLACEHOLDER = "__APP_ASSETS__";
  * The asset list is what the worker precaches, so the shell can boot offline
  * after the first visit — the worker only sees the page's asset requests once
  * it controls the page, which on the first visit is after they were made.
+ *
+ * It also stamps the titles a push without one is shown under, in every
+ * language (`pushTitles.ts`): the worker cannot import the dictionaries.
  *
  * Runs in `closeBundle`, the one hook that is after vite has copied `public/`
  * into outDir. Failures throw rather than warn — a silently unstamped worker
@@ -52,7 +57,8 @@ function stampServiceWorker(): Plugin {
           throw new Error(`stamp-sw: ${placeholder} is missing from sw.js`);
         }
       }
-      writeFileSync(worker, source.replaceAll(BUILD_PLACEHOLDER, entry).replaceAll(ASSETS_PLACEHOLDER, assets.join(",")));
+      const stamped = source.replaceAll(BUILD_PLACEHOLDER, entry).replaceAll(ASSETS_PLACEHOLDER, assets.join(","));
+      writeFileSync(worker, stampPushTitles(stamped, pushTitleTable(TRANSLATIONS)));
     },
   };
 }

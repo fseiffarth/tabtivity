@@ -244,7 +244,9 @@ export function pollVpnUp(
     if (projectId) markVpnConnected(projectId, config);
     else useVpnStatusStore.getState().setState(config, "connected");
     useProjectsStore.setState({
-      connToast: `VPN up · ${opts?.name ?? fileOf(config)} — this computer's traffic now routes through the tunnel`,
+      connToast: translate(useI18nStore.getState().lang, "vpnAutoConnect.upToast", {
+        config: opts?.name ?? fileOf(config),
+      }),
     });
   };
   const giveUp = () => {

@@ -41,6 +41,7 @@ import { tabTerminalSpawn, terminalSpawnKey } from "../../lib/terminal/terminalS
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { translate } from "../../lib/i18n";
 
 const rootTabs = () => useTabsStore.getState().tabsByScope.root ?? [];
 const exitPty = (id: string) => {
@@ -75,6 +76,11 @@ describe("openConnectionInRoot — a login terminal, not a typed command", () =>
     expect(tab.initialInput).toBeUndefined();
     expect(tab.tmuxSession).toBeUndefined();
     expect(tab.kind).toBe("shell");
+    // The toast that points at it is the app language's.
+    expect(useProjectsStore.getState().switchToast).toBe(
+      translate("en", "remoteConnect.authInRootToast", { label: "ssh · alice@h.example" }),
+    );
+    expect(useProjectsStore.getState().switchToast).toContain("ssh · alice@h.example");
 
     // …and the spawn inputs carry it, with no tmux/container even if the pane
     // layer derived one.

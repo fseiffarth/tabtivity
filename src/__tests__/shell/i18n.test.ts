@@ -4,6 +4,14 @@ import { BRAND } from "../../lib/brand";
 // The aggregator also registers every lazy dictionary, so `translate` below
 // answers in all five languages without awaiting a chunk.
 import { TRANSLATIONS } from "../../lib/i18nDicts/all";
+// The raw dictionaries, `{app}`/`{slug}` still unfilled — the placeholder
+// parity check needs them (see below).
+import { dict as de } from "../../lib/i18nDicts/de";
+import { dict as es } from "../../lib/i18nDicts/es";
+import { dict as fr } from "../../lib/i18nDicts/fr";
+import { dict as it_ } from "../../lib/i18nDicts/it";
+
+const RAW_DICTS = { de, es, fr, it: it_ };
 
 describe("i18n", () => {
   it("translates a known key per language", () => {
@@ -79,17 +87,23 @@ describe("i18n", () => {
     // A dropped `{path}` renders the literal braces to the user, and a *renamed*
     // one renders nothing at all — both invisible until someone runs that
     // language. The worktree confirmations are exactly this shape.
-    const placeholders = (s: string) => (s.match(/\{(\w+)\}/g) ?? []).sort();
+    //
+    // Compared on the RAW dictionaries (`enSource` and each language's own
+    // `dict`), before `fillBrand`: in `TRANSLATIONS` `{app}`/`{slug}` are
+    // already filled, so a translation that dropped (or added) the app's name
+    // would compare equal. Set equality, both directions — a translation may
+    // repeat a placeholder, but it may neither drop one English has nor bring
+    // one English does not (that would render a name English never shows).
+    const placeholders = (s: string) =>
+      [...new Set(s.match(/\{(\w+)\}/g) ?? [])].sort().join(",");
     const mismatched: string[] = [];
-    for (const { value } of LANGUAGES) {
-      if (value === "en") continue;
-      const dict = TRANSLATIONS[value] as Record<string, string>;
-      for (const [key, text] of Object.entries(TRANSLATIONS.en)) {
-        const there = dict[key];
+    for (const [lang, dict] of Object.entries(RAW_DICTS)) {
+      for (const [key, text] of Object.entries(enSource)) {
+        const there = (dict as Record<string, string | undefined>)[key];
         if (typeof there !== "string") continue;
-        const a = placeholders(text as string).join(",");
-        const b = placeholders(there).join(",");
-        if (a !== b) mismatched.push(`${value}/${key}: en[${a}] vs [${b}]`);
+        const a = placeholders(text as string);
+        const b = placeholders(there);
+        if (a !== b) mismatched.push(`${lang}/${key}: en[${a}] vs [${b}]`);
       }
     }
     expect(mismatched).toEqual([]);
