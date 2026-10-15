@@ -171,7 +171,7 @@ const SELECTORS: string[] = [...CSS.matchAll(/([^{}@;]+)\{/g)].flatMap((m) => m[
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** The class as CSS source spells it: `[path:line]` → `\[path\:line\]`. */
-const cssClass = (name: string) => "." + name.replace(/[[\]:!]/g, "\\$&");
+const cssClass = (name: string) => "." + name.replace(/[\\[\]:!]/g, "\\$&");
 
 /** A selector where `.name` is the only class/attribute/id in its compound. */
 function hasStandaloneRule(name: string): boolean {
@@ -181,6 +181,11 @@ function hasStandaloneRule(name: string): boolean {
 
 describe("former Tailwind utility names", () => {
   const { files, uses } = scanApp();
+
+  it("escapes CSS punctuation and existing backslashes", () => {
+    expect(cssClass("[path:line]")).toBe(".\\[path\\:line\\]");
+    expect(cssClass("a\\:b!")).toBe(".a\\\\\\:b\\!");
+  });
 
   it("scans the app's sources", () => {
     expect(files).toBeGreaterThan(500);

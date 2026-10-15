@@ -319,13 +319,12 @@ describe("highlight — prose runs", () => {
   });
 });
 
-/** The text a highlighted HTML string displays: tags dropped, entities undone.
+/** The text a highlighted HTML string displays, parsed by an inert template.
  *  The editor lays this over its <textarea>, so it must equal the source. */
 function shownText(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, "")
-    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return template.content.textContent ?? "";
 }
 
 // The samples below are source code in other languages, so `${…}` inside a plain
