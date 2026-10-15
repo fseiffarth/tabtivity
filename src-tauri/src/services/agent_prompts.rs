@@ -261,7 +261,14 @@ fn validate_sent(input: SentAgentPromptInput) -> Result<SentAgentPromptInput, St
         }
     }
     Ok(SentAgentPromptInput {
-        schedule_origin: input.schedule_origin,
+        // `ScheduleOrigin` keeps unknown fields in a flattened map so an older
+        // build writes `agent_tasks.json` back whole; that map holds only what
+        // a file held, never what a caller sent (`agent_tasks::apply_upsert`
+        // clears it the same way). Only the fields this build knows are copied
+        // into the history.
+        schedule_origin: input.schedule_origin.map(|origin| {
+            crate::schema::agent_tasks::ScheduleOrigin { extra: Default::default(), ..origin }
+        }),
         tab_label,
         session_id: input.session_id,
         tab_id: input.tab_id,
@@ -1639,6 +1646,20 @@ mod tests {
         .unwrap();
         assert_eq!(clean.tab_label, "Claude[31m");
         assert_eq!(clean.preface, vec!["/clear".to_string()]);
+
+        // A caller's schedule origin carries no unknown field into the
+        // history: `ScheduleOrigin`'s flattened map is the file's, never the
+        // caller's (screen 2026-10-15 follow-up F-b).
+        let planted: SentAgentPromptInput = serde_json::from_value(serde_json::json!({
+            "schedule_origin": { "by": "agent", "session": "s", "at": "a", "planted": true },
+            "tab_label": "Claude",
+        }))
+        .unwrap();
+        assert_eq!(planted.schedule_origin.as_ref().unwrap().extra.len(), 1);
+        let clean = validate_sent(planted).unwrap();
+        let origin = clean.schedule_origin.expect("the origin itself stays");
+        assert_eq!(origin.session, "s");
+        assert!(origin.extra.is_empty(), "{:?}", origin.extra);
     }
 
     #[test]
