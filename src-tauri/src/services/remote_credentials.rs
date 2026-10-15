@@ -170,6 +170,21 @@ pub fn openvpn_user_account(config: &str) -> String {
     format!("openvpn-user:{config}")
 }
 
+/// The keychain account for the chat assistant's **web-search key** at a
+/// hosted search provider (`services::web_lane`; today only `"ollama"`, so
+/// `web-search:ollama`). One entry per provider, never per chat. The provider
+/// name is folded to lowercase ASCII alphanumerics so a stray character cannot
+/// build a second key.
+pub fn web_search_account(provider: &str) -> String {
+    let provider: String = provider
+        .trim()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    format!("web-search:{provider}")
+}
+
 /// The platform credential handle for `account`.
 ///
 /// Everywhere but Linux this is `keyring::Entry`, the crate's own dispatch to the
@@ -983,6 +998,14 @@ mod tests {
         assert!(m.starts_with("mail:"));
         assert_ne!(m, ssh_account(&Some("u".into()), "h.example", Some(993)));
         assert_ne!(m, openvpn_account("h.example"));
+    }
+
+    #[test]
+    fn the_web_search_account_is_one_key_per_provider() {
+        assert_eq!(web_search_account("ollama"), "web-search:ollama");
+        assert_eq!(web_search_account(" Ollama "), "web-search:ollama");
+        assert_ne!(web_search_account("ollama"), web_search_account("searxng"));
+        assert_ne!(web_search_account("ollama"), mail_store_key_account());
     }
 
     #[test]

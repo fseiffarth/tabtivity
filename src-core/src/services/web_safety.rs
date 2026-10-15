@@ -848,7 +848,9 @@ fn net6(cidr: &str) -> Ipv6Net {
 }
 
 fn ipv4_reach(a: Ipv4Addr) -> Reach {
-    if a.is_loopback() || a.is_unspecified() {
+    // `0.0.0.0/8` is "this network": Linux sends `0.0.0.0` to the machine // privacy-check: ok — address literal in an SSRF test/rule
+    // itself, and the rest of the block is no public host either.
+    if a.is_loopback() || a.is_unspecified() || a.octets()[0] == 0 {
         return Reach::Confirm(ConfirmReason::Loopback);
     }
     if a.is_link_local() {
@@ -861,6 +863,10 @@ fn ipv4_reach(a: Ipv4Addr) -> Reach {
         // `is_global()` is still unstable, hence the explicit range.
         || net4("100.64.0.0/10").contains(&a)
         || net4("192.0.0.0/24").contains(&a)
+        // Benchmarking (`198.18.0.0/15`) and the reserved `240.0.0.0/4`: no // privacy-check: ok — address literal in an SSRF test/rule
+        // public host lives there, and a LAN may route them anywhere.
+        || net4("198.18.0.0/15").contains(&a) // privacy-check: ok — address literal in an SSRF test/rule
+        || net4("240.0.0.0/4").contains(&a) // privacy-check: ok — address literal in an SSRF test/rule
         || a.is_broadcast()
         || a.is_multicast()
     {
@@ -873,13 +879,39 @@ fn ipv6_reach(a: Ipv6Addr) -> Reach {
     if a.is_loopback() || a.is_unspecified() {
         return Reach::Confirm(ConfirmReason::Loopback);
     }
+    // An IPv4 address carried inside an IPv6 one is judged as that IPv4
+    // address: a NAT64 gateway or a 6to4 relay delivers the packet to it.
+    if let Some(v4) = embedded_v4(&a) {
+        return ipv4_reach(v4);
+    }
     if net6("fe80::/10").contains(&a) {
         return Reach::Confirm(ConfirmReason::LinkLocal);
     }
-    if net6("fc00::/7").contains(&a) || a.is_multicast() {
+    if net6("fc00::/7").contains(&a)
+        // Deprecated site-local, local-use NAT64 (RFC 8215, whose embedded
+        // address is a LAN's choice) and Teredo (the client's address is
+        // obfuscated inside it).
+        || net6("fec0::/10").contains(&a)
+        || net6("64:ff9b:1::/48").contains(&a)
+        || net6("2001::/32").contains(&a)
+        || a.is_multicast()
+    {
         return Reach::Confirm(ConfirmReason::PrivateNetwork);
     }
     Reach::Global
+}
+
+/// The IPv4 address an IPv6 one embeds, for the forms a gateway turns back
+/// into IPv4: NAT64 `64:ff9b::/96`, 6to4 `2002::/16`, the deprecated
+/// IPv4-compatible `::/96` and IPv4-translated `::ffff:0:0:0/96`. (The
+/// IPv4-mapped `::ffff:0:0/96` is unmapped by [`host_reach`] before this.)
+fn embedded_v4(a: &Ipv6Addr) -> Option<Ipv4Addr> {
+    let s = a.segments();
+    let tail = |hi: u16, lo: u16| Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8);
+    if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] || s[..6] == [0, 0, 0, 0, 0, 0] || s[..6] == [0, 0, 0, 0, 0xffff, 0] {
+        return Some(tail(s[6], s[7]));
+    }
+    (s[0] == 0x2002).then(|| tail(s[1], s[2]))
 }
 
 /// Whether a host is globally routable, i.e. the gate would not ask about it.
@@ -1188,6 +1220,23 @@ mod tests {
             ("http://192.168.1.1/", ConfirmReason::PrivateNetwork),
             ("http://100.64.0.1/", ConfirmReason::PrivateNetwork),
             ("http://[fc00::1]/", ConfirmReason::PrivateNetwork),
+            ("http://[fd12:3456:789a::1]/", ConfirmReason::PrivateNetwork),
+            ("http://0.1.2.3/", ConfirmReason::Loopback), // privacy-check: ok — address literal in an SSRF test/rule
+            ("http://198.18.0.1/", ConfirmReason::PrivateNetwork), // privacy-check: ok — address literal in an SSRF test/rule
+            ("http://240.0.0.1/", ConfirmReason::PrivateNetwork), // privacy-check: ok — address literal in an SSRF test/rule
+            // An IPv4 address behind a gateway form is that address.
+            ("http://[64:ff9b::7f00:1]/", ConfirmReason::Loopback),
+            ("http://[64:ff9b::a00:1]/", ConfirmReason::PrivateNetwork),
+            ("http://[64:ff9b::c0a8:101]/", ConfirmReason::PrivateNetwork),
+            ("http://[64:ff9b::a9fe:a9fe]/", ConfirmReason::LinkLocal),
+            ("http://[2002:7f00:1::]/", ConfirmReason::Loopback),
+            ("http://[2002:c0a8:101::1]/", ConfirmReason::PrivateNetwork),
+            ("http://[2002:a9fe:a9fe::1]/", ConfirmReason::LinkLocal),
+            ("http://[::127.0.0.1]/", ConfirmReason::Loopback),
+            ("http://[::ffff:0:7f00:1]/", ConfirmReason::Loopback),
+            ("http://[64:ff9b:1::1]/", ConfirmReason::PrivateNetwork),
+            ("http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/", ConfirmReason::PrivateNetwork),
+            ("http://[fec0::1]/", ConfirmReason::PrivateNetwork),
             ("http://router.local/", ConfirmReason::InternalName),
             ("http://box.internal/", ConfirmReason::InternalName),
             ("http://x.home.arpa/", ConfirmReason::InternalName),
@@ -1211,6 +1260,10 @@ mod tests {
             "http://9.255.255.255/",
             "http://192.169.0.1/",
             "http://[2001:db8::1]/",
+            // A gateway form around a public address stays public.
+            "http://[64:ff9b::808:808]/",
+            "http://[2002:808:808::1]/",
+            "http://198.20.0.1/", // privacy-check: ok — address literal in an SSRF test/rule
         ] {
             assert_eq!(decide(case), NavDecision::Allow, "`{case}`");
         }

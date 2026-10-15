@@ -8288,6 +8288,7 @@ mod tests {
         let runtime = root_mcp::runtime().expect("a) the host publishes its runtime");
         assert_eq!(runtime.port, port);
         assert!(!runtime.serves_root, "the host serves no root lane");
+        assert!(runtime.serves_web, "the host serves the assistant's web lane: a phone chat runs with no window");
 
         let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = recorded.clone();
@@ -8387,7 +8388,7 @@ mod tests {
             }))
             .expect("options")
         };
-        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: false };
+        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: true };
         for project in [None, Some("vm-reader")] {
             let mut here = spawn("headless:c", project);
             root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
@@ -8407,6 +8408,43 @@ mod tests {
         root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
         assert!(!here.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", here.env.keys());
         assert!(window.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", window.env.keys());
+
+        // The assistant's web lane: a phone-made chat with no window gets the
+        // lane from this host's listener (the `assistant` flag on, a profile
+        // that wants it), and the token is good on `/mcp/web` alone. A
+        // runtime that does not serve the lane (a server daemon's) and a
+        // profile that does not want it (Codex: native search) get none.
+        let mut settings: Value = serde_json::from_slice(&std::fs::read(state_dir.join("settings.json")).expect("settings")).expect("json");
+        settings["assistant"] = json!(true);
+        std::fs::write(state_dir.join("settings.json"), settings.to_string()).expect("settings");
+        let assistant = |id: &str, cli: &str| -> PtyOptions {
+            serde_json::from_value(json!({
+                "id": id, "cmd": "claude", "args": [], "env": {}, "cwd": "/w", "cols": 80, "rows": 24,
+                "agent": true, "project_id": "assistant", "assistant": { "cli": cli },
+            }))
+            .expect("options")
+        };
+        let mut chat = assistant("headless:web", "claude");
+        root_mcp::grant_lanes(&mut chat, true, root_mcp::runtime(), root_mcp::tokens(), &state_dir);
+        let web = chat.env.get(root_mcp::WEB_TOKEN_ENV).cloned().expect("the host hands a phone chat the web lane");
+        assert_eq!(chat.env[root_mcp::WEB_URL_ENV], format!("http://127.0.0.1:{port}/mcp/web"));
+        let tokens: Vec<_> = chat.env.keys().filter(|k| k.ends_with("_MCP_TOKEN")).collect();
+        assert_eq!(tokens, [root_mcp::WEB_TOKEN_ENV], "the web token is the only one an assistant chat holds");
+        assert_ne!(mcp_status(port, "/mcp/web", &web).await, 401, "the host's listener serves /mcp/web");
+        assert_eq!(mcp_status(port, "/mcp/web", &schedule).await, 401, "another lane's token is refused on /mcp/web");
+        for path in ["/mcp/schedule", "/mcp/git", "/mcp/help"] {
+            assert_eq!(mcp_status(port, path, &web).await, 401, "the web token is refused on {path}");
+        }
+        assert_eq!(mcp_status(port, "/mcp", &web).await, 404);
+        assert_eq!(admission(other, "/mcp/web", &web).await, Err(StatusCode::UNAUTHORIZED), "another process's listener refuses it");
+        let daemon = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: false };
+        let mut none = assistant("headless:web-daemon", "claude");
+        root_mcp::grant_lanes(&mut none, true, Some(&daemon), other, &state_dir);
+        assert!(!none.env.contains_key(root_mcp::WEB_TOKEN_ENV), "a daemon does not serve the web lane");
+        let mut codex = assistant("headless:web-codex", "codex");
+        root_mcp::grant_lanes(&mut codex, true, root_mcp::runtime(), other, &state_dir);
+        assert!(!codex.env.keys().any(|k| k.ends_with("_MCP_TOKEN")), "Codex searches natively: no lane");
+        root_mcp::revoke_tab("headless:web");
 
         // d) The phone's close with no window takes the tokens with the tab.
         let (status, _, body) = host.send(request_as("DELETE", &format!("/api/v1/tabs/{tab_id}"), &cookie, None)).await;

@@ -24,6 +24,8 @@ pub mod git_push_mcp;
 pub mod git_release;
 pub mod git_ci;
 pub mod help_mcp;
+// The chat assistant's guarded web lane (docs/assistant_plan.md, A2).
+pub mod web_lane;
 pub use app_core::services::schedule_usage;
 pub use app_core::services::agent_usage;
 pub mod markup_mcp;
