@@ -1171,4 +1171,3 @@ export function RemoteMachinesWindow({
     document.body,
   );
 }
-
