@@ -376,7 +376,6 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("hpc_ws_available", "target.projectDir", ProjectDir),
     ("hpc_ws_extend", "target.projectDir", ProjectDir),
     ("hpc_ws_list", "target.projectDir", ProjectDir),
-    ("hpc_ws_release", "target.projectDir", ProjectDir),
     ("import_external_file", "projectDir", ProjectDir),
     ("list_dir", "projectDir", ProjectDir),
     ("list_project_endings", "projectDir", ProjectDir),
@@ -550,7 +549,6 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("git_checkout", "target", NotAPath),            // a ref
     ("git_peer_checkout", "target", NotAPath),       // a branch
     ("hpc_ws_extend", "filesystem", NotAPath),       // a workspace filesystem's name
-    ("hpc_ws_release", "filesystem", NotAPath),
     ("mail_agent_mark_folder", "folderId", NotAPath),
     ("mail_headers", "folderId", NotAPath),
     ("mail_mark_folder_read", "folderId", NotAPath),
