@@ -817,7 +817,14 @@ pub async fn sync_status(
                     m.remove(rel);
                 }
             }
-            let _ = remote_sync::save_manifest(&project_id, m);
+            // A status refresh is background work (every 15 s): a failed save is
+            // logged, and the heal that never landed is forgotten, not trusted —
+            // the next refresh verifies those bytes again. A failed prune only
+            // leaves the entry for the next refresh to prune.
+            let healed: Vec<String> = rebases.iter().map(|rb| rb.rel.clone()).collect();
+            if let Err(e) = remote_sync::save_manifest_or_mark_stale(&project_id, m, &healed) {
+                eprintln!("sync_status: could not save the sync record: {e}");
+            }
         }
     }
     // NEW-local-file pass: files the mirror holds that the manifest has never
@@ -1128,7 +1135,12 @@ pub async fn sync_apply_delete(
         let m = ensure_loaded(&mut guard, &project_id);
         if m.get(&rel_path) == Some(&snapshot) {
             m.remove(&rel_path);
-            let _ = remote_sync::save_manifest(&project_id, m);
+            // Nothing to forget: the entry that stays on disk has no copy left on
+            // either side, and the next status prunes it. Say so, though — the
+            // user asked for this.
+            remote_sync::save_manifest_or_mark_stale(&project_id, m, &[]).map_err(|e| {
+                format!("'{rel_path}' was deleted, but its sync record could not be saved: {e}")
+            })?;
         }
     }
     Ok(())
@@ -1291,6 +1303,7 @@ async fn preview_pull(
                     rel: p,
                     size,
                     mtime,
+                    mode: None,
                 });
             }
             out
@@ -1305,6 +1318,7 @@ async fn preview_pull(
                     rel: rel.to_string(),
                     size,
                     mtime,
+                    mode: None,
                 }]
             }
         },
@@ -1551,9 +1565,26 @@ pub async fn sync_push(
                 let mut guard = manifest.lock().await;
                 let m = ensure_loaded(&mut guard, &project_id);
                 remote_sync::record_push(m, &rel, hs, hm, ls, lm);
-                let _ = remote_sync::save_manifest(&project_id, m);
+                let saved = remote_sync::save_manifest_or_mark_stale(&project_id, m, std::slice::from_ref(&rel));
+                drop(guard);
                 net_usage::record_files(&project_id, 0, 1);
-                pushed += 1;
+                match saved {
+                    Ok(()) => pushed += 1,
+                    // The bytes are on the host but the record is not: reported as a
+                    // failure (the file now reads as changed on both sides, and its
+                    // next push asks first) so the result never claims a clean push.
+                    Err(e) => {
+                        failed_total += 1;
+                        if failed.len() < PREVIEW_NAME_CAP {
+                            failed.push(rel.clone());
+                        }
+                        if first_error.is_none() {
+                            first_error = Some(format!(
+                                "pushed '{rel}', but its sync record could not be saved: {e}"
+                            ));
+                        }
+                    }
+                }
             }
             Ok(Err(e)) => {
                 eprintln!("sync_push: skip '{rel}': {e}");
@@ -1717,12 +1748,13 @@ async fn pull_subtree(
             Err(_) => {
                 // Not a directory — treat `rel` as a single file (stat it).
                 let host_abs = join_remote(&target.spec.remote_path, rel);
-                let (size, mtime) = crate::services::sftp::metadata_on(sftp, &host_abs).await?;
+                let (size, mtime, mode) = crate::services::sftp::metadata_with_mode_on(sftp, &host_abs).await?;
                 (
                     vec![remote_sync::HostFile {
                         rel: rel.to_string(),
                         size,
                         mtime,
+                        mode,
                     }],
                     false,
                 )
@@ -1785,6 +1817,10 @@ async fn pull_subtree(
     let mirror_root = remote_sync::mirror_dir(project_id);
     let mut done = 0usize;
     let mut outcome = remote_sync::PullOutcome::default();
+    // Files whose bytes landed but whose record did not (fixed decision #7): the
+    // pull goes on, then fails visibly with the count and the first reason.
+    let mut unrecorded = 0usize;
+    let mut record_error: Option<String> = None;
     for file in files {
         let host_abs = join_remote(&target.spec.remote_path, &file.rel);
         let local = mirror_local_path(project_id, &file.rel);
@@ -1796,7 +1832,7 @@ async fn pull_subtree(
         let local_base = if rsynced {
             remote_sync::rsync_pulled_base(&local, file.size)
         } else {
-            remote_sync::pull_file(sftp, &host_abs, file.size, &mirror_root, &file.rel)
+            remote_sync::pull_file(sftp, &host_abs, file.size, file.mode, &mirror_root, &file.rel)
                 .await
                 .ok()
         };
@@ -1806,7 +1842,12 @@ async fn pull_subtree(
                 let mut guard = manifest.lock().await;
                 let m = ensure_loaded(&mut guard, project_id);
                 remote_sync::record_pull(m, &file.rel, file.size, file.mtime, ls, lm);
-                let _ = remote_sync::save_manifest(project_id, m);
+                if let Err(e) =
+                    remote_sync::save_manifest_or_mark_stale(project_id, m, std::slice::from_ref(&file.rel))
+                {
+                    unrecorded += 1;
+                    record_error.get_or_insert(e);
+                }
                 net_usage::record_files(project_id, 1, 0);
             }
             None => {
@@ -1820,6 +1861,13 @@ async fn pull_subtree(
         emit(ctx, project_id, "file", &file.rel, done, total);
     }
     emit(ctx, project_id, "done", rel, done, total);
+    if let Some(e) = record_error {
+        return Err(format!(
+            "Pulled {} file(s), but the sync record of {unrecorded} could not be saved ({e}); \
+             they show as changed until they are synced again",
+            outcome.pulled
+        ));
+    }
     Ok(outcome)
 }
 

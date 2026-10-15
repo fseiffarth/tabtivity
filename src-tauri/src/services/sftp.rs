@@ -522,6 +522,10 @@ pub struct RawEntry {
     pub size: u64,
     /// Last-modified time as whole seconds since the Unix epoch, when reported.
     pub modified_secs: Option<u64>,
+    /// Permission bits (`0o7777` mask) from the listing attrs, when reported —
+    /// what a pull gives the mirror copy, so a host `0755` script stays
+    /// executable locally.
+    pub mode: Option<u32>,
 }
 
 /// Whether a `readdir` name is exactly ONE path component the local side may
@@ -570,6 +574,7 @@ pub async fn list_dir_raw_on(sftp: &Sftp, path: &str) -> Result<Vec<RawEntry>, S
         let meta = entry.metadata();
         let size = meta.len().unwrap_or(0);
         let modified_secs = meta.modified().map(|t| t.as_duration().as_secs());
+        let mode = permission_bits(&meta);
         let kind = match entry.file_type() {
             Some(t) if t.is_dir() => SyncKind::Dir,
             Some(t) if t.is_symlink() => SyncKind::Symlink,
@@ -581,6 +586,7 @@ pub async fn list_dir_raw_on(sftp: &Sftp, path: &str) -> Result<Vec<RawEntry>, S
             kind,
             size,
             modified_secs,
+            mode,
         });
     }
     Ok(out)
@@ -913,6 +919,17 @@ pub async fn rename_on(sftp: &Sftp, from: &str, to: &str) -> Result<(), String> 
 /// `(size, modified_secs)` for a remote path on an open session. `size` is `0`
 /// and `modified_secs` is `None` when the server omits the attribute.
 pub async fn metadata_on(sftp: &Sftp, path: &str) -> Result<(u64, Option<u64>), String> {
+    metadata_with_mode_on(sftp, path)
+        .await
+        .map(|(size, modified, _)| (size, modified))
+}
+
+/// [`metadata_on`] plus the permission bits (`0o7777` mask), `None` when the
+/// server omits them — one stat for a pull that must carry the host's mode.
+pub async fn metadata_with_mode_on(
+    sftp: &Sftp,
+    path: &str,
+) -> Result<(u64, Option<u64>, Option<u32>), String> {
     let mut fs = sftp.fs();
     let meta = fs
         .metadata(path)
@@ -920,7 +937,13 @@ pub async fn metadata_on(sftp: &Sftp, path: &str) -> Result<(u64, Option<u64>), 
         .map_err(|e| format!("sftp metadata failed: {e}"))?;
     let size = meta.len().unwrap_or(0);
     let modified = meta.modified().map(|t| t.as_duration().as_secs());
-    Ok((size, modified))
+    Ok((size, modified, permission_bits(&meta)))
+}
+
+/// The permission bits (`0o7777`: rwx for all three classes plus
+/// setuid/setgid/sticky) of SFTP attrs, `None` when the server sent none.
+fn permission_bits(meta: &openssh_sftp_client::metadata::MetaData) -> Option<u32> {
+    meta.permissions().map(|p| p.as_raw().bits() & 0o7777)
 }
 
 /// Like [`metadata_on`], but the three outcomes stay distinct: `Ok(Some(..))`

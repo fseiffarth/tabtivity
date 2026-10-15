@@ -2052,7 +2052,11 @@ async fn forget_synced_paths(manifest: &SyncManifestState, project_id: &str, pat
     for p in paths {
         m.remove(p);
     }
-    let _ = remote_sync::save_manifest(project_id, m);
+    // A removal that never landed leaves an inert base (`drop_tracked` keeps the
+    // path off byte-sync while lockstep owns it): logged, nothing to forget.
+    if let Err(e) = remote_sync::save_manifest_or_mark_stale(project_id, m, &[]) {
+        eprintln!("lockstep: could not drop the sync bases of {} path(s): {e}", paths.len());
+    }
 }
 
 // ── Local-loss audit (#28q) ─────────────────────────────────────────────────
@@ -2877,6 +2881,7 @@ async fn restamp_after_checkout(
 
     let mut g = manifest.lock().await;
     let m = remote_sync::ensure_loaded(&mut g, project_id);
+    let mut restamped = Vec::new();
     for ch in changes {
         if ch.deleted {
             m.remove(&ch.path);
@@ -2892,8 +2897,11 @@ async fn restamp_after_checkout(
             None => (ls, lm),
         };
         remote_sync::record_pull(m, &ch.path, hs, hm, ls, lm);
+        restamped.push(ch.path);
     }
-    let _ = remote_sync::save_manifest(project_id, m);
+    if let Err(e) = remote_sync::save_manifest_or_mark_stale(project_id, m, &restamped) {
+        eprintln!("lockstep: could not re-stamp the sync bases after a checkout: {e}");
+    }
 }
 
 /// Seed the file-sync manifest for every git-tracked file right after an INITIAL
@@ -2911,7 +2919,7 @@ async fn seed_manifest_after_pairing(
     project_id: &str,
     spec: &RemoteSpec,
 ) {
-    let paths = tracked_paths(project_id);
+    let paths: Vec<String> = tracked_paths(project_id).into_iter().collect();
     if paths.is_empty() {
         return;
     }
@@ -2919,19 +2927,21 @@ async fn seed_manifest_after_pairing(
 
     let mut g = manifest.lock().await;
     let m = remote_sync::ensure_loaded(&mut g, project_id);
-    for rel in paths {
-        let local_path = mirror_local_path(project_id, &rel);
+    for rel in &paths {
+        let local_path = mirror_local_path(project_id, rel);
         let (ls, lm) = remote_sync::local_size_mtime(std::fs::metadata(&local_path).ok());
         let (hs, hm) = match &sftp {
             Some(s) => {
-                let host_abs = remote_sync::join_remote(&spec.remote_path, &rel);
+                let host_abs = remote_sync::join_remote(&spec.remote_path, rel);
                 sftp::metadata_on(s, &host_abs).await.unwrap_or((ls, lm))
             }
             None => (ls, lm),
         };
-        remote_sync::record_pull(m, &rel, hs, hm, ls, lm);
+        remote_sync::record_pull(m, rel, hs, hm, ls, lm);
     }
-    let _ = remote_sync::save_manifest(project_id, m);
+    if let Err(e) = remote_sync::save_manifest_or_mark_stale(project_id, m, &paths) {
+        eprintln!("lockstep: could not seed the sync bases after pairing: {e}");
+    }
 }
 
 /// Coordinated checkout: pause file auto-sync, check the target out on the initiating

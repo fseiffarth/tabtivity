@@ -248,67 +248,74 @@ pub async fn sync_worker(
         };
     }
 
-    // Attempt an incremental bundle first (excluding the worker's last_head); on any
-    // apply failure — most likely a missing prerequisite because the worker's tree
-    // drifted from what we recorded — retry with a full bundle, which is always
-    // correct (merely larger).
-    let mut attempts: Vec<Option<String>> = Vec::new();
-    if let Some(last) = last_head.clone() {
+    let outcome = push_with_fallback(&head, last_head.as_deref(), |exclude| {
+        push_once(pool, project_id, host_id, &spec, &mirror, exclude)
+    })
+    .await;
+    match outcome {
+        Ok(skipped) => {
+            write_record(
+                project_id,
+                host_id,
+                &WorkerRecord {
+                    last_head: Some(head.clone()),
+                },
+            );
+            WorkerSyncReport {
+                project_id: project_id.to_string(),
+                host_id: host_id.to_string(),
+                head: Some(short_sha(&head)),
+                ok: true,
+                skipped,
+                error: None,
+            }
+        }
+        Err(e) => report_err(e),
+    }
+}
+
+/// Bring a worker to `head`: an incremental bundle first (excluding the worker's
+/// `last_head`), then — on any failure, most likely a missing prerequisite because
+/// the worker drifted from what we recorded — a full bundle, which is always
+/// correct (merely larger). `push(exclude)` is one [`push_once`]. `Ok(true)` = the
+/// worker already had `head` (nothing sent), `Ok(false)` = applied; either way the
+/// caller records `head`.
+///
+/// An EMPTY incremental bundle means "the worker has HEAD" only when the excluded
+/// commit IS `head`. When the mirror's HEAD moved backwards (a `reset` to an
+/// older commit) or onto a commit `last_head` already contains, `HEAD ^last_head`
+/// is empty too, yet the worker still sits on `last_head`: recording `head` then
+/// would leave the worker's tree ahead of the mirror while the record says it
+/// matches. So that case falls through to the full bundle, which moves the worker
+/// (its apply is `reset --hard`, tracked files only — never `git clean`). A full
+/// bundle of an existing HEAD is never empty; if git says it is, the sync fails
+/// visibly rather than record a head the worker may not have.
+async fn push_with_fallback<'a, P, F>(head: &str, last_head: Option<&'a str>, mut push: P) -> Result<bool, String>
+where
+    P: FnMut(Option<&'a str>) -> F,
+    F: std::future::Future<Output = Result<bool, String>>,
+{
+    let mut attempts: Vec<Option<&'a str>> = Vec::new();
+    if let Some(last) = last_head {
         attempts.push(Some(last));
     }
     attempts.push(None); // full bundle fallback (and first attempt when no last_head)
 
     let mut last_err: Option<String> = None;
     for exclude in attempts {
-        match push_once(
-            pool,
-            project_id,
-            host_id,
-            &spec,
-            &mirror,
-            exclude.as_deref(),
-        )
-        .await
-        {
+        match push(exclude).await {
+            Ok(true) if exclude == Some(head) => return Ok(true),
             Ok(true) => {
-                // Empty bundle — worker already at HEAD. Record and finish.
-                write_record(
-                    project_id,
-                    host_id,
-                    &WorkerRecord {
-                        last_head: Some(head.clone()),
-                    },
-                );
-                return WorkerSyncReport {
-                    project_id: project_id.to_string(),
-                    host_id: host_id.to_string(),
-                    head: Some(short_sha(&head)),
-                    ok: true,
-                    skipped: true,
-                    error: None,
-                };
+                last_err = Some(match exclude {
+                    Some(_) => "the mirror's HEAD is not ahead of the worker's last synced commit".to_string(),
+                    None => "git produced an empty bundle for the mirror's HEAD".to_string(),
+                });
             }
-            Ok(false) => {
-                write_record(
-                    project_id,
-                    host_id,
-                    &WorkerRecord {
-                        last_head: Some(head.clone()),
-                    },
-                );
-                return WorkerSyncReport {
-                    project_id: project_id.to_string(),
-                    host_id: host_id.to_string(),
-                    head: Some(short_sha(&head)),
-                    ok: true,
-                    skipped: false,
-                    error: None,
-                };
-            }
+            Ok(false) => return Ok(false),
             Err(e) => last_err = Some(e),
         }
     }
-    report_err(last_err.unwrap_or_else(|| "worker sync failed".to_string()))
+    Err(last_err.unwrap_or_else(|| "worker sync failed".to_string()))
 }
 
 /// One push attempt with a given `exclude`. `Ok(true)` = nothing to send (empty
@@ -765,5 +772,73 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Fixed decision (M4b): the mirror's HEAD moved BACKWARDS (a reset to an
+    /// older commit). `HEAD ^last_head` is then an empty bundle, which used to be
+    /// read as "the worker already has HEAD" — the worker stayed on the newer
+    /// commit while its record claimed the older one. It must fall through to the
+    /// full bundle so the worker is moved; only `last_head == HEAD` is "nothing
+    /// to send".
+    #[tokio::test]
+    async fn a_mirror_head_moved_backwards_moves_the_worker_with_a_full_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = dir.path().to_path_buf();
+        let git = |args: &[&str]| Peer::Local(tmp.clone()).run(args).unwrap();
+        assert!(git(&["init", "-q"]).status.success());
+        let _ = git(&["config", "user.email", "t@e"]);
+        let _ = git(&["config", "user.name", "t"]);
+        std::fs::write(tmp.join("code.txt"), b"v1").unwrap();
+        assert!(git(&["add", "code.txt"]).status.success());
+        assert!(git(&["commit", "-q", "-m", "c1"]).status.success());
+        let c1 = mirror_head(&tmp).unwrap();
+        std::fs::write(tmp.join("code.txt"), b"v2").unwrap();
+        assert!(git(&["commit", "-q", "-am", "c2"]).status.success());
+        let c2 = mirror_head(&tmp).unwrap();
+        // The worker was synced at c2; then the mirror went back to c1.
+        assert!(git(&["reset", "-q", "--hard", &c1]).status.success());
+        let head = mirror_head(&tmp).unwrap();
+        assert_eq!(head, c1);
+
+        let bundle = tmp.join("out.bundle");
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let push = |exclude: Option<&str>| {
+            attempts.borrow_mut().push(exclude.map(str::to_string));
+            let result = build_bundle(&tmp, &bundle, exclude);
+            async move { result }
+        };
+        let outcome = push_with_fallback(&head, Some(&c2), push).await;
+        assert_eq!(outcome, Ok(false), "a full bundle was built (and would be applied), not 'already there'");
+        assert_eq!(*attempts.borrow(), [Some(c2.clone()), None], "the empty incremental fell through to the full bundle");
+
+        // Only a worker already AT head is "nothing to send".
+        attempts.borrow_mut().clear();
+        let push = |exclude: Option<&str>| {
+            attempts.borrow_mut().push(exclude.map(str::to_string));
+            let result = build_bundle(&tmp, &bundle, exclude);
+            async move { result }
+        };
+        assert_eq!(push_with_fallback(&head, Some(&head), push).await, Ok(true));
+        assert_eq!(attempts.borrow().len(), 1);
+    }
+
+    /// An empty full bundle (impossible for a real HEAD) is a visible failure,
+    /// never a recorded head; an apply failure of the incremental still retries
+    /// with the full bundle.
+    #[tokio::test]
+    async fn the_bundle_fallback_never_records_a_head_it_did_not_send() {
+        let empty_always = |_: Option<&str>| async { Ok::<bool, String>(true) };
+        assert!(push_with_fallback("h", Some("older"), empty_always).await.is_err());
+        let empty_always = |_: Option<&str>| async { Ok::<bool, String>(true) };
+        assert!(push_with_fallback("h", None, empty_always).await.is_err());
+
+        let calls = std::cell::Cell::new(0);
+        let flaky = |exclude: Option<&str>| {
+            calls.set(calls.get() + 1);
+            let result = if exclude.is_some() { Err("missing prerequisite".to_string()) } else { Ok(false) };
+            async move { result }
+        };
+        assert_eq!(push_with_fallback("h", Some("older"), flaky).await, Ok(false));
+        assert_eq!(calls.get(), 2);
     }
 }
