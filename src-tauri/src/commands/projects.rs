@@ -1196,11 +1196,10 @@ pub struct UnsyncedReport {
 }
 
 /// Run `git <args>` in `dir`, returning trimmed stdout (empty string on failure).
+/// Hookless: it inspects a mirror in the background.
 fn git_in(dir: &Path, args: &[&str]) -> String {
     use crate::services::git_bounded::BoundedOutput;
-    crate::paths::command_no_window("git")
-        .args(args)
-        .current_dir(dir)
+    crate::commands::git::hookless_git_command_in(dir, args)
         .bounded_output()
         .ok()
         .filter(|o| o.status.success())
@@ -3292,9 +3291,7 @@ fn git_scaffold_commit(dir: &Path) {
 /// (don't force a commit when we can't tell), never a wipe.
 fn git_head_unborn(dir: &Path) -> bool {
     use crate::services::git_bounded::BoundedOutput;
-    crate::paths::command_no_window("git")
-        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
-        .current_dir(dir)
+    crate::commands::git::hardened_git_command_in(dir, &["rev-parse", "--verify", "--quiet", "HEAD"])
         .bounded_output()
         .map(|o| !o.status.success())
         .unwrap_or(false)

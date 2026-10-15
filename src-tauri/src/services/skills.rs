@@ -141,6 +141,8 @@ pub fn refresh_source(id: &str) -> Result<(), String> {
         .ok_or_else(|| format!("Unknown skills source '{id}'"))?;
     let dest = cache_dir(&source.id);
     if dest.join(".git").exists() {
+        // Bare on purpose: the skills cache is Tabtivity's own clone in the
+        // state dir, not a project tree an agent or container can write.
         let mut cmd = crate::paths::command_no_window("git");
         cmd.current_dir(&dest);
         cmd.env("GIT_TERMINAL_PROMPT", "0");

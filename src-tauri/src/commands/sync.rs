@@ -1901,6 +1901,7 @@ fn diff_mirror_vs_host(
         None => mirror_path.to_string_lossy().into_owned(),
     };
 
+    // Bare on purpose: `diff --no-index` compares two files, outside any repo.
     let out = crate::paths::command_no_window("git")
         .args(["diff", "--no-index", "--", &mirror_arg, &host_tmp_path])
         .output()

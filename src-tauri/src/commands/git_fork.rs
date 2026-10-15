@@ -204,10 +204,9 @@ fn fork_clone_blocking(
 
     // Best-effort: the tree is on disk already, so a missing `upstream` is worth
     // less than the import it would otherwise abort.
-    let _ = crate::paths::command_no_window("git")
-        .current_dir(&dest)
-        .args(["remote", "add", "upstream", &url])
-        .output();
+    let _ = crate::services::git_bounded::BoundedOutput::bounded_output(
+        &mut crate::commands::git::hardened_git_command_in(&dest, &["remote", "add", "upstream", &url]),
+    );
 
     Ok(ForkResult {
         dir: dest,

@@ -44,10 +44,11 @@ pub const DEFAULT_BRANCH: &str = "main";
 pub const INIT_SHELL: &str =
     "git init -b main >/dev/null 2>&1 || { git init && git symbolic-ref HEAD refs/heads/main; }";
 
-fn git(dir: &Path) -> Command {
-    let mut cmd = crate::paths::command_no_window("git");
-    cmd.current_dir(dir);
-    cmd
+/// `git <args>` in `dir`, through the hardened builder: Publish runs these on
+/// an existing repo, whose config and hooks are the project's (untrusted).
+/// `init` is special-cased there (no config strip, no common-dir pin).
+fn git(dir: &Path, args: &[&str]) -> Command {
+    crate::commands::git::hardened_git_command_in(dir, args)
 }
 
 /// Run `git` in `dir` and report only whether it succeeded. Bounded
@@ -55,8 +56,7 @@ fn git(dir: &Path) -> Command {
 /// whose `HEAD` or `config` may be a FIFO git would block on.
 fn ok(dir: &Path, args: &[&str]) -> bool {
     use crate::services::git_bounded::BoundedOutput;
-    git(dir)
-        .args(args)
+    git(dir, args)
         .bounded_output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -65,7 +65,7 @@ fn ok(dir: &Path, args: &[&str]) -> bool {
 /// Trimmed stdout of a `git` command, or `None` when it failed.
 fn out(dir: &Path, args: &[&str]) -> Option<String> {
     use crate::services::git_bounded::BoundedOutput;
-    let o = git(dir).args(args).bounded_output().ok()?;
+    let o = git(dir, args).bounded_output().ok()?;
     if !o.status.success() {
         return None;
     }
@@ -80,12 +80,7 @@ fn out(dir: &Path, args: &[&str]) -> Option<String> {
 /// an unborn HEAD — an existing repo (this is called guarded by "no `.git`
 /// yet", but a race or a nested repo could still land here) keeps its branch.
 pub fn init_repo(dir: &Path) -> Result<(), String> {
-    let init = git(dir)
-        .args([
-            "-c",
-            &format!("init.defaultBranch={DEFAULT_BRANCH}"),
-            "init",
-        ])
+    let init = git(dir, &["-c", &format!("init.defaultBranch={DEFAULT_BRANCH}"), "init"])
         .output()
         .map_err(|e| format!("failed to run git init: {e}"))?;
     if !init.status.success() {
