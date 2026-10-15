@@ -8,7 +8,7 @@
 // @ts-expect-error node:child_process has no type declarations in this project (no @types/node)
 import { execFileSync, spawnSync } from "node:child_process";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 // @ts-expect-error node:os has no type declarations in this project (no @types/node)
 import { tmpdir } from "node:os";
 // @ts-expect-error node:path has no type declarations in this project (no @types/node)
@@ -25,34 +25,47 @@ const hasTool = (bin: string) => spawnSync(bin, ["--version"], { stdio: "ignore"
 const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
   GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
+const lines = (out: string) => out.split("\n").filter(Boolean).sort();
+
+// The hook itself, as tracked in this repo.
+const hook = join(repoRoot, ".githooks", "pre-push");
+const BUMP_FILES = ["Cargo.lock", "package.json", "src-tauri/Cargo.toml", "src-tauri/tauri.conf.json"];
+
+/** A throwaway repo at v0.1.2 with two commits; the remote "has" the first. */
+function throwawayRepo() {
+  const work = mkdtempSync(join(tmpdir(), `${BRAND.slug}-preflight-`));
+  git(work, "init", "-q", "-b", "develop");
+  mkdirSync(join(work, "scripts"));
+  mkdirSync(join(work, "src-tauri"));
+  for (const script of ["bump-version.sh", "privacy-check.sh"]) {
+    writeFileSync(join(work, "scripts", script), readFileSync(join(repoRoot, "scripts", script)), { mode: 0o755 });
+  }
+  writeFileSync(join(work, "package.json"), JSON.stringify({ name: "x", version: "0.1.2" }, null, 2) + "\n");
+  writeFileSync(join(work, "src-tauri", "Cargo.toml"), `[package]\nname = "${BRAND.slug}"\nversion = "0.1.2"\n`);
+  writeFileSync(join(work, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "0.1.2" }, null, 2) + "\n");
+  writeFileSync(join(work, "Cargo.lock"), `[[package]]\nname = "${BRAND.slug}"\nversion = "0.1.2"\n`);
+  writeFileSync(join(work, "hello.txt"), "hello\n");
+  git(work, "add", "-A");
+  git(work, "commit", "-q", "-m", "one");
+  const remoteSha = git(work, "rev-parse", "HEAD");
+  writeFileSync(join(work, "hello.txt"), "hello again\n");
+  git(work, "commit", "-q", "-am", "two");
+  const localSha = git(work, "rev-parse", "HEAD");
+  return { work, remoteSha, localSha };
+}
+
+/** The hook under the preflight, pushing develop through a nonexistent remote. */
+const preflight = (work: string, localSha: string, remoteSha: string) =>
+  spawnSync(hook, ["origin", "file:///nonexistent/remote.git"], {
+    cwd: work, encoding: "utf8", input: `refs/heads/develop ${localSha} refs/heads/develop ${remoteSha}\n`,
+    env: { ...env, [envName("PUSH_PREFLIGHT")]: "1", [envName("SKIP_PRIVACY_CHECK")]: "1", GIT_TERMINAL_PROMPT: "0" },
+  });
 
 describe.skipIf(process.platform === "win32" || !hasTool("git") || !hasTool("jq"))(`pre-push under ${BRAND.envPrefix}PUSH_PREFLIGHT`, () => {
   it("bumps, commits, exits 0 and never pushes", () => {
-    const work = mkdtempSync(join(tmpdir(), `${BRAND.slug}-preflight-`));
-    git(work, "init", "-q", "-b", "develop");
-    mkdirSync(join(work, "scripts"));
-    mkdirSync(join(work, "src-tauri"));
-    for (const script of ["bump-version.sh", "privacy-check.sh"]) {
-      writeFileSync(join(work, "scripts", script), readFileSync(join(repoRoot, "scripts", script)), { mode: 0o755 });
-    }
-    writeFileSync(join(work, "package.json"), JSON.stringify({ name: "x", version: "0.1.2" }, null, 2) + "\n");
-    writeFileSync(join(work, "src-tauri", "Cargo.toml"), `[package]\nname = "${BRAND.slug}"\nversion = "0.1.2"\n`);
-    writeFileSync(join(work, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "0.1.2" }, null, 2) + "\n");
-    writeFileSync(join(work, "Cargo.lock"), `[[package]]\nname = "${BRAND.slug}"\nversion = "0.1.2"\n`);
-    writeFileSync(join(work, "hello.txt"), "hello\n");
-    git(work, "add", "-A");
-    git(work, "commit", "-q", "-m", "one");
-    const remoteSha = git(work, "rev-parse", "HEAD");
-    writeFileSync(join(work, "hello.txt"), "hello again\n");
-    git(work, "commit", "-q", "-am", "two");
-    const localSha = git(work, "rev-parse", "HEAD");
-    // The hook itself, as tracked in this repo, through a nonexistent remote.
-    const hook = join(repoRoot, ".githooks", "pre-push");
+    const { work, remoteSha, localSha } = throwawayRepo();
     expect(existsSync(hook)).toBe(true);
-    const run = spawnSync(hook, ["origin", "file:///nonexistent/remote.git"], {
-      cwd: work, encoding: "utf8", input: `refs/heads/develop ${localSha} refs/heads/develop ${remoteSha}\n`,
-      env: { ...env, [envName("PUSH_PREFLIGHT")]: "1", [envName("SKIP_PRIVACY_CHECK")]: "1", GIT_TERMINAL_PROMPT: "0" },
-    });
+    const run = preflight(work, localSha, remoteSha);
     expect(run.status, run.stderr).toBe(0);
     expect(run.stderr).toContain(`${BRAND.display}'s transport carries the bump`);
     expect(run.stderr).not.toContain("failed to push");
@@ -69,5 +82,33 @@ describe.skipIf(process.platform === "win32" || !hasTool("git") || !hasTool("jq"
     });
     expect(plain.status).not.toBe(0);
     expect(plain.stderr).toContain("pushing with the bump included");
+  });
+
+  it("commits only the version files, whatever else is staged", () => {
+    const { work, remoteSha, localSha } = throwawayRepo();
+    // Staged after the scan's range was fixed: it stays staged, it never rides.
+    writeFileSync(join(work, "unrelated.txt"), "not scanned\n");
+    writeFileSync(join(work, "hello.txt"), "staged edit\n");
+    git(work, "add", "unrelated.txt", "hello.txt");
+    const run = preflight(work, localSha, remoteSha);
+    expect(run.status, run.stderr).toBe(0);
+    expect(git(work, "log", "-1", "--format=%s")).toBe("chore: bump version to v0.1.3");
+    expect(git(work, "rev-parse", "HEAD^")).toBe(localSha);
+    expect(lines(git(work, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"))).toEqual(BUMP_FILES);
+    // The shared index: the version files match the bump commit, the rest is
+    // still staged on top of it, and nothing is left unstaged.
+    expect(lines(git(work, "status", "--porcelain"))).toEqual(["A  unrelated.txt", "M  hello.txt"]);
+    // The private index is gone from the git dir.
+    expect(readdirSync(join(work, ".git")).filter((f: string) => f.startsWith("bump-index"))).toEqual([]);
+  });
+
+  it("refuses to bump over uncommitted edits in the version files", () => {
+    const { work, remoteSha, localSha } = throwawayRepo();
+    writeFileSync(join(work, "src-tauri", "Cargo.toml"), `[package]\nname = "${BRAND.slug}"\nversion = "0.1.2"\n# edit\n`);
+    const run = preflight(work, localSha, remoteSha);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("src-tauri/Cargo.toml");
+    expect(git(work, "rev-parse", "HEAD")).toBe(localSha);
+    expect(JSON.parse(readFileSync(join(work, "package.json"), "utf8")).version).toBe("0.1.2");
   });
 });

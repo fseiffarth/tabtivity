@@ -120,10 +120,6 @@ ALLOW=(
   # Spelled with the helper's old-name variable: this script is checked too.
   "start-$APP_LEGACY_SLUG-*.sh"
   "scripts/$APP_LEGACY_SLUG-dev.cmd"
-  # The README's picture of the window. Not renamed: a binary under a new path
-  # needs a fresh privacy review, and the picture shows the old name anyway.
-  # Until it is retaken.
-  "screenshots/$APP_LEGACY_SLUG-current.png"
 
   # --- Tooling that cannot source the brand helper. --------------------------
   # Git hooks: run in any state of the tree, so they stay self-contained, and

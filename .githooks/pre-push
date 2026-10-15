@@ -12,7 +12,8 @@
 #
 # git can't add a commit to a push that is already in flight, so this hook:
 #   1. bumps package.json / Cargo.toml / tauri.conf.json / Cargo.lock,
-#   2. commits the bump onto the current branch,
+#   2. commits the bump onto the current branch — those four files only, from
+#      a private index, whatever else is staged,
 #   3. re-runs the push (which carries the bump), and
 #   4. aborts the original push, now superseded by the re-push.
 #
@@ -206,18 +207,41 @@ fi
 
 [ "$bump" -eq 0 ] && exit 0
 
+# The bump commit is made from a private index holding HEAD plus the four
+# version files, never from the shared one: whatever else is staged must not
+# ride into a commit this hook makes after the scan (the scan covered HEAD, and
+# the re-push skips the hook). That leaves the version files themselves, which
+# bump-version.sh rewrites in the working tree — an uncommitted edit in one of
+# them would ride along unscanned, so the bump stops instead.
+bump_files=(package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json Cargo.lock)
+if ! git -C "$repo_root" diff --quiet HEAD -- "${bump_files[@]}"; then
+  echo "pre-push: not bumping — the version files carry uncommitted changes:" >&2
+  git -C "$repo_root" diff --name-only HEAD -- "${bump_files[@]}" | sed 's/^/          /' >&2
+  echo "          Commit or revert them, then push again." >&2
+  exit 1
+fi
+
 new="$("$repo_root/scripts/bump-version.sh" patch)"
 
+# The private index lives in the git dir, not /tmp: under Tabtivity's fenced
+# push preflight .git is writable and /tmp is not shared. mktemp reserves the
+# name, and the empty file goes again so read-tree writes a fresh index
+# instead of parsing a zero-byte one.
+bump_index="$(mktemp "$(git -C "$repo_root" rev-parse --absolute-git-dir)/bump-index.XXXXXX")"
+trap 'rm -f "$bump_index" "$bump_index.lock"' EXIT
+rm -f "$bump_index"
+GIT_INDEX_FILE="$bump_index" git -C "$repo_root" read-tree HEAD
 # Cargo.lock carries the workspace's own version too, so it is part of the bump
-# — staged with the rest or the bump commit leaves the tree dirty behind it.
-# `--` and the explicit list keep this to the version files: a push must never
-# sweep up whatever else happens to be in the working tree.
-git -C "$repo_root" add -- \
-  package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json Cargo.lock
+# — committed with the rest or the bump commit leaves the tree dirty behind it.
+GIT_INDEX_FILE="$bump_index" git -C "$repo_root" add -- "${bump_files[@]}"
 # TABTIVITY_VERSION_BUMP tells post-commit this is the push's own bump: its
 # phone-staleness advisory has nothing to do with pushing, and git routes a
 # hook's output to stderr, where it read as the push's error.
-TABTIVITY_VERSION_BUMP=1 git -C "$repo_root" commit -m "chore: bump version to v${new}" >/dev/null
+GIT_INDEX_FILE="$bump_index" TABTIVITY_VERSION_BUMP=1 \
+  git -C "$repo_root" commit -m "chore: bump version to v${new}" >/dev/null
+# The shared index still holds the pre-bump version files: point those four
+# entries at the bump commit. Anything else staged there stays staged.
+git -C "$repo_root" reset -q -- "${bump_files[@]}"
 
 # Under Tabtivity's preflight there is nothing to re-push with: the bump commit
 # is on the branch, Tabtivity's own transport (hooks off, with the token this
