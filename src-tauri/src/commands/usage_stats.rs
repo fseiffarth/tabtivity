@@ -203,10 +203,10 @@ fn git_stats_blocking(project_dir: &str, since: &str) -> Result<GitStats, String
     Ok(parse_numstat_log(&String::from_utf8_lossy(&out.stdout)))
 }
 
-/// The repo's configured author email, or `None` when unset.
+/// The repo's configured author email, or `None` when unset. Hookless, like
+/// the recap's `log` above: it runs unattended in the project's repo.
 fn git_user_email(project_dir: &str) -> Option<String> {
-    let mut cmd = crate::paths::command_no_window("git");
-    cmd.args(["config", "user.email"]).current_dir(project_dir);
+    let cmd = crate::commands::git::hookless_git_command_in(project_dir, &["config", "user.email"]);
     let out = crate::services::git_bounded::output(cmd).ok()?;
     if !out.status.success() {
         return None;

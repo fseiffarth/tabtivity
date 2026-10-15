@@ -80,6 +80,62 @@ impl Subject {
             preview: true,
         })
     }
+
+    /// [`Subject::file`] for things git can run without reading them: `None`
+    /// only when the file is gone; any other read failure is a subject of its
+    /// own (#3) — an execute-only ELF hook is run by git all the same, so
+    /// "unreadable" must never fingerprint like "absent".
+    fn file_or_unread(path: &Path) -> Option<Subject> {
+        match std::fs::read(path) {
+            Ok(bytes) => Some(Subject {
+                label: path.to_string_lossy().into_owned(),
+                bytes,
+                preview: true,
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => Some(Subject::unread_path(path, &e)),
+        }
+    }
+
+    /// A path that could not be read. The label differs from the readable
+    /// file's, so no content can ever fingerprint like the unread state; the
+    /// bytes carry what `stat` still tells (inode, size, ctime), so swapping
+    /// one unreadable hook for another asks again too.
+    fn unread_path(path: &Path, e: &std::io::Error) -> Subject {
+        let mut bytes = e.to_string();
+        if let Ok(m) = std::fs::metadata(path) {
+            bytes.push_str(&stat_summary(&m));
+        }
+        Subject {
+            label: format!("{} (could not be read)", path.to_string_lossy()),
+            bytes: bytes.into_bytes(),
+            preview: true,
+        }
+    }
+}
+
+#[cfg(unix)]
+fn stat_summary(m: &std::fs::Metadata) -> String {
+    use std::os::unix::fs::MetadataExt;
+    format!(
+        "\ninode {} mode {:o} size {} changed {}.{:09}",
+        m.ino(),
+        m.mode(),
+        m.size(),
+        m.ctime(),
+        m.ctime_nsec()
+    )
+}
+
+#[cfg(not(unix))]
+fn stat_summary(m: &std::fs::Metadata) -> String {
+    let modified = m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!("\nsize {} modified {modified}", m.len())
 }
 
 #[derive(Debug, Serialize)]
@@ -276,15 +332,81 @@ fn parse_scoped_config(raw: &[u8]) -> Vec<(String, String, String)> {
 }
 
 #[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
+fn is_executable(m: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    m.is_file() && m.permissions().mode() & 0o111 != 0
 }
 
 #[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
+fn is_executable(m: &std::fs::Metadata) -> bool {
+    m.is_file()
 }
+
+/// `dir`'s entries with their (symlink-followed) metadata, sorted. A missing
+/// dir is empty; every other failure — the dir itself, an entry, an entry's
+/// metadata — is pushed to `unread` instead of reading as "nothing" (#3): git
+/// runs a hook in a `0311` hooks dir it cannot list, so neither may we skip it.
+/// An entry that vanished in between (`NotFound`) is simply gone.
+fn dir_entries(dir: &Path, unread: &mut Vec<Subject>) -> Vec<(PathBuf, std::fs::Metadata)> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            unread.push(Subject::unread_path(dir, &e));
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    for entry in rd {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(e) => {
+                unread.push(Subject::unread_path(dir, &e));
+                continue;
+            }
+        };
+        match std::fs::metadata(&path) {
+            Ok(m) => out.push((path, m)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => unread.push(Subject::unread_path(&path, &e)),
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Every hook name git runs (githooks(5)), looked up by name in a hooks dir
+/// that cannot be listed.
+const GIT_HOOK_NAMES: &[&str] = &[
+    "applypatch-msg",
+    "pre-applypatch",
+    "post-applypatch",
+    "pre-commit",
+    "pre-merge-commit",
+    "prepare-commit-msg",
+    "commit-msg",
+    "post-commit",
+    "pre-rebase",
+    "post-checkout",
+    "post-merge",
+    "pre-push",
+    "pre-receive",
+    "update",
+    "proc-receive",
+    "post-receive",
+    "post-update",
+    "reference-transaction",
+    "push-to-checkout",
+    "pre-auto-gc",
+    "post-rewrite",
+    "sendemail-validate",
+    "fsmonitor-watchman",
+    "p4-changelist",
+    "p4-prepare-changelist",
+    "p4-post-changelist",
+    "p4-pre-submit",
+    "post-index-change",
+];
 
 fn git_subjects(repo: &Path) -> Vec<Subject> {
     // The hooked variant, so the view is the one the gated verb gets: the hooks
@@ -312,19 +434,38 @@ fn git_subjects(repo: &Path) -> Vec<Subject> {
         if o.status.success() {
             let rel = String::from_utf8_lossy(&o.stdout).trim().to_string();
             let hooks = if Path::new(&rel).is_absolute() { PathBuf::from(&rel) } else { repo.join(&rel) };
-            let mut files: Vec<PathBuf> = std::fs::read_dir(&hooks)
-                .map(|rd| rd.flatten().map(|e| e.path()).collect())
-                .unwrap_or_default();
-            files.sort();
-            for f in files {
+            // #3: whatever could not be read here may still be a hook git runs,
+            // so it counts as one — the hook managers' configs below included.
+            let mut unread_hooks = Vec::new();
+            let mut entries = dir_entries(&hooks, &mut unread_hooks);
+            if !unread_hooks.is_empty() {
+                // A dir we cannot list (`0311`) can still be searched: look
+                // up every name git would run, as git itself does.
+                entries.extend(GIT_HOOK_NAMES.iter().filter_map(|name| {
+                    let f = hooks.join(name);
+                    std::fs::metadata(&f).ok().map(|m| (f, m))
+                }));
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+                entries.dedup_by(|a, b| a.0 == b.0);
+            }
+            for (f, meta) in entries {
                 let sample = f.extension().is_some_and(|e| e == "sample");
-                if !sample && is_executable(&f) {
-                    if let Some(s) = Subject::file(&f) {
+                if !sample && is_executable(&meta) {
+                    if let Some(s) = Subject::file_or_unread(&f) {
                         out.push(s);
                         have_hook = true;
                     }
                 }
             }
+            have_hook |= !unread_hooks.is_empty();
+            out.extend(unread_hooks);
+        } else {
+            let mut e = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            if e.is_empty() {
+                e = format!("git rev-parse exited with {}", o.status);
+            }
+            out.push(unread("hooks", e));
+            have_hook = true;
         }
     }
 
@@ -343,6 +484,13 @@ fn git_subjects(repo: &Path) -> Vec<Subject> {
                     });
                 }
             }
+        } else {
+            // Unlisted config may still name a program (`core.fsmonitor`, …).
+            let mut e = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            if e.is_empty() {
+                e = format!("git config exited with {}", o.status);
+            }
+            out.push(unread("config", e));
         }
     }
 
@@ -356,16 +504,17 @@ fn git_subjects(repo: &Path) -> Vec<Subject> {
             .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
             .unwrap_or_else(|| repo.to_path_buf());
         for name in [".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml", "lefthook-local.yml"] {
-            if let Some(s) = Subject::file(&repo.join(name)) {
+            if let Some(s) = Subject::file_or_unread(&repo.join(name)) {
                 out.push(s);
             }
         }
-        let husky = repo.join(".husky");
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&husky)
-            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect())
-            .unwrap_or_default();
-        files.sort();
-        out.extend(files.iter().filter_map(|f| Subject::file(f)));
+        let mut unread_husky = Vec::new();
+        for (f, meta) in dir_entries(&repo.join(".husky"), &mut unread_husky) {
+            if meta.is_file() {
+                out.extend(Subject::file_or_unread(&f));
+            }
+        }
+        out.extend(unread_husky);
     }
     out
 }
@@ -751,6 +900,131 @@ mod tests {
         let got = git_subjects(repo);
         assert_eq!(got.len(), 1);
         assert!(got[0].label.ends_with("pre-commit"));
+    }
+
+    /// Unix permission tests mean nothing as root (it reads everything).
+    #[cfg(unix)]
+    fn is_root() -> bool {
+        // SAFETY: geteuid has no preconditions.
+        unsafe { libc::geteuid() == 0 }
+    }
+
+    #[cfg(unix)]
+    fn init_repo(repo: &Path) {
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(repo).status().unwrap().success());
+    }
+
+    #[cfg(unix)]
+    fn chmod(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// #3: git execs an execute-only hook it cannot read — the gate must see
+    /// it, and never fingerprint it like an absent or a readable hook.
+    #[cfg(unix)]
+    #[test]
+    fn an_execute_only_hook_is_a_subject_not_nothing() {
+        if is_root() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_repo(repo);
+        let none = fingerprint(&git_subjects(repo));
+        let hook = repo.join(".git/hooks/pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\necho pwned\n").unwrap();
+        chmod(&hook, 0o755);
+        let readable = fingerprint(&git_subjects(repo));
+        chmod(&hook, 0o111);
+        let got = git_subjects(repo);
+        chmod(&hook, 0o755);
+        assert_eq!(got.len(), 1, "{:?}", got.iter().map(|s| &s.label).collect::<Vec<_>>());
+        assert!(got[0].label.contains("pre-commit") && got[0].label.ends_with("(could not be read)"));
+        let unread = fingerprint(&got);
+        assert_ne!(unread, none, "unreadable must not read as no hook");
+        assert_ne!(unread, readable, "unreadable must not read as the approved hook");
+        // A readable hook whose content is the error text still differs.
+        std::fs::write(&hook, &got[0].bytes).unwrap();
+        assert_ne!(fingerprint(&git_subjects(repo)), unread);
+        // And swapping one unreadable hook for another asks again.
+        chmod(&hook, 0o111);
+        let before = fingerprint(&git_subjects(repo));
+        chmod(&hook, 0o755);
+        std::fs::write(&hook, "#!/bin/sh\necho other\n").unwrap();
+        chmod(&hook, 0o111);
+        let after = fingerprint(&git_subjects(repo));
+        chmod(&hook, 0o755);
+        assert_ne!(before, after, "an unreadable hook's swap must not keep its approval");
+    }
+
+    /// #3: a `0311` hooks dir cannot be listed, yet git runs `pre-commit` in
+    /// it. That is a subject, and counts as a hook, so the hook managers'
+    /// configs are fingerprinted too.
+    #[cfg(unix)]
+    #[test]
+    fn an_unlistable_hooks_dir_is_a_subject_and_counts_as_a_hook() {
+        if is_root() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_repo(repo);
+        std::fs::write(repo.join(".pre-commit-config.yaml"), "repos: []\n").unwrap();
+        assert!(git_subjects(repo).is_empty(), "no hook → the manager config alone never asks");
+        let hooks = repo.join(".git/hooks");
+        chmod(&hooks, 0o311);
+        let got = git_subjects(repo);
+        chmod(&hooks, 0o755);
+        let labels: Vec<&String> = got.iter().map(|s| &s.label).collect();
+        assert!(labels.iter().any(|l| l.ends_with("hooks (could not be read)")), "{labels:?}");
+        assert!(labels.iter().any(|l| l.ends_with(".pre-commit-config.yaml")), "{labels:?}");
+        // A hook git would run in it is found by name, content and all.
+        let hook = hooks.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\necho pwned\n").unwrap();
+        chmod(&hook, 0o755);
+        chmod(&hooks, 0o311);
+        let got = git_subjects(repo);
+        chmod(&hooks, 0o755);
+        assert!(got.iter().any(|s| s.label.ends_with("pre-commit") && s.bytes.ends_with(b"echo pwned\n")), "{:?}", got.iter().map(|s| &s.label).collect::<Vec<_>>());
+    }
+
+    /// #3: a missing hooks dir is still "no hooks" (else every repo without
+    /// one would ask), and an unreadable `.husky` file is a subject.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_hooks_dir_is_nothing_but_an_unreadable_husky_file_is_not() {
+        if is_root() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_repo(repo);
+        std::fs::remove_dir_all(repo.join(".git/hooks")).unwrap();
+        assert!(git_subjects(repo).is_empty());
+        std::fs::create_dir(repo.join(".git/hooks")).unwrap();
+        let hook = repo.join(".git/hooks/pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\nnpx husky run\n").unwrap();
+        chmod(&hook, 0o755);
+        std::fs::create_dir(repo.join(".husky")).unwrap();
+        let husky = repo.join(".husky/pre-commit");
+        std::fs::write(&husky, "curl evil\n").unwrap();
+        chmod(&husky, 0o000);
+        let got = git_subjects(repo);
+        chmod(&husky, 0o644);
+        let labels: Vec<&String> = got.iter().map(|s| &s.label).collect();
+        assert!(labels.iter().any(|l| l.contains(".husky") && l.ends_with("(could not be read)")), "{labels:?}");
+    }
+
+    /// #3: a failed `--git-path hooks` query is a subject, not "no hooks".
+    #[test]
+    fn a_failed_hooks_path_query_is_a_subject() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // A `.git` file naming a missing git dir: git refuses, whatever is above.
+        std::fs::write(dir.join(".git"), format!("gitdir: {}\n", dir.join("gone").display())).unwrap();
+        let got = git_subjects(dir);
+        assert!(got.iter().any(|s| s.label == "git could not be read (hooks)"), "{:?}", got.iter().map(|s| &s.label).collect::<Vec<_>>());
     }
 
     /// #2349: a query git refuses (a FIFO it would block on) fails closed —
