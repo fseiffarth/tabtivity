@@ -43,9 +43,9 @@ reports the queue or last failure. A running window keeps its current binary
 until you relaunch it. For a separate development state directory, launch
 `./start-tabtivity-dev-sandbox.sh` yourself.
 
-On Linux you can also use the convenience scripts in `docs/`:
-`docs/start-tabtivity-tauri.sh` (packaged build) and
-`docs/start-tabtivity-tauri-hotreload.sh` (hot reload). The desktop launchers
+On Linux you can also use the convenience scripts:
+`docs/start-tabtivity-tauri.sh` (packaged build) and the root
+`./start-tabtivity-tauri-hotreload.sh` (hot reload). The desktop launchers
 `docs/Tabtivity.desktop` and `docs/TabtivityHotReload.desktop` carry a
 `/path/to/tabtivity/...` placeholder — point them at your checkout, then
 install them:

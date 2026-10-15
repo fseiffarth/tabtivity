@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 #
-# Bump the app's version across the four files that must stay in lockstep:
+# Bump the app's version across the five files that must stay in lockstep:
 #   - package.json
+#   - package-lock.json      (its root "version" and packages[""].version)
 #   - src-tauri/Cargo.toml   (the [package] version)
 #   - src-tauri/tauri.conf.json
 #   - Cargo.lock             (the workspace's own [[package]] entry)
 #
-# The lockfile is in the list because cargo rewrites that entry from Cargo.toml
-# the next time it runs. Left out, every auto-bumped push committed a lockfile
-# one version behind and handed the tree straight back dirty.
+# The lockfiles are in the list because their tools rewrite those entries from
+# the manifest the next time they run (cargo always, npm on its next install).
+# Left out, every auto-bumped push committed a lockfile one version behind and
+# handed the tree straight back dirty.
 #
 # Usage:
 #   scripts/bump-version.sh [patch|minor|major]   # bump a semver component (default: patch)
@@ -22,6 +24,7 @@ pkg="$repo_root/package.json"
 cargo="$repo_root/src-tauri/Cargo.toml"
 tauri="$repo_root/src-tauri/tauri.conf.json"
 lock="$repo_root/Cargo.lock"
+npm_lock="$repo_root/package-lock.json"
 
 for f in "$pkg" "$cargo" "$tauri"; do
   [ -f "$f" ] || { echo "bump-version: missing $f" >&2; exit 1; }
@@ -49,6 +52,26 @@ tmp="$(mktemp)"
 jq --arg v "$new" '.version = $v' "$pkg" >"$tmp" && mv "$tmp" "$pkg"
 tmp="$(mktemp)"
 jq --arg v "$new" '.version = $v' "$tauri" >"$tmp" && mv "$tmp" "$tauri"
+
+# package-lock.json — the root's two copies of the version: the top-level one
+# and packages[""] (the root package). Edited in place rather than through jq,
+# which would re-serialise the whole lockfile; the jq check after it proves both
+# landed. Matched by indentation, as brand-flip.sh matches the lockfile's names:
+# the top-level key is the only one at two spaces, and packages[""]'s version is
+# the first six-space "version" after its `"": {`, before any dependency's.
+# Absent lockfile is not an error, as for Cargo.lock below.
+if [ -f "$npm_lock" ]; then
+  tmp="$(mktemp)"
+  awk -v v="$new" '
+    !top && /^  "version":/ { sub(/"version": "[^"]*"/, "\"version\": \"" v "\""); top = 1 }
+    /^    "": \{/ { root = 1 }
+    root && !rooted && /^      "version":/ { sub(/"version": "[^"]*"/, "\"version\": \"" v "\""); rooted = 1 }
+    root && /^    \}/ { root = 0 }
+    { print }
+  ' "$npm_lock" >"$tmp" && mv "$tmp" "$npm_lock"
+  jq -e --arg v "$new" '.version == $v and .packages[""].version == $v' "$npm_lock" >/dev/null || {
+    echo "bump-version: could not set the root version in $npm_lock" >&2; exit 1; }
+fi
 
 # Cargo.toml — only the version line inside [package], nothing else.
 tmp="$(mktemp)"

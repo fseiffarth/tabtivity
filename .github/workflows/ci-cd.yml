@@ -235,7 +235,7 @@ jobs:
         run: cargo clippy -p tabtivity --no-default-features --lib -- -D warnings
 
       - name: Lint daemon crate
-        run: cargo clippy -p app-serverd -- -D warnings
+        run: cargo clippy -p app-serverd --all-targets -- -D warnings
 
   test-ubuntu:
     name: test-ubuntu

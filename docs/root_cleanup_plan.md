@@ -186,8 +186,8 @@ The changes:
     `DOCUMENTATION.md`, `docs/README.tex`, the `todo/` hits;
   - comments at `paths.rs:586`, `storage.rs:274`, `dev_build.rs:261`,
     `guard-single-instance.sh` and `package-dev.sh:254,274`.
-  - Delete the stale `docs/start-tabtivity-tauri-hotreload.sh`, a
-    pre-`brand.sh` copy.
+  - Done (2026-10-15, screen Medium M6): delete the stale
+    `docs/start-tabtivity-tauri-hotreload.sh`, a pre-`brand.sh` copy.
   - Fix `docs/Tabtivity.desktop`'s `Exec=`, which points at a root
     `start-tabtivity-tauri.sh` that doesn't exist.
 - **Final report to the user:** one `sed` to run outside Tabtivity. It

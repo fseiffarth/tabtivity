@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
@@ -84,16 +83,6 @@ function themedManifests(): Plugin {
   };
 }
 
-/** The short commit HEAD points at, or "" outside git — the same hash the
- * desktop's `TABTIVITY_BUILD_COMMIT` bakes in. */
-function headCommit(): string {
-  try {
-    return execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-  } catch {
-    return "";
-  }
-}
-
 export default defineConfig({
   root: "mobile-web",
   plugins: [react(), themedManifests(), stampServiceWorker()],
@@ -107,11 +96,10 @@ export default defineConfig({
       plugins: [themeColors({ include: (file) => file.replaceAll("\\", "/").includes("/mobile-web/src/") }), autoprefixer()],
     },
   },
-  // The commit and build time the phone shows beside its version (see `src/buildInfo.ts`).
-  define: {
-    __APP_MOBILE_BUILT_AT__: JSON.stringify(new Date().toISOString()),
-    __APP_MOBILE_COMMIT__: JSON.stringify(headCommit()),
-  },
+  // No `define`s that vary between builds (a build time, the commit): inlined
+  // into the hashed entry they changed its hash, so `sw.js`'s cache name, on
+  // every rebuild of an unchanged phone bundle. The phone reads the entry hash
+  // off its own script URL instead (`src/buildInfo.ts`).
   build: {
     outDir: "../mobile-dist",
     emptyOutDir: true,

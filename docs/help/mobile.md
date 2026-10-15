@@ -415,10 +415,11 @@ and turn on **Always-on VPN** for it (search Settings for "VPN", then tap the
 gear next to Tailscale; Samsung lists it under Connections → More connection
 settings → VPN).
 
-The splash also shows the phone app's version and build time (`v0.1.x ·
-dd-mm hh:mm`), the same line as the home screen's header. After the desktop
-updates, a build time older than the desktop's means the phone is still
-running an old copy: close and reopen the app.
+The splash also shows the phone app's version and bundle id (`v0.1.x ·
+<8 characters>`), the same line as the home screen's header. The id changes
+whenever the phone app's code does, and only then. After the desktop updates,
+an id that did not change means the phone may still be running an old copy:
+close and reopen the app.
 
 The desktop keeps the phone's server up to date by itself: each time Tabtivity
 starts, a server older than Tabtivity is replaced (phones reconnect within
