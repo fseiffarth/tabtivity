@@ -56,3 +56,7 @@ ccadf849295743c9c9c88a73392b1465516781c6:src-gateway/src/server/tests.rs:generic
 # the re-pin test vector's auth nonce, shared by the vault test and the phone test
 0e6ba8282359ca082645aba93e1d43568178d6a4:src-tauri/src/services/server/vault/tests.rs:generic-api-key:462
 f49778aa6513650ebe03570fe61375f8f6f527b0:src/__tests__/mobile/MobileSecretsRelease.test.ts:generic-api-key:88
+# S5a phone-scope tests: idempotency_key fixtures "s5a-…-0123456789abcdef"
+806348a7ed2bf30cbac559848926eee545b2b8f5:src-tauri/src/services/mobile_control/host.rs:generic-api-key:8578
+806348a7ed2bf30cbac559848926eee545b2b8f5:src-tauri/src/services/mobile_control/host.rs:generic-api-key:8595
+806348a7ed2bf30cbac559848926eee545b2b8f5:src-tauri/src/services/mobile_control/host.rs:generic-api-key:8646
