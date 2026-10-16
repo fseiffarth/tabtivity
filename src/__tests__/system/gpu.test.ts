@@ -14,6 +14,8 @@ import {
   gpuTotals,
   type GpuSample,
 } from "../../lib/gpu";
+import { registerDict } from "../../lib/i18n";
+import { dict as de } from "../../lib/i18nDicts/de";
 
 /** The machine this was built on: a Strix APU — a 512 MB carve-out + a 61 GB GTT pool. */
 const apu: GpuSample = {
@@ -93,6 +95,23 @@ describe("gpuTooltip", () => {
 
   it("omits the shared line for a card that has no shared pool", () => {
     expect(gpuTooltip([dgpu], 0)).not.toContain("Shared");
+  });
+
+  it("speaks the app language and keeps its values in one column", () => {
+    registerDict("de", de);
+    const tip = gpuTooltip([{ ...apu, temp_c: 58 }], 3 * 1024 ** 3, "de");
+    expect(tip).toContain("Strix [Radeon 880M / 890M] — 95% ausgelastet");
+    expect(tip).toContain("Ollama-Modelle: 3.0 GB");
+    expect(tip).not.toContain("Shared");
+    // Every row's value starts in the same column, whatever the labels' lengths.
+    const rows = tip.split("\n").filter((row) => row.startsWith("  "));
+    expect(rows.length).toBe(3);
+    const column = rows[0].indexOf("420 MB");
+    expect(column).toBeGreaterThan(2);
+    for (const row of rows) {
+      expect(row.slice(column - 2, column), row).toBe("  ");
+      expect(row[column], row).not.toBe(" ");
+    }
   });
 });
 

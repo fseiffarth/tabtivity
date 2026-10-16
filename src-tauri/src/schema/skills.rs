@@ -1,18 +1,19 @@
-//! Types for the Skills Library (`docs/skills_plan.md`): a browsable catalog of
+//! Types for the Skills Library (`docs/done/skills_plan.md`): a browsable catalog of
 //! git-hosted Claude Code skills (plain `<name>/SKILL.md` folders) that can be
-//! copied into a project's own `.claude/skills/` or into the machine's personal
-//! `~/.claude/skills/`. See `services::skills` for the logic; these are just the
+//! copied into a project's own `.claude/skills/` or into the personal scope (the
+//! Tabtivity-wide agent layer's `.claude/skills/`, laid into every agent home).
+//! See `services::skills` for the logic; these are just the
 //! wire shapes.
 
 use serde::{Deserialize, Serialize};
 
-/// Where an install lands — the two scopes Claude Code actually reads.
+/// Where an install lands — the two scopes a Tabtivity agent tab reads.
 ///
 /// The variants are asymmetric on purpose. `Project` names a directory, because
 /// only the caller knows which project is meant; `Personal` carries **nothing**,
 /// because the frontend must not be able to say *where* home is. That is what
 /// keeps this a scope choice rather than an install-anything-anywhere primitive:
-/// `services::skills` resolves `Personal` against `paths::home_dir()` itself, so
+/// `services::skills` resolves `Personal` to `agent_global::global_dir()` itself, so
 /// the widest-reaching target in the feature is also the one no caller can aim.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -20,8 +21,10 @@ pub enum SkillTarget {
     /// `<dir>/.claude/skills/` — travels with the repo, reaches a container
     /// through the identical-path mount and a remote host through lockstep.
     Project { dir: String },
-    /// `~/.claude/skills/` — every project on **this machine**, and no other
-    /// machine at all.
+    /// `<state_dir>/agent-global/.claude/skills/` (`services::agent_global`),
+    /// copied into every agent home at its spawn — every project on **this
+    /// machine**, and no other machine at all. Never the user's own
+    /// `~/.claude/skills/` (another app's config).
     Personal,
 }
 

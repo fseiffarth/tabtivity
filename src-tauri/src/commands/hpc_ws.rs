@@ -570,31 +570,6 @@ pub async fn hpc_ws_extend(
     .await
 }
 
-/// Release a workspace. The data is not deleted immediately (sites keep it for a
-/// grace period and `ws_restore` can recover it), but the directory goes away —
-/// so the UI must confirm before calling this.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn hpc_ws_release(
-    target: HpcWsTarget,
-    id: String,
-    filesystem: Option<String>,
-) -> Result<(), String> {
-    app_core::rt::try_blocking("workspace", move || {
-        let id = validate_token("workspace name", &id)?;
-        let fs = fs_flag(filesystem.as_deref())?;
-        let script = format!(
-            "command -v ws_release >/dev/null 2>&1 || {{ printf '%s\\n' \
-             'this host has no ws_release' >&2; exit 1; }}\n\
-             out=$(ws_release{fs} {} 2>&1) || {{ printf '%s\\n' \"$out\" >&2; exit 1; }}\n\
-             printf '%s\\n' \"$out\"",
-            shell_quote(&id)
-        );
-        run_ws_script(&target, &script)?;
-        Ok(())
-    })
-    .await
-}
-
 /// Symlink a workspace into a project's remote root (`<remote_path>/<link_name>
 /// -> <workspace_path>`) — for the layout where the project itself stays in
 /// `$HOME` (code, git) and only the bulk data lives in the workspace, so a job

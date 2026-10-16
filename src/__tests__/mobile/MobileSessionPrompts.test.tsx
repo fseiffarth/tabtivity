@@ -115,7 +115,11 @@ describe("Mobile bridge — what a session was last asked", () => {
 
   afterEach(() => {
     cleanup();
-    vi.mocked(invoke).mockReset();
+    // The activity store's busy edge (beforeEach) arms agentModels' 2.5 s
+    // turn-start recheck, which can fire after this test on a loaded machine:
+    // a reset mock answering `undefined` (not a promise) made it an unhandled
+    // rejection. Answer every later call with a settled promise instead.
+    vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
     vi.mocked(listen).mockReset();
     useActivityStore.setState({ busyByTab: {}, attentionByTab: {}, attentionByScope: {} });
     useAgentModelsStore.setState({ byTab: {}, promptByTab: {}, recentByTab: {} });

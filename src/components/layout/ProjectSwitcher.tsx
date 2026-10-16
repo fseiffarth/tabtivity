@@ -4,6 +4,8 @@ import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
+import { dissolveBoxSpec } from "../projects/BoxEditorDialog";
+import { useDialogs } from "../common/PromptDialogs";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { ProjectSearch } from "../projects/ProjectSearch";
 import type { SettingsPanelKind } from "./SettingsPanel";
@@ -60,6 +62,7 @@ const ADD_MENU_ID = "project-add";
 
 export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   const t = useT();
+  const { confirmAction, dialogs } = useDialogs();
   const projects = useProjectsStore((s) => s.projects);
   const setActive = useProjectsStore((s) => s.setActive);
   const addProject = useProjectsStore((s) => s.addProject);
@@ -590,8 +593,9 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             onDelete={(boxId) => {
               const target = boxes.find((b) => b.id === boxId);
               if (!target) return;
-              if (!window.confirm(t("boxEditor.dissolveConfirm", { name: target.name }))) return;
-              void deleteBox(boxId);
+              void confirmAction(dissolveBoxSpec(t, target.name)).then((ok) => {
+                if (ok) void deleteBox(boxId);
+              });
             }}
             active={!!boxFilter && scope === `${BOX_SCOPE_PREFIX}${boxFilter}`}
             rootActive={scope === ROOT_SCOPE}
@@ -804,6 +808,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
           onOpenBox={(id) => selectBox(id)}
         />
       </div>
+      {dialogs}
     </>
   );
 }

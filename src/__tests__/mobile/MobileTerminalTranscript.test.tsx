@@ -140,6 +140,19 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBeNull();
   });
 
+  it.each(["Google Gemini", "Google Antigravity"])("shows %s's stored conversation instead of its startup logo", async (agent) => {
+    vi.stubGlobal("fetch", sidecarFetch(() => STORED));
+    terminalState.lines = ["  ▄▀▀▄  " + agent, "  Gemini 3.1 Pro", "> add a clear button", "✦ screen answer", ">", "? for shortcuts"];
+    render(<Terminal tab={{ ...TAB, label: agent, agent_label: agent }} back={() => {}} />);
+    await settle();
+    expect(screen.getByTitle("Output view").textContent).toBe("Chat");
+    const chat = screen.getByTestId("session-transcript");
+    expect(chat.textContent).toContain("Looking at the composer.");
+    expect(chat.textContent).not.toContain("▄▀▀▄");
+    expect(chat.textContent).not.toContain("screen answer");
+    expect(within(chat).getByRole("group", { name: "Your prompt" }).textContent).toContain("add a clear button");
+  });
+
   it("stays in the Reader for a tab with no session id yet, and paints the session once it reads", async () => {
     // A tab the phone just created: the bridge answers `no_session` until the
     // agent's hook records one. The Reader reads the screen meanwhile and

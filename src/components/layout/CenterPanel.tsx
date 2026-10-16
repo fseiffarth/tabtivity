@@ -21,6 +21,7 @@ import { dragPreviewLayout } from "../tabs/dragPreview";
 import {
   BLOB_TAB_CMD,
   ROOT_SCOPE,
+  activeLayoutPersistTarget,
   DEFAULT_MIN_SUBWINDOW_PX,
   EMPTY_GROUP_ID,
   allGroups,
@@ -350,12 +351,11 @@ function CenterPanelImpl() {
     // way — `storage::project_key` maps it to `sessions/box_<id>/` and an empty
     // localFile skips the project-tree export copy. A project without a
     // `local_file` isn't ready to persist yet.
-    const isBoxScope = scope.startsWith(BOX_SCOPE_PREFIX);
-    if (!isBoxScope && activeId && !localFile) return;
-    const scopeToPersist = isBoxScope ? scope : (activeId ?? "root");
-    const file = isBoxScope ? "" : (localFile ?? "");
+    // (`activeLayoutPersistTarget`: the rule AppShell's quit flush shares.)
+    const target = activeLayoutPersistTarget(scope, activeId, localFile);
+    if (!target) return;
     const timer = window.setTimeout(() => {
-      persistScope(scopeToPersist, file).catch(() => {});
+      persistScope(target.scope, target.localFile).catch(() => {});
     }, 300);
     return () => window.clearTimeout(timer);
   }, [scope, activeId, localFile, tabs, layout, detachedGroups, persistScope]);

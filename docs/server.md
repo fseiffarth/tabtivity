@@ -62,7 +62,7 @@ Read this first; keep it current when a decision or an open point changes.
 | [`context/sharing.md`](context/sharing.md) | Rationale for hubs, editor-share gates, shared calendars and to-dos, pair mode (dropped). |
 | `DOCUMENTATION.md` § "Hosted server: …" | User docs (sign-in, containers, desktop as client, secrets key, admin keys, sharing, browser access). |
 | `todo/group-z-server.md` | The server backlog. |
-| [`headless_owner_plan.md`](headless_owner_plan.md) and its handoff/review/merge files | P1's groundwork (the sidecar as headless owner), merged and user-verified before the server work started. Frozen. |
+| [`headless_owner_plan.md`](done/headless_owner_plan.md) and its handoff/review/merge files | P1's groundwork (the sidecar as headless owner), merged and user-verified before the server work started. Frozen. |
 
 ## What runs where (server mode)
 

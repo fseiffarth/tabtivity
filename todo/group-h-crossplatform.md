@@ -73,8 +73,9 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
-    - [x] **30c — Native PID liveness.** ✅ Done. `check_pid_alive`
-      (`commands/apps.rs`) no longer shells out to `tasklist` on Windows; it uses
+    - [x] **30c — Native PID liveness.** ✅ Done. `pid_alive`
+      (`commands/apps.rs`; its uncalled IPC wrapper `check_pid_alive` was
+      removed 2026-10-15) no longer shells out to `tasklist` on Windows; it uses
       `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess`,
       treating `STILL_ACTIVE` (259) as alive (a handle to an exited process still
       opens, so the exit code must be inspected — not just OpenProcess success).
@@ -3653,7 +3654,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
   - [ ] 🖐️ Full-screen files library (2026-10-14, plan
-    `docs/mobile_files_library_plan.md`; untested ids `mobile.files.library`,
+    `docs/done/mobile_files_library_plan.md`; untested ids `mobile.files.library`,
     `mobile.files.grid`, `mobile.files.sort`, `mobile.files.pathMenu`,
     `mobile.files.counts`; needs `npm run mobile:bundle`, and the rebuilt
     backend for the counts). Open a project, ☰ → **Files**: the library fills
@@ -3685,8 +3686,8 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   `mobile_host_switches_and_unknown_keys_survive_a_patch`,
   `MobileProjectUploadsGate.test.tsx`, `InboxIndicator.test.tsx`,
   `MobileProjectFiles.test.tsx`; ⚠️ never run on a phone; Windows runtime
-  never run). Plan `docs/phone_upload_plan.md`, handoff
-  `docs/phone_upload_handoff.md`. Second host-wide switch **Settings → Mobile →
+  never run). Plan `docs/done/phone_upload_plan.md`, handoff
+  `docs/done/phone_upload_handoff.md`. Second host-wide switch **Settings → Mobile →
   Project access → Phone may add files to projects** (default off, under
   Project files on the phone); the desktop header inbox gains *Added to
   projects*. Untested ids `mobile.files.upload` (phone button + the switch),
@@ -3823,7 +3824,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   ✅ code-complete, automated tests passing — `markup.rs`/`markup_pdf.rs` units,
   host tests `a_markup_submit_bakes_a_copy_…` and `only_the_pdf_frame_may_be_framed_…`,
   `MobileMarkup.test.ts`, `MobileMarkupView.test.tsx`; ⚠️ never run on a phone
-  or an iPad). Plan `docs/mobile_pdf_markup_plan.md`; its §4.0 spike (the
+  or an iPad). Plan `docs/done/mobile_pdf_markup_plan.md`; its §4.0 spike (the
   sealed frame and the Pencil on the iPad) was not run first — the checks
   below are that spike. The bake is Tabtivity's own incremental-update writer,
   not `lopdf` (no crate could be fetched in the fenced tab). Untested ids
@@ -3875,7 +3876,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual QA, phone — markup rounds: Submit keeps the view open (2026-10-02; plan `docs/pdf_markup_rounds_plan.md`, handoff `docs/pdf_markup_rounds_handoff.md`; untested id `mobile.markup.rounds`; ✅ automated: `MobileMarkupRoundsCore.test.ts`, `MobileMarkupRounds.test.tsx`; ⚠️ never run on a phone; PWA rebuild + `backend:stale` first): an agent tab on a LaTeX project → files drawer → the built PDF → **Mark up** → strike a word → **Submit**: the view stays open, the stroke dims, the pill reads Sent → Agent is working… → Agent finished — PDF unchanged (the default instruction only lists). While it works circle another word and Submit → the pill says Queued, and only the new circle goes out (the chat shows the second prompt). Tell the agent in the chat to make the changes and rebuild → back in the view the pill goes working → "Agent finished — PDF changed" with **Reload PDF** → Reload: the rebuilt pages appear under the layer at the same place, the sent marks stay on show, dimmed, to check each change against — the eraser removes a checked one (⋯ **Show sent marks** hides them, ⋯ **Clear sent marks** drops them; nothing removes one automatically), unsent marks stay. Same on a PDF the agent sent with `eldrun-send` (chat bubble → viewer): Reload picks the newer copy, and closing and reopening that copy shows the layer.
+  - [ ] 🖐️ Manual QA, phone — markup rounds: Submit keeps the view open (2026-10-02; plan `docs/done/pdf_markup_rounds_plan.md`, handoff `docs/done/pdf_markup_rounds_handoff.md`; untested id `mobile.markup.rounds`; ✅ automated: `MobileMarkupRoundsCore.test.ts`, `MobileMarkupRounds.test.tsx`; ⚠️ never run on a phone; PWA rebuild + `backend:stale` first): an agent tab on a LaTeX project → files drawer → the built PDF → **Mark up** → strike a word → **Submit**: the view stays open, the stroke dims, the pill reads Sent → Agent is working… → Agent finished — PDF unchanged (the default instruction only lists). While it works circle another word and Submit → the pill says Queued, and only the new circle goes out (the chat shows the second prompt). Tell the agent in the chat to make the changes and rebuild → back in the view the pill goes working → "Agent finished — PDF changed" with **Reload PDF** → Reload: the rebuilt pages appear under the layer at the same place, the sent marks stay on show, dimmed, to check each change against — the eraser removes a checked one (⋯ **Show sent marks** hides them, ⋯ **Clear sent marks** drops them; nothing removes one automatically), unsent marks stay. Same on a PDF the agent sent with `eldrun-send` (chat bubble → viewer): Reload picks the newer copy, and closing and reopening that copy shows the layer.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3902,7 +3903,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual QA, desktop — the agent's markup questions beside the PDF (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `desktop.markup.questions`; ✅ automated: `PdfMarkupQuestions.test.tsx`, Rust `services::markup_mcp`, `commands::markup_mcp`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): a local project with a fresh Claude tab → its PDF → **✎ Mark up** → draw an ambiguous arrow (or circle two words and write "which?") → **Submit**. The agent calls `markup_ask` (Claude asks to approve the tool the first time) and ends its turn; a card "The agent asks" appears under the markup strip, the pill reads "The agent asks about your marks — answer below" and **Make these changes** is off. Each question has a `?n` pin at the quoted words (in the page's top margin when the quote is not found). Click a pin → the card scrolls to its question and flashes it; **Show on page N** → the page scrolls to the pin and lights the quoted words. Click an option of a single question → the answer appears in the agent tab as your prompt ("My answers to your markup questions on `…`: 1. … → …"), the card goes, the pill follows the turn. Several questions or a "Pick any that apply." one: rows tick, **Send answers** sends them all. **Other…** → type → it goes out as `Other: …`. **Answer in chat instead** → the card goes, nothing is typed. Ask the agent to ask again before answering → the first card is replaced. Same flow in a Codex tab. Turn markup off → the card goes; back on → it is back.
+  - [ ] 🖐️ Manual QA, desktop — the agent's markup questions beside the PDF (2026-10-03; plan `docs/done/markup_questions_mcp_plan.md`, handoff `docs/done/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `desktop.markup.questions`; ✅ automated: `PdfMarkupQuestions.test.tsx`, Rust `services::markup_mcp`, `commands::markup_mcp`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): a local project with a fresh Claude tab → its PDF → **✎ Mark up** → draw an ambiguous arrow (or circle two words and write "which?") → **Submit**. The agent calls `markup_ask` (Claude asks to approve the tool the first time) and ends its turn; a card "The agent asks" appears under the markup strip, the pill reads "The agent asks about your marks — answer below" and **Make these changes** is off. Each question has a `?n` pin at the quoted words (in the page's top margin when the quote is not found). Click a pin → the card scrolls to its question and flashes it; **Show on page N** → the page scrolls to the pin and lights the quoted words. Click an option of a single question → the answer appears in the agent tab as your prompt ("My answers to your markup questions on `…`: 1. … → …"), the card goes, the pill follows the turn. Several questions or a "Pick any that apply." one: rows tick, **Send answers** sends them all. **Other…** → type → it goes out as `Other: …`. **Answer in chat instead** → the card goes, nothing is typed. Ask the agent to ask again before answering → the first card is replaced. Same flow in a Codex tab. Turn markup off → the card goes; back on → it is back.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3911,7 +3912,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual QA, phone — the agent's markup questions in the markup view (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `mobile.markup.questions`; ✅ automated: `MobileMarkupQuestionsCard.test.tsx`, `MobileMarkupQuestions.test.tsx`, Rust host `markup_questions_cross_as_leaf_names_and_answers_as_indices`, `protocol::markup_questions_cross_by_tab_pair_and_answers_stay_strict`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` and `npm run mobile:bundle`): as above, but Submit from the phone's **Mark up** on a PDF the agent sent (chat bubble → viewer). A card "The agent asks · n" docks at the top of the palette within ~3 s; it also shows while just reading the PDF. Pins come from the sealed frame at the quoted words (check at high zoom and on a two-column page); tap a pin → the card opens and flashes that question; **Show on page N** → the page scrolls there and the words light up briefly. Tap an option → the answer appears in the chat as your prompt and the card goes on the phone **and** the desktop. Fold the card with its head; a new ask opens it again. **Other…** with the keyboard up on a small phone: the card stays usable. Answer the same ask on the desktop first, then on the phone → "they were already answered", nothing typed. Close the desktop window (sidecar keeps running) → no card, no error.
+  - [ ] 🖐️ Manual QA, phone — the agent's markup questions in the markup view (2026-10-03; plan `docs/done/markup_questions_mcp_plan.md`, handoff `docs/done/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `mobile.markup.questions`; ✅ automated: `MobileMarkupQuestionsCard.test.tsx`, `MobileMarkupQuestions.test.tsx`, Rust host `markup_questions_cross_as_leaf_names_and_answers_as_indices`, `protocol::markup_questions_cross_by_tab_pair_and_answers_stay_strict`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` and `npm run mobile:bundle`): as above, but Submit from the phone's **Mark up** on a PDF the agent sent (chat bubble → viewer). A card "The agent asks · n" docks at the top of the palette within ~3 s; it also shows while just reading the PDF. Pins come from the sealed frame at the quoted words (check at high zoom and on a two-column page); tap a pin → the card opens and flashes that question; **Show on page N** → the page scrolls there and the words light up briefly. Tap an option → the answer appears in the chat as your prompt and the card goes on the phone **and** the desktop. Fold the card with its head; a new ask opens it again. **Other…** with the keyboard up on a small phone: the card stays usable. Answer the same ask on the desktop first, then on the phone → "they were already answered", nothing typed. Close the desktop window (sidecar keeps running) → no card, no error.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3920,7 +3921,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual QA, phone — the Focus banner for an open markup question (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `mobile.markup.questions`; ✅ automated: `MobileMarkupQuestionsCard.test.tsx` (banner cases); ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` and `npm run mobile:bundle`): while an ask is open, the tab's Chat shows a one-line banner over the session facts. The agent sent the PDF to the phone: "The agent asks about <file>" with **Open** → the PDF opens in the markup view with the card. The PDF lives only in the project: "… about <file> in its markup view", no Open. An ask without a file: "… about your marks in the markup view". Answer it → the banner goes. The banner never shows while a viewer, the gallery or the file browser covers the chat.
+  - [ ] 🖐️ Manual QA, phone — the Focus banner for an open markup question (2026-10-03; plan `docs/done/markup_questions_mcp_plan.md`, handoff `docs/done/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `mobile.markup.questions`; ✅ automated: `MobileMarkupQuestionsCard.test.tsx` (banner cases); ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` and `npm run mobile:bundle`): while an ask is open, the tab's Chat shows a one-line banner over the session facts. The agent sent the PDF to the phone: "The agent asks about <file>" with **Open** → the PDF opens in the markup view with the card. The PDF lives only in the project: "… about <file> in its markup view", no Open. An ask without a file: "… about your marks in the markup view". Answer it → the banner goes. The banner never shows while a viewer, the gallery or the file browser covers the chat.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3929,7 +3930,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual QA, desktop and phone — an answer that could not be delivered reopens its questions (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested ids `desktop.markup.questions`, `mobile.markup.questions`; ✅ automated: `reopen_undoes_only_the_answer_whose_prompt_was_not_delivered`, the delivery-failure cases in `PdfMarkupQuestions.test.tsx` and `MobileMarkupQuestionsCard.test.tsx`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): make queueing into the tab fail (e.g. fill the tab's scheduled prompts up to its cap) and answer: the desktop card stays and says the questions are still open — try again; the phone says it could not be sent and the questions are still open. Free the queue and answer again → delivered once. If the agent asked anew meanwhile, the old answer is not reopened: the desktop shows the prompt text to paste, the phone says the questions have closed.
+  - [ ] 🖐️ Manual QA, desktop and phone — an answer that could not be delivered reopens its questions (2026-10-03; plan `docs/done/markup_questions_mcp_plan.md`, handoff `docs/done/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested ids `desktop.markup.questions`, `mobile.markup.questions`; ✅ automated: `reopen_undoes_only_the_answer_whose_prompt_was_not_delivered`, the delivery-failure cases in `PdfMarkupQuestions.test.tsx` and `MobileMarkupQuestionsCard.test.tsx`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): make queueing into the tab fail (e.g. fill the tab's scheduled prompts up to its cap) and answer: the desktop card stays and says the questions are still open — try again; the phone says it could not be sent and the questions are still open. Free the queue and answer again → delivered once. If the agent asked anew meanwhile, the old answer is not reopened: the desktop shows the prompt text to paste, the phone says the questions have closed.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3938,7 +3939,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual QA, the Manage CLIs switch for markup questions (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `markupMcp`; ✅ automated: Rust `services::root_mcp` wiring tests, `services::markup_mcp` `off` case; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): Settings → Agents → Manage CLIs → Advanced → **Let project agents ask about your PDF marks (MCP)** is on in fresh settings. Turn it off → a newly opened Claude tab lists no `markup_ask` (`/mcp`); a tab opened before still has the tool, and a call answers `off` naming the setting, no card appears. Turn it on → a new tab has the tool again. A remote project's tab, a VM project and a container tab never have it.
+  - [ ] 🖐️ Manual QA, the Manage CLIs switch for markup questions (2026-10-03; plan `docs/done/markup_questions_mcp_plan.md`, handoff `docs/done/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `markupMcp`; ✅ automated: Rust `services::root_mcp` wiring tests, `services::markup_mcp` `off` case; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): Settings → Agents → Manage CLIs → Advanced → **Let project agents ask about your PDF marks (MCP)** is on in fresh settings. Turn it off → a newly opened Claude tab lists no `markup_ask` (`/mcp`); a tab opened before still has the tool, and a call answers `off` naming the setting, no card appears. Turn it on → a new tab has the tool again. A remote project's tab, a VM project and a container tab never have it.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3992,7 +3993,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual QA, desktop and phone — **Apply marks directly** and **Undo** (2026-10-04; plan `docs/pdf_markup_direct_apply_plan.md`, handoff `docs/pdf_markup_direct_apply_handoff.md`; untested ids `mobile.markup.undo`, `desktop.markup.undo`; ✅ automated: `MobileMarkupRounds.test.tsx`, `MobileMarkupRoundsCore.test.ts`, `PdfMarkupSubmit.test.tsx`, `DesktopSettings.test.tsx`, Rust `services::markup_rounds` + host route test; ⚠️ never live; needs the rebuilt backend and phone bundle — `npm run backend:stale`). A LaTeX project in git: mark a typo and Submit → in one turn the agent edits the `.tex`, rebuilds (phone: and sends the PDF back); the pill says Agent finished and offers **Undo**, never Make these changes. **Undo** → a sheet (desktop: a dialog) lists the files and says the PDF goes back → **Undo** → the `.tex` and the PDF are back as before, the PDF reloads under the marks (which stay), a note "I undid your edits …" appears in the chat and no new round starts. Edit the `.tex` by hand after a round → **Undo** says "Can't undo — `….tex` changed since. Nothing was changed." and leaves the file alone. A folder that is not a git repository (phone: also a remote project or a picture) → the line "No undo here (…) — the agent lists the changes first." and **Make these changes** as before. Switch off (phone: Home → ⚙ This device → Mark up prompt → **Apply marks directly**; desktop: Settings → Agents → PDF markup) → list first as before; the Mark up prompt field starts from the list default while off and the apply default while on.
+  - [ ] 🖐️ Manual QA, desktop and phone — **Apply marks directly** and **Undo** (2026-10-04; plan `docs/done/pdf_markup_direct_apply_plan.md`, handoff `docs/done/pdf_markup_direct_apply_handoff.md`; untested ids `mobile.markup.undo`, `desktop.markup.undo`; ✅ automated: `MobileMarkupRounds.test.tsx`, `MobileMarkupRoundsCore.test.ts`, `PdfMarkupSubmit.test.tsx`, `DesktopSettings.test.tsx`, Rust `services::markup_rounds` + host route test; ⚠️ never live; needs the rebuilt backend and phone bundle — `npm run backend:stale`). A LaTeX project in git: mark a typo and Submit → in one turn the agent edits the `.tex`, rebuilds (phone: and sends the PDF back); the pill says Agent finished and offers **Undo**, never Make these changes. **Undo** → a sheet (desktop: a dialog) lists the files and says the PDF goes back → **Undo** → the `.tex` and the PDF are back as before, the PDF reloads under the marks (which stay), a note "I undid your edits …" appears in the chat and no new round starts. Edit the `.tex` by hand after a round → **Undo** says "Can't undo — `….tex` changed since. Nothing was changed." and leaves the file alone. A folder that is not a git repository (phone: also a remote project or a picture) → the line "No undo here (…) — the agent lists the changes first." and **Make these changes** as before. Switch off (phone: Home → ⚙ This device → Mark up prompt → **Apply marks directly**; desktop: Settings → Agents → PDF markup) → list first as before; the Mark up prompt field starts from the list default while off and the apply default while on.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -4111,7 +4112,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
 
 - [~] **31bz — The phone's ⎇ Git overview, and the ＋ sheet's worktree row**
   (2026-10-04; untested id `mobile.project.gitOverview`;
-  `docs/mobile_git_overview_plan.md`). Needs the frozen dev build (the
+  `docs/done/mobile_git_overview_plan.md`). Needs the frozen dev build (the
   sidecar serves the new route). In a git project with one linked worktree
   (desktop Git panel → Worktrees → add) and an agent tab running in it: on the
   phone tap the project's name → **⎇ Git**. The head line shows the project
@@ -4145,7 +4146,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   passing, ⚠️ live QA pending — and a rebuild + restart first: the sidecar,
   two commands and a new one changed; untested id `mobile.phonePicker`;
   design `docs/context/mobile_access.md`, plan
-  `docs/mobile_device_scoped_access_plan.md`). The side panel's phone button
+  `docs/done/mobile_device_scoped_access_plan.md`). The side panel's phone button
   opens a picker — All phones / Only these phones (checklist of the paired
   phones) / Turn off — and Settings → Mobile shows "All phones ▾" / "N phones
   ▾" / "No phones ▾" beside each enabled project and box, opening the same
@@ -4223,7 +4224,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   `MobileLocalModelsGate.test.tsx`, `MobileLocalModelsSheet.test.tsx`,
   `MobileMutationList.test.ts`, `MobileApiDeadlines.test.ts`; ⚠️ not
   verified on a phone). Plan
-  `docs/mobile_local_model_control_plan.md`. Home → **Local models** lists
+  `docs/done/mobile_local_model_control_plan.md`. Home → **Local models** lists
   the desktop's installed Ollama models (size, parameters/quantization,
   idle / loading / loaded / failed, GPU · N % GPU · CPU, stays loaded /
   unloads in N min, the model new local-model tabs use) with **Load**

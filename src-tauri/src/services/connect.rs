@@ -191,7 +191,7 @@ pub async fn open_socket(session: &Session, resume: Option<&str>) -> Result<Sock
     let tcp = tokio::net::TcpStream::connect((host.as_str(), port)).await.map_err(|e| format!("{host}:{port}: {e}"))?;
     let stream: Box<dyn Io> = if secure {
         let name = rustls_pki_types::ServerName::try_from(host.clone()).map_err(|e| e.to_string())?;
-        let tls = tokio_rustls::TlsConnector::from(crate::services::mail_engine::tls_config()).connect(name, tcp).await.map_err(|e| format!("TLS: {e}"))?;
+        let tls = tokio_rustls::TlsConnector::from(crate::services::mail_engine::tls_config()?).connect(name, tcp).await.map_err(|e| format!("TLS: {e}"))?;
         Box::new(tls)
     } else {
         Box::new(tcp)

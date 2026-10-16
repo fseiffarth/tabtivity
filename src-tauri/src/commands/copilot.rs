@@ -101,19 +101,6 @@ pub fn copilot_setup() -> Value {
     })
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn copilot_project_policy(project_id: String) -> Value {
-    let settings: Settings = storage::read_json(&settings_path()).unwrap_or_default();
-    let policy = settings.completion_project_policies.as_ref().and_then(|p| p.get(&project_id));
-    json!({
-        "copilot": policy.is_some_and(|p| p.copilot),
-        "localOnly": policy.is_some_and(|p| p.local_only),
-        "text": policy.is_some_and(|p| p.copilot_text),
-        "remote": remote::remote_target_for(&project_id).is_some(),
-        "authorized": authorize(&project_id).is_ok(),
-    })
-}
-
 /// Consent binds the project id to the directory the backend resolves now.
 /// Text-file consent only stands on top of code consent; dropping that drops
 /// it too. Returns the settings that won, like `patch_settings`, for the
@@ -265,11 +252,6 @@ pub async fn copilot_sign_out(project_id: String) -> Result<(), String> {
     // Even an offline sign-out releases credentials, cached offers and work.
     sessions().stop(&project_id).await;
     result
-}
-
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn copilot_stop(project_id: String) {
-    sessions().stop(&project_id).await;
 }
 
 /// `RunEvent::Exit`: no language server outlives Tabtivity.

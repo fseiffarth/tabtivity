@@ -457,12 +457,16 @@ async fn reconcile_pass(
     // Host directory walks already paid for size+mtime. Carry those values into
     // the reconcile loop instead of serially re-stat'ing every walked file over
     // SFTP. Explicit single-file markers and mirror-only candidates still stat.
+    // The walk's permission bits ride along for the pull (the mirror copy keeps
+    // the host's mode).
     let mut walked_host_meta: HashMap<String, (u64, Option<u64>)> = HashMap::new();
+    let mut walked_host_mode: HashMap<String, Option<u32>> = HashMap::new();
     for d in &auto_dirs {
         match remote_sync::walk_host_files(&sftp, &target.spec.remote_path, d).await {
             Ok(files) => {
                 for file in files {
                     walked_host_meta.insert(file.rel.clone(), (file.size, file.mtime));
+                    walked_host_mode.insert(file.rel.clone(), file.mode);
                     candidates.insert(file.rel);
                 }
             }
@@ -498,9 +502,12 @@ async fn reconcile_pass(
         let host_abs = remote_sync::join_remote(&target.spec.remote_path, &rel);
         // `Option`, distinguishing a gone host path (None) from an empty file —
         // the same input `push_decision`/`divergence` expect (matches sync_push).
-        let host = match walked_host_meta.get(&rel) {
-            Some(meta) => Some(*meta),
-            None => sftp::metadata_on(&sftp, &host_abs).await.ok(),
+        let (host, host_mode) = match walked_host_meta.get(&rel) {
+            Some(meta) => (Some(*meta), walked_host_mode.get(&rel).copied().flatten()),
+            None => match sftp::metadata_with_mode_on(&sftp, &host_abs).await {
+                Ok((size, mtime, mode)) => (Some((size, mtime)), mode),
+                Err(_) => (None, None),
+            },
         };
         let local_path = mirror_local_path(project_id, &rel);
         let local = std::fs::metadata(&local_path)
@@ -518,7 +525,7 @@ async fn reconcile_pass(
                     // must not hang this background task forever (which, sharing the
                     // session, would wedge every manual push too). A timeout abandons
                     // the pass; the pool keepalive then evicts a dead master.
-                    match run_bounded(remote_sync::pull_file(&sftp, &host_abs, hsize, &mirror_root, &rel))
+                    match run_bounded(remote_sync::pull_file(&sftp, &host_abs, hsize, host_mode, &mirror_root, &rel))
                         .await
                     {
                         Ok((ls, lm)) => {
@@ -526,7 +533,15 @@ async fn reconcile_pass(
                             let mut g = manifest.lock().await;
                             let m = ensure_loaded(&mut g, project_id);
                             remote_sync::record_pull(m, &rel, hs, hm, ls, lm);
-                            let _ = remote_sync::save_manifest(project_id, m);
+                            // Background: logged; the unsaved record is forgotten
+                            // (both sides read as moved, so later passes skip it).
+                            if let Err(e) = remote_sync::save_manifest_or_mark_stale(
+                                project_id,
+                                m,
+                                std::slice::from_ref(&rel),
+                            ) {
+                                eprintln!("auto-sync: pulled '{rel}' but could not record it: {e}");
+                            }
                             net_usage::record_files(project_id, 1, 0);
                             pulled += 1;
                         }
@@ -547,7 +562,13 @@ async fn reconcile_pass(
                             let mut g = manifest.lock().await;
                             let m = ensure_loaded(&mut g, project_id);
                             remote_sync::record_push(m, &rel, hs, hm, ls, lm);
-                            let _ = remote_sync::save_manifest(project_id, m);
+                            if let Err(e) = remote_sync::save_manifest_or_mark_stale(
+                                project_id,
+                                m,
+                                std::slice::from_ref(&rel),
+                            ) {
+                                eprintln!("auto-sync: pushed '{rel}' but could not record it: {e}");
+                            }
                             net_usage::record_files(project_id, 0, 1);
                             pushed += 1;
                         }

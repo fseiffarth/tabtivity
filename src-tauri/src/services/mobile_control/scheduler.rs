@@ -37,7 +37,7 @@
 //! CLI's own queue as soon as the pane takes keystrokes and is not on a
 //! question, as a prompt typed then would go.
 //!
-//! Not here (recorded in `docs/headless_owner_handoff.md`): the window's
+//! Not here (recorded in `docs/done/headless_owner_handoff.md`): the window's
 //! after-link chaining and prompt blame, both of which need its stores.
 
 use std::collections::{HashMap, HashSet};

@@ -1,6 +1,6 @@
 /**
  * The Skills Library's wire types — the exact shapes `commands::skills`
- * serializes. See `docs/skills_plan.md` for the feature's scope and
+ * serializes. See `docs/done/skills_plan.md` for the feature's scope and
  * `lib/agents/skills.ts` for the invoke wrappers built on them.
  */
 

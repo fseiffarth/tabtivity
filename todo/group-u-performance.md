@@ -2217,7 +2217,7 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
 
 2415. **Per-tab cost readout and the loaded-PDF notice.** ✅ Done on branch
-    `perf` (T1 in `docs/tab_cost_handoff.md`, plan `docs/tab_cost_plan.md`
+    `perf` (T1 in `docs/done/tab_cost_handoff.md`, plan `docs/done/tab_cost_plan.md`
     step 1), code-complete and **live-unverified**. Untested pills
     `tabCost.hover` and `settings.tabCosts` (its row also covers the toast).
     Setup: a frozen dev build of this branch.
@@ -2265,7 +2265,7 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
 
 2416. **Shell scrollback setting.** ✅ Done on branch `perf` (T2 in
-    `docs/tab_cost_handoff.md`, plan `docs/tab_cost_plan.md` step 2),
+    `docs/done/tab_cost_handoff.md`, plan `docs/done/tab_cost_plan.md` step 2),
     code-complete and **live-unverified**. Untested pill
     `settings.shellScrollback`. Setup: a frozen dev build of this branch.
     - [x] 🤖 Automated test — `Scrollback`, `TerminalScrollback`, Rust
@@ -2287,7 +2287,7 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
 
 2417. **Experimental features no longer follow Debug mode.** ✅ Done on branch
-    `perf` (T3 in `docs/tab_cost_handoff.md`, plan `docs/tab_cost_plan.md`
+    `perf` (T3 in `docs/done/tab_cost_handoff.md`, plan `docs/done/tab_cost_plan.md`
     step 3), code-complete and **live-unverified**. Untested pills
     `settings.debugNoExperiments`, `settings.deckPresenter`. Setup: a frozen
     dev build of this branch; for T3.1 a profile whose `settings.json` has
@@ -2328,7 +2328,7 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
 
 2421. **GPU compositing (Linux, experimental).** ✅ Done 2026-10-14,
-    code-complete and **live-unverified** (`docs/gpu_compositing_plan.md`).
+    code-complete and **live-unverified** (`docs/done/gpu_compositing_plan.md`).
     Settings → Experimental → "GPU compositing" (Linux only, default off,
     never carried by Debug mode) stops `run()` forcing
     `WEBKIT_DISABLE_DMABUF_RENDERER=1`; it applies at the next launch, and an

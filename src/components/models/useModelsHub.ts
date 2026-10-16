@@ -395,8 +395,10 @@ export function useModelsHub(active: boolean) {
 
   // Pause an in-flight download; the backend keeps the partial blobs and emits a
   // "paused" event that flips the row to Resume / Delete.
+  // A refused pause leaves the download running: say so rather than let the
+  // rejection go unhandled with the row still showing Pause.
   const pausePull = (model: string) => {
-    void invoke("pause_ollama_pull", { model });
+    invoke("pause_ollama_pull", { model }).catch(() => setError(t("localModel.pauseFailed")));
   };
 
   // Resume a paused download — Ollama continues from the partial blobs.

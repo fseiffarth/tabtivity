@@ -9,13 +9,19 @@
  * backend command's own argument names; nothing here reaches the server.
  */
 import type { WsClient } from "./wsClient";
+import { translate, useI18nStore, type TranslationKey } from "../i18n";
 
 type Args = Record<string, unknown>;
+
+/** A rejection the UI shows as-is: in the app language. */
+function clientError(key: TranslationKey): Error {
+  return new Error(translate(useI18nStore.getState().lang, key));
+}
 
 async function openContentUrl(client: WsClient, path: string, download: boolean): Promise<void> {
   const ticket = (await client.call("desktop_file_ticket", { path, download })) as { url: string };
   const opened = window.open(ticket.url, "_blank", "noopener");
-  if (!opened && !download) throw new Error("the browser blocked the new tab");
+  if (!opened && !download) throw clientError("clientAdapters.newTabBlocked");
 }
 
 /**
@@ -39,10 +45,10 @@ export function adaptClientCommand(client: WsClient, cmd: string, args: Args): P
       if (args.checkOnly) return Promise.resolve(null);
       return openContentUrl(client, String(args.path ?? ""), false);
     case "open_in_file_manager":
-      return Promise.reject(new Error("open_in_file_manager: the server's folders cannot be shown in this browser"));
+      return Promise.reject(clientError("clientAdapters.noFileManager"));
     case "open_external_url": {
       const url = String(args.url ?? "");
-      if (!/^https?:\/\//.test(url)) return Promise.reject(new Error("refusing to open a non-web URL"));
+      if (!/^https?:\/\//.test(url)) return Promise.reject(clientError("clientAdapters.nonWebUrl"));
       window.open(url, "_blank", "noopener");
       return Promise.resolve();
     }

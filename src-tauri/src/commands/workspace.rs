@@ -3,11 +3,10 @@ use app_core::sync::LockExt;
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "desktop")]
-use tauri::{AppHandle, Emitter, State};
+use tauri::State;
 
 use crate::commands::apps::{opened_windows_for_project, TrackedWindow, WindowRegistryState};
 use crate::platform::{detect_backend, WorkspaceBackend, WorkspaceInfo};
-use crate::services::window_service;
 
 pub struct WorkspaceState {
     pub backend: Box<dyn WorkspaceBackend>,
@@ -59,34 +58,6 @@ pub fn workspace_capabilities(state: State<'_, WorkspaceStateArc>) -> WorkspaceC
     capabilities_of(&*state.lock_ok().backend)
 }
 
-#[cfg(feature = "desktop")]
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn workspace_switch(
-    state: State<'_, WorkspaceStateArc>,
-    windows: State<'_, WindowRegistryState>,
-    app: AppHandle,
-    project_id: Option<String>,
-    previous_project_id: Option<String>,
-) -> Result<(), String> {
-    let (previous_window_ids, current_window_ids) = {
-        let windows = windows.lock_ok();
-        let previous_window_ids =
-            window_service::project_window_ids(&windows.windows, previous_project_id.as_deref());
-        let current_window_ids =
-            window_service::project_window_ids(&windows.windows, project_id.as_deref());
-        (previous_window_ids, current_window_ids)
-    };
-
-    {
-        let workspace = state.lock_ok();
-        window_service::hide_windows(&*workspace.backend, &previous_window_ids);
-        window_service::show_windows(&*workspace.backend, &current_window_ids);
-    }
-    let info = state.lock_ok().backend.info();
-    let _ = app.emit("workspace-changed", info);
-    Ok(())
-}
-
 /// Does the desktop shell own the lone Super/Meta key?
 ///
 /// The frontend binds the bare Super key to the panel toggle, and must not do
@@ -122,51 +93,6 @@ pub fn get_opened_windows(
     // would become visible, so sweep the requested scope first.
     crate::commands::apps::prune_dead_windows(&mut windows, project_id.as_deref());
     opened_windows_for_project(windows.windows.values(), project_id.as_deref())
-}
-
-#[cfg(feature = "desktop")]
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn switch_project_windows(
-    state: State<'_, WorkspaceStateArc>,
-    windows: State<'_, WindowRegistryState>,
-    project_id: Option<String>,
-    previous_project_id: Option<String>,
-) -> Result<(), String> {
-    let (previous_window_ids, current_window_ids) = {
-        let windows = windows.lock_ok();
-        let previous =
-            opened_windows_for_project(windows.windows.values(), previous_project_id.as_deref());
-        let current = opened_windows_for_project(windows.windows.values(), project_id.as_deref());
-        (
-            previous
-                .into_iter()
-                .filter_map(|window| window.window_id)
-                .collect::<Vec<_>>(),
-            current
-                .into_iter()
-                .filter_map(|window| window.window_id)
-                .collect::<Vec<_>>(),
-        )
-    };
-
-    let backend = state.lock_ok();
-    for window_id in previous_window_ids {
-        if let Err(error) = backend.backend.hide_window(window_id) {
-            eprintln!("hide tracked window {window_id} failed: {error}");
-        }
-    }
-    for window_id in current_window_ids {
-        if let Err(error) = backend.backend.show_window(window_id) {
-            eprintln!("show tracked window {window_id} failed: {error}");
-        }
-    }
-    Ok(())
-}
-
-#[cfg(feature = "desktop")]
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn workspace_name(state: State<'_, WorkspaceStateArc>) -> String {
-    state.lock_ok().backend.name().to_string()
 }
 
 /// Returns "wlan", "lan", or "disconnected".

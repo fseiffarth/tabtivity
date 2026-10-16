@@ -108,6 +108,8 @@ vi.mock("../../hooks/useKeyboard", () => ({ useKeyboard: vi.fn() }));
 import { AppShell } from "../../components/layout/AppShell";
 import { invoke } from "@tauri-apps/api/core";
 import { message } from "@tauri-apps/plugin-dialog";
+import { useProjectsStore } from "../../stores/projects";
+import { useTabsStore } from "../../stores/tabs";
 
 describe("AppShell close handler", () => {
   beforeEach(() => {
@@ -167,5 +169,31 @@ describe("AppShell close handler", () => {
 
     expect(message).toHaveBeenCalledOnce();
     expect(shared.destroy).toHaveBeenCalledOnce();
+  });
+  it("flushes an open box's own scope on quit, not the active project's", async () => {
+    // A box open over a project: the tab store shows `box:<id>` while the
+    // project stays active. The quit flush must save the box (its last change
+    // is what the 300 ms debounce may still hold), with no project file —
+    // the rule CenterPanel's debounced save uses.
+    // Set after render (the handler reads both stores when the quit runs), the
+    // mocked projects store last so nothing re-renders against it.
+    render(<AppShell />);
+    const persistScope = vi.fn().mockResolvedValue(undefined);
+    const prev = useTabsStore.getState();
+    act(() => useTabsStore.setState({ scope: "box:b1", persistScope }));
+    const projects = useProjectsStore.getState() as unknown as { activeId: string | null; projects: unknown[] };
+    projects.activeId = "proj";
+    projects.projects = [{ id: "proj", local_file: "/p/project.json" }];
+    try {
+      await act(async () => {
+        await shared.handler!({ preventDefault: vi.fn() });
+      });
+      expect(persistScope).toHaveBeenCalledWith("box:b1", "");
+      expect(persistScope).not.toHaveBeenCalledWith("proj", expect.anything());
+    } finally {
+      projects.activeId = null;
+      projects.projects = [];
+      useTabsStore.setState({ scope: prev.scope, persistScope: prev.persistScope });
+    }
   });
 });

@@ -7,7 +7,7 @@ import { ASSISTANT_SCOPE } from "../lib/assistant";
 /**
  * The **docked agent** of the mail, calendar and to-do overlays — a root agent
  * tab shown in a column beside the app, so the agent's MCP writes land next to
- * the prompt that caused them (`docs/overlay_agent_plan.md`).
+ * the prompt that caused them (`docs/done/overlay_agent_plan.md`).
  *
  * The tab itself is an ordinary root tab (`addTabToRoot`): its PTY is owned by
  * `CenterPanel`'s keep-alive layer and it shows in the root console's strip.

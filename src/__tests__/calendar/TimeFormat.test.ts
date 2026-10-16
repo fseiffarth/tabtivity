@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { defaultUse24h, resolveUse24h } from "../../lib/timeFormat";
 import { localeUses24h, osUse24hFrom } from "../../lib/osClock";
-import { formatStampTime, formatTime } from "../../lib/calendar/calendarTime";
+import { formatLongDate, formatStampTime, formatTime } from "../../lib/calendar/calendarTime";
+import { registerDict, useI18nStore } from "../../lib/i18n";
+import { dict as es } from "../../lib/i18nDicts/es";
 
 /**
  * The app-wide clock.
@@ -98,3 +100,32 @@ describe("formatTime", () => {
   });
 });
 
+
+describe("calendar display in the app language", () => {
+  it("spells the day period in the app language, by default and when passed", () => {
+    registerDict("es", es);
+    const before = useI18nStore.getState().lang;
+    try {
+      expect(formatTime("09:05", false, "es")).toBe("9:05 a. m.");
+      expect(formatTime("17:30", false, "en")).toBe("5:30 PM");
+      useI18nStore.setState({ lang: "es" });
+      expect(formatTime("17:30", false)).toBe("5:30 p. m.");
+      expect(formatStampTime("2026-07-08T09:00", false)).toBe("9:00 a. m.");
+      // A 24-hour clock has no day period to spell.
+      expect(formatTime("17:30", true)).toBe("17:30");
+    } finally {
+      useI18nStore.setState({ lang: before });
+    }
+  });
+
+  it("spells a long date in the app language unless told otherwise", () => {
+    const before = useI18nStore.getState().lang;
+    try {
+      useI18nStore.setState({ lang: "de" });
+      expect(formatLongDate("2026-07-08")).toContain("Juli");
+      expect(formatLongDate("2026-07-08", "en")).toContain("July");
+    } finally {
+      useI18nStore.setState({ lang: before });
+    }
+  });
+});

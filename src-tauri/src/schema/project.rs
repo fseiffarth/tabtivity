@@ -634,6 +634,34 @@ mod tests {
         assert!(out.get("compute_hosts").is_none());
     }
 
+    /// A build of 2026-10-15 marked hosts a browser account stored with
+    /// `added_by_client` (both spellings below). The field is gone; such a file
+    /// still loads and writes the key back through `extra` — in
+    /// `project.json` and in the `projects.json` entry the same spec comes from.
+    #[test]
+    fn a_host_marked_added_by_client_loads_and_round_trips() {
+        let marked = r#"{"id":"p1","name":"One","directory":"/s/p1",
+            "remote":{"user":"alice","host":"build.example","remote_path":"/srv/p1","added_by_client":true},
+            "compute_hosts":[{"id":"w1","host":"gpu.example","remote_path":"/srv/p1","addedByClient":true}]}"#;
+        let p: Project = parse(marked);
+        let remote = p.remote.as_ref().unwrap();
+        assert_eq!(remote.host, "build.example");
+        assert_eq!(remote.extra.get("added_by_client"), Some(&Value::Bool(true)));
+        assert_eq!(p.compute_hosts[0].spec.host, "gpu.example");
+        let out = json(&p);
+        let input = serde_json::from_str::<Value>(marked).unwrap();
+        assert_eq!(out["remote"], input["remote"]);
+        assert_eq!(out["compute_hosts"][0]["addedByClient"], true);
+        assert_eq!(json(&parse::<Project>(&out.to_string())), out, "stable once written");
+
+        let entries = format!(r#"[{{"id":"p1","name":"One","status":"active","position":0,"local_file":"","remote":{}}}]"#,
+            serde_json::to_string(&json(&p)["remote"]).unwrap());
+        let list: crate::schema::projects::ProjectsList = parse(&entries);
+        assert_eq!(json(&list), serde_json::from_str::<Value>(&entries).unwrap());
+        let spec: RemoteSpec = serde_json::from_value(list[0].extra["remote"].clone()).unwrap();
+        assert_eq!(spec.host, "build.example");
+    }
+
     /// Fields the Python app wrote and the Rust model never learned about ride
     /// through `extra` unchanged, at the top level and inside the nested blocks.
     #[test]

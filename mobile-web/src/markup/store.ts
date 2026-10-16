@@ -1,10 +1,10 @@
 /**
  * Where a markup layer waits between strokes: the phone's own IndexedDB,
- * never the desktop (`docs/mobile_pdf_markup_plan.md` §2.7). Handwriting is
+ * never the desktop (`docs/done/mobile_pdf_markup_plan.md` §2.7). Handwriting is
  * many points, and Safari allows `localStorage` only a few MB for the whole
  * app. One record per source; saved as each stroke ends, so a closed app or
  * a reload loses at most the stroke in progress. A Submit keeps the record:
- * its marks move to the layer's `sent` side (`docs/pdf_markup_rounds_plan.md`
+ * its marks move to the layer's `sent` side (`docs/done/pdf_markup_rounds_plan.md`
  * §2.1), and the record goes only once neither side has a mark.
  *
  * Every access may fail — a private window, evicted or blocked storage — and

@@ -1,29 +1,35 @@
-// Stamped by `vite.mobile.config.ts` at bundle time. The version alone does not
-// move between local re-bundles (it only bumps on push), so the phone also
-// shows the commit its bundle was built from and when — the way to tell by
-// hand whether a refresh actually picked up the new one.
+// The version alone does not move between local re-bundles (it only bumps on
+// push), so the phone also shows its bundle's entry hash — the way to tell by
+// hand whether a refresh actually picked up the new one. The hash is read at
+// run time off the page's own entry script URL (`/assets/index-<hash>.js`),
+// never stamped in at build time: a stamp (a build time, the commit) inlined
+// into the hashed entry would change that hash, and with it `sw.js`'s cache
+// name, on every rebuild of an unchanged bundle (`vite.mobile.config.ts`).
 import { version as APP_VERSION } from "../../package.json";
 
-declare const __APP_MOBILE_BUILT_AT__: string | undefined;
-declare const __APP_MOBILE_COMMIT__: string | undefined;
+/** The same entry the service-worker stamp keys its cache on. */
+const ENTRY_SCRIPT = /\/assets\/index-([A-Za-z0-9_-]+)\.js(?:[?#]|$)/;
 
-const BUILT_AT = typeof __APP_MOBILE_BUILT_AT__ === "string" ? __APP_MOBILE_BUILT_AT__ : undefined;
-const COMMIT = typeof __APP_MOBILE_COMMIT__ === "string" ? __APP_MOBILE_COMMIT__ : "";
-
-/** `dd-mm hh:mm` in the phone's local time, or "" when the stamp is missing or unreadable. */
-export function formatBuildStamp(iso: string | undefined = BUILT_AT): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(date.getDate())}-${pad(date.getMonth() + 1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+/** The first 8 characters of the entry chunk's hash among `scripts`' URLs, or
+ * "" when none is a hashed entry (the vite dev server serves `/src/main.tsx`). */
+export function entryHash(scripts: Iterable<{ src: string }>): string {
+  for (const script of scripts) {
+    const hash = ENTRY_SCRIPT.exec(script.src)?.[1];
+    if (hash) return hash.slice(0, 8);
+  }
+  return "";
 }
 
-/** `v0.1.x · <commit> · dd-mm hh:mm`, skipping whichever part is empty. */
-export function formatBundleVersion(version: string, commit: string, stamp: string): string {
-  return [`v${version}`, commit, stamp].filter(Boolean).join(" · ");
+/** `v0.1.x · <entry hash>`, without the hash when there is none. */
+export function formatBundleVersion(version: string, hash: string): string {
+  return [`v${version}`, hash].filter(Boolean).join(" · ");
+}
+
+function pageEntryHash(): string {
+  if (typeof document === "undefined") return "";
+  return entryHash(document.querySelectorAll<HTMLScriptElement>("script[src]"));
 }
 
 /** The bundle this phone is running, as the splash, the lock sheet and Home's
  * header all show it. */
-export const BUNDLE_VERSION = formatBundleVersion(APP_VERSION, COMMIT, formatBuildStamp());
+export const BUNDLE_VERSION = formatBundleVersion(APP_VERSION, pageEntryHash());

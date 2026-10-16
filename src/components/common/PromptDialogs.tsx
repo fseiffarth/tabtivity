@@ -1,4 +1,4 @@
-import { useModalFocus } from "../../hooks/useModalFocus";
+import { topModal, useModalFocus } from "../../hooks/useModalFocus";
 import { type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useState } from "react";
 import { UntestedTag } from "./UntestedTag";
 import { createPortal } from "react-dom";
@@ -134,6 +134,10 @@ export function DialogShell({
    *  settings-style header (title row with a close button). */
   frame?: "file-delete-dialog" | "project-dialog";
 }) {
+  // Read before this frame registers itself: a question asked from inside an
+  // elevated dialog (a to-do card over its board) must ride above that dialog,
+  // or it opens underneath it at the plain modal layer.
+  const [elevated] = useState(() => !!topModal()?.closest(".modal-backdrop-elevated"));
   const ref = useModalFocus(onDismiss);
   const titleId = useId();
   useLayoutEffect(() => {
@@ -141,7 +145,16 @@ export function DialogShell({
     if (heading) heading.id = titleId;
   }, [ref, titleId]);
   return createPortal(
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onDismiss(); }}>
+    <div
+      className={elevated ? "modal-backdrop modal-backdrop-elevated" : "modal-backdrop"}
+      onMouseDown={(e) => {
+        // A portal leaves the DOM but not React's tree: unstopped, a press on
+        // this backdrop would bubble into whatever mounted the dialog — a host
+        // dialog's own dismissing backdrop, the header's window-drag handler.
+        e.stopPropagation();
+        if (e.target === e.currentTarget) onDismiss();
+      }}
+    >
       <div
         ref={ref}
         tabIndex={-1}
@@ -434,7 +447,11 @@ type Pending =
  * the flows that chain them (confirm → act → report) `await` each in turn, so a
  * second question can only exist once the first is answered.
  *
- * Mount `dialogs` once in the component's tree. `promptText` resolves to the
+ * Mount `dialogs` once in the component's tree — beside, not inside, any
+ * element whose `onKeyDown` closes a host dialog on Escape: the portal leaves
+ * the DOM, but React still bubbles its key events through the component tree,
+ * so that handler would see this dialog's Escape before the modal stack does.
+ * (Presses are contained by `DialogShell` itself.) `promptText` resolves to the
  * trimmed value or `null` if dismissed; pass `run` to perform the work from
  * inside the dialog, so a failure keeps it open with the typed value intact
  * instead of discarding it.

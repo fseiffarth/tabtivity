@@ -8,7 +8,7 @@
  * six steps as the settings fold, with the two Tabtivity can perform (run the
  * `tailscale serve` command, land on the Mobile section) as buttons.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -37,7 +37,6 @@ describe(`${BRAND.display} Mobile setup guide`, () => {
     useTabsStore.setState({ scope: "project:p1", tabsByScope: { root: [] } });
     useRootOverlayStore.setState({ open: false });
     useHeaderStatusStore.setState({ reports: {} });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -85,6 +84,11 @@ describe(`${BRAND.display} Mobile setup guide`, () => {
 
     expect(screen.getByText("tailscale serve --bg http://127.0.0.1:9001")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Set up in terminal" }));
+    // Asked first, in the app's own dialog over the guide — never `window.confirm`.
+    const question = await screen.findByRole("dialog", { name: "Set up in terminal" });
+    expect(question.textContent).toContain("tailscale serve --bg http://127.0.0.1:9001");
+    expect(useTabsStore.getState().tabsByScope.root ?? []).toHaveLength(0);
+    await user.click(within(question).getByRole("button", { name: "Set up in terminal" }));
 
     const rootTabs = useTabsStore.getState().tabsByScope.root ?? [];
     expect(rootTabs).toHaveLength(1);

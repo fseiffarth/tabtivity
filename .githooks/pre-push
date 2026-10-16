@@ -11,8 +11,9 @@
 #      v* tag, which this hook deliberately doesn't bump.
 #
 # git can't add a commit to a push that is already in flight, so this hook:
-#   1. bumps package.json / Cargo.toml / tauri.conf.json / Cargo.lock,
-#   2. commits the bump onto the current branch — those four files only, from
+#   1. bumps package.json / package-lock.json / Cargo.toml / tauri.conf.json /
+#      Cargo.lock,
+#   2. commits the bump onto the current branch — those five files only, from
 #      a private index, whatever else is staged,
 #   3. re-runs the push (which carries the bump), and
 #   4. aborts the original push, now superseded by the re-push.
@@ -207,13 +208,13 @@ fi
 
 [ "$bump" -eq 0 ] && exit 0
 
-# The bump commit is made from a private index holding HEAD plus the four
+# The bump commit is made from a private index holding HEAD plus the five
 # version files, never from the shared one: whatever else is staged must not
 # ride into a commit this hook makes after the scan (the scan covered HEAD, and
 # the re-push skips the hook). That leaves the version files themselves, which
 # bump-version.sh rewrites in the working tree — an uncommitted edit in one of
 # them would ride along unscanned, so the bump stops instead.
-bump_files=(package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json Cargo.lock)
+bump_files=(package.json package-lock.json src-tauri/Cargo.toml src-tauri/tauri.conf.json Cargo.lock)
 if ! git -C "$repo_root" diff --quiet HEAD -- "${bump_files[@]}"; then
   echo "pre-push: not bumping — the version files carry uncommitted changes:" >&2
   git -C "$repo_root" diff --name-only HEAD -- "${bump_files[@]}" | sed 's/^/          /' >&2
@@ -227,7 +228,7 @@ fi
 # index staging the *old* versions — the next commit would quietly revert the
 # bump. So every step below that can fail undoes the whole bump instead: the
 # bump commit comes off the branch again (ref only, compare-and-swap on its
-# sha, so nothing newer is ever dropped) and the four files get HEAD's bytes
+# sha, so nothing newer is ever dropped) and the five files get HEAD's bytes
 # back, written straight from the blobs — no index lock needed, since a held
 # `index.lock` is exactly what makes the reset fail. The shared index was never
 # touched before the reset, and the check above made the files match HEAD, so
@@ -281,8 +282,9 @@ trap 'rm -f "$bump_index" "$bump_index.lock"' EXIT
 rm -f "$bump_index"
 GIT_INDEX_FILE="$bump_index" git -C "$repo_root" read-tree HEAD \
   || bump_failed "reading HEAD into the private index"
-# Cargo.lock carries the workspace's own version too, so it is part of the bump
-# — committed with the rest or the bump commit leaves the tree dirty behind it.
+# Cargo.lock and package-lock.json carry the app's own version too, so they are
+# part of the bump — committed with the rest or the bump commit leaves the tree
+# dirty behind it (or, for package-lock.json, quietly a version behind).
 GIT_INDEX_FILE="$bump_index" git -C "$repo_root" add -- "${bump_files[@]}" \
   || bump_failed "staging the version files in the private index"
 # TABTIVITY_VERSION_BUMP tells post-commit this is the push's own bump: its
@@ -292,7 +294,7 @@ GIT_INDEX_FILE="$bump_index" TABTIVITY_VERSION_BUMP=1 \
   git -C "$repo_root" commit -m "chore: bump version to v${new}" >/dev/null \
   || bump_failed "the bump commit"
 bump_sha="$(git -C "$repo_root" rev-parse HEAD)"
-# The shared index still holds the pre-bump version files: point those four
+# The shared index still holds the pre-bump version files: point those five
 # entries at the bump commit. Anything else staged there stays staged.
 git -C "$repo_root" reset -q -- "${bump_files[@]}" \
   || bump_failed "resetting the version files in the shared index"

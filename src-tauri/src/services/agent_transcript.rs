@@ -338,6 +338,17 @@ pub fn agent_session_transcript(
         let db = crate::services::opencode_store::db_path_for(project_id);
         return opencode_transcript(&db, project_id, tab_dir, since, subagent, version, limit);
     }
+    if matches!(cmd, "gemini" | "agy") {
+        if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
+        let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
+            return AgentTranscript::unavailable("no_session");
+        };
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return AgentTranscript::unavailable("unsupported");
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        return crate::services::google_chat::transcript(cmd, &home, directory, since, version, limit);
+    }
     let read = match cmd {
         "claude" => claude_transcript(project_id, launch_id, subagent, version, limit),
         "codex" => codex_transcript(project_id, launch_id, subagent, version, limit),
@@ -2189,9 +2200,9 @@ mod tests {
         assert!(read.entries[0].cut && !read.entries[1].cut);
         assert_eq!(read.entries[0].text.chars().count(), MAX_ANSWER_CHARS);
 
-        let gemini = agent_session_transcript("gemini", None, None, None, "0f5f9b7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b", None, None, 5);
-        assert!(!gemini.available);
-        assert_eq!(gemini.reason.as_deref(), Some("unsupported"));
+        let unknown = agent_session_transcript("unknown-agent", None, None, None, "0f5f9b7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b", None, None, 5);
+        assert!(!unknown.available);
+        assert_eq!(unknown.reason.as_deref(), Some("unsupported"));
         // Not even a uuid: refused before any file is looked for.
         assert_eq!(agent_session_transcript("claude", None, None, None, "../x", None, None, 5).reason.as_deref(), Some("no_transcript"));
         assert_eq!(agent_session_transcript("codex", None, None, None, "../x", None, None, 5).reason.as_deref(), Some("no_transcript"));

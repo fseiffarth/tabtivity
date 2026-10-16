@@ -1,5 +1,5 @@
 //! Agent token counts per CLI, model and scope — the `tokens.*` keys of the
-//! usage recap (`docs/token_stats_plan.md`).
+//! usage recap (`docs/done/token_stats_plan.md`).
 //!
 //! **Derived from the CLIs' own records, never counted live.** Every local
 //! agent tab's `$HOME` is an Tabtivity-owned agent home (`services::agent_home`),

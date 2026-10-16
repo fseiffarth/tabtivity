@@ -50,13 +50,20 @@ static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 /// writes this file too (a fired schedule's history row, headless owner
 /// plan H2), so the transaction has to hold across processes.
 struct Guard {
-    _file: Option<storage::FileLock>,
+    _file: storage::FileLock,
     _mutex: std::sync::MutexGuard<'static, ()>,
 }
 
-fn lock() -> Guard {
+fn lock() -> Result<Guard, String> {
     let mutex = LOCK.get_or_init(|| Mutex::new(())).lock_ok();
-    Guard { _file: storage::FileLock::exclusive(&path()).ok(), _mutex: mutex }
+    Ok(Guard { _file: file_lock(&path())?, _mutex: mutex })
+}
+
+/// The cross-process lock beside `path`. The file carries no revision a
+/// writer could check, so a lock that cannot be taken fails the transaction
+/// rather than letting two processes interleave their read-modify-writes.
+fn file_lock(path: &std::path::Path) -> Result<storage::FileLock, String> {
+    storage::FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))
 }
 
 /// `<state_dir>/agent_prompts.json`.
@@ -727,7 +734,7 @@ fn apply_link_delete(
 
 pub fn list(project_id: &str) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     Ok(read()?
         .projects
         .get(project_id)
@@ -754,7 +761,7 @@ pub fn upsert(
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     let input = validate_input(input)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = apply_upsert(&mut file, project_id, input, &storage::iso_now())?;
     write(&file)?;
@@ -772,7 +779,7 @@ pub fn upsert_at(
     validate_id("project id", project_id)?;
     let input = validate_input(input)?;
     let path = file_path(state_dir);
-    let _lock = storage::FileLock::exclusive(&path).ok();
+    let _lock = file_lock(&path)?;
     let mut file = read_at(&path)?;
     let result = apply_upsert(&mut file, project_id, input, &storage::iso_now())?;
     write_at(&path, &file)?;
@@ -795,7 +802,7 @@ pub fn archive_at(
     let (input, roll) = resolve_live_session(project_id, input);
     let head = prompt_blame::head(project_id);
     let path = file_path(state_dir);
-    let _lock = storage::FileLock::exclusive(&path).ok();
+    let _lock = file_lock(&path)?;
     let mut file = read_at(&path)?;
     apply_archive(&mut file, project_id, prompt_id, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
     write_at(&path, &file)?;
@@ -805,7 +812,7 @@ pub fn archive_at(
 pub fn delete(project_id: &str, prompt_id: &str) -> Result<Vec<ProjectAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     validate_id("prompt id", prompt_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     apply_delete(&mut file, project_id, prompt_id);
     write(&file)?;
@@ -814,7 +821,7 @@ pub fn delete(project_id: &str, prompt_id: &str) -> Result<Vec<ProjectAgentPromp
 
 pub fn links(project_id: &str) -> Result<Vec<PromptLink>, String> {
     validate_id("project id", project_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     prune_links(&mut file, project_id);
     Ok(file.links.get(project_id).cloned().unwrap_or_default())
@@ -823,7 +830,7 @@ pub fn links(project_id: &str) -> Result<Vec<PromptLink>, String> {
 pub fn link_upsert(project_id: &str, input: PromptLinkInput) -> Result<Vec<PromptLink>, String> {
     validate_id("project id", project_id)?;
     let link = validate_link(input)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     prune_links(&mut file, project_id);
     let result = apply_link_upsert(&mut file, project_id, link)?;
@@ -834,7 +841,7 @@ pub fn link_upsert(project_id: &str, input: PromptLinkInput) -> Result<Vec<Promp
 pub fn link_delete(project_id: &str, link_id: &str) -> Result<Vec<PromptLink>, String> {
     validate_id("project id", project_id)?;
     validate_id("link id", link_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = apply_link_delete(&mut file, project_id, link_id);
     write(&file)?;
@@ -849,7 +856,7 @@ pub fn reorder(project_id: &str, ids: Vec<String>) -> Result<Vec<ProjectAgentPro
     for id in &ids {
         validate_id("prompt id", id)?;
     }
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = apply_reorder(&mut file, project_id, &ids);
     write(&file)?;
@@ -858,7 +865,7 @@ pub fn reorder(project_id: &str, ids: Vec<String>) -> Result<Vec<ProjectAgentPro
 
 pub fn history(project_id: &str) -> Result<Vec<SentAgentPrompt>, String> {
     validate_id("project id", project_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     Ok(read()?.history.get(project_id).cloned().unwrap_or_default())
 }
 
@@ -876,7 +883,7 @@ pub fn archive(
     // Read before the lock: it spawns git (local projects only), and nothing
     // in the file depends on it.
     let head = prompt_blame::head(project_id);
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     apply_archive(
         &mut file,
@@ -908,7 +915,7 @@ pub fn record(
         return Ok(Vec::new());
     }
     let (entry, input, head, roll) = prepare_record(project_id, entry)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     apply_record(&mut file, project_id, &entry, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
     write(&file)?;
@@ -930,7 +937,7 @@ pub fn record_at(
     }
     let (entry, input, head, roll) = prepare_record(project_id, entry)?;
     let path = file_path(state_dir);
-    let _lock = storage::FileLock::exclusive(&path).ok();
+    let _lock = file_lock(&path)?;
     let mut file = read_at(&path)?;
     apply_record(&mut file, project_id, &entry, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
     write_at(&path, &file)?;
@@ -947,7 +954,7 @@ pub fn delete_at(
     validate_id("project id", project_id)?;
     validate_id("prompt id", prompt_id)?;
     let path = file_path(state_dir);
-    let _lock = storage::FileLock::exclusive(&path).ok();
+    let _lock = file_lock(&path)?;
     let mut file = read_at(&path)?;
     apply_delete(&mut file, project_id, prompt_id);
     write_at(&path, &file)?;
@@ -989,7 +996,7 @@ pub fn blame(
     validate_id("project id", project_id)?;
     validate_id("history entry id", entry_id)?;
     let (commit, sent_at, agent, launch_id) = {
-        let _guard = lock();
+        let _guard = lock()?;
         let file = read()?;
         let entry = file
             .history
@@ -1021,7 +1028,7 @@ pub fn blame(
     let model = agent.zip(launch_id).and_then(|(agent, launch_id)| {
         crate::services::agent_session::agent_session_model(&agent, Some(project_id), &launch_id)
     });
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     if apply_blame(&mut file, project_id, entry_id, files, model, &storage::iso_now()).is_some() {
         write(&file)?;
@@ -1036,7 +1043,7 @@ pub fn clear_history(
     entry_id: Option<&str>,
 ) -> Result<Vec<SentAgentPrompt>, String> {
     validate_id("project id", project_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     match entry_id {
         Some(entry_id) => {

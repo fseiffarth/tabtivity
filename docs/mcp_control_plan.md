@@ -67,7 +67,7 @@ Five decisions carry the design:
    `active_session.json`), answered without the round trip.
 
    *Revisit when the headless owner lands (noted 2026-09-29).*
-   [`headless_owner_plan.md`](headless_owner_plan.md) moves the live
+   [`headless_owner_plan.md`](done/headless_owner_plan.md) moves the live
    model out of the window into one headless `workspace` owner, the Mobile
    sidecar. That covers the tab set, spawning, project activation and every
    timer. Because it is a *move*, not a second implementation, the drift

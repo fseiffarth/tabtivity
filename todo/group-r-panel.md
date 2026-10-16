@@ -497,7 +497,7 @@
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-- [ ] 🖐️ Manual test — side panel as a VS Code-style bar (`docs/side_panel_ide_toggle_plan.md`).
+- [ ] 🖐️ Manual test — side panel as a VS Code-style bar (`docs/done/side_panel_ide_toggle_plan.md`).
       Fresh settings: panel closed, rail visible. Click Files → docked, workspace
       shrinks; click Files again → closes. Git while open → switches. Ctrl+B in
       the empty area toggles; in a shell tab Ctrl+B reaches the shell and Alt+1

@@ -178,25 +178,6 @@ pub async fn agent_fence_marks(
     .await
 }
 
-/// List the tmux sessions running on the **local** machine (TODO #85), for a local
-/// project's Sessions view. Empty on Windows / without tmux / no server.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSession>, String> {
-    if !crate::services::tmux_local::tmux_available() {
-        return Ok(Vec::new());
-    }
-    app_core::rt::blocking("terminal", || {
-        let out = crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_ls_args())
-            .output();
-        match out {
-            Ok(o) => crate::services::ssh_exec::parse_tmux_ls(&String::from_utf8_lossy(&o.stdout)),
-            Err(_) => Vec::new(),
-        }
-    })
-    .await
-}
-
 /// Kill a **local** tmux session (TODO #85) — the explicit-close / Sessions-view
 /// kill of a local persistent tab. No-op on Windows / without tmux.
 #[cfg_attr(feature = "desktop", tauri::command)]

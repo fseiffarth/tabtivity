@@ -12,8 +12,11 @@
  * `end "2026-07-09"`. This is the iCalendar convention and it makes duration,
  * overlap and multi-day slicing fall out as plain subtraction.
  *
- * Pure — no React, no Tauri. All of it is unit-tested.
+ * Pure — no React components, no Tauri. All of it is unit-tested. The one
+ * outside read is the app language, as the default for the display helpers'
+ * `lang`/`locale` (AM/PM marker, long date).
  */
+import { dateLocale, translate, useI18nStore, type Language } from "../i18n";
 
 /** Minutes in a day; the unit the time grid positions blocks in. */
 export const MINUTES_PER_DAY = 24 * 60;
@@ -436,24 +439,36 @@ export function layoutOverlaps(items: Placeable[]): Placement[] {
  * shape rather than with `isNaN(h)`: `"".split(":")` is `[""]`, and `Number("")`
  * is `0`, not `NaN`, so a laxer guard renders an absent time as "12:undefined AM".
  */
-export function formatTime(hhmm: string, use24h: boolean): string {
+export function formatTime(
+  hhmm: string,
+  use24h: boolean,
+  lang: Language = useI18nStore.getState().lang,
+): string {
   if (use24h) return hhmm;
   const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
   if (!m) return hhmm;
   const hour = Number(m[1]);
   if (hour > 23) return hhmm;
-  const suffix = hour < 12 ? "AM" : "PM";
+  // The day-period marker is the app language's ("a. m." in Spanish), never
+  // the browser's: the rest of the row around it is in the app language too.
+  const suffix = translate(lang, hour < 12 ? "calendarTime.am" : "calendarTime.pm");
   return `${hour % 12 === 0 ? 12 : hour % 12}:${m[2]} ${suffix}`;
 }
 
 /** The clock label for a stamp, or `""` for an all-day one. */
-export function formatStampTime(stamp: string, use24h: boolean): string {
+export function formatStampTime(
+  stamp: string,
+  use24h: boolean,
+  lang: Language = useI18nStore.getState().lang,
+): string {
   const t = timePart(stamp);
-  return t ? formatTime(t, use24h) : "";
+  return t ? formatTime(t, use24h, lang) : "";
 }
 
-/** A long, human date: `"Wednesday, July 8, 2026"`. */
-export function formatLongDate(date: string, locale = "en"): string {
+/** A long, human date: `"Wednesday, July 8, 2026"`. Without a `locale` it is
+ *  spelled in the app language (keeping the browser's region when the two
+ *  agree — `dateLocale`), never a fixed English. */
+export function formatLongDate(date: string, locale: string | undefined = dateLocale()): string {
   const d = toDate(date);
   if (Number.isNaN(d.getTime())) return date;
   return d.toLocaleDateString(locale, {

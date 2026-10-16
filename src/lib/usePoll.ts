@@ -9,7 +9,8 @@ import { useSettingsStore } from "../stores/settings";
  * A UI poll exists to keep something on screen current, so it has no reason to
  * run while nobody can be looking at it: it stops while this window is blurred
  * (`stores/power`'s `blurred`, fed per window by `startFocusTracking`) or
- * hidden (`document.hidden`), and — for the hook — while its pane is hidden
+ * hidden (`document.hidden`) — or, with `onBlur: "widen"`, only widens while
+ * blurred (a live preview) — and, for the hook, while its pane is hidden
  * (`PaneVisibleContext`) or the caller's own gate (`enabled`) is off. When the
  * window comes back the run that fell due while it was away happens at once
  * (the catch-up), then the cadence resumes from it. Energy Saver widens the
@@ -47,6 +48,13 @@ export interface PollOptions {
   lastRunAt?: () => number;
   /** Energy Saver widens the interval by this factor. Default 3; 1 = never. */
   saverFactor?: number;
+  /** What a blurred window does to a quiesced poll: `"pause"` (default) stops
+   *  it like a hidden window; `"widen"` keeps it running at the Energy Saver
+   *  cadence (`saverFactor`) — a file viewer left open on a second screen as a
+   *  live preview of a file edited in another app must still follow it. A
+   *  hidden window still pauses either way. Coming back to the window runs the
+   *  catch-up if a run fell due at the normal cadence. */
+  onBlur?: "pause" | "widen";
 }
 
 /** Handed to every run: `stopped` turns true once the poll is stopped
@@ -101,6 +109,7 @@ export function startPoll(
   options: PollOptions = {},
 ): Poll {
   const quiesce = options.quiesce ?? true;
+  const widenOnBlur = quiesce && options.onBlur === "widen";
   const factor = options.saverFactor ?? 3;
   let interval = intervalMs;
   let lastStart = Number.NEGATIVE_INFINITY;
@@ -114,9 +123,9 @@ export function startPoll(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let saver = saverOn();
 
-  const paused = () => stopped || (quiesce && (blurredNow() || windowHidden()));
+  const paused = () => stopped || (quiesce && ((!widenOnBlur && blurredNow()) || windowHidden()));
   const since = () => Math.max(lastStart, options.lastRunAt?.() ?? Number.NEGATIVE_INFINITY);
-  const period = () => saverInterval(interval, saver, factor);
+  const period = () => saverInterval(interval, saver || (widenOnBlur && blurredNow()), factor);
 
   const clear = () => {
     if (timer !== null) clearTimeout(timer);
@@ -180,7 +189,8 @@ export function startPoll(
     const blurChanged = nextBlurred !== blurred;
     blurred = nextBlurred;
     saver = nextSaver;
-    if (blurChanged) resume();
+    // A widening poll that just blurred only re-arms on the wider cadence.
+    if (blurChanged && !(widenOnBlur && nextBlurred)) resume();
     else arm();
   });
   const unsubSettings = subscribe(useSettingsStore, () => {
@@ -230,10 +240,10 @@ export interface UsePollOptions extends PollOptions {
 export function usePoll(run: PollFn, intervalMs: number, options: UsePollOptions = {}): void {
   const paneVisible = usePaneVisible();
   const active = (options.enabled ?? true) && paneVisible;
-  const { quiesce, immediate, catchUpAfterMs, saverFactor, lastRunAt } = options;
+  const { quiesce, immediate, catchUpAfterMs, saverFactor, lastRunAt, onBlur } = options;
   useEffect(() => {
     if (!active) return;
-    const poll = startPoll(run, intervalMs, { quiesce, immediate, catchUpAfterMs, saverFactor, lastRunAt });
+    const poll = startPoll(run, intervalMs, { quiesce, immediate, catchUpAfterMs, saverFactor, lastRunAt, onBlur });
     return poll.stop;
-  }, [active, run, intervalMs, quiesce, immediate, catchUpAfterMs, saverFactor, lastRunAt]);
+  }, [active, run, intervalMs, quiesce, immediate, catchUpAfterMs, saverFactor, lastRunAt, onBlur]);
 }

@@ -81,7 +81,7 @@ runs project code holds the token:
 network) is skipped, the privacy scan and bump commit run as before, and it
 exits 0 instead of re-pushing and aborting. Without it nothing changed.
 Either way the bump commit is made from a private index inside the git dir
-(the fence's `/tmp` is not the host's), so it holds the four version files
+(the fence's `/tmp` is not the host's), so it holds the five version files
 and nothing else that was staged; uncommitted edits in those files stop the
 bump, since they would ride into a commit the scan never saw.
 

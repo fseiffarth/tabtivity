@@ -1,4 +1,3 @@
-import { translate, useI18nStore } from "../../src/lib/i18n";
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
 
@@ -1084,8 +1083,12 @@ export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = f
  * exactly that file instead (`POST /api/v1/open-ticket`). If none can be had
  * the plain URL still opens — in a browser tab of the site the cookie rides.
  * The installed app on an iPhone or iPad cannot be got back to from there
- * (`openingOutsideStrands`): callers keep the file inside the app instead. */
-export async function openOutside(url: string): Promise<void> {
+ * (`openingOutsideStrands`): callers keep the file inside the app instead.
+ *
+ * Resolves `"host_outdated"` (nothing opened) when the host is too old to mint
+ * a ticket: the caller says so where the reader is looking
+ * (`mobile.open.hostOutdated`), in place of a browser `alert()`. */
+export async function openOutside(url: string): Promise<"opened" | "host_outdated"> {
   let target = url;
   try {
     const minted = await api<{ url?: unknown }>("/api/v1/open-ticket", { method: "POST", body: JSON.stringify({ url }) });
@@ -1095,11 +1098,11 @@ export async function openOutside(url: string): Promise<void> {
     // static GET: a bodiless 405 (or 404). The plain URL would only show the
     // browser `authentication_required` there, so say why instead.
     if (error instanceof ApiError && error.code === "request_failed" && (error.status === 404 || error.status === 405)) {
-      window.alert(translate(useI18nStore.getState().lang, "mobile.open.hostOutdated"));
-      return;
+      return "host_outdated";
     }
   }
   window.open(target, "_blank", "noopener");
+  return "opened";
 }
 
 /** One row of a project folder (`files.rs`): `token` is a sealed path the
@@ -1249,7 +1252,7 @@ export interface MarkupPageBody { n: number; size: [number, number]; marks: Mark
  * its asking dial (0–4), absent at the default stop; `mode` what **Apply
  * marks directly** asks for (absent = `list`); `round` this Submit's id
  * (`mintRound`), which the prompt names its marks under for the agent's
- * ticks (`markup_done`, `docs/markup_tick_approve_plan.md`); `origin`
+ * ticks (`markup_done`, `docs/done/markup_tick_approve_plan.md`); `origin`
  * `viewer` when the markup view has no agent chat to send to, so the prompt
  * tells the agent to ask only through `markup_ask` (absent = `chat`). */
 export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string; ask?: number; mode?: MarkupMode; round?: string; origin?: MarkupOrigin }
@@ -1338,7 +1341,7 @@ export function markupUndoConflict(error: unknown): { files: string[]; more: num
 }
 
 /** One question of an agent's markup ask (`markup_ask`,
- * `docs/markup_questions_mcp_plan.md`): 2–6 options, a 1-based `page` and a
+ * `docs/done/markup_questions_mcp_plan.md`): 2–6 options, a 1-based `page` and a
  * `quote` of that page's words it is about. */
 export interface PhoneMarkupQuestion {
   question: string;

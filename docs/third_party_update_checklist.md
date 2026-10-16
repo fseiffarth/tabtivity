@@ -783,7 +783,7 @@ tabs via `ollama launch <agent>`).
 
 **Where** `services/token_stats.rs` (scan + cache), `commands/usage_stats.rs`
 (`usage_token_stats`), `src/lib/tokenStats.ts` (the recap's Tokens section).
-Plan: `docs/token_stats_plan.md`; context: `docs/context/usage_stats.md`.
+Plan: `docs/done/token_stats_plan.md`; context: `docs/context/usage_stats.md`.
 
 **Assumes** (checked against live files, 2026-10-01)
 
@@ -1258,7 +1258,7 @@ restructure or a `spellbook` bump.
 ## 18. Agent Skills
 
 **Where** `services/skills.rs`, `commands/skills.rs`, `src/lib/agents/skills.ts`,
-`docs/skills_plan.md`.
+`docs/done/skills_plan.md`.
 
 **Assumes** the `SKILL.md` frontmatter (`name`, `description`), install
 target `.claude/skills/<name>/`, catalog source

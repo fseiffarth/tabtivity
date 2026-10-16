@@ -19,6 +19,8 @@ import { KIND_CALL, KIND_RET, WsClient, type SocketLike } from "../../lib/transp
 import { WsInternals } from "../../lib/transport/wsInternals";
 import { pausePollersWhileDown, socketUrl } from "../../lib/transport/installWeb";
 import { setDialogAdapter } from "../../lib/transport/dialogAdapter";
+import { registerDict, useI18nStore } from "../../lib/i18n";
+import { dict as de } from "../../lib/i18nDicts/de";
 
 class FakeSocket implements SocketLike {
   static instances: FakeSocket[] = [];
@@ -312,7 +314,32 @@ describe("the browser transport", () => {
     await expect(invoke("plugin:dialog|message", { message: "Really?", buttons: "YesNo" })).resolves.toBe("Yes");
     await expect(invoke("plugin:dialog|message", { message: "Custom", buttons: { OkCancelCustom: ["Go", "Stay"] } })).resolves.toBe("Go");
     await expect(invoke("plugin:dialog|message", { message: "Note", buttons: "Ok" })).resolves.toBe("Ok");
-    expect(asked).toEqual([["Sure?", "Ok", "Cancel"], ["Really?", "Yes", "No"], ["Custom", "Go", "Stay"]]);
+    expect(asked).toEqual([["Sure?", "OK", "Cancel"], ["Really?", "Yes", "No"], ["Custom", "Go", "Stay"]]);
+  });
+
+  it("shows the default dialog buttons in the app language, answering with the plugin's English tokens", async () => {
+    const { invoke } = connected();
+    const asked: unknown[] = [];
+    setDialogAdapter({
+      open: () => Promise.resolve(null),
+      save: () => Promise.resolve(null),
+      confirm: (message, options) => {
+        asked.push([message, options.okLabel, options.cancelLabel]);
+        return Promise.resolve(false);
+      },
+      message: () => Promise.resolve(),
+    });
+    registerDict("de", de);
+    const before = useI18nStore.getState().lang;
+    useI18nStore.setState({ lang: "de" });
+    try {
+      // Declined: the answer is the cancel TOKEN `ask`/`confirm` compare against.
+      await expect(invoke("plugin:dialog|message", { message: "Sicher?", buttons: "YesNo" })).resolves.toBe("No");
+      await expect(invoke("plugin:dialog|message", { message: "Wirklich?", buttons: "OkCancel" })).resolves.toBe("Cancel");
+    } finally {
+      useI18nStore.setState({ lang: before });
+    }
+    expect(asked).toEqual([["Sicher?", "Ja", "Nein"], ["Wirklich?", "OK", "Abbrechen"]]);
   });
 
   it("answers the window plugin for the one page it is", async () => {
@@ -478,10 +505,10 @@ describe("the installed @tauri-apps JS through the shim", () => {
     await expect(confirm("Sure?")).resolves.toBe(true);
     await expect(confirm("Delete it?", { okLabel: "Delete", cancelLabel: "Keep" })).resolves.toBe(true);
     expect(calls).toEqual([
-      ["message", "Saved", { title: "Export", kind: "info", okLabel: "Ok", cancelLabel: undefined }],
+      ["message", "Saved", { title: "Export", kind: "info", okLabel: "OK", cancelLabel: undefined }],
       ["message", "Done", { title: undefined, kind: undefined, okLabel: "Got it", cancelLabel: undefined }],
       ["confirm", "Really?", { title: "Remove", kind: "warning", okLabel: "Yes", cancelLabel: "No" }],
-      ["confirm", "Sure?", { title: undefined, kind: undefined, okLabel: "Ok", cancelLabel: "Cancel" }],
+      ["confirm", "Sure?", { title: undefined, kind: undefined, okLabel: "OK", cancelLabel: "Cancel" }],
       ["confirm", "Delete it?", { title: undefined, kind: undefined, okLabel: "Delete", cancelLabel: "Keep" }],
     ]);
   });

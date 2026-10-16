@@ -58,7 +58,9 @@ function installTransport(client: WsClient, native: NativeInternals | null): Web
   pausePollersWhileDown();
   client.connect();
   const ready = client.whenReady().then((hello) => {
-    (window as unknown as Record<string, unknown>)[HOST_OS_GLOBAL] = hello.capabilities.hostOs;
+    // No host OS named → leave the global unset; `lib/platform.ts` then uses
+    // this machine's.
+    if (hello.capabilities.hostOs) (window as unknown as Record<string, unknown>)[HOST_OS_GLOBAL] = hello.capabilities.hostOs;
     markCliInstallsByAdmin(hello.capabilities.cliInstalls === "admin-helper");
     return hello;
   });

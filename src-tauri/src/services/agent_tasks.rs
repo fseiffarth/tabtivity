@@ -33,20 +33,21 @@ static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 /// is the only at-most-once check there is). Fields drop in order — the
 /// file lock goes before the mutex.
 struct Guard {
-    _file: Option<storage::FileLock>,
+    _file: storage::FileLock,
     _mutex: std::sync::MutexGuard<'static, ()>,
 }
 
-fn lock() -> Guard {
+fn lock() -> Result<Guard, String> {
     let mutex = LOCK.get_or_init(|| Mutex::new(())).lock_ok();
-    Guard { _file: file_lock(&path()), _mutex: mutex }
+    Ok(Guard { _file: file_lock(&path())?, _mutex: mutex })
 }
 
-/// The cross-process lock beside `path` (`agent_tasks.json.lock`). Best
-/// effort, like every `FileLock`: a filesystem without advisory locks still
-/// gets the occurrence checks inside the transaction.
-fn file_lock(path: &std::path::Path) -> Option<storage::FileLock> {
-    storage::FileLock::exclusive(path).ok()
+/// The cross-process lock beside `path` (`agent_tasks.json.lock`). Not
+/// optional: a claim is the at-most-once check, and it holds across
+/// processes only under this lock, so a lock that cannot be taken fails the
+/// transaction instead of running it unguarded.
+fn file_lock(path: &std::path::Path) -> Result<storage::FileLock, String> {
+    storage::FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))
 }
 
 /// `<state_dir>/agent_tasks.json`.
@@ -232,7 +233,7 @@ fn target_mut<'a>(
 pub fn list(project_id: &str, target_id: &str) -> Result<Vec<ScheduledAgentPrompt>, String> {
     validate_id("project id", project_id)?;
     validate_id("schedule target id", target_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     if super::schedule_mcp::prune_proposals(&mut file, &chrono::Utc::now().to_rfc3339()) {
         write(&file)?;
@@ -285,7 +286,7 @@ fn schedules_of(file: &AgentTasksFile, project_id: &str, target_id: &str) -> Vec
 
 /// Schedule MCP uses the same transaction lock for validation, quotas and writes.
 pub(crate) fn mutate<T>(f: impl FnOnce(&mut AgentTasksFile) -> Result<T, String>) -> Result<T, String> {
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = f(&mut file)?;
     write(&file)?;
@@ -429,7 +430,7 @@ pub fn upsert(
     // schedule nor an editor request may manufacture one at the CRUD boundary.
     prompt.last = None;
     let prompt = validate_prompt(prompt)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let result = apply_upsert(&mut file, project_id, target_id, prompt, expect_existing_on)?;
     write(&file)?;
@@ -453,7 +454,7 @@ pub fn upsert_in(
     }
     prompt.last = None;
     let prompt = validate_prompt(prompt)?;
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     let mut file = read_at(path)?;
     let result = apply_upsert(&mut file, project_id, target_id, prompt, expect_existing_on)?;
     write_at(path, &file)?;
@@ -489,7 +490,7 @@ pub fn delete(
     schedule_id: &str,
     expect_undelivered: bool,
 ) -> Result<(), String> {
-    let _guard = lock();
+    let _guard = lock()?;
     delete_locked(&path(), project_id, target_id, schedule_id, expect_undelivered)
 }
 
@@ -502,7 +503,7 @@ pub fn delete_in(
     schedule_id: &str,
     expect_undelivered: bool,
 ) -> Result<(), String> {
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     delete_locked(path, project_id, target_id, schedule_id, expect_undelivered)
 }
 
@@ -524,7 +525,7 @@ fn delete_locked(
 pub fn delete_target(project_id: &str, target_id: &str) -> Result<(), String> {
     validate_id("project id", project_id)?;
     validate_id("schedule target id", target_id)?;
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     if let Some(project) = file.projects.get_mut(project_id) {
         project.remove(target_id);
@@ -550,7 +551,7 @@ pub fn claim(
     schedule_id: &str,
     occurrence: &str,
 ) -> Result<ClaimOutcome, String> {
-    let _guard = lock();
+    let _guard = lock()?;
     claim_locked(&path(), project_id, target_id, schedule_id, occurrence, chrono::Local::now())
 }
 
@@ -567,7 +568,7 @@ pub fn claim_in(
     occurrence: &str,
     now: chrono::DateTime<chrono::Local>,
 ) -> Result<bool, String> {
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     claim_locked(path, project_id, target_id, schedule_id, occurrence, now).map(|outcome| outcome == ClaimOutcome::Claimed)
 }
 
@@ -662,7 +663,7 @@ pub fn cancel_phone_rules(
     // first inverted it: a claim holding the mutex and this holding the file
     // lock waited on each other for good.
     let mutex = LOCK.get_or_init(|| Mutex::new(())).lock_ok();
-    let _guard = Guard { _file: file_lock(path), _mutex: mutex };
+    let _guard = Guard { _file: file_lock(path)?, _mutex: mutex };
     cancel_phone_rules_locked(path, reaches)
 }
 
@@ -672,7 +673,7 @@ pub fn cancel_phone_rules_in(
     path: &std::path::Path,
     reaches: impl Fn(&str, &str) -> Result<bool, String>,
 ) -> Result<Vec<CancelledRule>, String> {
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     cancel_phone_rules_locked(path, reaches)
 }
 
@@ -716,7 +717,7 @@ pub fn complete(
     occurrence: &str,
     result: AgentScheduleResult,
 ) -> Result<Vec<ScheduledAgentPrompt>, String> {
-    let _guard = lock();
+    let _guard = lock()?;
     complete_locked(&path(), project_id, target_id, schedule_id, occurrence, result)
 }
 
@@ -729,7 +730,7 @@ pub fn complete_in(
     occurrence: &str,
     result: AgentScheduleResult,
 ) -> Result<Vec<ScheduledAgentPrompt>, String> {
-    let _lock = file_lock(path);
+    let _lock = file_lock(path)?;
     complete_locked(path, project_id, target_id, schedule_id, occurrence, result)
 }
 
@@ -834,7 +835,7 @@ fn saved_bindings(file: &AgentTasksFile) -> HashSet<(String, String)> {
 }
 
 pub fn cleanup_orphans(live: &[AgentScheduleTargetBinding]) -> Result<usize, String> {
-    let _guard = lock();
+    let _guard = lock()?;
     let mut file = read()?;
     let mut keep = saved_bindings(&file);
     keep.extend(

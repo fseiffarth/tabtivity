@@ -657,7 +657,7 @@
   white-space: nowrap;
 }
 
-/* Skills Library (docs/skills_plan.md) — the print pane's layout applied to a
+/* Skills Library (docs/done/skills_plan.md) — the print pane's layout applied to a
    list+preview split rather than a single scrolling column. */
 .skills-toolbar {
   display: flex;

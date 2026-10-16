@@ -1,5 +1,5 @@
 /**
- * Tailwind is gone (S5 of docs/vite8_vitest5_migration_plan.md): the app styles
+ * Tailwind is gone (S5 of docs/done/vite8_vitest5_migration_plan.md): the app styles
  * itself with its own classes, and the one thing Tailwind gave it — the
  * preflight reset — is vendored in `src/styles/reset.css`. Tailwind 3's
  * directives and functions would now reach the browser unprocessed (an

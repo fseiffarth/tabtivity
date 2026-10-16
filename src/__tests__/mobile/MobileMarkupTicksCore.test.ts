@@ -1,5 +1,5 @@
 /**
- * Markup ticks, the pure half (`docs/markup_tick_approve_plan.md` §3): a
+ * Markup ticks, the pure half (`docs/done/markup_tick_approve_plan.md` §3): a
  * Submit with a round id logs its marks as sent; the agent's ticks (round id,
  * page, 1-based mark) map back onto the sent side — by reference, else by
  * equality for a record rebuilt from a copy — and only the reader's approval

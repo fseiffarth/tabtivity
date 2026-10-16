@@ -8,8 +8,10 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import "./style.css";
 import "./themes.css";
 import { applyPhoneTheme } from "./theme";
+import { rememberPushLanguage } from "./pushTitles";
 
 applyPhoneTheme();
+rememberPushLanguage();
 if ("serviceWorker" in navigator) window.addEventListener("load", () => void navigator.serviceWorker.register("/sw.js"));
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><ErrorBoundary><App /></ErrorBoundary></React.StrictMode>);
 

@@ -1,5 +1,5 @@
 /**
- * The desktop markup strip's second round of tools (`docs/markup_tools_plan.md`):
+ * The desktop markup strip's second round of tools (`docs/done/markup_tools_plan.md`):
  * text marks snapped to the page's words, stamps, shape snapping on a held
  * stroke, note colours, the select tool (move, recolour, delete, comment),
  * presets, the undo history kept with the stored layer, the words each mark

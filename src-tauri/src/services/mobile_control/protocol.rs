@@ -247,7 +247,7 @@ pub struct MobileLocalLaunch {
 }
 
 /// Everything a phone may ask of the desktop's Ollama
-/// (`docs/mobile_local_model_control_plan.md`): load an installed model,
+/// (`docs/done/mobile_local_model_control_plan.md`): load an installed model,
 /// unload one, start the server. There is deliberately no pull, delete, copy
 /// or update variant — downloading and deleting stay desktop-only, so such a
 /// request cannot even be deserialized on either side of the bridge. Strict

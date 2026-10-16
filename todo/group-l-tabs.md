@@ -941,6 +941,33 @@ correctness/UX work atop the same layout model #42 detaches.*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+    - **Fix (2026-10-15): a backgrounded call is known by its task again.**
+      Claude 2.1.300 spells a `run_in_background` Bash call exactly like the
+      call it waits on — no `< /dev/null` seam any more (measured: same command
+      line, parent, process group and environment) — so the second ▶ for "agent
+      working AND a command of its own" never lit mid-turn; the job showed only
+      once the turn ended. The hook now keeps the `backgroundTaskId` a
+      `PostToolUse` reports in `<uid>.bg` (last 16), and the Linux job scan counts
+      a tool shell whose stdout/stderr is that task's `tasks/<id>.output`. The
+      seam is still honoured for older Claudes. macOS keeps the after-the-turn
+      reading only; Windows has no job scan. Backend change, **restart needed**.
+      *Files: `src-tauri/src/services/{agent_turn,agent_session}.rs`.*
+      - [x] 🤖 Automated test — `agent_turn` (`a_shell_writing_a_recorded_background_task_is_a_job_mid_turn`,
+        `a_task_is_known_by_its_output_file_and_the_record_keeps_only_ids`),
+        `hook_script_records_the_turn_state_for_the_tabs_own_session_only`
+      - [ ] 🖐️ Manual test — after a restart, in a Claude tab: "run `sleep 60`
+        in the background, then run `sleep 5` in the foreground and `ls`". While
+        the turn runs the tab shows two ▶ (green, then shell-coloured); the
+        foreground `sleep 5` adds no second mark of its own. When the turn ends
+        the tab is shell-coloured until the minute is up, then ✓.
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
     - **Fix (2026-10-15): a new tab off the strip's right edge scrolls into
       view.** With the strip overflowing, an agent tab added at its far end
       became active but stayed hidden past the right chevron; only a click

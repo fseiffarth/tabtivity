@@ -5,7 +5,7 @@ All phases are built on branch `hosted` (2026-10-06, unmerged, never run
 live); the build log is [`hosted_handoff.md`](hosted_handoff.md). The text
 below is the design as planned. The desktop-side groundwork (the
 headless owner, P1) is split out into
-[`headless_owner_plan.md`](headless_owner_plan.md). Written 2026-09-29 against the tree at
+[`headless_owner_plan.md`](done/headless_owner_plan.md). Written 2026-09-29 against the tree at
 `1441eb0e`, and revised the same day, against `923e0202`, after three
 independent reviews (security, architecture, scope). The reviewers then
 discussed each other's findings. The user then decided every other §12
@@ -109,7 +109,7 @@ Seven decisions carry it:
    every schedule fires twice. **The owner is the existing per-user Mobile
    sidecar** (`tabtivity --mobile-host`), grown into a `workspace` service. That
    work is desktop work, worth doing with no server, and has its own plan:
-   [`headless_owner_plan.md`](headless_owner_plan.md). On the server the same
+   [`headless_owner_plan.md`](done/headless_owner_plan.md). On the server the same
    code becomes the daemon (§3.4).
 
 4. **The backend becomes `tabtivity-core`, a Tauri-free crate, plus two thin
@@ -393,7 +393,7 @@ carries `HOST_OS`.
 ### 3.4 Live state: from the window to one headless owner
 
 The move itself, with its ownership table, protocol, migration order and
-tests, is [`headless_owner_plan.md`](headless_owner_plan.md) (split out
+tests, is [`headless_owner_plan.md`](done/headless_owner_plan.md) (split out
 2026-09-29). It lands on the desktop first, where the owner is the Mobile
 sidecar; on the server the same `workspace` service runs inside the user's
 daemon. What the server adds to that plan:
@@ -527,7 +527,7 @@ cannot make private.
 the staged file (`storage.rs:117`). What is missing is an fsync of the
 **parent directory** after `persist` (`:118`), so a crash can lose the
 rename. On a multi-user box that runs for months, that fix is a hard
-prerequisite (#172, H0 of [`headless_owner_plan.md`](headless_owner_plan.md)).
+prerequisite (#172, H0 of [`headless_owner_plan.md`](done/headless_owner_plan.md)).
 
 ---
 
@@ -1350,10 +1350,10 @@ comes.
   fails `cargo test`. Handoff: [`hosted_handoff.md`](hosted_handoff.md).
 - The desktop prerequisites that used to sit here (#171, #172, the sidecar
   serving persisted-state kinds with the window closed) are H0 of
-  [`headless_owner_plan.md`](headless_owner_plan.md).
+  [`headless_owner_plan.md`](done/headless_owner_plan.md).
 
 **P1: one headless owner.** The riskiest phase, done first.
-- [`headless_owner_plan.md`](headless_owner_plan.md) H0–H3, on the desktop.
+- [`headless_owner_plan.md`](done/headless_owner_plan.md) H0–H3, on the desktop.
   Its exit is this phase's exit.
 - In parallel: start the crate extraction (§3.2). Fix the seven services and
   `terminal/mod.rs` first, then convert one `commands/*.rs` file at a time,
@@ -1597,7 +1597,7 @@ i18n and `UntestedTag` rows land inside each phase, never after it.
 - **Gates:** all five AGENTS.md gates stay at zero warnings through P1 on
   every converted file. That is how an extraction touching 211 coupled
   commands stays reviewable.
-- **Owner tests (P1):** [`headless_owner_plan.md`](headless_owner_plan.md)
+- **Owner tests (P1):** [`headless_owner_plan.md`](done/headless_owner_plan.md)
   §4.
 - **Protocol tests:**
   - the shim against a fake daemon: every `__TAURI_INTERNALS__` member,
@@ -1815,7 +1815,7 @@ discussion round.** All three agreed on every change below.
   from agents, while still surviving daemon restarts (§6.8).
 - **Split (2026-09-29):** §1 decision 3's detail, §3.4's ownership table,
   protocol and migration order, P0's desktop items and the owner tests moved
-  to [`headless_owner_plan.md`](headless_owner_plan.md), because all of it
+  to [`headless_owner_plan.md`](done/headless_owner_plan.md), because all of it
   pays off on the desktop with no server. This file keeps the server delta.
 - **Q1/Q3/Q4:** a small trusted group with one person as admin (invites and
   device keys, OIDC stays P5); per-member clones through the hub; a shared

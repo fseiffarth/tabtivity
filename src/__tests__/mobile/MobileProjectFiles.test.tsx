@@ -474,12 +474,15 @@ describe("Mobile project — read-only file browser", () => {
       ? new Response(JSON.stringify({ ...ROOT, entries: ROOT.entries.map((entry) => entry.name === "notes.md" ? { ...entry, size: 9_000_000 } : entry) }), { status: 200 })
       : host(input, init)));
     const open = vi.spyOn(window, "open").mockReturnValue(null);
-    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+    // Said in the viewer, where the reader is looking — never a browser `alert()`.
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => { throw new Error("window.alert must not be used"); });
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const sheet = await openLibrary();
     fireEvent.click(await within(sheet).findByRole("button", { name: "Open notes.md" }));
-    fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Open the whole file" }));
-    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringContaining("Reconnect")));
+    const viewer = screen.getByRole("dialog", { name: "notes.md" });
+    fireEvent.click(within(viewer).getByRole("button", { name: "Open the whole file" }));
+    await waitFor(() => expect(within(viewer).getByRole("alert").textContent).toContain("Reconnect"));
+    expect(alert).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalled();
   });
 

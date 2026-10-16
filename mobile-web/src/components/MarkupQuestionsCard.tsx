@@ -40,7 +40,7 @@ export function pickQuestion(question: PhoneMarkupQuestion): MarkupQuestion {
 export type QuestionFocus = { askId: string; index: number; nonce: number };
 
 /**
- * The agent's markup questions (`markup_ask`, `docs/markup_questions_mcp_plan.md`
+ * The agent's markup questions (`markup_ask`, `docs/done/markup_questions_mcp_plan.md`
  * P3), docked above the markup palette: a collapsible card, "The agent asks
  * · n", that opens by itself when a new ask arrives. Its rows are the Focus
  * list's (`QuestionRows`), so the two read alike. Rows are picked (ticked for

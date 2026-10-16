@@ -1,4 +1,4 @@
-//! Local models from the phone (`docs/mobile_local_model_control_plan.md`):
+//! Local models from the phone (`docs/done/mobile_local_model_control_plan.md`):
 //! the sidecar's half of listing the desktop's Ollama models and loading,
 //! unloading or starting them.
 //!

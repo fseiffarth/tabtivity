@@ -56,7 +56,10 @@ use crate::tauri_host::Ctx;
 // — a remote project's primary or worker host, or a global machine — matched on
 // user, host and port as the keychain account spells them
 // ([`ssh_login_configured`]); anything else would let a browser client make the
-// server dial any host and port. The desktop window keeps any host (adding a
+// server dial any host and port. On a per-user server daemon the account owns
+// the hosts it stores, so the list is a typo guard there, not an approval. The
+// login runs to the matched entry's stored spelling, never the caller's, which
+// only had to compare equal. The desktop window keeps any host (adding a
 // machine or project logs in before it is stored).
 
 /// Which login a login PTY runs — i.e. which saved credentials may be typed into
@@ -169,25 +172,28 @@ fn login_refusal(
     None
 }
 
-/// Whether `target` is an ssh login to one of `configured` — the same user, host
-/// and port, compared as the keychain account spells them
-/// ([`creds::ssh_account`]: trimmed, host case-folded, no port = 22).
+/// The stored address `target`, an ssh login, matches in `configured` — the
+/// same user, host and port, compared as the keychain account spells them
+/// ([`creds::ssh_account`]: trimmed, host case-folded, no port = 22). It is the
+/// **stored** spelling that comes back, which is what the login argv is built
+/// from: the caller's only had to compare equal (a Unicode case fold such as
+/// KELVIN SIGN → `k` must not reach ssh).
 fn ssh_login_known(
     target: &LoginTarget,
     configured: impl IntoIterator<Item = crate::services::remote::SshAddress>,
-) -> bool {
+) -> Option<crate::services::remote::SshAddress> {
     let LoginTarget::Ssh { user, host, port } = target else {
-        return false;
+        return None;
     };
     let wanted = creds::ssh_account(user, host, *port);
     configured
         .into_iter()
-        .any(|(user, host, port)| creds::ssh_account(&user, &host, port) == wanted)
+        .find(|(user, host, port)| creds::ssh_account(user, host, *port) == wanted)
 }
 
 /// [`ssh_login_known`] against what the owner configured: every remote project's
 /// primary and worker hosts (`projects.json`) and every global machine.
-fn ssh_login_configured(target: &LoginTarget) -> bool {
+fn ssh_login_configured(target: &LoginTarget) -> Option<crate::services::remote::SshAddress> {
     let machines = crate::commands::global_machines::load_all()
         .into_iter()
         .map(|m| (m.user, m.host, m.port));
@@ -219,23 +225,25 @@ pub(crate) fn apply_login(
 fn apply_login_with(
     opts: &mut PtyOptions,
     caller: &app_core::Caller,
-    ssh_configured: impl FnOnce(&LoginTarget) -> bool,
+    ssh_configured: impl FnOnce(&LoginTarget) -> Option<crate::services::remote::SshAddress>,
 ) -> Result<Option<LoginTarget>, String> {
-    let Some(target) = opts.login.clone() else {
+    let Some(mut target) = opts.login.clone() else {
         return Ok(None);
     };
     if let Some(what) = login_refusal(opts, &target, caller) {
         return Err(format!("a login terminal cannot be {what}"));
     }
-    // A server client dials only hosts the owner configured (module comment).
-    if matches!(target, LoginTarget::Ssh { .. })
-        && matches!(caller, app_core::Caller::Client(_))
-        && !ssh_configured(&target)
-    {
-        return Err(
-            "a browser client may open an ssh login only to a host a remote project or machine names"
-                .to_string(),
-        );
+    // A server client dials only hosts the owner configured (module comment),
+    // and ssh gets the stored spelling of the one it matched — never the
+    // caller's, which only had to compare equal.
+    if matches!(target, LoginTarget::Ssh { .. }) && matches!(caller, app_core::Caller::Client(_)) {
+        let Some((user, host, port)) = ssh_configured(&target) else {
+            return Err(
+                "a browser client may open an ssh login only to a host a remote project or machine names"
+                    .to_string(),
+            );
+        };
+        target = LoginTarget::Ssh { user, host, port };
     }
     let mut argv = target.argv()?.into_iter();
     let program = argv.next().ok_or_else(|| "empty login command".to_string())?;
@@ -474,6 +482,14 @@ mod tests {
         Caller::Local(ClientId::new("main"))
     }
 
+    /// The allow-list's answer when the caller's own spelling is what is stored.
+    fn as_stored(t: &LoginTarget) -> Option<crate::services::remote::SshAddress> {
+        match t {
+            LoginTarget::Ssh { user, host, port } => Some((user.clone(), host.clone(), *port)),
+            LoginTarget::Vpn { .. } => None,
+        }
+    }
+
     /// A spawn as the renderer sends it — here a hostile one, whose command line
     /// would capture whatever is typed into it.
     fn hostile(id: &str, login: serde_json::Value) -> PtyOptions {
@@ -558,7 +574,7 @@ mod tests {
             serde_json::json!({ "kind": "ssh", "user": "alice", "host": "host.example", "port": 2222 }),
         );
         opts.remote_host_id = Some("worker".to_string());
-        let target = apply_login_with(&mut opts, &client(), |_| true).unwrap();
+        let target = apply_login_with(&mut opts, &client(), as_stored).unwrap();
         assert_eq!(
             target,
             Some(LoginTarget::Ssh {
@@ -628,7 +644,7 @@ mod tests {
     fn a_vpn_login_is_refused_for_a_client() {
         let vpn = serde_json::json!({ "kind": "vpn", "config": "/home/u/work.ovpn" });
         let mut opts = hostile("root:vpn", vpn);
-        let err = apply_login_with(&mut opts, &client(), |_| true).unwrap_err();
+        let err = apply_login_with(&mut opts, &client(), as_stored).unwrap_err();
         assert!(err.contains("client"), "{err}");
         assert_eq!(opts.cmd, "sh");
     }
@@ -640,7 +656,7 @@ mod tests {
     fn a_clients_ssh_login_needs_a_configured_host() {
         let ssh = serde_json::json!({ "kind": "ssh", "user": "alice", "host": "h.example", "port": 2222 });
         let mut opts = hostile("root:ssh", ssh.clone());
-        let err = apply_login_with(&mut opts, &client(), |_| false).unwrap_err();
+        let err = apply_login_with(&mut opts, &client(), |_| None).unwrap_err();
         assert!(err.contains("browser client") && err.contains("machine"), "{err}");
         assert_eq!(opts.cmd, "sh", "a refused login changes nothing");
 
@@ -648,7 +664,7 @@ mod tests {
         let mut asked = None;
         assert!(apply_login_with(&mut opts, &client(), |t| {
             asked = Some(t.clone());
-            true
+            as_stored(t)
         })
         .unwrap()
         .is_some());
@@ -686,7 +702,7 @@ mod tests {
             host: host.to_string(),
             port,
         };
-        let allowed = |t: LoginTarget| ssh_login_known(&t, known.clone());
+        let allowed = |t: LoginTarget| ssh_login_known(&t, known.clone()).is_some();
 
         assert!(allowed(login(Some("alice"), "build.example", None)), "the primary, host case-folded");
         assert!(allowed(login(Some("alice"), " build.example ", Some(22))), "port 22 is no port");
@@ -699,8 +715,75 @@ mod tests {
         assert!(!allowed(login(Some("bob"), "gpu.example", None)), "the worker's port is part of it");
         assert!(!allowed(login(None, "evil.example", None)), "an unknown host");
         assert!(!allowed(login(Some("alice"), "machine.example", Some(2022))), "the machine's user is none");
-        assert!(!ssh_login_known(&LoginTarget::Vpn { config: "/a.ovpn".into() }, known.clone()));
-        assert!(!ssh_login_known(&login(None, "machine.example", Some(2022)), Vec::new()), "nothing configured");
+        assert!(ssh_login_known(&LoginTarget::Vpn { config: "/a.ovpn".into() }, known.clone()).is_none());
+        assert!(ssh_login_known(&login(None, "machine.example", Some(2022)), Vec::new()).is_none(), "nothing configured");
+    }
+
+    /// A per-user server daemon's account owns the hosts it stores, so a host
+    /// stays a host whoever stored it — also one an earlier build marked
+    /// `added_by_client` (that key now rides in `RemoteSpec::extra`).
+    #[test]
+    fn a_host_an_earlier_build_marked_client_added_counts() {
+        let list: crate::schema::projects::ProjectsList = serde_json::from_value(serde_json::json!([
+            { "id": "p1", "name": "P1", "status": "active", "position": 0, "local_file": "",
+              "remote": { "user": "alice", "host": "new.example", "remote_path": "/srv/x",
+                          "added_by_client": true },
+              "compute_hosts": [{ "id": "w1", "host": "w.example", "remote_path": "/srv/x",
+                                  "addedByClient": true }] },
+        ]))
+        .unwrap();
+        let known = crate::services::remote::ssh_addresses_of(&list);
+        let login = |user: Option<&str>, host: &str| LoginTarget::Ssh {
+            user: user.map(str::to_string),
+            host: host.to_string(),
+            port: None,
+        };
+        assert!(ssh_login_known(&login(Some("alice"), "new.example"), known.clone()).is_some());
+        assert!(ssh_login_known(&login(None, "w.example"), known).is_some());
+    }
+
+    /// #12: ssh receives the **stored** spelling of the matched host, not the
+    /// caller's — which only had to compare equal (trimmed, case-folded, port
+    /// 22 = none, and a Unicode case fold: KELVIN SIGN lowercases to `k`).
+    #[test]
+    fn a_clients_login_runs_to_the_stored_spelling() {
+        let stored = vec![(Some("alice".to_string()), "host.example".to_string(), None)];
+        let mut opts = hostile(
+            "root:spelling",
+            serde_json::json!({ "kind": "ssh", "user": "alice", "host": "Host.Example ", "port": 22 }),
+        );
+        let target = apply_login_with(&mut opts, &client(), |t| ssh_login_known(t, stored.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            target,
+            LoginTarget::Ssh { user: Some("alice".into()), host: "host.example".into(), port: None }
+        );
+        assert_eq!(opts.args.last().map(String::as_str), Some("alice@host.example"));
+        assert!(!opts.args.iter().any(|a| a == "-p"), "{:?}", opts.args);
+
+        // A caller spelling that only folds to the stored one never reaches ssh.
+        let stored = vec![(Some("alice".to_string()), "kdc.example".to_string(), None)];
+        let mut opts = hostile(
+            "root:spelling",
+            serde_json::json!({ "kind": "ssh", "user": "alice", "host": "\u{212A}DC.example", "port": null }),
+        );
+        let target = apply_login_with(&mut opts, &client(), |t| ssh_login_known(t, stored.clone()))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(target, LoginTarget::Ssh { ref host, .. } if host == "kdc.example"));
+        assert_eq!(opts.args.last().map(String::as_str), Some("alice@kdc.example"));
+        assert!(opts.args.iter().all(|a| a.is_ascii()), "{:?}", opts.args);
+
+        // The desktop window's login is never rewritten.
+        let mut opts = hostile(
+            "root:spelling",
+            serde_json::json!({ "kind": "ssh", "user": "alice", "host": "Host.Example", "port": 22 }),
+        );
+        let target = apply_login_with(&mut opts, &window(), |_| panic!("the desktop is never asked"))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(target, LoginTarget::Ssh { ref host, .. } if host == "Host.Example"));
     }
 
     /// The desktop window's VPN login runs the elevated connect argv itself.

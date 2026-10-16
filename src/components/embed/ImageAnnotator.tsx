@@ -16,6 +16,7 @@ import { useT } from "../../lib/i18n";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
 import "./ImageAnnotator.css";
 import { ArrowUpRightIcon, PencilIcon } from "../common/icons/Icon";
+import { useDialogs } from "../common/PromptDialogs";
 
 type Tool = "pen" | "rect" | "arrow" | "text";
 
@@ -53,6 +54,11 @@ export function ImageAnnotator({
 }) {
   const t = useT();
   const scope = useFileScope();
+  // The text tool asks for its words in the app's own prompt. While it is open
+  // Escape belongs to the prompt (cancel the text), not to this overlay's
+  // capture-phase "discard everything and close".
+  const { promptText, dialogs } = useDialogs();
+  const askingRef = useRef(false);
   // While open, the drawing lives only on this component's canvas: keep a
   // sleepable pane awake (performance plan §5.3), or a hidden image tab left
   // mid-annotation would unmount and lose it. Released on Save/Close (unmount).
@@ -190,15 +196,25 @@ export function ImageAnnotator({
       const pt = toCanvas(e);
 
       if (toolRef.current === "text") {
-        const text = window.prompt(t("imageAnnotator.annotationTextPrompt"));
-        if (text && text.trim().length > 0) {
-          pushUndoSnapshot();
-          applyStroke(ctx);
-          const fontPx = Math.max(14, widthRef.current * 6);
-          ctx.font = `${fontPx}px sans-serif`;
-          ctx.textBaseline = "top";
-          ctx.fillText(text, pt.x, pt.y);
-        }
+        if (askingRef.current) return;
+        askingRef.current = true;
+        void promptText({
+          title: t("imageAnnotator.annotationTextTitle"),
+          label: t("imageAnnotator.annotationTextPrompt"),
+          confirmLabel: t("common.add"),
+        })
+          .then((text) => {
+            if (!text) return;
+            pushUndoSnapshot();
+            applyStroke(ctx);
+            const fontPx = Math.max(14, widthRef.current * 6);
+            ctx.font = `${fontPx}px sans-serif`;
+            ctx.textBaseline = "top";
+            ctx.fillText(text, pt.x, pt.y);
+          })
+          .finally(() => {
+            askingRef.current = false;
+          });
         return;
       }
 
@@ -215,7 +231,7 @@ export function ImageAnnotator({
         ctx.moveTo(pt.x, pt.y);
       }
     },
-    [loaded, saving, overlayCtx, toCanvas, pushUndoSnapshot, applyStroke, t],
+    [loaded, saving, overlayCtx, toCanvas, pushUndoSnapshot, applyStroke, promptText, t],
   );
 
   const onPointerMove = useCallback(
@@ -329,7 +345,7 @@ export function ImageAnnotator({
   // Esc cancels.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !askingRef.current) {
         e.stopPropagation();
         onClose();
       }
@@ -466,6 +482,7 @@ export function ImageAnnotator({
           )}
         </div>
       </div>
+      {dialogs}
     </div>
   );
 }

@@ -272,7 +272,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("timer_lease_release", Core),
     // commands/apps.rs
     ("cancel_file_drag", Client),
-    ("check_pid_alive", Client),
     ("close_tracked_window", Client),
     ("drag_preview_icon", Client),
     ("embed_capability", Client),
@@ -282,7 +281,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("list_tracked_windows", Client),
     ("open_file", Client),
     ("resolve_app_icon", Client),
-    ("restore_open_apps", Client),
     ("run_script_detached", Core),
     ("set_project_default_apps", Core),
     ("start_file_drag", Client),
@@ -311,7 +309,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("set_box_members", Core),
     ("patch_box", Core),
     ("set_box_mobile_access", Core),
-    ("set_box_relations", Core),
     // commands/brand_migration.rs
     ("legacy_name_status", Core),
     // commands/browser.rs
@@ -381,13 +378,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("copilot_finish_sign_in", Core),
     ("copilot_message_action", Core),
     ("copilot_prepare", Core),
-    ("copilot_project_policy", Core),
     ("copilot_set_project_policy", Core),
     ("copilot_setup", Core),
     ("copilot_shown", Core),
     ("copilot_sign_in", Core),
     ("copilot_sign_out", Core),
-    ("copilot_stop", Core),
     // commands/crash.rs
     ("report_frontend_error", Core),
     // commands/credentials.rs
@@ -545,7 +540,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("hpc_ws_list", Core),
     ("hpc_ws_move_root", Core),
     ("hpc_ws_pull_logs", Core),
-    ("hpc_ws_release", Core),
     ("set_project_hpc", Core),
     // commands/ide.rs
     ("detect_project_ides", Client),
@@ -656,7 +650,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("mobile_host_status", Admin),
     ("mobile_opaque_id", Core),
     ("mobile_paired_devices", Core),
-    ("mobile_prepare_phone_install_script", Core),
     ("mobile_tailscale_serve_status", Admin),
     ("mobile_verify_tailscale_serve", Admin),
     ("phone_upload_undo", Core),
@@ -684,9 +677,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("ensure_vibe_ollama_model", Core),
     ("install_ollama", Admin),
     ("install_vibe", Admin),
-    ("list_installable_models", Core),
     ("list_local_drivers", Core),
-    ("list_ollama_models", Core),
     ("list_ollama_models_detailed", Core),
     ("list_orphan_partial_blobs", Core),
     ("list_pending_ollama_pulls", Core),
@@ -696,10 +687,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("ollama_gpu_status", Core),
     ("ollama_install_strategy", Core),
     ("ollama_is_installed", Core),
-    ("ollama_is_running", Core),
     ("ollama_models_dir_plan", Core),
     ("ollama_registry_details", Core),
-    ("ollama_registry_size", Core),
     ("ollama_server_kind", Core),
     ("ollama_status", Core),
     ("ollama_version_status", Core),
@@ -831,7 +820,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("set_project_python", Core),
     // commands/remote.rs
     ("remote_connect", Core),
-    ("remote_connected_ids", Core),
     ("remote_connected_targets", Core),
     ("remote_disconnect", Core),
     ("remote_disconnect_all_hosts", Core),
@@ -896,7 +884,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("spell_check", Core),
     ("spell_dictionaries", Core),
     ("spell_install_language", Core),
-    ("spell_languages", Core),
     ("spell_remove_language", Core),
     // commands/sqlite.rs
     ("sqlite_page", Core),
@@ -956,7 +943,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("copilot_fence_sign_out", Core),
     ("local_tmux_kill", Core),
     ("local_tmux_kill_app_sessions", Core),
-    ("local_tmux_list", Core),
     ("local_tmux_rename", Core),
     ("local_tmux_screen", Core),
     ("project_cpu_percent", Core),
@@ -998,14 +984,12 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("remote_download_size", Core),
     ("remote_download_to", Core),
     ("vm_allow_temporarily", Admin),
-    ("vm_blocked", Admin),
     ("vm_boot", Admin),
     ("vm_doctor", Admin),
     ("vm_rebuild", Admin),
     ("vm_set_spec", Admin),
     ("vm_shutdown", Admin),
     ("vm_status", Admin),
-    ("vm_unpushed_commits", Admin),
     // commands/workspace.rs
     ("desktop_owns_super_key", Client),
     ("get_opened_windows", Client),
@@ -1014,11 +998,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("network_identity", Client),
     ("network_wifi_ssid", Client),
     ("show_window", Client),
-    ("switch_project_windows", Client),
     ("workspace_capabilities", Client),
     ("workspace_info", Client),
-    ("workspace_name", Client),
-    ("workspace_switch", Client),
 ];
 
 #[cfg(test)]

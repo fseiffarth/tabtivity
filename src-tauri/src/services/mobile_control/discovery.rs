@@ -132,7 +132,7 @@ fn fresh_since(tab: &SavedTab) -> Option<i64> {
         .args
         .as_ref()
         .and_then(Value::as_array)
-        .is_some_and(|args| args.iter().any(|arg| arg.as_str() == Some("--continue")));
+        .is_some_and(|args| args.iter().any(|arg| arg.as_str().is_some_and(|arg| matches!(arg, "--continue" | "--resume" | "-c" | "-r"))));
     if continued {
         return None;
     }
@@ -714,26 +714,20 @@ fn expected_tmux_for(pair: &crate::brand::Pair, project_id: &str, kind: &str, na
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// The built-in agent CLIs whose tabs resume across a relaunch (the frontend's
-/// `RESUMABLE_AGENTS`): what the phone may come back to, and — with no
-/// window — what it may start (`headless::agents`).
-pub(super) const RESUMABLE_BUILTINS: &[&str] = &[
-    "claude",
-    "codex",
-    "qwen",
-    "opencode",
-    "copilot",
-    "cursor-agent",
-    "grok",
-    "gemini",
-    "agy",
-    "vibe",
-    "droid",
-];
+/// The built-in agent CLIs whose tabs resume across a relaunch, in registry
+/// order (`commands::agents`' `Resume`, the frontend's `RESUMABLE_AGENTS`):
+/// what the phone may come back to, and — with no window — what it may start
+/// (`headless::agents`).
+pub(super) fn resumable_builtins() -> Vec<&'static str> {
+    crate::commands::agents::agent_bins()
+        .into_iter()
+        .filter(|bin| crate::commands::agents::is_resumable_bin(bin))
+        .collect()
+}
 
 fn resumable(tab: &SavedTab) -> bool {
     tab.session_id.is_some()
-        && (RESUMABLE_BUILTINS.contains(&tab.cmd.as_str())
+        && (crate::commands::agents::is_resumable_bin(&tab.cmd)
             || tab.resume_args.as_ref().is_some_and(|v| !v.is_empty()))
 }
 
@@ -985,7 +979,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             kind: ScopeKind::Root,
             roots: vec![root.dir.clone()],
             // Root has its own switch and gate; per-phone root is out of
-            // scope (docs/mobile_device_scoped_access_plan.md).
+            // scope (docs/done/mobile_device_scoped_access_plan.md).
             devices: None,
         });
     }
@@ -2124,6 +2118,9 @@ mod tests {
         };
         assert_eq!(fresh_since(&saved(serde_json::json!([]), Some(serde_json::json!(1_700_000_000_123_i64)))), Some(1_700_000_000_123));
         assert_eq!(fresh_since(&saved(serde_json::json!(["--continue"]), Some(serde_json::json!(5)))), None);
+        for args in [serde_json::json!(["--resume", "latest"]), serde_json::json!(["-r", "latest"]), serde_json::json!(["-c"])] {
+            assert_eq!(fresh_since(&saved(args, Some(serde_json::json!(5)))), None);
+        }
         assert_eq!(fresh_since(&saved(serde_json::json!([]), None)), None);
         // An odd shape is no stamp, never a file that fails to parse.
         assert_eq!(fresh_since(&saved(serde_json::json!("x"), Some(serde_json::json!("soon")))), None);

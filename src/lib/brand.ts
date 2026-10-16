@@ -136,6 +136,10 @@ function namesFor(b: BrandForms) {
     mobileOpenMessage: `${b.slug}-open`,
     /** Prefix of the phone's notification tags. */
     mobileNotificationTagPrefix: `${b.slug}-`,
+    /** The phone's Cache Storage entry holding its language, which the
+     *  service worker reads to title a push that came without one. Outside
+     *  the shell cache: the worker purges every other cache on activate. */
+    mobilePushLangCache: `${b.slug}-mobile-prefs`,
   };
 }
 

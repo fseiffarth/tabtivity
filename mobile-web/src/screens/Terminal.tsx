@@ -6,6 +6,7 @@ import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
+import { ConfirmSheet } from "../components/ConfirmSheet";
 import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
@@ -1089,6 +1090,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [addSheet, setAddSheet] = useState(false);
   /** The Commit chip's sheet: commit everything, or split it up. */
   const [commitSheet, setCommitSheet] = useState(false);
+  // The key row's Interrupt asks first, in the phone's own sheet.
+  const [interruptSheet, setInterruptSheet] = useState(false);
   /** The "From the desktop" list: `null` while the desktop is being asked. */
   const [desktopSheet, setDesktopSheet] = useState(false);
   const [desktopImages, setDesktopImages] = useState<DesktopImage[] | null>(null);
@@ -2768,7 +2771,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The markup view's Submit: the desktop's prompt goes out like a typed
    * one — into the agent's queue while it works (a markup prompt is never a
    * slash command, so `submitDraft` holds it exactly then). The viewer stays
-   * open for the next round (`docs/pdf_markup_rounds_plan.md` §2.5). */
+   * open for the next round (`docs/done/pdf_markup_rounds_plan.md` §2.5). */
   const sendMarkup = useCallback((text: string): MarkupSend => {
     const queued = agentAtWorkRef.current;
     if (!submitDraftRef.current(text, false)) return false;
@@ -4116,7 +4119,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           setFocusSource("session");
           setFocusMenu(false);
         }}>
-          <span><strong>{t("mobile.focus.session")} {isUntested("mobile.focus.session") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{transcript?.available ? t("mobile.focus.sessionHint") : t(noSessionReason(transcript))}{!transcript?.available && transcript?.reason === "no_session" && isUntested("mobile.focus.noSessionYet") && <em> · {t("mobile.focus.untested")}</em>}</small></span>
+          <span><strong>{t("mobile.focus.session")} {(isUntested("mobile.focus.session") || ((antigravity || /gemini/iu.test(agentLabel)) && isUntested("mobile.focus.googleSession"))) && <em>{t("mobile.focus.untested")}</em>}</strong><small>{transcript?.available ? t("mobile.focus.sessionHint") : t(noSessionReason(transcript))}{!transcript?.available && transcript?.reason === "no_session" && isUntested("mobile.focus.noSessionYet") && <em> · {t("mobile.focus.untested")}</em>}</small></span>
           {sessionShown && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
         </button>
         <button role="menuitemradio" aria-checked={!sessionShown} onClick={() => {
@@ -4447,7 +4450,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </div>
       {keysShown && <div className="keys" id="terminal-keys">
       {isUntested("mobile.composer.keysToggle") && <em className="composer-untested keys-untested">{t("mobile.focus.untested")}</em>}
-      <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => window.confirm(t("mobile.keys.interruptConfirm")) && type("\u0003")}>{t("mobile.keys.interrupt")}</button>
+      <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => setInterruptSheet(true)}>{t("mobile.keys.interrupt")}</button>
       </div>}
     </div>
     {/* Lifted over a markup view, whose model chip opens it too. */}
@@ -4480,6 +4483,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       tiles={attachTiles}
       onPick={pickAdd}
       onClose={() => setAddSheet(false)}
+    />}
+    {interruptSheet && <ConfirmSheet
+      confirm={{ title: t("mobile.keys.interrupt"), note: t("mobile.keys.interruptConfirm"), label: t("mobile.keys.interrupt"), run: () => { type("\u0003"); } }}
+      busy={!connected}
+      onClose={() => setInterruptSheet(false)}
     />}
     {commitSheet && <OptionSheet
       title={t("mobile.commit.title")}

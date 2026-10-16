@@ -2066,6 +2066,16 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
+         # A Bash call put in the background (`run_in_background`, or moved there\n\
+         # while it ran) comes back with its task id, and its shell writes to\n\
+         # `<id>.output`: that is how the job scan tells it from the call the\n\
+         # agent waits on, which looks the same. The last few ids are kept; written\n\
+         # before the turn record, whose write is what makes the scan look.\n\
+         if [ \"$event\" = PostToolUse ]; then\n\
+         \x20 bg=$(printf '%s' \"$input\" | sed -n 's/.*\"backgroundTaskId\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z0-9]*\\)\".*/\\1/p')\n\
+         \x20 [ -n \"$bg\" ] && {{ tail -n 15 \"$dir/${UPPER}_TAB_UID.bg\" 2>/dev/null; printf '%s\\n' \"$bg\"; }} > \"$dir/${UPPER}_TAB_UID.bg.$$\" &&\n\
+         \x20   mv -f \"$dir/${UPPER}_TAB_UID.bg.$$\" \"$dir/${UPPER}_TAB_UID.bg\"\n\
+         fi\n\
          [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/${UPPER}_TAB_UID.turn\"\n\
          # A prompt in the conversation a /clear started ends that clear's undo:\n\
          # resuming the one it ended would leave the prompt behind. Not a session\n\
@@ -3595,6 +3605,25 @@ mod tests {
         assert_eq!(turn().as_deref(), Some("decision"));
         run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", r#","tool_name":"Bash""#));
         assert_eq!(turn().as_deref(), Some("working"));
+        // A Bash call put in the background leaves its task id for the job scan
+        // (the result's shape as Claude 2.1.300 records it); a foreground call,
+        // even one whose OUTPUT quotes such a field, leaves none.
+        let bg = || std::fs::read_to_string(live.join(format!("{uid}.bg"))).ok();
+        let fg_result = r#","tool_name":"Bash","tool_response":{"stdout":"{\"backgroundTaskId\":\"zzz9\"}","stderr":""}"#;
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", fg_result));
+        assert_eq!(bg(), None);
+        let bg_result = |id: &str| {
+            format!(r#","tool_name":"Bash","tool_response":{{"stdout":"","stderr":"","interrupted":false,"backgroundTaskId":"{id}"}}"#)
+        };
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", &bg_result("brwkwm4yv")));
+        assert_eq!(bg().as_deref(), Some("brwkwm4yv\n"));
+        assert_eq!(turn().as_deref(), Some("working"));
+        // Only the last sixteen are kept.
+        for i in 0..20 {
+            run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", &bg_result(&format!("t{i}"))));
+        }
+        let kept: Vec<String> = bg().unwrap().lines().map(str::to_string).collect();
+        assert_eq!(kept, (4..20).map(|i| format!("t{i}")).collect::<Vec<_>>());
         // A notification that is not a wait leaves the state alone.
         run_hook(&script, &live, uid, claude, true, &ev(uid, "Notification", r#","notification_type":"auth_success""#));
         assert_eq!(turn().as_deref(), Some("working"));

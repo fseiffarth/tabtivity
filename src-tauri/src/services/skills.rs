@@ -1,4 +1,4 @@
-//! Skills Library (`docs/skills_plan.md`) — fetch + catalog, no manifest, no
+//! Skills Library (`docs/done/skills_plan.md`) — fetch + catalog, no manifest, no
 //! versioning. A "source" is a git repo (Anthropic's own `anthropics/skills` by
 //! default, or any other collection the user points at); its clone is cached
 //! under `~/.local/share/tabtivity/skills_cache/<id>/` and walked on demand for
@@ -10,9 +10,13 @@
 //! list and every cached clone live in `state_dir()`, shared by every project —
 //! which is why a skill can be installed into a project (`.claude/skills/`,
 //! travelling with the repo, reaching a container through the identical-path
-//! mount and a remote host through lockstep) or into the machine's personal
-//! `~/.claude/skills/`, which every project here sees and no other machine ever
-//! does. `SkillTarget` is that choice and nothing more: it is resolved by
+//! mount and a remote host through lockstep) or into the personal scope: the
+//! Tabtivity-wide agent layer's `.claude/skills/` (`services::agent_global`,
+//! `<state_dir>/agent-global`), which is copied into every agent home at every
+//! spawn — every project here sees it and no other machine ever does. The
+//! user's own `~/.claude/skills` belongs to their own Claude Code and is never
+//! written (agent tabs do not read it anyway: they run in Tabtivity's agent
+//! homes). `SkillTarget` is that choice and nothing more: it is resolved by
 //! [`target_skills_dir`] and by no caller, so the personal target — the one
 //! with the widest blast radius — is the one whose path never crosses the IPC
 //! boundary.
@@ -20,7 +24,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::paths;
 use crate::schema::skills::{
     InstalledSkill, SkillCatalogEntry, SkillDetail, SkillSource, SkillTarget,
 };
@@ -34,8 +37,48 @@ fn cache_root() -> PathBuf {
     storage::state_dir().join("skills_cache")
 }
 
-fn cache_dir(source_id: &str) -> PathBuf {
-    cache_root().join(source_id)
+/// A source's clone, `skills_cache/<id>`. The id arrives from the caller
+/// (`skills_list_catalog`, `skills_remove_source`, …), so it must be one plain
+/// folder name: `../..` would aim a recursive delete at the state dir's parent.
+fn cache_dir(source_id: &str) -> Result<PathBuf, String> {
+    Ok(cache_root().join(plain_name(source_id, "skills source id")?))
+}
+
+/// `name` as a single plain path component — not empty, `.` or `..`, no
+/// separator (either kind, on every OS), not absolute, no drive prefix, no
+/// NUL. What every name this module joins onto a folder must be: a skill's
+/// folder name in a target, a source id, one segment of a catalog path.
+fn plain_name<'a>(name: &'a str, what: &str) -> Result<&'a str, String> {
+    let mut parts = Path::new(name).components();
+    let single = matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none();
+    if !single || name.contains(['/', '\\', '\0']) || name.trim() != name {
+        return Err(format!("'{name}' is not a valid {what}"));
+    }
+    Ok(name)
+}
+
+/// A catalog entry's skill folder: `rel_path` (`/`-separated, as the catalog
+/// lists it) taken as plain segments under the source's clone, and the folder
+/// it resolves to still inside that clone — a link in the repository cannot
+/// aim a read or an install copy at a folder elsewhere.
+fn skill_folder(source_id: &str, rel_path: &str) -> Result<PathBuf, String> {
+    skill_folder_in(&cache_dir(source_id)?, rel_path)
+}
+
+fn skill_folder_in(root: &Path, rel_path: &str) -> Result<PathBuf, String> {
+    if rel_path.is_empty() {
+        return Err("no skill folder named".to_string());
+    }
+    let mut src = root.to_path_buf();
+    for segment in rel_path.split('/') {
+        src.push(plain_name(segment, "skill folder")?);
+    }
+    let real_root = root.canonicalize().map_err(|e| format!("skills source '{}': {e}", root.display()))?;
+    let real = src.canonicalize().map_err(|_| format!("'{rel_path}' is not a skill folder (no SKILL.md)"))?;
+    if !real.starts_with(&real_root) || real == real_root {
+        return Err(format!("'{rel_path}' leads out of its skills source"));
+    }
+    Ok(real)
 }
 
 /// Seeded on first use — Anthropic's own skills repo, doubling as a Claude Code
@@ -120,8 +163,8 @@ pub fn add_source(label: String, url: String) -> Result<SkillSource, String> {
 pub fn remove_source(id: String) -> Result<(), String> {
     let mut sources = list_sources();
     sources.retain(|s| s.id != id);
+    let dir = cache_dir(&id)?;
     save_sources(&sources)?;
-    let dir = cache_dir(&id);
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     }
@@ -139,7 +182,7 @@ pub fn refresh_source(id: &str) -> Result<(), String> {
         .into_iter()
         .find(|s| s.id == id)
         .ok_or_else(|| format!("Unknown skills source '{id}'"))?;
-    let dest = cache_dir(&source.id);
+    let dest = cache_dir(&source.id)?;
     if dest.join(".git").exists() {
         // Bare on purpose: the skills cache is Tabtivity's own clone in the
         // state dir, not a project tree an agent or container can write.
@@ -206,7 +249,9 @@ fn walk_for_skills(root: &Path, dir: &Path, source_id: &str, out: &mut Vec<Skill
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // Never through a link: a repository's link would lead the walk out
+        // of the clone, or round a loop until the stack ran out.
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
             if path.file_name().is_some_and(|n| n == ".git") {
                 continue;
             }
@@ -241,7 +286,9 @@ fn walk_for_skills(root: &Path, dir: &Path, source_id: &str, out: &mut Vec<Skill
 /// The catalog for one source, re-derived from its cache on every call —
 /// nothing about it is persisted.
 pub fn list_catalog(source_id: &str) -> Vec<SkillCatalogEntry> {
-    let root = cache_dir(source_id);
+    let Ok(root) = cache_dir(source_id) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     walk_for_skills(&root, &root, source_id, &mut out);
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -256,9 +303,10 @@ fn list_bundled_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
             list_bundled_files(root, &path, out);
-        } else if path.file_name().is_some_and(|n| n != "SKILL.md") {
+        } else if kind.is_file() && path.file_name().is_some_and(|n| n != "SKILL.md") {
             out.push(
                 path.strip_prefix(root)
                     .unwrap_or(&path)
@@ -274,7 +322,7 @@ fn list_bundled_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
 /// list (scripts flagged separately so an install is never a silent "and it
 /// can also execute things").
 pub fn get_skill_detail(source_id: &str, rel_path: &str) -> Result<SkillDetail, String> {
-    let src = cache_dir(source_id).join(rel_path);
+    let src = skill_folder(source_id, rel_path)?;
     let skill_md = src.join("SKILL.md");
     if !skill_md.is_file() {
         return Err(format!("'{rel_path}' is not a skill folder (no SKILL.md)"));
@@ -301,9 +349,10 @@ fn project_skills_dir(project_dir: &str) -> PathBuf {
     Path::new(project_dir).join(".claude").join("skills")
 }
 
-/// The `.claude/skills/` directory a target names. `Personal` resolves against
-/// this process's own idea of home — the frontend never says where that is, so
-/// no caller can turn the personal scope into an arbitrary destination.
+/// The `.claude/skills/` directory a target names. `Personal` resolves to the
+/// Tabtivity-wide agent layer (`agent_global::global_dir()`), never the user's
+/// own `~/.claude` — the frontend never says where that is, so no caller can
+/// turn the personal scope into an arbitrary destination.
 ///
 /// An empty project dir is refused rather than silently resolving to a relative
 /// `.claude/skills` under whatever the working directory happens to be: a
@@ -317,27 +366,50 @@ fn target_skills_dir(target: &SkillTarget) -> Result<PathBuf, String> {
             }
             Ok(project_skills_dir(dir))
         }
-        SkillTarget::Personal => Ok(project_skills_dir(&paths::home_dir_string())),
+        SkillTarget::Personal => Ok(crate::services::agent_global::global_dir()
+            .join(".claude")
+            .join("skills")),
     }
 }
 
 /// Copy `src` into `dest` recursively. `dest`'s parent is created if needed;
 /// `dest` itself is expected to not exist yet — callers that mean to overwrite
 /// (a re-install) remove it first, so this never merges an old and a new
-/// install's files together.
+/// install's files together. A link in the skill is skipped, not followed: a
+/// repository's `notes -> ~/.ssh` would otherwise copy that folder into the
+/// project.
 fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dest)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let from = entry.path();
         let to = dest.join(entry.file_name());
-        if from.is_dir() {
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
             copy_dir_recursive(&from, &to)?;
-        } else {
+        } else if kind.is_file() {
             fs::copy(&from, &to)?;
         }
     }
     Ok(())
+}
+
+/// `<target>/.claude/skills/<name>`, for a `name` that is one plain folder
+/// name. A project's `.claude/skills` is the project's — attacker-controlled
+/// content — so it must still resolve inside the project: a planted
+/// `.claude/skills -> ~/.config` would aim the delete and the copy there.
+fn installed_skill_dir(target: &SkillTarget, name: &str) -> Result<PathBuf, String> {
+    let name = plain_name(name, "skill name")?;
+    let skills = target_skills_dir(target)?;
+    if let SkillTarget::Project { dir } = target {
+        let project = crate::commands::fs::canonical_or_new(Path::new(dir))?;
+        let real = crate::commands::fs::canonical_or_new(&skills)?;
+        if !real.starts_with(&project) {
+            return Err(format!("'{}' leads out of the project", skills.display()));
+        }
+        return Ok(real.join(name));
+    }
+    Ok(skills.join(name))
 }
 
 /// Copy a skill folder verbatim into the target's `.claude/skills/<name>/`.
@@ -345,7 +417,7 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
 /// refresh) — no commit-pin, no drift detection; the frontend confirms the
 /// overwrite before calling this.
 pub fn install_skill(target: &SkillTarget, source_id: &str, rel_path: &str) -> Result<(), String> {
-    let src = cache_dir(source_id).join(rel_path);
+    let src = skill_folder(source_id, rel_path)?;
     if !src.join("SKILL.md").is_file() {
         return Err(format!("'{rel_path}' is not a skill folder (no SKILL.md)"));
     }
@@ -354,9 +426,11 @@ pub fn install_skill(target: &SkillTarget, source_id: &str, rel_path: &str) -> R
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
+    // The name comes from the catalog's own SKILL.md: a repository's
+    // `name: ../../..` must not pick the folder that is deleted and refilled.
     let (name, _, _) = parse_skill_md(&content, &folder_name);
-    let dest = target_skills_dir(target)?.join(&name);
-    if dest.exists() {
+    let dest = installed_skill_dir(target, &name)?;
+    if fs::symlink_metadata(&dest).is_ok() {
         fs::remove_dir_all(&dest).map_err(|e| e.to_string())?;
     }
     copy_dir_recursive(&src, &dest).map_err(|e| e.to_string())
@@ -364,8 +438,8 @@ pub fn install_skill(target: &SkillTarget, source_id: &str, rel_path: &str) -> R
 
 /// Delete `<target>/.claude/skills/<name>/`.
 pub fn uninstall_skill(target: &SkillTarget, name: &str) -> Result<(), String> {
-    let dir = target_skills_dir(target)?.join(name);
-    if dir.exists() {
+    let dir = installed_skill_dir(target, name)?;
+    if fs::symlink_metadata(&dir).is_ok() {
         fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -496,11 +570,19 @@ mod tests {
             Path::new("/tmp/proj").join(".claude").join("skills")
         );
 
-        // Personal resolves against this process's own home — the point being
-        // that no argument reached it, so no caller can aim it elsewhere.
+        // Personal resolves to the Tabtivity-wide agent layer, which every
+        // agent home is laid from — never the user's own `~/.claude/skills`
+        // (another app's config). No argument reached it, so no caller can aim
+        // it elsewhere.
         let personal = target_skills_dir(&SkillTarget::Personal).unwrap();
-        assert!(personal.ends_with(Path::new(".claude").join("skills")));
-        assert!(personal.starts_with(paths::home_dir_string()));
+        assert_eq!(
+            personal,
+            crate::services::agent_global::global_dir()
+                .join(".claude")
+                .join("skills")
+        );
+        let home_skills = Path::new(&crate::paths::home_dir_string()).join(".claude").join("skills");
+        assert_ne!(personal, home_skills);
     }
 
     #[test]
@@ -511,6 +593,82 @@ mod tests {
         assert!(target_skills_dir(&SkillTarget::Project { dir: String::new() }).is_err());
         assert!(target_skills_dir(&SkillTarget::Project { dir: "  ".into() }).is_err());
         assert!(list_installed(&SkillTarget::Project { dir: String::new() }).is_empty());
+    }
+
+    #[test]
+    fn a_name_joined_onto_a_folder_is_one_plain_component() {
+        for bad in ["", ".", "..", "../..", "a/b", "a\\b", "/etc", " x", "x\0"] {
+            assert!(plain_name(bad, "name").is_err(), "{bad:?}");
+        }
+        if cfg!(windows) {
+            assert!(plain_name("C:", "name").is_err());
+        }
+        assert_eq!(plain_name("pdf-fill", "name").unwrap(), "pdf-fill");
+        assert!(cache_dir("../..").is_err(), "a source id never climbs out of the cache");
+        assert!(cache_dir("/").is_err());
+        assert!(cache_dir("anthropic").is_ok());
+    }
+
+    #[test]
+    fn uninstall_never_leaves_the_targets_skills_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("victim");
+        fs::create_dir_all(&victim).unwrap();
+        let project = tmp.path().join("p");
+        fs::create_dir_all(project.join(".claude").join("skills")).unwrap();
+        let target = SkillTarget::Project { dir: project.to_string_lossy().into_owned() };
+        for name in ["../../victim", &victim.to_string_lossy(), "..", ""] {
+            assert!(uninstall_skill(&target, name).is_err(), "{name:?}");
+        }
+        assert!(victim.is_dir(), "nothing outside the skills folder was deleted");
+    }
+
+    #[test]
+    fn a_catalog_path_stays_inside_its_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let clone = tmp.path().join("clone");
+        fs::create_dir_all(clone.join("good")).unwrap();
+        fs::write(clone.join("good").join("SKILL.md"), "x").unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join("SKILL.md"), "x").unwrap();
+        assert!(skill_folder_in(&clone, "good").is_ok());
+        for bad in ["../elsewhere", "good/../../elsewhere", &elsewhere.to_string_lossy(), "", "good/"] {
+            assert!(skill_folder_in(&clone, bad).is_err(), "{bad:?}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&elsewhere, clone.join("link")).unwrap();
+            assert!(skill_folder_in(&clone, "link").is_err(), "a link in the repository leads nowhere outside it");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_link_is_never_followed_by_an_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secret = tmp.path().join("secret");
+        fs::create_dir_all(&secret).unwrap();
+        fs::write(secret.join("id_key"), "k").unwrap();
+        // A skill whose folder carries a link out of the repository.
+        let skill = tmp.path().join("skill");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "x").unwrap();
+        std::os::unix::fs::symlink(&secret, skill.join("notes")).unwrap();
+        std::os::unix::fs::symlink(secret.join("id_key"), skill.join("key")).unwrap();
+        let dest = tmp.path().join("dest");
+        copy_dir_recursive(&skill, &dest).unwrap();
+        assert!(dest.join("SKILL.md").is_file());
+        assert!(fs::symlink_metadata(dest.join("notes")).is_err(), "a linked folder is not copied");
+        assert!(fs::symlink_metadata(dest.join("key")).is_err(), "a linked file is not copied");
+        // A project whose `.claude/skills` leads out of it.
+        let project = tmp.path().join("p");
+        fs::create_dir_all(project.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&secret, project.join(".claude").join("skills")).unwrap();
+        let target = SkillTarget::Project { dir: project.to_string_lossy().into_owned() };
+        assert!(installed_skill_dir(&target, "id_key").is_err());
+        assert!(uninstall_skill(&target, "id_key").is_err());
+        assert!(secret.join("id_key").is_file());
     }
 
     #[test]

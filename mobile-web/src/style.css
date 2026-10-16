@@ -7,6 +7,9 @@ button { color:inherit; }
    desktop browser the whole window rather than a strip down its middle. The
    tab bar and the to-do ＋ keep to the same edges. */
 :root { --screen-measure:720px; }
+/* Home and the project screen's scale: type, 4pt spacing, group surfaces,
+   the 44px hit box, octagon cuts (docs/mobile_home_redesign_plan.md). */
+:root { --fs-large:1.75rem; --fs-title:1.25rem; --fs-headline:1.0625rem; --fs-body:.9375rem; --fs-sub:.875rem; --fs-foot:.8125rem; --fs-caption:.75rem; --fs-micro:.6875rem; --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-7:32px; --surface-group:#1a1d2b; --surface-raised:#222637; --hairline:#2b3040; --edge:#363c50; --ink-muted:#98a0b4; --hit:44px; --oct-sm:6px; --oct-md:10px; --oct-lg:14px; --oct-fab:17px; }
 @media (min-width:900px) { :root { --screen-measure:100vw; } }
 .screen { max-width:var(--screen-measure); min-height:100dvh; margin:auto; padding:max(22px,env(safe-area-inset-top)) 18px max(24px,env(safe-area-inset-bottom)); }
 @media (min-width:900px) { .screen { padding-inline:max(28px,env(safe-area-inset-left)) max(28px,env(safe-area-inset-right)); } }
@@ -35,27 +38,17 @@ nav button,.keys button { flex:1; }
    the select taking the width the label leaves. */
 .activity-sort { display:flex; align-items:center; gap:10px; margin:-8px 0 12px; color:#9aa0b4; font-size:.9rem; }
 .activity-sort select { flex:1; width:auto; padding:8px 30px 8px 10px; background-position:right 10px center; }
-/* The same control in a screen's header instead, beside the name and the back
-   chevron, the way an agent tab's header carries its view switch: a phone screen
-   holds about five cards, and the order is set once a week. The select takes the
-   width its own value needs rather than everything the name is not using, and on
-   a narrow phone the word "Sort" goes — an order reads as one from its value, and
-   the select keeps its label for a screen reader. */
-.activity-sort.in-header { flex:0 1 auto; min-width:0; margin:0; }
-.activity-sort.in-header select { flex:0 1 auto; max-width:11rem; }
-@media (max-width:420px) { .activity-sort.in-header > span { display:none; } }
-/* One dense row, the agent tab header's shape: plain chevron, the name taking
-   what is left with its order under it, then the drawer's ☰ and a small ＋.
-   The tools never shrink below their own width; the name ellipsizes instead. */
+/* One sticky row: ‹, the name over its order (it ellipsizes), ☰ — 44px
+   each. The screen's one blur, over a fill that reads without it. */
 .project-header-tools { flex:0 0 auto; display:flex; align-items:center; gap:6px; min-width:0; }
-/* The sticky bar and cards share a softer surface, while the controls remain
-   visible as the tab list scrolls. */
-.project-screen { padding-top:0; background:radial-gradient(ellipse 85% 300px at 50% 0, #1c2034 0, #0e111b 72%, #0e111b 100%); }
-.project-header { position:sticky; top:0; z-index:5; gap:8px; margin:0 -18px 12px; padding:env(safe-area-inset-top) 12px 0 6px; border-bottom:1px solid #2b3040; background:rgba(15,18,29,.96); box-shadow:0 8px 24px rgba(0,0,0,.16); }
+.project-header { position:sticky; top:0; z-index:5; gap:2px; margin:0 calc(-1 * var(--sp-4)) var(--sp-3); padding:env(safe-area-inset-top) 4px 0 2px; border-bottom:1px solid var(--hairline); background:rgba(15,18,29,.9); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); }
+.project-header > .back { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0 0 3px; }
+.project-header .drawer-open { width:var(--hit); min-width:var(--hit); height:var(--hit); border:0; background:transparent; }
+.project-header .drawer-open svg { width:20px; height:20px; }
+.project-header h1 { font-size:var(--fs-title); font-weight:650; }
 .project-header > .terminal-title { align-content:center; }
 /* The order stays under the name on a phone, where a tab's caption goes. */
-.project-header .terminal-title small { display:block; color:#98a0b4; font-size:.72rem; }
-.project-header-tools .new-tab, .projects-row .new-tab { display:grid; place-items:center; width:32px; min-width:32px; height:32px; padding:0; border-radius:10px; font-size:1.1rem; }
+.project-header .terminal-title small { display:block; color:var(--ink-muted); font-size:var(--fs-caption); }
 /* The name is the order's dropdown: it reads as the title, with the Focus
    switch's caret; the menu is Focus's own, pinned under the name instead. */
 .project-header .project-title { display:inline-flex; align-items:center; max-width:100%; min-width:0; padding:0; border:0; background:transparent; font:inherit; color:inherit; text-align:left; }
@@ -71,25 +64,14 @@ nav button,.keys button { flex:1; }
 .drawer-menu .project-menu-count { color:#8fb8ff; font-weight:650; }
 .project-menu-note { margin:2px 6px 0; }
 .cards { display:grid; gap:10px; }
-.project-screen .cards { gap:12px; }
 .card { width:100%; text-align:left; justify-content:space-between; padding:16px; background:rgba(28,31,43,.92); }
 .card span:first-child { display:grid; gap:4px; }
 .card-trailing { flex:0 0 auto; gap:10px; }
-/* Project rows also use this shell for their reorder grip. The layered card
-   treatment below belongs to the project screen's agent tab overview only. */
 .tab-card { position:relative; display:grid; border:1px solid #383c4d; border-radius:11px; background:rgba(28,31,43,.92); }
-.project-screen .tab-card { border-color:#363c50; border-radius:18px; background:linear-gradient(155deg, #222637, #1a1d2b 76%); box-shadow:0 8px 24px rgba(0,0,0,.15); }
-.project-screen .tab-card:focus-within { border-color:#8578ed; }
 .tab-card .card { border:0; background:transparent; }
-/* #264 — a tab the user has coloured. The desktop spends the tab's bottom rule
-   on the colour; a card has no such edge, so it spends its left border, which
-   stays visible however far the card's own content scrolls past. The hue comes
-   in as `--tab-color` from the row (one palette, resolved to hex the same way
-   in both surfaces), so this rule needs no per-colour class. */
-.tab-card.has-tab-color { border-left:3px solid var(--tab-color); }
-/* The same left edge on a plain `.card` — the Activity list's rows, which are
-   buttons rather than tab cards. One rule for both, so a colour reads the same
-   wherever a tab is listed. */
+/* #264 — a tab the user has coloured spends its left edge on the colour
+   (`--tab-color`, resolved to hex as on the desktop): the Activity list's
+   rows here; the project screen's cards draw it on their outline below. */
 .card.has-tab-color { border-left:3px solid var(--tab-color); }
 /* The colour picker's chips (`ColorSheet`). A dot plus its name, not a bare
    swatch: nine unlabelled circles is a guessing game on a phone, and the name
@@ -99,42 +81,32 @@ nav button,.keys button { flex:1; }
 .tab-color-chip.is-current { border-color:#7c6cff; background:#3b326e; }
 .tab-color-chip-dot { flex:0 0 auto; width:16px; height:16px; border-radius:50%; }
 .tab-color-chip-dot.none { border:1px solid #6f7488; background:transparent; }
-/* #264 — manual tab order. The grip sits beside the card's own button rather
-   than on it: a press anywhere else on the card opens the session, and the two
-   must not be the same gesture. `touch-action:none` is what keeps the drag from
-   being read as a page scroll on a phone, and the captured pointer is what
-   keeps it once it has started. */
+/* #264 — manual order. The grip is never the opener: a press elsewhere opens
+   the row. `touch-action:none` keeps a drag from reading as a page scroll. */
 .tab-card-head { display:flex; align-items:stretch; min-width:0; }
 .tab-card-head .card { flex:1 1 auto; min-width:0; }
 .project-screen .tab-card-head { min-height:64px; }
-.project-screen .tab-card-head .card { padding:16px 4px 12px; }
-/* The colour chooser: a small dot in the card's upper-left corner. The button
-   is wider than the dot so a thumb can hit it, and the card's own left padding
-   closes up so the label does not drift right. */
-.tab-card-dot { position:relative; z-index:1; flex:0 0 auto; align-self:flex-start; display:grid; place-items:center; width:44px; height:60px; padding:0; border:0; border-radius:18px 0 0 0; background:transparent; line-height:0; }
-.tab-card-dot span { display:block; width:14px; height:14px; border:2px solid #747c97; border-radius:50%; }
-.tab-card.has-tab-color .tab-card-dot span { border-color:var(--tab-color); background:var(--tab-color); }
-.tab-card-head .tab-card-dot + .card { padding-left:2px; }
-/* The opener is stretched over the whole card — head, prompts and foot — so
-   the mark that says so can sit on the foot's right end rather than beside the
-   ✕. Everything that is its own control (the dot, the name, ✕, the grip, ◷)
-   lifts itself above it; the rest of the card is the opener's. */
+.project-screen .tab-card-head .card { padding:18px 0 10px 12px; }
+/* A card's or Home row's leading tile: one accent tint, no per-row hue. */
+.tab-card-tile,.home-tile { --o:var(--oct-sm); display:grid; place-items:center; flex:0 0 auto; background:#2e2b48; color:#bcb0ff; font-weight:700; line-height:1; }
+.tab-card-tile { align-self:flex-start; width:40px; height:40px; margin:12px 0 0 12px; font-size:var(--fs-sub); letter-spacing:-.02em; }
+.tab-card-tile.file { background:none; }
+.home-tile { width:36px; height:36px; font-size:var(--fs-body); }
+/* The opener is stretched over the whole card; every control of its own
+   (the model, ◷, ⋯, ✕, the grip) lifts itself above it. */
 .tab-card-main { position:relative; }
 .tab-card-main.unavailable > span { opacity:.45; }
-.tab-card-open { position:absolute; inset:0; padding:0; border:0; border-radius:18px; background:transparent; }
+.tab-card-open { position:absolute; inset:0; padding:0; border:0; border-radius:0; background:transparent; }
 .tab-card-open:disabled { opacity:1; }
-.tab-card-name { position:relative; z-index:1; justify-self:start; min-width:0; margin:0 -6px; padding:4px 6px; border:0; border-radius:6px; background:transparent; line-height:20px; text-align:left; }
-.tab-card-name strong { font-size:1.02rem; letter-spacing:-.02em; overflow-wrap:anywhere; }
-.tab-card-name:active,.tab-card-model:active { background:#343a52; }
+.tab-card-title > strong { font-size:var(--fs-headline); font-weight:650; letter-spacing:-.01em; overflow-wrap:anywhere; }
+.tab-card-model:active { background:#343a52; }
 /* The name and model share a row when there is room, then wrap without
    truncating the tab name. The stronger selector overrides the generic card. */
-.tab-card-head .tab-card-main .tab-card-title { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; }
-/* The head's top row — dot, name, ✕ — shares one centre line, 30px down: the
-   dot is 60px tall from the top, the ✕ 40px under a 10px margin, and the name's
-   first line is a 28px box (the name's 20px line plus its 4px tap padding, the
-   model pill 16px plus its 5px padding and border) under the card's 16px top
-   padding. So the body sits at the top rather than centred in the head, and a
-   name that wraps grows downward from that line instead of dropping below it. */
+.tab-card-head .tab-card-main .tab-card-title { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; }
+.tab-card-meta { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; }
+.tab-card-meta:empty { display:none; }
+/* Tile, name, ⋯ and ✕ share one centre line 32px down (12+40, 10+44, the
+   name's 28px line under 18px), so a wrapping name grows downward. */
 .tab-card-head .tab-card-main { align-items:flex-start; }
 .tab-card-head .tab-card-main .tab-card-title > strong { line-height:28px; }
 /* The model is a quiet button: it still opens the picker, but the session name
@@ -142,13 +114,9 @@ nav button,.keys button { flex:1; }
 .tab-card-main .tab-card-model { position:relative; z-index:1; display:inline-block; flex:0 1 auto; max-width:100%; margin:0; padding:5px 8px; border:1px solid #414861; border-radius:8px; background:#2b3145; color:#b6bdd8; font-size:.72rem; font-weight:600; line-height:16px; text-align:left; text-transform:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tab-card-main .tab-card-model:disabled { opacity:1; }
 .tab-card-grip { position:relative; z-index:1; flex:0 0 auto; width:44px; padding:0; border:0; border-left:1px solid #2d3040; border-radius:0 11px 0 0; background:transparent; color:#6f7488; font-size:1.05rem; touch-action:none; cursor:grab; }
-.project-screen .tab-card-grip { border-left-color:#34394d; border-radius:0 18px 0 0; color:#848ba4; }
 .tab-card-grip:active { cursor:grabbing; color:#d3d6e4; }
-/* A card that is only its head — the home screen's project rows, which wear the
-   same row so their grip sits beside the opener rather than on it. With no
-   prompts or schedule line under it the grip reaches the card's bottom edge, so
-   it is that corner it has to round rather than a rule running into nothing. */
-.tab-card.one-row .tab-card-grip { border-radius:0 11px 11px 0; }
+/* Home's project rows: the grip a quiet column beside the opener. */
+.tab-card.one-row .tab-card-grip { border-left:0; border-radius:0; }
 .tab-card.dragging { opacity:.65; }
 /* A card a right→left swipe is closing slides out the way the finger went
    while the desktop answers; a refused close drops the class and it slides
@@ -173,26 +141,26 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 /* On a start-page row the mark opens the ⎇ Git sheet: a taller touch target
    that leaves the caption's line height alone. */
 .home-project-card .git-mark { padding:8px 0; margin:-8px 0; }
-.tab-card-foot { display:flex; align-items:center; gap:8px; min-height:56px; padding:8px 14px 9px 10px; border-top:1px solid #303549; }
+.tab-card-foot { display:flex; align-items:center; gap:8px; margin-left:64px; padding:8px 14px 10px 0; border-top:1px solid var(--hairline); }
 .tab-card-when { min-width:0; flex:1 1 auto; color:#a9b0c6; font-size:.78rem; line-height:1.3; }
 .tab-card .agent-status { padding:5px 9px; border-radius:999px; font-size:.72rem; line-height:1; white-space:nowrap; }
-/* The ✕ and ◷ retain separate, comfortable touch targets. */
-.tab-card-icon { position:relative; z-index:1; flex:0 0 auto; display:grid; place-items:center; width:40px; height:40px; padding:0; border:0; border-radius:11px; background:transparent; color:#a3aac0; font-size:1rem; line-height:1; }
+.tab-card-icon { position:relative; z-index:1; flex:0 0 auto; display:grid; place-items:center; width:var(--hit); height:var(--hit); padding:0; border:0; border-radius:11px; background:transparent; color:#a3aac0; font-size:1rem; line-height:1; }
 .tab-card-icon:active { background:rgba(56,60,80,.8); color:#d3d6e4; }
 .tab-card-icon.accent { background:#2e2b48; color:#bcb0ff; font-size:1.15rem; }
-/* The ◷ beside the model pill takes the pill's 28px row height. */
+/* The ◷ takes the model pill's 28px row, with a 44px hit square. */
 .tab-card-title .tab-card-schedule { width:28px; height:28px; border-radius:8px; font-size:.95rem; }
-.tab-card-close { align-self:flex-start; margin:10px 8px 0 0; font-size:.9rem; }
+.tab-card-title .tab-card-schedule::after { content:""; position:absolute; inset:-8px; }
+.tab-card-more,.tab-card-close { align-self:flex-start; margin-top:10px; }
+.tab-card-more { font-size:1.2rem; }
+.tab-card-close { margin-right:4px; font-size:.9rem; }
 .tab-card-close:active { color:#ff9aa6; }
-.tab-card-head .tab-card-main { padding-right:4px; }
 /* The same pill the sheets' headings wear (`.option-sheet h2 small`), as a
    class, for the places that mark an unverified feature outside a heading. */
 .untested { margin-left:6px; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; }
-/* The newest prompt is the primary preview; older ones form a quiet history.
-   Flat on the card, no inner surface: indented to the tab name (the 44px dot
-   column plus the head's 2px) so it reads as that tab's, not as its own box. */
-.tab-card-prompts { display:grid; gap:0; min-width:0; margin:0 14px 10px 46px; }
-.tab-card-prompts-label, .reopen-closed-label { margin:0 0 3px; font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.09em; color:#929cba; }
+/* The newest prompt leads, older ones a quiet history, indented to the name
+   (12+40+12px); the "Last prompts" caption is for screen readers only. */
+.tab-card-prompts { display:grid; gap:0; min-width:0; margin:0 14px 12px 64px; }
+.tab-card-prompts-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .tab-card-prompt { display:flex; gap:8px; min-width:0; margin:0; padding:2px 0; color:#a3abc2; font-size:.82rem; line-height:1.35; }
 .tab-card-prompt.latest { display:grid; gap:1px; color:#ecedfa; font-size:.88rem; }
 .tab-card-prompt.empty { color:#8992ad; font-style:italic; }
@@ -238,62 +206,46 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
 .subagent-index-list .agent-worktree span { font-size:inherit; line-height:inherit; }
 .subagents-sheet .subagent-index-list { max-height:none; padding-top:0; }
 .subagents-sheet .subagent-index-list small em { color:#a99cff; font-style:normal; }
-.card.in-plan,.project-screen .tab-card.in-plan { border-color:#7b6ee0; }
-.card.in-goal,.project-screen .tab-card.in-goal { border-color:#4fb3c0; }
-.card.in-plan.has-tab-color,.tab-card.in-plan.has-tab-color,.card.in-goal.has-tab-color,.tab-card.in-goal.has-tab-color { border-left-color:var(--tab-color); }
-/* The project screen's tab cards and the home screen's project rows are
-   octagons: each rounded corner becomes a straight 45° cut. The card itself is
-   not clipped — the status mark hangs over its left edge — so the shape is two
-   clipped layers under the content: `::before` is the outline in `--oct-edge`,
-   `::after` the face inset 1px (`--oct-face`, opaque, or the outline would show
-   through it). The face's cut is .41px shorter so the diagonal edges stay as
-   thick as the straight ones. Plan/goal/focus retint the outline; a tab colour
-   widens the left edge to 3px, its cuts included, as its left border did. The
-   drop line is drawn on the face: the card's own shadow paints under both
-   layers. */
-.project-screen .tab-card,.tab-card.home-project-card { --oct:12px; --oct-edge:#363c50; --oct-face:linear-gradient(155deg, #222637, #1a1d2b 76%); isolation:isolate; border:0; border-radius:0; background:none; box-shadow:none; }
-.project-screen .tab-card::before,.project-screen .tab-card::after,.tab-card.home-project-card::before,.tab-card.home-project-card::after { content:""; position:absolute; z-index:-1; clip-path:polygon(var(--cut) 0,calc(100% - var(--cut)) 0,100% var(--cut),100% calc(100% - var(--cut)),calc(100% - var(--cut)) 100%,var(--cut) 100%,0 calc(100% - var(--cut)),0 var(--cut)); pointer-events:none; }
-.project-screen .tab-card::before,.tab-card.home-project-card::before { --cut:var(--oct); inset:0; background:var(--oct-edge); }
-.project-screen .tab-card::after,.tab-card.home-project-card::after { --cut:calc(var(--oct) - .41px); inset:1px; background:var(--oct-face); }
+.card.in-plan { border-color:#7b6ee0; }
+.card.in-goal { border-color:#4fb3c0; }
+.card.in-plan.has-tab-color,.card.in-goal.has-tab-color { border-left-color:var(--tab-color); }
+/* The project screen's tab cards are octagons, drawn as two clipped layers
+   under an unclipped card (the grip sits in its cut): `::before` the outline
+   in `--oct-edge`, `::after` the flat face 1px in, its cut .41px shorter so
+   the diagonals keep the edge's weight. Plan/goal/focus retint the outline;
+   a tab colour is a 3px left stripe, cuts included; drops draw on the face. */
+.project-screen .tab-card { --oct:var(--oct-md); --oct-edge:var(--edge); --oct-face:var(--surface-group); isolation:isolate; border:0; border-radius:0; background:none; box-shadow:none; }
+.project-screen .tab-card::before,.project-screen .tab-card::after { content:""; position:absolute; z-index:-1; clip-path:polygon(var(--cut) 0,calc(100% - var(--cut)) 0,100% var(--cut),100% calc(100% - var(--cut)),calc(100% - var(--cut)) 100%,var(--cut) 100%,0 calc(100% - var(--cut)),0 var(--cut)); pointer-events:none; }
+.project-screen .tab-card::before { --cut:var(--oct); inset:0; background:var(--oct-edge); }
+.project-screen .tab-card::after { --cut:calc(var(--oct) - .41px); inset:1px; background:var(--oct-face); }
 .project-screen .tab-card:focus-within { --oct-edge:#8578ed; }
 .project-screen .tab-card.in-plan { --oct-edge:#7b6ee0; }
 .project-screen .tab-card.in-goal { --oct-edge:#4fb3c0; }
 .project-screen .tab-card.has-tab-color::before { background:linear-gradient(90deg, var(--tab-color) calc(var(--oct) + 3px), var(--oct-edge) 0); }
 .project-screen .tab-card.has-tab-color::after { left:3px; }
-.project-screen .tab-card.drop-before,.project-screen .tab-card.drop-after,.tab-card.home-project-card.drop-before,.tab-card.home-project-card.drop-after { box-shadow:none; }
-.project-screen .tab-card.drop-before::after,.tab-card.home-project-card.drop-before::after { box-shadow:inset 0 3px 0 0 #7c6cff; }
-.project-screen .tab-card.drop-after::after,.tab-card.home-project-card.drop-after::after { box-shadow:inset 0 -3px 0 0 #7c6cff; }
-/* A wide screen (an iPad, a desktop browser) stands the cards two to a line,
-   read left to right; a drop lands beside a card, so its line is a side. */
+.project-screen .tab-card.drop-before,.project-screen .tab-card.drop-after { box-shadow:none; }
+.project-screen .tab-card.drop-before::after { box-shadow:inset 0 3px 0 0 #7c6cff; }
+.project-screen .tab-card.drop-after::after { box-shadow:inset 0 -3px 0 0 #7c6cff; }
+/* A wide screen stands cards two to a line, so a drop line is a side; Home's
+   grouped project list stays one column. */
 @media (min-width:900px) {
   .cards { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .home-screen > .home-projects { grid-template-columns:minmax(0,1fr); }
   .tab-card.drop-before { box-shadow:inset 3px 0 0 0 #7c6cff; }
   .tab-card.drop-after { box-shadow:inset -3px 0 0 0 #7c6cff; }
-  .project-screen .tab-card.drop-before::after,.tab-card.home-project-card.drop-before::after { box-shadow:inset 3px 0 0 0 #7c6cff; }
-  .project-screen .tab-card.drop-after::after,.tab-card.home-project-card.drop-after::after { box-shadow:inset -3px 0 0 0 #7c6cff; }
+  .home-projects > .tab-card.drop-before { box-shadow:inset 0 3px 0 0 #7c6cff; }
+  .home-projects > .tab-card.drop-after { box-shadow:inset 0 -3px 0 0 #7c6cff; }
+  .project-screen .tab-card.drop-before::after { box-shadow:inset 3px 0 0 0 #7c6cff; }
+  .project-screen .tab-card.drop-after::after { box-shadow:inset -3px 0 0 0 #7c6cff; }
 }
-.project-screen .tab-card-open,.project-screen .tab-card-dot,.project-screen .tab-card-grip,.tab-card.one-row.home-project-card .tab-card-grip { border-radius:0; }
-/* On an octagon the grip is no column beside ✕: it sits in the lower-right
-   cut, its ⠿ turned 45° so the dots run along the cut. The button is a 36px
-   triangle in that corner — `clip-path` clips its hit area too — so ✕ above it
-   and the opener around it keep their taps; the prompts, the schedule line and
-   a project row's count step in to stay clear of the glyph. */
-.project-screen .tab-card-grip,.tab-card.home-project-card .tab-card-grip { position:absolute; right:0; bottom:0; width:36px; height:36px; border:0; clip-path:polygon(100% 0,100% 100%,0 100%); }
-.project-screen .tab-card-grip > span,.tab-card.home-project-card .tab-card-grip > span { position:absolute; right:4px; bottom:4px; display:grid; place-items:center; width:16px; height:16px; line-height:1; transform:rotate(45deg); }
+/* The grip is a 36px triangle in the lower-right cut (`clip-path` clips its
+   hit area too), its ⠿ turned along the cut; the text steps clear of it. */
+.project-screen .tab-card-grip { position:absolute; right:0; bottom:0; width:36px; height:36px; border:0; border-radius:0; clip-path:polygon(100% 0,100% 100%,0 100%); }
+.project-screen .tab-card-grip > span { position:absolute; right:4px; bottom:4px; display:grid; place-items:center; width:16px; height:16px; line-height:1; transform:rotate(45deg); }
 .project-screen .tab-card:has(.tab-card-grip) .tab-card-prompts { margin-right:26px; }
 .project-screen .tab-card:has(.tab-card-grip) .tab-card-foot { padding-right:26px; }
-.tab-card.home-project-card:has(.tab-card-grip) .card { padding-right:28px; }
-/* The project screen's tab cards carry a hexagonal status mark on the left
-   border. Its inset face leaves a coloured edge around the glyph. The card's
-   outline and face have a round hole punched where the mark sits (centre 1px
-   left of the card's edge, 1.2px wider than the 12.3px the pulsing hexagon
-   reaches), so the page shows between mark and card, as the disc's dark ring
-   once did. Each layer places the hole from its own left edge. Taps pass
-   through the mark. */
-.tab-card:has(> .tab-card-status)::before,.tab-card:has(> .tab-card-status)::after { --hole:radial-gradient(circle at calc(-1px - var(--hole-left, 0px)) 50%, transparent 13.5px, #000 14px); -webkit-mask:var(--hole); mask:var(--hole); }
-.tab-card:has(> .tab-card-status)::after { --hole-left:1px; }
-.project-screen .tab-card.has-tab-color:has(> .tab-card-status)::after { --hole-left:3px; }
-.tab-card > .tab-card-status { position:absolute; top:50%; left:-12px; z-index:2; display:grid; place-items:center; width:22px; height:22px; padding:0; border:0; border-radius:0; background:currentColor; clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); font-size:.72rem; line-height:1; transform:translateY(-50%); pointer-events:none; }
+/* The state badge: a hexagon on the tile's corner. Taps pass through it. */
+.tab-card > .tab-card-status { position:absolute; top:41px; left:41px; z-index:2; display:grid; place-items:center; width:22px; height:22px; padding:0; border:0; border-radius:0; background:currentColor; clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); font-size:.72rem; line-height:1; pointer-events:none; }
 .tab-card > .tab-card-status::before { content:""; position:absolute; inset:1.5px; background:var(--status-face); clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); }
 .tab-card > .tab-card-status.working { --status-face:#173827; font-size:.56rem; }
 .tab-card > .tab-card-status.question { --status-face:#493b1d; }
@@ -305,8 +257,7 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
    (registered `--hex-run`, so the shape itself stays still), clipped to the
    hexagon's edge ring. The asking hexagon pulses — it
    swells and a faint fill glows inside it; the pill's ? tips its head. ✓ and
-   ■ land once. The mark's own transform places it on the border, so the pulse
-   repeats it. */
+   ■ land once. */
 .agent-status-glyph { display:inline-block; position:relative; z-index:1; }
 .agent-status.working:not(.tab-card-status) .agent-status-glyph { animation:agent-status-breathe 1.6s ease-in-out infinite; }
 .agent-status.question .agent-status-glyph { animation:agent-status-ask 2.6s ease-in-out infinite; transform-origin:50% 85%; }
@@ -321,7 +272,7 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
 .tab-card > .tab-card-status.question .agent-status-glyph { animation:none; }
 @keyframes agent-status-breathe { 50% { opacity:.55; } }
 @keyframes agent-status-hex-run { to { --hex-run:360deg; } }
-@keyframes agent-status-hex-pulse { 0%,100% { transform:translateY(-50%) scale(1); } 50% { transform:translateY(-50%) scale(1.12); } }
+@keyframes agent-status-hex-pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.12); } }
 @keyframes agent-status-hex-glow { 0%,100% { opacity:0; } 50% { opacity:.22; } }
 @keyframes agent-status-ask { 0%,64%,100% { transform:rotate(0); } 72% { transform:rotate(-16deg); } 80% { transform:rotate(13deg); } 88% { transform:rotate(-7deg); } 94% { transform:rotate(3deg); } }
 @keyframes agent-status-pop { 0% { transform:scale(.3); opacity:0; } 60% { transform:scale(1.3); opacity:1; } 100% { transform:scale(1); } }
@@ -330,6 +281,7 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
   .agent-status .agent-status-glyph { animation:none; }
   .tab-card > .tab-card-status.working::after,.tab-card > .tab-card-status.question,.tab-card > .tab-card-status.question::after { animation:none; }
   .tab-card > .tab-card-status.question::after { display:none; }
+  .tab-card,.project-foot-caret { transition:none; }
 }
 small { color:#9498aa; }
 .count { min-width:34px; text-align:center; padding:6px; border-radius:0; background:#312a57; }
@@ -343,10 +295,6 @@ small { color:#9498aa; }
 .lamp { width:10px; height:10px; border-radius:50%; background:#55d187; box-shadow:0 0 10px #55d187; }
 .lamp.off { background:#d15b66; box-shadow:none; }
 .create { display:grid; gap:9px; margin-top:22px; }
-.reopen-closed > button { text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-/* The row whose reopen is in flight: working dots, not dimmed with the rest. */
-.reopen-closed > button.reopening { display:flex; align-items:center; gap:8px; border-color:#8fb8ff; }
-.reopen-closed > button.reopening:disabled { opacity:1; }
 .agent-create > button:first-child { flex:1; text-align:left; }
 .mode { text-transform:capitalize; }
 /* The shell remains a clear first action; the agents fit two across without
@@ -380,42 +328,82 @@ small { color:#9498aa; }
 .new-tab-cloud-agent { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 0 8px; }
 .new-tab-cloud-agent > strong { flex:1 1 auto; min-width:0; color:#aeb4c8; font-size:.9rem; font-weight:600; overflow-wrap:anywhere; }
 .new-tab-cloud-agent > button { min-height:36px; padding:6px 10px; font-size:.8rem; }
-/* The ＋ at the end of the project header. Square against the back chevron
-   opposite it, and it never shrinks: the project's name is what gives way. */
-.new-tab { flex:0 0 auto; min-width:44px; padding:8px 12px; font-size:1.25rem; line-height:1.1; }
-.home-screen { background:radial-gradient(ellipse 90% 250px at 50% 0,rgba(97,82,174,.16),transparent 78%); }
-.home-header { position:relative; gap:10px; min-height:70px; padding:9px 12px; border:1px solid #3a3c58; border-radius:18px; background:linear-gradient(125deg,rgba(50,44,76,.92),rgba(27,31,46,.95) 62%,rgba(25,37,54,.94)); box-shadow:0 10px 25px rgba(3,5,12,.2); }
-.home-brand { display:flex; flex:1; align-items:center; gap:8px; min-width:0; }
-.home-brand-copy { display:grid; gap:2px; min-width:0; }
-.home-brand strong { font-size:1.05rem; letter-spacing:.01em; white-space:nowrap; }
-.home-brand-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
-.home-logo-frame { position:relative; display:grid; place-items:center; width:50px; height:47px; flex:0 0 auto; }
-.home-logo { position:relative; width:35px; height:35px; color:#f0efff; }
-.home-header > .lamp { flex:0 0 auto; }
-/* The gear that opens the phone's own settings (This device). Square, like
-   the project header's ＋, and never shrinking: the brand gives way. */
-.home-settings { display:grid; place-items:center; flex:0 0 auto; width:40px; height:40px; padding:0; border-color:#45476a; border-radius:11px; background:rgba(27,30,44,.7); color:#d7d3f5; }
-.home-settings svg { width:21px; height:21px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-/* A project row must not read as one more button: every other control on the
-   page is the same grey octagon. So it wears a violet-tinted edge and face,
-   and a 3px accent down its left side, cuts included — the tab-colour edge
-   the project screen's cards use (`has-tab-color`), here in the brand violet. */
-.tab-card.home-project-card { --oct-edge:#4b4780; --oct-face:linear-gradient(100deg,rgba(124,108,255,.24),rgba(124,108,255,.07) 45%,rgba(124,108,255,0) 80%),#1d1f2e; }
-.tab-card.home-project-card::before { background:linear-gradient(90deg, #8c7df4 calc(var(--oct) + 3px), var(--oct-edge) 0); }
-.tab-card.home-project-card::after { left:3px; }
-.tab-card.home-project-card:focus-within { --oct-edge:#8d80ee; }
-.home-project-card .card { min-height:62px; padding-left:18px; }
-.home-project-card .card strong { font-size:1.05rem; letter-spacing:-.01em; }
-/* A row's agent tabs by state: the tab cards' status pills, a size down so
-   three of them and the tab count fit one phone-width row. */
+/* Home: slim bar, large title, one segmented switch, then inset groups with
+   hairline rows. No gradients: accent for actions and selection, colour for
+   state. The project screen shares the gutter and the ground. */
+.home-screen,.project-screen { padding-inline:var(--sp-4); background:#0b0d13; }
+.project-screen { padding-top:0; }
+.home-header { min-height:var(--hit); gap:var(--sp-1); }
+.home-brand { display:flex; flex:1; align-items:center; gap:var(--sp-2); min-width:0; }
+.home-brand strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-headline); font-weight:650; letter-spacing:.01em; }
+.home-logo-frame { display:grid; place-items:center; flex:0 0 auto; width:28px; height:28px; }
+.home-logo { width:26px; height:26px; color:#f0efff; }
+.home-header > .lamp { flex:0 0 auto; margin:0 var(--sp-2); }
+.home-offline { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; padding:4px 10px; border-radius:999px; background:#3b2027; color:#ffb4c0; font-size:var(--fs-caption); font-weight:650; }
+.home-settings { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; background:transparent; color:#d7d3f5; }
+.home-settings svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.projects-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:var(--sp-3); }
+.projects-row h1 { font-size:var(--fs-large); font-weight:700; letter-spacing:-.02em; }
+.projects-row > .new-tab { --o:var(--oct-sm); display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; font-size:1.25rem; line-height:1; }
+.home-switch { --o:var(--oct-md); gap:2px; margin:var(--sp-4) 0 var(--sp-2); padding:3px; background:var(--surface-group); }
+.home-switch > button { --o:var(--oct-sm); display:flex; align-items:center; justify-content:center; gap:6px; min-height:38px; padding:0 var(--sp-2); border:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:600; }
+.home-switch > button.selected { background:#2e2b48 !important; color:#e7e9f2; }
+.home-switch-badge { min-width:18px; padding:1px 5px; border-radius:999px; background:#493b1d; color:#ffd36b; font-size:var(--fs-micro); font-weight:700; font-variant-numeric:tabular-nums; }
+/* The projects' caption shows only under Needs you; alone, the title says it. */
+.home-section-head { margin:28px var(--sp-1) var(--sp-2); color:var(--ink-muted); font-size:var(--fs-caption); font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.home-needs > .home-section-head { margin-top:var(--sp-5); }
+.home-projects-head { display:none; }
+.home-needs ~ .home-projects-head { display:block; }
+/* An inset group. Never put a sheet in one: the clip would cut it off. */
+.home-group,.home-screen > .home-projects { --o:var(--oct-lg); display:grid; gap:0; background:var(--surface-group); }
+.home-group > * + *,.home-projects > * + * { border-top:1px solid var(--hairline); }
+.home-needs-row,.home-group-more { display:flex; align-items:center; gap:var(--sp-3); width:100%; min-height:52px; padding:10px var(--sp-3); border:0; border-radius:0; background:transparent; text-align:left; }
+.home-needs-row > .agent-status { flex:0 0 auto; justify-content:center; width:28px; height:28px; padding:0; }
+.home-needs-copy { display:grid; flex:1 1 auto; gap:2px; min-width:0; }
+.home-needs-title,.home-needs-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.home-needs-title { font-size:var(--fs-body); font-weight:600; }
+.home-needs-copy small { color:var(--ink-muted); font-size:var(--fs-foot); }
+.home-needs-row time { flex:0 0 auto; color:var(--ink-muted); font-size:var(--fs-caption); font-variant-numeric:tabular-nums; }
+.home-group-more { min-height:var(--hit); color:#bcb0ff; font-size:var(--fs-sub); font-weight:600; }
+.home-group-more-glyph { color:#6fe29c; font-size:.7rem; }
+.home-projects > .tab-card { border:0; border-radius:0; background:transparent; }
+.home-project-card .card { gap:var(--sp-3); min-height:60px; padding:10px var(--sp-3); }
+.home-project-card .card > span:nth-child(2) { display:grid; flex:1 1 auto; gap:2px; min-width:0; }
+.home-project-card .card strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-headline); font-weight:650; letter-spacing:-.01em; }
+.home-project-card .card small { font-size:var(--fs-foot); }
+.home-project-card .tab-card-grip { width:var(--hit); color:#6f7488; }
 .home-project-card .card-trailing { gap:6px; }
 .home-project-card .agent-status.home-agent-count { padding:4px 7px; font-variant-numeric:tabular-nums; }
-.home-project-card .count { border-radius:8px; background:#38305f; color:#ebe6ff; font-variant-numeric:tabular-nums; }
-@media (max-width:380px) {
-  .home-brand strong { font-size:.9rem; }
-  .home-logo-frame { width:43px; height:41px; }
-  .home-logo { width:30px; height:30px; }
-}
+.home-project-card .count { display:inline-flex; align-items:center; gap:5px; min-width:0; padding:0 0 0 4px; background:none; color:var(--ink-muted); font-size:var(--fs-sub); font-variant-numeric:tabular-nums; }
+.home-project-card .count::before { content:""; width:11px; height:9px; border:1.5px solid currentColor; border-radius:2px; }
+.home-hint,.project-hint { display:flex; align-items:center; gap:var(--sp-1); margin:6px 0 0 var(--sp-1); color:var(--ink-muted); font-size:var(--fs-foot); line-height:1.35; }
+.home-hint > span,.project-hint > span { flex:1 1 auto; min-width:0; }
+.home-hint > button,.project-hint > button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -6px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.2rem; }
+.home-empty,.project-empty { display:grid; justify-items:center; gap:6px; padding:var(--sp-7) var(--sp-4); text-align:center; }
+.home-empty-glyph,.project-empty-glyph { color:#6f7488; font-size:40px; line-height:1; }
+.home-empty strong,.project-empty strong { font-size:var(--fs-headline); }
+.home-empty p,.project-empty p { max-width:32ch; margin:0; color:var(--ink-muted); font-size:var(--fs-sub); line-height:1.4; }
+.home-empty > button { min-height:var(--hit); margin-top:var(--sp-2); }
+/* Send to desktop and Local models as one group; their own headings are
+   left to screen readers. */
+.home-desktop { display:grid; gap:2px; }
+.home-desktop > .phone-settings { gap:0; margin-top:0; }
+.home-desktop > .phone-settings > h2 { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.home-desktop > .phone-settings .option-list button { --o:var(--oct-md); min-height:56px; border-radius:0; background:var(--surface-group); }
+.project-foot { --o:var(--oct-md); display:grid; margin-top:var(--sp-6); background:var(--surface-group); }
+.project-foot > * + *,.project-closed-row { border-top:1px solid var(--hairline); }
+.project-closed { display:grid; }
+.project-foot-row,.project-closed-row { display:flex; align-items:center; gap:var(--sp-3); width:100%; min-height:var(--hit); padding:10px var(--sp-4); border:0; border-radius:0; background:transparent; font-size:var(--fs-body); text-align:left; }
+.project-foot-icon { width:20px; color:var(--ink-muted); text-align:center; }
+.project-foot-caret { flex:0 0 auto; width:18px; height:18px; margin-left:auto; fill:none; stroke:#6f7488; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; transition:transform .15s ease-out; }
+.project-foot-row[aria-expanded="true"] .project-foot-caret { transform:rotate(90deg); }
+.project-closed-row { display:block; padding-left:48px; overflow:hidden; color:#d7d3f5; text-overflow:ellipsis; white-space:nowrap; }
+.project-closed-row.reopening { display:flex; gap:8px; color:#8fb8ff; }
+.project-closed-row.reopening:disabled { opacity:1; }
+.project-activate { margin-bottom:var(--sp-3); }
+.project-activate > button { --o:var(--oct-md); width:100%; min-height:var(--hit); border:0; }
+/* The octagon these screens cut their pieces to, each its own `--o`. */
+.home-switch,.home-switch > button,.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button,.fab-extended::before,.fab-extended::after { clip-path:polygon(var(--o) 0,calc(100% - var(--o)) 0,100% var(--o),100% calc(100% - var(--o)),calc(100% - var(--o)) 100%,var(--o) 100%,0 calc(100% - var(--o)),0 var(--o)); }
 /* The four top-level sections. Fixed to the bottom edge so it survives the long
    scroll of a board or a month, on the same `--screen-measure` as `.screen`, and kept under the modal backdrops (z-index 10/12) so an
    open editor still covers it. `.tabbed > .screen` pays for the space it takes
@@ -425,20 +413,17 @@ small { color:#9498aa; }
 .mobile-tab span { display:grid; place-items:center; width:35px; height:31px; font-size:1.2rem; line-height:1.15; }
 .mobile-tab.active { background:rgba(108,92,231,.18); color:#d7cffd; }
 .tabbed > .screen { padding-bottom:calc(76px + max(24px,env(safe-area-inset-bottom))); }
-.projects-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:17px; }
-.projects-row h1 { font-size:1.2rem; }
-.mobile-alerts,.phone-settings { display:grid; gap:10px; margin-top:28px; }
-.mobile-alerts h2,.phone-settings h2 { margin:0; font-size:1.2rem; }
-.mobile-alert-list { display:grid; gap:8px; }
+.phone-settings { display:grid; gap:10px; margin-top:28px; }
+.phone-settings h2 { margin:0; font-size:1.2rem; }
 /* The ✓ rides beside the row, never inside it: a button in a button is invalid
    markup and would fold finishing the thing into the tap that opens it. */
-.mobile-alert-row-wrap { display:flex; align-items:stretch; gap:8px; }
+.mobile-alert-row-wrap { display:flex; align-items:center; }
 .mobile-alert-row-wrap .mobile-alert-row { flex:1 1 auto; min-width:0; }
 /* The board card's own check, same size and same square, so a tick means one
    thing across the phone (`.todo-check`). */
-.mobile-alert-done { width:38px; flex:0 0 auto; padding:0; border-radius:11px; border-color:#776db4; background:#24203b; color:#fff; font-size:1rem; font-weight:800; }
+.mobile-alert-done { width:38px; height:38px; flex:0 0 auto; margin-right:var(--sp-2); padding:0; border-radius:11px; border-color:#776db4; background:#24203b; color:#fff; font-size:1rem; font-weight:800; }
 .mobile-alert-done:disabled { opacity:.55; }
-.mobile-alert-row { display:grid; width:100%; grid-template-columns:auto auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:12px; border:1px solid #383c4d; border-radius:11px; background:rgba(28,31,43,.92); text-align:left; }
+.mobile-alert-row { display:grid; width:100%; grid-template-columns:auto auto minmax(0,1fr) auto; align-items:center; gap:10px; min-height:52px; padding:10px var(--sp-3); border:0; border-radius:0; background:transparent; text-align:left; }
 button.mobile-alert-row { cursor:pointer; }
 .mobile-alert-dot { width:8px; height:8px; border-radius:50%; background:#8290b0; }
 .mobile-alert-dot.overdue { background:#f06d7e; box-shadow:0 0 8px rgba(240,109,126,.7); }
@@ -446,11 +431,12 @@ button.mobile-alert-row { cursor:pointer; }
 .mobile-alert-dot.soon { background:#6fc8ff; }
 .mobile-alert-copy { display:grid; min-width:0; gap:3px; }
 .mobile-alert-copy strong,.mobile-alert-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:plaintext; }
-.mobile-alert-row time { color:#b7bac8; font-size:.78rem; white-space:nowrap; }
+.mobile-alert-row time { color:var(--ink-muted); font-size:var(--fs-caption); white-space:nowrap; }
 .mobile-alerts-error { margin:0; padding:10px 12px; border:1px solid #6d3b46; border-radius:11px; background:rgba(60,30,38,.6); color:#f3c3ca; font-size:.85rem; }
-.mobile-alerts-empty,.projects-empty { margin:0; padding:16px; border:1px solid #383c4d; border-radius:11px; color:#9498aa; text-align:center; }
-/* The rest of the home screen is cut to the project rows' octagon too. These
-   hang nothing over their edges, so the element itself is clipped. The clip
+.projects-empty { margin:0; padding:var(--sp-6) var(--sp-4); color:var(--ink-muted); text-align:center; }
+/* Home's own controls — the search, the Agents list's rows and sort, the
+   notices, the ✓ — are cut to the octagon too. These hang nothing over their
+   edges, so the element itself is clipped. The clip
    takes the corners of the border with it, so a bordered element repaints the
    four cuts as its first background layers (`--oct-corners`): each a square
    `--oct` wide whose gradient turns to the edge colour on the diagonal and
@@ -458,7 +444,7 @@ button.mobile-alert-row { cursor:pointer; }
    into its cuts). `--oct-edge` is the border colour, so a state retints both.
    Borderless elements need only the clip. The outer shadows go: a clip would
    cut them off anyway. */
-.home-header,.home-screen > nav button,.home-screen .search,.home-screen .activity-sort select,.home-screen .projects-empty,.home-screen .mobile-alerts-empty,.home-screen .mobile-alerts-error,.home-screen .mobile-alert-row,.home-screen .mobile-alert-done,.home-screen .cards > button.card,.home-screen .error,.home-screen .notice,.home-screen .phone-settings .option-list button,.home-screen .inbox-upload,.home-screen .inbox-upload button,.home-project-card .count {
+.home-screen .search,.home-screen .activity-sort select,.home-screen .mobile-alerts-error,.home-screen .mobile-alert-done,.home-screen .cards > button.card,.home-screen .error,.home-screen .notice,.home-screen .inbox-upload,.home-screen .inbox-upload button {
   --oct:10px; --oct-edge:#383c4d;
   --oct-corners:linear-gradient(to bottom right, var(--oct-lc, var(--oct-edge)) calc(50% + var(--oct-lw, 1px)), transparent 0) top left / var(--oct) var(--oct) no-repeat border-box,
     linear-gradient(to bottom left, var(--oct-edge) calc(50% + 1px), transparent 0) top right / var(--oct) var(--oct) no-repeat border-box,
@@ -467,18 +453,14 @@ button.mobile-alert-row { cursor:pointer; }
   border-radius:0; box-shadow:none;
   clip-path:polygon(var(--oct) 0,calc(100% - var(--oct)) 0,100% var(--oct),100% calc(100% - var(--oct)),calc(100% - var(--oct)) 100%,var(--oct) 100%,0 calc(100% - var(--oct)),0 var(--oct));
 }
-.home-header,.home-screen .projects-empty,.home-screen .mobile-alerts-empty,.home-screen .mobile-alert-row,.home-screen .cards > button.card { --oct:12px; }
+.home-screen .cards > button.card { --oct:12px; }
 .home-screen .activity-sort select,.home-screen .mobile-alert-done,.home-screen .inbox-upload { --oct:8px; }
-.home-screen .inbox-upload button,.home-project-card .count { --oct:6px; }
-.home-header { --oct-edge:#3a3c58; border-color:var(--oct-edge); background:var(--oct-corners),linear-gradient(125deg,rgba(50,44,76,.92),rgba(27,31,46,.95) 62%,rgba(25,37,54,.94)); }
-.home-screen > nav button { border-color:var(--oct-edge); background:var(--oct-corners),#1b1e29; }
-.home-screen > nav button.selected { --oct-edge:#7c6cff; background:var(--oct-corners),#3b326e !important; }
+.home-screen .inbox-upload button { --oct:6px; }
 .home-screen .search,.home-screen .activity-sort select { --oct-edge:#3a3e50; border-color:var(--oct-edge); }
 .home-screen .search { background:var(--oct-corners),#171a24; }
 .home-screen .activity-sort select { background:var(--oct-corners),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239aa0b4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6'/%3E%3C/svg%3E") right 10px center / 12px 8px no-repeat,#171a24; }
-.home-screen .projects-empty,.home-screen .mobile-alerts-empty { border-color:var(--oct-edge); background:var(--oct-corners); }
 .home-screen .mobile-alerts-error { --oct-edge:#6d3b46; border-color:var(--oct-edge); background:var(--oct-corners),rgba(60,30,38,.6); }
-.home-screen .mobile-alert-row,.home-screen .cards > button.card { border-color:var(--oct-edge); background:var(--oct-corners),rgba(28,31,43,.92); }
+.home-screen .cards > button.card { border-color:var(--oct-edge); background:var(--oct-corners),rgba(28,31,43,.92); }
 .home-screen .mobile-alert-done { --oct-edge:#776db4; border-color:var(--oct-edge); background:var(--oct-corners),#24203b; }
 .home-screen .cards > button.card.in-plan { --oct-edge:#7b6ee0; }
 .home-screen .cards > button.card.in-goal { --oct-edge:#4fb3c0; }
@@ -493,11 +475,18 @@ button.mobile-alert-row { cursor:pointer; }
    instead of sitting at the top where it scrolls away. Anchored over the tab bar
    (z-index 8) and under the editor backdrop (10), on the same `--screen-measure`
    as `.screen` so it keeps the board's right edge on a wide window. */
-.todo-fab { position:fixed; z-index:9; right:max(18px,calc((100vw - var(--screen-measure)) / 2 + 18px)); bottom:calc(86px + max(24px,env(safe-area-inset-bottom))); width:58px; height:58px; padding:0; border-radius:50%; font-size:1.9rem; line-height:1; box-shadow:0 10px 24px rgba(4,5,9,.55); }
+.todo-fab,.fab { position:fixed; z-index:9; right:max(18px,calc((100vw - var(--screen-measure)) / 2 + 18px)); bottom:calc(86px + max(24px,env(safe-area-inset-bottom))); }
+.todo-fab { width:58px; height:58px; padding:0; border-radius:50%; font-size:1.9rem; line-height:1; box-shadow:0 10px 24px rgba(4,5,9,.55); }
+/* ＋ New tab: the to-do FAB's place and octagon, with its word. Face and
+   shadow are clipped layers, the shadow a static offset copy. */
+.fab-extended { --o:var(--oct-fab); display:flex; align-items:center; gap:var(--sp-2); height:56px; padding:0 22px 0 18px; border:0; background:none; isolation:isolate; font-size:var(--fs-body); font-weight:700; }
+.fab-extended::before,.fab-extended::after { content:""; position:absolute; inset:0; z-index:-1; background:#6c5ce7; }
+.fab-extended::after { z-index:-2; inset:5px 0 -5px; background:rgba(4,5,9,.5); }
+.fab-plus { font-size:1.35rem; line-height:1; }
 /* The last card must not end under the button the way it must not end under the
    tab bar; this replaces `.tabbed > .screen`'s allowance rather than adding to
    it, so the two never double up. */
-.tabbed > .todo-screen { padding-bottom:calc(150px + max(24px,env(safe-area-inset-bottom))); }
+.tabbed > .todo-screen,.tabbed > .project-screen { padding-bottom:calc(150px + max(24px,env(safe-area-inset-bottom))); }
 /* The search sits on its own, directly under the header: it is the first thing
    reached for on a board of forty cards, so it is not one cell of the filter
    grid below it. */
@@ -1350,7 +1339,7 @@ span.files-close { background:transparent; }
 .files-list strong { font-size:.94rem; }
 /* A PDF opened from the drawer, as a card after the tabs: the row's kind tile
    where a tab card has its colour dot, and the folder under the name. */
-.file-tab-card .tab-card-head > .files-icon { display:grid; flex:0 0 auto; place-items:center; align-self:center; width:34px; height:34px; margin:0 4px 0 12px; border-radius:9px; background:#3a2226; color:#f28b82; }
+.file-tab-card .tab-card-tile > .files-icon { display:grid; place-items:center; width:40px; height:40px; border-radius:0; background:#3a2226; color:#f28b82; }
 .file-tab-card .files-icon svg { fill:none; stroke:currentColor; stroke-linecap:round; stroke-linejoin:round; }
 .file-tab-card .tab-card-main > span { display:grid; gap:2px; min-width:0; }
 .file-tab-card .tab-card-title strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1452,7 +1441,7 @@ span.files-close { background:transparent; }
 /* The status/code pair, for reading back into a bug report. */
 .splash-detail { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.7rem; color:#6a6e7f; letter-spacing:.04em; }
 .connect-trace { max-width:100%; margin:0; white-space:pre-wrap; text-align:left; letter-spacing:0; }
-/* The running bundle's version and build time, to check the phone is on the
+/* The running bundle's version and entry hash, to check the phone is on the
    desktop's current bundle. */
 .splash-version { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.72rem; color:#767a8b; letter-spacing:.04em; }
 .splash-progress { width:148px; height:2px; overflow:hidden; border-radius:999px; background:rgba(56,60,77,.8); }

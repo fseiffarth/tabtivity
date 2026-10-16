@@ -5,7 +5,7 @@ import { MOBILE_HOST_KEY } from "./brand";
 
 /**
  * The desktop half of "local models from the phone"
- * (`docs/mobile_local_model_control_plan.md`): the sidecar's
+ * (`docs/done/mobile_local_model_control_plan.md`): the sidecar's
  * `DesktopRequest::LocalModels` / `LocalModelMutate`, answered from the Tauri
  * Ollama commands so a load the phone starts shows on every desktop surface
  * (`ollama-load-progress`).

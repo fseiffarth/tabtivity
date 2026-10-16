@@ -1,5 +1,5 @@
 //! The shared tab set of a scope — the workspace service (headless owner plan,
-//! H1, `docs/headless_owner_plan.md` §2).
+//! H1, `docs/done/headless_owner_plan.md` §2).
 //!
 //! What every client must see identically is a scope's ordered tabs with
 //! their persisted fields (`TerminalSession::tab_layout`). Until now each

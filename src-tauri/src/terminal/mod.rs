@@ -1275,6 +1275,11 @@ fn invalidate_proc_tree_cache() {
 }
 
 /// How aggressively [`reap_child_subtree`] signals a doomed process subtree.
+///
+/// Every signal, the first one included, goes only to a process that is
+/// still the one the walk saw — same pid, same start time ([`Doomed`]) — so
+/// a pid the kernel hands to an unrelated process after a doomed one exited
+/// during the grace period is never killed.
 pub(crate) enum ReapMode {
     /// SIGTERM now, then SIGKILL any survivors after a short grace period on a
     /// detached thread. Used on tab close / respawn, where the app stays alive
@@ -1295,6 +1300,50 @@ pub(crate) enum ReapMode {
     GracefulBlocking(#[cfg_attr(not(unix), allow(dead_code))] Duration),
 }
 
+/// One process of a doomed subtree as the walk saw it. The pid alone is not
+/// an identity: once the process exits the kernel may give the number to an
+/// unrelated one, which a delayed SIGKILL would then hit. With the start time
+/// (`sysstat::process_start`) it names that one process; `None` — the walk
+/// could not read it — is never signalled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Doomed {
+    pid: u32,
+    start: Option<u64>,
+}
+
+impl Doomed {
+    /// Whether `pid` still runs as the walk saw it, per `start_now` (the
+    /// platform's start-time reader, or a test's).
+    #[cfg(unix)]
+    fn is_still(&self, start_now: impl Fn(u32) -> Option<u64>) -> bool {
+        self.start.is_some() && start_now(self.pid) == self.start
+    }
+}
+
+/// The subtrees of `leaders` (leaders included), walked afresh, each process
+/// with its identity. Linux reads the start times from the same table walk
+/// that found the pids, so no pid can be reused in between.
+#[cfg(target_os = "linux")]
+fn doomed_subtree(leaders: &[u32]) -> Vec<Doomed> {
+    // Fresh walk: a cached set may predate a just-spawned child.
+    crate::sysstat::invalidate_descendant_cache();
+    let table = crate::services::proc_table::snapshot_within(Duration::ZERO);
+    table
+        .descendants(leaders)
+        .into_iter()
+        .map(|pid| Doomed { pid, start: table.get(pid).map(|p| p.start).filter(|&start| start != 0) })
+        .collect()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn doomed_subtree(leaders: &[u32]) -> Vec<Doomed> {
+    crate::sysstat::invalidate_descendant_cache();
+    crate::sysstat::descendant_pids(leaders)
+        .into_iter()
+        .map(|pid| Doomed { pid, start: crate::sysstat::process_start(pid) })
+        .collect()
+}
+
 /// Best-effort abort of a PTY child's **entire process subtree**.
 ///
 /// `portable_pty`'s [`Child::kill`] signals only the shell leader; anything it
@@ -1307,67 +1356,87 @@ pub(crate) enum ReapMode {
 /// The leader pid is included in the returned set; re-signalling a leader the
 /// caller also `Child::kill`s is a harmless no-op (a dead pid yields ESRCH).
 pub(crate) fn reap_child_subtree(leader_pid: u32, mode: ReapMode) {
-    // Force a fresh process-tree walk rather than reusing a cached CPU sample
-    // that may predate a just-spawned child.
-    crate::sysstat::invalidate_descendant_cache();
-    let subtree = crate::sysstat::descendant_pids(&[leader_pid]);
-    reap_pids(subtree, mode);
+    reap_pids(doomed_subtree(&[leader_pid]), mode);
 }
 
-/// Signal a set of pids best-effort. Every pid came from a live process walk
-/// moments earlier, so a stale one is expected and ignored (ESRCH on Unix, a
-/// failed `OpenProcess` on Windows).
+/// Signal a doomed subtree best-effort, each process only while it is still
+/// the one the walk saw ([`Doomed`]); one that already exited is skipped.
 #[cfg(unix)]
-fn reap_pids(pids: Vec<u32>, mode: ReapMode) {
-    if pids.is_empty() {
+fn reap_pids(doomed: Vec<Doomed>, mode: ReapMode) {
+    reap_with(doomed, mode, crate::sysstat::process_start, |pid, sig| {
+        // SAFETY: `libc::kill` takes no pointers and a real signal number; a
+        // pid that exited since its identity check returns ESRCH, ignored.
+        unsafe {
+            libc::kill(pid as libc::pid_t, sig);
+        }
+    });
+}
+
+/// [`reap_pids`] with the start-time reader and the signal sender passed in.
+#[cfg(unix)]
+fn reap_with(
+    doomed: Vec<Doomed>,
+    mode: ReapMode,
+    start_now: fn(u32) -> Option<u64>,
+    send: fn(u32, libc::c_int),
+) {
+    if doomed.is_empty() {
         return;
     }
-    // SAFETY: `libc::kill` takes no pointers and a real signal number; a stale
-    // pid returns ESRCH, which we ignore.
-    let signal = |pids: &[u32], sig: libc::c_int| unsafe {
-        for &pid in pids {
-            libc::kill(pid as libc::pid_t, sig);
+    let signal = move |doomed: &[Doomed], sig: libc::c_int| {
+        for d in doomed.iter().filter(|d| d.is_still(start_now)) {
+            send(d.pid, sig);
         }
     };
     match mode {
-        ReapMode::Immediate => signal(&pids, libc::SIGKILL),
+        ReapMode::Immediate => signal(&doomed, libc::SIGKILL),
         ReapMode::Graceful => {
-            signal(&pids, libc::SIGTERM);
+            signal(&doomed, libc::SIGTERM);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(2));
-                signal(&pids, libc::SIGKILL);
+                signal(&doomed, libc::SIGKILL);
             });
         }
         ReapMode::GracefulBlocking(grace) => {
-            signal(&pids, libc::SIGTERM);
+            signal(&doomed, libc::SIGTERM);
             let deadline = Instant::now() + grace;
             while Instant::now() < deadline {
-                // SAFETY: `kill(pid, 0)` probes existence without signalling.
-                let any_alive = pids
-                    .iter()
-                    .any(|&pid| unsafe { libc::kill(pid as libc::pid_t, 0) } == 0);
-                if !any_alive {
+                if !doomed.iter().any(|d| d.is_still(start_now)) {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
-            signal(&pids, libc::SIGKILL);
+            signal(&doomed, libc::SIGKILL);
         }
     }
 }
 
 /// Windows has no SIGTERM/SIGKILL split — `TerminateProcess` is the only per-pid
-/// primitive — so both modes reap immediately.
+/// primitive — so every mode reaps immediately. The process is opened by pid
+/// and terminated only when that handle's creation time is the walk's: the
+/// open handle pins the process, so the check and the kill see the same one.
 #[cfg(windows)]
-fn reap_pids(pids: Vec<u32>, _mode: ReapMode) {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
-    for pid in pids {
+fn reap_pids(doomed: Vec<Doomed>, _mode: ReapMode) {
+    use windows::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    };
+    for d in doomed {
+        let Some(start) = d.start else { continue };
         // SAFETY: the handle is closed before the next iteration; a failed open
-        // (the pid already exited) is ignored.
+        // (the pid already exited) is skipped. The FILETIME out-params are
+        // valid for the call.
         unsafe {
-            if let Ok(handle) = OpenProcess(PROCESS_TERMINATE, false, pid) {
-                let _ = TerminateProcess(handle, 1);
+            if let Ok(handle) = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, false, d.pid) {
+                let mut creation = FILETIME::default();
+                let mut exit = FILETIME::default();
+                let mut kernel = FILETIME::default();
+                let mut user = FILETIME::default();
+                let same = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user).is_ok()
+                    && ((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime)) == start;
+                if same {
+                    let _ = TerminateProcess(handle, 1);
+                }
                 let _ = CloseHandle(handle);
             }
         }
@@ -1375,7 +1444,7 @@ fn reap_pids(pids: Vec<u32>, _mode: ReapMode) {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn reap_pids(_pids: Vec<u32>, _mode: ReapMode) {}
+fn reap_pids(_doomed: Vec<Doomed>, _mode: ReapMode) {}
 
 // ── PtyRegistry ───────────────────────────────────────────────────────────
 
@@ -1684,8 +1753,7 @@ impl PtyRegistry {
             .values()
             .filter_map(|e| e.child.process_id())
             .collect();
-        crate::sysstat::invalidate_descendant_cache();
-        let subtree = crate::sysstat::descendant_pids(&leaders);
+        let subtree = doomed_subtree(&leaders);
 
         for (id, mut e) in self.entries.drain() {
             e.dead.store(true, Ordering::SeqCst);
@@ -1765,9 +1833,7 @@ pub fn teardown_taken(taken: Vec<TakenPty>) {
     }
     let leaders: Vec<u32> = taken.iter().filter_map(|t| t.entry.child.process_id()).collect();
     if !leaders.is_empty() {
-        // Fresh walk: a cached set may predate a just-spawned child.
-        crate::sysstat::invalidate_descendant_cache();
-        reap_pids(crate::sysstat::descendant_pids(&leaders), ReapMode::Graceful);
+        reap_pids(doomed_subtree(&leaders), ReapMode::Graceful);
     }
     for TakenPty { id, mut entry } in taken {
         let _ = entry.child.kill();
@@ -3553,6 +3619,110 @@ mod tests {
             }
             assert!(gone, "every taken tab's inner process must be aborted");
         }
+    }
+
+    // ── Reaping by identity (pid + start time) ──────────────────────────
+
+    /// Fake pids far above any real `pid_max`, so the fake signal log is
+    /// never confused with a real process, and parallel tests never share one.
+    const SAME: u32 = 4_100_001;
+    const RECYCLED: u32 = 4_100_002;
+    const GONE: u32 = 4_100_003;
+    const UNREAD: u32 = 4_100_004;
+
+    /// The fake process table: `SAME` still runs as the walk saw it (start
+    /// 10), `RECYCLED`'s number now belongs to a process started at 99 (the
+    /// walk saw 20), `GONE` exited.
+    fn fake_start(pid: u32) -> Option<u64> {
+        match pid {
+            SAME => Some(10),
+            RECYCLED => Some(99),
+            UNREAD => Some(5),
+            _ => None,
+        }
+    }
+
+    fn fake_doomed() -> Vec<Doomed> {
+        vec![
+            Doomed { pid: SAME, start: Some(10) },
+            Doomed { pid: RECYCLED, start: Some(20) },
+            Doomed { pid: GONE, start: Some(30) },
+            Doomed { pid: UNREAD, start: None },
+        ]
+    }
+
+    static SENT: Mutex<Vec<(u32, libc::c_int)>> = Mutex::new(Vec::new());
+
+    fn record_send(pid: u32, sig: libc::c_int) {
+        SENT.lock().unwrap().push((pid, sig));
+    }
+
+    fn sent_to(pid: u32) -> Vec<libc::c_int> {
+        SENT.lock().unwrap().iter().filter(|(p, _)| *p == pid).map(|(_, sig)| *sig).collect()
+    }
+
+    #[test]
+    fn a_doomed_process_is_itself_only_with_the_same_start_time() {
+        let [same, recycled, gone, unread] = fake_doomed()[..] else { panic!() };
+        assert!(same.is_still(fake_start));
+        assert!(!recycled.is_still(fake_start), "a reused pid is another process");
+        assert!(!gone.is_still(fake_start));
+        assert!(!unread.is_still(fake_start), "an identity the walk could not read is never trusted");
+    }
+
+    /// Both graceful modes re-check identity before the SIGKILL (and the
+    /// SIGTERM): a pid recycled during the grace period is never signalled.
+    #[test]
+    fn graceful_reaps_never_signal_a_recycled_pid() {
+        reap_with(fake_doomed(), ReapMode::GracefulBlocking(Duration::from_millis(60)), fake_start, record_send);
+        assert_eq!(sent_to(SAME), vec![libc::SIGTERM, libc::SIGKILL], "the survivor is escalated");
+        for pid in [RECYCLED, GONE, UNREAD] {
+            assert!(sent_to(pid).is_empty(), "pid {pid} was signalled");
+        }
+
+        // The detached escalation of `Graceful` checks again after its sleep.
+        const LATE: u32 = 4_100_005;
+        fn recycled_after_term(pid: u32) -> Option<u64> {
+            // Itself at the SIGTERM, someone else by the SIGKILL.
+            let calls = SENT.lock().unwrap().iter().filter(|(p, _)| *p == pid).count();
+            if pid == LATE { Some(if calls == 0 { 7 } else { 8 }) } else { None }
+        }
+        reap_with(vec![Doomed { pid: LATE, start: Some(7) }], ReapMode::Graceful, recycled_after_term, record_send);
+        std::thread::sleep(Duration::from_millis(2_500));
+        assert_eq!(sent_to(LATE), vec![libc::SIGTERM], "no SIGKILL for the pid's new owner");
+    }
+
+    #[test]
+    fn an_immediate_reap_signals_only_the_walks_processes() {
+        const SAME_NOW: u32 = 4_100_006;
+        fn start(pid: u32) -> Option<u64> {
+            if pid == SAME_NOW { Some(1) } else { fake_start(pid) }
+        }
+        let mut doomed = fake_doomed();
+        doomed.retain(|d| d.pid != SAME);
+        doomed.push(Doomed { pid: SAME_NOW, start: Some(1) });
+        reap_with(doomed, ReapMode::Immediate, start, record_send);
+        assert_eq!(sent_to(SAME_NOW), vec![libc::SIGKILL]);
+        for pid in [RECYCLED, GONE, UNREAD] {
+            assert!(sent_to(pid).is_empty(), "pid {pid} was signalled");
+        }
+    }
+
+    /// End to end against a real process: a recorded start time that is not
+    /// the process's own (what a recycled pid looks like) spares it; its own
+    /// start time kills it.
+    #[test]
+    fn a_real_process_with_a_changed_start_time_survives_the_reap() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().expect("spawn sleep");
+        let pid = child.id();
+        let start = crate::sysstat::process_start(pid).expect("start time of a live child");
+
+        reap_pids(vec![Doomed { pid, start: Some(start + 1) }], ReapMode::GracefulBlocking(Duration::from_millis(100)));
+        assert!(child.try_wait().unwrap().is_none(), "another process's pid must not be killed");
+
+        reap_pids(vec![Doomed { pid, start: Some(start) }], ReapMode::GracefulBlocking(Duration::from_millis(100)));
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "the process itself is reaped");
     }
 }
 

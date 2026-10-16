@@ -277,29 +277,6 @@ pub async fn remote_connect(
     Ok(())
 }
 
-/// The ids of every project whose pooled SSH connection is currently live —
-/// the authoritative backend truth `remote::is_connected` already computes for
-/// `network_ssh_link_snapshot`. Lets the frontend periodically reconcile
-/// `useRemoteStatusStore` (which only ever moves on an explicit connect/
-/// disconnect result) against reality: a pooled ssh child that exits on its own
-/// — a network drop, a keepalive eviction, a VPN tunnel getting replaced out
-/// from under it — is only ever noticed lazily, the next time some other
-/// command happens to touch that project's pool entry. Until then the lamp and
-/// the Connect dialog both keep reporting "connected" from stale frontend
-/// state while every read that actually asks the pool (like the network-
-/// traffic pane) correctly reports disconnected.
-///
-/// The `Result` is Tauri's requirement for an async command borrowing `State`,
-/// not a failure mode — this reads an in-process map and cannot fail. The error
-/// type is `String` rather than `()` because every other command here uses
-/// `String` (and `clippy::result_unit_err` asks for a nameable error either way);
-/// nothing ever constructs one.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn remote_connected_ids(ctx: Ctx) -> Result<Vec<String>, String> {
-    let pool = ctx.get::<RemotePoolState>();
-    Ok(remote::connected_ids(pool).await)
-}
-
 /// Close the pooled connection for a remote project host (on deactivation, or a
 /// per-host lamp toggle). `host_id` defaults to the primary.
 /// For the **primary**, stops the auto-sync + git-lockstep tasks first (cancel +
@@ -345,9 +322,17 @@ pub async fn remote_disconnect_all_hosts(
     Ok(())
 }
 
-/// The `(project_id, host_id)` pairs whose pooled SSH connection is currently live
-/// — the per-host granular form of [`remote_connected_ids`], for the frontend to
-/// reconcile each host lamp against reality (see that command's rationale).
+/// The `(project_id, host_id)` pairs whose pooled SSH connection is currently
+/// live — the authoritative backend truth `remote::is_connected_host` computes.
+/// Lets the frontend periodically reconcile each host lamp against reality: the
+/// remote status store only ever moves on an explicit connect/disconnect
+/// result, while a pooled ssh child that exits on its own (a network drop, a
+/// keepalive eviction, a VPN tunnel replaced under it) is otherwise noticed
+/// only the next time some other command touches that pool entry. Until then
+/// the lamp and the Connect dialog would keep reporting "connected".
+///
+/// The `Result` is Tauri's requirement for an async command borrowing state,
+/// not a failure mode: this reads an in-process map and never errs.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_connected_targets(ctx: Ctx) -> Result<Vec<(String, String)>, String> {
     let pool = ctx.get::<RemotePoolState>();

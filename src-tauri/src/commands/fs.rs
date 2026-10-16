@@ -1933,11 +1933,125 @@ pub fn file_size_local(path: &str, scope_id: Option<&str>) -> Result<u64, String
 /// scope resolves to no project (e.g. first run), which makes every absolute-path
 /// command fail closed. See REVIEW.md Security #1.
 fn allowed_roots(scope_id: Option<&str>) -> Vec<PathBuf> {
-    static PROJECTS: StateJsonCache<ProjectsList> = StateJsonCache::new();
-    static BOXES: StateJsonCache<BoxesList> = StateJsonCache::new();
     let projects = PROJECTS.get("projects.json");
     let boxes = BOXES.get("boxes.json");
     compute_allowed_roots(&projects, &boxes, scope_id, &storage::root_work_dir())
+}
+
+/// The parsed registries every confinement check reads (see [`StateJsonCache`]).
+static PROJECTS: StateJsonCache<ProjectsList> = StateJsonCache::new();
+static BOXES: StateJsonCache<BoxesList> = StateJsonCache::new();
+
+/// Every folder a server **user** (`core_dispatch::Role::User`) may name to a
+/// command that takes a local path (`core_dispatch::confine_for_user`): the
+/// root work dir, the parents new projects and remote mirrors are created
+/// under, every project's directory and mirror override, and every box
+/// folder. Wider than [`allowed_roots`] on purpose — that one isolates a
+/// viewer to its own project; this one is the whole of what the user's
+/// projects are, so a folder outside every project (`/`, `/etc`, another
+/// account's home) is refused while switching projects is not.
+pub(crate) fn user_roots() -> Vec<PathBuf> {
+    let projects = PROJECTS.get("projects.json");
+    let boxes = BOXES.get("boxes.json");
+    let base = [
+        storage::root_work_dir(),
+        crate::paths::projects_root(),
+        crate::paths::projects_ssh_root(),
+    ];
+    let keep_clear = [crate::paths::home_dir(), crate::paths::app_home(), storage::state_dir()];
+    compute_user_roots(&projects, &boxes, &base, &keep_clear)
+}
+
+/// Pure core of [`user_roots`]. Each root is resolved as a confinement
+/// candidate is (`canonical_or_new`), so a root that does not exist yet still
+/// compares equal to a path under it.
+///
+/// A registered root (a project, mirror or box folder; not a `base` one) is
+/// judged by where it resolves *now*, and a user can turn a folder they own
+/// into a symlink after registering it (`git_checkout` of a branch holding a
+/// link, `move_path` of one over it) — without these two rules, a project
+/// folder swapped for a link to `/` made `/` a root. So a registered root is
+/// dropped when
+/// - any symlink on its spelling (the root itself or an ancestor) sits
+///   strictly inside a root, by either spelling: a link there is the user's
+///   to plant. A link above every root (`/home` → `/data/home`, macOS's
+///   `/var`) is the system's and is followed; or
+/// - it resolves to `keep_clear` (home, app home, state dir) or an ancestor of
+///   one, whatever the route.
+///
+/// The cost: a project registered (by an admin or the desktop) through a link
+/// inside a root is not one of a user's roots — refused, never widened.
+fn compute_user_roots(
+    projects: &ProjectsList,
+    boxes: &BoxesList,
+    base: &[PathBuf],
+    keep_clear: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut registered: Vec<PathBuf> = projects.iter().filter_map(project_dir).collect();
+    registered.extend(projects.iter().filter_map(mirror_override_dir));
+    registered.extend(boxes.iter().filter_map(|b| b.folder.as_deref()).map(str::trim).filter(|f| !f.is_empty()).map(PathBuf::from));
+    // A relative entry would resolve against the process's cwd, and a `..`
+    // makes the spelling a lie about where the link checks look: never a root.
+    let usable = |r: &PathBuf| r.is_absolute() && !r.components().any(|c| matches!(c, std::path::Component::ParentDir));
+    let base: Vec<PathBuf> = base.iter().filter(|r| usable(r)).cloned().collect();
+    registered.retain(usable);
+    let resolve = |r: &PathBuf| canonical_or_new(r).unwrap_or_else(|_| r.clone());
+    let keep_clear: Vec<PathBuf> = keep_clear.iter().filter(|k| k.is_absolute()).map(resolve).collect();
+    let covers_kept = |c: &Path| keep_clear.iter().any(|k| k.starts_with(c));
+    let resolved: Vec<(PathBuf, PathBuf)> = registered.iter().map(|r| (r.clone(), resolve(r))).collect();
+    // Where a planted link would sit: inside any root, as spelled or resolved
+    // (a resolution that covers a kept-clear folder is no fence: it would
+    // count every system link as planted).
+    let mut fences: Vec<PathBuf> = base.iter().flat_map(|b| [b.clone(), resolve(b)]).collect();
+    for (lexical, canonical) in &resolved {
+        fences.push(lexical.clone());
+        if !covers_kept(canonical) {
+            fences.push(canonical.clone());
+        }
+    }
+    let mut roots: Vec<PathBuf> = base.iter().map(resolve).collect();
+    roots.extend(
+        resolved
+            .into_iter()
+            .filter(|(lexical, canonical)| !covers_kept(canonical) && !through_planted_link(lexical, &fences))
+            .map(|(_, canonical)| canonical),
+    );
+    roots
+}
+
+/// Whether a symlink on `root`'s spelling (`root` itself or an ancestor) sits
+/// strictly inside one of `fences`, by its spelled or its resolved location.
+fn through_planted_link(root: &Path, fences: &[PathBuf]) -> bool {
+    root.ancestors().any(|at| {
+        if !fs::symlink_metadata(at).is_ok_and(|m| m.file_type().is_symlink()) {
+            return false;
+        }
+        let real = at.parent().zip(at.file_name()).and_then(|(parent, name)| parent.canonicalize().ok().map(|p| p.join(name)));
+        let inside = |loc: &Path| fences.iter().any(|f| loc != f.as_path() && loc.starts_with(f));
+        inside(at) || real.as_deref().is_some_and(inside)
+    })
+}
+
+/// Whether `local_file` is a known project's `project.json` (`local_file` in
+/// `projects.json`), by its spelling or, failing that, by where it resolves.
+pub(crate) fn is_project_local_file(local_file: &str) -> bool {
+    is_local_file_in(&PROJECTS.get("projects.json"), local_file)
+}
+
+fn is_local_file_in(projects: &ProjectsList, local_file: &str) -> bool {
+    if local_file.trim().is_empty() {
+        return false;
+    }
+    if projects.iter().any(|e| !e.local_file.is_empty() && e.local_file == local_file) {
+        return true;
+    }
+    let Ok(wanted) = fs::canonicalize(local_file) else {
+        return false;
+    };
+    projects
+        .iter()
+        .filter(|e| !e.local_file.is_empty())
+        .any(|e| fs::canonicalize(&e.local_file).is_ok_and(|known| known == wanted))
 }
 
 /// The last parse of one state file, reused while the file's bytes are unchanged.
@@ -2334,11 +2448,25 @@ pub(crate) fn confine_project_path(p: &Path, scope_id: Option<&str>) -> Result<(
 }
 
 /// Confine a path a server **user** (not the box's admin) names to a command
-/// that has no confinement of its own because it stands in for an OS file
-/// dialog on the desktop — `list_dir_all`, the browser's file tickets and
-/// grants (`services::core_dispatch::user_path`). The same roots as a read.
+/// with no confinement of its own — `list_dir_all` (on the desktop it stands
+/// in for an OS file dialog), every path argument `core_dispatch`'s user table
+/// holds, the browser's file tickets and grants
+/// (`services::core_dispatch::user_path`) — to [`user_roots`]. A relative path
+/// is refused: it would resolve against the server process's cwd.
 pub(crate) fn confine_user_path(p: &Path) -> Result<(), String> {
-    confine_abs_read(p, None)
+    if !p.is_absolute() {
+        return Err(format!("path '{}' is not absolute", p.display()));
+    }
+    confine_abs_within(p, &user_roots()).map_err(|_| outside_user_roots(p))
+}
+
+/// The refusal for a path outside every one of a user's roots. Keeps the
+/// "not in the current project" wording the other refusals use.
+fn outside_user_roots(p: &Path) -> String {
+    format!(
+        "path '{}' is not in the current project or any other of your projects",
+        p.display()
+    )
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -3748,6 +3876,86 @@ mod tests {
             folder: folder.map(|s| s.to_string()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn user_roots_cover_every_project_mirror_box_folder_and_base_and_nothing_else() {
+        let tmp = tempfile::tempdir().unwrap();
+        let at = |rel: &str| tmp.path().join(rel);
+        let dir = |rel: &str| at(rel).to_string_lossy().into_owned();
+        let mut y = entry("y", "inactive", &dir("code-y"));
+        y.extra.insert("mirror".to_string(), Value::String(dir("mirror-y")));
+        let projects = vec![entry("x", "current", &dir("code-x")), y, entry("rel", "inactive", "relative/dir")];
+        let boxes = vec![mk_box("b1", &["x"], Some(dir("box-b1").as_str())), mk_box("b2", &[], None)];
+        let roots = compute_user_roots(&projects, &boxes, &[at("work")], &[]);
+        let held = |p: PathBuf| confine_abs_within(&p, &roots).is_ok();
+        for inside in ["work/a", "code-x/src/main.rs", "code-y", "mirror-y/f", "box-b1/notes.md"] {
+            assert!(held(at(inside)), "{inside} is a user's");
+        }
+        assert!(!held(at("elsewhere/f")), "a sibling of the roots is not");
+        assert!(!held(tmp.path().to_path_buf()), "nor their parent");
+        assert!(!held(at("code-x/../elsewhere")), "a `..` never passes");
+        assert!(roots.iter().all(|r| r.is_absolute()), "a relative entry is never a root");
+    }
+
+    /// A registered folder the user turns into a link after registering it
+    /// (a branch checkout, a move) must not widen their roots to its target.
+    #[cfg(unix)]
+    #[test]
+    fn a_registered_root_swapped_for_a_link_never_widens_the_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let at = |rel: &str| tmp.path().join(rel);
+        let dir = |rel: &str| at(rel).to_string_lossy().into_owned();
+        let outside = at("outside");
+        fs::create_dir_all(outside.join("etc")).unwrap();
+        fs::create_dir_all(at("work/c")).unwrap();
+        fs::create_dir_all(at("work/d")).unwrap();
+        // The registered folder itself became a link.
+        std::os::unix::fs::symlink(&outside, at("work/c/p")).unwrap();
+        // A folder above the registered one became a link (`d/x/etc` resolves
+        // to `outside/etc`).
+        std::os::unix::fs::symlink(&outside, at("work/d/x")).unwrap();
+        // A project registered under a link in a registered project's tree.
+        fs::create_dir_all(at("code-y/sub")).unwrap();
+        std::os::unix::fs::symlink(&outside, at("code-y/sub/q")).unwrap();
+        // A link above every root is the system's (`/home` → `/data/home`).
+        fs::create_dir_all(at("data/z")).unwrap();
+        std::os::unix::fs::symlink(at("data"), at("sys")).unwrap();
+        // A folder that resolves to the home folder or above.
+        fs::create_dir_all(at("home/u")).unwrap();
+        let projects = vec![
+            entry("p", "inactive", &dir("work/c/p")),
+            entry("x", "inactive", &dir("work/d/x/etc")),
+            entry("y", "inactive", &dir("code-y")),
+            entry("q", "inactive", &dir("code-y/sub/q")),
+            entry("z", "current", &dir("sys/z")),
+            entry("h", "inactive", &dir("home")),
+        ];
+        let roots = compute_user_roots(&projects, &Vec::new(), &[at("work")], &[at("home/u")]);
+        let held = |p: PathBuf| confine_abs_within(&p, &roots).is_ok();
+        assert!(!held(outside.join("etc").join("passwd")), "a link planted in a root is not followed to a root: {roots:?}");
+        assert!(!held(outside.clone()));
+        assert!(held(at("sys/z/f")), "a link above every root is followed");
+        assert!(held(at("data/z/f")));
+        assert!(held(at("code-y/f")));
+        assert!(!held(at("home/u/f")), "a root covering the home folder is dropped");
+        assert!(held(at("work/c/other")), "the base root itself still holds");
+    }
+
+    #[test]
+    fn a_local_file_must_be_a_known_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("p");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("project.json"), "{}").unwrap();
+        let projects = vec![entry("p", "current", &dir.to_string_lossy())];
+        let known = dir.join("project.json");
+        assert!(is_local_file_in(&projects, &known.to_string_lossy()));
+        // The same file under another spelling resolves to it.
+        let spelled = tmp.path().join("p").join(".").join("project.json");
+        assert!(is_local_file_in(&projects, &spelled.to_string_lossy()));
+        assert!(!is_local_file_in(&projects, &tmp.path().join("other.json").to_string_lossy()));
+        assert!(!is_local_file_in(&projects, ""));
     }
 
     #[test]

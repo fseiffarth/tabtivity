@@ -44,6 +44,7 @@ const FRONTEND_ONLY = new Set([
   "mobileShellCachePrefix",
   "mobileOpenMessage",
   "mobileNotificationTagPrefix",
+  "mobilePushLangCache",
   // The gateway crate builds it from SERVER_ACCOUNT_PREFIX (`names::helper_binary`).
   "serverAdminHelper",
   // Backed by `ASSISTANT_NAME` (a word of its own, no LEGACY_ twin): checked
@@ -170,6 +171,7 @@ describe("brand mirror", () => {
     expect(sw).toContain(`const CACHE = "${NAMES.mobileShellCachePrefix}__APP_BUILD__";`);
     expect(sw).toContain(`type: "${NAMES.mobileOpenMessage}"`);
     expect(sw).toContain(`\`${NAMES.mobileNotificationTagPrefix}\${data.tag}\``);
+    expect(sw).toContain(`const PREFS = "${NAMES.mobilePushLangCache}";`);
   });
 
   it("the phone's static pages show the brand's display name", () => {

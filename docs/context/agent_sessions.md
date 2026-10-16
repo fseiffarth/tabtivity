@@ -8,7 +8,14 @@ the copy inside a project folder is export-only). Shell/files tabs are always
 restored on relaunch; agent tabs are normally dropped, **except resumable agent
 tabs** — Claude and Codex tabs that carry a `sessionId` are persisted (with
 their `sessionId`) and restored, respawning the agent so the prior conversation
-comes back (see `isRestorableTab`/`RESUMABLE_AGENTS` in `src/stores/tabs.ts`).
+comes back (see `isRestorableTab` in `src/stores/tabs.ts` and `RESUMABLE_AGENTS`
+in `src/lib/agents/agentClis.ts`). Which CLIs are agents and how each resumes
+is the backend registry's (`commands/agents.rs` `AGENTS`, its `resume` field):
+the frontend reads it as the generated `src/lib/agents/agentCliTable.ts`
+(`UPDATE_AGENT_CLI_TABLE=1 cargo test … the_generated_agent_cli_table_ts_is_current`),
+and the restore allow-list (`terminal_service`) and the phone's resumable set
+(`mobile_control`) read it directly — one table, so a new CLI never restores
+as a shell.
 
 ## Mechanism
 

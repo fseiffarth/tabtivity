@@ -1,5 +1,5 @@
 /**
- * The loaded-PDF notice (`PdfLoadWarningHost`, `docs/tab_cost_plan.md` step
+ * The loaded-PDF notice (`PdfLoadWarningHost`, `docs/done/tab_cost_plan.md` step
  * 1): after the start-up grace, the 8th loaded PDF shows one self-dismissing
  * toast and the 9th none; inside the grace there is none.
  */

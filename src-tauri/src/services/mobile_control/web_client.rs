@@ -50,8 +50,11 @@
 //! (`core_dispatch::Role`), fixed at login and never read from a frame: the
 //! token login is the box owner's `Admin`; a gateway-verified account's is
 //! what the gateway's handshake names. A user's calls are confined where an
-//! admin's are not (`core_dispatch::user_path`: `list_dir_all`, file tickets
-//! and grants), and every transport-level command passes the class check too.
+//! admin's are not: every path argument of a `core` command is held to the
+//! user's roots by `core_dispatch`'s table (project folders, absolute paths,
+//! `project.json` files; `list_dir_all`'s empty start is the root work dir),
+//! as are file tickets and grants here (`core_dispatch::user_path`), and
+//! every transport-level command passes the class check too.
 //!
 //! **Backpressure.** Each client has a bounded event queue. A full queue drops
 //! the event — terminal output is shed oldest-first the way `pty_bridge` sheds
@@ -515,6 +518,18 @@ pub struct WebClientState {
     live: Arc<Mutex<HashMap<ClientId, Live>>>,
     next_client: Arc<AtomicU64>,
     next_generation: Arc<AtomicU64>,
+    #[cfg(test)]
+    call_gate: Option<Arc<TestCallGate>>,
+}
+
+/// A per-fixture scheduling probe; it never changes another socket test.
+#[cfg(test)]
+struct TestCallGate {
+    id: u64,
+    queued: mpsc::UnboundedSender<u64>,
+    starts: Mutex<Vec<u64>>,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 impl WebClientState {
@@ -540,6 +555,8 @@ impl WebClientState {
             live: Arc::default(),
             next_client: Arc::new(AtomicU64::new(1)),
             next_generation: Arc::new(AtomicU64::new(1)),
+            #[cfg(test)]
+            call_gate: None,
         }
     }
 
@@ -1160,6 +1177,10 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: Session
                                 // Taken here, in arrival order, not in the task.
                                 let turn = crate::commands::persist_lane::is_ordered(&cmd).then(ordered_turn);
                                 tokio::spawn(async move {
+                                    #[cfg(test)]
+                                    if let Some(gate) = &state.call_gate {
+                                        let _ = gate.queued.send(id);
+                                    }
                                     let done = match turn {
                                         Some((before, done)) => {
                                             if let Some(before) = before {
@@ -1301,6 +1322,14 @@ fn handed_out_path(role: Role, cmd: &str, args: &Value) -> Result<String, Value>
 async fn handle_call(state: &WebClientState, ctx: &CoreCtx, role: Role, id: u64, cmd: &str, args: Value) -> Answer {
     if let Some(refused) = transport_refusal(cmd, role) {
         return Answer::Text(ret_frame(id, &Err(serde_json::to_value(refused).unwrap_or(Value::Null))));
+    }
+    #[cfg(test)]
+    if let Some(gate) = &state.call_gate {
+        gate.starts.lock_ok().push(id);
+        if id == gate.id {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
     }
     match cmd {
         CAPABILITIES_CMD => {
@@ -1469,6 +1498,170 @@ pub fn page_csp(host: &str, inline_hashes: &str, secure: bool) -> String {
 mod tests {
     use super::*;
     use app_core::CoreState;
+
+    type TestSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+    /// Real command bodies resolve process-wide paths. Run just this test in
+    /// a child with its own paths rather than changing the parallel suite's
+    /// environment or writing to the developer's state.
+    fn run_in_isolated_process(name: &str) -> bool {
+        let marker = crate::brand::env_name("TEST_WEB_CLIENT_SOCKET");
+        if std::env::var(&marker).as_deref() == Ok(name) {
+            return false;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("services::mobile_control::web_client::tests::{name}"), "--nocapture"])
+            .env(marker, name)
+            .env(crate::brand::env_name("STATE_DIR"), &state)
+            .env(crate::brand::env_name("HOME"), dir.path().join("app-home"))
+            .env(crate::brand::env_name("SERVER_MODE"), "0")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let finished = crate::test_util::wait_until(crate::test_util::PATIENCE * 8, || child.try_wait().unwrap().is_some());
+        if !finished {
+            child.kill().expect("stop timed-out test child");
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(finished, "isolated socket test timed out");
+        assert!(output.status.success(), "isolated test failed:\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        true
+    }
+
+    async fn open_test_socket(gate: Option<Arc<TestCallGate>>) -> (TestSocket, tokio::task::JoinHandle<()>) {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let events = Arc::new(WebEvents::default());
+        let ctx = CoreCtx::system(Arc::new(CoreState::new().manage(crate::services::remote::new_pool())), events.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut state = WebClientState::new(true, ctx, events, &crate::storage::state_dir().join("mobile-control"), port, None);
+        state.call_gate = gate;
+        let session = state.lock_sessions().login(Role::User).unwrap();
+        let app = routes(state);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut request = format!("ws://127.0.0.1:{port}/api/v1/desktop/ws").into_client_request().unwrap();
+        request.headers_mut().insert("cookie", format!("{}={session}", crate::brand::DESKTOP_SESSION_COOKIE).parse().unwrap());
+        request.headers_mut().insert("origin", format!("http://127.0.0.1:{port}").parse().unwrap());
+        request.headers_mut().insert("sec-websocket-protocol", crate::brand::DESKTOP_PROTOCOL.parse().unwrap());
+        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        let hello = next_test_message(&mut socket).await;
+        assert!(matches!(hello, tokio_tungstenite::tungstenite::Message::Text(ref text) if serde_json::from_str::<Value>(text).unwrap()["t"] == "hello"));
+        (socket, server)
+    }
+
+    async fn next_test_message(socket: &mut TestSocket) -> tokio_tungstenite::tungstenite::Message {
+        tokio::time::timeout(crate::test_util::PATIENCE, socket.next()).await.expect("socket response timed out").expect("socket closed").expect("socket failed")
+    }
+
+    #[tokio::test]
+    async fn a_user_can_save_and_read_binary_project_files_over_the_socket() {
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+        if run_in_isolated_process("a_user_can_save_and_read_binary_project_files_over_the_socket") {
+            return;
+        }
+        let root = crate::storage::state_dir().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let project = "browser project % ü";
+        crate::storage::write_json(&crate::storage::projects_path(), &json!([{
+            "id": project, "name": "Fixture", "status": "current", "position": 0,
+            "local_file": root.join("project.json"), "directory": root,
+        }])).unwrap();
+        let file = root.join("résumé 100% 完了.bin");
+        let encode = |value: &str| -> String {
+            value.bytes().map(|byte| {
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                    (byte as char).to_string()
+                } else {
+                    format!("%{byte:02X}")
+                }
+            }).collect()
+        };
+        let bytes = [0, 1, 127, 128, 255, b'\n', b'%'];
+        let header = serde_json::to_vec(&json!({"cmd": "write_file_bytes", "headers": {
+            crate::brand::FILE_PATH_HEADER: encode(file.to_str().unwrap()),
+            crate::brand::FILE_PROJECT_HEADER: encode(project),
+        }})).unwrap();
+        let mut payload = (header.len() as u32).to_be_bytes().to_vec();
+        payload.extend_from_slice(&header);
+        payload.extend_from_slice(&bytes);
+        let (mut socket, server) = open_test_socket(None).await;
+        socket.send(WsMessage::Binary(binary_frame(KIND_CALL, 71, &payload).into())).await.unwrap();
+        let answer = next_test_message(&mut socket).await;
+        let WsMessage::Text(text) = answer else { panic!("expected write result, got {answer:?}") };
+        let result: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(result, json!({"t": "ret", "id": 71, "ok": null}));
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        socket.send(WsMessage::Text(json!({"t": "call", "id": 72, "cmd": "read_file_bytes", "args": {"path": file, "projectId": project}}).to_string().into())).await.unwrap();
+        let answer = next_test_message(&mut socket).await;
+        let WsMessage::Binary(frame) = answer else { panic!("expected raw read result, got {answer:?}") };
+        let (kind, id, body) = parse_binary_frame(&frame).expect("binary result frame");
+        assert_eq!((kind, id), (KIND_RET, 72));
+        assert_eq!(body, bytes);
+        socket.close(None).await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn socket_settings_calls_keep_arrival_order_and_a_failure_releases_the_next() {
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+        if run_in_isolated_process("socket_settings_calls_keep_arrival_order_and_a_failure_releases_the_next") {
+            return;
+        }
+        for fail_first in [false, true] {
+            crate::storage::write_json(&crate::storage::settings_path(), &crate::schema::Settings::default()).unwrap();
+            let (queued, mut queue) = mpsc::unbounded_channel();
+            let gate = Arc::new(TestCallGate {
+                id: 41, queued, starts: Mutex::new(Vec::new()),
+                entered: tokio::sync::Notify::new(), release: tokio::sync::Notify::new(),
+            });
+            let (mut socket, server) = open_test_socket(Some(gate.clone())).await;
+            let first = if fail_first { json!(7) } else { json!("de") };
+            socket.send(WsMessage::Text(json!({"t": "call", "id": 41, "cmd": "patch_settings", "args": {"patch": {"language": first}}}).to_string().into())).await.unwrap();
+            tokio::time::timeout(crate::test_util::PATIENCE, gate.entered.notified()).await.expect("first patch never entered");
+            assert_eq!(tokio::time::timeout(crate::test_util::PATIENCE, queue.recv()).await.unwrap(), Some(41));
+            for call in [
+                json!({"t": "call", "id": 42, "cmd": "patch_settings", "args": {"patch": {"language": "fr"}}}),
+                json!({"t": "call", "id": 43, "cmd": "get_settings"}),
+            ] {
+                socket.send(WsMessage::Text(call.to_string().into())).await.unwrap();
+            }
+            // Each task reports immediately before waiting for its predecessor.
+            // Receiving these proves both followers were scheduled; the held
+            // first body must still be the only one they have entered.
+            let mut queued_ids = Vec::new();
+            for _ in 0..2 {
+                queued_ids.push(tokio::time::timeout(crate::test_util::PATIENCE, queue.recv()).await.unwrap().expect("call queue closed"));
+            }
+            queued_ids.sort_unstable();
+            assert_eq!(queued_ids, vec![42, 43]);
+            assert_eq!(*gate.starts.lock_ok(), vec![41]);
+            gate.release.notify_one();
+            let mut answers = Vec::new();
+            for _ in 0..3 {
+                let message = next_test_message(&mut socket).await;
+                let WsMessage::Text(text) = message else { panic!("expected settings result, got {message:?}") };
+                answers.push(serde_json::from_str::<Value>(&text).unwrap());
+            }
+            answers.sort_by_key(|answer| answer["id"].as_u64());
+            if fail_first {
+                assert!(answers[0].get("err").is_some(), "{}", answers[0]);
+            } else {
+                assert_eq!(answers[0]["ok"]["language"], "de");
+            }
+            assert_eq!(answers[1]["ok"]["language"], "fr");
+            assert_eq!(answers[2]["ok"]["language"], "fr");
+            let saved: Value = crate::storage::read_json(&crate::storage::settings_path()).unwrap();
+            assert_eq!(saved["language"], "fr");
+            assert_eq!(*gate.starts.lock_ok(), vec![41, 42, 43]);
+            socket.close(None).await.unwrap();
+            server.abort();
+        }
+    }
 
     fn headers(host: &str, origin: Option<&str>) -> HeaderMap {
         let mut h = HeaderMap::new();
@@ -1849,7 +2042,8 @@ mod tests {
 
     /// A user's socket: admin commands refused, a ticket or grant for a path
     /// outside the user's roots refused, `list_dir_all` confined — the P2
-    /// review's items 6 and 8.
+    /// review's items 6 and 8 — and a project folder outside them (`/`, a
+    /// foreign folder) refused before any body runs.
     #[tokio::test]
     async fn a_user_session_is_confined_and_denied_admin_commands() {
         use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as WsMessage};
@@ -1886,6 +2080,9 @@ mod tests {
             json!({ "t": "call", "id": 3, "cmd": FILE_GRANT_CMD, "args": { "path": outside.to_string_lossy() } }),
             json!({ "t": "call", "id": 4, "cmd": "list_dir_all", "args": { "path": dir.path().to_string_lossy() } }),
             json!({ "t": "call", "id": 5, "cmd": "read_file_bytes", "args": { "path": outside.to_string_lossy() } }),
+            // A project folder of `/` would make every relative path a whole-disk one.
+            json!({ "t": "call", "id": 6, "cmd": "list_dir", "args": { "projectDir": if cfg!(windows) { "C:\\" } else { "/" }, "relPath": "" } }),
+            json!({ "t": "call", "id": 7, "cmd": "git_status", "args": { "projectDir": dir.path().to_string_lossy() } }),
         ];
         for call in &calls {
             ws.send(WsMessage::Text(call.to_string().into())).await.unwrap();
