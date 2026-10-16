@@ -1378,6 +1378,195 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   const tileGrid = (rows: ReactNode) =>
     isOverlay ? <div className="models-home-grid machines-grid">{rows}</div> : rows;
 
+  const addControls = (
+    <>
+      <div className="tab-new-menu-group-label">{t("machines.addGroupLabel")}</div>
+      {adding ? (
+        <div className="vpn-indicator-row menu-form">
+          <label>
+            {t("machines.sshAddress")}
+            <input
+              placeholder={t("machines.addressPlaceholder")}
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submitAdd();
+              }}
+              spellCheck={false}
+              autoFocus
+            />
+          </label>
+          <label>
+            {t("machines.username")}
+            <input
+              placeholder={t("machines.usernamePlaceholder")}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          {!addViaTerminal && (
+            <label>
+              {t("machines.password")}
+              <PasswordInput
+                placeholder={t("machines.addPasswordPlaceholder")}
+                value={password}
+                autoComplete="off"
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void submitAdd();
+                }}
+              />
+            </label>
+          )}
+          {/* Kept on screen in the terminal path, and *disabled* rather than
+              hidden: a saved password belongs to the host, and a row that
+              vanishes reads as one that was discarded. It has nothing to act on
+              there — the flag only reaches the keychain through `ssh_connect`'s
+              `remember`, which a terminal login never calls — so an existing
+              credential is left exactly as it was found. */}
+          <label
+            className="vpn-indicator-auto"
+            title={t(
+              addViaTerminal
+                ? "machines.savePasswordTerminalTitle"
+                : "machines.savePasswordTitle",
+            )}
+          >
+            <Toggle
+              checked={savePassword}
+              disabled={addViaTerminal}
+              onChange={(e) => setSavePassword(e.target.checked)}
+              size="sm"
+            />
+            <span>
+              {t("machines.savePassword")}
+              <UntestedTag id="machinesIndicator.14" />
+            </span>
+          </label>
+          <label
+            className="vpn-indicator-auto"
+            title={t("machines.autoConnectAddTitle")}
+          >
+            <Toggle
+              checked={addAuto && !addHpc}
+              disabled={addHpc}
+              onChange={(e) => setAddAuto(e.target.checked)}
+              size="sm"
+            />
+            <span>
+              {t("machines.autoConnectLabel")}
+              {addHpc && (
+                <span className="machines-auto-blocked"> {t("machines.autoBlockedHpcAdd")}</span>
+              )}
+              <UntestedTag id="machinesIndicator.15" />
+            </span>
+          </label>
+          {/* The tag, at the moment it is actually known: logging in is when
+              the user knows what they are logging in to. Everything Tabtivity
+              would otherwise do to this machine on its own is gated behind it
+              (`lib/remote/hpc/hpcHost.ts`), so ticking it here means the very first
+              connect already behaves — nothing scans, nothing polls, and the
+              monitor reads it lightly from its first sample. */}
+          <label
+            className="vpn-indicator-auto"
+            title={t("machines.hpcAddTitle")}
+          >
+            <Toggle checked={addHpc} onChange={(e) => setAddHpc(e.target.checked)} size="sm" />
+            <span>
+              {t("machines.hpcToggleLabel")}
+              <UntestedTag id="machinesIndicator.16" />
+            </span>
+          </label>
+          <label>
+            {t("machines.labelOptional")}
+            <input
+              placeholder={t("machines.labelPlaceholder")}
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              spellCheck={false}
+            />
+          </label>
+          <TerminalSignInToggle
+            channel="ssh"
+            checked={addViaTerminal}
+            busy={addWaiting}
+            onChange={setAddViaTerminal}
+          />
+          {/* The login is a root-terminal tab, not something in this menu — which
+              closes the moment the pointer leaves it — so say where it went. */}
+          {addViaTerminal && addWaiting && (
+            <div className="settings-help" role="status">
+              {t("machines.terminalLoginHint.pre")}{" "}
+              <strong>{t("machines.rootTerminal")}</strong>{" "}
+              {t("machines.terminalLoginHint.post")}
+            </div>
+          )}
+          {addError && <ErrorNote className="vpn-indicator-error" error={addError} />}
+          <div className="vpn-indicator-actions">
+            {addViaTerminal ? (
+              <button
+                type="button"
+                className="vpn-indicator-connect"
+                disabled={addWaiting}
+                title={t("machines.loginInTerminalTitle")}
+                onClick={() => void startTerminalAdd()}
+              >
+                {addWaiting ? t("machines.waitingForLogin") : t("machines.loginInTerminal")}
+              </button>
+            ) : (
+              <button type="button" className="vpn-indicator-connect" disabled={addBusy} onClick={() => void submitAdd()}>
+                {addBusy ? t("machines.connecting") : t("machines.connectAndAdd")}
+              </button>
+            )}
+            {/* Only after the poll has given up: a login finished late is still a
+                login, and re-arming beats retyping the whole form. */}
+            {addViaTerminal && !addWaiting && addError && (
+              <button type="button" className="vpn-indicator-connect" onClick={retryTerminalAdd}>
+                {t("machines.loggedInAdd")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="vpn-indicator-remove"
+              onClick={() => {
+                clearAddPoll();
+                setAddWaiting(false);
+                setAdding(false);
+              }}
+            >
+              {t("common.cancel")}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="vpn-indicator-row vpn-indicator-browse machines-io-buttons">
+          <button type="button" className="vpn-indicator-connect" onClick={() => setAdding(true)}>
+            {t("machines.addMachine")}
+          </button>
+          <button
+            type="button"
+            className="vpn-indicator-connect"
+            title={t("machines.importTitle")}
+            onClick={() => void startImport()}
+          >
+            {t("machines.import")}
+          </button>
+          <button
+            type="button"
+            className="vpn-indicator-connect"
+            disabled={machines.length === 0}
+            title={t("machines.exportTitle")}
+            onClick={startExport}
+          >
+            {t("machines.export")}
+          </button>
+        </div>
+      )}
+    </>
+  );
+
   // The list itself, shared by both surfaces: the dropdown scrolls it under
   // its pinned title, the overlay lays it out as a page of tiles.
   const body = (
@@ -1552,11 +1741,14 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             </div>
           ) : (
             <>
+          {addControls}
+
           {/* The drag this used to describe does not exist: attaching is the
               row's ⇥ picker (see the component doc), and the only drag left is a
               row's grip, which reorders. */}
           <div className="vpn-indicator-note">
-            <strong>{t("machines.note.strong")}</strong> {t("machines.note.rest")}
+            <strong>{t("machines.note.strong")}</strong>{" "}
+            {t(isOverlay ? "machines.note.overlay" : "machines.note.rest")}
             <UntestedTag id="machinesIndicator.5" />
           </div>
 
@@ -1924,7 +2116,13 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     <span className="models-tile-intro machines-tile-target">{targetLabel(m)}</span>
                     <span className="models-tile-stat machines-tile-stat">
                       {stateTip}
-                      {busy && <span className="machines-tile-busy">{busyLabel(busy)}</span>}
+                      {busy && (
+                        <span className="machines-tile-busy" title={busyLabel(busy)}>
+                          {t(busy.sessions === 1 ? "machines.sessionOne" : "machines.sessionMany", {
+                            count: busy.sessions,
+                          })}
+                        </span>
+                      )}
                     </span>
                   </div>
                 )}
@@ -2278,191 +2476,6 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
               </div>
             );
           }))}
-
-          <div className="tab-new-menu-group-label">{t("machines.addGroupLabel")}</div>
-          {adding ? (
-            <div className="vpn-indicator-row menu-form">
-              <label>
-                {t("machines.sshAddress")}
-                <input
-                  placeholder={t("machines.addressPlaceholder")}
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void submitAdd();
-                  }}
-                  spellCheck={false}
-                  autoFocus
-                />
-              </label>
-              <label>
-                {t("machines.username")}
-                <input
-                  placeholder={t("machines.usernamePlaceholder")}
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </label>
-              {!addViaTerminal && (
-                <label>
-                  {t("machines.password")}
-                  <PasswordInput
-                    placeholder={t("machines.addPasswordPlaceholder")}
-                    value={password}
-                    autoComplete="off"
-                    onChange={(e) => setPassword(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void submitAdd();
-                    }}
-                  />
-                </label>
-              )}
-              {/* Kept on screen in the terminal path, and *disabled* rather than
-                  hidden: a saved password belongs to the host, and a row that
-                  vanishes reads as one that was discarded. It has nothing to act on
-                  there — the flag only reaches the keychain through `ssh_connect`'s
-                  `remember`, which a terminal login never calls — so an existing
-                  credential is left exactly as it was found. */}
-              <label
-                className="vpn-indicator-auto"
-                title={t(
-                  addViaTerminal
-                    ? "machines.savePasswordTerminalTitle"
-                    : "machines.savePasswordTitle",
-                )}
-              >
-                <Toggle
-                  checked={savePassword}
-                  disabled={addViaTerminal}
-                  onChange={(e) => setSavePassword(e.target.checked)}
-                  size="sm"
-                />
-                <span>
-                  {t("machines.savePassword")}
-                  <UntestedTag id="machinesIndicator.14" />
-                </span>
-              </label>
-              <label
-                className="vpn-indicator-auto"
-                title={t("machines.autoConnectAddTitle")}
-              >
-                <Toggle
-                  checked={addAuto && !addHpc}
-                  disabled={addHpc}
-                  onChange={(e) => setAddAuto(e.target.checked)}
-                  size="sm"
-                />
-                <span>
-                  {t("machines.autoConnectLabel")}
-                  {addHpc && (
-                    <span className="machines-auto-blocked"> {t("machines.autoBlockedHpcAdd")}</span>
-                  )}
-                  <UntestedTag id="machinesIndicator.15" />
-                </span>
-              </label>
-              {/* The tag, at the moment it is actually known: logging in is when
-                  the user knows what they are logging in to. Everything Tabtivity
-                  would otherwise do to this machine on its own is gated behind it
-                  (`lib/remote/hpc/hpcHost.ts`), so ticking it here means the very first
-                  connect already behaves — nothing scans, nothing polls, and the
-                  monitor reads it lightly from its first sample. */}
-              <label
-                className="vpn-indicator-auto"
-                title={t("machines.hpcAddTitle")}
-              >
-                <Toggle checked={addHpc} onChange={(e) => setAddHpc(e.target.checked)} size="sm" />
-                <span>
-                  {t("machines.hpcToggleLabel")}
-                  <UntestedTag id="machinesIndicator.16" />
-                </span>
-              </label>
-              <label>
-                {t("machines.labelOptional")}
-                <input
-                  placeholder={t("machines.labelPlaceholder")}
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                  spellCheck={false}
-                />
-              </label>
-              <TerminalSignInToggle
-                channel="ssh"
-                checked={addViaTerminal}
-                busy={addWaiting}
-                onChange={setAddViaTerminal}
-              />
-              {/* The login is a root-terminal tab, not something in this menu — which
-                  closes the moment the pointer leaves it — so say where it went. */}
-              {addViaTerminal && addWaiting && (
-                <div className="settings-help" role="status">
-                  {t("machines.terminalLoginHint.pre")}{" "}
-                  <strong>{t("machines.rootTerminal")}</strong>{" "}
-                  {t("machines.terminalLoginHint.post")}
-                </div>
-              )}
-              {addError && <ErrorNote className="vpn-indicator-error" error={addError} />}
-              <div className="vpn-indicator-actions">
-                {addViaTerminal ? (
-                  <button
-                    type="button"
-                    className="vpn-indicator-connect"
-                    disabled={addWaiting}
-                    title={t("machines.loginInTerminalTitle")}
-                    onClick={() => void startTerminalAdd()}
-                  >
-                    {addWaiting ? t("machines.waitingForLogin") : t("machines.loginInTerminal")}
-                  </button>
-                ) : (
-                  <button type="button" className="vpn-indicator-connect" disabled={addBusy} onClick={() => void submitAdd()}>
-                    {addBusy ? t("machines.connecting") : t("machines.connectAndAdd")}
-                  </button>
-                )}
-                {/* Only after the poll has given up: a login finished late is still a
-                    login, and re-arming beats retyping the whole form. */}
-                {addViaTerminal && !addWaiting && addError && (
-                  <button type="button" className="vpn-indicator-connect" onClick={retryTerminalAdd}>
-                    {t("machines.loggedInAdd")}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="vpn-indicator-remove"
-                  onClick={() => {
-                    clearAddPoll();
-                    setAddWaiting(false);
-                    setAdding(false);
-                  }}
-                >
-                  {t("common.cancel")}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="vpn-indicator-row vpn-indicator-browse machines-io-buttons">
-              <button type="button" className="vpn-indicator-connect" onClick={() => setAdding(true)}>
-                {t("machines.addMachine")}
-              </button>
-              <button
-                type="button"
-                className="vpn-indicator-connect"
-                title={t("machines.importTitle")}
-                onClick={() => void startImport()}
-              >
-                {t("machines.import")}
-              </button>
-              <button
-                type="button"
-                className="vpn-indicator-connect"
-                disabled={machines.length === 0}
-                title={t("machines.exportTitle")}
-                onClick={startExport}
-              >
-                {t("machines.export")}
-              </button>
-            </div>
-          )}
             </>
           )}
     </>

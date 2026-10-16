@@ -782,15 +782,16 @@ svg.alerts-toggle-icon {
 .machines-home-inner {
   max-width: 1320px;
 }
-/* As many 300px columns as fit: a fleet is a list of peers, not four fixed
+/* As many 280px columns as fit: a fleet is a list of peers, not four fixed
    sections, so it takes the auto-fill a two-up would waste. */
 .machines-home .machines-grid {
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
 }
 .machines-grid > .machines-tile {
-  gap: 10px;
-  min-height: 170px;
-  padding: 16px 18px;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 16px;
   border: 1px solid var(--control-border);
   cursor: var(--cur-default, default);
 }
@@ -838,6 +839,10 @@ svg.alerts-toggle-icon {
   color: var(--text-secondary);
 }
 .machines-tile-busy {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   padding: 0 7px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--success) 16%, transparent);
@@ -850,6 +855,9 @@ svg.alerts-toggle-icon {
 /* The icon actions at the tile's foot, so the tiles of one row line them up
    (the chips' rule in `.models-tile-chips`). */
 .machines-grid > .machines-tile .machines-row-actions {
+  /* The dropdown's 100% basis is a row break; here the flex axis is vertical. */
+  flex-basis: auto;
+  flex-wrap: wrap;
   margin-top: auto;
   padding-top: 8px;
   border-top: 1px solid var(--border-color);

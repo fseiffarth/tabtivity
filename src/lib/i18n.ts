@@ -5443,6 +5443,9 @@ export const enSource = {
   "machines.openOverlayAria": "Open the Machines overview",
   "machines.openOverlayTitle": "Open these machines as a window — one tile per machine",
   "machines.empty": "No global machines yet.",
+  "machines.sessionOne": "{count} session running",
+  "machines.sessionMany": "{count} sessions running",
+  "machines.note.overlay": "to add that machine to a project — as a shared-folder worker on a remote project, or as the primary host of a local one.",
   "machines.note.strong": "Use a row's ⇥ button",
   "machines.note.rest": "to add that machine to a project — as a shared-folder worker on a remote project, or as the primary host of a local one. Drag a row's grip (⠿) to reorder.",
 
