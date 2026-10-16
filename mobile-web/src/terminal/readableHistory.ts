@@ -66,6 +66,25 @@ export function shiftHistory(history: ReadableHistory, trimmed: number) {
   }
 }
 
+/** Subscribes to the trims of a scrollback; returns the unsubscribe. */
+export type TrimEvent = (listener: (amount: number) => void) => { dispose(): void };
+
+/** The trim emitter of `term`'s normal buffer — the event {@link shiftHistory}
+ * is fed from — or undefined when there is none.
+ *
+ * xterm has no public event for a scrollback trim, so this reads the internal
+ * buffer list's own `onTrim` (`_core._bufferService.buffers.normal.lines`),
+ * guarded at every step: when a future xterm renames it, the owner falls back
+ * to the bounded whole-screen rebuild instead of showing wrong lines. The
+ * emitter belongs to one buffer, and `term.reset()` builds a new one, so read
+ * it again after every reset. */
+export function scrollbackTrimEvent(term: object): TrimEvent | undefined {
+  const onTrim = (term as {
+    _core?: { _bufferService?: { buffers?: { normal?: { lines?: { onTrim?: unknown } } } } };
+  })._core?._bufferService?.buffers?.normal?.lines?.onTrim;
+  return typeof onTrim === "function" ? (onTrim as TrimEvent) : undefined;
+}
+
 /** The text of the newest absorbed line — the seam context the tail rebuild
  * hands to `readableRange` so a paragraph break survives the boundary. */
 export function lastHistoryText(history: ReadableHistory): string | undefined {

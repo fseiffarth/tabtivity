@@ -13,6 +13,13 @@ import type { ScheduledPrompt } from "../../../mobile-web/src/api";
 import { ScheduleSheet } from "../../../mobile-web/src/screens/ScheduleSheet";
 import { BRAND } from "../../lib/brand";
 
+// The phone's clock field follows the phone's own locale; pin the 24-hour face
+// so typing "18" means the same hour on every machine that runs this.
+vi.mock("../../../mobile-web/src/terminal/chatTimes", async (original) => ({
+  ...(await original<typeof import("../../../mobile-web/src/terminal/chatTimes")>()),
+  phoneUse24h: () => true,
+}));
+
 const TAB = "tab one";
 const PATH = "/api/v1/tabs/tab%20one/schedules";
 
@@ -59,7 +66,8 @@ describe("Mobile schedule sheet", () => {
     expect((screen.getByLabelText("Recurrence") as HTMLSelectElement).value).toBe("once");
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Review the diff" } });
     fireEvent.change(screen.getByLabelText("Recurrence"), { target: { value: "daily" } });
-    fireEvent.change(screen.getByLabelText("Desktop-local time"), { target: { value: "07:30" } });
+    fireEvent.change(screen.getByLabelText("Desktop-local time (h)"), { target: { value: "07" } });
+    fireEvent.change(screen.getByLabelText("Desktop-local time (min)"), { target: { value: "30" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls("POST")).toHaveLength(1));
     expect(lastBody("POST")).toEqual({ enabled: true, message: "Review the diff", rule: { type: "daily", time: "07:30" } });
@@ -92,7 +100,10 @@ describe("Mobile schedule sheet", () => {
     await screen.findByText("No prompts are scheduled for this tab.");
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Ship it" } });
     fireEvent.change(screen.getByLabelText("Recurrence"), { target: { value: "once" } });
-    fireEvent.change(screen.getByLabelText("Desktop-local date and time"), { target: { value: "2026-12-24T18:00" } });
+    // The day from the phone's date picker, the hour in the shared clock field.
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-12-24" } });
+    fireEvent.change(screen.getByLabelText("Time (h)"), { target: { value: "18" } });
+    fireEvent.change(screen.getByLabelText("Time (min)"), { target: { value: "00" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls("POST")).toHaveLength(1));
     expect(lastBody("POST").rule).toEqual({ type: "once", at: "2026-12-24T18:00" });
@@ -115,7 +126,8 @@ describe("Mobile schedule sheet", () => {
     expect(screen.getByText("Edit schedule")).toBeTruthy();
     expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("Old text");
     expect((screen.getByLabelText("Recurrence") as HTMLSelectElement).value).toBe("weekdays");
-    expect((screen.getByLabelText("Desktop-local time") as HTMLInputElement).value).toBe("10:15");
+    expect((screen.getByLabelText("Desktop-local time (h)") as HTMLInputElement).value).toBe("10");
+    expect((screen.getByLabelText("Desktop-local time (min)") as HTMLInputElement).value).toBe("15");
     expect((screen.getByLabelText("Mon") as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText("Tue") as HTMLInputElement).checked).toBe(false);
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "New text" } });

@@ -82,7 +82,8 @@ describe("Mobile schedule sheet, applied write", () => {
     await screen.findByText("No prompts are scheduled for this tab.");
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Review the diff" } });
     fireEvent.change(screen.getByLabelText("Recurrence"), { target: { value: "daily" } });
-    fireEvent.change(screen.getByLabelText("Desktop-local time"), { target: { value: "07:30" } });
+    fireEvent.change(screen.getByLabelText("Desktop-local time (h)"), { target: { value: "07" } });
+    fireEvent.change(screen.getByLabelText("Desktop-local time (min)"), { target: { value: "30" } });
   };
 
   it("reloads the list and clears the form, with one write", async () => {

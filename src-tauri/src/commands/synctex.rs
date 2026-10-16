@@ -1,10 +1,12 @@
-//! Native SyncTeX reverse search: a point on a PDF page → the source line that
-//! produced it, read straight out of the `.synctex(.gz)` the compile emitted.
+//! SyncTeX, read natively out of the `.synctex(.gz)` the compile emitted (every
+//! compile passes `-synctex=1`): reverse search (a point on a PDF page → the
+//! source line that produced it), forward search (a source line → the boxes it
+//! produced), the deck's page → source-line anchors, and the map's freshness.
+//! These are the `synctex_*` commands.
 //!
-//! `synctex edit` (the CLI) answers the same question, and `commands::tex`
-//! still falls back to it. But the CLI is wrong often enough to be the thing
-//! users notice, and wrong in a way that hurts: it opens the **wrong `.tex`
-//! file**.
+//! The `synctex` CLI is not used in either direction. It answers both
+//! questions, but it is wrong often enough to be the thing users notice, and
+//! wrong in a way that hurts: it opens the **wrong `.tex` file**.
 //!
 //! Why: pdfTeX tags each line's hbox with whatever input file was being read at
 //! the moment `\par` finally fired — and for a paragraph that ends at the end of
@@ -79,19 +81,62 @@
 //! 207 of 10 005 line boxes, and every dropped record is a `main.tex`
 //! `\end{frame}` line.
 //!
-//! SyncTeX records no column, so the column is always 0 (as with the CLI, which
-//! reports `Column:-1` for every record pdfTeX writes).
+//! Forward search reads the same leaves the other way round ({@link view_in}):
+//! a line is found by the boxes whose *material* came from it, never by a box's
+//! own tag, and a line that set nothing (a comment, a blank line, the preamble)
+//! takes the nearest line of the same file that did. It never answers with a
+//! box whose material belongs to another file.
+//!
+//! SyncTeX records no column, so reverse search answers with a line only.
+//!
+//! Paths come back in the caller's spelling: the engine records its physical
+//! working directory, so on a symlinked project the map names the resolved
+//! tree, and a path from it would not match the tab already open on the
+//! project's own spelling ({@link Spelling}).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
+use serde::Serialize;
+
 /// Scaled points per TeX point.
 const SP_PER_PT: f64 = 65536.0;
-/// TeX points → big points (PostScript points, 1/72 in), the unit both the
-/// SyncTeX CLI and the PDF viewer speak.
+/// TeX points → big points (PostScript points, 1/72 in), the unit the PDF
+/// viewer speaks.
 const PT_PER_BP: f64 = 72.0 / 72.27;
+
+/// A source location returned by reverse search (`synctex_edit`): the input
+/// `.tex` file and the 1-based line that produced a clicked PDF point.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncSource {
+    /// Absolute path to the source file, spelled through the caller's
+    /// spelling of the PDF's folder or an ancestor of it ({@link Spelling}).
+    pub input: String,
+    /// 1-based source line.
+    pub line: u32,
+    /// Always 0: SyncTeX records no column (the CLI printed `Column:-1` for
+    /// every record pdfTeX writes). Kept so the payload's shape is stable.
+    pub column: u32,
+}
+
+/// A PDF rectangle returned by forward search (`synctex_view`): the page and a
+/// box (big points, 72 dpi, origin at the page's top-left) the viewer can
+/// scroll to and highlight.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct SyncRect {
+    /// 1-based PDF page.
+    pub page: u32,
+    /// Left edge in big points from the page's top-left.
+    pub x: f64,
+    /// Top edge in big points from the page's top-left.
+    pub y: f64,
+    /// Box width in big points.
+    pub w: f64,
+    /// Box height in big points.
+    pub h: f64,
+}
 
 /// One parsed SyncTeX record: a box or a leaf (glyph run, kern, glue, rule).
 /// `x`/`y` are the record's origin in big points from the page's top-left — for
@@ -110,6 +155,11 @@ struct Rec {
     /// *line fill*, the stretch TeX inserts to justify a short line out to the
     /// margin. See {@link trim_line_fill}.
     elastic: bool,
+    /// True for a nested box's own record in its parent's child list. Reverse
+    /// search keeps it there (a click in the margin beside a section number must
+    /// see something); forward search does not count it as the parent's
+    /// material, since the nested box is matched on its own.
+    is_box: bool,
 }
 
 /// A record's position may differ from a box edge by this much (big points) and
@@ -244,6 +294,7 @@ fn parse_record(body: &str, p: &Preamble, elastic: bool) -> Option<Rec> {
         h: scale(h),
         d: scale(d),
         elastic,
+        is_box: false,
     })
 }
 
@@ -301,6 +352,7 @@ fn walk_hboxes(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>) -> Vec<(u
                             h: 0.0,
                             d: 0.0,
                             elastic: false,
+                            is_box: false,
                         },
                         is_h,
                         Vec::new(),
@@ -312,7 +364,7 @@ fn walk_hboxes(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>) -> Vec<(u
                     continue;
                 };
                 if let Some(parent) = stack.last_mut() {
-                    parent.2.push(rec);
+                    parent.2.push(Rec { is_box: true, ..rec });
                 }
                 if is_h && rec.line > 0 {
                     out.push((
@@ -359,6 +411,52 @@ fn interval_distance(v: f64, lo: f64, hi: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+/// True when the vertical span `outer` (top, bottom) holds two of `inner` that
+/// do not overlap each other vertically: a block of lines, not a line.
+fn spans_lines(outer: (f64, f64), inner: impl Iterator<Item = (f64, f64)>) -> bool {
+    let mut lowest_bottom = f64::INFINITY;
+    let mut highest_top = f64::NEG_INFINITY;
+    for (top, bottom) in inner {
+        if top >= outer.0 - EDGE_EPSILON && bottom <= outer.1 + EDGE_EPSILON {
+            lowest_bottom = lowest_bottom.min(bottom);
+            highest_top = highest_top.max(top);
+        }
+    }
+    lowest_bottom < highest_top - EDGE_EPSILON
+}
+
+/// `boxes` without the page backgrounds a beamer theme lays under a frame:
+/// full-height boxes nested deeper than the text, which win {@link pick_hbox}
+/// for any click on the page (vertical distance 0, more depth) and answer
+/// `\end{frame}`. A background is page chrome ({@link is_chrome}) with nothing
+/// but its own tag in it, spanning several lines ({@link spans_lines}). Kept
+/// when nothing else is left — a frame whose every record is `\end{frame}`'s.
+fn drop_backgrounds(boxes: Vec<HBox>) -> Vec<HBox> {
+    let span = |bx: &HBox| (bx.rec.y - bx.rec.h, bx.rec.y + bx.rec.d);
+    let background: Vec<bool> = boxes
+        .iter()
+        .enumerate()
+        .map(|(i, bx)| {
+            let own = (bx.rec.tag, bx.rec.line);
+            is_chrome(bx)
+                && material(bx, true).iter().all(|tl| *tl == own)
+                && spans_lines(
+                    span(bx),
+                    boxes.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, o)| span(o)),
+                )
+        })
+        .collect();
+    if background.iter().all(|b| *b) {
+        return boxes;
+    }
+    boxes
+        .into_iter()
+        .zip(background)
+        .filter(|(_, b)| !b)
+        .map(|(bx, _)| bx)
+        .collect()
 }
 
 /// The hbox a click at `(cx, cy)` belongs to.
@@ -409,6 +507,13 @@ fn trim_line_fill<'a>(bx: &HBox, leaves: &[&'a Rec]) -> Vec<&'a Rec> {
     leaves[start..=end].to_vec()
 }
 
+/// True when `r` repeats the `(tag, line)` of a box enclosing `bx` (and not
+/// `bx`'s own): a node minted when that box closed, not material.
+fn is_ancestor_artefact(bx: &HBox, r: &Rec) -> bool {
+    let own = r.tag == bx.rec.tag && r.line == bx.rec.line;
+    !own && bx.ancestors.iter().any(|&(t, l)| r.tag == t && r.line == l)
+}
+
 /// The source location for a click at `cx` inside `bx`: the nearest leaf that
 /// says something neither the box's own tag nor any enclosing box's does.
 ///
@@ -439,9 +544,7 @@ fn resolve_in_hbox(bx: &HBox, cx: f64) -> (u32, u32) {
     // A line box is routinely wrapped in hboxes carrying its own tag (beamer's
     // block layout nests four deep), so the box's own tag is excluded here or
     // the middle layer below would never hold anything.
-    let is_ancestor = |r: &Rec| {
-        !is_own(r) && bx.ancestors.iter().any(|&(t, l)| r.tag == t && r.line == l)
-    };
+    let is_ancestor = |r: &Rec| is_ancestor_artefact(bx, r);
     // Layered: leaves that disagree with everything, then the box's own leaves
     // (a line whose tag is right and whose only foreign records are callback
     // artefacts — the beamer block title), then whatever is there. The middle
@@ -475,21 +578,62 @@ fn resolve_in_hbox(bx: &HBox, cx: f64) -> (u32, u32) {
     (chosen.tag, chosen.line)
 }
 
-/// Absolutise (and canonicalise) an `Input:` path against the PDF's directory.
-/// pdfTeX usually writes an absolute path already, but with a `./` segment in
-/// the middle — which must be normalised or the result will not match the path
-/// an already-open editor tab was opened under.
-fn absolutise(input: &str, base: &Path) -> String {
-    let p = Path::new(input);
-    let abs: PathBuf = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        base.join(p)
-    };
-    std::fs::canonicalize(&abs)
-        .unwrap_or(abs)
-        .to_string_lossy()
-        .into_owned()
+/// The caller's spelling of a directory (the PDF's) and of each of its
+/// ancestors, next to their canonical forms.
+///
+/// The engine records the path of every input under its *physical* working
+/// directory, so on a project reached through a symlink the map names the
+/// resolved tree. Canonicalising alone would hand that resolved spelling to the
+/// frontend, where it matches neither the open editor tab (a duplicate tab
+/// opens) nor the project root the markup prompt strips. So a recorded path is
+/// canonicalised and then *re-rooted*: under the deepest ancestor whose
+/// canonical form prefixes it, it is spelled through that ancestor as the
+/// caller spelled it. A lexical cleanup would not do, since the `./` pdfTeX
+/// writes is the least of it.
+struct Spelling {
+    base: PathBuf,
+    /// `(as spelled, canonical)`, deepest first.
+    roots: Vec<(PathBuf, PathBuf)>,
+}
+
+impl Spelling {
+    fn new(base: &Path) -> Self {
+        let roots = base
+            .ancestors()
+            .filter_map(|a| std::fs::canonicalize(a).ok().map(|c| (a.to_path_buf(), c)))
+            .collect();
+        Spelling {
+            base: base.to_path_buf(),
+            roots,
+        }
+    }
+
+    /// Absolutise (against the base) and canonicalise an `Input:` path, then
+    /// re-spell it under the caller's spelling of the base where it lies there.
+    /// A path that does not exist (a moved tree) comes back absolutised only.
+    /// Never carries Windows' `\\?\` verbatim prefix.
+    fn absolutise(&self, input: &str) -> String {
+        let p = Path::new(input);
+        let abs: PathBuf = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.base.join(p)
+        };
+        let Ok(canonical) = std::fs::canonicalize(&abs) else {
+            return crate::commands::fs::display_path(&abs);
+        };
+        for (spelled, root) in &self.roots {
+            if let Ok(rest) = canonical.strip_prefix(root) {
+                let respelled = if rest.as_os_str().is_empty() {
+                    spelled.clone()
+                } else {
+                    spelled.join(rest)
+                };
+                return crate::commands::fs::display_path(&respelled);
+            }
+        }
+        crate::commands::fs::display_path(&canonical)
+    }
 }
 
 /// The largest map read, compressed or inflated. A 600-page thesis writes
@@ -512,7 +656,7 @@ struct Map {
 
 /// The SyncTeX map beside `pdf`, preferring the compressed form the engines
 /// write. None when there is none — an imported PDF, or one built without
-/// `-synctex=1`, simply has no reverse search.
+/// `-synctex=1`, simply has no SyncTeX.
 fn map_path(pdf: &Path) -> Option<PathBuf> {
     let stem = pdf.file_stem()?.to_str()?;
     let dir = pdf.parent().unwrap_or_else(|| Path::new("."));
@@ -527,9 +671,9 @@ fn map_path(pdf: &Path) -> Option<PathBuf> {
     }
 }
 
-/// What reverse search can promise for a PDF right now — the answer to "why did
-/// my click do nothing, or land on the wrong line", asked by the viewer before
-/// it words a notice. Every field is a reason to recompile.
+/// What SyncTeX can promise for a PDF right now — the answer to "why did my
+/// click do nothing, or land on the wrong line", asked by the viewer before it
+/// words a notice. Every field is a reason to recompile.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct MapStatus {
     /// A `.synctex(.gz)` sits beside the PDF at all.
@@ -540,7 +684,7 @@ pub struct MapStatus {
     pub pdf_newer_than_map: bool,
     /// Local sources the map names — the `.tex`/`.sty`/`.cls` files under the
     /// main document's directory — saved after the map was written. The lines
-    /// reverse search answers with are those of the build *before* that edit.
+    /// SyncTeX answers with are those of the build *before* that edit.
     pub newer_sources: Vec<String>,
 }
 
@@ -559,6 +703,7 @@ const SOURCE_EXTS: [&str; 5] = ["tex", "sty", "cls", "ltx", "tikz"];
 /// without touching a clock.
 fn stale_inputs(
     inputs: &HashMap<u32, String>,
+    spelling: &Spelling,
     root: &Path,
     map_mtime: SystemTime,
     mtime_of: impl Fn(&Path) -> Option<SystemTime>,
@@ -566,15 +711,15 @@ fn stale_inputs(
     let threshold = map_mtime + STALE_GRACE;
     let mut out: Vec<String> = inputs
         .values()
-        .map(|p| absolutise(p, root))
-        .filter(|abs| {
-            let path = Path::new(abs);
-            path.starts_with(root)
-                && path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| SOURCE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        // By extension first: only the few sources are worth resolving.
+        .filter(|p| {
+            Path::new(p)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| SOURCE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
         })
+        .map(|p| spelling.absolutise(p))
+        .filter(|abs| Path::new(abs).starts_with(root))
         .filter(|abs| mtime_of(Path::new(abs)).is_some_and(|m| m > threshold))
         .collect();
     out.sort();
@@ -600,6 +745,7 @@ pub fn status(pdf: &Path) -> MapStatus {
     let newer_sources = match load_map(pdf) {
         Some(map) => {
             let pdf_dir = pdf.parent().unwrap_or_else(|| Path::new("."));
+            let spelling = Spelling::new(pdf_dir);
             // The main document is the lowest-numbered input; its directory is
             // the tree the person edits (an out-dir build puts the PDF elsewhere).
             let root = map
@@ -607,11 +753,10 @@ pub fn status(pdf: &Path) -> MapStatus {
                 .inputs
                 .iter()
                 .min_by_key(|(tag, _)| **tag)
-                .map(|(_, p)| PathBuf::from(absolutise(p, pdf_dir)))
+                .map(|(_, p)| PathBuf::from(spelling.absolutise(p)))
                 .and_then(|main| main.parent().map(Path::to_path_buf))
                 .unwrap_or_else(|| pdf_dir.to_path_buf());
-            let root = std::fs::canonicalize(&root).unwrap_or(root);
-            stale_inputs(&map.pre.inputs, &root, map_mtime, mtime)
+            stale_inputs(&map.pre.inputs, &spelling, &root, map_mtime, mtime)
         }
         None => Vec::new(),
     };
@@ -620,6 +765,27 @@ pub fn status(pdf: &Path) -> MapStatus {
         pdf_newer_than_map,
         newer_sources,
     }
+}
+
+/// Read and parse the map at `path`, bounded both ways at `cap` bytes: the map
+/// sits in a project folder, so a small `.gz` could inflate to gigabytes. None
+/// for a map that cannot be read or is past the cap — no SyncTeX for it.
+fn read_map(path: &Path, cap: u64) -> Option<Map> {
+    use std::io::Read;
+    let mut text = String::new();
+    let read = if path.extension().is_some_and(|e| e == "gz") {
+        let file = std::fs::File::open(path).ok()?;
+        flate2::read::GzDecoder::new(file.take(cap))
+            .take(cap + 1)
+            .read_to_string(&mut text)
+    } else {
+        std::fs::File::open(path).ok()?.take(cap + 1).read_to_string(&mut text)
+    };
+    if read.is_err() || text.len() as u64 > cap {
+        return None;
+    }
+    let pre = parse_preamble(&text);
+    Some(Map { text, pre })
 }
 
 /// Read the SyncTeX map beside `pdf` ({@link map_path}), through the cache.
@@ -635,47 +801,35 @@ fn load_map(pdf: &Path) -> Option<std::sync::Arc<Map>> {
         }
     }
 
-    // Bounded both ways: the map sits in a project folder, so a small `.gz`
-    // could inflate to gigabytes. A map past the cap has no reverse search.
-    use std::io::Read;
-    let mut text = String::new();
-    let read = if path.extension().is_some_and(|e| e == "gz") {
-        let file = std::fs::File::open(&path).ok()?;
-        flate2::read::GzDecoder::new(file.take(MAX_MAP_BYTES))
-            .take(MAX_MAP_BYTES + 1)
-            .read_to_string(&mut text)
-    } else {
-        std::fs::File::open(&path).ok()?.take(MAX_MAP_BYTES + 1).read_to_string(&mut text)
-    };
-    if read.is_err() || text.len() as u64 > MAX_MAP_BYTES {
-        return None;
-    }
-
-    let pre = parse_preamble(&text);
-    let map = std::sync::Arc::new(Map { text, pre });
+    let map = std::sync::Arc::new(read_map(&path, MAX_MAP_BYTES)?);
     if let Ok(mut guard) = CACHE.lock() {
         *guard = Some((path, mtime, map.clone()));
     }
     Some(map)
 }
 
-/// Reverse search `(page, x, y)` (big points from the page's top-left) in the
-/// SyncTeX map beside `pdf`, as `(source path, line)`.
-///
-/// Returns None when there is no map, the page holds no boxes, or the winning
-/// record names an input the map never declared — every one of which the caller
-/// answers by falling back to the `synctex` CLI.
-pub fn resolve(pdf: &Path, page: u32, x: f64, y: f64) -> Option<(String, u32)> {
-    let map = load_map(pdf)?;
-    let boxes = page_hboxes(&map.text, page, &map.pre);
-    let bx = pick_hbox(&boxes, x, y)?;
+/// The source line for one click among one page's boxes, in the caller's
+/// spelling. None when the page holds no boxes or the winning record names an
+/// input the map never declared.
+fn resolve_point(map: &Map, spelling: &Spelling, boxes: &[HBox], x: f64, y: f64) -> Option<(String, u32)> {
+    let bx = pick_hbox(boxes, x, y)?;
     let (tag, line) = resolve_in_hbox(bx, x);
     if line == 0 {
         return None;
     }
-    let input = map.pre.inputs.get(&tag)?;
-    let dir = pdf.parent().unwrap_or_else(|| Path::new("."));
-    Some((absolutise(input, dir), line))
+    Some((spelling.absolutise(map.pre.inputs.get(&tag)?), line))
+}
+
+/// Reverse search `(page, x, y)` (big points from the page's top-left) in the
+/// SyncTeX map beside `pdf`, as `(source path, line)`.
+///
+/// Returns None when there is no map, the page holds no boxes, or the winning
+/// record names an input the map never declared.
+pub fn resolve(pdf: &Path, page: u32, x: f64, y: f64) -> Option<(String, u32)> {
+    let map = load_map(pdf)?;
+    let boxes = drop_backgrounds(page_hboxes(&map.text, page, &map.pre));
+    let spelling = Spelling::new(pdf.parent().unwrap_or_else(|| Path::new(".")));
+    resolve_point(&map, &spelling, &boxes, x, y)
 }
 
 /// {@link resolve} for many points on many pages, walking the map once: what a
@@ -691,101 +845,464 @@ pub fn resolve_pages(pdf: &Path, points: &BTreeMap<u32, Vec<(f64, f64)>>) -> BTr
     for (page, bx) in walk_hboxes(&map.text, &map.pre, Some(&wanted)) {
         by_page.entry(page).or_default().push(bx);
     }
-    let dir = pdf.parent().unwrap_or_else(|| Path::new("."));
+    let by_page: BTreeMap<u32, Vec<HBox>> =
+        by_page.into_iter().map(|(page, boxes)| (page, drop_backgrounds(boxes))).collect();
+    let spelling = Spelling::new(pdf.parent().unwrap_or_else(|| Path::new(".")));
     points
         .iter()
         .map(|(page, list)| {
             let boxes = by_page.get(page).map(Vec::as_slice).unwrap_or_default();
             let answers = list
                 .iter()
-                .map(|&(x, y)| {
-                    let bx = pick_hbox(boxes, x, y)?;
-                    let (tag, line) = resolve_in_hbox(bx, x);
-                    if line == 0 {
-                        return None;
-                    }
-                    Some((absolutise(map.pre.inputs.get(&tag)?, dir), line))
-                })
+                .map(|&(x, y)| resolve_point(&map, &spelling, boxes, x, y))
                 .collect();
             (*page, answers)
         })
         .collect()
 }
 
-/// The `Input:` tag for source file `input`, matched by **canonicalised path**
-/// against the recorded table (with a basename fallback).
+/// The `Input:` tags for source file `input`, matched by **canonicalised path**
+/// against the recorded table — a set, since a file `\input` twice is declared
+/// twice.
 ///
-/// This is the whole reason forward search is done natively rather than by
-/// shelling to `synctex view -i`: that CLI matches the `-i` argument against the
-/// path string SyncTeX happened to record, so an absolute path, a `./`-prefixed
-/// one, a basename or a symlinked spelling that does not match it *character for
-/// character* returns nothing — which looks exactly like "SyncTeX can't find the
-/// cursor" even when the caret is squarely on body text. Canonicalising both
-/// sides removes that entire failure class.
-fn input_tag(pre: &Preamble, input: &str, dir: &Path) -> Option<u32> {
-    let target = absolutise(input, dir);
-    let target_base = Path::new(input).file_name();
-    let mut base_hit: Option<u32> = None;
-    for (tag, path) in &pre.inputs {
-        if absolutise(path, dir) == target {
-            return Some(*tag); // exact canonical match — the strong signal
-        }
-        if target_base.is_some() && Path::new(path).file_name() == target_base {
-            base_hit = Some(*tag); // last-resort: same file name in the table
-        }
+/// Matching by path rather than by the recorded string is why forward search is
+/// native: the CLI's `synctex view -i` needs the path *character for character*
+/// as SyncTeX happened to record it, so an absolute path, a `./`-prefixed one, a
+/// basename or a symlinked spelling returned nothing.
+///
+/// Only when no recorded path is the file does the basename count, and only for
+/// a tree that moved since the build: the one recorded path with that name no
+/// longer exists. Two recorded files sharing the name is an honest miss — never
+/// the other file's line.
+fn input_tags(pre: &Preamble, input: &str, spelling: &Spelling) -> BTreeSet<u32> {
+    // Compared as paths, component by component, so `/` and `\` agree.
+    let target = PathBuf::from(spelling.absolutise(input));
+    let Some(name) = target.file_name() else {
+        return BTreeSet::new();
+    };
+    // Only same-named inputs can match, so only those are resolved: the table
+    // runs to hundreds of TeX tree files, each a `canonicalize` per call.
+    let recorded: Vec<(u32, PathBuf)> = pre
+        .inputs
+        .iter()
+        .filter(|(_, path)| Path::new(path).file_name() == Some(name))
+        .map(|(tag, path)| (*tag, PathBuf::from(spelling.absolutise(path))))
+        .collect();
+    let exact: BTreeSet<u32> = recorded
+        .iter()
+        .filter(|(_, path)| *path == target)
+        .map(|(tag, _)| *tag)
+        .collect();
+    if !exact.is_empty() {
+        return exact;
     }
-    base_hit
+    let named: BTreeSet<&Path> = recorded
+        .iter()
+        .filter(|(_, path)| path.file_name() == Some(name))
+        .map(|(_, path)| path.as_path())
+        .collect();
+    match named.into_iter().collect::<Vec<_>>().as_slice() {
+        [only] if !only.exists() => recorded
+            .iter()
+            .filter(|(_, path)| path == only)
+            .map(|(tag, _)| *tag)
+            .collect(),
+        _ => BTreeSet::new(),
+    }
 }
 
-/// Forward search: the boxes any page's `input:line` produced, as
-/// `(page, x, y, w, h)` in big points from the page top-left — the same unit and
-/// rect shape the CLI's `synctex view` yields, so the frontend picks the box for
-/// the clicked column and narrows to the word exactly as before.
+/// The `(tag, line)`s an hbox's own leaves were written by — its *material* —
+/// for forward search. Nested boxes are matched on their own and are not their
+/// parent's material.
 ///
-/// Matches the source file by canonicalised path ({@link input_tag}) and the line
-/// by the **leaf** records inside each box, never the box's own `(tag, line)`:
-/// that tag is the paragraph-break artefact reverse search exists to work around,
-/// so a line whose material sits in a box tagged for another file (an `\input`ed
-/// fragment) is found by its leaves where matching the box tag would miss it.
-/// Empty when there is no map, the file is not in it, or the line produced nothing
-/// — the caller then falls back to the CLI.
-pub fn view(pdf: &Path, input: &str, line: u32) -> Vec<(u32, f64, f64, f64, f64)> {
+/// A leaf survives when it is not line fill ({@link trim_line_fill}), not an
+/// elastic record parked at the right edge (a zero-width kern or the
+/// `\rightskip` at a line break carries the *next* line's tag), and not an
+/// ancestor artefact ({@link is_ancestor_artefact}). Of the survivors, a leaf
+/// repeating the box's own tag is the paragraph-break artefact whenever the box
+/// holds anything else (pdfTeX stamps each line's first glyph run with the box's
+/// tag) — so the box's own tag counts only for a box with nothing else in it, a
+/// heading or a beamer block title.
+///
+/// Such a box is page chrome-shaped when its tag is also the page's
+/// ({@link is_chrome}); its material counts only `with_chrome`.
+fn material(bx: &HBox, with_chrome: bool) -> Vec<(u32, u32)> {
+    let right = bx.rec.x + bx.rec.w;
+    let leaves: Vec<&Rec> = bx.leaves.iter().filter(|r| r.line > 0 && !r.is_box).collect();
+    let surviving: Vec<&Rec> = trim_line_fill(bx, &leaves)
+        .into_iter()
+        .filter(|r| !(r.elastic && r.x >= right - EDGE_EPSILON))
+        .filter(|r| !is_ancestor_artefact(bx, r))
+        .collect();
+    let own = (bx.rec.tag, bx.rec.line);
+    let foreign: Vec<(u32, u32)> = surviving
+        .iter()
+        .map(|r| (r.tag, r.line))
+        .filter(|tl| *tl != own)
+        .collect();
+    if !foreign.is_empty() {
+        return foreign;
+    }
+    if is_chrome(bx) && !with_chrome {
+        return Vec::new();
+    }
+    surviving.iter().map(|r| (r.tag, r.line)).collect()
+}
+
+/// A box tagged like its page (the outermost box around it, or itself at the
+/// page's root). With nothing but its own tag in it, that is how a header or a
+/// footer looks: the output routine set it when the page shipped, tagged with
+/// wherever the input happened to be — `\end{document}`, or the middle of a
+/// paragraph on the *next* page. It is also how every box of a beamer frame
+/// looks, since beamer reads the whole frame as an argument and re-reads it at
+/// `\end{frame}`; hence chrome is only ever a second pass ({@link view_in}).
+fn is_chrome(bx: &HBox) -> bool {
+    let own = (bx.rec.tag, bx.rec.line);
+    bx.ancestors.first().is_none_or(|page| *page == own)
+}
+
+/// Forward search: the boxes `input:line` produced, on any page, as rects in big
+/// points from the page's top-left.
+///
+/// Matches the source file by canonicalised path ({@link input_tags}) and the
+/// line by each box's material ({@link material}), never by the box's own tag
+/// alone: that tag is the paragraph-break artefact reverse search exists to work
+/// around. Empty when there is no map or the file is not in it.
+pub fn view(pdf: &Path, input: &str, line: u32) -> Vec<SyncRect> {
     let Some(map) = load_map(pdf) else {
         return Vec::new();
     };
-    let dir = pdf.parent().unwrap_or_else(|| Path::new("."));
-    view_in(&map.text, &map.pre, dir, input, line)
+    let spelling = Spelling::new(pdf.parent().unwrap_or_else(|| Path::new(".")));
+    view_in(&map.text, &map.pre, &spelling, input, line)
 }
 
 /// The pure core of {@link view}, separated from the on-disk map load so it can be
 /// unit-tested against a SyncTeX fixture without a real PDF.
-fn view_in(
-    text: &str,
-    pre: &Preamble,
-    dir: &Path,
-    input: &str,
-    line: u32,
-) -> Vec<(u32, f64, f64, f64, f64)> {
-    let Some(tag) = input_tag(pre, input, dir) else {
+///
+/// Runs {@link find_boxes} without page chrome first, and only when that finds
+/// nothing with it: a header or footer must not outrank the text of the line
+/// whose position it happens to carry, but a beamer frame, all of whose boxes
+/// look like chrome, must still be found. Where one hit contains another on the
+/// same page only the outer one is kept: a section number inside its heading's
+/// line, the identical wrappers beamer nests a block title in.
+fn view_in(text: &str, pre: &Preamble, spelling: &Spelling, input: &str, line: u32) -> Vec<SyncRect> {
+    let tags = input_tags(pre, input, spelling);
+    if tags.is_empty() {
+        return Vec::new();
+    }
+    let walked = walk_hboxes(text, pre, None);
+    for with_chrome in [false, true] {
+        let boxes: Vec<(&HBox, Vec<(u32, u32)>)> =
+            walked.iter().map(|(_, bx)| (bx, material(bx, with_chrome))).collect();
+        let hits = find_boxes(&boxes, &tags, line, with_chrome);
+        if hits.is_empty() {
+            continue;
+        }
+        let rects = hits
+            .iter()
+            .map(|&i| {
+                let (page, bx) = &walked[i];
+                // The box spans `y - h` (top) to `y + d` (bottom).
+                SyncRect {
+                    page: *page,
+                    x: bx.rec.x,
+                    y: bx.rec.y - bx.rec.h,
+                    w: bx.rec.w,
+                    h: bx.rec.h + bx.rec.d,
+                }
+            })
+            .collect();
+        return outermost(rects);
+    }
+    Vec::new()
+}
+
+/// The indices of the boxes in `boxes` (each with its material) that file `tags`,
+/// line `line` produced. The first rule that finds anything wins:
+/// 1. the boxes with material at `(F, L)`, plus the boxes *tagged* `(F, L)`
+///    with no material (an outer line box with nothing but a nested box in it:
+///    XeTeX's section heading); failing those, the boxes tagged `(F, L)` whose
+///    material is `F`'s — a blank line after a paragraph, or the paragraph's
+///    `\par`, is that paragraph, as with the CLI;
+/// 2. the nearest line of `F` that has material — the smallest after `L`, else
+///    the largest before it (a comment, the preamble, past `\end{document}`) —
+///    by rule 1;
+/// 3. a box tagged with `F` whose material is `F`'s or empty, nearest line
+///    first.
+///
+/// Never a box whose material is only another file's, nor, unless
+/// `with_chrome`, page chrome ({@link is_chrome}).
+fn find_boxes(boxes: &[(&HBox, Vec<(u32, u32)>)], tags: &BTreeSet<u32>, line: u32, with_chrome: bool) -> Vec<usize> {
+    let of_file = |tl: &(u32, u32)| tags.contains(&tl.0);
+    // Tagged with the file, and neither page chrome nor another file's lines.
+    let eligible_by_tag = |bx: &HBox, m: &[(u32, u32)]| {
+        tags.contains(&bx.rec.tag)
+            && (with_chrome || !is_chrome(bx) || !m.is_empty())
+            && (m.is_empty() || m.iter().any(of_file))
+    };
+    // A box tagged `(F, l)` that holds other lines of `F` is only the
+    // paragraph `l`'s `\par` closed: it stands in for `l` when no box holds
+    // `l` itself — `\item` closes the item before it, whose box must not come
+    // back beside the item's own.
+    let hits_at = |l: u32| -> Vec<usize> {
+        let tagged = |bx: &HBox, m: &[(u32, u32)]| bx.rec.line == l && eligible_by_tag(bx, m);
+        let own: Vec<usize> = boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, (bx, m))| {
+                m.iter().any(|tl| of_file(tl) && tl.1 == l) || (m.is_empty() && tagged(bx, m))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if !own.is_empty() {
+            return own;
+        }
+        boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, (bx, m))| tagged(bx, m))
+            .map(|(i, _)| i)
+            .collect()
+    };
+    let nearest = |lines: BTreeSet<u32>| {
+        lines
+            .range(line..)
+            .next()
+            .or_else(|| lines.range(..line).next_back())
+            .copied()
+    };
+
+    let hits = hits_at(line);
+    if !hits.is_empty() {
+        return hits;
+    }
+    let lines: BTreeSet<u32> = boxes
+        .iter()
+        .flat_map(|(_, m)| m.iter().filter(|tl| of_file(tl)).map(|tl| tl.1))
+        .collect();
+    if let Some(l) = nearest(lines) {
+        return hits_at(l);
+    }
+    let lines: BTreeSet<u32> = boxes
+        .iter()
+        .filter(|(bx, m)| eligible_by_tag(bx, m))
+        .map(|(bx, _)| bx.rec.line)
+        .collect();
+    let Some(l) = nearest(lines) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
-    for (page, bx) in walk_hboxes(text, pre, None) {
-        let hit = (bx.rec.tag == tag && bx.rec.line == line)
-            || bx.leaves.iter().any(|r| r.tag == tag && r.line == line);
-        if hit {
-            // The box spans `y - h` (top) to `y + d` (bottom); the CLI rect is the
-            // top edge plus the full height.
-            out.push((
-                page,
-                bx.rec.x,
-                bx.rec.y - bx.rec.h,
-                bx.rec.w,
-                bx.rec.h + bx.rec.d,
-            ));
+    boxes
+        .iter()
+        .enumerate()
+        .filter(|(_, (bx, m))| bx.rec.line == l && eligible_by_tag(bx, m))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Drop every rect that another one on the same page contains (of identical
+/// rects, keep the first), and every rect with no area when one has some: a
+/// void box or a zero-width wrapper locates nothing a highlight could show.
+/// But first drop a rect whose height holds two hits on different lines: that
+/// is a block — a beamer frame's page-sized background — not the line that was
+/// asked for.
+fn outermost(rects: Vec<SyncRect>) -> Vec<SyncRect> {
+    let has_area = |r: &SyncRect| r.w > 0.0 && r.h > 0.0;
+    let rects: Vec<SyncRect> = if rects.iter().any(has_area) {
+        rects.into_iter().filter(has_area).collect()
+    } else {
+        rects
+    };
+    let contains = |a: &SyncRect, b: &SyncRect| {
+        a.page == b.page
+            && a.x <= b.x + EDGE_EPSILON
+            && a.y <= b.y + EDGE_EPSILON
+            && a.x + a.w >= b.x + b.w - EDGE_EPSILON
+            && a.y + a.h >= b.y + b.h - EDGE_EPSILON
+    };
+    let rects: Vec<SyncRect> = rects
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| {
+            // Vertically only: a background need not cover a line's width.
+            let held = rects
+                .iter()
+                .enumerate()
+                .filter(|(j, o)| j != i && o.page == r.page)
+                .map(|(_, o)| (o.y, o.y + o.h));
+            !spans_lines((r.y, r.y + r.h), held)
+        })
+        .map(|(_, r)| *r)
+        .collect();
+    rects
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| {
+            !rects
+                .iter()
+                .enumerate()
+                .any(|(j, o)| j != *i && contains(o, r) && !(contains(r, o) && *i < j))
+        })
+        .map(|(_, r)| *r)
+        .collect()
+}
+
+// ── Page → source lines (the deck's slide anchors) ──────────────────────────
+//
+// This is the producer half of the deck's slide anchoring (`sidecar.ts`'s
+// `reconcile`, TODO V #100). The sidecar has always documented a `line` anchor as
+// "strictly better than any content heuristic" — it survives inserting, deleting
+// and reordering frames exactly as well as the author's own mental model — and
+// has always *consumed* one. Nothing ever wrote it, so the mechanism did not
+// exist at runtime and every deck fell back to fingerprinting.
+//
+// It is answered by reading the `.synctex.gz` the compile already emits rather
+// than by shelling out to `synctex edit` once per page: a 200-page plate would be
+// 200 process spawns for one reconcile.
+
+/// The source lines SyncTeX attributes to one page of a compiled PDF.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PageLines {
+    /// 1-based, as the PDF numbers it.
+    pub page: u32,
+    /// Distinct contributing lines of the **main** input file, ascending.
+    pub lines: Vec<u32>,
+}
+
+/// Parse a decompressed SyncTeX file into per-page line sets.
+///
+/// The format is one record per line. `{N` opens page N and `}N` closes it;
+/// inside, a box/glyph/kern/glue record is `<type><tag>,<line>[,<column>]:<geometry>`
+/// where `<tag>` names an input file declared as `Input:<tag>:<path>`. Closing
+/// records (`]`, `)`) carry no tag.
+///
+/// `want_tag` restricts the harvest to one input file. That restriction is
+/// load-bearing rather than an optimisation: line numbers from two different
+/// files are not comparable, so mixing them would produce an anchor that silently
+/// means nothing. A deck whose frames live in an `\input`ed file simply records no
+/// line and falls back to the fingerprint, which is the honest outcome.
+fn parse_synctex_pages(text: &str, pre: &Preamble, want_tag: u32) -> Vec<PageLines> {
+    let mut out: Vec<PageLines> = Vec::new();
+    let mut page: Option<u32> = None;
+    let mut lines: BTreeSet<u32> = BTreeSet::new();
+
+    let flush = |page: &mut Option<u32>, lines: &mut BTreeSet<u32>, out: &mut Vec<PageLines>| {
+        if let Some(p) = page.take() {
+            out.push(PageLines {
+                page: p,
+                lines: lines.iter().copied().collect(),
+            });
+            lines.clear();
+        }
+    };
+
+    for raw in text.lines() {
+        let l = raw.trim_end();
+        let Some(c) = l.chars().next() else { continue };
+        match c {
+            '{' => {
+                if let Ok(p) = l[1..].trim().parse::<u32>() {
+                    flush(&mut page, &mut lines, &mut out);
+                    page = Some(p);
+                }
+            }
+            '}' => flush(&mut page, &mut lines, &mut out),
+            // Box open/close-with-content, void boxes, and the glyph/kern/glue
+            // records. `]` and `)` are the closers and carry no tag, so they are
+            // not listed.
+            '[' | '(' | 'v' | 'h' | 'x' | 'k' | 'g' | '$' | 'r' if page.is_some() => {
+                if let Some(rec) = parse_record(&l[1..], pre, false) {
+                    if rec.tag == want_tag && rec.line > 0 {
+                        lines.insert(rec.line);
+                    }
+                }
+            }
+            _ => {}
         }
     }
+    flush(&mut page, &mut lines, &mut out);
+    out.sort_by_key(|p| p.page);
     out
+}
+
+/// The `Input:` tag whose path has file stem `stem` — the document's own main
+/// source rather than one of its includes or a package. The lowest such tag:
+/// the run's own `.aux` shares the stem and is declared later.
+fn main_input_tag(pre: &Preamble, stem: &str) -> Option<u32> {
+    pre.inputs
+        .iter()
+        .filter(|(_, path)| Path::new(path).file_stem().and_then(|s| s.to_str()) == Some(stem))
+        .map(|(tag, _)| *tag)
+        .min()
+}
+
+/// The source lines behind each page of the map beside `pdf`, read with the
+/// same cap as the cached reader but **uncached**: a deck load must not evict
+/// the map of the PDF someone is clicking in.
+fn page_lines(pdf: &Path, cap: u64) -> Vec<PageLines> {
+    let Some(stem) = pdf.file_stem().and_then(|s| s.to_str()) else {
+        return Vec::new();
+    };
+    let Some(map) = map_path(pdf).and_then(|path| read_map(&path, cap)) else {
+        return Vec::new();
+    };
+    // No input named like the job: no line of the main file to anchor to.
+    match main_input_tag(&map.pre, stem) {
+        Some(tag) => parse_synctex_pages(&map.text, &map.pre, tag),
+        None => Vec::new(),
+    }
+}
+
+// ── Commands ─────────────────────────────────────────────────────────────────
+
+/// Read the SyncTeX map beside `pdf` and report the source lines behind each page.
+///
+/// Returns an empty vector — never an error — when there is no map, or none
+/// readable within the cap: a deck whose plate was imported, or compiled by
+/// something that did not emit one, is an ordinary case that falls back to
+/// content fingerprinting.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn synctex_page_lines(pdf: String) -> Result<Vec<PageLines>, String> {
+    app_core::rt::blocking("synctex", move || page_lines(Path::new(&pdf), MAX_MAP_BYTES)).await
+}
+
+/// Reverse search: which source line produced the point `(x, y)` (big points
+/// from the page top-left) on `page` of `pdf`. `Ok(None)` when there is no map
+/// or it has no answer, so the UI can degrade silently. The column is always 0
+/// (see {@link SyncSource}).
+///
+/// Async so the read + gunzip runs off the main thread: a sync `#[tauri::command]`
+/// is called on it, and a large document's map is megabytes.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn synctex_edit(pdf: String, page: u32, x: f64, y: f64) -> Result<Option<SyncSource>, String> {
+    app_core::rt::blocking("synctex", move || {
+        resolve(Path::new(&pdf), page, x, y).map(|(input, line)| SyncSource {
+            input,
+            line,
+            column: 0,
+        })
+    })
+    .await
+}
+
+/// Why a SyncTeX jump did nothing, or landed on the wrong line: whether a map
+/// exists beside `pdf`, whether the PDF outgrew it, and which local sources were
+/// saved after it ({@link MapStatus}). The viewer asks after a miss — and after
+/// a hit, to warn that the line it just jumped to belongs to the build before
+/// the edit — and words a "recompile" notice from the answer. Off the main
+/// thread for the same reason as `synctex_edit`: the first call after a compile
+/// inflates the map.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn synctex_status(pdf: String) -> Result<MapStatus, String> {
+    app_core::rt::blocking("synctex", move || status(Path::new(&pdf))).await
+}
+
+/// Forward search: where in `pdf` the source line `input:line` landed, as every
+/// box it produced ({@link view}); the frontend picks the one for the caret's
+/// column. Empty when there is no map or no answer. Off the main thread like
+/// `synctex_edit`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn synctex_view(pdf: String, input: String, line: u32) -> Result<Vec<SyncRect>, String> {
+    app_core::rt::blocking("synctex", move || view(Path::new(&pdf), &input, line)).await
 }
 
 #[cfg(test)]
@@ -1039,6 +1556,7 @@ g1,9:11436714,8865054
                 h: 10.0,
                 d: 0.0,
                 elastic: false,
+                is_box: false,
             },
             depth: 1,
             ancestors: Vec::new(),
@@ -1104,15 +1622,17 @@ x1,4:11218261,8865054
         // whatever spelling the caller passes, where the CLI's `-i` would need a
         // character-for-character match against the recorded string.
         let p = parse_preamble(DOC);
-        let dir = Path::new("/proj");
+        let dir = Spelling::new(Path::new("/proj"));
+        let tags = |input: &str| input_tags(&p, input, &dir).into_iter().collect::<Vec<_>>();
         // Exact recorded spelling.
-        assert_eq!(input_tag(&p, "/proj/main.tex", dir), Some(1));
+        assert_eq!(tags("/proj/main.tex"), vec![1]);
         // A relative spelling resolved against the PDF dir → same file.
-        assert_eq!(input_tag(&p, "chapters/intro.tex", dir), Some(5));
-        // A bare basename still resolves via the fallback.
-        assert_eq!(input_tag(&p, "second.tex", dir), Some(6));
+        assert_eq!(tags("chapters/intro.tex"), vec![5]);
+        // A bare basename resolves via the fallback: the fixture's recorded
+        // paths do not exist, which is what a moved tree looks like.
+        assert_eq!(tags("second.tex"), vec![6]);
         // A file the document never included is not invented.
-        assert_eq!(input_tag(&p, "/proj/nope.tex", dir), None);
+        assert!(tags("/proj/nope.tex").is_empty());
     }
 
     #[test]
@@ -1122,25 +1642,25 @@ x1,4:11218261,8865054
         // finds it. This is the exact failure reverse search documents, applied to
         // the forward direction.
         let p = parse_preamble(DOC);
-        let dir = Path::new("/proj");
-        let rects = view_in(DOC, &p, dir, "/proj/main.tex", 3);
+        let dir = Spelling::new(Path::new("/proj"));
+        let rects = view_in(DOC, &p, &dir, "/proj/main.tex", 3);
         assert_eq!(rects.len(), 1, "one box on one page: {rects:?}");
-        let (page, x, _y, w, _h) = rects[0];
-        assert_eq!(page, 1);
+        assert_eq!(rects[0].page, 1);
         // The enclosing line box's own geometry (left edge 133.77bp, width 343.71).
-        assert!((x - 133.77).abs() < 0.01, "x = {x}");
-        assert!((w - 343.71).abs() < 0.01, "w = {w}");
+        assert!((rects[0].x - 133.77).abs() < 0.01, "x = {}", rects[0].x);
+        assert!((rects[0].w - 343.71).abs() < 0.01, "w = {}", rects[0].w);
 
         // intro.tex (tag 5) line 4 is in the SECOND line box (tag 6).
-        let intro = view_in(DOC, &p, dir, "/proj/chapters/intro.tex", 4);
+        let intro = view_in(DOC, &p, &dir, "/proj/chapters/intro.tex", 4);
         assert_eq!(intro.len(), 1, "{intro:?}");
-        assert_eq!(intro[0].0, 1);
+        assert_eq!(intro[0].page, 1);
+        assert!(intro[0].y > rects[0].y, "the second line: {intro:?}");
 
-        // A line the document never set produces nothing (→ caller keeps the PDF
-        // where it is, no false jump).
-        assert!(view_in(DOC, &p, dir, "/proj/main.tex", 999).is_empty());
+        // A line past the last one the document set takes the last line, as the
+        // CLI's nearest-line rule did.
+        assert_eq!(view_in(DOC, &p, &dir, "/proj/main.tex", 999), rects);
         // An unknown file produces nothing rather than a wrong box.
-        assert!(view_in(DOC, &p, dir, "/proj/ghost.tex", 3).is_empty());
+        assert!(view_in(DOC, &p, &dir, "/proj/ghost.tex", 3).is_empty());
     }
 
     #[test]
@@ -1166,11 +1686,11 @@ x1,5:11218261,8865054
 }2
 ";
         let p = parse_preamble(TWO_PAGE);
-        let dir = Path::new("/proj");
-        let rects = view_in(TWO_PAGE, &p, dir, "/proj/main.tex", 5);
+        let dir = Spelling::new(Path::new("/proj"));
+        let rects = view_in(TWO_PAGE, &p, &dir, "/proj/main.tex", 5);
         assert_eq!(rects.len(), 2, "one box per page: {rects:?}");
-        assert_eq!(rects[0].0, 1);
-        assert_eq!(rects[1].0, 2);
+        assert_eq!(rects[0].page, 1);
+        assert_eq!(rects[1].page, 2);
     }
 
     /// One slide of a LuaLaTeX beamer talk, trimmed from a real run: `main.tex`
@@ -1275,6 +1795,40 @@ g295,3:27869633,4673000
     }
 
     #[test]
+    fn a_frame_background_never_wins_a_click() {
+        // A theme's page-sized background, nested deeper than the body line and
+        // full height, so its vertical distance is 0 for every click. It holds
+        // nothing but the frame's own tag, so it is dropped from the candidates.
+        let text = LUATEX.replace(
+            "[1,33:4718592,4718592:23146168,12000000,0\n",
+            "[1,33:4718592,4718592:23146168,12000000,0\n\
+             (1,33:0,12000000:23146168,12000000,0\n(1,33:0,12000000:23146168,12000000,0\n\
+             (1,33:0,12000000:23146168,12000000,0\nr1,33:0,12000000:23146168,12000000,0\n\
+             g1,33:23146168,12000000\n)\n)\n)\n",
+        );
+        let pre = parse_preamble(&text);
+        let boxes = drop_backgrounds(page_hboxes(&text, 7, &pre));
+        assert_eq!(boxes.len(), 3, "the background boxes are gone");
+        let at = |cx: f64, cy: f64| resolve_in_hbox(pick_hbox(&boxes, cx, cy).expect("an hbox"), cx);
+        let (title, body) = (bp(3637000.0), bp(4673000.0));
+        assert_eq!(at(20.0, body), (295, 2), "a margin click on the body line");
+        assert_eq!(at(20.0, title), (295, 1));
+        assert_eq!(at(bp(2457000.0), (title + body) / 2.0).0, 295, "between the lines");
+        // A frame with nothing but its own tag still answers `\end{frame}`,
+        // the one answer there is; and a background alone on its page stays.
+        let chrome_only = "Input:1:/proj/main.tex\nContent:\n{1\n[1,33:0,0:100,100,0\n\
+            (1,33:0,12000000:23146168,12000000,0\nr1,33:0,12000000:23146168,12000000,0\n)\n\
+            (1,33:0,3000000:23146168,400000,0\nx1,33:10,3000000\n)\n\
+            (1,33:0,5000000:23146168,400000,0\nx1,33:10,5000000\n)\n]\n}1\n";
+        let pre = parse_preamble(chrome_only);
+        let boxes = drop_backgrounds(page_hboxes(chrome_only, 1, &pre));
+        let bx = pick_hbox(&boxes, 20.0, bp(4000000.0)).expect("an hbox");
+        assert_eq!(resolve_in_hbox(bx, 20.0), (1, 33));
+        let alone = page_hboxes(chrome_only, 1, &pre).into_iter().take(1).collect::<Vec<_>>();
+        assert_eq!(drop_backgrounds(alone).len(), 1);
+    }
+
+    #[test]
     fn an_ancestor_tag_is_still_the_answer_when_it_is_all_there_is() {
         // Beamer's own chrome (a footline typeset by the template) has nothing
         // but the frame's own tag in it; dropping every leaf must not answer
@@ -1317,12 +1871,13 @@ x1,33:3834000,3637000
             ("/proj/main.aux", t0 + Duration::from_secs(60)), // generated, not a source
             ("/proj/theme.sty", t0 - Duration::from_secs(60)), // older: fine
         ]);
-        let got = stale_inputs(&inputs, Path::new("/proj"), t0, |p| {
+        let spelling = Spelling::new(Path::new("/proj"));
+        let got = stale_inputs(&inputs, &spelling, Path::new("/proj"), t0, |p| {
             mtimes.get(p.to_str().unwrap()).copied()
         });
         assert_eq!(got, vec!["/proj/slides/idea.tex".to_string()]);
         // A file the stat cannot see is not reported as stale.
-        let got = stale_inputs(&inputs, Path::new("/proj"), t0, |_| None);
+        let got = stale_inputs(&inputs, &spelling, Path::new("/proj"), t0, |_| None);
         assert!(got.is_empty());
     }
 
@@ -1341,7 +1896,7 @@ x1,33:3834000,3637000
 
         // A map naming a local source and a system class.
         std::fs::create_dir(root.join("slides")).expect("slides dir");
-        let slide = root.join("slides/idea.tex");
+        let slide = root.join("slides").join("idea.tex");
         let main = root.join("main.tex");
         File::create(&slide).expect("slide");
         File::create(&main).expect("main");
@@ -1376,10 +1931,11 @@ x1,33:3834000,3637000
             }
         );
 
-        // The slide is saved after the build: reported, by canonical path.
+        // The slide is saved after the build: reported, by canonical path,
+        // without Windows' `\\?\` prefix (which `root` carries there).
         set(&slide, t0 + Duration::from_secs(120));
         let st = status(&pdf);
-        assert_eq!(st.newer_sources, vec![slide.to_string_lossy().into_owned()]);
+        assert_eq!(st.newer_sources, vec![crate::commands::fs::display_path(&slide)]);
         assert!(!st.pdf_newer_than_map);
 
         // The PDF rebuilt without a map: the map is the older build's.
@@ -1406,5 +1962,569 @@ Content:
         assert!((r.x - to_bp(1000000.0, 2.0, 65536.0)).abs() < 1e-9);
         // The offset applies to the origin, never to a width.
         assert!((r.w - 100000.0 * 2.0 / SP_PER_PT * PT_PER_BP).abs() < 1e-9);
+    }
+
+    // ── Forward search ──────────────────────────────────────────────────────
+
+    /// `view_in` against a fixture whose recorded paths sit under `/proj`.
+    fn forward(text: &str, input: &str, line: u32) -> Vec<SyncRect> {
+        view_in(text, &parse_preamble(text), &Spelling::new(Path::new("/proj")), input, line)
+    }
+
+    #[test]
+    fn forward_never_answers_with_another_files_material() {
+        // intro.tex:1 set nothing of its own (its only records are box (5,1)'s
+        // fill), so the nearest line of intro.tex that did — line 4, in the
+        // second box — answers; never box (5,1), whose material is main.tex:3.
+        let main = forward(DOC, "/proj/main.tex", 3);
+        let intro = forward(DOC, "/proj/chapters/intro.tex", 1);
+        assert_eq!(intro, forward(DOC, "/proj/chapters/intro.tex", 4));
+        assert_eq!(intro.len(), 1);
+        assert!(intro[0].y > main[0].y, "the intro:4 line, not main:3's: {intro:?}");
+        // second.tex:1 tags box (6,1), but that box holds intro.tex's line 4 and
+        // nothing of second.tex's: an honest miss.
+        assert!(forward(DOC, "/proj/chapters/second.tex", 1).is_empty());
+    }
+
+    #[test]
+    fn forward_skips_luatex_callback_artefacts() {
+        // The block title: its inner box and the identical wrapper around it
+        // both carry interpolation.tex:1 — one rect, not two.
+        let title = forward(LUATEX, "/proj/slides/interpolation.tex", 1);
+        assert_eq!(title.len(), 1, "{title:?}");
+        assert!((title[0].y - (bp(3637000.0) - bp(544000.0))).abs() < 0.01);
+        // The body line's material is line 2, whatever its box says.
+        let body = forward(LUATEX, "/proj/slides/interpolation.tex", 2);
+        assert_eq!(body.len(), 1, "{body:?}");
+        assert!(body[0].y > title[0].y);
+        // main.tex:33 appears only in the font callback's records: no answer,
+        // rather than the slide lines they were spliced into.
+        assert!(forward(LUATEX, "/proj/main.tex", 33).is_empty());
+    }
+
+    /// A one-file article, trimmed from a real `pdflatex -synctex=1` run of
+    /// ```text
+    ///  1 \documentclass{article}       7 line three of the same paragraph.
+    ///  2 \usepackage{lipsum}           8
+    ///  3 \begin{document}              9 Second paragraph alone on one line.
+    ///  4 \section{Heading}            10
+    ///  5 First paragraph line one,    11 \end{document}
+    ///  6 % a comment line             12 trailing junk after end
+    /// ```
+    /// Every box of the page — the empty header, the footer's page number —
+    /// is tagged with line 11, where the page shipped; the first paragraph's
+    /// box carries line 8 (its `\par`) and an `x1,8` first-word record.
+    const SINGLE: &str = "\
+Input:1:/proj/./doc.tex
+Unit:1
+X Offset:0
+Y Offset:0
+Content:
+{1
+[1,11:4736286,46220574:26673152,41484288,0
+[1,11:8799518,46220574:22609920,40435712,0
+[1,11:8799518,6571294:22609920,786432,0
+(1,11:8799518,6571294:22609920,0,0
+h1,11:8799518,6571294:22609920,0,0
+)
+]
+[1,11:8799518,44254494:22609920,36044800,0
+(1,4:8799518,8865054:22609920,655359,183500
+(1,4:8799518,8865054:1592523,608173,0
+g1,4:8799518,8865054
+x1,4:9330359,8865054
+g1,4:10392041,8865054
+)
+x1,4:14228077,8865054
+k1,4:31409438,8865054:17181361
+g1,4:31409438,8865054
+)
+(1,8:8799518,10300473:22609920,455111,127431
+x1,8:10179418,10300473
+g1,5:10397871,10300473
+x1,5:13314231,10300473
+g1,7:17392032,10300473
+x1,7:18850210,10300473
+k1,8:31409438,10300473:5725266
+g1,8:31409438,10300473
+)
+(1,10:8799518,11086905:22609920,455111,127431
+h1,9:8799518,11086905:983040,0,0
+x1,9:11785051,11086905
+g1,9:12003504,11086905
+x1,9:14919864,11086905
+k1,10:31409438,11086905:11246685
+g1,10:31409438,11086905
+)
+]
+(1,11:8799518,46220574:22609920,422343,0
+(1,11:8799518,46220574:22609920,422343,0
+k1,11:19940638,46220574:11141120
+x1,11:20268319,46220574
+k1,11:31409438,46220574:11141119
+)
+)
+]
+]
+}1
+";
+
+    #[test]
+    fn forward_takes_the_nearest_line_that_set_something() {
+        let at = |line: u32| forward(SINGLE, "/proj/doc.tex", line);
+        let heading = at(4);
+        let first = at(5);
+        let second = at(9);
+        // The heading is its whole line, not the section number nested in it.
+        assert_eq!(heading.len(), 1, "{heading:?}");
+        assert!((heading[0].w - 343.71).abs() < 0.01, "{heading:?}");
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert!(first[0].y > heading[0].y && second[0].y > first[0].y);
+        // A comment line inside the paragraph, and the blank line ending it.
+        assert_eq!(at(6), first);
+        assert_eq!(at(7), first);
+        assert_eq!(at(8), first, "a blank line after a paragraph is that paragraph");
+        assert_eq!(at(10), second);
+        // The preamble: the first line that set anything.
+        assert_eq!(at(2), heading);
+        // `\end{document}` and what follows: the last line — not the header or
+        // the page number, which carry line 11 only because the page shipped there.
+        assert_eq!(at(11), second);
+        assert_eq!(at(12), second);
+    }
+
+    #[test]
+    fn a_footer_never_outranks_the_text_of_its_line() {
+        // Page 1 shipped while TeX read line 50 (the blank line after the
+        // paragraph that opens page 2), so its footer is tagged (1, 50) — as
+        // is page 2's first line box, the paragraph line 50 ends.
+        const PAGES: &str = "\
+Input:1:/proj/doc.tex
+Unit:1
+X Offset:0
+Y Offset:0
+Content:
+{1
+[1,50:4736286,46220574:26673152,41484288,0
+[1,50:8799518,44254494:22609920,36044800,0
+(1,48:8799518,8865054:22609920,455111,127431
+h1,47:8799518,8865054:983040,0,0
+x1,47:10228568,8865054
+k1,47:12999630,8865054:236997
+x1,47:14000000,8865054
+)
+]
+(1,50:8799518,46220574:22609920,422343,0
+(1,50:8799518,46220574:22609920,422343,0
+k1,50:19940638,46220574:11141120
+x1,50:20268319,46220574
+k1,50:31409438,46220574:11141119
+)
+)
+]
+}1
+{2
+[1,96:4736286,46220574:26673152,41484288,0
+[1,96:8799518,44254494:22609920,36044800,0
+(1,50:8799518,8865054:22609920,455111,127431
+h1,49:8799518,8865054:983040,0,0
+x1,49:10228568,8865054
+k1,49:12999630,8865054:236997
+x1,49:14000000,8865054
+)
+]
+]
+}2
+";
+        for line in [49, 50] {
+            let rects = forward(PAGES, "/proj/doc.tex", line);
+            assert_eq!(rects.len(), 1, "line {line}: {rects:?}");
+            assert_eq!(rects[0].page, 2, "line {line}");
+        }
+        assert_eq!(forward(PAGES, "/proj/doc.tex", 47)[0].page, 1);
+    }
+
+    #[test]
+    fn a_beamer_frame_is_found_although_every_box_looks_like_chrome() {
+        // Beamer reads a frame as an argument and re-reads it at `\end{frame}`,
+        // so every main.tex record of a frame carries that line — the page's
+        // own tag, which is how a footer looks. The second pass still finds the
+        // frame: main.tex:6 → frame 1 (ends on line 9), main.tex:12 → frame 2.
+        const FRAMES: &str = "\
+Input:1:/proj/main.tex
+Input:152:/proj/chapters/intro.tex
+Unit:1
+X Offset:0
+Y Offset:0
+Content:
+{1
+[1,9:4736286,4736286:18414002,13164651,0
+(1,9:0,17900937:23867907,17900937,0
+(1,9:0,17900937:23867907,17900937,0
+r1,9:23867907,17900937:23867907,17900937,-1073741824
+)
+)
+(1,9:717619,17333526:-717619,17333526,0
+)
+(1,9:717619,3000000:22432669,498028,147830
+x1,9:1288126,3000000
+)
+(1,9:717619,5000000:22432669,498028,147830
+x1,9:1288126,5000000
+g1,9:2383107,5000000
+x1,9:3415761,5000000
+)
+(1,9:717619,9035217:22432669,498028,147830
+h152,1:717619,9035217:0,0,0
+x152,1:1288126,9035217
+g152,1:2383107,9035217
+k1,9:4927574,9035217:-20093
+x1,9:6565898,9035217
+g152,2:12050239,9035217
+x152,2:13098681,9035217
+g1,9:23150288,9035217
+)
+]
+}1
+{2
+[1,14:4736286,4736286:18414002,13164651,0
+(1,14:717619,5000000:22432669,498028,147830
+x1,14:1288126,5000000
+)
+]
+}2
+";
+        // The frame's own lines (its title, its text) — never the page-sized
+        // backgrounds the theme lays under them, which carry the same tag.
+        let six = forward(FRAMES, "/proj/main.tex", 6);
+        assert_eq!(six.len(), 2, "{six:?}");
+        assert!(six.iter().all(|r| r.page == 1 && r.h < 20.0), "no background: {six:?}");
+        assert!((six[1].y - (bp(5000000.0) - bp(498028.0))).abs() < 0.01, "the frame's text line: {six:?}");
+        assert_eq!(forward(FRAMES, "/proj/main.tex", 12)[0].page, 2);
+        // The `\input` slide is found by its own material in the first pass.
+        let intro = forward(FRAMES, "/proj/chapters/intro.tex", 2);
+        assert_eq!(intro.len(), 1);
+        assert!(intro[0].y > six[1].y);
+    }
+
+    #[test]
+    fn forward_finds_a_xetex_document_made_only_of_glue() {
+        // XeTeX writes no glyph records: a line holds only `g`/`k`, and a
+        // section heading's line box only its number box and its fill.
+        const XETEX: &str = "\
+Input:1:/proj/doc.tex
+Unit:1
+X Offset:0
+Y Offset:0
+Content:
+{1
+[1,11:4736287,46220575:26673152,41484288,0
+[1,11:8799519,44254495:22609920,36044800,0
+(1,4:8799519,8865055:22609920,654940,189686
+(1,4:8799519,8865055:1475031,619079,0
+g1,4:8799519,8865055
+g1,4:10274550,8865055
+)
+k1,4:31409439,8865055:17297731
+g1,4:31409439,8865055
+)
+(1,8:8799519,10301145:22609920,462029,135003
+g1,5:10397942,10301145
+g1,5:13533840,10301145
+g1,7:17393255,10301145
+g1,7:19069666,10301145
+k1,8:31409439,10301145:5723913
+g1,8:31409439,10301145
+)
+]
+]
+}1
+";
+        let heading = forward(XETEX, "/proj/doc.tex", 4);
+        assert_eq!(heading.len(), 1, "{heading:?}");
+        assert!((heading[0].w - 343.71).abs() < 0.01, "the whole line: {heading:?}");
+        let para = forward(XETEX, "/proj/doc.tex", 5);
+        assert_eq!(para.len(), 1);
+        assert!(para[0].y > heading[0].y);
+        assert_eq!(forward(XETEX, "/proj/doc.tex", 6), para);
+        assert_eq!(forward(XETEX, "/proj/doc.tex", 8), para);
+    }
+
+    #[test]
+    fn a_file_input_twice_is_found_at_both_places() {
+        // pdfTeX declares a file once per `\input`: tags 5 and 7 are one file.
+        const TWICE: &str = "\
+Input:1:/proj/main.tex
+Input:5:/proj/./chapters/intro.tex
+Input:7:/proj/./chapters/intro.tex
+Unit:1
+X Offset:0
+Y Offset:0
+Content:
+{1
+[1,8:8799518,44254494:22609920,36044800,0
+(6,2:8799518,8865054:22609920,455111,127431
+x1,3:11257122,8865054
+k5,1:27586685,8865054:-18205
+x5,1:29008455,8865054
+)
+(1,8:8799518,12010782:22609920,455111,127431
+x1,8:9782560,12010782
+k7,1:10015714,12010782:233154
+x7,1:11626810,12010782
+)
+]
+}1
+";
+        let p = parse_preamble(TWICE);
+        let tags = input_tags(&p, "/proj/chapters/intro.tex", &Spelling::new(Path::new("/proj")));
+        assert_eq!(tags, BTreeSet::from([5, 7]));
+        let rects = forward(TWICE, "/proj/chapters/intro.tex", 1);
+        assert_eq!(rects.len(), 2, "{rects:?}");
+    }
+
+    #[test]
+    fn the_basename_counts_only_for_a_tree_that_moved() {
+        let spelling = Spelling::new(Path::new("/proj"));
+        let tags_of = |table: &str, input: &str| input_tags(&parse_preamble(table), input, &spelling);
+        // Moved: the one recorded `intro.tex` is gone, the caller's is elsewhere.
+        assert_eq!(
+            tags_of("Input:5:/old/proj/chapters/intro.tex\n", "/new/proj/chapters/intro.tex"),
+            BTreeSet::from([5])
+        );
+        // Two recorded files share the name: never guess which.
+        assert!(tags_of(
+            "Input:2:/old/a/intro.tex\nInput:3:/old/b/intro.tex\n",
+            "/new/intro.tex"
+        )
+        .is_empty());
+
+        // The recorded file still exists: it is another file, not this one moved.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(dir.path()).expect("canonical");
+        std::fs::create_dir_all(root.join("a")).expect("a");
+        std::fs::write(root.join("a").join("intro.tex"), "x").expect("intro");
+        let table = format!("Input:2:{}\n", root.join("a").join("intro.tex").display());
+        let other = root.join("b").join("intro.tex");
+        assert!(tags_of(&table, other.to_str().expect("utf-8")).is_empty());
+    }
+
+    /// A symlinked project: the engine records the physical tree, the caller
+    /// spells the link. Every path SyncTeX hands back keeps the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_project_keeps_the_callers_spelling() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = std::fs::canonicalize(dir.path()).expect("canonical");
+        let real = root.join("real");
+        let link = root.join("link");
+        std::fs::create_dir_all(real.join("chapters")).expect("real");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        std::fs::write(real.join("main.tex"), "x").expect("main");
+        std::fs::write(real.join("chapters").join("intro.tex"), "x").expect("intro");
+        std::fs::write(real.join("main.pdf"), "").expect("pdf");
+        // As pdfTeX writes it: the physical working directory plus `./`.
+        let doc = DOC
+            .replace("/proj/main.tex", &format!("{}/./main.tex", real.display()))
+            .replace("/proj/chapters/", &format!("{}/./chapters/", real.display()));
+        std::fs::write(real.join("main.synctex"), doc).expect("map");
+
+        let pdf = link.join("main.pdf");
+        let (input, line) = resolve(&pdf, 1, bp(11436714.0), bp(8865054.0)).expect("a hit");
+        assert_eq!((Path::new(&input), line), (link.join("main.tex").as_path(), 3));
+        let (input, _) = resolve(&pdf, 1, 20.0, bp(13224414.0)).expect("a hit");
+        assert_eq!(Path::new(&input), link.join("chapters").join("intro.tex"));
+
+        // Forward search takes either spelling of the source.
+        assert_eq!(view(&pdf, link.join("main.tex").to_str().expect("utf-8"), 3).len(), 1);
+        assert_eq!(view(&pdf, real.join("main.tex").to_str().expect("utf-8"), 3).len(), 1);
+
+        // And a stale source is reported as the caller spells it.
+        let t0 = SystemTime::now() - Duration::from_secs(3600);
+        let set = |p: &Path, t: SystemTime| {
+            std::fs::File::options().write(true).open(p).expect("open").set_modified(t).expect("mtime")
+        };
+        set(&real.join("main.synctex"), t0);
+        set(&real.join("main.pdf"), t0);
+        set(&real.join("chapters").join("intro.tex"), t0);
+        set(&real.join("main.tex"), t0 + Duration::from_secs(120));
+        assert_eq!(status(&pdf).newer_sources, vec![link.join("main.tex").to_string_lossy().into_owned()]);
+    }
+
+    // ── Page → source lines ─────────────────────────────────────────────────
+
+    /// A SyncTeX body shaped like the real thing: a preamble of `Input:` files,
+    /// then two pages, the second of which is a Beamer overlay of the first — the
+    /// case the whole line anchor exists for, since both come from the same frame
+    /// and are therefore attributed to the same source lines.
+    const SYNCTEX: &str = "\
+SyncTeX Version:1
+Input:1:/talks/main.tex
+Input:2:/usr/share/texmf/beamer.sty
+Content:
+{1
+[1,12:0,0:100,50,0
+(1,14:10,10:80,20,0
+h1,15:10,10:80,10,0
+)
+x2,99:5,5
+]
+}1
+{2
+[1,12:0,0:100,50,0
+h1,15:10,10:80,10,0
+h1,18:10,30:80,10,0
+]
+}2
+Input:3:/talks/main.aux
+Postamble:
+Count:2
+";
+
+    #[test]
+    fn synctex_pages_harvest_the_main_file_s_lines() {
+        let pre = parse_preamble(SYNCTEX);
+        // The run's own `.aux` shares the stem; the main source is the lower tag.
+        let tag = main_input_tag(&pre, "main");
+        assert_eq!(tag, Some(1));
+        let pages = parse_synctex_pages(SYNCTEX, &pre, 1);
+        assert_eq!(
+            pages,
+            vec![
+                PageLines {
+                    page: 1,
+                    lines: vec![12, 14, 15]
+                },
+                PageLines {
+                    page: 2,
+                    lines: vec![12, 15, 18]
+                },
+            ]
+        );
+        // The package's own tag is excluded: line numbers from two files are not
+        // comparable, so mixing them would be an anchor that means nothing.
+        assert!(!pages[0].lines.contains(&99));
+    }
+
+    #[test]
+    fn overlay_pages_share_a_first_line() {
+        // Both pages of the frame report 12 as their lowest line. That is not a
+        // bug to fix here — it is the fact `reconcile` matches *within* the group
+        // for, so the k-th slide on line L takes the k-th page L produced.
+        let pages = parse_synctex_pages(SYNCTEX, &parse_preamble(SYNCTEX), 1);
+        assert_eq!(pages[0].lines.first(), Some(&12));
+        assert_eq!(pages[1].lines.first(), Some(&12));
+    }
+
+    #[test]
+    fn a_map_with_no_matching_input_yields_no_lines() {
+        // A deck whose frames live in an `\input`ed file records nothing rather
+        // than an anchor built from another file's line numbering.
+        let pre = parse_preamble(SYNCTEX);
+        assert_eq!(main_input_tag(&pre, "chapter"), None);
+        let pages = parse_synctex_pages(SYNCTEX, &pre, 7);
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(|p| p.lines.is_empty()));
+    }
+
+    #[test]
+    fn postamble_lines_are_not_mistaken_for_records() {
+        // `Count:2` sits outside any page and must not become line data.
+        let pages = parse_synctex_pages(SYNCTEX, &parse_preamble(SYNCTEX), 1);
+        assert_eq!(pages.len(), 2);
+        assert!(!pages.iter().any(|p| p.lines.contains(&2)), "{pages:?}");
+    }
+
+    #[test]
+    fn page_lines_read_the_map_beside_the_pdf_within_the_cap() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = dir.path().join("main.pdf");
+        assert!(page_lines(&pdf, MAX_MAP_BYTES).is_empty(), "no map, no lines");
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(SYNCTEX.as_bytes()).expect("gzip");
+        std::fs::write(dir.path().join("main.synctex.gz"), gz.finish().expect("gzip")).expect("map");
+        assert_eq!(page_lines(&pdf, MAX_MAP_BYTES).len(), 2);
+        // A map inflating past the cap is not read at all.
+        assert!(page_lines(&pdf, 64).is_empty());
+
+        // A job named like none of its inputs has no main file: no lines,
+        // rather than every file's numbering mixed into one anchor.
+        std::fs::copy(dir.path().join("main.synctex.gz"), dir.path().join("talk.synctex.gz")).expect("copy");
+        assert!(page_lines(&dir.path().join("talk.pdf"), MAX_MAP_BYTES).is_empty());
+    }
+
+    #[test]
+    fn an_item_line_is_its_own_item_not_the_one_its_item_closed() {
+        // Trimmed from a real pdflatex run of
+        //   5 \item First item text      8 \end{itemize}
+        //   6 here on six                 9 Paragraph text that
+        //   7 \item Second item text    10 ends here\par
+        // `\item` on line 7 closes item 1, so item 1's box is tagged (1, 7)
+        // while holding lines 5–6; line 7's own text is in item 2's box.
+        const ITEMS: &str = "\
+Input:1:/proj/doc.tex
+Unit:1
+X Offset:0
+Y Offset:0
+Content:
+{1
+[1,11:4736286,46220574:26673152,41484288,0
+[1,11:8799518,44254494:22609920,36044800,0
+(1,7:10437920,8865054:20971518,455111,0
+(1,5:10437920,8865054:0,286650,0
+g1,5:10437920,8865054
+g1,5:9127198,8865054
+x1,5:10110240,8865054
+)
+x1,5:11817820,8865054
+g1,5:12036273,8865054
+x1,5:13310587,8865054
+g1,6:16316144,8865054
+x1,6:17007915,8865054
+k1,7:31409438,8865054:13396636
+g1,7:31409438,8865054
+)
+(1,8:10437920,10175774:20971518,455111,0
+(1,7:10437920,10175774:0,286650,0
+g1,7:10437920,10175774
+g1,7:9127198,10175774
+x1,7:10110240,10175774
+)
+x1,7:12440413,10175774
+g1,7:12658866,10175774
+x1,7:13933180,10175774
+k1,8:31409438,10175774:16110922
+g1,8:31409438,10175774
+)
+(1,10:8799518,11617566:22609920,455111,127431
+x1,10:9245528,11617566
+x1,9:11779593,11617566
+g1,9:11998046,11617566
+x1,9:13144929,11617566
+g1,10:16279739,11617566
+x1,10:17483054,11617566
+k1,10:31409438,11617566:13926384
+g1,10:31409438,11617566
+)
+]
+]
+}1
+";
+        let at = |line: u32| forward(ITEMS, "/proj/doc.tex", line);
+        let second = at(7);
+        assert_eq!(second.len(), 1, "item 2 only: {second:?}");
+        assert!((second[0].y - (bp(10175774.0) - bp(455111.0))).abs() < 0.01, "{second:?}");
+        let first = at(5);
+        assert_eq!(first.len(), 1);
+        assert!(first[0].y < second[0].y);
+        // Line 10's own words hide behind the first-word record; the box its
+        // `\par` closed still answers, by tag.
+        let par = at(10);
+        assert_eq!(par.len(), 1, "{par:?}");
+        assert!((par[0].y - (bp(11617566.0) - bp(455111.0))).abs() < 0.01, "{par:?}");
+        assert_eq!(at(9), par);
     }
 }

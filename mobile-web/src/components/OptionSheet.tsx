@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useT } from "../../../src/lib/i18n";
 
 export interface SheetOption {
@@ -20,9 +21,11 @@ export interface SheetOption {
  * choices to offer; Home's voice-language row opens the same sheet, so it sits
  * here rather than being drawn twice.
  */
-export function OptionSheet({ title, note, options, waiting, busy, onPick, onClose }: {
+export function OptionSheet({ title, note, children, options, waiting, busy, onPick, onClose }: {
   title: string;
   note?: { text: string; error?: boolean };
+  /** What the choice is about, shown under the note and above the rows. */
+  children?: ReactNode;
   options: SheetOption[];
   /** Shown while the list is still empty. */
   waiting: string;
@@ -40,6 +43,7 @@ export function OptionSheet({ title, note, options, waiting, busy, onPick, onClo
         <span className="sheet-close" aria-hidden="true" />
       </header>
       {note && <p className={note.error ? "sheet-note error" : "sheet-note"} role={note.error ? "alert" : undefined}>{note.text}</p>}
+      {children}
       {options.length === 0
         ? <p className="sheet-note">{waiting}</p>
         : <ul className="option-list">{options.map((option) => <li key={option.key}>

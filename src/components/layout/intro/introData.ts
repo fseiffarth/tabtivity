@@ -1,19 +1,26 @@
 /**
  * The pure half of the first-run intro wizard (`HowToStart`): the page order,
- * the remembered page, which agent CLIs the intro features, and the local-model
+ * the remembered page, the goals that shape the route and the lessons matched
+ * to them, which agent CLIs the intro features, and the local-model
  * recommendation. Store- and Tauri-free, so it is unit-testable on its own.
  */
 import type { TranslationKey } from "../../../lib/i18n";
 import { storageKey } from "../../../lib/brand";
 
-export const INTRO_PAGES = ["welcome", "projects", "agents", "localModels", "askApp", "done"] as const;
+/** Every page the wizard can show, in canonical order. The goals picked on the
+ *  Goals page decide which of the setup pages a run actually visits
+ *  (`introRoute`). */
+export const INTRO_PAGES = ["welcome", "goals", "projects", "agents", "localModels", "forYou", "askApp", "done"] as const;
 export type IntroPage = (typeof INTRO_PAGES)[number];
 
+/** Each page's title in the step rail, the compact dropdown and the heading. */
 export const INTRO_PAGE_TITLE_KEYS: Record<IntroPage, TranslationKey> = {
   welcome: "intro.page.welcome",
+  goals: "intro.page.goals",
   projects: "intro.page.projects",
   agents: "intro.page.agents",
   localModels: "intro.page.localModels",
+  forYou: "intro.page.forYou",
   askApp: "intro.page.askApp",
   done: "intro.page.done",
 };
@@ -37,6 +44,162 @@ export function writeIntroPage(page: IntroPage): void {
     else localStorage.setItem(PAGE_KEY, page);
   } catch {
     // Private window / blocked storage: the wizard simply starts at Welcome.
+  }
+}
+
+/** What the user can say they want to do on the Goals page, in display order. */
+export const INTRO_GOALS = ["code", "localAi", "write", "remote", "sandbox", "organize", "phone", "explore"] as const;
+export type IntroGoal = (typeof INTRO_GOALS)[number];
+
+/** One goal card and what picking it brings along. */
+export interface IntroGoalDef {
+  /** One emoji, decorative (rendered `aria-hidden`). */
+  icon: string;
+  titleKey: TranslationKey;
+  blurbKey: TranslationKey;
+  /** Setup pages this goal pulls into the route. */
+  pages: readonly IntroPage[];
+  /** Lesson ids from `src/lib/lessons.ts`, best first. Plain strings so this
+   *  module stays free of the lesson registry; a test checks they exist. */
+  lessons: readonly string[];
+}
+
+/** The goal table: card text, the pages each goal needs, its lessons. */
+export const INTRO_GOAL_DEFS: Record<IntroGoal, IntroGoalDef> = {
+  code: {
+    icon: "🤖",
+    titleKey: "intro.goal.code.title",
+    blurbKey: "intro.goal.code.blurb",
+    pages: ["projects", "agents"],
+    lessons: ["install-agent", "add-tab", "skills-library", "run-python"],
+  },
+  localAi: {
+    icon: "🔒",
+    titleKey: "intro.goal.localAi.title",
+    blurbKey: "intro.goal.localAi.blurb",
+    pages: ["localModels"],
+    lessons: ["local-model", "add-local-model"],
+  },
+  write: {
+    icon: "📝",
+    titleKey: "intro.goal.write.title",
+    blurbKey: "intro.goal.write.blurb",
+    pages: ["projects"],
+    lessons: ["tex-workspace", "pdf-viewer", "deck-presenter", "native-viewer"],
+  },
+  remote: {
+    icon: "🖥️",
+    titleKey: "intro.goal.remote.title",
+    blurbKey: "intro.goal.remote.blurb",
+    pages: ["projects"],
+    lessons: ["add-ssh-project", "tour-remote", "compute-machines", "persistent-sessions", "hpc-pipeline"],
+  },
+  sandbox: {
+    icon: "📦",
+    titleKey: "intro.goal.sandbox.title",
+    blurbKey: "intro.goal.sandbox.blurb",
+    pages: ["projects"],
+    lessons: ["docker-sandbox", "project-boxes", "vm-project"],
+  },
+  organize: {
+    icon: "📅",
+    titleKey: "intro.goal.organize.title",
+    blurbKey: "intro.goal.organize.blurb",
+    pages: [],
+    lessons: ["mail", "calendar", "todo-board", "usage-recap"],
+  },
+  phone: {
+    icon: "📱",
+    titleKey: "intro.goal.phone.title",
+    blurbKey: "intro.goal.phone.blurb",
+    pages: [],
+    lessons: ["mobile"],
+  },
+  explore: {
+    icon: "🧭",
+    titleKey: "intro.goal.explore.title",
+    blurbKey: "intro.goal.explore.blurb",
+    pages: ["projects", "agents", "localModels"],
+    // "tour" is `TOUR_LESSON_ID` (lessons.ts), spelled out to keep this module pure.
+    lessons: ["tour", "arrange-tabs", "keyboard-steering", "file-search"],
+  },
+};
+
+/** Pages every route visits, whatever the goals. */
+const ALWAYS_PAGES: readonly IntroPage[] = ["welcome", "goals", "forYou", "askApp", "done"];
+
+function isIntroGoal(value: unknown): value is IntroGoal {
+  return typeof value === "string" && (INTRO_GOALS as readonly string[]).includes(value);
+}
+
+/** No goal picked counts as ["explore"] (the full tour, as before); otherwise
+ *  the picked goals, deduplicated, in INTRO_GOALS order. */
+export function effectiveGoals(goals: readonly IntroGoal[]): IntroGoal[] {
+  const picked = INTRO_GOALS.filter((g) => goals.includes(g));
+  return picked.length > 0 ? picked : ["explore"];
+}
+
+/** The pages this run visits: welcome and goals, the union of the effective
+ *  goals' setup pages, then forYou, askApp and done — no duplicates, always in
+ *  INTRO_PAGES order. */
+export function introRoute(goals: readonly IntroGoal[]): IntroPage[] {
+  const wanted = new Set<IntroPage>(ALWAYS_PAGES);
+  for (const g of effectiveGoals(goals)) for (const p of INTRO_GOAL_DEFS[g].pages) wanted.add(p);
+  return INTRO_PAGES.filter((p) => wanted.has(p));
+}
+
+/** Effective goals in INTRO_GOALS order, each with its lessons minus any already
+ *  listed under an earlier goal; groups left empty are dropped. */
+export function recommendedLessons(goals: readonly IntroGoal[]): { goal: IntroGoal; lessonIds: string[] }[] {
+  const seen = new Set<string>();
+  const groups: { goal: IntroGoal; lessonIds: string[] }[] = [];
+  for (const goal of effectiveGoals(goals)) {
+    const lessonIds = INTRO_GOAL_DEFS[goal].lessons.filter((id) => !seen.has(id));
+    for (const id of lessonIds) seen.add(id);
+    if (lessonIds.length > 0) groups.push({ goal, lessonIds });
+  }
+  return groups;
+}
+
+/** The best first step for these goals: the first lesson of
+ *  `recommendedLessons(goals)`, or undefined. */
+export function firstRecommendedLesson(goals: readonly IntroGoal[]): string | undefined {
+  return recommendedLessons(goals)[0]?.lessonIds[0];
+}
+
+/** Adds or removes `goal`; the result is kept in INTRO_GOALS order. Pure. */
+export function toggleGoal(goals: readonly IntroGoal[], goal: IntroGoal): IntroGoal[] {
+  const on = !goals.includes(goal);
+  return INTRO_GOALS.filter((g) => (g === goal ? on : goals.includes(g)));
+}
+
+/** The picked goals survive a close and a reload, like the page — a per-viewer
+ *  convenience in localStorage, as a JSON array. */
+const GOALS_KEY = storageKey("intro.goals");
+
+/** The remembered goals in INTRO_GOALS order; unknown ids and garbage are
+ *  dropped, and any storage error reads as none picked. */
+export function readIntroGoals(): IntroGoal[] {
+  try {
+    const raw = localStorage.getItem(GOALS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const valid = parsed.filter(isIntroGoal);
+    return INTRO_GOALS.filter((g) => valid.includes(g));
+  } catch {
+    return [];
+  }
+}
+
+/** Remembers the picked goals; none picked removes the key. */
+export function writeIntroGoals(goals: readonly IntroGoal[]): void {
+  try {
+    const picked = INTRO_GOALS.filter((g) => goals.includes(g));
+    if (picked.length === 0) localStorage.removeItem(GOALS_KEY);
+    else localStorage.setItem(GOALS_KEY, JSON.stringify(picked));
+  } catch {
+    // Private window / blocked storage: the goals simply aren't remembered.
   }
 }
 

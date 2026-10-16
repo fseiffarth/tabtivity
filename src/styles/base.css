@@ -3,11 +3,10 @@
    IMPORT ORDER IS LOAD-BEARING: these files are @imported in sequence from
    styles/index.css; equal-specificity rules rely on source order exactly as
    they did in the monolith, so never reorder the imports or move rules
-   between files without checking the cascade. */
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+   between files without checking the cascade.
+   The browser reset (Tailwind 3's vendored preflight) is reset.css, imported
+   just before this file; Tailwind itself is gone, so no utility classes exist —
+   style elements with the app's own classes. */
 
 /* ── Base reset ────────────────────────────────────────────────────────── */
 * {
@@ -338,6 +337,30 @@ html, body, #root {
    this element is the worst place to have (see the baseline above). */
 .xterm-viewport {
   overflow-y: auto !important;
+}
+
+/* xterm 6 no longer scrolls `.xterm-viewport` natively: it draws VS Code's
+   scrollable element instead, its own bar in the 14px gutter FitAddon reserves,
+   so `customScrollbar.ts` finds nothing to paint a thumb on. Its slider gets
+   that module's look here — a 4px accent bar 2px in from the right edge (the
+   transparent borders inset it within the inline 14px width). One class more
+   than the rules xterm injects at runtime, hover/active included, so these win
+   regardless of order. xterm's hover/active rules set the `background`
+   shorthand, which resets the clip, and tie with the resting rule here — so
+   the state rule restates the clip, or the hovered or dragged thumb would
+   paint under the borders, the whole 14px wide. */
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  box-sizing: border-box;
+  border: 2px solid transparent;
+  border-left-width: 8px;
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider:hover,
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider.active {
+  background-color: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
 }
 
 /* ── Custom (square) scrollbars ─────────────────────────────────────────

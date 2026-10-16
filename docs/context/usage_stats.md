@@ -17,6 +17,11 @@ churn comes from a recursive `notify` watcher on the **active** project
 (`services::usage_stats`); it cannot see an SFTP tree, so a remote project is
 counted only via its local mirror. The recap (`components/stats/`) opens on the
 first launch of each day (`daily_stats_recap`, default on) and from Settings.
+The launch recap covers the last day with tracked time, not a fixed
+"yesterday" (after a weekend that is Friday), and opens with a typed
+welcome-back line plus Continue / Switch buttons for that day's top project and
+two recent others (`lib/welcomeBack`). With no time tracked before today (a
+fresh install, where the intro wizard has the screen) it does not open.
 
 Autocomplete records `autocomplete.accept.<mode>.<model>` or
 `autocomplete.dismiss.<mode>.<model>` once per offered candidate. Accepting a

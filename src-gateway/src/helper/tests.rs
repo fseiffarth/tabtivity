@@ -419,3 +419,14 @@ fn oidc_set_reads_the_secret_from_stdin_and_a_link_reaches_both_sides() {
     assert_eq!(rec.stdin_seen[0].1, "", "an empty binding removes the daemon's");
     assert_eq!(Db::load(dir.path()).unwrap().account("alice").unwrap().oidc, None);
 }
+
+#[test]
+fn invite_codes_are_eight_digits_from_the_whole_range() {
+    let codes: Vec<String> = (0..2000).map(|_| eight_digits()).collect();
+    assert!(codes.iter().all(|c| c.len() == 8 && c.bytes().all(|b| b.is_ascii_digit())), "{codes:?}");
+    // Every leading digit turns up: no bias toward the low codes, and the
+    // zero padding is kept (a code below 10^7 starts with '0').
+    for d in b'0'..=b'9' {
+        assert!(codes.iter().any(|c| c.as_bytes()[0] == d), "no code starts with {}", d as char);
+    }
+}

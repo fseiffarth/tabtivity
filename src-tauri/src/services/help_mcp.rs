@@ -14,7 +14,11 @@
 //!
 //! `AppHandle`-free and deterministic: the index is built once from the
 //! embedded corpus, search is tokenized BM25 over sections with the topic's
-//! title and keywords boosted, ties broken by topic id then section order.
+//! title and keywords boosted, ties broken by topic id then section order. A
+//! query word the corpus never uses falls back to the corpus words one typo
+//! away or that it begins ([`expand`]), at a discount; one topic fills at most
+//! [`MAX_PER_TOPIC`] places of a result list, so a long topic cannot crowd out
+//! the rest.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -48,6 +52,14 @@ pub const MAX_SECTION_BYTES: usize = 8 * 1024;
 pub const SNIPPET_CHARS: usize = 240;
 pub const MAX_QUERY_BYTES: usize = 256;
 pub const MAX_QUERY_TERMS: usize = 16;
+/// Hits one topic may fill in an unfiltered search.
+pub const MAX_PER_TOPIC: usize = 3;
+/// `related` topics a front matter may name.
+pub const MAX_RELATED: usize = 8;
+/// A typo or prefix match scores this share of an exact one; each unknown
+/// query word expands to at most [`MAX_EXPANSIONS`] corpus words.
+const FUZZY_WEIGHT: f64 = 0.5;
+const MAX_EXPANSIONS: usize = 3;
 /// Topics `tabtivity_help_topics` lists at most (the corpus is a few dozen).
 pub const MAX_TOPICS: usize = 200;
 const TRUNCATED: &str = "\n\n[… truncated — read one section at a time with `section`]";
@@ -70,6 +82,9 @@ pub struct Topic {
     pub id: String,
     pub title: String,
     pub keywords: Vec<String>,
+    /// Other topics worth reading next — ids, held to existing ones by
+    /// `real_corpus_parses`.
+    pub related: Vec<String>,
     #[serde(skip)]
     pub intro: String,
     pub sections: Vec<Section>,
@@ -89,6 +104,8 @@ pub struct Index {
     /// held to zero by `real_corpus_parses`.
     pub rejected: Vec<(String, String)>,
     units: Vec<Unit>,
+    /// Per topic, the words of its title, keywords and id.
+    heads: Vec<std::collections::HashSet<String>>,
     df: HashMap<String, usize>,
     avg_len: f64,
 }
@@ -123,9 +140,10 @@ fn unquote(s: &str) -> &str {
 }
 
 /// One corpus file, `stem` its filename without `.md`. The contract
-/// (`docs/help_mcp_plan.md`): a `---` front-matter block with `id` (= the
-/// stem), `title` and `keywords: [a, b]`; `##` headings open sections, text
-/// before the first is the intro. `##` inside a fenced code block is text.
+/// (`docs/context/help_mcp.md`): a `---` front-matter block with `id` (= the
+/// stem), `title`, `keywords: [a, b]` and optionally `related: [topic-id, …]`;
+/// `##` headings open sections, text before the first is the intro. `##`
+/// inside a fenced code block is text.
 pub fn parse_topic(stem: &str, text: &str) -> Result<Topic, String> {
     let text = text.replace("\r\n", "\n");
     let rest = text.strip_prefix("---\n").ok_or("missing front matter")?;
@@ -133,17 +151,19 @@ pub fn parse_topic(stem: &str, text: &str) -> Result<Topic, String> {
         .or_else(|| rest.strip_suffix("\n---").map(|r| (r.len(), rest.len())))
         .ok_or("unterminated front matter")?;
     let (front, body) = (&rest[..end.0], &rest[end.1..]);
-    let (mut id, mut title, mut keywords) = (None, None, None);
+    let (mut id, mut title, mut keywords, mut related) = (None, None, None, Vec::new());
+    let flow_list = |value: &str, what: &str| -> Result<Vec<String>, String> {
+        let list = value.trim().strip_prefix('[').and_then(|v| v.strip_suffix(']'))
+            .ok_or_else(|| format!("{what} must be a flow list `[a, b]`"))?;
+        Ok(list.split(',').map(unquote).filter(|k| !k.is_empty()).map(str::to_string).collect())
+    };
     for line in front.lines().filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#')) {
         let (key, value) = line.split_once(':').ok_or("front matter line without `key:`")?;
         match key.trim() {
             "id" => id = Some(unquote(value).to_string()),
             "title" => title = Some(unquote(value).to_string()),
-            "keywords" => {
-                let list = value.trim().strip_prefix('[').and_then(|v| v.strip_suffix(']'))
-                    .ok_or("keywords must be a flow list `[a, b]`")?;
-                keywords = Some(list.split(',').map(unquote).filter(|k| !k.is_empty()).map(str::to_string).collect::<Vec<_>>());
-            }
+            "keywords" => keywords = Some(flow_list(value, "keywords")?),
+            "related" => related = flow_list(value, "related")?,
             _ => {} // forward-compatible: unknown keys are ignored
         }
     }
@@ -154,6 +174,9 @@ pub fn parse_topic(stem: &str, text: &str) -> Result<Topic, String> {
     let keywords = keywords.ok_or("missing `keywords`")?;
     if keywords.len() > 32 || keywords.iter().any(|k| k.chars().count() > 48) {
         return Err("too many or over-long keywords".into());
+    }
+    if related.len() > MAX_RELATED || related.iter().any(|r| !valid_id(r) || *r == id) {
+        return Err(format!("`related` must be at most {MAX_RELATED} other topic ids"));
     }
     let mut intro = String::new();
     let mut sections: Vec<Section> = Vec::new();
@@ -176,7 +199,7 @@ pub fn parse_topic(stem: &str, text: &str) -> Result<Topic, String> {
     let trim = |s: &mut String| *s = s.trim().to_string();
     trim(&mut intro);
     sections.iter_mut().for_each(|s| trim(&mut s.body));
-    Ok(Topic { id, title, keywords, intro, sections })
+    Ok(Topic { id, title, keywords, related, intro, sections })
 }
 
 // ── Tokens ──────────────────────────────────────────────────────────────────
@@ -211,7 +234,11 @@ pub fn tokenize(text: &str) -> Vec<String> {
 // ── Index and search ────────────────────────────────────────────────────────
 
 /// Field weights: a term in the topic's title or keywords counts as three in
-/// the body, one in the section's heading as two.
+/// the body, one in the section's heading as two. The topic's share is the
+/// same for each of its units (scored at average length), so it lifts the
+/// topic and the body alone decides between its sections — a long section
+/// that answers the question is not outranked by a short one that merely
+/// shares the topic's keywords.
 const W_TOPIC: f64 = 3.0;
 const W_HEADING: f64 = 2.0;
 const K1: f64 = 1.2;
@@ -233,10 +260,12 @@ impl Index {
         }
         topics.sort_by(|a, b| a.id.cmp(&b.id));
         let mut units = Vec::new();
+        let mut heads = Vec::new();
         for (ti, topic) in topics.iter().enumerate() {
             let mut head = tokenize(&topic.title);
             head.extend(topic.keywords.iter().flat_map(|k| tokenize(k)));
             head.extend(tokenize(&topic.id.replace('-', " ")));
+            heads.push(head.into_iter().collect::<std::collections::HashSet<_>>());
             let unit = |section: Option<usize>, heading: &str, body: &str| {
                 let mut tf: HashMap<String, f64> = HashMap::new();
                 let body = tokenize(body);
@@ -244,7 +273,6 @@ impl Index {
                 let len = (body.len() + heading.len()) as f64;
                 for t in body { *tf.entry(t).or_default() += 1.0; }
                 for t in heading { *tf.entry(t).or_default() += W_HEADING; }
-                for t in &head { *tf.entry(t.clone()).or_default() += W_TOPIC; }
                 Unit { topic: ti, section, tf, len: len.max(1.0) }
             };
             if !topic.intro.is_empty() || topic.sections.is_empty() {
@@ -255,9 +283,13 @@ impl Index {
             }
         }
         let mut df: HashMap<String, usize> = HashMap::new();
-        for u in &units { for t in u.tf.keys() { *df.entry(t.clone()).or_default() += 1; } }
+        for u in &units {
+            for t in u.tf.keys().chain(heads[u.topic].iter().filter(|t| !u.tf.contains_key(*t))) {
+                *df.entry(t.clone()).or_default() += 1;
+            }
+        }
         let avg_len = if units.is_empty() { 1.0 } else { units.iter().map(|u| u.len).sum::<f64>() / units.len() as f64 };
-        Index { topics, rejected, units, df, avg_len }
+        Index { topics, rejected, units, heads, df, avg_len }
     }
 
     pub fn topic(&self, id: &str) -> Option<&Topic> {
@@ -266,58 +298,114 @@ impl Index {
 
     /// Ranked hits for `query`, at most `limit` (clamped to [`MAX_RESULTS`]).
     pub fn search(&self, query: &str, limit: usize) -> Vec<Hit> {
-        let mut terms = tokenize(query);
-        terms.dedup();
+        self.search_scored(query, limit, None)
+    }
+
+    /// [`Index::search`] within one topic (`topic` = its id), or across all
+    /// with an unknown id refused the way a read refuses it.
+    pub fn search_in(&self, query: &str, limit: usize, topic: Option<&str>) -> Result<Vec<Hit>, String> {
+        let only = topic.map(|id| self.topic_index(id)).transpose()?;
+        Ok(self.search_scored(query, limit, only))
+    }
+
+    /// The query's terms with their weights: each known word at 1, each word
+    /// the corpus never uses replaced by its [`expand`]ed neighbours.
+    fn weighted_terms(&self, query: &str) -> Vec<(String, f64)> {
         let mut seen = std::collections::HashSet::new();
+        let mut terms: Vec<String> = tokenize(query);
         terms.retain(|t| seen.insert(t.clone()));
         terms.truncate(MAX_QUERY_TERMS);
+        let mut weighted: Vec<(String, f64)> = Vec::new();
+        for term in terms {
+            if self.df.contains_key(&term) {
+                weighted.push((term, 1.0));
+            } else {
+                for near in expand(&term, &self.df) {
+                    if !weighted.iter().any(|(t, _)| *t == near) { weighted.push((near, FUZZY_WEIGHT)); }
+                }
+            }
+        }
+        weighted
+    }
+
+    fn search_scored(&self, query: &str, limit: usize, only: Option<usize>) -> Vec<Hit> {
+        let terms = self.weighted_terms(query);
         if terms.is_empty() { return Vec::new(); }
         let n = self.units.len() as f64;
-        let mut scored: Vec<(f64, usize)> = self.units.iter().enumerate().filter_map(|(i, u)| {
-            let score: f64 = terms.iter().map(|t| {
-                let tf = u.tf.get(t).copied().unwrap_or(0.0);
-                if tf == 0.0 { return 0.0; }
-                let df = self.df.get(t).copied().unwrap_or(0) as f64;
-                let idf = (1.0 + (n - df + 0.5) / (df + 0.5)).ln();
-                idf * tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * u.len / self.avg_len))
-            }).sum();
-            (score > 0.0).then_some((score, i))
-        }).collect();
+        let mut scored: Vec<(f64, usize)> = self.units.iter().enumerate()
+            .filter(|(_, u)| only.is_none_or(|t| u.topic == t))
+            .filter_map(|(i, u)| {
+                let score: f64 = terms.iter().map(|(t, w)| {
+                    let tf = u.tf.get(t).copied().unwrap_or(0.0);
+                    let in_head = self.heads[u.topic].contains(t);
+                    if tf == 0.0 && !in_head { return 0.0; }
+                    let df = self.df.get(t).copied().unwrap_or(0) as f64;
+                    let idf = (1.0 + (n - df + 0.5) / (df + 0.5)).ln();
+                    let body = tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * u.len / self.avg_len));
+                    let head = if in_head { W_TOPIC * (K1 + 1.0) / (W_TOPIC + K1) } else { 0.0 };
+                    w * idf * (body + head)
+                }).sum();
+                (score > 0.0).then_some((score, i))
+            }).collect();
         scored.sort_by(|a, b| {
             let (ua, ub) = (&self.units[a.1], &self.units[b.1]);
             b.0.total_cmp(&a.0)
                 .then_with(|| self.topics[ua.topic].id.cmp(&self.topics[ub.topic].id))
                 .then_with(|| ua.section.cmp(&ub.section))
         });
-        scored.into_iter().take(limit.clamp(1, MAX_RESULTS)).map(|(score, i)| {
-            let u = &self.units[i];
-            let topic = &self.topics[u.topic];
-            let section = u.section.map(|s| &topic.sections[s]);
-            let body = section.map_or(topic.intro.as_str(), |s| s.body.as_str());
-            Hit {
-                id: topic.id.clone(),
-                title: topic.title.clone(),
-                section: section.map(|s| s.id.clone()),
-                section_title: section.map(|s| s.title.clone()),
-                snippet: snippet(body, &terms),
-                score: (score * 1000.0).round() / 1000.0,
-            }
-        }).collect()
+        let words: Vec<String> = terms.into_iter().map(|(t, _)| t).collect();
+        let mut per_topic: HashMap<usize, usize> = HashMap::new();
+        scored.into_iter()
+            .filter(|(_, i)| {
+                let count = per_topic.entry(self.units[*i].topic).or_default();
+                *count += 1;
+                only.is_some() || *count <= MAX_PER_TOPIC
+            })
+            .take(limit.clamp(1, MAX_RESULTS))
+            .map(|(score, i)| {
+                let u = &self.units[i];
+                let topic = &self.topics[u.topic];
+                let section = u.section.map(|s| &topic.sections[s]);
+                let body = section.map_or(topic.intro.as_str(), |s| s.body.as_str());
+                Hit {
+                    id: topic.id.clone(),
+                    title: topic.title.clone(),
+                    section: section.map(|s| s.id.clone()),
+                    section_title: section.map(|s| s.title.clone()),
+                    snippet: snippet(body, &words),
+                    score: (score * 1000.0).round() / 1000.0,
+                }
+            }).collect()
     }
 
-    /// A topic's text: one section (`section` = its id), or the intro and
-    /// every section as markdown. Capped; `truncated` says so.
-    pub fn read(&self, id: &str, section: Option<&str>) -> Result<Read, String> {
-        let topic = self.topic(id).ok_or_else(|| {
+    fn topic_index(&self, id: &str) -> Result<usize, String> {
+        self.topics.iter().position(|t| t.id == id).ok_or_else(|| {
             let near: Vec<String> = self.search(&id.replace('-', " "), 3).into_iter().map(|h| h.id).collect();
             format!(concat!("unknown topic {:?}; call ", crate::app_slug!(), "_help_topics for the list{}"), clip(id, 64),
                 if near.is_empty() { String::new() } else { format!(" (closest: {})", near.join(", ")) })
-        })?;
+        })
+    }
+
+    /// A topic's text: one section, or the intro and every section as
+    /// markdown. Capped; `truncated` says so. The section may be named by its
+    /// id, by its heading (`"Git sync"`), or inside `id` as `topic#section`.
+    pub fn read(&self, id: &str, section: Option<&str>) -> Result<Read, String> {
+        let (id, section) = match (id.split_once('#'), section) {
+            (Some((topic, sid)), None) if !sid.is_empty() => (topic, Some(sid)),
+            (Some((topic, _)), _) => (topic, section),
+            (None, _) => (id, section),
+        };
+        let topic = &self.topics[self.topic_index(id)?];
+        let mut resolved = None;
         let (text, cap) = match section {
             Some(sid) => {
-                let s = topic.sections.iter().find(|s| s.id == sid).ok_or_else(|| format!(
+                let want = slug(sid);
+                let s = topic.sections.iter().find(|s| s.id == sid)
+                    .or_else(|| topic.sections.iter().find(|s| s.id == want))
+                    .ok_or_else(|| format!(
                     "unknown section {:?} of {:?}; sections: {}", clip(sid, 96), topic.id,
                     topic.sections.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", ")))?;
+                resolved = Some(s.id.clone());
                 (format!("## {}\n\n{}", s.title, s.body), MAX_SECTION_BYTES)
             }
             None => {
@@ -331,14 +419,14 @@ impl Index {
         let text = if truncated { format!("{}{TRUNCATED}", clip_bytes(&text, cap)) } else { text };
         Ok(Read {
             id: topic.id.clone(), title: topic.title.clone(), keywords: topic.keywords.clone(),
-            section: section.map(str::to_string), text, truncated,
+            related: topic.related.clone(), section: resolved, text, truncated,
             sections: topic.sections.iter().map(|s| SectionRef { id: s.id.clone(), title: s.title.clone() }).collect(),
         })
     }
 
     pub fn list(&self) -> Vec<TopicRef> {
         self.topics.iter().take(MAX_TOPICS).map(|t| TopicRef {
-            id: t.id.clone(), title: t.title.clone(), keywords: t.keywords.clone(),
+            id: t.id.clone(), title: t.title.clone(), keywords: t.keywords.clone(), related: t.related.clone(),
             sections: t.sections.iter().map(|s| SectionRef { id: s.id.clone(), title: s.title.clone() }).collect(),
         }).collect()
     }
@@ -352,18 +440,89 @@ fn clip_bytes(s: &str, max: usize) -> &str {
 }
 fn clip(s: &str, chars: usize) -> String { s.chars().take(chars).collect() }
 
-/// The first line of `body` holding a query term, else its first line;
-/// markdown list/heading markers dropped, cut to [`SNIPPET_CHARS`].
+/// The corpus words an unknown query word may have meant: the two halves of a
+/// joined compound, else those it begins (a word of four or more characters)
+/// and, for five or more, those one edit away. Closest first, then
+/// alphabetical — deterministic.
+fn expand(term: &str, vocabulary: &HashMap<String, usize>) -> Vec<String> {
+    let n = term.chars().count();
+    if n < 4 { return Vec::new(); }
+    // A joined compound ("spellcheck", "darkmode") is its two words.
+    if let Some((a, b)) = (3..=n.saturating_sub(3)).filter_map(|i| {
+        let at = term.char_indices().nth(i)?.0;
+        let (a, b) = (stem(&term[..at]), stem(&term[at..]));
+        (vocabulary.contains_key(&a) && vocabulary.contains_key(&b)).then_some((a, b))
+    }).next() {
+        return if a == b { vec![a] } else { vec![a, b] };
+    }
+    let mut near: Vec<(usize, &String)> = vocabulary.keys().filter_map(|word| {
+        if word.starts_with(term) { return Some((word.chars().count() - n, word)); }
+        (n >= 5 && within_one_edit(term, word)).then_some((1, word))
+    }).collect();
+    near.sort();
+    near.into_iter().take(MAX_EXPANSIONS).map(|(_, w)| w.clone()).collect()
+}
+
+/// Whether `a` becomes `b` by one insertion, deletion, substitution or
+/// swap of two neighbouring characters (a different word, not the same).
+fn within_one_edit(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a == b || a.len().abs_diff(b.len()) > 1 { return false; }
+    let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let (ra, rb) = (&a[prefix..], &b[prefix..]);
+    match ra.len().cmp(&rb.len()) {
+        std::cmp::Ordering::Equal => ra[1..] == rb[1..] || (ra.len() >= 2 && ra[0] == rb[1] && ra[1] == rb[0] && ra[2..] == rb[2..]),
+        std::cmp::Ordering::Less => ra == &rb[1..],
+        std::cmp::Ordering::Greater => &ra[1..] == rb,
+    }
+}
+
+/// The paragraph of `body` holding a query term (else its first), joined onto
+/// one line with list and heading markers dropped, cut to [`SNIPPET_CHARS`]
+/// around the first matching word. Code blocks are skipped.
 fn snippet(body: &str, terms: &[String]) -> String {
-    let lines: Vec<&str> = body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("```")).collect();
-    let hit = lines.iter().find(|l| {
-        let toks = tokenize(l);
-        terms.iter().any(|t| toks.contains(t))
+    let mut paragraphs: Vec<String> = Vec::new();
+    let (mut current, mut fenced, mut row) = (String::new(), false, false);
+    for line in body.lines().map(str::trim) {
+        if line.starts_with("```") || line.starts_with("~~~") { fenced = !fenced; continue; }
+        if fenced || line.is_empty() || line.starts_with('|') {
+            if !current.is_empty() { paragraphs.push(std::mem::take(&mut current)); }
+            // A table row is a paragraph of its cells; the `|---|` rule is not,
+            // and it marks the row before it as the header, which is dropped.
+            if !fenced && line.starts_with('|') {
+                if line.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
+                    if row { paragraphs.pop(); }
+                } else {
+                    paragraphs.push(line.trim_matches('|').split('|').map(str::trim).collect::<Vec<_>>().join(" — "));
+                    row = true;
+                    continue;
+                }
+            }
+            row = false;
+            continue;
+        }
+        row = false;
+        let line = line.trim_start_matches('#').trim_start();
+        let line = ["- ", "* ", "> "].iter().find_map(|m| line.strip_prefix(m)).unwrap_or(line);
+        let line = line.split_once(". ").filter(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())).map_or(line, |(_, r)| r);
+        if !current.is_empty() { current.push(' '); }
+        current.push_str(line);
+    }
+    if !current.is_empty() { paragraphs.push(current); }
+    let matches = |word: &str| tokenize(word).iter().any(|t| terms.contains(t));
+    let found = paragraphs.iter().find_map(|p| {
+        let words: Vec<&str> = p.split(' ').collect();
+        words.iter().position(|w| matches(w)).map(|at| (words, at))
     });
-    let line = hit.or(lines.first()).copied().unwrap_or("");
-    let line = line.trim_start_matches(['#', '-', '*', '>', ' ']);
-    let line = line.split_once(". ").filter(|(n, _)| n.chars().all(|c| c.is_ascii_digit())).map_or(line, |(_, r)| r);
-    if line.chars().count() > SNIPPET_CHARS { format!("{}…", clip(line, SNIPPET_CHARS - 1)) } else { line.to_string() }
+    let (words, at) = found.unwrap_or_else(|| (paragraphs.first().map_or(Vec::new(), |p| p.split(' ').collect()), 0));
+    // Start up to six words before the match so it reads in context, never
+    // so far back that the match falls out of the second half.
+    let mut start = at.saturating_sub(6);
+    while start < at && words[start..=at].join(" ").chars().count() > SNIPPET_CHARS / 2 { start += 1; }
+    let text = words[start..].join(" ");
+    let lead = if start > 0 { "…" } else { "" };
+    let room = SNIPPET_CHARS - lead.chars().count();
+    if text.chars().count() > room { format!("{lead}{}…", clip(&text, room - 1)) } else { format!("{lead}{text}") }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -386,6 +545,7 @@ pub struct Read {
     pub id: String,
     pub title: String,
     pub keywords: Vec<String>,
+    pub related: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
     pub text: String,
@@ -393,7 +553,7 @@ pub struct Read {
     pub sections: Vec<SectionRef>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct TopicRef { pub id: String, pub title: String, pub keywords: Vec<String>, pub sections: Vec<SectionRef> }
+pub struct TopicRef { pub id: String, pub title: String, pub keywords: Vec<String>, pub related: Vec<String>, pub sections: Vec<SectionRef> }
 
 /// The index over the corpus this binary embeds, built on first use.
 pub fn index() -> &'static Index {
@@ -423,11 +583,12 @@ fn schema(name: &str) -> Value {
     match name {
         TOOL_SEARCH => object(json!({
             "query": {"type":"string","maxLength":MAX_QUERY_BYTES,"description":"What the user wants to know, in plain words (e.g. \"install a local model\", \"sync a remote project\")."},
-            "limit": {"type":"integer","minimum":1,"maximum":MAX_RESULTS,"description":format!("How many hits, 1–{MAX_RESULTS}; default {DEFAULT_RESULTS}.")}
+            "limit": {"type":"integer","minimum":1,"maximum":MAX_RESULTS,"description":format!("How many hits, 1–{MAX_RESULTS}; default {DEFAULT_RESULTS}. One topic fills at most {MAX_PER_TOPIC} unless `topic_id` is given.")},
+            "topic_id": {"type":"string","maxLength":64,"description":"Optional topic id: search only inside that topic (useful for long ones such as `mobile`)."}
         }), json!(["query"])),
         TOOL_READ => object(json!({
-            "topic_id": {"type":"string","maxLength":64,"description":concat!("A topic id from ", crate::app_slug!(), "_help_search or ", crate::app_slug!(), "_help_topics.")},
-            "section": {"type":"string","maxLength":96,"description":"Optional section id (from the hit or the topic's `sections`) to read just that part."}
+            "topic_id": {"type":"string","maxLength":161,"description":concat!("A topic id from ", crate::app_slug!(), "_help_search or ", crate::app_slug!(), "_help_topics; `topic#section` reads one section.")},
+            "section": {"type":"string","maxLength":96,"description":"Optional section to read just that part: its id (from the hit or the topic's `sections`) or its heading."}
         }), json!(["topic_id"])),
         _ => object(json!({}), json!([])),
     }
@@ -436,8 +597,8 @@ fn schema(name: &str) -> Value {
 pub fn tools() -> Value {
     let describe = |name: &str| match name {
         TOOL_SEARCH => concat!("Search ", crate::app_name!(), "'s user documentation. Returns ranked topic sections with a snippet; follow up with ", crate::app_slug!(), "_help_read."),
-        TOOL_READ => concat!("Read one ", crate::app_name!(), " help topic (or one of its sections) as markdown. Output is capped; read by section for long topics."),
-        TOOL_TOPICS => concat!("List every ", crate::app_name!(), " help topic with its sections and keywords."),
+        TOOL_READ => concat!("Read one ", crate::app_name!(), " help topic (or one of its sections) as markdown, with the ids of related topics. Output is capped; read by section for long topics."),
+        TOOL_TOPICS => concat!("List every ", crate::app_name!(), " help topic with its sections, keywords and related topics."),
         _ => concat!("Which ", crate::app_name!(), " build this is (version, OS) and which agent tabs have these help tools. No user data."),
     };
     Value::Array(TOOLS.iter().map(|name| json!({
@@ -460,7 +621,7 @@ pub fn call(index: &Index, name: &str, args: &Value) -> Result<Value, String> {
         TOOL_SEARCH => {
             let query = args["query"].as_str().unwrap_or_default();
             let limit = args["limit"].as_u64().map_or(DEFAULT_RESULTS, |n| n as usize);
-            let hits = index.search(query, limit);
+            let hits = index.search_in(query, limit, args["topic_id"].as_str())?;
             Ok(json!({"query": clip(query, 256), "results": hits,
                 "hint": if hits.is_empty() { concat!("no match; try other words or ", crate::app_slug!(), "_help_topics") } else { concat!(crate::app_slug!(), "_help_read(topic_id, section) for the full text") }}))
         }
@@ -521,7 +682,7 @@ mod tests {
 
     const LOCAL: &str = "---\nid: local-models\ntitle: Installing local models\nkeywords: [ollama, model, gpu, pull, offline]\n---\n\nRun models on your own machine.\n\n## Install Ollama\n\n1. Open Settings → Models.\n2. Click Install Ollama.\n\n## Pull a model\n\nPick a model and click Pull. Models need disk space.\n\n```sh\n## not a heading\nollama pull qwen\n```\n\n## Pull a model\n\nDuplicate heading.\n";
     const SYNC: &str = "---\nid: sync\ntitle: Syncing remote projects\nkeywords: [\"git\", 'lockstep', byte-sync]\n---\n## Lockstep\n\nTracked files follow git commits. A model of the peer is kept.\n\n## Byte sync\n\nOpt in per path.\n";
-    const PROJECTS: &str = concat!("---\nid: projects\ntitle: Projects\nkeywords: [project, create, folder]\n---\n\n## What a project is\n\nA folder ", crate::app_name!(), " manages.\n");
+    const PROJECTS: &str = concat!("---\nid: projects\ntitle: Projects\nkeywords: [project, create, folder]\nrelated: [sync, local-models]\n---\n\n## What a project is\n\nA folder ", crate::app_name!(), " manages.\n");
 
     fn fixture() -> Index {
         Index::build(&[("sync.md", SYNC), ("local-models.md", LOCAL), ("projects.md", PROJECTS), ("notes.txt", "ignored")])
@@ -549,10 +710,12 @@ mod tests {
             ("d.md", "---\nid: d\nkeywords: []\n---\n"),
             ("E.md", "---\nid: E\ntitle: E\nkeywords: []\n---\n"),
             ("f.md", "---\nid: f\ntitle: F\nkeywords: []\n"),
+            ("g.md", "---\nid: g\ntitle: G\nkeywords: []\nrelated: [g]\n---\n"),
+            ("h.md", "---\nid: h\ntitle: H\nkeywords: []\nrelated: [Not An Id]\n---\n"),
             ("projects.md", PROJECTS),
         ]);
         assert_eq!(index.topics.len(), 1);
-        assert_eq!(index.rejected.len(), 6, "{:?}", index.rejected);
+        assert_eq!(index.rejected.len(), 8, "{:?}", index.rejected);
     }
 
     #[test]
@@ -577,7 +740,8 @@ mod tests {
         let body: String = (0..400).map(|i| format!("## Part {i}\n\n{}\n\n", "ollama words ".repeat(40))).collect();
         let big = format!("---\nid: big\ntitle: Big\nkeywords: [ollama]\n---\n{body}");
         let index = Index::build(&[("big.md", &big)]);
-        assert_eq!(index.search("ollama", 1000).len(), MAX_RESULTS);
+        assert_eq!(index.search("ollama", 1000).len(), MAX_PER_TOPIC, "one topic fills at most MAX_PER_TOPIC");
+        assert_eq!(index.search_in("ollama", 1000, Some("big")).unwrap().len(), MAX_RESULTS);
         assert_eq!(index.search("ollama", 0).len(), 1);
         let read = index.read("big", None).unwrap();
         assert!(read.truncated && read.text.len() <= MAX_TOPIC_BYTES + TRUNCATED.len());
@@ -603,6 +767,85 @@ mod tests {
         assert_eq!(read.section.as_deref(), Some("lockstep"));
         assert!(call(&index, "mail_read", &json!({})).is_err(), "a root tool is not a help tool");
         assert!(call(&index, "schedule_prompt", &json!({})).is_err());
+    }
+
+    #[test]
+    fn unknown_words_fall_back_to_typos_and_prefixes() {
+        let index = fixture();
+        // "ollamma" is one edit from "ollama"; "lockst" begins "lockstep".
+        assert_eq!(index.search("ollamma", 5)[0].id, "local-models");
+        assert_eq!(index.search("lockst", 5)[0].id, "sync");
+        // A fuzzy match scores below the exact word.
+        assert!(index.search("ollamma", 1)[0].score < index.search("ollama", 1)[0].score);
+        // Short words are never stretched: "zzz" and "abc" stay unmatched.
+        assert!(index.search("zzz abc", 5).is_empty());
+        assert!(within_one_edit("pull", "pul") && within_one_edit("form", "from") && within_one_edit("sync", "synk"));
+        // A joined compound finds its two words: "bytesync" → "byte" + "sync".
+        assert_eq!(index.search("bytesync", 1)[0].section.as_deref(), Some("byte-sync"));
+        assert!(!within_one_edit("sync", "sync") && !within_one_edit("sync", "snyk-x"));
+    }
+
+    #[test]
+    fn search_can_stay_inside_one_topic() {
+        let index = fixture();
+        let hits = index.search_in("model", 10, Some("sync")).unwrap();
+        assert!(!hits.is_empty() && hits.iter().all(|h| h.id == "sync"));
+        let err = index.search_in("model", 10, Some("sinc")).unwrap_err();
+        assert!(err.contains("unknown topic"), "{err}");
+        let reply = call(&index, concat!(crate::app_slug!(), "_help_search"), &json!({"query": "model", "topic_id": "sync"})).unwrap();
+        assert!(reply["results"].as_array().unwrap().iter().all(|h| h["id"] == "sync"));
+    }
+
+    #[test]
+    fn sections_are_addressed_by_id_heading_or_hash() {
+        let index = fixture();
+        for (id, section) in [("sync", Some("byte-sync")), ("sync", Some("Byte sync")), ("sync#byte-sync", None), ("sync#Byte sync", None)] {
+            let read = index.read(id, section).unwrap();
+            assert_eq!((read.id.as_str(), read.section.as_deref()), ("sync", Some("byte-sync")), "{id} {section:?}");
+            assert!(read.text.starts_with("## Byte sync"));
+        }
+        // An explicit section wins over a `#` suffix; an empty suffix reads the topic.
+        assert_eq!(index.read("sync#byte-sync", Some("lockstep")).unwrap().section.as_deref(), Some("lockstep"));
+        assert_eq!(index.read("sync#", None).unwrap().section, None);
+        let reply = call(&index, concat!(crate::app_slug!(), "_help_read"), &json!({"topic_id": "sync#lockstep"})).unwrap();
+        assert_eq!(reply["section"], "lockstep");
+    }
+
+    #[test]
+    fn related_topics_travel_with_reads_and_the_list() {
+        let index = fixture();
+        assert_eq!(index.read("projects", None).unwrap().related, ["sync", "local-models"]);
+        assert!(index.read("sync", None).unwrap().related.is_empty());
+        let list = index.list();
+        assert_eq!(list.iter().find(|t| t.id == "projects").unwrap().related, ["sync", "local-models"]);
+    }
+
+    /// The topic's keywords lift every section of the topic alike, so the
+    /// section whose body answers wins over a short one that only shares them.
+    #[test]
+    fn the_answering_section_beats_a_short_sibling() {
+        let long = format!("---\nid: srv\ntitle: Server\nkeywords: [recovery code]\n---\n## Short\n\nSee elsewhere.\n\n## Secrets key\n\n{} Type your recovery code after a reboot.\n", "Many words about sealing and keys. ".repeat(30));
+        let index = Index::build(&[("srv.md", &long)]);
+        assert_eq!(index.search("recovery code", 1)[0].section.as_deref(), Some("secrets-key"));
+    }
+
+    #[test]
+    fn snippets_are_whole_paragraphs_around_the_match() {
+        let body = "First paragraph about nothing.\n\nA long paragraph that is wrapped\nover several lines and only later\nmentions the lockstep engine by name.\n\n```sh\nlockstep in code\n```";
+        let s = snippet(body, &["lockstep".to_string()]);
+        assert!(s.contains("mentions the lockstep engine by name."), "{s}");
+        assert!(!s.contains('\n') && !s.contains("in code"), "{s}");
+        let long = format!("{} lockstep {}", "word ".repeat(200), "tail ".repeat(200));
+        let s = snippet(&long, &["lockstep".to_string()]);
+        assert!(s.starts_with('…') && s.ends_with('…') && s.contains("lockstep"), "{s}");
+        assert!(s.chars().count() <= SNIPPET_CHARS, "{}", s.chars().count());
+        assert_eq!(snippet("1. Open Settings.\n2. Click Pull.", &["zebra".to_string()]), "Open Settings. Click Pull.");
+        // Bold stays whole; list and quote markers go.
+        assert_eq!(snippet("**Black out** text.", &[]), "**Black out** text.");
+        assert_eq!(snippet("- **Item** one", &[]), "**Item** one");
+        // A table row is its cells; the rule line is not.
+        assert_eq!(snippet("| System | How |\n|---|---|\n| Linux | Desktops |\n| macOS | Apps are hidden |", &tokenize("macos")), "macOS — Apps are hidden");
+        assert_eq!(snippet("| System | How |\n|---|---|\n| Linux | Desktops |", &tokenize("system")), "Linux — Desktops", "the header row is not a snippet");
     }
 
     #[test]
@@ -665,5 +908,26 @@ mod tests {
         let index = Index::build(corpus::HELP_CORPUS);
         assert!(index.rejected.is_empty(), "docs/help files that do not parse: {:?}", index.rejected);
         assert_eq!(index.topics.len(), corpus::HELP_CORPUS.len());
+        for topic in &index.topics {
+            for related in &topic.related {
+                assert!(index.topic(related).is_some(), "{} names an unknown related topic {related:?}", topic.id);
+            }
+        }
+    }
+
+    /// The help's own topic (`ask-<slug>.md`) lists every topic under its
+    /// `Topics` heading, so a new file cannot go unannounced.
+    #[test]
+    fn the_topics_section_names_every_topic() {
+        let index = Index::build(corpus::HELP_CORPUS);
+        let own = index.topic(concat!("ask-", crate::app_slug!())).expect("the help's own topic");
+        let list = &own.sections.iter().find(|s| s.id == "topics").expect("a Topics section").body;
+        let named: Vec<&str> = list.split([',', '.', '\n', ' ']).map(str::trim).filter(|w| !w.is_empty()).collect();
+        for topic in &index.topics {
+            assert!(named.contains(&topic.id.as_str()), "the Topics section of {} misses {}", own.id, topic.id);
+        }
+        for name in &named {
+            assert!(index.topic(name).is_some(), "the Topics section names an unknown topic {name:?}");
+        }
     }
 }

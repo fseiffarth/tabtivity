@@ -113,9 +113,8 @@ pub struct Flow {
 }
 
 fn random_b64(n: usize) -> String {
-    use rand::RngCore;
     let mut bytes = vec![0u8; n];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    crate::fill_random(&mut bytes);
     Base64UrlUnpadded::encode_string(&bytes)
 }
 

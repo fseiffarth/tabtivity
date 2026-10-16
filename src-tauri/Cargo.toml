@@ -1,6 +1,6 @@
 [package]
 name = "tabtivity"
-version = "0.2.8"
+version = "0.2.11"
 edition = "2021"
 description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
@@ -111,11 +111,13 @@ toml_edit = "0.25"
 chrono = "0.4"
 chrono-tz = "0.10"
 regex = "1"
-serde_yaml = "0.9"
+# serde_yaml is deprecated (RUSTSEC-2025-0068); serde_norway is its maintained,
+# API-identical fork.
+serde_norway = "0.9"
 portable-pty = "0.9.0"
 tokio = { version = "1.52.3", features = ["full"] }
 mime_guess = "2.0.5"
-infer = "0.19.0"
+infer = "0.22"
 opener = "0.8.4"
 notify = "8"
 # Read images (e.g. screenshots) off the system clipboard for paste-into-tree.
@@ -124,7 +126,7 @@ notify = "8"
 # runtime when the compositor lacks the protocol, so this is additive.
 arboard = { version = "3", features = ["wayland-data-control"], optional = true }
 # Encode the clipboard's raw RGBA image as PNG before writing it to disk.
-png = "0.17"
+png = "0.18"
 calamine = "0.36"
 rusqlite = { version = "0.40.1", features = ["bundled", "hooks", "limits"] }
 # Stage host file bytes on disk so `git diff --no-index` can diff the local mirror
@@ -132,7 +134,7 @@ rusqlite = { version = "0.40.1", features = ["bundled", "hooks", "limits"] }
 tempfile = "3"
 # Extract dropped/double-clicked .zip archives in place (deflate covers the vast
 # majority of real-world zips; "stored" entries need no feature).
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 # Read the `.synctex.gz` a TeX compile emits, so a deck slide can be anchored to
 # the source line that produced its page rather than to a content fingerprint
 # (commands::tex::synctex_page_lines). Already in the tree via `zip`'s deflate
@@ -358,8 +360,8 @@ gtk = { version = "0.18", optional = true }
 # Same crate/version wry uses; needed to hook `ProcessFailed` on the raw
 # `ICoreWebView2` for the webview crash reporter (the WebView2 spelling of the
 # `web-process-terminated` hook the Linux build takes from `webkit2gtk`).
-webview2-com = "0.38"
-windows = { version = "0.61", features = [
+webview2-com = "0.39"
+windows = { version = "0.62", features = [
     # Handle-relative, no-reparse project file reads for the phone browser.
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
@@ -423,7 +425,7 @@ libc = "0.2"
 tempfile = "3"
 # Builds the crafted `.xls` (an OLE compound file) the spreadsheet reader's
 # child-process test feeds calamine; already in the tree via `infer`.
-cfb = "0.7"
+cfb = "0.14"
 # The macOS GPU sampler's `ioreg` plist parser is pure and gated
 # `any(target_os = "macos", test)`, so its fixture test runs on every OS;
 # the crate is already the macOS runtime dependency above.

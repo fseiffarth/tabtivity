@@ -2,6 +2,7 @@
 id: containers-boxes
 title: Containers, VMs and project boxes
 keywords: [container, docker, sandbox, vm, virtual machine, isolation, trust tier, box, group, meta-project]
+related: [projects, remote-projects, agent-clis, server]
 ---
 
 ## Where a project runs (trust tiers)

@@ -43,5 +43,8 @@ export default defineConfig({
   build: {
     outDir: "web-dist",
     emptyOutDir: true,
+    // Vite 6's default browser floor, kept on vite 8 (whose default rose to
+    // Safari 16.4 / Chrome 111): macOS 10.15's WebKit and older phones.
+    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
   },
 });

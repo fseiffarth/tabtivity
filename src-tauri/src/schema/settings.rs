@@ -615,6 +615,14 @@ pub struct Settings {
     /// the backend reads it, the renderer is an xterm.js concern.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_webgl: Option<bool>,
+    /// EXPERIMENTAL, default OFF, Linux only. Start WebKitGTK on its GPU paint
+    /// path: `run()` stops forcing `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+    /// (`services::webkit_gpu`, `docs/gpu_compositing_plan.md`). Read once, at
+    /// launch, before GTK/WebKit init, so a change applies after a restart. The
+    /// 2D-canvas acceleration that made this path drop content is off on every
+    /// webview regardless. Read via `gpu_compositing()`, strict default-off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_compositing: Option<bool>,
     /// EXPERIMENTAL, default OFF. The markdown relationship graph: a "Graph"
     /// mode on the markdown viewer that crawls the viewed document's local-file
     /// links and renders them as a clickable navigation map. Purely a frontend
@@ -1207,6 +1215,14 @@ impl Settings {
         self.browser_live_pages.unwrap_or(false)
     }
 
+    /// Whether `run()` leaves WebKit's DMA-BUF renderer on (Linux).
+    ///
+    /// `unwrap_or(false)`, **not** `experimental()`: it changes the renderer and
+    /// has crash history, so unset means off everywhere, debug builds included.
+    pub fn gpu_compositing(&self) -> bool {
+        self.gpu_compositing.unwrap_or(false)
+    }
+
     /// Whether LOCAL shell/script tabs are wrapped in a persistent tmux session
     /// (TODO #85). Default ON when unset; only an explicit `Some(false)` opts out.
     /// The caller still gates on `tmux_local::tmux_available()` (no tmux / Windows →
@@ -1625,6 +1641,26 @@ mod default_rule_tests {
             ..Default::default()
         };
         assert!(on.browser_live_pages());
+    }
+
+    /// GPU compositing is absent by default, a real field (not an `extra`
+    /// passenger), round-trips, and stays off in debug mode on an unmarked
+    /// profile.
+    #[test]
+    fn gpu_compositing_defaults_absent_and_round_trips() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(!raw.contains("gpu_compositing"), "default settings must omit it: {raw}");
+        let debug = Settings {
+            debug: Some(true),
+            ..Default::default()
+        };
+        assert!(!debug.gpu_compositing());
+        let s: Settings = serde_json::from_str(r#"{"gpu_compositing":true}"#).expect("parse");
+        assert!(s.gpu_compositing());
+        assert!(s.extra.is_empty(), "fell through to `extra`: {:?}", s.extra.keys());
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
+        assert_eq!(back.gpu_compositing, Some(true));
     }
 
     /// `window_state` written before `maximized` existed reads as not

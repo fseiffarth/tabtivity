@@ -62,7 +62,7 @@ desktop state.
 |---------|-----------|
 | Window shell | Tauri v2 (`tauri-plugin-dialog`) |
 | Frontend framework | React 18, TypeScript, Vite |
-| Styling | Tailwind CSS + CSS variables (5 themes, `src/types/index.ts::THEMES`) |
+| Styling | Plain CSS + CSS variables (5 themes, `src/types/index.ts::THEMES`); the browser reset is Tailwind 3's preflight, vendored in `src/styles/reset.css` (no Tailwind; PostCSS runs autoprefixer only) |
 | Global state | Zustand |
 | Terminal UI | xterm.js (`@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`) |
 | PTY management | `portable-pty` Rust crate |
@@ -276,7 +276,7 @@ Toolbar behavior:
 
 `TerminalView.tsx`:
 - Creates an xterm.js `Terminal` instance with the fit, web-links, and
-  canvas/webgl addons (WebGL behind `terminal_webgl`). An open-watchdog guards
+  webgl addons (WebGL behind `terminal_webgl`, else xterm's DOM renderer). An open-watchdog guards
   the case where xterm never `open()`s — on Windows, WebView2 can drop the
   ResizeObserver callback, which showed up as a black, dead agent tab.
 - On mount, invokes `spawn_pty` on the backend; backend emits

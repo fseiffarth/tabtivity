@@ -29,8 +29,11 @@
  * making the editor tab drive it would only mean two places to press the same
  * arrow key.
  *
- * Pure, so both windows and the tests share it.
+ * Pure, so both windows and the tests share it — bar the remembered screen
+ * below, which is one localStorage key both windows read.
  */
+
+import { storageKey } from "../../../lib/brand";
 
 /**
  * FNV-1a (32-bit), base36 — the same shape `deck/present.ts` and
@@ -91,6 +94,46 @@ export interface PdfPresentReady {
 export function clampPage(page: number, count: number): number {
   if (!Number.isFinite(page) || count <= 0) return 1;
   return Math.min(Math.max(Math.trunc(page), 1), count);
+}
+
+// --- the screen it opens on ------------------------------------------------
+//
+// With more than one monitor the backend picks one (the first that is not the
+// main window's). On a desk with three screens that is a guess, so the present
+// window's "next screen" (`S`) moves it on and the monitor it lands on is
+// remembered here — per machine, both windows share the origin — and handed back
+// to `open_presenter_window` on the next Present. A remembered screen that is
+// unplugged is simply not found, and the backend's default applies.
+
+/** The backend's `MonitorPick`: the output's name plus its desktop origin. */
+export interface MonitorPick {
+  name: string | null;
+  x: number;
+  y: number;
+}
+
+const SCREEN_KEY = storageKey("pdfPresent.screen");
+
+export function readPresentScreen(): MonitorPick | null {
+  try {
+    const raw = localStorage.getItem(SCREEN_KEY);
+    if (!raw) return null;
+    const v: unknown = JSON.parse(raw);
+    if (!v || typeof v !== "object") return null;
+    const { name, x, y } = v as Record<string, unknown>;
+    if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
+    return { name: typeof name === "string" ? name : null, x: x as number, y: y as number };
+  } catch {
+    return null;
+  }
+}
+
+export function writePresentScreen(pick: MonitorPick): void {
+  try {
+    localStorage.setItem(SCREEN_KEY, JSON.stringify(pick));
+  } catch {
+    // A blocked store only costs the memory of the choice.
+  }
 }
 
 // --- the talk clock (the present window's bottom bar) -----------------------

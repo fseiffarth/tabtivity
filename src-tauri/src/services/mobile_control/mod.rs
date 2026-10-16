@@ -8,6 +8,7 @@
 pub mod admin;
 pub mod alarms;
 pub mod auth;
+pub mod chat_uncommitted;
 pub mod config;
 pub mod discovery;
 pub mod files;

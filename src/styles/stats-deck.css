@@ -60,6 +60,16 @@
   font-weight: 650;
 }
 
+/* StatsRecap's welcome-back block: the typed line, then Continue / Switch. */
+.stats-welcome {
+  margin: 4px 0 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+.stats-welcome .typewriter {
+  margin-bottom: 10px;
+}
+
 .stats-empty {
   margin: 8px 0 0;
   color: var(--text-muted);

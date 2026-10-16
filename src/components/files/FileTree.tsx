@@ -244,9 +244,12 @@ type EntryContextMenu = {
 } | null;
 type DeleteConfirm = { entries: FileEntry[] } | null;
 /** Open paste-rename window: `kind` is whether the source is the in-app file
- *  clipboard or a system-clipboard image (screenshot); `name` is the name being
- *  chosen for the pasted result in the current folder. */
-type PastePrompt = { kind: "file" | "image"; name: string; error: string | null };
+ *  clipboard, a system-clipboard image (screenshot) or a file/folder a file
+ *  manager copied (`system`); `name` is the name being chosen for the pasted
+ *  result in the current folder. */
+type PastePrompt = { kind: "file" | "image" | "system"; name: string; error: string | null };
+/** A file or folder on the OS clipboard (`clipboard_file_paths`). */
+type SystemClipboardFile = { path: string; name: string; isDir: boolean };
 /** The entry whose rename dialog is open (`RenameDialog` owns the typed name).
  *  Replaces a `window.prompt`, which WebKitGTK draws as a browser alert titled
  *  with the dev-server origin ("localhost:1420 says"). */
@@ -450,27 +453,20 @@ const FileRow = React.memo(function FileRow({
       // here relocates it (hit-tested by data-move-rel in the drag).
       data-move-rel={e.is_dir ? rel : undefined}
       {...(e.is_dir ? moveTargetAttrs : undefined)}
-      // Dirs: single-click navigates + native DnD (file export).
-      // Files, plain drag: pointer-based drag onto a tab bar for
-      // drag-to-tab files (built-in viewer OR embeddable handler); R6 —
-      // native DnD disabled then so it can't hijack the pointer. Opened
-      // by double-click.
-      // Files, CTRL held: arm native HTML5 DnD so any file can be dragged
-      // out into an embedded browser / external target like Signal (the
-      // pointer drag-to-tab bails on Ctrl, see onEntryPointerDown).
+      // Plain drag: pointer-based — files with a built-in viewer OR an
+      // embeddable handler drop onto a tab bar; files and folders alike
+      // move into a folder row / crumb / ↑ (spring-opening it on a dwell).
+      // R6 — native DnD disabled then so it can't hijack the pointer.
+      // Files open by double-click, folders navigate on a single click.
+      // CTRL held: arm native HTML5 DnD so any entry can be dragged out
+      // into an embedded browser / external target like Signal (the
+      // pointer drag bails on Ctrl, see onEntryPointerDown).
       onClick={(ev) => rows.click(ev, e)}
       onDoubleClick={e.is_dir ? undefined : (ev) => rows.open(e, ev)}
       onContextMenu={(ev) => rows.contextMenu(ev, e)}
-      draggable={e.is_dir || ctrlHeld}
-      onDragStart={
-        e.is_dir || ctrlHeld
-          ? (ev) => rows.dragStart(ev, e)
-          : (ev) => ev.preventDefault()
-      }
-      // Every file arms the pointer drag — files with a tab/viewer target
-      // can drop onto a tab bar, and ALL files can be dragged into a
-      // folder to move them. Folders aren't dragged (they navigate).
-      onPointerDown={!e.is_dir ? (ev) => rows.pointerDown(ev, e, dragTarget) : undefined}
+      draggable={ctrlHeld}
+      onDragStart={ctrlHeld ? (ev) => rows.dragStart(ev, e) : (ev) => ev.preventDefault()}
+      onPointerDown={(ev) => rows.pointerDown(ev, e, dragTarget)}
       onMouseEnter={(ev) => rows.mouseEnter(ev, e)}
       onMouseLeave={rows.mouseLeave}
     >
@@ -897,6 +893,9 @@ export function FileTree({
   // (which is what the move's no-op check wants), not the one now listed.
   const relPathRef = useRef(relPath);
   relPathRef.current = relPath;
+  // When the last drag gesture ended (see `commitRelease`), so the click its
+  // release fires is not taken as a click on the row.
+  const dragClickGuard = useRef(0);
   const [moveTargetRel, setMoveTargetRel] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<EntryContextMenu>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -955,6 +954,9 @@ export function FileTree({
   // Whether the system clipboard holds an image when the context menu opened
   // (probed async on right-click), gating the "Paste screenshot" option.
   const [clipboardImage, setClipboardImage] = useState(false);
+  // Files/folders a file manager put on the system clipboard, probed the same
+  // way; pasted as copies through the OS-drop import (`import_external_file`).
+  const [systemFiles, setSystemFiles] = useState<SystemClipboardFile[]>([]);
   const clipboardEntries = useFileClipboardStore((s) => s.entries);
   const setClipboardEntries = useFileClipboardStore((s) => s.setEntries);
   const clearClipboard = useFileClipboardStore((s) => s.clear);
@@ -2073,6 +2075,7 @@ export function FileTree({
   // folder — drives the multi-selection instead (shift = range, ctrl/cmd =
   // toggle). Opening a file stays a double-click (onDoubleClick → handleOpen).
   function handleRowClick(ev: React.MouseEvent, entry: FileEntry) {
+    if (Date.now() - dragClickGuard.current < 400) return;
     const hasMod = ev.shiftKey || ev.ctrlKey || ev.metaKey;
     if (entry.is_dir && !hasMod) {
       clearSelection();
@@ -2256,7 +2259,8 @@ export function FileTree({
     entry: FileEntry,
     dragTarget: InternalViewer | "embed" | null,
   ) {
-    if (e.button !== 0 || entry.is_dir) return;
+    if (e.button !== 0) return;
+    // A folder is dragged only to move it (`dragTarget` is null for one).
     // A built-in viewer drives the in-app drop; "embed" means an external
     // handler, so no viewer. `canTab` is whether this file can land on a tab bar
     // / new window at all — only such files take the commitFileDrop path on
@@ -2278,6 +2282,7 @@ export function FileTree({
       .filter((en) => !en.is_dir)
       .map((en) => ({ path: en.path, name: en.name, viewer: internalViewerFor(en, disabledViewerSet) ?? undefined }));
     const canDrop = isMultiDrag ? dragFiles.length > 0 : canTab;
+    const draggedDirRels = dragEntries.filter((en) => en.is_dir).map(relForEntry);
     // Ctrl held → the user wants to EXPORT/COPY this file out to another app
     // (Signal, a browser, a file manager). The row arms HTML5 `draggable` while
     // `ctrlHeld` (see renderEntry); its onDragStart suppresses the broken
@@ -2385,7 +2390,7 @@ export function FileTree({
         // Built-in viewers render in-app and need no external handler, so skip
         // the embed-capability probe for them. For other embeddable files,
         // prefetch the capability so the drop can resolve embed-vs-external.
-        if (!viewer) {
+        if (!viewer && !entry.is_dir) {
           invoke<EmbedCap>("embed_capability", { path: entry.path, handler: null, projectId })
             .then((cap) => useDragStore.getState().setEmbedCap(cap))
             .catch(() => useDragStore.getState().setEmbedCap(null));
@@ -2473,6 +2478,7 @@ export function FileTree({
         root: projectDir,
         folderRel: relPath,
         remote: remoteListing,
+        draggedDirRels,
       });
       setMoveTarget(resolved, resolved?.crossRoot ? moveEl : null);
       // Spring-loading: hovering a folder row / crumb / ↑ of THIS tree navigates
@@ -2546,6 +2552,9 @@ export function FileTree({
       // the cleanup() call.
       const moveTarget = moveTargetRef.current;
       cleanup();
+      // A release on the row the drag began on still fires its click, which on
+      // a folder would navigate into it. Swallow that one click.
+      if (dragging) dragClickGuard.current = Date.now();
       if (!dragging) {
         // Never moved → a plain click does NOT open. Opening a file is a
         // double-click (onDoubleClick → handleClick); dragging it onto a tab bar
@@ -2827,9 +2836,11 @@ export function FileTree({
         crossRoot: target.crossRoot,
       });
       retargetTabsForRenamedPath(sourceAbs, newAbs);
-      // This tree re-lists (the entry left it); a cross-root destination tree
-      // catches up through its own fs-watch.
-      await load(relPath);
+      // This tree re-lists the folder now on screen — after a spring-load that
+      // is where the drag went, not where it started (the entry left either
+      // way); a cross-root destination tree catches up through its own
+      // fs-watch.
+      await load(relPathRef.current);
     } catch (err) {
       setError(String(err));
       setLoading(false);
@@ -2855,7 +2866,7 @@ export function FileTree({
       entry,
       rowRect: { left: row.left, top: row.top, width: row.width, height: row.height },
     });
-    probeClipboardImage();
+    probeSystemClipboard();
   }
 
   /** "Download to…" (`docs/vm_projects_plan.md` Phase 2): SFTP-copy a remote
@@ -3364,6 +3375,12 @@ export function FileTree({
     setPastePrompt({ kind: "file", name: suggestPasteName(clipboard.name), error: null });
   }
 
+  function openSystemPastePrompt() {
+    setContextMenu(null);
+    if (!systemFiles[0]) return;
+    setPastePrompt({ kind: "system", name: suggestPasteName(systemFiles[0].name), error: null });
+  }
+
   function openScreenshotPrompt() {
     setContextMenu(null);
     setPastePrompt({ kind: "image", name: suggestPasteName("screenshot.png"), error: null });
@@ -3382,6 +3399,50 @@ export function FileTree({
           : t("fileTree.pasteNamed", { name: clipboard?.name ?? "", move })}
       </button>
     );
+  }
+
+  // The context-menu entry for files a file manager copied. One item keeps the
+  // rename prompt, several paste in bulk — the in-app Paste's split.
+  function renderSystemPasteButton() {
+    if (systemFiles.length === 0) return null;
+    const multi = systemFiles.length > 1;
+    return (
+      <button className="untested" onClick={() => (multi ? void pasteAllSystem() : openSystemPastePrompt())}>
+        {multi
+          ? t("fileTree.pasteFromSystemCount", { count: systemFiles.length })
+          : t("fileTree.pasteFromSystemNamed", { name: systemFiles[0].name })}
+        <UntestedTag id="fileTree.pasteFromSystem" />
+      </button>
+    );
+  }
+
+  // Copy every system-clipboard item into the current folder, auto-naming each
+  // collision with " copy" (pasteAll's rule). The source is never moved, even
+  // after a file manager's Cut.
+  async function pasteAllSystem() {
+    setContextMenu(null);
+    const files = systemFiles;
+    if (files.length === 0) return;
+    setLoading(true);
+    setError(null);
+    const claimed = new Set<string>();
+    try {
+      for (const f of files) {
+        const destName = suggestPasteName(f.name, claimed);
+        claimed.add(destName);
+        await invoke("import_external_file", {
+          projectDir,
+          sourcePath: f.path,
+          destRel: relPath,
+          replace: false,
+          destName,
+        });
+      }
+      await load(relPath);
+    } catch (err) {
+      setError(String(err));
+      setLoading(false);
+    }
   }
 
   // Paste a multi-item clipboard into the current folder in one go — no per-file
@@ -3432,6 +3493,16 @@ export function FileTree({
     try {
       if (pastePrompt.kind === "image") {
         await invoke("save_clipboard_image", { projectDir, relPath: destRel });
+      } else if (pastePrompt.kind === "system") {
+        const source = systemFiles[0];
+        if (!source) return;
+        await invoke("import_external_file", {
+          projectDir,
+          sourcePath: source.path,
+          destRel: relPath,
+          replace: false,
+          destName: newName,
+        });
       } else {
         if (!clipboard) return;
         await invoke(clipboard.op === "cut" ? "move_path" : "copy_path", {
@@ -3467,16 +3538,23 @@ export function FileTree({
     cancelTooltipTimer();
     setTooltip(null);
     setContextMenu({ x: e.clientX, y: e.clientY, entry: null, rowRect: null });
-    probeClipboardImage();
+    probeSystemClipboard();
   }
 
-  // Ask the backend whether a screenshot/image is on the system clipboard so the
-  // open context menu can reveal "Paste screenshot". Async, so the menu shows
-  // immediately and the option appears once the probe resolves.
-  function probeClipboardImage() {
+  // Ask the backend whether a screenshot/image or copied files are on the system
+  // clipboard so the open context menu can reveal "Paste screenshot" / "Paste
+  // … from the system clipboard". Async, so the menu shows immediately and the
+  // options appear once the probes resolve. A remote listing has no local
+  // folder to import into, so it skips the file probe.
+  function probeSystemClipboard() {
     invoke<boolean>("clipboard_has_image")
       .then(setClipboardImage)
       .catch(() => setClipboardImage(false));
+    setSystemFiles([]);
+    if (remoteListing) return;
+    invoke<SystemClipboardFile[]>("clipboard_file_paths")
+      .then((files) => setSystemFiles(Array.isArray(files) ? files : []))
+      .catch(() => setSystemFiles([]));
   }
 
   async function confirmDelete() {
@@ -4641,8 +4719,9 @@ export function FileTree({
                   </button>
                 </>
               )}
-              {(clipboard || clipboardImage) && <hr />}
+              {(clipboard || clipboardImage || systemFiles.length > 0) && <hr />}
               {renderPasteButton()}
+              {renderSystemPasteButton()}
               {clipboardImage && (
                 <button onClick={openScreenshotPrompt}>
                   {t("fileTree.pasteScreenshot")}
@@ -4883,6 +4962,7 @@ export function FileTree({
                   </button>
                 )}
                 {renderPasteButton()}
+                {renderSystemPasteButton()}
                 {clipboardImage && (
                   <button onClick={openScreenshotPrompt}>
                     {t("fileTree.pasteScreenshot")}
@@ -5022,11 +5102,19 @@ export function FileTree({
             <h2>
               {pastePrompt.kind === "image"
                 ? t("fileTree.pasteScreenshotTitle")
-                : t(clipboard?.isDir ? "fileTree.pasteFolderTitle" : "fileTree.pasteFileTitle")}
+                : t(
+                    (pastePrompt.kind === "system" ? systemFiles[0]?.isDir : clipboard?.isDir)
+                      ? "fileTree.pasteFolderTitle"
+                      : "fileTree.pasteFileTitle",
+                  )}
             </h2>
             <p>
               {pastePrompt.kind === "image" ? (
                 <>{t("fileTree.saveClipboardImage")}</>
+              ) : pastePrompt.kind === "system" ? (
+                <>
+                  {t("common.copy")} <strong>{systemFiles[0]?.name}</strong>
+                </>
               ) : (
                 <>
                   {t(clipboard?.op === "cut" ? "common.move" : "common.copy")}{" "}

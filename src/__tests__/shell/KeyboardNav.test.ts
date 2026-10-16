@@ -2,7 +2,7 @@
  * #62 — keyboard navigation primitives.
  *
  * The store-level `toggleFullscreen` state machine. The DOM wiring (chords →
- * store actions) is covered in KeyboardNav.test.tsx.
+ * store actions) is covered in KeyboardNavDom.test.tsx.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 

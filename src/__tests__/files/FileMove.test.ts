@@ -89,6 +89,20 @@ describe("resolveMoveTarget", () => {
     ).toBeNull();
   });
 
+  it("a dragged folder never lands in itself or below it", () => {
+    const src = { ...LOCAL_A, draggedDirRels: ["src/lib"] };
+    for (const rel of ["src/lib", "src/lib/deep"]) {
+      expect(resolveMoveTarget({ rel, root: LOCAL_A.root, remote: false }, src)).toBeNull();
+    }
+    // A sibling sharing the name's prefix, and the parent's parent, are fine.
+    expect(resolveMoveTarget({ rel: "src/library", root: LOCAL_A.root, remote: false }, src)).not.toBeNull();
+    expect(resolveMoveTarget({ rel: "", root: LOCAL_A.root, remote: false }, src)).toEqual({
+      root: LOCAL_A.root,
+      rel: "",
+      crossRoot: false,
+    });
+  });
+
   it("a remote tree still moves within itself (same-root path unchanged)", () => {
     const r = resolveMoveTarget(
       { rel: "out", root: `/home/u/${BRAND.slug}/projects/r`, remote: true },
@@ -174,6 +188,13 @@ describe("FileTree source tripwires", () => {
     // file rows or empty space — not over a folder row. Without the tree root
     // as a target that release resolved to nothing and the file stayed put.
     expect(SRC).toMatch(/data-move-rel=\{relPath\}\n\s*\{\.\.\.moveTargetAttrs\}/);
+  });
+
+  it("folder rows arm the pointer drag too, so a folder moves by drag", () => {
+    // Folders used to keep only the HTML5 drag (an OS export), so dragging one
+    // over a crumb neither spring-opened it nor moved the folder there.
+    expect(SRC).toContain("onPointerDown={(ev) => rows.pointerDown(ev, e, dragTarget)}");
+    expect(SRC).toContain("draggedDirRels,");
   });
 
   it("the move commit routes to the TARGET root, not the source tree's", () => {

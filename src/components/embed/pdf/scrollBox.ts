@@ -33,15 +33,16 @@ const EPS = 1;
  * `block: "start"` puts its top at the scrollport's top (a page jump). Both
  * mirror the `scrollIntoView` options they replace. No-op when `el` is not
  * inside a scroll box (a detached node, or the present window, which mounts its
- * own single-sheet view).
+ * own single-sheet view). Returns whether it could place `el` — false for no
+ * scroll box or one not laid out (a hidden pane), so a caller can retry on show.
  */
-export function scrollIntoPdfBox(el: HTMLElement, block: "center" | "start"): void {
+export function scrollIntoPdfBox(el: HTMLElement, block: "center" | "start"): boolean {
   const box = el.closest<HTMLElement>(SCROLL_BOX);
-  if (!box) return;
+  if (!box) return false;
   // Not laid out (a pane still hidden behind another tab): every rect below reads
   // zero, and scrolling to "0" would throw the reader's position away for a jump
   // that cannot be shown yet. `scrollIntoView` was a no-op here too.
-  if (box.clientHeight === 0) return;
+  if (box.clientHeight === 0) return false;
   const elRect = el.getBoundingClientRect();
   const boxRect = box.getBoundingClientRect();
 
@@ -61,4 +62,5 @@ export function scrollIntoPdfBox(el: HTMLElement, block: "center" | "start"): vo
   else if (right > box.scrollLeft + box.clientWidth + EPS) {
     box.scrollLeft = Math.min(left, right - box.clientWidth);
   }
+  return true;
 }

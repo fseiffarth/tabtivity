@@ -49,12 +49,15 @@ function mergingBackend(disk: Settings) {
 const patchCalls = () => invoke.mock.calls.filter(([cmd]) => cmd === "patch_settings");
 
 describe("explicitExperimentalPatch", () => {
-  it("ticks every unset flag Debug mode carried, never the WebGL renderer, plus the marker", () => {
+  it("ticks every unset flag Debug mode carried, never the GPU ones, plus the marker", () => {
     const patch = explicitExperimentalPatch(s({ debug: true }));
     const expected: Partial<Settings> = { experimental_explicit: true };
-    for (const flag of EXPERIMENTAL_FLAGS) if (flag !== "terminal_webgl") expected[flag] = true;
+    for (const flag of EXPERIMENTAL_FLAGS) {
+      if (flag !== "terminal_webgl" && flag !== "gpu_compositing") expected[flag] = true;
+    }
     expect(patch).toEqual(expected);
     expect(patch).not.toHaveProperty("terminal_webgl");
+    expect(patch).not.toHaveProperty("gpu_compositing");
   });
 
   it("writes the marker alone outside Debug mode", () => {
@@ -71,8 +74,9 @@ describe("explicitExperimentalPatch", () => {
 
   it("never overwrites an explicit value", () => {
     const patch = explicitExperimentalPatch(
-      s({ debug: true, mail_client: false, web_browser: true, terminal_webgl: true }),
+      s({ debug: true, mail_client: false, web_browser: true, terminal_webgl: true, gpu_compositing: true }),
     );
+    expect(patch).not.toHaveProperty("gpu_compositing");
     expect(patch).not.toHaveProperty("mail_client");
     expect(patch).not.toHaveProperty("web_browser");
     expect(patch).not.toHaveProperty("terminal_webgl");

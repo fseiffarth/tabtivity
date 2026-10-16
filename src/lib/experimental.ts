@@ -20,7 +20,8 @@
  * on, the legacy branch is dead.
  *
  * `terminal_webgl` was never carried by Debug mode (it rides the GPU/driver path
- * and is opt-in everywhere), so the migration leaves it unset.
+ * and is opt-in everywhere), so the migration leaves it unset. `gpu_compositing`
+ * is held to the same rule: it switches WebKit's renderer and has crash history.
  *
  * An explicit value always wins, in both directions: a user can opt into one
  * experiment, and switch one off again.
@@ -64,6 +65,7 @@ export const EXPERIMENTAL_FLAGS = [
   "mail_client",
   "web_browser",
   "terminal_webgl",
+  "gpu_compositing",
   "md_graph",
   "project_remarks",
   "copilot_completion",
@@ -83,6 +85,9 @@ export function experimentalEnabled(
   // which makes a visible terminal slower rather than faster. Keep the renderer
   // opt-in until that platform path is dependable; an explicit true still wins.
   if (flag === "terminal_webgl" && settings?.terminal_webgl == null) return false;
+  // Same rule for the GPU renderer switch (the backend's `gpu_compositing()` is
+  // a strict `unwrap_or(false)` too).
+  if (flag === "gpu_compositing" && settings?.gpu_compositing == null) return false;
   const explicit = settings?.[flag];
   if (explicit != null) return explicit;
   if (settings?.experimental_explicit === true) return false;
@@ -90,8 +95,8 @@ export function experimentalEnabled(
 }
 
 /** The flags an unmarked Debug-mode profile had on without a tick: every one but
- *  `terminal_webgl`, which Debug mode never carried. */
-const DEBUG_CARRIED_FLAGS = EXPERIMENTAL_FLAGS.filter((f) => f !== "terminal_webgl");
+ *  `terminal_webgl` and `gpu_compositing`, which Debug mode never carried. */
+const DEBUG_CARRIED_FLAGS = EXPERIMENTAL_FLAGS.filter((f) => f !== "terminal_webgl" && f !== "gpu_compositing");
 
 /**
  * The one-shot patch that moves a profile onto the explicit rule without

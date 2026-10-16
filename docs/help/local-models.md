@@ -2,6 +2,7 @@
 id: local-models
 title: Local models with Ollama
 keywords: [ollama, local model, model, gpu, vram, pull, download, offline, vibe, mistral, autocomplete, qwen, llama, gemma]
+related: [agent-clis, files-and-viewers, root-console, mail-calendar]
 ---
 
 Tabtivity runs open-weight models on your own machine through Ollama. Nothing

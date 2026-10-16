@@ -242,11 +242,13 @@ describe(`${BRAND.display} Mobile Focus — the project's files drawer`, () => {
     expect(strip()).toBeNull();
     const files = drawer();
     expect(files).not.toBeNull();
-    // The trail starts at the project's name, read off its detail.
+    // With no menu rows of its own the drawer is the files library straight
+    // away, its root titled by the project's name, read off its detail.
     expect(await within(files!).findByRole("button", { name: "Open the folder src" })).toBeTruthy();
-    expect(within(within(files!).getByRole("navigation", { name: "Folders" })).getByRole("button").textContent).toBe("Alpha");
+    expect(within(files!).getByRole("button", { name: "Alpha — show the folders above" }).textContent).toBe("Alpha");
 
-    drag(files!, [300, 300], [100, 300]);
+    // At the root, a right swipe from the left edge closes it.
+    drag(files!, [100, 300], [300, 300]);
     expect(drawer()).toBeNull();
   });
 

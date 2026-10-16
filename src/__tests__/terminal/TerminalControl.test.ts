@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   OSC52_MAX_CHARS,
   agentMouseDownAction,
+  altArrowWordJump,
   claimInitialInput,
   clearClaimedInitialInputsForTest,
   decodeOsc52Clipboard,
@@ -200,5 +201,41 @@ describe("right-click context menu", () => {
   it("stays native when nothing grabbed the mouse, and Shift always reaches it", () => {
     expect(suppressNativeContextMenu({ shiftKey: false }, false)).toBe(false);
     expect(suppressNativeContextMenu({ shiftKey: true }, true)).toBe(false);
+  });
+});
+
+describe("Alt+arrow keeps xterm 5's word-jump encoding", () => {
+  const alt = (key: string, mods: Partial<KeyboardEvent> = {}) => ({
+    key,
+    altKey: true,
+    ctrlKey: false,
+    shiftKey: false,
+    metaKey: false,
+    ...mods,
+  });
+
+  it("sends Ctrl+arrow's sequence for all four arrows off macOS", () => {
+    expect(altArrowWordJump(alt("ArrowLeft"), false)).toBe("\x1b[1;5D");
+    expect(altArrowWordJump(alt("ArrowRight"), false)).toBe("\x1b[1;5C");
+    expect(altArrowWordJump(alt("ArrowUp"), false)).toBe("\x1b[1;5A");
+    expect(altArrowWordJump(alt("ArrowDown"), false)).toBe("\x1b[1;5B");
+  });
+
+  it("sends readline's ESC b / ESC f for Option+left/right on macOS, and leaves up/down alone", () => {
+    expect(altArrowWordJump(alt("ArrowLeft"), true)).toBe("\x1bb");
+    expect(altArrowWordJump(alt("ArrowRight"), true)).toBe("\x1bf");
+    expect(altArrowWordJump(alt("ArrowUp"), true)).toBeNull();
+    expect(altArrowWordJump(alt("ArrowDown"), true)).toBeNull();
+  });
+
+  it("applies to Alt alone: another modifier, no Alt or another key keeps xterm's own encoding", () => {
+    for (const isMac of [false, true]) {
+      expect(altArrowWordJump(alt("ArrowLeft", { shiftKey: true }), isMac)).toBeNull();
+      expect(altArrowWordJump(alt("ArrowLeft", { ctrlKey: true }), isMac)).toBeNull();
+      expect(altArrowWordJump(alt("ArrowLeft", { metaKey: true }), isMac)).toBeNull();
+      expect(altArrowWordJump(alt("ArrowLeft", { altKey: false }), isMac)).toBeNull();
+      expect(altArrowWordJump(alt("b"), isMac)).toBeNull();
+      expect(altArrowWordJump(alt("Home"), isMac)).toBeNull();
+    }
   });
 });

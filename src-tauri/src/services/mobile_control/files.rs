@@ -19,6 +19,7 @@ use std::{
     collections::HashSet,
     fs,
     io::{Read, Seek},
+    ops::ControlFlow,
     path::{Path, PathBuf},
 };
 
@@ -33,6 +34,9 @@ use super::outbox::{self, MAX_OUTBOX_FILE};
 
 /// How many entries one folder listing returns; `truncated` says there were more.
 pub const MAX_ENTRIES: usize = 500;
+/// How many names one listing reads, over all its folders, to count their
+/// items (`Entry::items`): a page of huge folders costs no more than this.
+const ITEM_SCAN_BUDGET: usize = 20_000;
 /// The longest leaf that is listed or resolved.
 const MAX_NAME: usize = 255;
 /// The longest project-relative path a token may seal.
@@ -97,6 +101,12 @@ pub struct Entry {
     /// Left out when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub ignored: bool,
+    /// A folder's children that its own listing would row, counted to
+    /// `MAX_ENTRIES + 1` (the phone's "500+"). Only [`list`] counts, and only
+    /// while its [`ITEM_SCAN_BUDGET`] lasts; left out when not counted, which
+    /// the phone shows as no count, never as 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -401,6 +411,18 @@ impl ProjectDir {
     /// The folders and regular files in this folder, named, `true` for a
     /// folder. Links and anything else are left out without being followed.
     pub(super) fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {
+        let mut out = Vec::new();
+        self.each_entry(|name, is_dir| {
+            out.push((name.to_owned(), is_dir));
+            ControlFlow::Continue(())
+        })?;
+        Ok(out)
+    }
+
+    /// [`Self::entries`] one at a time, read only until `visit` breaks — what
+    /// a folder's item count stops early on. Names are the caller's to
+    /// filter: here `.` and `..` reach `visit` too.
+    pub(super) fn each_entry(&self, mut visit: impl FnMut(&str, bool) -> ControlFlow<()>) -> Result<(), FilesError> {
         use std::os::fd::AsRawFd;
         let os_error = || FilesError::Io(std::io::Error::last_os_error().to_string());
         // SAFETY: `fdopendir` takes ownership of a descriptor of its own.
@@ -418,7 +440,6 @@ impl ProjectDir {
         }
         // SAFETY: `stream` is open; the duplicate shares this folder's offset.
         unsafe { libc::rewinddir(stream) };
-        let mut out = Vec::new();
         loop {
             // SAFETY: `stream` is open, and each entry is read before the next call.
             let entry = unsafe { libc::readdir(stream) };
@@ -438,11 +459,13 @@ impl ProjectDir {
                 },
                 _ => continue,
             };
-            out.push((name.to_owned(), is_dir));
+            if visit(name, is_dir).is_break() {
+                break;
+            }
         }
         // SAFETY: `stream` is open and is not used again.
         unsafe { libc::closedir(stream) };
-        Ok(out)
+        Ok(())
     }
 
     /// Whether `name` is a folder (`Some(true)`) or a regular file, by
@@ -546,10 +569,42 @@ fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) -> HashSet<St
         .collect()
 }
 
+/// How many children of the held folder `dir` its own listing would row
+/// (folders and regular files under a [`valid_segment`] name, never through a
+/// link), counted to `MAX_ENTRIES + 1` at most. Every name read is charged to
+/// `budget`; `None` when it ran out before the count was settled, or the
+/// folder could not be read.
+fn item_count(dir: &ProjectDir, budget: &mut usize) -> Option<u32> {
+    let mut items = 0usize;
+    let mut settled = true;
+    dir.each_entry(|name, _| {
+        if *budget == 0 {
+            settled = false;
+            return ControlFlow::Break(());
+        }
+        *budget -= 1;
+        if valid_segment(name) {
+            items += 1;
+            if items > MAX_ENTRIES {
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    })
+    .ok()?;
+    settled.then(|| u32::try_from(items).ok()).flatten()
+}
+
 /// One folder of the project, folders first, then by name. Links, sockets and
 /// the like are not listed; neither are hidden names or names the browser
 /// could not resolve again. Only the kept entries are opened to sniff a type.
+/// Each folder row carries its item count while [`ITEM_SCAN_BUDGET`] lasts.
 pub fn list(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Listing, FilesError> {
+    list_with_budget(root, rel, host_key, raw_id, ITEM_SCAN_BUDGET)
+}
+
+/// [`list`] with the names its folders' item counts may read.
+fn list_with_budget(root: &Path, rel: &str, host_key: &[u8], raw_id: &str, mut budget: usize) -> Result<Listing, FilesError> {
     let dir = ProjectDir::open(root, rel)?;
     let mut found: Vec<(bool, String)> = dir
         .entries()?
@@ -566,18 +621,22 @@ pub fn list(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Lis
     let mut entries = Vec::with_capacity(found.len());
     for (is_dir, name) in found {
         // Swapped for a link or removed since the listing: not listed.
-        let (kind, size, meta) = if is_dir {
-            let Some(meta) = dir.child_dir_meta(&name) else { continue };
-            ("dir", 0, meta)
+        let (kind, size, meta, items) = if is_dir {
+            // One held handle for the row and its count: the folder counted
+            // is the one whose times are shown.
+            let Some(sub) = dir.child_dir(&name) else { continue };
+            let items = if budget > 0 { item_count(&sub, &mut budget) } else { None };
+            let Ok(meta) = sub.into_file().metadata() else { continue };
+            ("dir", 0, meta, items)
         } else {
             let Some((file, meta)) = dir.open_file(&name) else { continue };
             let Some((_file, meta, kind)) = outbox::sniff_opened(file, meta) else { continue };
-            (kind, meta.len(), meta)
+            (kind, meta.len(), meta, None)
         };
         let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
         let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
         let ignored = ignored.contains(&name);
-        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name))?, name, kind, size, modified, created, ignored });
+        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name))?, name, kind, size, modified, created, ignored, items });
     }
     Ok(Listing { entries, truncated })
 }
@@ -597,7 +656,7 @@ pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
     let (_file, meta, kind) = outbox::sniff_opened(file, meta)?;
     let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
     let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
-    Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false })
+    Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false, items: None })
 }
 
 /// One file's bytes and media type. Text longer than `MAX_OUTBOX_FILE` is
@@ -755,7 +814,7 @@ fn dir_entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
     let meta = ProjectDir::open(root, parent).ok()?.child_dir_meta(name)?;
     let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
     let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
-    Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind: "dir", size: 0, modified, created, ignored: false })
+    Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind: "dir", size: 0, modified, created, ignored: false, items: None })
 }
 
 /// The project's files and folders whose names hold every word of `query`
@@ -979,6 +1038,74 @@ mod tests {
         assert_eq!(listing.entries[0].name, "f0000.txt");
     }
 
+    fn items_of(listing: &Listing, name: &str) -> Option<u32> {
+        listing.entries.iter().find(|e| e.name == name).unwrap_or_else(|| panic!("{name} listed")).items
+    }
+
+    #[test]
+    fn folder_rows_count_what_their_own_listing_would_row() {
+        let dir = tree();
+        let root = dir.path();
+        let boxed = root.join("box");
+        fs::create_dir_all(boxed.join("inner")).unwrap();
+        fs::create_dir_all(boxed.join(".git")).unwrap();
+        fs::write(boxed.join("a.txt"), "a").unwrap();
+        fs::write(boxed.join(".env"), "HIDDEN=1").unwrap();
+        fs::create_dir_all(root.join("empty")).unwrap();
+
+        let listing = list(root, "", KEY, "p1").unwrap();
+        assert_eq!(items_of(&listing, "src"), Some(2), "deep and main.rs");
+        assert_eq!(items_of(&listing, "box"), Some(2), "hidden names are not counted");
+        assert_eq!(items_of(&listing, "empty"), Some(0));
+        assert_eq!(items_of(&listing, "box"), Some(list(root, "box", KEY, "p1").unwrap().entries.len() as u32));
+        assert!(listing.entries.iter().filter(|e| e.kind != "dir").all(|e| e.items.is_none()), "files carry no count");
+        let json = |name: &str| serde_json::to_value(listing.entries.iter().find(|e| e.name == name).unwrap()).unwrap();
+        assert_eq!(json("src")["items"], 2);
+        assert_eq!(json("empty")["items"], 0, "an empty folder says 0");
+        assert!(json("b.txt").get("items").is_none(), "None is left out");
+
+        // Only a listing counts: a search hit and a single entry do not.
+        let found = search(root, "deep", KEY, "p1").unwrap();
+        assert_eq!(found.hits[0].entry.kind, "dir");
+        assert_eq!(found.hits[0].entry.items, None);
+        assert_eq!(entry(root, "src/main.rs", KEY, "p1").unwrap().items, None);
+    }
+
+    #[test]
+    fn a_huge_folder_counts_to_one_past_the_listing_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let many = dir.path().join("many");
+        fs::create_dir(&many).unwrap();
+        for i in 0..(MAX_ENTRIES + 5) {
+            fs::write(many.join(format!("f{i:04}.txt")), "x").unwrap();
+        }
+        let listing = list(dir.path(), "", KEY, "p1").unwrap();
+        assert_eq!(items_of(&listing, "many"), Some(MAX_ENTRIES as u32 + 1), "the phone's \"500+\"");
+    }
+
+    #[test]
+    fn a_spent_scan_budget_leaves_the_rest_uncounted() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (folder, files) in [("a", 3), ("b", 20), ("c", 1)] {
+            fs::create_dir(root.join(folder)).unwrap();
+            for i in 0..files {
+                fs::write(root.join(folder).join(format!("{i}.txt")), "x").unwrap();
+            }
+        }
+        // Ten names: `a` fits (with `.` and `..` where the OS lists them),
+        // `b` runs it out mid-count, and nothing is left for `c`.
+        let listing = list_with_budget(root, "", KEY, "p1", 10).unwrap();
+        assert_eq!(names(&listing), ["a", "b", "c"]);
+        assert_eq!(items_of(&listing, "a"), Some(3));
+        assert_eq!(items_of(&listing, "b"), None, "a count the budget cut is not shown");
+        assert_eq!(items_of(&listing, "c"), None);
+        let none = list_with_budget(root, "", KEY, "p1", 0).unwrap();
+        assert!(none.entries.iter().all(|e| e.items.is_none()));
+        assert_eq!(none.entries.len(), 3, "an uncounted folder is still listed");
+        assert!(list(root, "", KEY, "p1").unwrap().entries.iter().all(|e| e.items.is_some()));
+    }
+
     #[test]
     fn a_huge_text_answers_its_head_and_a_huge_binary_is_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -1014,6 +1141,11 @@ mod tests {
         // Inside the project is no better: the path must be the real one.
         assert_eq!(read(dir.path(), "alias/main.rs"), Err(FilesError::NotFound));
         assert_eq!(list(dir.path(), "away", KEY, "p1"), Err(FilesError::NotFound));
+
+        // Links inside a folder are not counted among its items either.
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("src").join("away")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), dir.path().join("src").join("leak.txt")).unwrap();
+        assert_eq!(items_of(&list(dir.path(), "", KEY, "p1").unwrap(), "src"), Some(2));
 
         // A folder the phone listed, swapped for a link afterwards.
         let src_token = listing.entries.iter().find(|e| e.name == "src").unwrap();
@@ -1074,6 +1206,8 @@ mod tests {
         assert!(!names(&listing).contains(&"away"));
         assert!(!names(&listing).contains(&"alias"));
         assert!(!names(&list(dir.path(), "src/deep", KEY, "p1").unwrap()).contains(&"escape"));
+        assert_eq!(items_of(&listing, "src"), Some(2), "a junction inside is not counted");
+        assert_eq!(items_of(&list(dir.path(), "src", KEY, "p1").unwrap(), "deep"), Some(1));
         for path in ["away/secret.txt", "alias/main.rs", "src/deep/escape/secret.txt", "away"] {
             assert_eq!(read(dir.path(), path), Err(FilesError::NotFound), "{path}");
         }

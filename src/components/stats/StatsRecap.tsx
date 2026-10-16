@@ -20,8 +20,10 @@ import {
 import { formatBytes } from "../../lib/formatBytes";
 import type { ByteCounts, NetUsageReport } from "../monitoring/NetworkTrafficPane";
 import { Toggle } from "../common/Toggle";
+import { Typewriter } from "../common/Typewriter";
 import { UntestedTag } from "../common/UntestedTag";
-import { useT, type TranslationKey } from "../../lib/i18n";
+import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
+import { dayAnchorMs, type WelcomeBack } from "../../lib/welcomeBack";
 import {
   fetchTokenReport,
   foldTokens,
@@ -267,6 +269,67 @@ function TokensSection({
   );
 }
 
+/**
+ * The startup recap's opening line, typed out: "Hi there — yesterday you
+ * worked on X. Continue, or switch to Y?", then a button to continue with X
+ * and one per alternative. Either button makes that project current and closes
+ * the recap. A project deleted since the host picked it is left out; with X
+ * gone, there is no line.
+ */
+function WelcomeBackLine({ welcome, onDone }: { welcome: WelcomeBack; onDone: () => void }) {
+  const t = useT();
+  const lang = useI18nStore((s) => s.lang);
+  const projects = useProjectsStore((s) => s.projects);
+  const name = (id: string) => projects.find((p) => p.id === id)?.name;
+
+  const project = name(welcome.projectId);
+  if (!project) return null;
+  const others = welcome.alternatives
+    .map((id) => ({ id, name: name(id) }))
+    .filter((o): o is { id: string; name: string } => !!o.name);
+
+  const open = (id: string) => {
+    if (useProjectsStore.getState().activeId !== id) void useProjectsStore.getState().setActive(id);
+    onDone();
+  };
+
+  const opening =
+    welcome.day === dayKey(Date.now() - DAY_MS)
+      ? t("welcomeBack.yesterday", { project })
+      : t("welcomeBack.onDay", {
+          project,
+          day: new Date(dayAnchorMs(welcome.day)).toLocaleDateString(lang, {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            timeZone: "UTC",
+          }),
+        });
+  // At most two alternatives (`pickWelcomeBack`), so "A or B" is one key.
+  const ask = others.length
+    ? t("welcomeBack.askSwitch", {
+        others: others.length > 1 ? t("welcomeBack.either", { a: others[0].name, b: others[1].name }) : others[0].name,
+      })
+    : t("welcomeBack.askContinue");
+
+  return (
+    <div className="stats-welcome">
+      <Typewriter text={`${opening} ${ask}`} />
+      <div className="settings-link-row">
+        <button type="button" className="settings-btn primary" onClick={() => open(welcome.projectId)}>
+          {t("welcomeBack.continue", { project })}
+        </button>
+        {others.map((o) => (
+          <button key={o.id} type="button" className="settings-btn" onClick={() => open(o.id)}>
+            {t("welcomeBack.switchTo", { project: o.name })}
+          </button>
+        ))}
+        <UntestedTag id="welcomeBack.continue" />
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   onClose: () => void;
   /** Which day the recap opens on. The startup recap anchors on yesterday — the
@@ -275,9 +338,12 @@ interface Props {
   /** Shown only when the recap opened by itself, since it is the thing that
    *  turns that off. */
   showAutoToggle: boolean;
+  /** The startup recap's welcome-back line (StatsRecapHost picks it); absent
+   *  when opened on demand. */
+  welcome?: WelcomeBack | null;
 }
 
-export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle }: Props) {
+export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }: Props) {
   const t = useT();
   const modalRef = useModalFocus(onClose);
   const [period, setPeriod] = useState<Period>("day");
@@ -467,6 +533,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle }: Props) 
         </div>
 
         <div className="dialog-scroll">
+        {welcome && <WelcomeBackLine welcome={welcome} onDone={onClose} />}
         <p className="settings-help stats-window-label">{label}</p>
 
         {empty ? (

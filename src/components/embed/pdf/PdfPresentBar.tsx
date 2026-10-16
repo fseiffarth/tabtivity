@@ -16,6 +16,7 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   LaserIcon,
+  NextScreenIcon,
   PauseIcon,
   PlayIcon,
   SkipBackIcon,
@@ -51,6 +52,8 @@ export interface PdfPresentBarProps {
   onBlank: (mode: "black" | "white") => void;
   onToggleLaser: () => void;
   onToggleFullscreen: () => void;
+  /** Move to the next monitor; absent with only one, so the button is too. */
+  onNextScreen?: () => void;
   onHide: () => void;
   onClose: () => void;
 }
@@ -124,6 +127,7 @@ export function PdfPresentBar(p: PdfPresentBarProps) {
         </span>
         <UntestedTag id="pdfPresent.barLabel" />
         <UntestedTag id="pdfPresent.autoReload" />
+        <UntestedTag id="pdfPresent.nextScreen" />
       </div>
 
       <div className="pdf-present-bar-group is-nav">
@@ -205,6 +209,11 @@ export function PdfPresentBar(p: PdfPresentBarProps) {
         >
           <WindowIcon />
         </BarButton>
+        {p.onNextScreen && (
+          <BarButton title={t("pdfPresent.nextScreenTitle")} onClick={p.onNextScreen}>
+            <NextScreenIcon />
+          </BarButton>
+        )}
         <BarButton title={t("pdfPresent.hideBarTitle")} onClick={p.onHide} className="is-key">
           H
         </BarButton>

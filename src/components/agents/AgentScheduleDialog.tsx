@@ -525,7 +525,7 @@ export function AgentScheduleDialog({ scope, tab, onClose, initialMessage, initi
               ) : (
                 <label>
                   <span>{t("agentSchedule.time")}</span>
-                  <TimeField className="cal-input" value={time} onChange={setTime} aria-label={t("agentSchedule.time")} />
+                  <TimeField className="cal-input" value={time} required onChange={setTime} aria-label={t("agentSchedule.time")} />
                 </label>
               )}
               {kind === "weekdays" && (

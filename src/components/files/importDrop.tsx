@@ -215,7 +215,8 @@ export function useImportDrop({ projectDir, enabled, destRel, onImported }: Opti
             destName: destName ?? null,
           });
         } catch (err) {
-          console.error("import_external_file", sourcePath, err);
+          // Quoted: a dropped file's name may hold a line break (CodeQL js/log-injection).
+          console.error("import_external_file", JSON.stringify(sourcePath), err);
         }
       }
       // The tree auto-reloads via its fs-watch; the host may still want to

@@ -3,7 +3,9 @@
 //! - **In:** the file tree turns an image already on the OS clipboard into a PNG
 //!   file inside the project ([`clipboard_has_image`] / [`save_clipboard_image`]).
 //!   The path side reuses `fs`'s relative-path confinement so a paste can only
-//!   ever land inside the project root.
+//!   ever land inside the project root. Files and folders a file manager copied
+//!   are listed by [`clipboard_file_paths`]; the tree copies them in through
+//!   `fs::import_external_file`, the OS-drop route.
 //! - **Out:** [`copy_image_to_clipboard`] / [`copy_png_file_to_clipboard`] /
 //!   [`copy_png_bytes_to_clipboard`] put an image *on* the clipboard, so a
 //!   screenshot Tabtivity files into the project — or a region selected in the PDF
@@ -37,6 +39,57 @@ pub async fn clipboard_has_image() -> bool {
     })
     .await
     .unwrap_or(false)
+}
+
+/// One file or folder a file manager put on the system clipboard.
+#[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardFile {
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+}
+
+/// Most entries [`clipboard_file_paths`] reports; a bigger copy is cut here.
+const MAX_CLIPBOARD_FILES: usize = 1000;
+
+/// The files and folders on the system clipboard (a file manager's Copy or
+/// Cut: `text/uri-list` on Linux, `CF_HDROP` on Windows, file URLs on macOS),
+/// so the file tree's context menu can offer to paste them. A cut is pasted
+/// as a copy: the source stays where it is. Like [`clipboard_has_image`] it
+/// never errors and runs off the main thread; nothing on the clipboard, or no
+/// clipboard, is an empty list.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn clipboard_file_paths() -> Vec<ClipboardFile> {
+    app_core::rt::spawn_blocking(|| match arboard::Clipboard::new() {
+        Ok(mut cb) => cb.get().file_list().map(|paths| existing_files(&paths)).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// The absolute paths that still exist, deduplicated, in clipboard order. A
+/// stale entry (deleted since the copy) is dropped rather than offered.
+fn existing_files(paths: &[std::path::PathBuf]) -> Vec<ClipboardFile> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for path in paths {
+        if out.len() >= MAX_CLIPBOARD_FILES {
+            break;
+        }
+        if !path.is_absolute() || !seen.insert(path.clone()) {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(path) else { continue };
+        let Some(name) = path.file_name() else { continue };
+        out.push(ClipboardFile {
+            path: path.to_string_lossy().into_owned(),
+            name: name.to_string_lossy().into_owned(),
+            is_dir: meta.is_dir(),
+        });
+    }
+    out
 }
 
 /// Read the clipboard image and write it as a PNG at `project_dir`/`rel_path`.
@@ -198,7 +251,8 @@ fn decode_png_bytes_rgba(bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), String
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let size = reader.output_buffer_size().ok_or("PNG too large to decode")?;
+    let mut buf = vec![0u8; size];
     let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
     let px = &buf[..info.buffer_size()];
 
@@ -253,10 +307,38 @@ mod tests {
         // 2x1 RGBA image → decodes back to the same dimensions.
         let rgba = vec![255u8, 0, 0, 255, 0, 255, 0, 255];
         let png_bytes = encode_png(2, 1, &rgba).unwrap();
-        let decoder = png::Decoder::new(png_bytes.as_slice());
+        let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes.as_slice()));
         let reader = decoder.read_info().unwrap();
         let info = reader.info();
         assert_eq!((info.width, info.height), (2, 1));
+    }
+
+    #[test]
+    fn existing_files_keeps_live_absolute_paths_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.txt");
+        std::fs::write(&file, "x").unwrap();
+        let sub = dir.path().join("data");
+        std::fs::create_dir(&sub).unwrap();
+        let gone = dir.path().join("gone.txt");
+        let relative = std::path::PathBuf::from("notes.txt");
+
+        let got = existing_files(&[file.clone(), gone, relative, sub.clone(), file.clone()]);
+        assert_eq!(
+            got,
+            vec![
+                ClipboardFile {
+                    path: file.to_string_lossy().into_owned(),
+                    name: "notes.txt".into(),
+                    is_dir: false,
+                },
+                ClipboardFile {
+                    path: sub.to_string_lossy().into_owned(),
+                    name: "data".into(),
+                    is_dir: true,
+                },
+            ]
+        );
     }
 
     #[test]

@@ -350,6 +350,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("update_event", Core),
     ("update_task", Core),
     // commands/clipboard.rs
+    ("clipboard_file_paths", Client),
     ("clipboard_has_image", Client),
     ("copy_png_bytes_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
@@ -735,6 +736,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("close_presenter_window", Client),
     ("open_presenter_window", Client),
     ("presenter_inhibit_sleep", Client),
+    ("presenter_next_monitor", Client),
     ("presenter_release_sleep", Client),
     // commands/printing.rs
     ("print_job_cancel", Client),

@@ -28,7 +28,7 @@
  * on this machine, `open_file` downloads the file through the server's ticket
  * and opens it here; everything else is routed exactly as in a browser.
  *
- * Written against `@tauri-apps/api` 2.11 (`core.js`, `event.js`, `window.js`);
+ * Written against `@tauri-apps/api` 2.12 (`core.js`, `event.js`, `window.js`);
  * a Tauri upgrade re-checks the member list (`docs/third_party_update_checklist.md`).
  */
 import { COMMAND_CLASSES, OFF_REASONS } from "./commandClasses";
@@ -300,7 +300,7 @@ function notificationPlugin(command: string): Promise<unknown> {
       return Promise.resolve();
     case "get_pending":
     case "get_active":
-    case "listChannels":
+    case "list_channels":
       return Promise.resolve([]);
     default:
       return Promise.resolve();

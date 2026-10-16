@@ -27,6 +27,7 @@
 use std::{
     fs,
     mem::{offset_of, size_of},
+    ops::ControlFlow,
     os::windows::{
         fs::OpenOptionsExt,
         io::{AsRawHandle, FromRawHandle},
@@ -330,6 +331,21 @@ impl ProjectDir {
     }
 
     pub(in crate::services::mobile_control) fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {
+        let mut entries = Vec::new();
+        self.each_entry(|name, is_dir| {
+            entries.push((name.to_owned(), is_dir));
+            ControlFlow::Continue(())
+        })?;
+        Ok(entries)
+    }
+
+    /// [`Self::entries`] one at a time, read only until `visit` breaks — what
+    /// a folder's item count stops early on. Links are left out as there;
+    /// hidden names are the caller's to drop.
+    pub(in crate::services::mobile_control) fn each_entry(
+        &self,
+        mut visit: impl FnMut(&str, bool) -> ControlFlow<()>,
+    ) -> Result<(), FilesError> {
         // u64 storage aligns the native records; 64 KiB fits even the longest
         // filesystem name. Enumeration uses this directory handle, never its
         // former path, and a fresh enumeration starts at the first entry.
@@ -337,7 +353,6 @@ impl ProjectDir {
         let bytes = buffer.len() * size_of::<u64>();
         let name_offset = offset_of!(FILE_ID_BOTH_DIR_INFO, FileName);
         let mut restart = true;
-        let mut entries = Vec::new();
         loop {
             buffer.fill(0);
             let class = if restart {
@@ -357,7 +372,7 @@ impl ProjectDir {
             };
             if let Err(error) = result {
                 if error.code() == HRESULT::from_win32(ERROR_NO_MORE_FILES.0) {
-                    return Ok(entries);
+                    return Ok(());
                 }
                 return Err(FilesError::Io(error.to_string()));
             }
@@ -406,11 +421,11 @@ impl ProjectDir {
                     if let Ok(name) = String::from_utf16(name) {
                         // Hidden names are the caller's to drop (the file
                         // browser does); a drop box lists under `.tabtivity`.
-                        if plain_segment(&name) {
-                            entries.push((
-                                name,
-                                record.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0,
-                            ));
+                        if plain_segment(&name)
+                            && visit(&name, record.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0)
+                                .is_break()
+                        {
+                            return Ok(());
                         }
                     }
                 }

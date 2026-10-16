@@ -14,7 +14,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import * as pdfjs from "pdfjs-dist";
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { usePdfSyncStore } from "../../../stores/viewers/pdfSync";
 import { useScrollSync } from "../../../stores/viewers/scrollSync";
 import { usePdfMarkupLink } from "../../../stores/viewers/markupLinks";
@@ -102,7 +102,7 @@ import {
   type PdfDest,
 } from "./outline";
 import { loadPageLinks, destTopInBigPoints, type PdfLink } from "./links";
-import { pageTextItemBoxes } from "./pageText";
+import { pageTextItemBoxesUnturned } from "./pageText";
 import { HIGHLIGHT_COLORS, loadPageNotes } from "./notes";
 import {
   PdfNoteLayer,
@@ -119,8 +119,6 @@ import { PdfMarkupLayer } from "./PdfMarkupLayer";
 import { PdfMarkupBar, selectionColors } from "./PdfMarkupBar";
 import { PdfMarkupQuestions, PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
 import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
-import { PdfGroupSubmits } from "./PdfMarkupGroups";
-import type { Mark, MarkGroup, PageLayer } from "../../../../mobile-web/src/markup/layer";
 import { usePdfMarkup, type MarkupEdit, type MarkupTool, type QuestionFocus } from "./usePdfMarkup";
 import { colorsFor } from "../../../../mobile-web/src/markup/pen";
 import type { QuestionPin } from "../../../lib/viewers/markupQuestions";
@@ -140,6 +138,7 @@ import {
   PDF_PRESENT_READY,
   pdfPresentLabel,
   pdfPresentSeedEvent,
+  readPresentScreen,
 } from "./present";
 import { openRoutedUri } from "../../../lib/linkTarget";
 import {
@@ -162,7 +161,8 @@ import { resolveProjectDirectory } from "../../../types";
 import { basename, dirname, isPathWithin } from "../../../lib/paths";
 import {
   pdfPageMatches,
-  pdfPointToBigPoints,
+  viewportToSyncPoint,
+  syncRectToViewport,
   bigPointsToCssRect,
   synctexEdit,
   synctexStatus,
@@ -207,6 +207,11 @@ const RELOAD_SETTLE_ROUNDS = 10;
 /** The longest a running build (`beginCompile`) holds the viewer's mtime poll:
  *  a compile that long is not a compile, it is a window that died mid-build. */
 const PDF_COMPILE_HOLD_MAX_MS = 10 * 60_000;
+
+/** How long a SyncTeX forward-search highlight stays up: its fade's length, as
+ *  the reverse-search click marker's is, so reduced motion (no fade) still
+ *  clears it. */
+export const SYNC_HIGHLIGHT_MS = 2200;
 
 /**
  * Wait until the file's size holds still across two stats `RELOAD_SETTLE_MS`
@@ -584,6 +589,17 @@ export function PdfThumb({
   return <canvas ref={canvasRef} className="page-strip-canvas" />;
 }
 
+/** The two viewports SyncTeX geometry converts between (`syncRectToViewport`,
+ *  `viewportToSyncPoint`): the page as drawn at `scale` — its own `/Rotate` (a
+ *  `pdflscape` sheet) plus the viewer's turn `rot` — and the page's unturned
+ *  space at scale 1, where SyncTeX's big points live. */
+function syncViewports(page: PDFPageProxy, scale: number, rot: number) {
+  return {
+    turned: page.getViewport({ scale, rotation: (((page.rotate + rot) % 360) + 360) % 360 }),
+    unturned: page.getViewport({ scale: 1, rotation: 0 }),
+  };
+}
+
 /** One PDF page rendered to a canvas at `scale` (× devicePixelRatio for
  *  crispness). Re-renders when the page or scale changes; cancels an in-flight
  *  render on cleanup so rapid zooming doesn't paint stale frames. */
@@ -622,7 +638,6 @@ function PdfPageCanvas({
   markup,
   questionPins,
   tickBadges,
-  groupSubmits,
   onSize,
 }: {
   doc: PDFDocumentProxy;
@@ -644,12 +659,14 @@ function PdfPageCanvas({
    *  fetch the render needs anyway, so the reservation and every layer laid out
    *  by it (remarks, markup, copy region) follow the page as drawn. */
   onSize?: (size: { w: number; h: number }) => void;
-  /** SyncTeX reverse search: a click maps to big points on this page. */
+  /** SyncTeX reverse search: a click maps to big points in this page's own,
+   *  unturned space. */
   onSyncClick?: (page: number, xBp: number, yBp: number) => void;
   /** True while Ctrl/⌘ is held, so the page shows the reverse-search cursor. */
   syncArmed?: boolean;
-  /** SyncTeX forward search: when this page is the target, the box (big points)
-   *  to scroll into view and flash. `nonce` re-triggers a repeat reveal.
+  /** SyncTeX forward search: when this page is the target, the box (big points,
+   *  the page's unturned space) to scroll into view and flash. `nonce`
+   *  re-triggers a repeat reveal.
    *  `phrase`, when set, narrows the box to the clicked word via the page's text
    *  content (using the surrounding words to disambiguate). */
   highlight?: { rect: SyncRect; nonce: number; phrase?: CaretPhrase } | null;
@@ -758,14 +775,6 @@ function PdfPageCanvas({
     disabled: boolean;
     onApprove: (marks: TickBadge["marks"]) => void;
   } | null;
-  /** The unsent remarks' own Submits (`PdfMarkupGroups`), over the markup
-   *  layer: a click sends that group alone. */
-  groupSubmits?: {
-    groups: readonly MarkGroup[];
-    page: PageLayer | undefined;
-    disabled: boolean;
-    onSubmit: (marks: readonly Mark[]) => void;
-  } | null;
 }) {
   const t = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -779,7 +788,13 @@ function PdfPageCanvas({
   // the page wrapper), giving the jump visible feedback on the PDF side; it
   // auto-clears after ~2s. `nonce` re-triggers the fade for a repeat click on the
   // same spot. See `onClick`.
-  const [clickMark, setClickMark] = useState<{ left: number; top: number; nonce: number } | null>(null);
+  const [clickMark, setClickMark] = useState<{
+    left: number;
+    top: number;
+    nonce: number;
+    /** The page is drawn turned (its `/Rotate`, or a turn in the viewer). */
+    turned?: boolean;
+  } | null>(null);
   const clickTimer = useRef<number | null>(null);
   useEffect(() => () => { if (clickTimer.current != null) window.clearTimeout(clickTimer.current); }, []);
 
@@ -1125,9 +1140,34 @@ function PdfPageCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteFocus?.nonce]);
 
+  // SyncTeX speaks the page's own, unturned space; the canvas is drawn turned.
+  // The page proxy gives both viewports (`syncViewports`). Fetched while a
+  // highlight is up here — pdf.js hands back the page it already holds — and
+  // `page: null` when the fetch failed (a read mid-compile), which falls back to
+  // the plain scale mapping rather than showing nothing.
+  // Held with the document it came from: a recompile's reveal arrives with the
+  // NEW document, whose page may be turned or sized differently, so a geometry
+  // from the old one is not ready for it.
+  const [syncGeom, setSyncGeom] = useState<{
+    doc: PDFDocumentProxy;
+    page: PDFPageProxy | null;
+  } | null>(null);
+  const wantSyncGeom = highlight != null;
+  useEffect(() => {
+    if (!wantSyncGeom) return;
+    let cancelled = false;
+    doc.getPage(pageNumber).then(
+      (page) => { if (!cancelled) setSyncGeom({ doc, page }); },
+      () => { if (!cancelled) setSyncGeom({ doc, page: null }); },
+    );
+    return () => { cancelled = true; };
+  }, [doc, pageNumber, wantSyncGeom]);
+  const geom = syncGeom?.doc === doc ? syncGeom : null;
+
   // Narrow the SyncTeX line box to the clicked word: pull this page's text runs
-  // (big points, top-left origin, at viewport scale 1) and find the word nearest
-  // the line box. Best-effort — on no match (or no word) the original box stands.
+  // (big points, top-left origin, at viewport scale 1, UNTURNED — the space the
+  // SyncTeX box is in) and find the word nearest the line box. Best-effort — on
+  // no match (or no word) the original box stands.
   useEffect(() => {
     setRefined(null);
     const phrase = highlight?.phrase;
@@ -1135,7 +1175,7 @@ function PdfPageCanvas({
     let cancelled = false;
     (async () => {
       try {
-        const items = await pageTextItemBoxes(doc, pageNumber);
+        const items = await pageTextItemBoxesUnturned(doc, pageNumber);
         if (cancelled) return;
         const r = refineToWord(highlight.rect, phrase, items);
         if (!cancelled && r) setRefined(r);
@@ -1147,19 +1187,28 @@ function PdfPageCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlight?.nonce]);
 
-  // Scroll a forward-search target into view on a new nonce. Center the
-  // highlight *box*, not the whole page — on a tall page the target line can sit
-  // far from page-center, which is what made the jump feel imprecise. Scoped to
-  // the reader's own scroller (`scrollIntoPdfBox`): `scrollIntoView` also scrolls
+  // Scroll a forward-search target into view on a new nonce, once its box can be
+  // placed (the page geometry above is a fetch away). Center the highlight
+  // *box*, not the whole page — on a tall page the target line can sit far from
+  // page-center, which is what made the jump feel imprecise. Scoped to the
+  // reader's own scroller (`scrollIntoPdfBox`): `scrollIntoView` also scrolls
   // the `overflow: hidden` pane and tab hosts above it, which is what displaced
   // the whole pane — and the fit-to-width page inside it — on a jump.
+  // A pane hidden behind another tab cannot scroll (`scrollIntoPdfBox` says so),
+  // so the reveal is retried when the pane is shown; `onReveal` still fires once.
+  const revealedNonce = useRef<number | null>(null);
+  const announcedNonce = useRef<number | null>(null);
+  const syncGeomReady = geom != null;
   useEffect(() => {
-    if (!highlight) return;
-    onReveal?.();
+    if (!highlight || !syncGeomReady || !paneVisible || revealedNonce.current === highlight.nonce) return;
+    if (announcedNonce.current !== highlight.nonce) {
+      announcedNonce.current = highlight.nonce;
+      onReveal?.();
+    }
     const target = boxRef.current ?? wrapRef.current;
-    if (target) scrollIntoPdfBox(target, "center");
+    if (target && scrollIntoPdfBox(target, "center")) revealedNonce.current = highlight.nonce;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlight?.nonce]);
+  }, [highlight?.nonce, syncGeomReady, paneVisible]);
 
   // Ctrl+F: scroll the current match into view when the find bar parks it on this
   // page (`searchScrollNonce` bumps). All pages are mounted, so the target page's
@@ -1177,18 +1226,26 @@ function PdfPageCanvas({
     const canvas = canvasRef.current;
     if (!onSyncClick || !canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const { x, y } = pdfPointToBigPoints(rect, clientX, clientY, scale);
+    const left = clientX - rect.left;
+    const top = clientY - rect.top;
     // Mark the clicked point so the source-jump has feedback on the PDF side; the
     // canvas sits flush at the wrapper's top-left, so canvas-local offsets are
     // wrapper-local. Clear any prior marker's timer and fade out after ~2s.
-    setClickMark((m) => ({
-      left: clientX - rect.left,
-      top: clientY - rect.top,
-      nonce: (m?.nonce ?? 0) + 1,
-    }));
+    setClickMark((m) => ({ left, top, nonce: (m?.nonce ?? 0) + 1 }));
     if (clickTimer.current != null) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(() => setClickMark(null), 2000);
-    onSyncClick(pageNumber, x, y);
+    // The point as drawn → the page's unturned space, through the page's own
+    // viewports (a turned sheet, a crop box off the origin). A failed page read
+    // falls back to the plain scale mapping, right for an unturned page.
+    void doc.getPage(pageNumber).then(
+      (page) => {
+        const { turned, unturned } = syncViewports(page, scale, rot);
+        const p = viewportToSyncPoint(turned, unturned, left, top);
+        if (turned.rotation !== 0) setClickMark((m) => (m ? { ...m, turned: true } : m));
+        onSyncClick(pageNumber, p.x, p.y);
+      },
+      () => onSyncClick(pageNumber, left / scale, top / scale),
+    );
   };
 
   // ── Blacking an area out (#pdf-redact) ──────────────────────────────────
@@ -1322,7 +1379,14 @@ function PdfPageCanvas({
     });
   };
 
-  const box = highlight ? bigPointsToCssRect(refined ?? highlight.rect, scale) : null;
+  const syncTarget = highlight ? refined ?? highlight.rect : null;
+  const syncView = geom?.page ? syncViewports(geom.page, scale, rot) : null;
+  const box =
+    syncTarget && geom
+      ? syncView
+        ? syncRectToViewport(syncTarget, syncView.turned, syncView.unturned)
+        : bigPointsToCssRect(syncTarget, scale)
+      : null;
 
   return (
     <div
@@ -1455,12 +1519,24 @@ function PdfPageCanvas({
           style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
         />
       )}
+      {box && (
+        // Untested pills ride the mark they are about, for as long as it is up.
+        <span className="file-viewer-pdf-sync-pills" style={{ left: box.left, top: box.top + box.height + 2 }}>
+          <UntestedTag id="pdfViewer.syncHighlightClears" />
+          {syncView && syncView.turned.rotation !== 0 && <UntestedTag id="pdfViewer.syncTurnedPage" />}
+        </span>
+      )}
       {clickMark && (
         <div
           key={`click-${clickMark.nonce}`}
           className="file-viewer-pdf-click-mark"
           style={{ left: clickMark.left, top: clickMark.top }}
         />
+      )}
+      {clickMark?.turned && (
+        <span className="file-viewer-pdf-sync-pills" style={{ left: clickMark.left, top: clickMark.top + 12 }}>
+          <UntestedTag id="pdfViewer.syncTurnedPage" />
+        </span>
       )}
       {/* The blackout surface (#pdf-redact), under the marks so an armed click on an
           existing one removes it rather than starting a drag on top of it. */}
@@ -1600,16 +1676,6 @@ function PdfPageCanvas({
           remarks included, which it leaves visible but out of reach. */}
       {markup && cssSize && (
         <PdfMarkupLayer n={pageNumber} size={[cssSize.w, cssSize.h]} scale={scale} edit={markup} />
-      )}
-      {groupSubmits && groupSubmits.groups.length > 0 && cssSize && (
-        <PdfGroupSubmits
-          groups={groupSubmits.groups}
-          page={groupSubmits.page}
-          size={[cssSize.w, cssSize.h]}
-          scale={scale}
-          disabled={groupSubmits.disabled}
-          onSubmit={groupSubmits.onSubmit}
-        />
       )}
       {tickBadges && tickBadges.badges.length > 0 && cssSize && (
         <PdfTickBadges
@@ -2238,8 +2304,13 @@ function PdfCanvas({
         // windowed on a single-monitor machine, which is the right default for a
         // talk with a notes view but not for "show me this PDF fullscreen".
         // Opening is idempotent by label, so a second press re-focuses the window
-        // already up and the seed below moves it to this sheet.
-        await invoke("open_presenter_window", { label: presentLabel, fullscreen: true });
+        // already up and the seed below moves it to this sheet. `monitor` is the
+        // screen the reader last moved the present window to, if any.
+        await invoke("open_presenter_window", {
+          label: presentLabel,
+          fullscreen: true,
+          monitor: readPresentScreen(),
+        });
         setPresentOpen(true);
         seedPresent();
       } catch (e) {
@@ -2759,15 +2830,6 @@ function PdfCanvas({
     [markup.edit.base, markup.ticks.groups, markup.ticks.captions],
   );
   const approveTick = markup.ticks.approve;
-  // Each unsent remark's own Submit, by page — none while a stroke is drawn.
-  const groupsByPage = useMemo(() => {
-    const out = new Map<number, MarkGroup[]>();
-    for (const group of markup.groups) out.set(group.page, [...(out.get(group.page) ?? []), group]);
-    return out;
-  }, [markup.groups]);
-  const drawing = markup.edit.layer !== markup.edit.base;
-  const groupSubmitOff = markup.sending || markup.target === null || markup.edit.note !== null;
-  const submitGroup = markup.submit;
   const pickQuestionPin = useCallback((pin: QuestionPin) => showQuestion(pin.askId, pin.index, "card"), [showQuestion]);
   const holder = markup.key ? markupHolder(markup.key) : undefined;
   const gate = markupGate({ ...gateInput, claimedElsewhere: holder !== undefined && holder !== markupOwner });
@@ -2893,7 +2955,9 @@ function PdfCanvas({
   // a hit, the PDF's sibling `.tex` otherwise); `canRecompile` gates the button,
   // since a PDF opened on its own has no workspace to hand the build to.
   const [syncNotice, setSyncNotice] = useState<{
-    kind: SyncNoticeKind;
+    /** `"remote"`: the PDF is read from a remote host, whose map the SyncTeX
+     *  commands (local disk only) cannot reach — no call is made. */
+    kind: SyncNoticeKind | "remote";
     source: string;
     sources: string[];
     canRecompile: boolean;
@@ -2910,6 +2974,16 @@ function PdfCanvas({
   const reveal = usePdfSyncStore((s) => s.byPath[path] ?? null);
   const consumeReveal = usePdfSyncStore((s) => s.consume);
   const [highlight, setHighlight] = useState<{ rect: SyncRect; nonce: number; phrase?: CaretPhrase } | null>(null);
+  // The highlight is a flash, gone with its fade (1.6 s) — but under reduced
+  // motion the fade is off and the box would stay for good. Dropped after the
+  // click marker's 2.2 s either way, so "briefly" holds for both. The clock runs
+  // only while the pane is on screen: a reveal into a hidden pane is still there
+  // to see (and scroll to) when it is shown.
+  useEffect(() => {
+    if (!highlight || !paneVisible) return;
+    const id = window.setTimeout(() => setHighlight(null), SYNC_HIGHLIGHT_MS);
+    return () => window.clearTimeout(id);
+  }, [highlight, paneVisible]);
   const [reloadReveal, setReloadReveal] = useState<{
     rect: SyncRect;
     nonce: number;
@@ -3978,8 +4052,15 @@ function PdfCanvas({
   };
 
   // Probe for SyncTeX data beside the PDF; re-checked after each disk change
-  // (a recompile may have just written it).
+  // (a recompile may have just written it). Not for a PDF read from a remote
+  // host: the SyncTeX commands read local disk only, so a map found over SFTP
+  // could arm nothing but a refusal — and the stat ran on every reload.
+  const remoteSource = fileSource === "remote";
   useEffect(() => {
+    if (remoteSource) {
+      setSyncable(false);
+      return;
+    }
     let cancelled = false;
     const base = path.replace(/\.pdf$/i, "");
     const exists = (p: string) =>
@@ -3988,7 +4069,7 @@ function PdfCanvas({
       ([gz, raw]) => { if (!cancelled) setSyncable(gz || raw); },
     );
     return () => { cancelled = true; };
-  }, [path, scope, diskVersion]);
+  }, [path, scope, diskVersion, remoteSource]);
 
   // Reverse search: a click on a page → which source line produced it → jump.
   // Resolve the clicked source's root (the main `.tex` that produces this PDF) and
@@ -4003,6 +4084,13 @@ function PdfCanvas({
   const onSyncClick = useCallback(
     async (page: number, x: number, y: number) => {
       setSyncNotice(null);
+      // The SyncTeX commands read the map off local disk; a PDF read from a
+      // remote host has none there, so say so and ask nothing. A mirror path is
+      // local and goes on.
+      if (remoteSource) {
+        setSyncNotice({ kind: "remote", source: path, sources: [], canRecompile: false });
+        return;
+      }
       const src = syncable ? await synctexEdit(path, page, x, y) : null;
       if (src) {
         const anchor = await resolveTexRoot(src.input).catch(() => src.input);
@@ -4021,7 +4109,7 @@ function PdfCanvas({
       const canRecompile = await canRecompileTexSource(source).catch(() => false);
       setSyncNotice({ kind, source, sources: status?.newer_sources ?? [], canRecompile });
     },
-    [path, syncable, onReverseSource],
+    [path, remoteSource, syncable, onReverseSource],
   );
 
   // Seed the mtime baseline once per file, visible or not, so it pairs with the
@@ -5302,17 +5390,20 @@ function PdfCanvas({
         <div className="file-viewer-banner" role="status">
           <span>
             {t(
-              syncNotice.kind === "noMap"
-                ? "pdfViewer.syncNoMapMsg"
-                : syncNotice.kind === "pdfNewer"
-                  ? "pdfViewer.syncPdfNewerMsg"
-                  : syncNotice.kind === "stale"
-                    ? "pdfViewer.syncStaleMsg"
-                    : "pdfViewer.syncMissMsg",
+              syncNotice.kind === "remote"
+                ? "pdfViewer.syncRemoteMsg"
+                : syncNotice.kind === "noMap"
+                  ? "pdfViewer.syncNoMapMsg"
+                  : syncNotice.kind === "pdfNewer"
+                    ? "pdfViewer.syncPdfNewerMsg"
+                    : syncNotice.kind === "stale"
+                      ? "pdfViewer.syncStaleMsg"
+                      : "pdfViewer.syncMissMsg",
               {
                 files: syncNotice.sources.map((f) => basename(f)).join(", "),
               },
             )}
+            {syncNotice.kind === "remote" && <UntestedTag id="pdfViewer.syncRemoteMsg" />}
           </span>
           {syncNotice.canRecompile && (
             <button
@@ -5498,11 +5589,6 @@ function PdfCanvas({
                     questionPins={
                       marking && ref.src === SELF && questionPins.has(i + 1)
                         ? { pins: questionPins.get(i + 1)!, focus: markup.questions.focus, onPick: pickQuestionPin }
-                        : null
-                    }
-                    groupSubmits={
-                      marking && ref.src === SELF && !drawing && groupsByPage.has(i + 1)
-                        ? { groups: groupsByPage.get(i + 1)!, page: markup.edit.base.pages[i + 1], disabled: groupSubmitOff, onSubmit: (marks) => void submitGroup({ page: i + 1, marks }) }
                         : null
                     }
                     tickBadges={

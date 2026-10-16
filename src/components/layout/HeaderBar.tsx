@@ -7,6 +7,7 @@ import { CalendarIndicator } from "../header/CalendarIndicator";
 import { TodoIndicator } from "../header/TodoIndicator";
 import { InboxIndicator } from "../header/InboxIndicator";
 import { SettingsMenu } from "../header/SettingsMenu";
+import { HelpAgentButton } from "../header/HelpAgentButton";
 import { WindowControls } from "../header/WindowControls";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { LocalModelMenu } from "./LocalModelMenu";
@@ -80,6 +81,9 @@ export function HeaderBar() {
             with the other global buttons rather than at the head of the project
             strip, where it put the switcher's own controls on both sides of a
             scrolling row. */}
+        {/* The ? opens an agent primed with the built-in help, beside the
+            gear whose menu holds the help pages. */}
+        <HelpAgentButton />
         <SettingsMenu />
         <span className="header-right-gap" aria-hidden="true" />
         <StatusCluster />

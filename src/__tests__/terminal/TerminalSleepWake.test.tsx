@@ -92,7 +92,6 @@ vi.mock("@xterm/xterm", () => ({
     };
   },
 }));
-vi.mock("@xterm/addon-canvas", () => ({ CanvasAddon: class { dispose() {} } }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: class { onContextLoss() {} dispose() {} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} dispose() {} } }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));

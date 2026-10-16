@@ -165,6 +165,8 @@ import {
   PaneVisibleContext,
   usePaneVisible,
   fileSource,
+  FileSourceContext,
+  useFileSource,
   type FileSource,
   readFileText,
   readFileBytes,
@@ -214,7 +216,12 @@ import {
   type TexRefCreation,
   texRefRanges,
   texRefHitRanges,
-  synctexViewBest,
+  synctexView,
+  synctexStatus,
+  syncNoticeKind,
+  withUnsavedSource,
+  editedAboveLine,
+  type SyncNoticeKind,
   pickSyncRect,
   sourceColumnFraction,
   isTexDocumentRoot,
@@ -741,6 +748,10 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
   return (
     <FileScopeContext.Provider value={projectId}>
       <PaneVisibleContext.Provider value={visible}>
+      {/* The side the viewer's bytes come from (`useFileSource`): the Mark up
+          gate and SyncTeX read it. Until `file_source` answers, a remote
+          project's file counts as remote — the side that offers less. */}
+      <FileSourceContext.Provider value={sideOverride ?? source ?? (project?.remote ? "remote" : "none")}>
       <ViewerHeaderInfoContext.Provider value={{ path: effectivePath, projectId, sourceSwitch }}>
         {/* A single relative host so the marker/laser presentation overlay can
             sit over ANY viewer without each one wiring it in (see
@@ -769,6 +780,7 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
           {!presenting && <PresentationOverlay />}
         </div>
       </ViewerHeaderInfoContext.Provider>
+      </FileSourceContext.Provider>
       </PaneVisibleContext.Provider>
     </FileScopeContext.Provider>
   );
@@ -1639,6 +1651,8 @@ export function useEditableFile(path: string, enabled = true) {
     content, error, draft, setDraft, loaded, isDirty, saving, saveError, save,
     undo, redo, canUndo, canRedo,
     externalChange, reloadFromDisk, keepMine,
+    /** The text last read from or written to disk — what a build sees. */
+    baseline,
   };
 }
 
@@ -9383,9 +9397,12 @@ function TexView({
   const texInstallLabel = IS_HOST_WINDOWS ? t("fileViewer.texInstallMiktex") : t("fileViewer.texInstallLatex");
   const {
     error, draft, setDraft, loaded, isDirty, saving, saveError, save,
-    undo, redo, canUndo, canRedo, externalChange, reloadFromDisk, keepMine,
+    undo, redo, canUndo, canRedo, externalChange, reloadFromDisk, keepMine, baseline,
   } = useEditableFile(path);
   const scope = useFileScope();
+  // The SyncTeX commands read the map off local disk; a file read from a remote
+  // host (not its local mirror) has none there.
+  const remoteSource = useFileSource() === "remote";
   const ai = useTabAiPrefs(tabKey, "tex");
   const ac = ai.ac;
   const sc = ai.sc;
@@ -9553,6 +9570,8 @@ function TexView({
     [onCompileOptsChange, viewPos],
   );
   const [compiling, setCompiling] = useState(false);
+  const compilingRef = useRef(compiling);
+  compilingRef.current = compiling;
   // A build in flight keeps the pane awake: its result (diagnostics, the PDF
   // reload it asks for) lands in this component (performance plan §5.3).
   usePaneSleepHold(compiling);
@@ -9572,15 +9591,19 @@ function TexView({
   // Mirror of `pdfVersion` for the compile closure (which doesn't depend on the
   // state), so it can report the next version to the workspace host in one write.
   const pdfVersionRef = useRef(0);
-  // Why the last forward-search (caret → PDF) did not jump, if it didn't — shown
-  // as a transient notice so it reads as a SyncTeX outcome, never as a build
-  // failure (the PDF is always shown/refreshed regardless). `"miss"` = SyncTeX
-  // ran but found no box for that line (the PDF kept its position); `"unavail"` =
-  // SyncTeX could not run at all (tool absent, or a backend not yet rebuilt), the
-  // case that used to masquerade as a miss; `"noPdf"` = a Ctrl/⌘+click forward
-  // search before the document was ever compiled, so there is no PDF to jump
-  // into yet. Auto-cleared by the effect below.
-  const [syncNote, setSyncNote] = useState<null | "miss" | "unavail" | "noPdf">(null);
+  // Why the last forward search (caret → PDF) did not jump, or may have jumped to
+  // the wrong place — shown as a transient notice so it reads as a SyncTeX
+  // outcome, never as a build failure (the PDF is always shown/refreshed
+  // regardless). The kinds are reverse search's (`syncNoticeKind`, worded from
+  // the same `synctexStatus`) plus two of forward search's own: `"noPdf"` = a
+  // Ctrl/⌘+click before the document was ever compiled, so there is no PDF to
+  // jump into yet; `"remote"` = the PDF is read from a remote host, whose map the
+  // SyncTeX commands (local disk only) cannot reach. `files` names the sources
+  // edited since the build on a `"stale"` notice. Auto-cleared by the effect below.
+  const [syncNote, setSyncNote] = useState<null | {
+    kind: SyncNoticeKind | "noPdf" | "remote";
+    files: string[];
+  }>(null);
   // The last build finished without running an engine (latexmk found every
   // source unchanged) — a success that produced nothing new. Cleared by the
   // next build; shown until then so it explains the PDF the reader is looking at.
@@ -9644,6 +9667,10 @@ function TexView({
   const caretApiRef = useRef<(() => number | null) | null>(null);
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  // Read by forward search, which counts unsaved edits above the caret's line
+  // as a stale source: the saved text when the draft differs from it, else null.
+  const unsavedBaseRef = useRef<string | null>(null);
+  unsavedBaseRef.current = isDirty ? baseline : null;
 
   // The file actually built on Compile: a child `.tex` redirects to its main
   // document (resolve_tex_root). Resolved on load and refreshed after each
@@ -9782,36 +9809,64 @@ function TexView({
     [pdfPath, root],
   );
 
-  // SyncTeX forward search on demand: map a caret offset in this source to its
-  // box in the PDF and reveal/flash it there — without recompiling. Opens (or
-  // refocuses) the PDF tab only on a hit, so a miss never spawns a broken tab.
+  // SyncTeX forward search, for both callers — a Ctrl/⌘+click and the reveal
+  // after a compile. `text` and `caret` are one snapshot, so the line searched
+  // and the phrase the PDF narrows to come from the same draft: a compile takes
+  // it when the build starts, and typing during the build must not move the
+  // reveal. Opens (or refocuses) the PDF tab only on a hit, so a miss never
+  // spawns a broken tab; after a compile the PDF is already open, the reveal
+  // rides its reload, and a miss asks for the reload outright. Every outcome is
+  // worded the way reverse search words it (`syncNoticeKind`): a stale map is
+  // said even on a hit, since the jump still happens but may be off. `unsaved`
+  // is the saved text when the draft has unsaved edits: an edit above the
+  // caret's line moved it, which counts this file as stale (Compile saves first).
+  const revealInPdf = useCallback(
+    async (pdf: string, text: string, caret: number, opts: { afterCompile: boolean; saved: string | null }) => {
+      // A PDF read from a remote host has no map on local disk (the PDF sits on
+      // the same side as its source). A mirror path is local and goes on.
+      if (remoteSource) {
+        setSyncNote({ kind: "remote", files: [] });
+        if (opts.afterCompile) usePdfSyncStore.getState().requestReload(pdf);
+        return;
+      }
+      const { line, column } = offsetToLineCol(text, caret);
+      // Pick the record (box / wrapped row) the clicked column lands in.
+      const rect = pickSyncRect(await synctexView(pdf, path, line), sourceColumnFraction(text, line, column));
+      if (rect) {
+        if (!opts.afterCompile) openPdf(pdf);
+        // Pass the clicked word + neighbours so the PDF narrows the line box to
+        // that exact word, using the phrase to pick the right occurrence.
+        usePdfSyncStore.getState().requestReveal(pdf, rect, phraseAt(text, caret) ?? undefined, opts.afterCompile);
+      } else if (opts.afterCompile) {
+        usePdfSyncStore.getState().requestReload(pdf);
+      }
+      const raw = await synctexStatus(pdf);
+      const moved = opts.saved != null && editedAboveLine(opts.saved, text, line);
+      const status = moved ? withUnsavedSource(raw, path) : raw;
+      const kind = syncNoticeKind(status, rect != null);
+      if (kind) setSyncNote({ kind, files: status?.newer_sources ?? [] });
+    },
+    [remoteSource, path, openPdf],
+  );
+
+  // SyncTeX forward search on demand: reveal the caret's box in the PDF without
+  // recompiling.
   const forwardSync = useCallback(
     async (caret: number) => {
+      // A build is running: its own reveal follows, from the caret it took at
+      // the start, and a notice from this click would only race it.
+      if (compilingRef.current) return;
       const pdf = targetPdf();
       setSyncNote(null);
       // Not compiled yet: say so, rather than letting SyncTeX fail on the
-      // missing PDF and read as "SyncTeX didn't run".
+      // missing PDF and read as a miss.
       if (!(await texPathExists(pdf, scope))) {
-        setSyncNote("noPdf");
+        setSyncNote({ kind: "noPdf", files: [] });
         return;
       }
-      const { line, column } = offsetToLineCol(draftRef.current, caret);
-      const phrase = phraseAt(draftRef.current, caret) ?? undefined;
-      // Try every spelling SyncTeX might have stored the source under. `null` here
-      // means SyncTeX could not run at all — a different notice from a real miss.
-      const recs = await synctexViewBest(pdf, path, rootDir, line, column);
-      // Pick the record (box / wrapped row) the clicked column lands in.
-      const rect = pickSyncRect(recs ?? [], sourceColumnFraction(draftRef.current, line, column));
-      if (rect) {
-        openPdf(pdf);
-        // Pass the clicked word + neighbours so the PDF narrows the line box to
-        // that exact word, using the phrase to pick the right occurrence.
-        usePdfSyncStore.getState().requestReveal(pdf, rect, phrase);
-      } else {
-        setSyncNote(recs === null ? "unavail" : "miss");
-      }
+      await revealInPdf(pdf, draftRef.current, caret, { afterCompile: false, saved: unsavedBaseRef.current });
     },
-    [targetPdf, path, openPdf, rootDir, scope],
+    [targetPdf, scope, revealInPdf],
   );
 
   // Ctrl/⌘+click in the editor: follow a `\input{…}`-style reference when the
@@ -9839,8 +9894,11 @@ function TexView({
     setDriverNote(null);
     // Snapshot the caret synchronously, before any await can let focus change or
     // a blur reset it: prefer the editor's live cursor, falling back to the last
-    // reported offset. This is the position forward search reveals in the PDF.
+    // reported offset. This is the position forward search reveals in the PDF —
+    // taken with the draft it indexes (the text this build saves), so typing
+    // during the build moves neither the line nor the phrase.
     const caretAtCompile = caretApiRef.current?.() ?? caretRef.current;
+    const draftAtCompile = draftRef.current;
     try {
       // The source is editable, so persist any pending edits before building —
       // this pane's AND every other mounted pane's (a workspace builds one
@@ -9908,28 +9966,8 @@ function TexView({
         openPdf(res.pdf_path); // open (or refocus) the PDF in its own tab
         // Forward search: reveal & highlight the caret's output position in the
         // PDF. `input` is this edited file even when a parent was built, since
-        // the caret lives here. Best-effort — no-op when SyncTeX has no answer.
-        const { line, column } = offsetToLineCol(draftRef.current, caretAtCompile);
-        const recs = await synctexViewBest(res.pdf_path, path, rootDir, line, column);
-        const rect = pickSyncRect(recs ?? [], sourceColumnFraction(draftRef.current, line, column));
-        if (rect)
-          usePdfSyncStore
-            .getState()
-            .requestReveal(
-              res.pdf_path,
-              rect,
-              phraseAt(draftRef.current, caretAtCompile) ?? undefined,
-              true,
-            );
-        // No jump: the PDF is already shown and stays where it was. Distinguish a
-        // real miss (SyncTeX ran, no box for that line) from SyncTeX being
-        // unavailable (`null`) so the notice names the actual cause, not a failure.
-        // The reveal above carried the re-read; without one, ask for it outright
-        // so Compile always puts the file as it is on disk on screen.
-        else {
-          setSyncNote(recs === null ? "unavail" : "miss");
-          usePdfSyncStore.getState().requestReload(res.pdf_path);
-        }
+        // the caret lives here. Best-effort — a miss leaves the PDF where it was.
+        await revealInPdf(res.pdf_path, draftAtCompile, caretAtCompile, { afterCompile: true, saved: null });
       }
     } catch (e) {
       setCompileError(String(e));
@@ -9948,7 +9986,7 @@ function TexView({
     extraFlags,
     cap?.latexmk,
     openPdf,
-    rootDir,
+    revealInPdf,
     t,
     onCompiled,
     onDiagnostics,
@@ -10294,16 +10332,29 @@ function TexView({
         </div>
       )}
       {syncNote && (
+        // One set of notices for both directions: the map-status ones are the
+        // PDF viewer's own (`pdfViewer.sync*`), worded for either.
         <div className="file-viewer-tex-sync-miss" role="status">
           {t(
-            syncNote === "noPdf"
+            syncNote.kind === "noPdf"
               ? "fileViewer.syncNoPdfMsg"
-              : syncNote === "unavail"
-                ? "fileViewer.syncUnavailMsg"
-                : "fileViewer.syncMissMsg",
-            { modifier: modifierLabel() },
+              : syncNote.kind === "remote"
+                ? "pdfViewer.syncRemoteMsg"
+                : syncNote.kind === "noMap"
+                  ? "pdfViewer.syncNoMapMsg"
+                  : syncNote.kind === "pdfNewer"
+                    ? "pdfViewer.syncPdfNewerMsg"
+                    : syncNote.kind === "stale"
+                      ? "pdfViewer.syncStaleMsg"
+                      : "fileViewer.syncMissMsg",
+            {
+              modifier: modifierLabel(),
+              files: syncNote.files.map((f) => basename(f)).join(", "),
+            },
           )}
-          {syncNote === "noPdf" && <UntestedTag id="fileViewer.syncNoPdfMsg" />}
+          {syncNote.kind === "noPdf" && <UntestedTag id="fileViewer.syncNoPdfMsg" />}
+          {syncNote.kind === "stale" && <UntestedTag id="fileViewerPane.9" />}
+          {syncNote.kind === "remote" && <UntestedTag id="pdfViewer.syncRemoteMsg" />}
         </div>
       )}
       {shellEscape && (

@@ -2,8 +2,18 @@
  * The browser desktop client's transport (hosted plan §3.5, §11 "the shim
  * against a fake daemon"): the `__TAURI_INTERNALS__` shim over `WsClient`,
  * driven through a fake socket that plays the server's half of the protocol.
+ *
+ * The last block drives the INSTALLED `@tauri-apps/api` (`core`, `event`,
+ * `window`, `webview`) and `@tauri-apps/plugin-dialog`/`-notification` JS
+ * through the shim, so an upstream rename of a command or an argument key
+ * fails here (`docs/third_party_update_checklist.md`, the API internals row).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { emit, emitTo, listen, once } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { availableMonitors, currentMonitor, getAllWindows, getCurrentWindow, primaryMonitor } from "@tauri-apps/api/window";
+import { ask, confirm, message, open, save } from "@tauri-apps/plugin-dialog";
 import { DisconnectedError, linkState, resetLinkStateForTests } from "../../lib/transport/linkState";
 import { KIND_CALL, KIND_RET, WsClient, type SocketLike } from "../../lib/transport/wsClient";
 import { WsInternals } from "../../lib/transport/wsInternals";
@@ -74,9 +84,40 @@ beforeEach(() => {
   resetLinkStateForTests();
 });
 
+/** Undo for `installed()`: the test setup's stub internals come back. */
+let restoreInternals: (() => void) | null = null;
+
 afterEach(() => {
   setDialogAdapter(null);
+  restoreInternals?.();
+  restoreInternals = null;
 });
+
+/** `connected()`, with the shim where the real `@tauri-apps/*` JS looks for it
+ *  (`installWsInternals` does the same on the page). */
+function installed() {
+  const link = connected();
+  const w = window as unknown as Record<string, unknown>;
+  const saved = [w.__TAURI_INTERNALS__, w.__TAURI_EVENT_PLUGIN_INTERNALS__];
+  w.__TAURI_INTERNALS__ = link.internals.internals();
+  w.__TAURI_EVENT_PLUGIN_INTERNALS__ = link.internals.eventInternals();
+  restoreInternals = () => {
+    [w.__TAURI_INTERNALS__, w.__TAURI_EVENT_PLUGIN_INTERNALS__] = saved;
+  };
+  return link;
+}
+
+/** A dialog adapter that records what reached it and answers `answer`. */
+function recordingDialogs(answer = true) {
+  const calls: unknown[][] = [];
+  setDialogAdapter({
+    open: (options) => (calls.push(["open", options]), Promise.resolve(["/srv/a.pdf"])),
+    save: (options) => (calls.push(["save", options]), Promise.resolve("/srv/out.vcf")),
+    confirm: (text, options) => (calls.push(["confirm", text, options]), Promise.resolve(answer)),
+    message: (text, options) => (calls.push(["message", text, options]), Promise.resolve()),
+  });
+  return calls;
+}
 
 describe("the browser transport", () => {
   it("offers the subprotocol, waits for hello, and is up", async () => {
@@ -242,5 +283,168 @@ describe("the browser transport", () => {
   it("derives the socket URL from the page it was served from", () => {
     expect(socketUrl({ protocol: "http:", host: "127.0.0.1:8742" })).toBe("ws://127.0.0.1:8742/api/v1/desktop/ws");
     expect(socketUrl({ protocol: "https:", host: "desk.example.ts.net" })).toBe("wss://desk.example.ts.net/api/v1/desktop/ws");
+  });
+});
+
+describe("the installed @tauri-apps JS through the shim", () => {
+  it("core: invoke reaches the server as a call frame, a bytes body as a binary frame", async () => {
+    const { socket } = installed();
+    const named = tauriInvoke("agent_is_installed", { id: "claude" });
+    const bare = tauriInvoke("server_capabilities");
+    expect(socket.textFrames()).toEqual([
+      { t: "call", id: 1, cmd: "agent_is_installed", args: { id: "claude" } },
+      { t: "call", id: 2, cmd: "server_capabilities", args: {} },
+    ]);
+    socket.text({ t: "ret", id: 1, ok: true });
+    socket.text({ t: "ret", id: 2, ok: { protocol: 1 } });
+    await expect(named).resolves.toBe(true);
+    await expect(bare).resolves.toEqual({ protocol: 1 });
+
+    const write = tauriInvoke("write_file_bytes", new Uint8Array([7]), { headers: new Headers({ "X-Path": "%2Ftmp%2Fa" }) });
+    const frame = socket.sent[socket.sent.length - 1] as Uint8Array;
+    expect(frame[0]).toBe(KIND_CALL);
+    const view = new DataView(frame.buffer, frame.byteOffset);
+    const hlen = view.getUint32(5);
+    expect(JSON.parse(new TextDecoder().decode(frame.slice(9, 9 + hlen)))).toEqual({ cmd: "write_file_bytes", headers: { "x-path": "%2Ftmp%2Fa" } });
+    expect([...frame.slice(9 + hlen)]).toEqual([7]);
+    socket.text({ t: "ret", id: view.getUint32(1), ok: null });
+    await expect(write).resolves.toBeNull();
+  });
+
+  it("event: listen subscribes once, delivers Tauri's event shape, and its unlisten unsubscribes", async () => {
+    const { socket } = installed();
+    const seen: unknown[] = [];
+    const first = await listen<{ v: number }>("workspace:patch", (event) => seen.push(["a", event.event, event.payload]));
+    const second = await listen<{ v: number }>("workspace:patch", (event) => seen.push(["b", typeof event.id, event.payload]), { target: "main" });
+    expect(socket.textFrames()).toEqual([{ t: "sub", name: "workspace:patch" }]);
+    socket.text({ t: "event", name: "workspace:patch", payload: { v: 1 } });
+    expect(seen).toEqual([["a", "workspace:patch", { v: 1 }], ["b", "number", { v: 1 }]]);
+    await first();
+    expect(socket.textFrames().filter((f) => f.t === "unsub")).toEqual([]);
+    await second();
+    expect(socket.textFrames().filter((f) => f.t === "unsub")).toEqual([{ t: "unsub", name: "workspace:patch" }]);
+    socket.text({ t: "event", name: "workspace:patch", payload: { v: 2 } });
+    expect(seen).toHaveLength(2);
+  });
+
+  it("event: once hears one event, then lets its subscription go", async () => {
+    const { socket } = installed();
+    const seen: unknown[] = [];
+    await once<string>("pty-exit", (event) => seen.push(event.payload));
+    socket.text({ t: "event", name: "pty-exit", payload: "first" });
+    await Promise.resolve();
+    socket.text({ t: "event", name: "pty-exit", payload: "second" });
+    expect(seen).toEqual(["first"]);
+    expect(socket.textFrames()).toEqual([{ t: "sub", name: "pty-exit" }, { t: "unsub", name: "pty-exit" }]);
+  });
+
+  it("event: emit and emitTo reach this page's listeners and the server", async () => {
+    const { socket } = installed();
+    const seen: unknown[] = [];
+    await listen("detached-seed", (event) => seen.push(event.payload));
+    await emit("detached-seed", { key: 1 });
+    await emitTo("main", "detached-seed", { key: 2 });
+    expect(seen).toEqual([{ key: 1 }, { key: 2 }]);
+    expect(socket.textFrames().filter((f) => f.t === "emit")).toEqual([
+      { t: "emit", name: "detached-seed", payload: { key: 1 } },
+      { t: "emit", name: "detached-seed", payload: { key: 2 } },
+    ]);
+  });
+
+  it("window: answers the one page it is, locally", async () => {
+    const { socket } = installed();
+    const win = getCurrentWindow();
+    expect(win.label).toBe("main");
+    expect((await getAllWindows()).map((w) => w.label)).toEqual(["main"]);
+    await expect(win.isMaximized()).resolves.toBe(true);
+    await expect(win.isMinimized()).resolves.toBe(false);
+    await expect(win.scaleFactor()).resolves.toBe(window.devicePixelRatio || 1);
+    await expect(win.maximize()).resolves.toBeUndefined();
+    expect(getCurrentWebview().label).toBe("main");
+    expect(socket.textFrames()).toEqual([]);
+  });
+
+  it("window: sizes, positions and monitors answer in the shapes window.js reads", async () => {
+    installed();
+    const win = getCurrentWindow();
+    const scale = window.devicePixelRatio || 1;
+    const size = await win.outerSize();
+    expect([size.width, size.height]).toEqual([Math.round(window.innerWidth * scale), Math.round(window.innerHeight * scale)]);
+    expect((await win.innerSize()).width).toBe(size.width);
+    const outer = await win.outerPosition();
+    const inner = await win.innerPosition();
+    expect([outer.x, outer.y, inner.x, inner.y]).toEqual([0, 0, 0, 0]);
+    // A page knows no monitors: "none" is an answer window.js can map.
+    await expect(currentMonitor()).resolves.toBeNull();
+    await expect(primaryMonitor()).resolves.toBeNull();
+    await expect(availableMonitors()).resolves.toEqual([]);
+  });
+
+  it("window/webview: title, fullscreen and zoom read the keys window.js and webview.js send", async () => {
+    installed();
+    // jsdom has no Fullscreen API.
+    const root = document.documentElement as unknown as { requestFullscreen?: () => Promise<void>; style: CSSStyleDeclaration };
+    const request = vi.fn(() => Promise.resolve());
+    root.requestFullscreen = request;
+    const savedTitle = document.title;
+    try {
+      await getCurrentWindow().setTitle("Board");
+      expect(document.title).toBe("Board");
+      await getCurrentWindow().setFullscreen(true);
+      expect(request).toHaveBeenCalledTimes(1);
+      await getCurrentWebview().setZoom(1.25);
+      expect(root.style.getPropertyValue("zoom")).toBe("1.25");
+    } finally {
+      document.title = savedTitle;
+      delete root.requestFullscreen;
+      root.style.removeProperty("zoom");
+    }
+  });
+
+  it("notification: the list calls answer under the names the installed plugin sends", async () => {
+    const { socket } = installed();
+    const { active, channels, pending } = await import("@tauri-apps/plugin-notification");
+    await expect(channels()).resolves.toEqual([]);
+    await expect(pending()).resolves.toEqual([]);
+    await expect(active()).resolves.toEqual([]);
+    expect(socket.textFrames()).toEqual([]);
+  });
+
+  it("plugin-dialog: open and save hand their options to the server-side picker", async () => {
+    const { socket } = installed();
+    const calls = recordingDialogs();
+    const filters = [{ name: "PDF", extensions: ["pdf"] }];
+    await expect(open({ multiple: true, directory: false, filters })).resolves.toEqual(["/srv/a.pdf"]);
+    await expect(save({ defaultPath: "/srv/out.vcf", filters })).resolves.toBe("/srv/out.vcf");
+    expect(calls).toEqual([
+      ["open", { multiple: true, directory: false, filters }],
+      ["save", { defaultPath: "/srv/out.vcf", filters }],
+    ]);
+    expect(socket.textFrames()).toEqual([]);
+  });
+
+  it("plugin-dialog: message, ask and confirm keep their text, title, kind and button labels", async () => {
+    installed();
+    const calls = recordingDialogs(true);
+    await expect(message("Saved", { title: "Export", kind: "info" })).resolves.toBe("Ok");
+    await expect(message("Done", { okLabel: "Got it" })).resolves.toBe("Got it");
+    await expect(ask("Really?", { title: "Remove", kind: "warning" })).resolves.toBe(true);
+    await expect(confirm("Sure?")).resolves.toBe(true);
+    await expect(confirm("Delete it?", { okLabel: "Delete", cancelLabel: "Keep" })).resolves.toBe(true);
+    expect(calls).toEqual([
+      ["message", "Saved", { title: "Export", kind: "info", okLabel: "Ok", cancelLabel: undefined }],
+      ["message", "Done", { title: undefined, kind: undefined, okLabel: "Got it", cancelLabel: undefined }],
+      ["confirm", "Really?", { title: "Remove", kind: "warning", okLabel: "Yes", cancelLabel: "No" }],
+      ["confirm", "Sure?", { title: undefined, kind: undefined, okLabel: "Ok", cancelLabel: "Cancel" }],
+      ["confirm", "Delete it?", { title: undefined, kind: undefined, okLabel: "Delete", cancelLabel: "Keep" }],
+    ]);
+  });
+
+  it("plugin-dialog: a declined ask or confirm reads as false", async () => {
+    installed();
+    recordingDialogs(false);
+    await expect(ask("Really?")).resolves.toBe(false);
+    await expect(confirm("Sure?")).resolves.toBe(false);
+    await expect(confirm("Delete it?", { okLabel: "Delete" })).resolves.toBe(false);
   });
 });

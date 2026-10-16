@@ -322,7 +322,8 @@ export type MailMarkAction = "seen" | "unseen" | "flag" | "unflag";
 export interface MobileMailWrites { actions?: boolean; reply?: boolean }
 export type MobileMailView =
   | ({ view: "overview"; accounts: MobileMailAccount[] } & MobileMailWrites)
-  | { view: "folder"; folder: MobileMailFolder; messages: MobileMailHeader[]; total: number; offset: number }
+  /** `syncing`: the desktop is still fetching the folder from the server; ask again. */
+  | { view: "folder"; folder: MobileMailFolder; messages: MobileMailHeader[]; total: number; offset: number; syncing?: boolean }
   | { view: "message"; message: MobileMailHeader; body: string; truncated: boolean; attachments: MobileMailAttachment[] };
 
 export class ApiError extends Error {
@@ -841,6 +842,36 @@ export async function getTranscript(tabId: string, version?: string, limit?: num
   return transcript;
 }
 
+/** One file the chat changed that git still lists as changed. `path` is
+ * relative to its checkout; `worktree` names a linked worktree (or a box
+ * member's folder) it is in, never by path. */
+export interface UncommittedFile {
+  path: string;
+  status: "modified" | "added" | "deleted";
+  worktree?: { label: string; branch?: string };
+}
+/** What the chat changed and has not committed: a floor — an edit made
+ * through a shell command is not in the CLI's record. `available: false` for
+ * a CLI whose edits are not read, a remote project, or git not answering. */
+export interface ChatUncommitted {
+  available: boolean;
+  reason?: string;
+  files: UncommittedFile[];
+  total: number;
+}
+
+/** `GET /api/v1/tabs/{id}/uncommitted` — the Commit chip's count. A host
+ * older than the route answers a bodiless 404: `null`, and the chip shows no
+ * count. */
+export async function getUncommitted(tabId: string, signal?: AbortSignal): Promise<ChatUncommitted | null> {
+  try {
+    return await api<ChatUncommitted>(`/api/v1/tabs/${encodeURIComponent(tabId)}/uncommitted`, { signal });
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404 && reason.code === "request_failed") return null;
+    throw reason;
+  }
+}
+
 /** A file the phone dropped into the tab's project inbox. `reference` is
  * project-relative (`.tabtivity/inbox/<file>`) — the one path shape that crosses
  * this boundary, because it carries no host component and is exactly what the
@@ -1068,7 +1099,11 @@ export async function openOutside(url: string): Promise<void> {
  * phone can only hand back, `kind` is `"dir"` or the media type the file's
  * first bytes announce, `modified` and `created` are unix seconds — `created`
  * missing where the desktop's filesystem keeps no birth time. */
-export interface ProjectFileEntry { token: string; name: string; kind: string; size: number; modified: number; created?: number; ignored?: boolean }
+export interface ProjectFileEntry {
+  token: string; name: string; kind: string; size: number; modified: number; created?: number; ignored?: boolean
+  /** A folder's item count, `MAX_ENTRIES + 1` (501) meaning "500+"; missing = unknown (not counted, or an older host) — never render it as 0. */
+  items?: number
+}
 /** `uploads`: whether **Upload here** may add files to this folder — the
  * desktop's "Phone may add files to projects" switch is on and no folder on
  * the way down starts with a dot. An older desktop omits it (no uploads). */

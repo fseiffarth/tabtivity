@@ -55,8 +55,16 @@ function words(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/** Whether `entry`'s words are the record of `text` — or, cut at the
+ * desktop's bound (a long prompt), their opening. Shared with the desktop
+ * Reader's sending bubbles. */
+export function recordsPrompt(entry: Pick<TranscriptEntry, "text" | "cut">, text: string): boolean {
+  const recorded = words(entry.text);
+  return entry.cut ? recorded !== "" && words(text).startsWith(recorded) : recorded === words(text);
+}
+
 function isCopy(entry: TranscriptEntry, text: string): boolean {
-  return entry.kind === "prompt" && entry.pending === undefined && words(entry.text) === words(text);
+  return entry.kind === "prompt" && entry.pending === undefined && recordsPrompt(entry, text);
 }
 
 /** `prompt` with the reader's new words. It keeps its place; only what tells

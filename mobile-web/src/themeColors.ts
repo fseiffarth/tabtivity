@@ -225,9 +225,9 @@ export function themeColors(options: { include?: (file: string) => boolean } = {
         },
         OnceExit(root, { Rule: RuleNode }) {
           if (used.size === 0) return;
-          const defs = new RuleNode({ selector: ":root" });
+          const defs = new RuleNode({ selector: ":root", source: root.source });
           for (const [name, color] of [...used].sort(([a], [b]) => a.localeCompare(b))) {
-            defs.append({ prop: `--mc-${name}`, value: fitExpr(fitColor(color.r, color.g, color.b)) });
+            defs.append({ prop: `--mc-${name}`, value: fitExpr(fitColor(color.r, color.g, color.b)), source: root.source });
           }
           // After every `@import`/`@charset`, which must lead the sheet.
           const leads = root.nodes.filter((node): node is AtRule => node.type === "atrule" && /^(charset|import)$/i.test(node.name));
@@ -258,7 +258,7 @@ function addOnAccent(rule: Rule) {
   if (fit.hue !== "accent" || fit.p < 0.6) return;
   const text = rule.nodes.find((node): node is Declaration => node.type === "decl" && node.prop.toLowerCase() === "color");
   if (!text) {
-    bg.after({ prop: "color", value: "var(--m-on-accent)" });
+    bg.after({ prop: "color", value: "var(--m-on-accent)", source: bg.source });
     return;
   }
   const own = /^var\(--mc-([0-9a-f]{6})\)$/.exec(text.value.trim());

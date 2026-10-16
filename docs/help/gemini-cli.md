@@ -2,6 +2,7 @@
 id: gemini-cli
 title: Gemini CLI in Tabtivity
 keywords: [gemini, google, gemini cli, npm, node, install, login, sign in, antigravity, agy]
+related: [agent-clis]
 ---
 
 Gemini CLI is Google's coding agent CLI (command `gemini`). It installs from

@@ -1,19 +1,29 @@
 import { useModalFocus, isInActiveModal } from "../../hooks/useModalFocus";
 import { UntestedTag } from "../common/UntestedTag";
+import { Typewriter } from "../common/Typewriter";
 import { Dropdown } from "../common/Dropdown";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HOW_TO_START_STEPS, focusModeTip } from "../../lib/shortcuts/hints";
 import { useT } from "../../lib/i18n";
 import { PLATFORM } from "../../lib/platform";
 import { probeSuperKeyOwnership } from "../../lib/shortcuts/superKey";
 import { SettingsHeader } from "./settingsUi";
+import { LESSONS } from "../../lib/lessons";
 import {
-  INTRO_PAGES,
   INTRO_PAGE_TITLE_KEYS,
+  firstRecommendedLesson,
+  introRoute,
+  readIntroGoals,
   readIntroPage,
+  toggleGoal,
+  writeIntroGoals,
   writeIntroPage,
+  type IntroGoal,
   type IntroPage,
 } from "./intro/introData";
+import { startLessonById } from "./intro/introUi";
+import { GoalsPage } from "./intro/GoalsPage";
+import { ForYouPage } from "./intro/ForYouPage";
 import { ProjectsPage } from "./intro/ProjectsPage";
 import { AgentsPage } from "./intro/AgentsPage";
 import { LocalModelsPage } from "./intro/LocalModelsPage";
@@ -21,8 +31,15 @@ import { AskAppPage } from "./intro/AskAppPage";
 
 /**
  * The first-run intro: a paged wizard shown once on the first launch of an
- * empty install and re-openable from Settings / the gear menu. Welcome →
- * Projects → Agent CLIs → Local models → Ask Tabtivity → Done.
+ * empty install and re-openable from Settings / the gear menu. The route
+ * adapts to the user: Welcome → Your goals (multi-select "what do you want to
+ * do?") → only the setup pages those goals need (Projects, Agent CLIs, Local
+ * models — `introRoute`) → For you (lessons matched to the goals) → Ask
+ * Tabtivity → Done, which names the best first lesson for the answers. No goal
+ * picked is the full tour. The answers are remembered (`readIntroGoals`) and
+ * can be changed any time; the rail, the dropdown, "Step n of total" and
+ * Back/Next all walk the current route, and a remembered page the route no
+ * longer contains opens on the goals page.
  *
  * Chrome is the Settings dialog's, down to the class names: `.settings-dialog
  * .settings-with-navigation` with the category rail on the left (the step rail
@@ -32,18 +49,42 @@ import { AskAppPage } from "./intro/AskAppPage";
  * visible and stop when the user moves on. ←/→ page, Esc closes (shared modal
  * focus), and the page it was left on is remembered for the next open.
  */
-export function HowToStart({ onClose }: { onClose: () => void }) {
+export function HowToStart({ onClose, firstRun = false }: {
+  onClose: () => void;
+  /** The fresh-install open: the Welcome greeting types itself out, once.
+   *  Re-opened from Settings it shows complete. */
+  firstRun?: boolean;
+}) {
   const t = useT();
-  const [page, setPage] = useState<IntroPage>(readIntroPage);
-  const index = INTRO_PAGES.indexOf(page);
-  const last = index === INTRO_PAGES.length - 1;
+  const [goals, setGoals] = useState<IntroGoal[]>(readIntroGoals);
+  const route = introRoute(goals);
+  // A remembered page the current answers don't route through opens on the
+  // goals page, where the route is decided.
+  const [page, setPage] = useState<IntroPage>(() => {
+    const remembered = readIntroPage();
+    return route.includes(remembered) ? remembered : "goals";
+  });
+  const [greet, setGreet] = useState(firstRun);
+  // Belt and braces: whatever happens to `page`, only a route page renders.
+  const current: IntroPage = route.includes(page) ? page : "goals";
+  const index = route.indexOf(current);
+  const last = index === route.length - 1;
   const go = (next: IntroPage) => {
     setPage(next);
+    setGreet(false);
     writeIntroPage(next);
   };
   const step = (delta: number) => {
-    const next = INTRO_PAGES[index + delta];
+    const next = route[index + delta];
     if (next) go(next);
+  };
+  const onToggleGoal = (goal: IntroGoal) => {
+    const next = toggleGoal(goals, goal);
+    setGoals(next);
+    writeIntroGoals(next);
+    // Toggles happen on the goals page, so this only guards a page that
+    // dropped out of the route from under the user.
+    if (!introRoute(next).includes(current)) go("goals");
   };
   // Finishing (the Done page's primary) starts the next open from Welcome;
   // any other close keeps the page, so a user who stepped out to run an
@@ -55,6 +96,21 @@ export function HowToStart({ onClose }: { onClose: () => void }) {
   // Closing on the Done page counts as finishing too.
   const close = () => (last ? finish() : onClose());
   const modalRef = useModalFocus(close);
+  // "Change my answers" on the Done page unmounts the button it was pressed
+  // on; hand the focus to the goal cards (the first picked one) instead of
+  // letting it fall to the body.
+  const focusGoalsRef = useRef(false);
+  const changeGoals = () => {
+    focusGoalsRef.current = true;
+    go("goals");
+  };
+  useEffect(() => {
+    if (!focusGoalsRef.current || current !== "goals") return;
+    focusGoalsRef.current = false;
+    const cards = modalRef.current?.querySelectorAll<HTMLElement>(".intro-goal-card");
+    const picked = Array.from(cards ?? []).find((c) => c.getAttribute("aria-pressed") === "true");
+    (picked ?? cards?.[0])?.focus();
+  }, [current, modalRef]);
 
   // ←/→ turn the page — unless a text field (the Ask box) or another modal
   // above this one has the keys.
@@ -72,7 +128,7 @@ export function HowToStart({ onClose }: { onClose: () => void }) {
     return () => document.removeEventListener("keydown", onKey);
   });
 
-  const railOptions = INTRO_PAGES.map((p, i) => ({ value: p, label: `${i + 1}. ${t(INTRO_PAGE_TITLE_KEYS[p])}` }));
+  const railOptions = route.map((p, i) => ({ value: p, label: `${i + 1}. ${t(INTRO_PAGE_TITLE_KEYS[p])}` }));
 
   return (
     <div className="modal-backdrop how-to-start-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
@@ -90,7 +146,7 @@ export function HowToStart({ onClose }: { onClose: () => void }) {
             <Dropdown
               ariaLabel={t("intro.stepsLabel")}
               title={t("intro.stepsLabel")}
-              value={page}
+              value={current}
               options={railOptions}
               onChange={(v) => go(v as IntroPage)}
             />
@@ -98,12 +154,12 @@ export function HowToStart({ onClose }: { onClose: () => void }) {
           <div className="settings-navigation-links">
             <div className="settings-navigation-group" role="group" aria-label={t("intro.stepsLabel")}>
               <div className="settings-navigation-group-title">{t("intro.stepsLabel")}</div>
-              {INTRO_PAGES.map((p, i) => (
+              {route.map((p, i) => (
                 <button
                   key={p}
                   type="button"
                   className="settings-btn"
-                  aria-current={p === page ? "step" : undefined}
+                  aria-current={p === current ? "step" : undefined}
                   onClick={() => go(p)}
                 >
                   <span className="intro-rail-entry">
@@ -118,23 +174,25 @@ export function HowToStart({ onClose }: { onClose: () => void }) {
 
         <div className="settings-panel-content">
           <SettingsHeader
-            title={<>{t(page === "welcome" ? "howToStart.title" : INTRO_PAGE_TITLE_KEYS[page])} <UntestedTag id="desktop.welcome" /></>}
+            title={<>{t(current === "welcome" ? "howToStart.title" : INTRO_PAGE_TITLE_KEYS[current])} <UntestedTag id="desktop.welcome" /></>}
             onClose={close}
           />
-          <div className="dialog-scroll" key={page}>
-            {page === "welcome" && <WelcomePage />}
-            {page === "projects" && <ProjectsPage onClose={onClose} />}
-            {page === "agents" && <AgentsPage onClose={onClose} />}
-            {page === "localModels" && <LocalModelsPage onClose={onClose} />}
-            {page === "askApp" && <AskAppPage />}
-            {page === "done" && <DonePage onClose={finish} />}
+          <div className="dialog-scroll" key={current}>
+            {current === "welcome" && <WelcomePage greet={greet} />}
+            {current === "goals" && <GoalsPage goals={goals} onToggle={onToggleGoal} route={route} />}
+            {current === "projects" && <ProjectsPage onClose={onClose} />}
+            {current === "agents" && <AgentsPage onClose={onClose} />}
+            {current === "localModels" && <LocalModelsPage onClose={onClose} />}
+            {current === "forYou" && <ForYouPage goals={goals} onClose={onClose} />}
+            {current === "askApp" && <AskAppPage />}
+            {current === "done" && <DonePage goals={goals} onClose={finish} onChangeGoals={changeGoals} />}
           </div>
           <div className="dialog-fixed-footer settings-link-row intro-footer">
             <button type="button" className="settings-btn" disabled={index === 0} onClick={() => step(-1)}>
               ‹ {t("common.back")}
             </button>
             <span className="settings-help intro-progress">
-              {t("intro.progress", { n: index + 1, total: INTRO_PAGES.length })}
+              {t("intro.progress", { n: index + 1, total: route.length })}
             </span>
             <UntestedTag id="desktop.intro.wizard" />
             {!last && (
@@ -158,9 +216,10 @@ export function HowToStart({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Page 1: what Tabtivity is, and the four basics — `HOW_TO_START_STEPS`, the same
- *  copy the Feature Guide shows, so the two stay in lockstep. */
-function WelcomePage() {
+/** Page 1: the greeting (typed out on the first run), what Tabtivity is, and the
+ *  four basics — `HOW_TO_START_STEPS`, the same copy the Feature Guide shows, so
+ *  the two stay in lockstep. */
+function WelcomePage({ greet }: { greet: boolean }) {
   const t = useT();
   // On Linux the panel key depends on the desktop (Super, or F9 where the shell
   // owns Super), and that answer is a backend probe. This dialog opens on the
@@ -181,7 +240,8 @@ function WelcomePage() {
 
   return (
     <>
-      <p className="settings-help">{t("howToStart.intro")}</p>
+      <Typewriter text={t("howToStart.greeting")} animate={greet} />
+      <p className="settings-help">{t("howToStart.intro")} <UntestedTag id="howToStart.greeting" /></p>
       <ol className="how-to-start-steps">
         {HOW_TO_START_STEPS.map((step, i) => (
           <li key={step.titleKey} className="how-to-start-step">
@@ -201,12 +261,32 @@ function WelcomePage() {
   );
 }
 
-/** Last page: where to go from here — the Feature Guide, the tour, the lessons. */
-function DonePage({ onClose }: { onClose: () => void }) {
+/** Last page: where to go from here — the best first lesson for the user's
+ *  goals (or back to change them), then the Feature Guide, the tour, the
+ *  lessons. */
+function DonePage({ goals, onClose, onChangeGoals }: {
+  goals: readonly IntroGoal[];
+  onClose: () => void;
+  onChangeGoals: () => void;
+}) {
   const t = useT();
+  const firstId = firstRecommendedLesson(goals);
+  const lesson = firstId ? LESSONS.find((l) => l.id === firstId) : undefined;
   return (
     <>
       <p className="settings-help">{t("intro.done.lead")}</p>
+      {lesson && <p className="settings-help">{t("intro.done.startWith")}</p>}
+      <div className="settings-link-row">
+        {lesson && (
+          // Not .primary: the footer's Start working is this view's one primary.
+          <button type="button" className="settings-btn" onClick={() => startLessonById(lesson.id, onClose)}>
+            {t(lesson.titleKey)}
+          </button>
+        )}
+        <button type="button" className="settings-btn" onClick={onChangeGoals}>
+          {t("intro.goals.change")}
+        </button>
+      </div>
       <h3 className="project-form-heading">{t("desktop.learnMore")}</h3>
       <div className="settings-link-row">
         <button

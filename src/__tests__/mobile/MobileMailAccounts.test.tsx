@@ -74,3 +74,26 @@ describe("phone mail account picker", () => {
     expect(paths).toContain("/api/v1/mail/folders/h-inbox?offset=0");
   });
 });
+
+describe("phone mail folder still being fetched", () => {
+  it("says so and asks again until the desktop's fetch is done", async () => {
+    const paths: string[] = [];
+    let rounds = 0;
+    const mail = { id: "m1", subject: "Filed away", sender: { address: "a@b.test" }, date: "2026-10-15T10:00:00Z", seen: true, has_attachments: false, preview: "" };
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      paths.push(path);
+      if (path === "/api/v1/mail") return { mail: { view: "overview", accounts } };
+      const target = accounts[0].folders[0];
+      rounds += 1;
+      return rounds === 1
+        ? { mail: { ...page(target), syncing: true } }
+        : { mail: { view: "folder", folder: target, messages: [mail], total: 1, offset: 0 } };
+    });
+    render(createElement(Mail));
+    fireEvent.click(await screen.findByText("Sent"));
+    await screen.findByText("Fetching this folder from the server…");
+    await screen.findByText("Filed away", undefined, { timeout: 3_000 });
+    expect(screen.queryByText("Fetching this folder from the server…")).toBeNull();
+    expect(paths.filter((path) => path === "/api/v1/mail/folders/w-sent?offset=0")).toHaveLength(2);
+  });
+});

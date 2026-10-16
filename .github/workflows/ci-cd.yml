@@ -34,10 +34,9 @@ env:
 #
 # `npm ci --ignore-scripts`: no dependency's install script runs here, where
 # a compromised package's postinstall would execute with the job's token and
-# secrets. The lock's only install scripts are esbuild's (a binary check and
-# a startup optimisation; it finds its binary through its @esbuild/<platform>
-# optional package without it) and fsevents' (a rebuild of a prebuilt
-# binary). A new dependency that truly needs its script fails loudly here.
+# secrets. The lock's only install script is fsevents' (a rebuild of a
+# prebuilt binary). A new dependency that truly needs its script fails
+# loudly here.
 jobs:
   # The pre-push hook runs this same scan, but the hook needs
   # `git config core.hooksPath .githooks` per clone and a fresh clone has it
@@ -630,6 +629,52 @@ jobs:
           path: |
             src-tauri/target/release/bundle/deb/*.deb
             target/release/bundle/deb/*.deb
+
+  # The server's .deb (gateway, per-user daemon, admin helper, web bundles),
+  # released next to the desktop bundles. Same runner as `package` for the
+  # same glibc reason; the package's Depends names the glibc it was built
+  # against. x86_64 only for now.
+  package-server:
+    name: package-server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    if: github.event_name == 'push'
+    needs: [test-ubuntu, privacy, brand]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: . -> target
+
+      - name: Install frontend dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build server package
+        run: scripts/package-server-deb.sh
+
+      - name: Upload server DEB
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tabtivity-${{ github.sha }}-server-deb
+          path: target/release/bundle/server/*.deb
+          if-no-files-found: error
 
   package-macos:
     name: package-macos

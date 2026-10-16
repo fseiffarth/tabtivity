@@ -1,7 +1,7 @@
 import { storageKey } from "../../src/lib/brand";
 
 /**
- * The folder the files drawer (`ProjectFiles`) was last standing in, per
+ * The folder the files library (`FilesLibrary`) was last standing in, per
  * project, so putting the drawer away — or the whole app — and opening it again
  * lands where the reader left off rather than at the project root.
  *
@@ -215,4 +215,197 @@ export function refreshFileTab(projectId: string, tab: FileTab, storage?: FilesP
 /** Forget one card. */
 export function closeFileTab(projectId: string, tab: FileTab, storage?: FilesPlaceStorage): void {
   writeTabs(projectId, (tabs) => tabs.filter((other) => !sameFile(other, tab)), storage);
+}
+
+/**
+ * What the reader keeps in the files library (`FilesLibrary`) beyond the
+ * folder it stands in, per project and only on this phone (nothing reaches
+ * the desktop): **favorites**, the files and folders starred from an item's
+ * menu and shown as a strip at the library's root; **recents**, the files
+ * opened from the library, newest first, shown while the search box is
+ * focused and empty; and **folder colours**, a palette id (`tabColors.ts`)
+ * per folder.
+ *
+ * Each seal carries a fresh nonce, so an item is known by the folder names
+ * above it and its own name, never by a token. The tokens kept — the item's
+ * and its folders' (`trail`, the crumbs below the root) — are only for
+ * opening it again; one that no longer opens means the item was moved or
+ * deleted, which the library says.
+ */
+export type FilesSaved = { kind: string; name: string; token: string; trail: FilesCrumb[] };
+/** A recent file also keeps its size and time, so its cover comes from the
+ * thumbnail cache. */
+export type FilesRecent = FilesSaved & { size: number; modified: number };
+/** What tells two saved items apart: the folders' names and its own. */
+export type FilesSavedFile = { name: string; trail: readonly { name: string }[] };
+
+const FAVORITES_KEY = storageKey("mobile.filesFavorites");
+const RECENTS_KEY = storageKey("mobile.filesRecents");
+const COLORS_KEY = storageKey("mobile.filesFolderColors");
+/** Favorites per project; past it the oldest-starred falls off. */
+export const FAVORITES_CAP = 50;
+/** Recent files per project; the oldest-opened falls off. */
+export const RECENTS_CAP = 20;
+/** Coloured folders per project; the longest-uncoloured falls off. */
+export const FOLDER_COLORS_CAP = 200;
+
+/** A folder's place: its names below the root, `a/b`, as `placeOf` makes it. */
+export function savedPlace(item: FilesSavedFile): string {
+  return [...item.trail.map((crumb) => crumb.name), item.name].join("/");
+}
+
+const sameSaved = (a: FilesSavedFile, b: FilesSavedFile) =>
+  a.name === b.name && a.trail.length === b.trail.length && a.trail.every((crumb, index) => crumb.name === b.trail[index].name);
+
+function validSaved(value: unknown): value is FilesSaved {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<FilesSaved>;
+  return validCrumb({ token: item.token, name: item.name })
+    && typeof item.kind === "string" && item.kind.length > 0 && item.kind.length <= 256
+    && Array.isArray(item.trail) && item.trail.length <= DEPTH_CAP && item.trail.every(validCrumb);
+}
+
+function validRecent(value: unknown): value is FilesRecent {
+  if (!validSaved(value)) return false;
+  const { size, modified, kind } = value as Partial<FilesRecent>;
+  return kind !== "dir" && typeof size === "number" && Number.isFinite(size) && size >= 0
+    && typeof modified === "number" && Number.isFinite(modified);
+}
+
+const pickSaved = ({ kind, name, token, trail }: FilesSaved): FilesSaved =>
+  ({ kind, name, token, trail: trail.map(({ token: crumbToken, name: crumbName }) => ({ token: crumbToken, name: crumbName })) });
+const pickRecent = (item: FilesRecent): FilesRecent => ({ ...pickSaved(item), size: item.size, modified: item.modified });
+
+/** One per-project list kept under `key`, entry by entry checked on the way
+ * in and out, `cap` long at most, with a listener for this page — the file
+ * tabs' idiom above. */
+function projectLists<T>(key: string, cap: number, valid: (value: unknown) => value is T, pick: (value: T) => T) {
+  const listeners = new Set<() => void>();
+  const load = (storage: FilesPlaceStorage): Record<string, T[]> => {
+    const parsed: unknown = JSON.parse(storage.getItem(key) ?? "{}");
+    const out: Record<string, T[]> = {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return out;
+    for (const [projectId, items] of Object.entries(parsed)) {
+      if (!projectId || !Array.isArray(items)) continue;
+      const kept = items.filter(valid).slice(0, cap).map(pick);
+      if (kept.length) out[projectId] = kept;
+    }
+    return out;
+  };
+  return {
+    read(projectId: string, storage?: FilesPlaceStorage): T[] {
+      try {
+        return load(storage ?? localStorage)[projectId] ?? [];
+      } catch {
+        return [];
+      }
+    },
+    write(projectId: string, change: (items: T[]) => T[], storage?: FilesPlaceStorage): void {
+      try {
+        const store = storage ?? localStorage;
+        let saved: Record<string, T[]>;
+        try { saved = load(store); } catch { saved = {}; }
+        const next = change(saved[projectId] ?? []).filter(valid).slice(0, cap).map(pick);
+        if (next.length) saved[projectId] = next;
+        else delete saved[projectId];
+        if (Object.keys(saved).length) store.setItem(key, JSON.stringify(saved));
+        else store.removeItem(key);
+      } catch {
+        // See rememberFilesPlace: without storage nothing is kept.
+      }
+      listeners.forEach((listener) => listener());
+    },
+    listen(listener: () => void): () => void {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  };
+}
+
+const favorites = projectLists(FAVORITES_KEY, FAVORITES_CAP, validSaved, pickSaved);
+const recents = projectLists(RECENTS_KEY, RECENTS_CAP, validRecent, pickRecent);
+
+/** `projectId`'s favorites, the latest starred first. */
+export function readFavorites(projectId: string, storage?: FilesPlaceStorage): FilesSaved[] {
+  return favorites.read(projectId, storage);
+}
+
+/** Whether `item` is among `projectId`'s favorites. */
+export function isFavorite(projectId: string, item: FilesSavedFile, storage?: FilesPlaceStorage): boolean {
+  return readFavorites(projectId, storage).some((other) => sameSaved(other, item));
+}
+
+/** Star `item`, or unstar it when it is a favorite already; answers whether
+ * it is one now. A new favorite goes first; past the cap the oldest goes. */
+export function toggleFavorite(projectId: string, item: FilesSaved, storage?: FilesPlaceStorage): boolean {
+  const was = isFavorite(projectId, item, storage);
+  favorites.write(projectId, (items) => was
+    ? items.filter((other) => !sameSaved(other, item))
+    : [item, ...items], storage);
+  return !was;
+}
+
+/** Forget one favorite (one that was moved or deleted, say). */
+export function removeFavorite(projectId: string, item: FilesSavedFile, storage?: FilesPlaceStorage): void {
+  favorites.write(projectId, (items) => items.filter((other) => !sameSaved(other, item)), storage);
+}
+
+/** Called whenever a project's favorites change, on this page. */
+export function onFavorites(listener: () => void): () => void {
+  return favorites.listen(listener);
+}
+
+/** `projectId`'s recent files, the last opened first. */
+export function readRecents(projectId: string, storage?: FilesPlaceStorage): FilesRecent[] {
+  return recents.read(projectId, storage);
+}
+
+/** A file was opened from the library: it goes first among the recents, in
+ * place of its older entry. Folders are not recents. */
+export function recordRecent(projectId: string, item: FilesRecent, storage?: FilesPlaceStorage): void {
+  if (item.kind === "dir") return;
+  recents.write(projectId, (items) => [item, ...items.filter((other) => !sameSaved(other, item))], storage);
+}
+
+/** Forget one recent file. */
+export function removeRecent(projectId: string, item: FilesSavedFile, storage?: FilesPlaceStorage): void {
+  recents.write(projectId, (items) => items.filter((other) => !sameSaved(other, item)), storage);
+}
+
+/** Called whenever a project's recent files change, on this page. */
+export function onRecents(listener: () => void): () => void {
+  return recents.listen(listener);
+}
+
+/** One folder's colour: its place (`a/b`) and a palette id. Kept as pairs, not
+ * an object, so a number-like folder name cannot reorder them past the cap. */
+type FolderColor = [place: string, color: string];
+
+function validFolderColor(value: unknown): value is FolderColor {
+  if (!Array.isArray(value) || value.length !== 2) return false;
+  const [place, color] = value as unknown[];
+  return typeof place === "string" && place.length > 0 && place.length <= 4096
+    && typeof color === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(color);
+}
+
+const folderColors = projectLists(COLORS_KEY, FOLDER_COLORS_CAP, validFolderColor, ([place, color]): FolderColor => [place, color]);
+
+/** `projectId`'s folder colours by place. An id this bundle's palette does not
+ * know is kept, and drawn as no colour (`tabColorCss`). */
+export function readFolderColors(projectId: string, storage?: FilesPlaceStorage): Map<string, string> {
+  return new Map(folderColors.read(projectId, storage));
+}
+
+/** Colour the folder at `place`, or clear its colour with `null`. Newest
+ * last, so the cap drops the longest-standing one. */
+export function setFolderColor(projectId: string, place: string, color: string | null, storage?: FilesPlaceStorage): void {
+  folderColors.write(projectId, (items) => {
+    const rest = items.filter(([other]) => other !== place);
+    return color ? [...rest, [place, color] as FolderColor].slice(-FOLDER_COLORS_CAP) : rest;
+  }, storage);
+}
+
+/** Called whenever a project's folder colours change, on this page. */
+export function onFolderColors(listener: () => void): () => void {
+  return folderColors.listen(listener);
 }

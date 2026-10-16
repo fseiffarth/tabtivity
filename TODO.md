@@ -38,7 +38,7 @@ order.
 
 Three independent axes are tracked per item:
 
-- **✅ Done** — code-complete: written, type-checks (`npx tsc --noEmit`) and/or
+- **✅ Done** — code-complete: written, type-checks (`npm run build`) and/or
   compiles (`cargo test`/`cargo build`). Says nothing about whether it actually
   works.
 - **🤖 Automated** — an automated test (vitest under `src/__tests__/` or a Rust
@@ -259,8 +259,8 @@ share files and context:
 
 ## Verification approach (per item, when implemented)
 
-- Frontend changes: `npx tsc --noEmit`, plus existing/added tests under
-  `src/__tests__/` (e.g. the session-restore test for Group F).
+- Frontend changes: `npm run build` (the type-check), plus existing/added
+  tests under `src/__tests__/` (e.g. the session-restore test for Group F).
 - Backend changes: `cargo test --manifest-path src-tauri/Cargo.toml`.
 - Runtime validation: Claude **must not** launch Tabtivity (user, 2026-07-29), and
   must not stop an instance it did not start. The user runs the app; Claude

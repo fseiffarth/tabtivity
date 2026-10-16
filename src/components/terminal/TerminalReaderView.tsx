@@ -50,6 +50,7 @@ import { onReaderInsert } from "../../lib/terminal/terminalDrop";
 import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
+import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import type { AskedQuestion, RunningShell } from "../../../mobile-web/src/api";
 
 /** How long a sent prompt shows as sending while the transcript has not
@@ -1006,8 +1007,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     });
   }, [sendTarget]);
 
-  // A sent prompt shows until the transcript records it (by its words, at or
-  // after the moment it went) or it has waited long enough to be let go.
+  // A sent prompt shows until the transcript records it (by its words — a
+  // long one's opening, the record cut at its bound — at or after the moment
+  // it went) or it has waited long enough to be let go.
   useEffect(() => {
     if (pending.length === 0) return;
     const now = Date.now();
@@ -1019,7 +1021,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       const prefix = /^\/[\w-]+$/u.test(sent) ? sent : null;
       return entries.some((entry) =>
         entry.kind === "prompt"
-        && (entry.text.trim() === sent || (!!prefix && !!slashCommand(entry.text)?.name.startsWith(prefix)))
+        && (recordsPrompt(entry, sent) || (!!prefix && !!slashCommand(entry.text)?.name.startsWith(prefix)))
         && (!entry.at || Date.parse(entry.at) >= item.sentAt - 5_000));
     };
     const left = pending.filter((item) => now - waitingSince(item) < PENDING_MS && !recorded(item));

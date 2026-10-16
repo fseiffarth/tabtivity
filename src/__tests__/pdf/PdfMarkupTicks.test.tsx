@@ -39,7 +39,6 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
 
 import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
 import { PdfTickBadges, tickBadgesByPage } from "../../components/embed/pdf/PdfMarkupTicks";
-import { GROUP_SETTLE_MS, PdfGroupSubmits } from "../../components/embed/pdf/PdfMarkupGroups";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import { useActivityStore } from "../../stores/activity";
 import { useSettingsStore } from "../../stores/settings";
@@ -280,42 +279,4 @@ describe("desktop markup ticks", () => {
     expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE, BOX]);
     expect(lastSaved()?.sent).not.toHaveProperty("log");
   }, SETTLE_MS + 8_000);
-});
-
-describe("desktop markup · a remark's own Submit", () => {
-  function Groups() {
-    const markup = usePdfMarkup({ projectId: "p1", scope: "p1", path: PATH, active: true, visible: true, pageCount: 3, docSize: 9_000, docVersion: 0 });
-    return (
-      <>
-        <PdfMarkupBar markup={markup} page={1} onReload={() => {}} onDone={() => {}} />
-        <div data-testid="page-1">
-          <PdfGroupSubmits groups={markup.groups.filter((group) => group.page === 1)} page={markup.edit.base.pages[1]} size={SIZE} scale={1}
-            disabled={markup.sending} onSubmit={(marks) => void markup.submit({ page: 1, marks })} />
-        </div>
-      </>
-    );
-  }
-  const groupButtons = () => within(screen.getByTestId("page-1")).queryAllByRole("button", { name: /Send only this remark/ });
-
-  it("sends that group alone, after it settled, and leaves the others unsent", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      render(<Groups />);
-      await waitFor(() => expect(groupButtons()).toHaveLength(2));
-      // Freshly drawn: a click right away does nothing.
-      fireEvent.click(groupButtons()[1], { detail: 1 });
-      expect(calls("pdf_markup_submit")).toHaveLength(0);
-      act(() => { vi.advanceTimersByTime(GROUP_SETTLE_MS + 50); });
-      fireEvent.click(groupButtons()[1], { detail: 1 });
-      await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
-      const pages = calls("pdf_markup_submit")[0][1].pages as { n: number; marks: Mark[] }[];
-      expect(pages.map((page) => page.n)).toEqual([1]);
-      expect(pages[0].marks).toEqual([BOX]);
-      await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([BOX]));
-      expect(lastSaved()?.pages[1].marks).toEqual([STROKE]);
-      await waitFor(() => expect(groupButtons()).toHaveLength(1));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });

@@ -211,7 +211,8 @@ describe("MarkupView", () => {
     expect(options().queryByRole("button", { name: "Yellow" })).toBeNull();
     fireEvent.click(options().getByRole("button", { name: "Marker" }));
     fireEvent.click(options().getByRole("button", { name: "Bold" }));
-    expect(options().getByText("Red — delete or fix")).toBeTruthy();
+    // Colours are plain colours: no meaning is shown beside them.
+    expect(options().queryByText(/delete or fix/)).toBeNull();
     fireEvent.click(options().getByRole("button", { name: "Yellow" }));
     const px = (units: number) => units * 336 / 800;
     const canvas = container.querySelector(".markup-page-layer")!;

@@ -1,7 +1,9 @@
 /**
- * "How to start" is a paged intro wizard: Welcome → Projects → Agent CLIs →
- * Local models → Ask Tabtivity → What next. It pages with Back/Next, the step rail
- * and ←/→, remembers the page it was left on, and each page's one-click
+ * "How to start" is a paged, goal-driven intro wizard: Welcome → Your goals →
+ * the setup pages the answers pull in (Projects, Agent CLIs, Local models) →
+ * For you → Ask Tabtivity → What next. No answer is the full tour. It pages with
+ * Back/Next, the step rail and ←/→, remembers the page and the answers, and
+ * each page's one-click
  * actions reuse an existing mechanism: the + menu's project dialogs (a window
  * event), the registry's installer run in a terminal tab (`runInstallInTab`),
  * Ollama's own commands, and the help MCP's status/search commands.
@@ -20,7 +22,15 @@ vi.mock("../../lib/installCommand", async (importOriginal) => ({
 }));
 
 import { HowToStart } from "../../components/layout/HowToStart";
-import { recommendModel, installNeedsNpm, readIntroPage } from "../../components/layout/intro/introData";
+import {
+  recommendModel,
+  installNeedsNpm,
+  readIntroPage,
+  readIntroGoals,
+  writeIntroGoals,
+} from "../../components/layout/intro/introData";
+import { LESSONS } from "../../lib/lessons";
+import { useTourStore } from "../../stores/tour";
 import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
@@ -41,6 +51,21 @@ function backend(handlers: Record<string, Handler>) {
 
 const heading = () => screen.getByRole("heading", { level: 2 }).textContent ?? "";
 const next = () => fireEvent.click(screen.getByRole("button", { name: /^Next/ }));
+const back = () => fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+/** The step rail's entries as shown: number + title. */
+const railEntries = () =>
+  Array.from(screen.getByRole("navigation").querySelectorAll(".settings-navigation-group button")).map(
+    (b) => b.textContent?.trim() ?? "",
+  );
+const progress = () => document.querySelector(".intro-progress")?.textContent ?? "";
+const goalGroup = () => screen.getByRole("group", { name: "What you want to do" });
+const goalCard = (title: RegExp) => {
+  const card = Array.from(goalGroup().querySelectorAll("button")).find((b) => title.test(b.textContent ?? ""));
+  if (!card) throw new Error(`no goal card ${title}`);
+  return card;
+};
+const lesson = (id: string) => LESSONS.find((l) => l.id === id)!;
+const realStartLesson = useTourStore.getState().startLesson;
 
 describe("How to start intro wizard", () => {
   beforeEach(() => {
@@ -52,10 +77,12 @@ describe("How to start intro wizard", () => {
     backend({});
     useProjectsStore.setState({ projects: [], activeId: null, loaded: true, rootDir: `/home/u/${BRAND.slug}/root` });
     useSettingsStore.setState({ settings: {} as Settings, loaded: true });
+    useTourStore.setState({ active: false, startLesson: realStartLesson });
   });
   afterEach(() => {
     cleanup();
     resetOllamaStatusPoller();
+    useTourStore.setState({ active: false, startLesson: realStartLesson });
   });
 
   it("pages with Next/Back, the rail and ←/→, and remembers the page", async () => {
@@ -69,12 +96,17 @@ describe("How to start intro wizard", () => {
     expect((screen.getByRole("button", { name: /Back/ }) as HTMLButtonElement).disabled).toBe(true);
 
     next();
+    expect(heading()).toContain("Your goals");
+    // Nothing picked: the full tour follows.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "ArrowRight" });
     expect(heading()).toContain("Projects");
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "ArrowRight" });
     expect(heading()).toContain("Agent CLIs");
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "ArrowLeft" });
     expect(heading()).toContain("Projects");
-    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+    back();
+    expect(heading()).toContain("Your goals");
+    back();
     expect(heading()).toContain("Welcome");
 
     // The rail jumps straight to a page.
@@ -89,13 +121,37 @@ describe("How to start intro wizard", () => {
     expect(heading()).toContain(`Ask ${BRAND.display}`);
   });
 
+  it("types the Welcome greeting only on the first run, and only once", async () => {
+    const greeting = `Hi there — I'm ${BRAND.display}.`;
+    const typed = () => document.querySelector(".typewriter [aria-hidden='true']")?.textContent ?? "";
+
+    // Re-opened from Settings: complete at once.
+    let unmount = () => {};
+    await act(async () => {
+      ({ unmount } = render(<HowToStart onClose={() => {}} />));
+    });
+    expect(typed()).toContain(greeting);
+    unmount();
+
+    // First run: it starts empty (screen readers still get the whole line) …
+    await act(async () => {
+      render(<HowToStart onClose={() => {}} firstRun />);
+    });
+    expect(typed()).not.toContain(greeting);
+    expect(document.querySelector(".typewriter-sr")?.textContent).toContain(greeting);
+    // … and coming back to Welcome does not type it again.
+    next();
+    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+    expect(typed()).toContain(greeting);
+  });
+
   it("finishing on the last page resets to Welcome; Skip keeps the page", () => {
     const onClose = vi.fn();
     const { unmount } = render(<HowToStart onClose={onClose} />);
     next();
     fireEvent.click(screen.getByRole("button", { name: "Skip intro" }));
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(readIntroPage()).toBe("projects");
+    expect(readIntroPage()).toBe("goals");
     unmount();
 
     localStorage.setItem(storageKey("intro.page"), "done");
@@ -118,6 +174,173 @@ describe("How to start intro wizard", () => {
     fireEvent.click(screen.getByRole("button", { name: /Feature Guide/ }));
     for (const type of ["app:start-tour", "app:open-lessons", "app:open-settings"]) window.removeEventListener(type, record);
     expect(events).toEqual(["app:start-tour", "app:open-lessons", "app:open-settings"]);
+  });
+
+  it("Your goals: toggle cards in a group; answers shape the rail, the progress and the preview", async () => {
+    await act(async () => {
+      render(<HowToStart onClose={() => {}} />);
+    });
+    next();
+    expect(heading()).toContain("Your goals");
+    expect(screen.getByText(/What do you want to do with/)).toBeTruthy();
+
+    const cards = Array.from(goalGroup().querySelectorAll("button"));
+    expect(cards).toHaveLength(8);
+    for (const card of cards) {
+      expect(card.getAttribute("type")).toBe("button");
+      expect(card.getAttribute("aria-pressed")).toBe("false");
+    }
+    // Nothing picked: the full tour, and the preview says so.
+    expect(progress()).toBe("Step 2 of 8");
+    expect(screen.getByText(/Nothing picked yet/)).toBeTruthy();
+    expect(screen.queryByText(/^Next up:/)).toBeNull();
+
+    fireEvent.click(goalCard(/Organize my day/));
+    expect(goalCard(/Organize my day/).getAttribute("aria-pressed")).toBe("true");
+    expect(goalCard(/Code with AI agents/).getAttribute("aria-pressed")).toBe("false");
+    expect(railEntries()).toEqual([
+      "1Welcome",
+      "2Your goals",
+      "3For you",
+      `4Ask ${BRAND.display}`,
+      "5What next",
+    ]);
+    expect(progress()).toBe("Step 2 of 5");
+    expect(screen.queryByText(/Nothing picked yet/)).toBeNull();
+    expect(screen.getByText(/^Next up:/).textContent).toBe(`Next up: For you · Ask ${BRAND.display}`);
+    expect(screen.getByText(/^Next up:/).closest("[aria-live='polite']")).toBeTruthy();
+
+    // A second goal adds its pages, in canonical order.
+    fireEvent.click(goalCard(/Code with AI agents/));
+    expect(screen.getByText(/^Next up:/).textContent).toBe(
+      `Next up: Projects · Agent CLIs · For you · Ask ${BRAND.display}`,
+    );
+    expect(progress()).toBe("Step 2 of 7");
+    // … and toggling it off takes them away again.
+    fireEvent.click(goalCard(/Code with AI agents/));
+    expect(goalCard(/Code with AI agents/).getAttribute("aria-pressed")).toBe("false");
+    expect(railEntries()).not.toContain("3Projects");
+    expect(railEntries().some((e) => /Projects|Agent CLIs|Local models/.test(e))).toBe(false);
+
+    // Next/Back follow the route: For you comes straight after the goals.
+    next();
+    expect(heading()).toContain("For you");
+    expect(progress()).toBe("Step 3 of 5");
+    next();
+    expect(heading()).toContain(`Ask ${BRAND.display}`);
+    back();
+    back();
+    expect(heading()).toContain("Your goals");
+  });
+
+  it("Your goals: answers persist across a close and a re-open", async () => {
+    let unmount = () => {};
+    await act(async () => {
+      ({ unmount } = render(<HowToStart onClose={() => {}} />));
+    });
+    next();
+    fireEvent.click(goalCard(/Organize my day/));
+    fireEvent.click(goalCard(/Continue on my phone/));
+    expect(readIntroGoals()).toEqual(["organize", "phone"]);
+    unmount();
+
+    render(<HowToStart onClose={() => {}} />);
+    expect(heading()).toContain("Your goals");
+    expect(goalCard(/Organize my day/).getAttribute("aria-pressed")).toBe("true");
+    expect(goalCard(/Continue on my phone/).getAttribute("aria-pressed")).toBe("true");
+    expect(goalCard(/Just show me around/).getAttribute("aria-pressed")).toBe("false");
+    expect(progress()).toBe("Step 2 of 5");
+
+    // Clearing every answer forgets them.
+    fireEvent.click(goalCard(/Organize my day/));
+    fireEvent.click(goalCard(/Continue on my phone/));
+    expect(readIntroGoals()).toEqual([]);
+    expect(localStorage.getItem(storageKey("intro.goals"))).toBeNull();
+  });
+
+  it("a remembered page outside the route reopens on the goals page", () => {
+    writeIntroGoals(["organize"]);
+    localStorage.setItem(storageKey("intro.page"), "projects");
+    const { unmount } = render(<HowToStart onClose={() => {}} />);
+    expect(heading()).toContain("Your goals");
+    expect(progress()).toBe("Step 2 of 5");
+    unmount();
+
+    localStorage.setItem(storageKey("intro.page"), "localModels");
+    render(<HowToStart onClose={() => {}} />);
+    expect(heading()).toContain("Your goals");
+  });
+
+  it("For you: the chosen goals' lessons, and Walk me through it starts one", () => {
+    writeIntroGoals(["organize"]);
+    localStorage.setItem(storageKey("intro.page"), "forYou");
+    const startLesson = vi.fn();
+    useTourStore.setState({ startLesson });
+    const onClose = vi.fn();
+    render(<HowToStart onClose={onClose} />);
+    expect(heading()).toContain("For you");
+    expect(screen.getByText(/Short guided walk-throughs/)).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 3, name: /Organize my day/ })).toBeTruthy();
+    for (const title of [`Read mail in ${BRAND.display}`, "Plan with the calendar", "Work a to-do board", "See your usage recap"]) {
+      expect(screen.getByText(title)).toBeTruthy();
+    }
+    // Only the chosen goal's lessons.
+    expect(screen.queryByText("Choose an AI agent")).toBeNull();
+    expect(screen.queryByRole("heading", { level: 3, name: /Code with AI agents/ })).toBeNull();
+
+    const walks = screen.getAllByRole("button", { name: "Walk me through it" });
+    expect(walks).toHaveLength(4);
+    fireEvent.click(walks[0]);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(startLesson).toHaveBeenCalledTimes(1);
+    expect(startLesson).toHaveBeenCalledWith(lesson("mail"));
+  });
+
+  it("For you: several goals list their lessons once each, grouped in goal order", () => {
+    writeIntroGoals(["localAi", "code"]);
+    localStorage.setItem(storageKey("intro.page"), "forYou");
+    render(<HowToStart onClose={() => {}} />);
+    const groups = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent ?? "");
+    expect(groups.findIndex((h) => h.includes("Code with AI agents"))).toBeLessThan(
+      groups.findIndex((h) => h.includes("Run AI privately")),
+    );
+    expect(screen.getAllByText("Choose an AI agent")).toHaveLength(1);
+    expect(screen.getByText("Add a local model or agent")).toBeTruthy();
+  });
+
+  it("What next: the first step for the answers, and Change my answers goes back", () => {
+    writeIntroGoals(["organize"]);
+    localStorage.setItem(storageKey("intro.page"), "done");
+    const startLesson = vi.fn();
+    useTourStore.setState({ startLesson });
+    const onClose = vi.fn();
+    const { unmount } = render(<HowToStart onClose={onClose} />);
+    expect(heading()).toContain("What next");
+    expect(screen.getByText("Based on your answers, a good first step:")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: `Read mail in ${BRAND.display}` }));
+    expect(startLesson).toHaveBeenCalledWith(lesson("mail"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // Starting the first step finishes the intro: the next open is Welcome.
+    expect(readIntroPage()).toBe("welcome");
+    unmount();
+
+    localStorage.setItem(storageKey("intro.page"), "done");
+    render(<HowToStart onClose={onClose} />);
+    fireEvent.click(screen.getByRole("button", { name: "Change my answers" }));
+    expect(heading()).toContain("Your goals");
+    expect(goalCard(/Organize my day/).getAttribute("aria-pressed")).toBe("true");
+    // The pressed button is gone; the focus lands on the picked card, not the body.
+    expect(document.activeElement).toBe(goalCard(/Organize my day/));
+  });
+
+  it("What next with no answers: the quick tour is the first step", () => {
+    localStorage.setItem(storageKey("intro.page"), "done");
+    const startLesson = vi.fn();
+    useTourStore.setState({ startLesson });
+    render(<HowToStart onClose={() => {}} />);
+    expect(screen.getByText("Based on your answers, a good first step:")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Quick tour" }));
+    expect(startLesson).toHaveBeenCalledWith(lesson("tour"));
   });
 
   it("Projects: live count, and New/Import open the + menu's dialogs", () => {

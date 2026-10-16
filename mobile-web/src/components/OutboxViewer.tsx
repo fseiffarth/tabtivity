@@ -159,7 +159,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   /** With no `markup`: Mark up still shows, and Submit opens a new agent tab. */
   newTab?: MarkupNewTab;
   /** A picture opens in Mark up — its card among the project's tabs is a
-   * markup under way. A PDF's reader opens as the phone's "PDFs open in"
+   * markup under way. A PDF's reader opens marking too (the files library's
+   * **Mark up**); without it the reader opens as the phone's "PDFs open in"
    * says. */
   startMarking?: boolean;
 }) {
@@ -374,7 +375,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   if (isPdf) {
     return <MarkupView tabId={markup?.tabId} projectId={target} place={marked.place} folder={marked.folder} onSend={markup?.onSend}
       newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} toChat={markup?.toChat} refresh={marked.refresh} scope={marked.scope} file={marked.file} adoptFrom={marked.adoptFrom} onClose={onClose}
-      reader={{ actions, alert: sharing.failed === file.name ? t("mobile.outbox.shareError") : undefined }} />;
+      startMarking={startMarking} reader={{ actions, alert: sharing.failed === file.name ? t("mobile.outbox.shareError") : undefined }} />;
   }
   return <div className={`outbox-viewer${isText ? " outbox-text-sheet" : ""}`} role="dialog" aria-modal="true" aria-label={sentName(file)}>
     <div className="outbox-viewer-head">

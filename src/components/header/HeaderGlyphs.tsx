@@ -90,6 +90,17 @@ export function SettingsGlyph({ className }: { className: string }) {
   );
 }
 
+/** A question mark in a ring — the header's help agent (`HelpAgentButton`). */
+export function HelpGlyph({ className }: { className: string }) {
+  return (
+    <Glyph className={className}>
+      <circle cx="8" cy="8" r="6" {...STROKE} />
+      <path d="M6.2 6.5a1.8 1.8 0 1 1 2.7 1.55c-.55.32-.9.75-.9 1.35v.35" {...STROKE} />
+      <circle cx="8" cy="11.35" r="0.7" fill="currentColor" />
+    </Glyph>
+  );
+}
+
 /** Two stacked server units — the global machines — for the header Machines
  *  button (`header/MachinesIndicator`) and its overlay's bar
  *  (`header/MachinesOverlay`). On the shared 16-unit grid, y=2..14. */

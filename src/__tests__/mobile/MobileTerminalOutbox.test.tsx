@@ -85,8 +85,9 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
 
-    // The facts row's usage read (`/status`) is not this test's concern.
-    expect(fetchMock.mock.calls.map(([url]) => url).filter((url) => !url.endsWith("/status"))).toEqual(["/api/v1/tabs/tab-7/outbox"]);
+    // The facts row's usage read (`/status`) and the Commit chip's count
+    // (`/uncommitted`) are not this test's concern.
+    expect(fetchMock.mock.calls.map(([url]) => url).filter((url) => !url.endsWith("/status") && !url.endsWith("/uncommitted"))).toEqual(["/api/v1/tabs/tab-7/outbox"]);
     const gallery = openGallery(2);
     expect(gallery.textContent).toContain("From the agent");
     expect(gallery.textContent).toContain("2 files");

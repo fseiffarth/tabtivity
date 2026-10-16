@@ -162,8 +162,13 @@ describe("applyCursor", () => {
 describe("the app stylesheet", () => {
   it("reads the cursor tokens instead of naming a keyword a pack replaces", () => {
     // Comments first: this file's own documentation quotes the bare form it is
-    // telling everyone not to write.
-    const css = readAppStylesheet().replace(/\/\*[\s\S]*?\*\//g, "");
+    // telling everyone not to write. reset.css is Tailwind 3's preflight,
+    // vendored verbatim (ResetParity.test.ts pins it): its `button,
+    // [role="button"] { cursor: pointer }` and `:disabled { cursor: default }`
+    // were in every build while Tailwind emitted them, so they are not app
+    // rules this invariant can ask to change. App rules on a button still
+    // override them, and every app rule must read the token.
+    const css = readAppStylesheet({ exclude: ["reset.css"] }).replace(/\/\*[\s\S]*?\*\//g, "");
     const keywords = [...new Set(CURSOR_SPECS.map((s) => s.fallback))];
     const bare = new RegExp(`cursor:\\s*(${keywords.join("|")})\\s*[;}]`, "g");
     expect(css.match(bare) ?? []).toEqual([]);

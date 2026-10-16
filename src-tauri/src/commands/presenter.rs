@@ -88,7 +88,52 @@ pub fn choose_audience_monitor_index(
     monitors.iter().position(|m| *m == chosen)
 }
 
+/// A monitor the reader picked for the present window, as the frontend
+/// remembers it: the output's name plus its desktop origin. The origin tells
+/// apart two identical panels, which report the same name; the name finds a
+/// panel again after a re-arrangement moved its origin.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorPick {
+    pub name: Option<String>,
+    pub x: i32,
+    pub y: i32,
+}
+
+/// Index of the monitor `pick` names, if it is still connected: name AND
+/// origin first, then origin alone, then name alone. `None` = the remembered
+/// output is gone, and the caller falls back to its usual choice.
+pub fn preferred_monitor_index(
+    monitors: &[(MonitorRect, Option<String>)],
+    pick: &MonitorPick,
+) -> Option<usize> {
+    let at = |(m, _): &(MonitorRect, Option<String>)| (m.x, m.y) == (pick.x, pick.y);
+    let named = |(_, n): &(MonitorRect, Option<String>)| pick.name.is_some() && *n == pick.name;
+    monitors
+        .iter()
+        .position(|e| at(e) && named(e))
+        .or_else(|| monitors.iter().position(at))
+        .or_else(|| monitors.iter().position(named))
+}
+
+/// The monitor after `current` in `available_monitors()` order, wrapping —
+/// what the present window's "next screen" key steps through. `None` with
+/// fewer than two monitors (there is nowhere else to go); an unknown current
+/// monitor starts the cycle at the first.
+pub fn next_monitor_index(monitors: &[MonitorRect], current: Option<MonitorRect>) -> Option<usize> {
+    if monitors.len() < 2 {
+        return None;
+    }
+    let here = current.and_then(|c| monitors.iter().position(|m| (m.x, m.y) == (c.x, c.y)));
+    Some(here.map_or(0, |i| (i + 1) % monitors.len()))
+}
+
 /// Open (or focus) a presentation window.
+///
+/// `monitor` is the output the reader last moved this kind of window to (the
+/// PDF present window's "next screen"): while it is still connected and there
+/// is more than one monitor, the window opens there instead of on the default
+/// pick — so a desk with three screens has to be told which one only once.
 ///
 /// `fullscreen` forces the takeover even when there is only one monitor. Left
 /// unset (the deck's audience window), a lone monitor yields an ordinary windowed
@@ -105,6 +150,7 @@ pub async fn open_presenter_window(
     app: AppHandle,
     label: String,
     fullscreen: Option<bool>,
+    monitor: Option<MonitorPick>,
 ) -> Result<String, String> {
     if !valid_presenter_label(&label) {
         return Err("invalid presenter window label".into());
@@ -117,7 +163,7 @@ pub async fn open_presenter_window(
         return Ok(label);
     }
 
-    let target = audience_monitor(&app);
+    let target = audience_monitor(&app, monitor.as_ref());
     let target_index = target.map(|(i, _)| i);
     let target = target.map(|(_, m)| m);
 
@@ -219,6 +265,61 @@ pub async fn open_presenter_window(
     });
 
     Ok(label)
+}
+
+/// Move a presentation window to the next monitor and fullscreen it there —
+/// the present window's answer to "it opened on the wrong screen". Returns the
+/// monitor it went to, for the frontend to remember and hand back on the next
+/// open; `None` when there is no other monitor (nothing moved).
+///
+/// Leaves fullscreen first, then places the window, then fullscreens it on the
+/// new output after a beat: a window already fullscreen on one output is moved
+/// unreliably by X11 window managers, and Wayland ignores the placement and
+/// goes by the output named in the fullscreen request (`fullscreen_on`).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn presenter_next_monitor(
+    app: AppHandle,
+    label: String,
+) -> Result<Option<MonitorPick>, String> {
+    if !valid_presenter_label(&label) {
+        return Err("invalid presenter window label".into());
+    }
+    let Some(win) = app.get_webview_window(&label) else {
+        return Ok(None);
+    };
+    let monitors = named_monitors(&app);
+    let rects: Vec<MonitorRect> = monitors.iter().map(|(m, _)| *m).collect();
+    let current = win.current_monitor().ok().flatten().map(|m| monitor_rect(&m));
+    let Some(index) = next_monitor_index(&rects, current) else {
+        return Ok(None);
+    };
+    let (target, name) = monitors[index].clone();
+
+    let app_main = app.clone();
+    let move_label = label.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = app_main.get_webview_window(&move_label) {
+            let _ = w.set_fullscreen(false);
+            let _ = w.set_position(PhysicalPosition::new(target.x, target.y));
+            let _ = w.set_size(PhysicalSize::new(target.w, target.h));
+        }
+    });
+    let fs_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let app_main = fs_app.clone();
+        let _ = fs_app.run_on_main_thread(move || {
+            if let Some(w) = app_main.get_webview_window(&label) {
+                fullscreen_on(&w, Some(index));
+            }
+        });
+    });
+
+    Ok(Some(MonitorPick {
+        name,
+        x: target.x,
+        y: target.y,
+    }))
 }
 
 /// Close the audience window. Idempotent — a window already gone is the state the
@@ -488,20 +589,39 @@ fn fullscreen_on(w: &tauri::WebviewWindow, _index: Option<usize>) {
     let _ = w.set_fullscreen(true);
 }
 
-/// Resolve the monitor to hand the audience window, from the live app: its
-/// index in `available_monitors()` order plus its rect.
-fn audience_monitor(app: &AppHandle) -> Option<(usize, MonitorRect)> {
-    let to_rect = |m: &tauri::Monitor| MonitorRect {
+fn monitor_rect(m: &tauri::Monitor) -> MonitorRect {
+    MonitorRect {
         x: m.position().x,
         y: m.position().y,
         w: m.size().width,
         h: m.size().height,
-    };
-    let monitors: Vec<MonitorRect> = app.available_monitors().ok()?.iter().map(to_rect).collect();
+    }
+}
+
+/// Every monitor with its name, in `available_monitors()` order — the order
+/// `fullscreen_on`'s index counts in.
+fn named_monitors(app: &AppHandle) -> Vec<(MonitorRect, Option<String>)> {
+    app.available_monitors()
+        .map(|ms| ms.iter().map(|m| (monitor_rect(m), m.name().cloned())).collect())
+        .unwrap_or_default()
+}
+
+/// Resolve the monitor to hand the audience window, from the live app: its
+/// index in `available_monitors()` order plus its rect. A remembered `pick`
+/// wins while it is connected and there is a choice to make at all.
+fn audience_monitor(app: &AppHandle, pick: Option<&MonitorPick>) -> Option<(usize, MonitorRect)> {
+    let named = named_monitors(app);
+    let monitors: Vec<MonitorRect> = named.iter().map(|(m, _)| *m).collect();
+    if let Some(index) = pick
+        .filter(|_| monitors.len() >= 2)
+        .and_then(|p| preferred_monitor_index(&named, p))
+    {
+        return Some((index, monitors[index]));
+    }
     let main = app
         .get_webview_window("main")
         .and_then(|w| w.current_monitor().ok().flatten())
-        .map(|m| to_rect(&m));
+        .map(|m| monitor_rect(&m));
     let index = choose_audience_monitor_index(&monitors, main)?;
     Some((index, monitors[index]))
 }
@@ -534,6 +654,40 @@ mod tests {
             w: 1920,
             h: 1080,
         }
+    }
+
+    #[test]
+    fn a_remembered_monitor_is_found_again() {
+        let named = |x, n: &str| (rect(x, 0), Some(n.to_string()));
+        let pick = |n: Option<&str>, x| MonitorPick {
+            name: n.map(str::to_string),
+            x,
+            y: 0,
+        };
+        // Two identical panels share a name: the origin tells them apart.
+        let ms = [named(0, "eDP-1"), named(1920, "DELL"), named(3840, "DELL")];
+        assert_eq!(preferred_monitor_index(&ms, &pick(Some("DELL"), 3840)), Some(2));
+        // Re-arranged: the name finds the panel at its new origin.
+        assert_eq!(preferred_monitor_index(&ms, &pick(Some("eDP-1"), -1920)), Some(0));
+        // Renamed by a driver update: the origin still finds it.
+        assert_eq!(preferred_monitor_index(&ms, &pick(Some("HDMI-2"), 1920)), Some(1));
+        // Unplugged: nothing, and the caller falls back to its default.
+        assert_eq!(preferred_monitor_index(&ms, &pick(Some("BENQ"), 7680)), None);
+        // An unnamed pick never matches an unnamed monitor by name alone.
+        let unnamed = [(rect(0, 0), None), (rect(1920, 0), None)];
+        assert_eq!(preferred_monitor_index(&unnamed, &pick(None, 7680)), None);
+    }
+
+    #[test]
+    fn next_monitor_cycles_and_wraps() {
+        let ms = [rect(0, 0), rect(1920, 0), rect(3840, 0)];
+        assert_eq!(next_monitor_index(&ms, Some(rect(0, 0))), Some(1));
+        assert_eq!(next_monitor_index(&ms, Some(rect(3840, 0))), Some(0));
+        // Unknown current monitor → start at the first.
+        assert_eq!(next_monitor_index(&ms, None), Some(0));
+        assert_eq!(next_monitor_index(&ms, Some(rect(-500, 0))), Some(0));
+        // One monitor: nowhere to go.
+        assert_eq!(next_monitor_index(&ms[..1], Some(rect(0, 0))), None);
     }
 
     #[test]

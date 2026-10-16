@@ -75,7 +75,19 @@ const EV_DOWNLOAD_REQUESTED: &str = "browser:download-requested";
 const EV_BLOCKED: &str = "browser:blocked";
 const EV_LIVE_CLOSED: &str = "browser:live-closed";
 
-/// Whether this build can open a **live-page window**. Every platform can.
+/// Whether this build can open a **live-page window**. Not on Linux, for now.
+///
+/// **Linux is refused** because the live window's renderer runs unsandboxed:
+/// on the GTK3 API (`webkit2gtk-4.1`) WebKit's bubblewrap sandbox is off
+/// unless the app calls `webkit_web_context_set_sandbox_enabled` before the
+/// context's first web process, and wry 0.57 never does — it builds the
+/// incognito context function-locally (`webkitgtk/mod.rs`, `new_gtk`), so
+/// there is no point at which we could, and flipping it after a web process
+/// exists aborts the process. A renderer RCE on a browsed page would run as
+/// the user, with no second escape needed. The fix is a separate helper
+/// process on `webkitgtk-6.0` (sandbox mandatory) inside our own bubblewrap,
+/// with no Tauri IPC in it; until then the `browser_live_pages` setting
+/// cannot open one here (`docs/browser_plan_b.md` §8.6).
 ///
 /// Windows used to be refused here: WebView2's *default* permission state
 /// draws Edge's own prompt, whose Allow grants a browsed page the camera, and
@@ -85,7 +97,7 @@ const EV_LIVE_CLOSED: &str = "browser:live-closed";
 /// [`deny_all_permissions`] installs exactly that on the live window, which is
 /// the same "a browsed page gets no device, ever" contract the Linux window
 /// keeps through WebKitGTK's permission-request signal.
-const LIVE_SUPPORTED: bool = true;
+const LIVE_SUPPORTED: bool = !cfg!(target_os = "linux");
 
 /// Whether this build can serve **reader mode**. Every platform can.
 ///
@@ -1236,10 +1248,13 @@ mod tests {
     #[allow(clippy::assertions_on_constants)]
     #[test]
     fn the_platform_report_matches_the_cfg_gate() {
-        assert!(
+        assert_eq!(
             LIVE_SUPPORTED,
-            "every desktop can open the live window: Windows pre-empts WebView2's \
-             permission prompt with a deny-only handler (see deny_all_permissions)"
+            !cfg!(target_os = "linux"),
+            "Linux refuses the live window until its renderer is sandboxed (wry \
+             never enables WebKitGTK's sandbox — see LIVE_SUPPORTED); Windows \
+             pre-empts WebView2's permission prompt with a deny-only handler \
+             (see deny_all_permissions)"
         );
         assert!(
             READER_SUPPORTED,

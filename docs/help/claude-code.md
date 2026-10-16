@@ -2,6 +2,7 @@
 id: claude-code
 title: Claude Code in Tabtivity
 keywords: [claude, claude code, anthropic, install, login, sign in, resume, update, trust, mcp]
+related: [agent-clis, root-console, scheduled-prompts]
 ---
 
 Claude Code is Anthropic's coding agent CLI (command `claude`). Tabtivity runs it

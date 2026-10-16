@@ -28,6 +28,12 @@ describe("experimentalEnabled", () => {
     expect(experimentalEnabled(s({ terminal_webgl: true }), "terminal_webgl")).toBe(true);
   });
 
+  it("keeps GPU compositing opt-in even in debug mode", () => {
+    expect(experimentalEnabled(s({ debug: true }), "gpu_compositing")).toBe(false);
+    expect(experimentalEnabled(s({ debug: true, experimental_explicit: true }), "gpu_compositing")).toBe(false);
+    expect(experimentalEnabled(s({ gpu_compositing: true }), "gpu_compositing")).toBe(true);
+  });
+
   it("lets an explicit value win over debug mode, both ways", () => {
     // Off while in debug mode — "turn this off" must work for the people most
     // likely to hit a broken experiment.
@@ -42,10 +48,10 @@ describe("experimentalEnabled", () => {
     expect(experimentalEnabled(undefined, "deck_presenter")).toBe(false);
   });
 
-  it("applies the debug default to every non-WebGL flag, while unmarked", () => {
+  it("applies the debug default to every flag but the GPU ones, while unmarked", () => {
     for (const flag of EXPERIMENTAL_FLAGS) {
       expect(experimentalEnabled(s({}), flag)).toBe(false);
-      expect(experimentalEnabled(s({ debug: true }), flag)).toBe(flag !== "terminal_webgl");
+      expect(experimentalEnabled(s({ debug: true }), flag)).toBe(flag !== "terminal_webgl" && flag !== "gpu_compositing");
       expect(experimentalEnabled(s({ debug: true, [flag]: false }), flag)).toBe(false);
     }
   });

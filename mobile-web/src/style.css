@@ -570,6 +570,18 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-due-fields,.todo-editor-grid,.todo-add-row,.todo-step-row { display:grid; gap:8px; }
 .todo-due-fields,.todo-editor-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .todo-inline-check { display:flex; align-items:center; gap:8px; }
+/* The clock-entry field (`common/TimeFieldCore`), shared with the desktop: the
+   box wears the phone's input look, the two segments inside it are bare (the
+   global `input` rule would make each a full-width box of its own). */
+.time-field { display:flex; align-items:center; width:100%; box-sizing:border-box; border:1px solid #3a3e50; border-radius:12px; padding:13px; background:#171a24; color:#fff; }
+.time-field:focus-within { border-color:var(--m-accent,#7c6cff); }
+.time-field.is-disabled { opacity:.45; }
+.time-field input.time-field-seg { width:2.2ch; flex:0 0 auto; padding:0; border:none; border-radius:4px; background:none; color:inherit; font:inherit; text-align:center; }
+.time-field input.time-field-seg:focus { outline:none; background:var(--m-accent,#7c6cff); color:var(--m-on-accent,#000); }
+.time-field-seg::selection { background:transparent; color:inherit; }
+.time-field-seg::placeholder { color:#8a8ea0; }
+.time-field-sep { padding:0 2px; opacity:.75; pointer-events:none; user-select:none; }
+.time-field-mer { margin-left:8px; padding:2px 6px; border:none; border-radius:4px; background:none; color:inherit; font:inherit; }
 .todo-inline-check input { width:auto; }
 .todo-editor-grid label { min-width:0; }
 .todo-editor-grid output { margin-left:5px; color:#d7d2ff; }
@@ -768,13 +780,24 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .terminal .xterm,.terminal .xterm-viewport { height:100%; overscroll-behavior:contain; }
 /* xterm gives `.xterm-screen` an explicit cols-wide pixel width. Letting the
    terminal element grow to it is what gives the scroller something to
-   scroll, and keeps the themed viewport background under the panned-to
-   columns instead of ending a screenful in. */
+   scroll, and keeps the themed background under the panned-to columns
+   instead of ending a screenful in. */
 .terminal .xterm { width:max-content; min-width:100%; }
-.terminal .xterm-viewport { scrollbar-color:#454b62 #0b0d13; scrollbar-width:thin; }
-.terminal .xterm-viewport::-webkit-scrollbar { width:7px; }
-.terminal .xterm-viewport::-webkit-scrollbar-track { background:#0b0d13; }
-.terminal .xterm-viewport::-webkit-scrollbar-thumb { border-radius:0; background:#454b62; }
+/* That themed background is the scrollable element's in xterm 6 (painted
+   inline from the theme); `.xterm-viewport`, which carried it up to xterm 5,
+   is now left at xterm.css's #000. Stretched to the element's full height,
+   the scrollable element covers it, so the strip under the last row — up to
+   a row's worth of a fitted screen, more under a desktop window's geometry —
+   is the theme's ground and not a black band (in a light theme above all).
+   xterm sizes its scroll range from the rows, never from this box. */
+.terminal .xterm-scrollable-element { min-height:100%; }
+/* xterm 6 draws its own bar (VS Code's scrollable element, 14px wide inline)
+   instead of a native one on `.xterm-viewport`; its slider keeps the old 7px
+   square thumb, inset by a transparent border. A class more than the slider
+   rules xterm injects, hover/active included, so these win in any order. */
+.terminal .xterm-scrollable-element > .scrollbar.vertical > .slider,
+.terminal .xterm-scrollable-element > .scrollbar.vertical > .slider:hover,
+.terminal .xterm-scrollable-element > .scrollbar.vertical > .slider.active { box-sizing:border-box; border-left:7px solid transparent; background:#454b62 padding-box; }
 /* Which edge still hides output. A phone shows no scrollbar until it is
    already moving, so the fade is the only standing cue that the line runs
    on. Hidden in Focus view, which re-wraps and never pans. */
@@ -998,6 +1021,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* Its own label only: a bare `small` also caught every option's note in the
    list below and set it in tiny blue capitals. */
 .transcript-screen > small { padding:0 4px; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; letter-spacing:.05em; }
+/* A dialog the chat could not read: what to do instead, and the way there. */
+.transcript-screen-note { margin:0; padding:0 4px; color:#d9dce7; font-size:.86rem; line-height:1.4; }
+.transcript-screen-action { justify-self:start; }
 /* Under the stored session while the live screen shows the agent mid-turn. */
 .transcript-working { display:flex; align-items:center; gap:8px; padding:6px 10px; color:#9da3b6; font:500 .78rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; }
 .transcript-working-dots { display:inline-flex; gap:3px; }
@@ -1101,6 +1127,13 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* Commit: an icon chip, so a fourth chip still fits a narrow phone. */
 .composer-prefix.composer-commit { display:grid; place-items:center; width:30px; padding:0; }
 .composer-bar .composer-commit svg { width:17px; height:17px; }
+/* What this chat changed and has not committed, on the chip's corner. */
+.composer-prefix.composer-commit { position:relative; }
+.composer-commit-count { position:absolute; top:-6px; right:-7px; min-width:17px; height:17px; padding:0 4px; border-radius:9px; background:#d29922; color:#14161f; font-size:.66rem; font-weight:700; line-height:17px; text-align:center; font-variant-numeric:tabular-nums; pointer-events:none; }
+.commit-files { display:grid; gap:4px; }
+.commit-files .git-section { margin:0; }
+.commit-files code { font-size:.8rem; overflow-wrap:anywhere; }
+.commit-files .git-more > button { width:100%; padding:0; border:0; background:none; color:#9da3b6; font:inherit; text-align:center; }
 .composer-untested { color:#ffd36b; font-size:.7rem; font-style:normal; }
 /* The draft row: the textarea, while there is a draft a ✕ that empties it —
    a phone keyboard has no select-all, and a long dictated draft was otherwise
@@ -1244,13 +1277,62 @@ body.terminal-open { min-height:0; overflow:hidden; }
 span.files-close { background:transparent; }
 .files-close svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 @keyframes files-drawer-in { from { opacity:0; transform:translateX(-24px); } to { opacity:1; transform:none; } }
-@media (prefers-reduced-motion:reduce) { .project-files { animation:none; } }
+@media (prefers-reduced-motion:reduce) { .project-files,.files-library { animation:none; } }
+/* The drawer's Files row: a menu row with a folder's chevron. */
+.drawer-files .untested { margin-left:6px; }
+/* The files library (`FilesLibrary`): the whole screen in the drawer sheet's
+   surface, slid in as the drawer is. Its head is ‹ parent · the folder's
+   title (the path menu) · ⋯ (the view menu); the body under it scrolls. */
+.files-library { position:fixed; inset:0; z-index:12; display:flex; flex-direction:column; padding:0 env(safe-area-inset-right) 0 env(safe-area-inset-left); background:#171a24; color:#e6e9f2; animation:files-drawer-in .18s ease-out; }
+.files-library-head { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,1fr); align-items:center; gap:4px; min-height:44px; padding:max(14px, calc(8px + env(safe-area-inset-top))) 10px 8px; border-bottom:1px solid #2b3040; }
+.files-library-back { justify-self:start; display:flex; align-items:center; gap:1px; max-width:100%; min-height:36px; padding:4px 8px 4px 0; border:0; border-radius:10px; background:transparent; color:#8fb8ff; font-size:.9rem; }
+.files-library-back span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.files-library-head svg { width:20px; height:20px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
+.files-library-head h2 { display:flex; justify-content:center; align-items:center; min-width:0; margin:0; font-size:1.02rem; }
+.files-library-title { min-width:0; padding:6px 8px; overflow:hidden; border:0; border-radius:10px; background:transparent; color:inherit; font:inherit; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
+.files-library-head h2 small { flex:0 0 auto; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; }
+.files-library-more { justify-self:end; display:grid; place-items:center; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:#2a2e3e; color:#c8cdda; }
+.files-library-more svg, .option-list .files-more svg { stroke-width:3.2; }
+.files-library-body { flex:1; display:grid; align-content:start; gap:11px; min-height:0; padding:10px 10px calc(16px + env(safe-area-inset-bottom)); overflow:auto; overscroll-behavior:contain; }
+/* A list row's ⋯, after its ↗ Share. */
+.option-list .files-more { flex:0 0 auto; width:auto; padding:0 12px; color:#98a0b4; }
+/* The grid: covers in as many columns as fit, the name on two lines and one
+   line of facts under each; ▾ sits on the cover's corner. */
+.files-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(104px,1fr)); gap:14px 10px; margin:0; padding:0 4px; list-style:none; }
+.files-tile { position:relative; display:grid; align-content:start; gap:4px; min-width:0; }
+.files-tile-open { display:grid; gap:3px; min-width:0; padding:0; border:0; background:transparent; color:#d8e2f5; text-align:left; }
+.files-tile-cover { position:relative; display:grid; place-items:center; aspect-ratio:4 / 5; overflow:hidden; border:1px solid #2b3040; border-radius:10px; background:#1e2230; }
+.files-tile-cover .files-icon { display:grid; place-items:center; width:56px; height:56px; border-radius:14px; background:#252a3a; color:#aab2c5; }
+.files-tile-cover .files-icon svg { width:30px; height:30px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.files-tile-cover .files-icon-dir { background:#1d2a44; color:#8fb8ff; }
+.files-tile-cover .files-icon-image { background:#1d3329; color:#8ad1a6; }
+.files-tile-cover .files-icon-pdf { background:#3a2226; color:#f28b82; }
+.files-tile-cover .files-icon-text { background:#2a2c3a; color:#c8cdda; }
+.files-tile-open strong { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; padding:2px 2px 0; font-size:.82rem; font-weight:600; line-height:1.25; overflow-wrap:anywhere; }
+.files-tile-open small { padding:0 2px; overflow:hidden; color:#98a0b4; font-size:.7rem; text-overflow:ellipsis; white-space:nowrap; }
+.files-tile-open small.files-hit-place { color:#8fb8ff; }
+.files-tile.files-folded strong { color:#aeb4c4; font-weight:500; }
+.files-tile-menu { position:absolute; top:5px; right:5px; display:grid; place-items:center; width:30px; height:30px; padding:0; border:0; border-radius:50%; background:rgba(16,19,28,.72); color:#d8e2f5; }
+.files-tile-menu svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
+.files-tile-share { justify-self:start; padding:5px 10px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.75rem; }
+.files-grid > .files-section { grid-column:1 / -1; }
+.files-grid .files-section button { display:flex; align-items:center; width:100%; text-align:left; }
+.files-grid .files-section svg { fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
+.files-grid .files-share-error { padding:0 2px; }
+/* A thumbnail lies over the kind icon and fades in (opacity only); a folder's
+   colour is inline on the cover and its icon. */
+.files-thumb { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:top center; opacity:0; transition:opacity .2s ease-out; }
+.files-thumb.shown { opacity:1; }
+@media (prefers-reduced-motion:reduce) { .files-thumb { transition:none; } }
+/* Favorites (a sideways strip of tiles at the root) and recent files. */
+.files-saved { display:grid; gap:8px; min-width:0; }
+.files-saved h3 { margin:0; padding:0 4px; color:#98a0b4; font-size:.76rem; font-weight:650; letter-spacing:.04em; text-transform:uppercase; }
+.files-strip { display:flex; gap:10px; overflow-x:auto; overscroll-behavior-x:contain; padding-bottom:4px; scrollbar-width:none; }
+.files-strip > .files-tile { flex:0 0 96px; }
+.files-stale { opacity:.45; }
 /* The search box under the head, and a hit's folder above its times. */
 .files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
 .files-list small.files-hit-place { overflow:hidden; color:#8fb8ff; text-overflow:ellipsis; white-space:nowrap; }
-.files-trail { display:flex; flex-wrap:wrap; gap:5px; padding:0 4px; }
-.files-trail button { max-width:100%; padding:5px 10px; overflow:hidden; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.8rem; text-overflow:ellipsis; white-space:nowrap; }
-.files-trail button:disabled { color:#d8e2f5; opacity:1; }
 /* A file's ↗ Share sits beside its row, drawn as the outbox tile's Share link. */
 .files-list li { display:flex; flex-wrap:wrap; align-items:stretch; gap:3px; }
 .files-list li > button:first-child { flex:1; width:auto; min-width:0; }
@@ -1279,9 +1361,9 @@ span.files-close { background:transparent; }
 .files-list small { font-size:.76rem; }
 .option-list .files-chevron { width:17px; height:17px; color:#6f7790; }
 /* A folded section's head: the desktop tree's divider, not a card. */
-.option-list .files-section button { gap:6px; margin-top:6px; padding:8px 10px; border-top:1px solid #2b3040; border-radius:0; background:transparent; color:#98a0b4; font-size:.8rem; }
-.option-list .files-section svg { width:15px; height:15px; transition:transform .12s ease-out; }
-.option-list .files-section button[aria-expanded="true"] svg { transform:rotate(90deg); }
+.option-list .files-section button, .files-grid .files-section button { gap:6px; margin-top:6px; padding:8px 10px; border-top:1px solid #2b3040; border-radius:0; background:transparent; color:#98a0b4; font-size:.8rem; }
+.option-list .files-section svg, .files-grid .files-section svg { width:15px; height:15px; transition:transform .12s ease-out; }
+.option-list .files-section button[aria-expanded="true"] svg, .files-grid .files-section button[aria-expanded="true"] svg { transform:rotate(90deg); }
 .files-list li.files-folded > button:first-child strong { color:#aeb4c4; font-weight:500; }
 /* Local models sheet: the files-list row with its trailing button (Load /
    Unload as the files' Share), the model's facts in the option-row surface. */
@@ -1770,9 +1852,6 @@ span.files-close { background:transparent; }
    animation. A tap approves the mark; "n done · Approve all" sits under the
    round's pill in its look. */
 .markup-pin.is-tick { width:26px; min-width:26px; height:26px; padding:0; border-radius:50%; background:#91e6a9; color:#0f2a18; font-size:.9rem; }
-/* A remark's own Submit while marking (`submitSpot`: outside it, over no mark). */
-.markup-pin.is-submit { min-width:0; padding:0 8px; border-radius:12px; background:#2f6fec; color:#fff; font-size:.72rem; }
-.markup-pin.is-submit:disabled { opacity:.45; }
 .markup-pin.is-tick:disabled { opacity:.5; }
 .markup-ticks .markup-round-words { color:#91e6a9; font-weight:600; }
 .markup-ticks .markup-approve-all { margin-left:auto; min-height:32px; }

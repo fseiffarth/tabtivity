@@ -40,7 +40,7 @@ impl RoutingKey {
             Ok(_) => Err(std::io::Error::other(format!("{}: not a 32-byte key", path.display()))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let mut key = [0u8; 32];
-                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+                getrandom::fill(&mut key).map_err(std::io::Error::other)?;
                 crate::write_atomic(&path, &key, 0o600)?;
                 Ok(Self(key))
             }

@@ -520,6 +520,7 @@ export function EventDialog({
                     <TimeField
                       className="cal-input"
                       value={form.startTime}
+                      required
                       aria-label={t("dateTime.time")}
                       onChange={(startTime) => patchStart({ startTime })}
                     />
@@ -540,6 +541,7 @@ export function EventDialog({
                     <TimeField
                       className="cal-input"
                       value={form.endTime}
+                      required
                       aria-label={t("dateTime.time")}
                       onChange={(endTime) => patchEnd({ endTime })}
                     />

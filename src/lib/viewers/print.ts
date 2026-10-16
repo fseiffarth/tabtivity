@@ -1396,7 +1396,14 @@ function escapeAttr(s: string): string {
  * webview) does not implement the `@page` margin box, so an `@page` margin alone
  * prints edge-to-edge. Body padding is honored by every engine. `@page` margin
  * is zeroed so Chromium-based WebView2 doesn't add its own on top (double
- * margin). This overrides the `html,body{padding:0}` reset in `buildPrintDoc`. */
+ * margin). This overrides the `html,body{padding:0}` reset in `buildPrintDoc`.
+ *
+ * Math prints as its MathML. KaTeX renders each expression twice — a MathML copy
+ * and an HTML copy drawn with `katex.css` and KaTeX's own fonts, the stylesheet
+ * hiding the MathML on screen. The print document carries neither the stylesheet
+ * nor the fonts, so without the rule below both copies printed, the HTML one as a
+ * jumble of unstyled spans next to the formula. Every webview this runs in
+ * typesets MathML natively, so the HTML copy is the one dropped. */
 export const MARKDOWN_PRINT_CSS = `
 @page{margin:0}
 body{padding:2.54cm}
@@ -1424,6 +1431,7 @@ body{padding:2.54cm}
 .markdown-body th{background:#f4f4f4}
 .markdown-body img,.markdown-body svg{max-width:100%;height:auto}
 .markdown-body hr{border:0;border-top:1px solid #ddd;margin:1.2em 0}
+.markdown-body .katex-html{display:none}
 `;
 
 /** Print styling for plain text / source shown in a single `<pre>`.

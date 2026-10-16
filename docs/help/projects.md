@@ -2,6 +2,7 @@
 id: projects
 title: Projects
 keywords: [project, create, new, import, folder, clone, github, gitlab, fork, scaffold, pill, workspace, publish]
+related: [project-desktop, project-transfer, git, remote-projects, containers-boxes]
 ---
 
 A project is a folder Tabtivity manages as one workspace: its own pill in the

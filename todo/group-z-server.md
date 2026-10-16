@@ -1115,3 +1115,54 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2423. **The server as a release `.deb`.** ✅ **Built** (2026-10-14, never
+    installed from a release; user: "regarding github releases what about an
+    own server release?"). `scripts/package-server-deb.sh` packs serverd,
+    gateway, admin helper and the web bundles; ci-cd.yml's `package-server`
+    job builds it on every push, release.yml requires it, signs it in
+    `SHA256SUMS` and calls it a preview in the notes; the desktop updater
+    never offers it (`app_update::is_server_package`). The guide's step 2
+    installs it, "Updating" upgrades it. Not built: aarch64, `.rpm`, a
+    Windows or macOS server (those hosts run it in a Linux VM).
+    - [x] 🤖 Automated test — `app_update::tests::the_server_package_is_never_a_desktop_update`;
+      ci-local `--check-drift` covers the new job.
+    - [ ] 🖐️ Manual test — in the `tabtivity-server` VM, from the first
+      release that carries it: guide step 2 (download, both signature checks
+      OK, `apt install`), then step 4 and `tt-admin check`; sign in from a
+      phone. Install the next release over it: the gateway and each
+      `serverd@` restart, agents in tmux keep running. `apt remove`: the
+      server's units stop.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2424. **`scripts/server-vm.sh`: a test server in one command.** ✅ **Built**
+    (2026-10-14, never run: the agent fence has no `/dev/kvm`; user: "would
+    you recommend the same for setting up a server inside a vm? one arg
+    should be the vm size" and "also allow larger disks up to 500gb").
+    Headless QEMU VM from an Ubuntu cloud image; `small`/`medium`/`large`
+    (4/8/16 GiB, 2/4/6 CPUs, 40/80/160 GB), `--disk` up to 500 GB, sparse and
+    grow-only; installs `latest`, a version, a `.deb` or `--build`, and does
+    the guide's steps 4–7 (tailnet join, `install`, fstab `/proc` line,
+    Tailscale Serve, `check`, admin user + pairing code). Until a release
+    carries the server `.deb` (#2423), use `--build`.
+    - [ ] 🖐️ Manual test — on the host: `scripts/server-vm.sh small --build`
+      bakes the base, boots, prints a login link (or joins with
+      `TABTIVITY_SERVER_VM_TS_AUTHKEY`), `check` has no FAIL line, the URL
+      and pairing code sign a phone in. `stop`, then `medium --disk 200`:
+      the disk grows and `df /` in `ssh` shows it; `small --disk 100` is
+      refused. `invite` prints a new code; `reset` and a new run start clean.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

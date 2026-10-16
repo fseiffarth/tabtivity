@@ -18,5 +18,13 @@ export default defineConfig({
     // and trips otherwise-passing tests. Give them headroom.
     testTimeout: 20000,
     hookTimeout: 20000,
+    // vitest 5's default, written out: every mock's call history is cleared
+    // before each test, so a test asserts only on calls it caused. A
+    // module-load call has to be captured at the top of the file.
+    clearMocks: true,
+    // Off: the cache lives in node_modules, which the freeze tree and
+    // hardlinked agent worktrees share, and showed no wall-time gain here.
+    // Explicit because vitest 5.0.4 turns it on by default.
+    fsModuleCache: false,
   },
 });

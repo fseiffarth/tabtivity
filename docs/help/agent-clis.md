@@ -1,7 +1,8 @@
 ---
 id: agent-clis
 title: AI agent CLIs — install, sign in, open
-keywords: [agent, cli, install, claude, codex, gemini, npm, node, manage clis, sign in, login, api key, resume, custom agent, skills]
+keywords: [agent, cli, install, claude, codex, gemini, npm, node, manage clis, sign in, login, api key, resume, custom agent, skills, cloud session, teleport, worktree, chat view]
+related: [claude-code, codex, gemini-cli, local-models, scheduled-prompts, root-console]
 ---
 
 Tabtivity runs AI coding agents as terminal tabs. It does not bundle them: each
@@ -157,6 +158,29 @@ API keys section says so.
 - The **Default** chip picks the agent Tabtivity uses when it must choose one
   itself (e.g. filling scaffold files).
 - Root console: agents are off there until you turn on their **Root** chip.
+- A project with linked git worktrees asks **Where should … start?**: the
+  main worktree or a worktree's branch. The agent's session belongs to the
+  folder it starts in, so pick the branch it should work on.
+- Choose where a tab runs (this computer, the project's host or a worker) from
+  its tab's location chip on a remote project; see `remote-projects`.
+
+## Cloud sessions
+
+Some vendors run an agent in their own cloud, on the project's repository
+instead of the project folder. The `+` menu's **Cloud session** group offers
+what each installed CLI supports:
+
+- **Claude**: *new cloud session…* (you type the task first, up to 4000
+  characters) and *open a cloud session* (pulls one into the terminal with
+  `--teleport`).
+- **Codex**: *open a cloud session* (`codex cloud`, which lists and starts
+  tasks).
+- **Kiro** and **Mistral Vibe**: *new cloud session* (Vibe asks for the task).
+- **GitHub Copilot**: *open a cloud session* (attaches with `--connect`).
+
+A cloud tab is labelled "(cloud)" and is not restored after a restart — the
+session lives on with the vendor; open it again from the same menu. The
+vendor's cloud needs a plan that includes it.
 
 ## Talk to an agent as a chat
 

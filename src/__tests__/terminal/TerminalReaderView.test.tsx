@@ -194,6 +194,23 @@ describe("the agent pane's Reader", () => {
     await waitFor(() => expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull(), { timeout: 5000 });
   });
 
+  it("lets a long prompt go once its record arrives cut at the bound", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    reader(host);
+    await screen.findByText("fix the parser");
+    const long = `${"a long prompt ".repeat(500)}and its end`;
+    act(() => noteSentPrompt("st-1", long));
+    expect(host.querySelector(".terminal-reader-turn.pending")).not.toBeNull();
+    const recorded = {
+      ...transcript,
+      version: "v2",
+      entries: [...transcript.entries, { kind: "prompt", text: long.slice(0, 6000).trim(), cut: true, at: new Date(Date.now() + 1000).toISOString() }],
+    };
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? recorded : []));
+    await waitFor(() => expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull(), { timeout: 5000 });
+  });
+
   it("keeps the text and says why when the prompt did not go in", async () => {
     sendSteeringPrompt.mockRejectedValue(new Error("agent terminal is not ready"));
     reader(host);

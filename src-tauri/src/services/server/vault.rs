@@ -704,7 +704,9 @@ impl Vault {
                 .decrypt(Nonce::from_slice(&nonce), Payload { msg: &unb64(&file.sealed)?, aad: b"credentials" })
                 .map_err(|_| "credentials.json does not open with this key".to_string())?,
         );
-        serde_json::from_slice(&plain).map_err(|e| e.to_string())
+        // Not the parser's message: it may quote the decrypted passwords, and
+        // callers log this error.
+        serde_json::from_slice(&plain).map_err(|_| "credentials.json does not parse".to_string())
     }
 
     /// A saved password, while unlocked; `None` when locked (like a locked

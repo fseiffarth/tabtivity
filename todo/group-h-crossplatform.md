@@ -3652,6 +3652,30 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Full-screen files library (2026-10-14, plan
+    `docs/mobile_files_library_plan.md`; untested ids `mobile.files.library`,
+    `mobile.files.grid`, `mobile.files.sort`, `mobile.files.pathMenu`,
+    `mobile.files.counts`; needs `npm run mobile:bundle`, and the rebuilt
+    backend for the counts). Open a project, ☰ → **Files**: the library fills
+    the screen at the remembered folder; ‹ Back at the root returns to the
+    drawer (from a tab's Focus view the swipe opens the library directly and
+    ‹ Back closes it). Grid by default: covers with the kind icon, the name on
+    two lines, date · size; ⋯ → List shows the old rows with ↗ and ⋯; Sort by
+    Name / Last edited / Created / Kind, Ascending/Descending, Folders on top —
+    reload the app, the choice is kept. Walk three folders deep: ‹ names the
+    parent and goes up one; tap the title → the path menu lists the root down
+    to here (this one ticked), pick the root → jumps there; a right swipe from
+    the left edge goes up one, at the root closes. ▾ on a file → Open, Share
+    (the phone's share sheet); ▾ on a search hit → Show in folder. Folder
+    tiles read "n items" (an older desktop: no count, never "0 items").
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31cg — Upload here: the phone adds files to a project folder** (2026-10-13;
   ✅ code-complete, automated tests passing — `uploads.rs` (add-only, dot

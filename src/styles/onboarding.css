@@ -193,6 +193,75 @@
   gap: 8px;
   color: var(--text-primary);
 }
+/* Goals page: multi-select toggle cards. Each is a native <button
+   aria-pressed> wearing .settings-card (the surface), laid out as a row:
+   icon, title + blurb, and a check badge in the step rail's number style —
+   hollow when off, filled accent with a ✓ when on. Pressed = the rail's
+   aria-current accent border plus the accent wash. */
+.intro-goal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
+  gap: 8px;
+}
+.settings-card.intro-goal-card {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.settings-card.intro-goal-card:hover {
+  border-color: var(--accent);
+}
+.settings-card.intro-goal-card[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.intro-goal-icon {
+  flex: none;
+  font-size: 20px;
+  line-height: 1.2;
+}
+.intro-goal-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.intro-goal-check {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--accent-contrast);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.intro-goal-card[aria-pressed="true"] .intro-goal-check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.intro-goal-preview {
+  margin: 0;
+  min-height: 1.35em;
+}
+@media (max-width: 520px) {
+  .intro-goal-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-card.intro-goal-card {
+    transition: none;
+  }
+}
 
 /* Contextual hint coachmark/banner. z-index 90: above the header (80) so it can
    point at chrome, but below true modals (.modal-backdrop, 100) so a dialog is
@@ -999,4 +1068,50 @@
   color: var(--accent);
   opacity: 1;
   text-shadow: 0 0 7px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* ── Typewriter greeting (common/Typewriter) ─────────────────────────────────
+   The first-run greeting (HowToStart) and the daily welcome-back line
+   (StatsRecap): the app "speaking" in the root terminal's monospace, with a
+   block caret that blinks while it types and fades once the line is complete.
+   The caret animates opacity only (no blurred shadow — WebKitGTK paints those
+   in software). */
+.typewriter {
+  margin: 0 0 12px;
+  font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  /* Room for the finished line up front, so the text below never jumps. */
+  min-height: calc(2 * 1.55em);
+}
+.typewriter-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.typewriter-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--accent);
+  animation: typewriter-blink 1s step-end infinite;
+  transition: opacity 600ms ease 1.2s;
+}
+.typewriter.done .typewriter-caret {
+  animation: none;
+  opacity: 0;
+}
+@keyframes typewriter-blink {
+  50% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typewriter-caret {
+    display: none;
+  }
 }

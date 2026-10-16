@@ -2,6 +2,7 @@
 id: tabs-and-panels
 title: Tabs, panes and panels
 keywords: [tab, pane, split, subwindow, detach, popout, file panel, file tree, viewer, root console, header, menu, restore]
+related: [files-and-viewers, root-console, keyboard, scheduled-prompts, project-desktop]
 ---
 
 ## Add a tab
@@ -92,7 +93,8 @@ tab here. Agents are opt-in in the root console: turn on an agent's **Root**
 chip in the Models & agents menu to offer it there; the **MCP** chip also
 gives it Tabtivity's root tools (calendar, board, project list). An agent
 docked beside the mail, calendar or to-do window is a root-console tab too, and
-shows in the console's strip. See `mail-calendar`.
+shows in the console's strip. See `mail-calendar`, and `root-console` for the
+Host session, the tools and their settings.
 
 ## The Models & agents menu
 

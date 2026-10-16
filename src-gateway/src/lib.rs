@@ -85,6 +85,15 @@ pub fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Fill `buf` from the OS's randomness, for the Linux-only modules' tokens and
+/// ids. Without system randomness there is nothing safe to fall back to, so
+/// this panics, as `rand::rngs::OsRng` did. (`cookie`, which builds on every
+/// OS, returns the error instead.)
+#[cfg(target_os = "linux")]
+pub(crate) fn fill_random(buf: &mut [u8]) {
+    getrandom::fill(buf).expect("no system randomness");
+}
+
 /// Write `bytes` to `path` atomically: a sibling temp file, `fsync`, rename,
 /// then the directory's `fsync`. `mode` applies to the new file; when this
 /// runs as root and the file existed, the new one keeps the old owner (the

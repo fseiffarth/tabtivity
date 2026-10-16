@@ -408,7 +408,7 @@ describe("TexView", () => {
 
     const compileBtn = await screen.findByRole("button", { name: /compile/i });
     // No notice before compiling.
-    expect(screen.queryByText(/couldn't locate the cursor/i)).toBeNull();
+    expect(screen.queryByText(/no place in the PDF for that line/i)).toBeNull();
 
     await act(async () => {
       await userEvent.click(compileBtn);
@@ -416,14 +416,14 @@ describe("TexView", () => {
 
     // A successful compile whose forward search finds no box surfaces the miss
     // notice — worded so it reads as a SyncTeX outcome, not a build failure.
-    await screen.findByText(/couldn't locate the cursor/i);
-    // …and it must NOT claim SyncTeX was unavailable (that is the other cause).
-    expect(screen.queryByText(/didn't run/i)).toBeNull();
+    await screen.findByText(/no place in the PDF for that line/i);
+    // Nothing claims "PDF updated" in the miss itself.
+    expect(screen.queryByText(/PDF updated/i)).toBeNull();
   });
 
-  it("distinguishes 'SyncTeX unavailable' from a real miss when the command errors", async () => {
-    // The synctex_view command itself REJECTS (a backend not yet rebuilt for it,
-    // or the `synctex` tool absent) — this used to look identical to a miss.
+  it("reads a rejected synctex_view call as a miss", async () => {
+    // The command itself REJECTS (a backend not yet rebuilt for it): nothing
+    // is left to tell apart, since the backend no longer shells out to a tool.
     setupInvoke(true, ["pdflatex"]);
     mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === "tex_capability")
@@ -446,11 +446,9 @@ describe("TexView", () => {
       await userEvent.click(compileBtn);
     });
 
-    // The notice names the real cause (SyncTeX didn't run) rather than a miss, and
-    // still confirms the PDF was updated (compile did NOT fail).
-    await screen.findByText(/didn't run/i);
-    await screen.findByText(/PDF updated/i);
-    expect(screen.queryByText(/couldn't locate the cursor/i)).toBeNull();
+    await screen.findByText(/no place in the PDF for that line/i);
+    // The compile did NOT fail: no error card.
+    expect(document.querySelector(".file-viewer-tex-error-card")).toBeNull();
   });
 
   it("a Ctrl+click forward search before any compile says there is no PDF yet", async () => {
@@ -469,8 +467,8 @@ describe("TexView", () => {
     });
 
     await screen.findByText(/hasn't been compiled/i);
-    // Worded as "compile first", not as SyncTeX failing to run.
-    expect(screen.queryByText(/didn't run/i)).toBeNull();
+    // Worded as "compile first", not as a miss.
+    expect(screen.queryByText(/no place in the PDF/i)).toBeNull();
     expect(mockInvoke).not.toHaveBeenCalledWith("synctex_view", expect.anything());
   });
 
@@ -608,7 +606,7 @@ describe("TexView", () => {
     await waitFor(() =>
       expect(mockInvoke).toHaveBeenCalledWith(
         "synctex_view",
-        expect.objectContaining({ line: 3, column: 2 }),
+        { pdf: "/p/paper.pdf", input: "/p/paper.tex", line: 3 },
       ),
     );
     const { usePdfSyncStore } = await import("../../stores/viewers/pdfSync");
@@ -616,6 +614,145 @@ describe("TexView", () => {
       rect: { page: 2, x: 10, y: 20, w: 100, h: 12 },
       afterReload: true,
     });
+  });
+
+  it("reveals the line the caret was on when the build started, however the draft moves during it", async () => {
+    setupInvoke(true, ["pdflatex"], undefined, [{ page: 1, x: 10, y: 20, w: 100, h: 12 }]);
+    const base = mockInvoke.getMockImplementation()!;
+    let finish!: () => void;
+    mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+      cmd === "compile_tex"
+        ? new Promise((resolve) => {
+            finish = () => resolve(base(cmd, args));
+          })
+        : base(cmd, args),
+    );
+    await renderTexView();
+    const { usePdfSyncStore } = await import("../../stores/viewers/pdfSync");
+    const textarea = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(textarea.value).toBe(TEX_SOURCE));
+    const caret = TEX_SOURCE.indexOf("Hi") + 1;
+    textarea.focus();
+    textarea.setSelectionRange(caret, caret);
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }));
+    });
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("compile_tex", expect.anything()));
+    // Two lines typed above the caret while the engine runs.
+    const typed = "% one\n% two\n" + TEX_SOURCE;
+    fireEvent.change(textarea, { target: { value: typed } });
+    await waitFor(() => expect(textarea.value).toBe(typed));
+    await act(async () => {
+      finish();
+    });
+
+    // The build's line, not wherever that offset sits in the draft now (line 4),
+    // and the word that was under the caret then ("Hi"), not "document".
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith("synctex_view", expect.objectContaining({ line: 3 })),
+    );
+    const lines = mockInvoke.mock.calls.filter(([c]) => c === "synctex_view").map(([, a]) => (a as { line: number }).line);
+    expect(lines).toEqual([3]);
+    await waitFor(() => expect(usePdfSyncStore.getState().byPath["/p/paper.pdf"]).toBeDefined());
+    const phrase = usePdfSyncStore.getState().byPath["/p/paper.pdf"]?.phrase;
+    expect(phrase?.words[phrase.index]).toBe("hi");
+  });
+
+  it("a Ctrl+click under an unsaved edit jumps and says the source changed; one above the edit does not", async () => {
+    setupInvoke(true, ["pdflatex"], undefined, [{ page: 1, x: 10, y: 20, w: 100, h: 12 }]);
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      // A PDF built earlier, beside a current map.
+      if (cmd === "file_mtime" && args?.path === "/p/paper.pdf") return Promise.resolve(1);
+      if (cmd === "synctex_status") {
+        return Promise.resolve({ has_map: true, pdf_newer_than_map: false, newer_sources: [] });
+      }
+      return base(cmd, args);
+    });
+    await renderTexView();
+    const { usePdfSyncStore } = await import("../../stores/viewers/pdfSync");
+    usePdfSyncStore.setState({ byPath: {} });
+    const textarea = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(textarea.value).toBe(TEX_SOURCE));
+    // A line typed under "Hi": the caret's line number is still the build's.
+    const below = TEX_SOURCE.replace("Hi\n", "Hi\nnew line\n");
+    fireEvent.change(textarea, { target: { value: below } });
+    await waitFor(() => expect(textarea.value).toBe(below));
+    textarea.setSelectionRange(below.indexOf("Hi"), below.indexOf("Hi"));
+    await act(async () => {
+      fireEvent.click(textarea, { ctrlKey: true });
+    });
+    await waitFor(() => expect(usePdfSyncStore.getState().byPath["/p/paper.pdf"]).toBeDefined());
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("synctex_status", { pdf: "/p/paper.pdf" }));
+    expect(screen.queryByText(/source changed after the last compile/i)).toBeNull();
+
+    // A line typed above it moves it: the stale notice names the unsaved file,
+    // in the same words reverse search uses…
+    usePdfSyncStore.setState({ byPath: {} });
+    const above = "% note\n" + TEX_SOURCE;
+    fireEvent.change(textarea, { target: { value: above } });
+    await waitFor(() => expect(textarea.value).toBe(above));
+    textarea.setSelectionRange(above.indexOf("Hi"), above.indexOf("Hi"));
+    await act(async () => {
+      fireEvent.click(textarea, { ctrlKey: true });
+    });
+    await screen.findByText(/source changed after the last compile \(paper\.tex\)/i);
+    // …and the jump still happens: a nearby line beats nothing.
+    await waitFor(() => expect(usePdfSyncStore.getState().byPath["/p/paper.pdf"]).toBeDefined());
+  });
+
+  it("a Ctrl+click while a build runs is left to the build's own reveal", async () => {
+    setupInvoke(true, ["pdflatex"], undefined, [{ page: 1, x: 10, y: 20, w: 100, h: 12 }]);
+    const base = mockInvoke.getMockImplementation()!;
+    let finish!: () => void;
+    mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "file_mtime" && args?.path === "/p/paper.pdf") return Promise.resolve(1);
+      if (cmd === "compile_tex") return new Promise((resolve) => { finish = () => resolve(base(cmd, args)); });
+      return base(cmd, args);
+    });
+    await renderTexView();
+    const textarea = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(textarea.value).toBe(TEX_SOURCE));
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /compile/i }));
+    });
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("compile_tex", expect.anything()));
+    textarea.setSelectionRange(TEX_SOURCE.indexOf("Hi"), TEX_SOURCE.indexOf("Hi"));
+    await act(async () => {
+      fireEvent.click(textarea, { ctrlKey: true });
+    });
+    expect(mockInvoke).not.toHaveBeenCalledWith("synctex_view", expect.anything());
+    await act(async () => {
+      finish();
+    });
+    // Only the build's reveal asks.
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("synctex_view", expect.anything()));
+    expect(mockInvoke.mock.calls.filter(([c]) => c === "synctex_view")).toHaveLength(1);
+  });
+
+  // Also proves the pane publishes `FileSourceContext`: the TeX viewer reads the
+  // side from it, not from a call of its own.
+  it("forward search on a PDF read from the remote host says so and asks SyncTeX nothing", async () => {
+    setupInvoke(true, ["pdflatex"], undefined, [{ page: 1, x: 10, y: 20, w: 100, h: 12 }]);
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "file_mtime" && args?.path === "/p/paper.pdf") return Promise.resolve(1);
+      if (cmd === "file_source") return Promise.resolve(args?.path === "/p/paper.tex" ? "remote" : "none");
+      return base(cmd, args);
+    });
+    await renderTexView();
+    const textarea = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(textarea.value).toBe(TEX_SOURCE));
+    const at = TEX_SOURCE.indexOf("Hi");
+    textarea.setSelectionRange(at, at);
+    await act(async () => {
+      fireEvent.click(textarea, { ctrlKey: true });
+    });
+
+    await screen.findByText(/isn't available for a file read from the remote host/i);
+    expect(mockInvoke).not.toHaveBeenCalledWith("synctex_view", expect.anything());
+    expect(mockInvoke).not.toHaveBeenCalledWith("synctex_status", expect.anything());
   });
   // #tex: latexmk fails a build over configuration — warnings treated as errors
   // in a latexmkrc, a bibliography rule, an unresolved reference — while the

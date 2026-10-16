@@ -8,13 +8,13 @@ import type { TextRun } from "../markup/findText";
 import { readFlag, writeFlag } from "../prefs";
 import {
   addMark, approveMarks, approveShown, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, eraseRect, finishStroke, forgetRound, stylusErases, hasSent, inkWidth, isEmpty, markAnchors, markBox, markedPages,
-  markGroups, markSent, markSentSome, mintRound, moveNote, onlyMarks, submitSpot, noteAt, redo, replaceMark, round, startHistory, tickBadgeSpot, tickedMarks, tickGroups, undo,
+  markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickBadgeSpot, tickedMarks, tickGroups, undo,
   addMarks, canAddAll, markAt, marksIn, MAX_COMMENT, moveMarks, removeMarks, restyleMarks, setComment, snapStroke, stampSize, STAMP_SYMBOLS,
-  type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type MarkGroup, type PageLayer, type StampMark, type TextMark,
+  type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type StampMark, type TextMark,
 } from "../markup/layer";
 import { composedPng, drawMark, drawPage, INK, LAYER_WIDTH, layerPng, pagePng, type Paint } from "../markup/rasterize";
 import {
-  COLOR_MEANING, colorOf, colorsFor, ERASER_MODES, eraserPx, PEN_SIZES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
+  colorOf, colorsFor, ERASER_MODES, eraserPx, PEN_SIZES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
   applyPreset, PALM_MODES, palmRejects, PRESSURE_CURVES, resetPresets, savePreset, SNAP_HOLD_MS, SNAP_SLOP_PX, TEXT_MARK_MODES,
   type PenPreset, type PenPrefs, type PenTool,
 } from "../markup/pen";
@@ -82,8 +82,6 @@ const SENT_ALPHA = 0.35;
 const JUMP_SLACK = 4;
 /** A ✓ badge's size, CSS pixels. */
 const TICK_BADGE = 26;
-/** A group's own Submit (CSS px) — placed whole, never over a mark. */
-const GROUP_SUBMIT: [number, number] = [66, 24];
 /** How soon after one approve a second tap is taken: a double tap must not
  * take whichever badge lies under the finger next. */
 const TICK_REPEAT_MS = 350;
@@ -330,7 +328,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * the new marks. Once the agent has finished, **Reload PDF** draws the file
  * as it is now (or its newer copy, `refresh`) under the same layer.
  */
-export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, adoptFrom, toChat }: {
+export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, adoptFrom, toChat, startMarking = false }: {
   tabId?: string;
   /** The project the file belongs to — the phone-side layer's key. */
   projectId?: string;
@@ -373,6 +371,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** Tucks the view away behind the host tab's chat, still mounted, with the
    * file's name for the chat's way back (`Terminal`'s `markupAway`). */
   toChat?: (name: string) => void;
+  /** The reader opens marking whatever this phone's "PDFs open in" says — the
+   * files library's **Mark up** asked for it. */
+  startMarking?: boolean;
 }) {
   const t = useT();
   /** The file shown — the host's, until a Reload finds a newer one. */
@@ -451,7 +452,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * Automatic — once only the pen draws, where fingers scroll all the same. */
   const [marking, setMarking] = useState(() => {
     if (!canMark) return false;
-    if (!reading) return true;
+    if (!reading || startMarking) return true;
     const open = readMarkupOpen();
     return open === "markup" || (open === "auto" && readPenMode() === "pen");
   });
@@ -1348,11 +1349,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const code = error instanceof ApiError ? error.code : "";
     return REASON_KEYS[code] ? t(REASON_KEYS[code]) : t("mobile.markup.reason.other", { code: code || "error" });
   };
-  /** Sends every marked page, or with `only` one group of unsent marks
-   * (`markGroups`: its own Submit button) — the rest stays unsent. */
-  const submit = async (only?: { page: number; marks: readonly Mark[] }) => {
-    const present = only ? onlyMarks(history.present, only.page, only.marks) : history.present;
-    const marked = only ? markedPages(present).filter((n) => sendable.includes(n)) : sendable;
+  /** Sends every marked page. */
+  const submit = async () => {
+    const present = history.present;
+    const marked = sendable;
     if (!marked.length || sending) return;
     setSendFailure(null);
     let tabId = givenTabId;
@@ -1478,12 +1478,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     // listed them, which the agent's ticks index — unless a page changed
     // meanwhile (then its ticks would point at the wrong marks: none kept).
     setHistory((now) => {
-      if (only) {
-        // The group's marks, as long as every one is still on its page.
-        const still = new Set(now.present.pages[only.page]?.marks ?? []);
-        const moving = present.pages[only.page].marks;
-        return startHistory(markSentSome(now.present, only.page, moving, moving.every((mark) => still.has(mark)) ? roundId : undefined, words[only.page]));
-      }
       const asSent = marked.every((n) => now.present.pages[n]?.marks === present.pages[n].marks);
       return startHistory(markSent(now.present, marked, asSent ? roundId : undefined, words));
     });
@@ -2028,47 +2022,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       </Fragment>;
     });
   };
-  // --- Each remark's own Submit, while marking ---------------------------
-  /** The unsent marks by remark (`markGroups`), regrouped after each stroke;
-   * a button just outside each group, clear of every unsent mark
-   * (`submitSpot`), sends that group alone. None while a stroke or a note is
-   * under way; a group that just changed takes no tap for a moment, so a pen
-   * still writing there cannot send it. */
-  const sendableKey = sendable.join(",");
-  const groups = useMemo(
-    () => (canMark && marking ? markGroups(history.present, sendableKey ? sendableKey.split(",").map(Number) : []) : []),
-    [canMark, marking, history.present, sendableKey],
-  );
-  const groupSeen = useRef(new WeakMap<Mark, number>());
-  const groupArrived = (group: MarkGroup): number => {
-    const now = Date.now();
-    let last = 0;
-    for (const mark of group.marks) {
-      let at = groupSeen.current.get(mark);
-      if (at === undefined) groupSeen.current.set(mark, at = now);
-      last = Math.max(last, at);
-    }
-    return last;
-  };
-  const groupLayer = (n: number, size: Size) => {
-    if (!(onSend || newTab) || preview !== null || note !== null) return null;
-    const mine = groups.filter((group) => group.page === n);
-    if (!mine.length) return null;
-    const scale = cssWidth / size[0];
-    const page: [number, number] = [cssWidth, size[1] * scale];
-    const boxes = (history.present.pages[n]?.marks ?? []).map(markBox);
-    return mine.map((group, i) => {
-      const arrived = groupArrived(group);
-      const [left, top] = submitSpot(group.box, scale, page, GROUP_SUBMIT, boxes);
-      return <button key={`${group.marks.length}:${i}`} className="markup-pin is-submit" style={{ left, top, width: GROUP_SUBMIT[0], height: GROUP_SUBMIT[1] }}
-        disabled={sending !== null || reloading || !online}
-        aria-label={t("mobile.markup.groupSubmitTitle", { count: group.marks.length })} title={t("mobile.markup.groupSubmitTitle", { count: group.marks.length })}
-        onClick={(event) => {
-          if (event.detail > 1 || gesture.current || Date.now() - arrived < ARRIVAL_GUARD_MS) return;
-          void submit({ page: n, marks: group.marks });
-        }}>{t("mobile.markup.submit")}</button>;
-    });
-  };
   const register = useCallback((n: number, canvas: HTMLCanvasElement | null) => {
     if (canvas) overlays.current.set(n, canvas);
     else overlays.current.delete(n);
@@ -2169,7 +2122,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         <button className="markup-submit" disabled={!sendable.length || sending !== null || reloading || !online} onClick={() => void submit()} title={t("mobile.markup.submitTitle")}>
           {t("mobile.markup.submit")}
         </button>
-        {groups.length > 0 && isUntested("mobile.markup.groupSubmit") && <span className="untested">{t("mobile.outbox.untested")}</span>}
         <button className="outbox-action markup-done" onClick={done} disabled={sending !== null}>{t("mobile.markup.done")}</button>
       </> : <>
         {canMark && <button className={`outbox-action markup-toggle${empty ? "" : " has-marks"}`} onClick={() => setMarking(true)}
@@ -2244,7 +2196,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
                 {!pictures[n] && <span className="markup-page-note">{t(pageFailures.has(n) ? "mobile.markup.pageFailed" : "mobile.markup.pageLoading", { n })}</span>}
                 {layerCanvas(n, size)}
               </>}
-              {groupLayer(n, size)}
               {tickLayer(n, size)}
               {pinLayer(n, size)}
               {noteEditor(n, size)}
@@ -2262,7 +2213,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
             }}
             onError={() => setFailure("picture")} />
           {sizes && layerCanvas(1, sizes[0])}
-          {sizes && groupLayer(1, sizes[0])}
           {sizes && tickLayer(1, sizes[0])}
           {sizes && noteEditor(1, sizes[0])}
         </div>
@@ -2355,13 +2305,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
             style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => { setColor(name); setPopover(null); }}
             aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
         </div>
-        <p className="markup-pen-meaning">{t("mobile.markup.colorMeaning", {
-          color: t(`mobile.markup.color.${color}` as TranslationKey),
-          meaning: t(`mobile.markup.meaning.${COLOR_MEANING[color]}` as TranslationKey),
-        })}{isUntested("mobile.markup.pen") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>
         <div className="markup-pen-row markup-pen-actions">
           <button onClick={() => setPen(savePreset)}>{t("mobile.markup.savePreset")}</button>
           <button onClick={() => setPen(resetPresets)}>{t("mobile.markup.resetPresets")}</button>
+          {isUntested("mobile.markup.pen") && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </div>
       </div>}
       {popover === "more" && <div className="markup-popover markup-more">

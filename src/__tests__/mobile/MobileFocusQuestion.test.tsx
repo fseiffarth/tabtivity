@@ -264,6 +264,30 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     expect(FakeWebSocket.sent).toEqual([]);
   });
 
+  it("sends the reader to the terminal when a dialog's rows cannot be read", async () => {
+    // A dialog whose footer is on screen but whose rows are in no shape the
+    // chat reads (here: no highlight). The session is waiting all the same,
+    // so the chat says so instead of showing nothing.
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await act(async () => {});
+    await paint([
+      "Pick one",
+      "",
+      "  1. Alpha",
+      "  2. Beta",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n"));
+    const card = screen.getByTestId("question-unread");
+    within(card).getByText(/answer it in the Terminal view/);
+    expect(card.querySelector(".option-list")).toBeNull();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Switch to Terminal" }));
+    await settle(50);
+    expect(screen.queryByTestId("question-unread")).toBeNull();
+    expect(screen.queryByTestId("session-transcript")).toBeNull();
+  });
+
   it("reads the question off a fullscreen agent's own frame", async () => {
     // Claude Code under `"tui": "fullscreen"` draws its whole session on the
     // alternate screen. There is no scrollback there for the reading view to
