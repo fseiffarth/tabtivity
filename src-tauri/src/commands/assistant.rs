@@ -22,8 +22,6 @@ use crate::tauri_host::Ctx;
 /// What every command answers while the experimental flag is off.
 pub const OFF: &str = "assistant_off";
 
-/// The keychain account of the Ollama web-search key (plan decision 7).
-
 /// The longest search key and SearXNG URL accepted.
 const MAX_KEY_LEN: usize = 1024;
 const MAX_URL_LEN: usize = 2048;
