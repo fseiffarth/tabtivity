@@ -61,6 +61,7 @@
   position: relative;
 }
 .mail-indicator-btn[aria-pressed="true"],
+.assistant-indicator-btn[aria-pressed="true"],
 .todo-indicator-btn[aria-pressed="true"],
 .calendar-indicator-btn[aria-pressed="true"],
 .alerts-toggle-btn[aria-pressed="true"] {
@@ -77,6 +78,7 @@
 .calendar-indicator-btn,
 .todo-indicator-btn,
 .inbox-indicator-btn,
+.assistant-indicator-btn,
 .local-model-btn,
 .help-agent-btn,
 .global-apps-menu-btn:has(> .settings-menu-icon) {
@@ -94,6 +96,7 @@
 .calendar-indicator-icon,
 .todo-indicator-icon,
 .inbox-indicator-icon,
+.assistant-indicator-icon,
 .help-agent-icon,
 .settings-menu-icon {
   width: 20px;
@@ -463,6 +466,7 @@ svg.alerts-toggle-icon {
 .mail-overlay,
 .calendar-overlay,
 .todo-overlay,
+.assistant-overlay,
 .models-overlay,
 .machines-overlay {
   width: min(1680px, calc(100vw - 24px));
@@ -489,6 +493,7 @@ svg.alerts-toggle-icon {
 .mail-overlay-body,
 .calendar-overlay-body,
 .todo-overlay-body,
+.assistant-overlay-body,
 .models-overlay-body,
 .machines-overlay-body {
   position: relative;
@@ -933,6 +938,150 @@ svg.alerts-toggle-icon {
   font-weight: 600;
   color: var(--text-secondary);
   white-space: nowrap;
+}
+/* ── The Tabby overlay (assistant/AssistantOverlay) ─────────────────────────
+   The family's frame (size and body rules above); inside it a chat list on the
+   left and the chat — or the new-chat form — on the right. The list's rows wear
+   the overlay head's × (`.subwindow-hide`), the cards the settings design
+   system's (`.settings-card`, `.settings-btn`), so only the layout is new. */
+.assistant-overlay-body {
+  display: flex;
+}
+.assistant-chat-list {
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+.assistant-chat-list-head {
+  flex: 0 0 auto;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+.assistant-new-chat-btn {
+  width: 100%;
+}
+.assistant-chat-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.assistant-chat-empty {
+  padding: 10px;
+  margin: 0;
+}
+.assistant-chat-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  border-left: 2px solid transparent;
+}
+.assistant-chat-row:hover,
+.assistant-chat-row.active {
+  background: var(--control-hover-bg);
+}
+.assistant-chat-row.active {
+  border-left-color: var(--accent);
+}
+.assistant-chat-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 6px 8px 10px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+.assistant-chat-label,
+.assistant-chat-sub {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-chat-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.assistant-chat-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.assistant-chat-delete {
+  flex: 0 0 auto;
+  margin-right: 4px;
+}
+.assistant-chat-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  color: var(--text-primary);
+}
+.assistant-main-note {
+  padding: 16px;
+}
+.assistant-new-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 560px;
+  box-sizing: border-box;
+  padding: 20px;
+}
+.assistant-new-chat-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--accent);
+}
+.assistant-chat {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.assistant-chat-notes {
+  flex: 0 0 auto;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+/* The pane fills what the notes leave; TabPane lays itself out in it as in a
+   `.center-pane` (the docked agent column's `.overlay-agent-body`). */
+.assistant-chat-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Not a scroll container (see ViewerOverflowClip.test.ts). */
+  overflow: hidden;
+  overflow: clip;
+}
+.assistant-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistant-card-plain {
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+}
+.assistant-card-title {
+  font-size: 13px;
+  font-weight: 650;
 }
 /* The docked agent column (layout/OverlayAgentColumn): a root agent tab beside
    the app, on the body's right like the ◫ file column — same edge, same

@@ -422,6 +422,7 @@ export const UNTESTED = {
   "mailPdfPreview.1": { area: "mail", what: "MailPdfPreview · PDF, {count} pages" },
 
   // --- mobile — The phone PWA ---------------------------------------
+  "settings.assistantPhone": { area: "mobile", what: "MobileSettings · the assistant from the phone switch (default on, shown with the experimental switch; the backend gates the phone's assistant scope on it)" },
   "mobile.assistant": { area: "mobile", what: "Phone · Home row for the assistant, chat list, New chat sheet, Focus chat; the Mobile switch for it (on by default); works with no desktop window open" },
   "mobile.sheet.color": { area: "mobile", what: "Color sheet · tab colour picker" },
   "mobile.sheet.rename": { area: "mobile", what: "Rename sheet · tab label change" },

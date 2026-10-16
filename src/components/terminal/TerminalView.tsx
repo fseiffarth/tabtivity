@@ -68,6 +68,7 @@ import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { notePromptTrailInput } from "../../stores/agents/promptTrail";
 import "@xterm/xterm/css/xterm.css";
 import { storageKey } from "../../lib/brand";
+import type { AssistantLaunch } from "../../lib/assistant";
 
 // Hoisted to module scope: keystroke input fires this on every key, so we reuse
 // one encoder rather than allocating a `new TextEncoder()` per keystroke. The
@@ -152,6 +153,9 @@ interface Props {
    *  home (`PtyOptions.host_session`). Honoured by the backend only with no
    *  project id. */
   hostSession?: boolean;
+  /** A Tabby chat's launch (`PtyOptions.assistant`): the backend builds the
+   *  argv from it and ignores `cmd`/`args`/`env` but the `TAB_UID` in `env`. */
+  assistant?: AssistantLaunch | null;
   // Whether this pane is laid out on screen (single-mode active tab, or any
   // pane in grid mode). Drives display + xterm fit.
   visible: boolean;
@@ -181,6 +185,10 @@ interface Props {
   scheduleTargetId?: string;
   /** Bumped to respawn the PTY in place (`relaunchTabInScope`). */
   relaunchSeq?: number;
+  /** Show the Reader always, even in an attach-only mirror, and without its
+   *  on/off toggle (the Tabby overlay's chats). Not the per-CLI preference:
+   *  that one is left as it is. */
+  readerAlways?: boolean;
 }
 
 function terminalTheme(scheme: string | undefined) {
@@ -267,7 +275,7 @@ function sweepXtermElements(container: HTMLElement) {
   }
 }
 
-export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, relaunchSeq = 0 }: Props) {
+export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login = null, cwd, localOnly = false, sandbox = false, projectId = null, remoteHostId = null, tmuxSession = null, tmuxAttach = null, hostBoundUid = null, hostSession = false, assistant = null, visible, focused, attachOnly = false, zoomable = false, persistOnUnmount = false, kind: declaredKind, scheduleTargetId, relaunchSeq = 0, readerAlways = false }: Props) {
   const viewerId = useRef(crypto.randomUUID()).current;
   const viewerUpdateSeq = useRef(0);
   const colorScheme = useSettingsStore((s) => s.settings?.color_scheme);
@@ -426,6 +434,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // By value, like args/env: a caller rebuilding the same target each render
   // must not respawn the login.
   const loginKey = JSON.stringify(login);
+  const assistantKey = JSON.stringify(assistant);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -440,7 +449,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // Mode's synthetic cleanup, which therefore still sees the PTY parked.
     const spawnKey = attachOnly
       ? null
-      : terminalSpawnKey({ id, cmd, args, env, initialInput, login: JSON.parse(loginKey) as LoginTarget | null, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
+      : terminalSpawnKey({ id, cmd, args, env, initialInput, login: JSON.parse(loginKey) as LoginTarget | null, cwd, localOnly, projectId, remoteHostId, sandbox, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, kind: declaredKind, scheduleTargetId, relaunchSeq, zoomable });
     const parked = attachOnly ? undefined : asleepPty(id);
     const waking = !!parked && parked.spawnKey !== null && parked.spawnKey === spawnKey;
     // This lifecycle runs (spawned) or took over the PTY: only then does its
@@ -1553,7 +1562,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
-          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, login: JSON.parse(loginKey) as LoginTarget | null },
+          opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
           sessionName: launchName,
         });
         // An older backend answers nothing: `named` absent types the line as before.
@@ -2044,7 +2053,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       fitRef.current = null;
       openedRef.current = false;
     };
-  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, relaunchSeq]);
+  }, [id, cmd, cwd, initialInput, loginKey, argsKey, envKey, localOnly, sandbox, projectId, remoteHostId, tmuxSession, tmuxAttach, hostBoundUid, hostSession, assistantKey, attachOnly, zoomable, persistOnUnmount, declaredKind, scheduleTargetId, relaunchSeq]);
 
   // Re-theme a LIVE, OPEN terminal. Both halves of that guard are load-bearing,
   // and `termRef.current` alone was neither: assigning `options.theme` makes
@@ -2121,9 +2130,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const readerTab = usePaneTab(readerIds?.scope, readerIds?.key);
   // A popout's pane is that tab's own pane in its window; the main window's
   // attach-only mirrors of a tab shown elsewhere are not.
-  const readerAvailable = readerOffered(readerTab) && (!attachOnly || isDetachedWindow());
+  const readerAvailable = readerOffered(readerTab) && (!attachOnly || isDetachedWindow() || readerAlways);
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
-  const readerOn = useReaderOpen(readerAgent, readerAvailable);
+  const readerPreferred = useReaderOpen(readerAgent, readerAvailable);
+  const readerOn = readerAlways ? readerAvailable : readerPreferred;
   const changesOn = useReaderChangesOpen(readerAgent);
   /** The Changes panel over the terminal itself while the Reader is off —
    * the pane pads its right edge by the panel, so the fit leaves it free. */
@@ -2238,7 +2248,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         background={terminalTheme(colorScheme).background}
         foreground={terminalTheme(colorScheme).foreground ?? "inherit"}
         onReturnFocus={() => termRef.current?.focus()}
-        reader={readerAvailable ? {
+        reader={readerAvailable && !readerAlways ? {
           open: readerOn,
           onToggle: () => setReader(!readerOn),
           changes: { open: changesOn, onToggle: () => useAgentReaderStore.getState().setChanges(readerAgent, !changesOn) },
