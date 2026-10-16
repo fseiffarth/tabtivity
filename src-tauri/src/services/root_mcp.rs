@@ -946,32 +946,20 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     root_agent
 }
 
-/// Whether a chat-assistant profile is handed the web lane. Cloud Claude is
-/// (page fetch; it searches natively), the local profiles are (fetch and
-/// search); Codex is not: native `web_search` only, and it carries no MCP
-/// entry (plan decision 4 / pinning table).
-fn assistant_wants_lane(cli: super::assistant::AssistantCli) -> bool {
-    use super::assistant::AssistantCli::*;
-    match cli {
-        Claude | OpenCodeLocal | ClaudeLocal => true,
-        Codex => false,
-    }
-}
-
 /// The assistant scope's one lane: the web lane's token and URL in the spawn
 /// env ([`WEB_TOKEN_ENV`] / [`WEB_URL_ENV`], which
 /// `assistant::LaneGrant::from_env` reads back). Granted only when this
 /// process serves the lane (`runtime.serves_web`: the window and the desktop's
 /// Mobile host, never a server daemon), the `assistant` flag is on in the
 /// trusted `settings.json` under `state`, and the profile wants it
-/// ([`assistant_wants_lane`]). Otherwise the spawn gets no env and `launch_line`
+/// ([`AssistantCli::uses_lane`](super::assistant::AssistantCli::uses_lane)). Otherwise the spawn gets no env and `launch_line`
 /// runs a cloud profile on native search alone / refuses a local one
 /// (`Refusal::NoLane`). The token is bound to the tab, so the existing
 /// revoke-with-the-tab paths end it; it is the only MCP token such a spawn holds.
 fn grant_assistant(opts: &mut PtyOptions, runtime: Option<&Runtime>, store: &TokenStore, state: &Path) {
     let Some(runtime) = runtime.filter(|r| r.serves_web) else { return };
     let Some(launch) = opts.assistant.as_ref() else { return };
-    if !assistant_wants_lane(launch.cli) { return; }
+    if !launch.cli.uses_lane() { return; }
     if !crate::storage::read_json::<crate::schema::Settings>(&state.join("settings.json")).is_ok_and(|s| s.assistant_enabled()) { return; }
     let Some(token) = mint_token() else { return };
     opts.env.insert(WEB_TOKEN_ENV.into(), token.clone());
@@ -3884,6 +3872,22 @@ mod tests {
 
     fn rt() -> Runtime {
         Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: false }
+    }
+
+    /// One lane rule: a profile gets the web lane exactly when
+    /// `AssistantCli::uses_lane` says so, for every profile there is.
+    #[test]
+    fn the_assistant_grant_follows_the_profiles_own_lane_rule() {
+        use super::super::assistant::{AssistantCli, AssistantLaunch};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("settings.json"), json!({"assistant": true}).to_string()).unwrap();
+        let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+        for cli in AssistantCli::ALL {
+            let mut spawn = opts(cli.bin(), &[], Some(crate::storage::ASSISTANT_SCOPE));
+            spawn.assistant = Some(AssistantLaunch { cli, model: None });
+            grant_assistant(&mut spawn, Some(&serving), &TokenStore::default(), dir.path());
+            assert_eq!(spawn.env.contains_key(WEB_TOKEN_ENV), cli.uses_lane(), "{cli:?}");
+        }
     }
 
     /// The assistant arm of [`grant_lanes`] (plan "Call sites" row 5): the web
