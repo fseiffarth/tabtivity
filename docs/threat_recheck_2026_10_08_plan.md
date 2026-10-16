@@ -150,7 +150,7 @@ Minor, folded into steps below:
 
 ## Rules for every step
 
-Same as the 2026-10-04 run (`docs/threat_recheck_fixes_plan.md`). Other
+Same as the 2026-10-04 run (`docs/done/threat_recheck_fixes_plan.md`). Other
 sessions edit the same tree: edit around their hunks, never revert, stash,
 checkout or commit. Never start the app. Backend edits finish with
 `npm run backend:stale`, reported. Every fixed gap: mark its row in

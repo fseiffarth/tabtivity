@@ -1,5 +1,5 @@
 /**
- * The tab cost registry's PDF side (`lib/tabCost`, `docs/tab_cost_plan.md`
+ * The tab cost registry's PDF side (`lib/tabCost`, `docs/done/tab_cost_plan.md`
  * step 1): a `PdfCanvas` registers when it mounts, reports its pages and bytes
  * once its document is up, and leaves when it unmounts — so the §4.3 release
  * of a hidden PDF drops the loaded count by one and a show brings it back.

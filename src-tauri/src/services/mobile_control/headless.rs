@@ -290,7 +290,7 @@ pub fn prompts(state_dir: &Path, project_id: &str) -> Result<Vec<ProjectAgentPro
 // ── Transcript ──────────────────────────────────────────────────────────────
 
 /// The agents whose transcript Tabtivity reads at all (`TRANSCRIPT_AGENTS`).
-const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode"];
+const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode", "gemini", "agy"];
 
 /// `agentTranscriptFor` off the tab record: the same two "not yet" answers
 /// (`no_session` for a transcript family whose hook has not recorded a
@@ -318,7 +318,7 @@ pub fn transcript(
         );
     }
     let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
-    let Some(session_id) = session_id.or((tab.cmd == "opencode").then_some("")) else {
+    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy").then_some("")) else {
         let reason = if TRANSCRIPT_AGENTS.contains(&tab.cmd.as_str()) { "no_session" } else { "unsupported" };
         return AgentTranscript::unavailable(reason);
     };
@@ -1835,6 +1835,11 @@ mod tests {
         // OpenCode is read by folder, so a tab without a session id (a
         // local-model one) still reaches the reader instead of waiting on one.
         assert_ne!(transcript("p1", &tab("opencode", None), None, None, None).reason.as_deref(), Some("no_session"));
+        for cmd in ["gemini", "agy"] {
+            let read = transcript("p1", &tab(cmd, None), None, None, None);
+            assert_ne!(read.reason.as_deref(), Some("no_session"));
+            assert_ne!(read.reason.as_deref(), Some("unsupported"));
+        }
         let mut local = tab("opencode", None);
         local.local_model = true;
         assert_ne!(transcript("p1", &local, None, None, None).reason.as_deref(), Some("no_session"));

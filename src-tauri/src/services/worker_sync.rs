@@ -14,9 +14,10 @@
 //!
 //! This inherits none of the hard parts of the primary's bidirectional lockstep:
 //! a worker tree is never read back, so there is no divergence, no conflict, and no
-//! destructive local-loss to audit. The single load-bearing invariant is that the
-//! worker sync **must never `git clean`** — untracked experiment outputs survive
-//! every sync by construction (plan §8).
+//! destructive local-loss to audit. Worker sync never `git clean`s and refuses
+//! existing untracked-output collisions before reset, including ignored outputs.
+//! The preflight and reset are separate operations: a concurrent writer can still
+//! introduce a collision between them, so pause output writers while syncing.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -159,22 +160,56 @@ fn build_bundle(mirror: &Path, bundle_path: &Path, exclude: Option<&str>) -> Res
 }
 
 /// The constant worker-side script: init (idempotent), fetch the shipped bundle,
-/// then move the **tracked** tree to it. It **never** `git clean`s, so untracked
-/// experiment outputs survive; the bundle is removed after applying. Constant text
-/// (no interpolation), so it is safe to hand to `run_remote_script`.
+/// then move the **tracked** tree to it. A preflight refuses collisions with
+/// untracked outputs (including ignored files) before the reset. The bundle is
+/// removed after applying. Constant text (no interpolation), so it is safe to
+/// hand to `run_remote_script`. The preflight does not lock out concurrent writers.
 fn worker_apply_script() -> String {
     format!(
         "git init -q && \
          git fetch -q --no-tags {bundle} && \
+         {guard} && \
          git -c advice.detachedHead=false reset -q --hard FETCH_HEAD && \
          rm -f {bundle}{legacy_bundle}",
         bundle = WORKER_BUNDLE,
+        guard = worker_output_guard(),
         // A bundle an interrupted sync of an older build left behind.
         legacy_bundle = crate::brand::PAIR
             .legacy(crate::brand::Name::WORKER_BUNDLE)
             .map(|old| format!(" {old}"))
             .unwrap_or_default(),
     )
+}
+
+/// Compare Git's quoted paths so whitespace/newlines remain one record. Both
+/// listings use identical quoting; only their enclosing quotes are removed.
+/// Ancestor lookups catch both file-to-directory and directory-to-file collisions.
+fn worker_output_guard() -> &'static str {
+    r#"guard=$(mktemp -d) &&
+trap 'rm -rf "$guard"' 0 &&
+git -c core.quotepath=true ls-files --others > "$guard/outputs" &&
+git -c core.quotepath=true ls-tree -r --name-only FETCH_HEAD > "$guard/incoming" &&
+awk '
+function path(value) {
+    if (substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"")
+        return substr(value, 2, length(value) - 2)
+    return value
+}
+FILENAME == ARGV[1] {
+    name = path($0)
+    outputs[name] = 1
+    while (sub(/\/[^/]*$/, "", name)) ancestors[name] = 1
+    next
+}
+{
+    name = path($0)
+    collision = (name in outputs || name in ancestors)
+    while (!collision && sub(/\/[^/]*$/, "", name)) collision = (name in outputs)
+    if (collision) {
+        print "Worker sync refused: untracked output collides with incoming code: " $0
+        exit 1
+    }
+}' "$guard/outputs" "$guard/incoming" >&2"#
 }
 
 /// Push the mirror's current HEAD to one worker's tracked tree (plan §2). `force`
@@ -248,8 +283,10 @@ pub async fn sync_worker(
         };
     }
 
-    let outcome = push_with_fallback(&head, last_head.as_deref(), |exclude| {
-        push_once(pool, project_id, host_id, &spec, &mirror, exclude)
+    let spec = &spec;
+    let mirror = &mirror;
+    let outcome = push_with_fallback(&head, last_head.as_deref(), force, |exclude| async move {
+        push_once(pool, project_id, host_id, spec, mirror, exclude.as_deref()).await
     })
     .await;
     match outcome {
@@ -270,16 +307,20 @@ pub async fn sync_worker(
                 error: None,
             }
         }
-        Err(e) => report_err(e),
+        Err(error) => report_err(error),
     }
 }
 
 /// Bring a worker to `head`: an incremental bundle first (excluding the worker's
 /// `last_head`), then — on any failure, most likely a missing prerequisite because
-/// the worker drifted from what we recorded — a full bundle, which is always
-/// correct (merely larger). `push(exclude)` is one [`push_once`]. `Ok(true)` = the
-/// worker already had `head` (nothing sent), `Ok(false)` = applied; either way the
-/// caller records `head`.
+/// the worker drifted from what we recorded, or a refused untracked-output
+/// collision — a full bundle, which is always correct (merely larger). `force`
+/// (the manual "Sync code now") skips the incremental and sends the full bundle
+/// straight away, so a worker whose tracked tree drifted at the same HEAD is put
+/// back. `push(exclude)` is one [`push_once`]; every attempt, the full-bundle
+/// fallback included, goes through the worker script's untracked-output guard.
+/// `Ok(true)` = the worker already had `head` (nothing sent), `Ok(false)` =
+/// applied; either way the caller records `head`.
 ///
 /// An EMPTY incremental bundle means "the worker has HEAD" only when the excluded
 /// commit IS `head`. When the mirror's HEAD moved backwards (a `reset` to an
@@ -290,32 +331,38 @@ pub async fn sync_worker(
 /// (its apply is `reset --hard`, tracked files only — never `git clean`). A full
 /// bundle of an existing HEAD is never empty; if git says it is, the sync fails
 /// visibly rather than record a head the worker may not have.
-async fn push_with_fallback<'a, P, F>(head: &str, last_head: Option<&'a str>, mut push: P) -> Result<bool, String>
+async fn push_with_fallback<F, Fut>(
+    head: &str,
+    last_head: Option<&str>,
+    force: bool,
+    mut push: F,
+) -> Result<bool, String>
 where
-    P: FnMut(Option<&'a str>) -> F,
-    F: std::future::Future<Output = Result<bool, String>>,
+    F: FnMut(Option<String>) -> Fut,
+    Fut: std::future::Future<Output = Result<bool, String>>,
 {
-    let mut attempts: Vec<Option<&'a str>> = Vec::new();
-    if let Some(last) = last_head {
-        attempts.push(Some(last));
+    let mut attempts = Vec::new();
+    if let Some(last) = last_head.filter(|_| !force) {
+        attempts.push(Some(last.to_string()));
     }
-    attempts.push(None); // full bundle fallback (and first attempt when no last_head)
-
-    let mut last_err: Option<String> = None;
+    attempts.push(None); // full bundle fallback (and first attempt when no last_head or forced)
+    let mut last_error = "worker sync failed".to_string();
     for exclude in attempts {
+        let at_head = exclude.as_deref() == Some(head);
+        let incremental = exclude.is_some();
         match push(exclude).await {
-            Ok(true) if exclude == Some(head) => return Ok(true),
+            Ok(true) if at_head => return Ok(true),
+            Ok(true) if incremental => {
+                last_error = "the mirror's HEAD is not ahead of the worker's last synced commit".to_string();
+            }
             Ok(true) => {
-                last_err = Some(match exclude {
-                    Some(_) => "the mirror's HEAD is not ahead of the worker's last synced commit".to_string(),
-                    None => "git produced an empty bundle for the mirror's HEAD".to_string(),
-                });
+                last_error = "git produced an empty bundle for the mirror's HEAD".to_string();
             }
             Ok(false) => return Ok(false),
-            Err(e) => last_err = Some(e),
+            Err(error) => last_error = error,
         }
     }
-    Err(last_err.unwrap_or_else(|| "worker sync failed".to_string()))
+    Err(last_error)
 }
 
 /// One push attempt with a given `exclude`. `Ok(true)` = nothing to send (empty
@@ -486,15 +533,15 @@ fn outputs_list_script() -> &'static str {
 }
 
 /// Parse the `<bytes>\t<relpath>` listing into [`WorkerOutput`]s. Pure. Skips
-/// blank/malformed lines and anything with a `..` segment or an absolute path (a
-/// download-target traversal guard).
+/// blank/malformed lines, `..` segments, and platform-specific rooted/drive/stream
+/// paths. The conservative portable rules apply even when the local OS is Unix.
 pub fn parse_outputs_listing(stdout: &str) -> Vec<WorkerOutput> {
     stdout
         .lines()
         .filter_map(|line| {
             let (size, rel) = line.split_once('\t')?;
             let rel = rel.trim_end_matches('\r');
-            if rel.is_empty() || rel.starts_with('/') {
+            if rel.is_empty() || rel.starts_with(['/', '\\']) || rel.contains(':') {
                 return None;
             }
             if rel.split(['/', '\\']).any(|seg| seg == "..") {
@@ -635,8 +682,8 @@ mod tests {
     #[test]
     fn worker_apply_script_never_cleans_and_resets_tracked() {
         let s = worker_apply_script();
-        // The single load-bearing invariant (plan §8): the worker sync must NEVER
-        // `git clean` — that is what lets untracked experiment outputs survive.
+        // No broad deletion pass is allowed; the real-worker tests below also
+        // verify collision refusal because reset --hard can overwrite outputs.
         assert!(
             !s.contains("clean"),
             "worker script must never git clean: {s}"
@@ -732,6 +779,348 @@ mod tests {
     }
 
     #[test]
+    fn output_listing_rejects_windows_prefixes_on_every_platform() {
+        for rel in [
+            "C:/outside.txt",
+            r"C:\outside.txt",
+            "C:outside.txt",
+            r"\outside.txt",
+            r"\\server\share\outside.txt",
+            r"\\?\C:\outside.txt",
+            r"\\.\C:\outside.txt",
+            "nested/file.txt:stream",
+        ] {
+            assert!(
+                parse_outputs_listing(&format!("7\t{rel}\n")).is_empty(),
+                "worker output path must not redirect a Windows download: {rel:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn accepted_worker_outputs_stay_inside_the_windows_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path().join("outputs").join("worker");
+        for rel in ["C:/outside.txt", "C:outside.txt", r"\outside.txt", "run/log.txt"] {
+            for output in parse_outputs_listing(&format!("7\t{rel}\n")) {
+                assert!(dest.join(&output.rel).starts_with(&dest), "{rel:?} escaped {dest:?}");
+            }
+        }
+        let valid = parse_outputs_listing("7\trun/log.txt\n");
+        assert_eq!(valid.len(), 1);
+        assert_eq!(dest.join(&valid[0].rel), dest.join("run").join("log.txt"));
+    }
+
+    #[cfg(unix)]
+    fn init_worker_test_repo(path: &Path) {
+        std::fs::create_dir_all(path).unwrap();
+        let run = |args: &[&str]| {
+            let out = Peer::Local(path.to_path_buf()).run(args).unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "test@example.invalid"]);
+        run(&["config", "user.name", "Worker sync test"]);
+    }
+
+    #[cfg(unix)]
+    fn commit_worker_test_repo(path: &Path) -> String {
+        let peer = Peer::Local(path.to_path_buf());
+        for args in [["add", "-A"].as_slice(), ["commit", "-q", "-m", "test"].as_slice()] {
+            let out = peer.run(args).unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        }
+        mirror_head(path).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn apply_worker_test_bundle(source: &Path, worker: &Path, exclude: Option<&str>) -> Result<bool, String> {
+        let bundle = worker.join(WORKER_BUNDLE);
+        if build_bundle(source, &bundle, exclude)? {
+            return Ok(true);
+        }
+        let out = std::process::Command::new("sh")
+            .args(["-c", &worker_apply_script()])
+            .current_dir(worker)
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+            .env("GIT_CONFIG_VALUE_0", "/dev/null")
+            .output()
+            .map_err(|error| error.to_string())?;
+        if out.status.success() {
+            Ok(false)
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).into_owned())
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn applying_worker_code_preserves_a_colliding_untracked_output_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let worker = temp.path().join("worker");
+        init_worker_test_repo(&source);
+        init_worker_test_repo(&worker);
+        std::fs::write(source.join("code.txt"), b"v1").unwrap();
+        commit_worker_test_repo(&source);
+        apply_worker_test_bundle(&source, &worker, None).unwrap();
+        std::fs::write(worker.join("checkpoint.bin"), b"unique experiment output").unwrap();
+        std::fs::write(source.join("checkpoint.bin"), b"incoming code").unwrap();
+        commit_worker_test_repo(&source);
+
+        let previous_head = mirror_head(&worker);
+        let result = apply_worker_test_bundle(&source, &worker, None);
+        assert_eq!(mirror_head(&worker), previous_head);
+        assert_eq!(std::fs::read(worker.join("checkpoint.bin")).unwrap(), b"unique experiment output");
+        assert!(result.is_err(), "a collision must refuse the code update");
+        assert_eq!(std::fs::read(worker.join("code.txt")).unwrap(), b"v1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn applying_worker_code_preserves_an_untracked_directory_replaced_by_a_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let worker = temp.path().join("worker");
+        init_worker_test_repo(&source);
+        init_worker_test_repo(&worker);
+        std::fs::write(source.join("code.txt"), b"v1").unwrap();
+        commit_worker_test_repo(&source);
+        apply_worker_test_bundle(&source, &worker, None).unwrap();
+        std::fs::create_dir(worker.join("results")).unwrap();
+        std::fs::write(worker.join("results").join("output.bin"), b"unique output").unwrap();
+        std::fs::write(source.join("results"), b"incoming code").unwrap();
+        commit_worker_test_repo(&source);
+
+        let previous_head = mirror_head(&worker);
+        let result = apply_worker_test_bundle(&source, &worker, None);
+        assert_eq!(mirror_head(&worker), previous_head);
+        assert_eq!(std::fs::read(worker.join("results").join("output.bin")).unwrap(), b"unique output");
+        assert!(result.is_err(), "a directory collision must refuse the update");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn applying_worker_code_preserves_an_untracked_file_replaced_by_a_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let worker = temp.path().join("worker");
+        init_worker_test_repo(&source);
+        init_worker_test_repo(&worker);
+        std::fs::write(source.join("code.txt"), b"v1").unwrap();
+        commit_worker_test_repo(&source);
+        apply_worker_test_bundle(&source, &worker, None).unwrap();
+        std::fs::write(worker.join("results"), b"unique output").unwrap();
+        std::fs::create_dir(source.join("results")).unwrap();
+        std::fs::write(source.join("results").join("code.txt"), b"incoming code").unwrap();
+        commit_worker_test_repo(&source);
+
+        let previous_head = mirror_head(&worker);
+        let result = apply_worker_test_bundle(&source, &worker, None);
+        assert_eq!(mirror_head(&worker), previous_head);
+        assert_eq!(std::fs::read(worker.join("results")).unwrap(), b"unique output");
+        assert!(result.is_err(), "a file collision must refuse the update");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn applying_worker_code_preserves_ignored_and_quoted_output_paths() {
+        for relative in [
+            vec!["ignored.bin"],
+            vec!["results\nnew line.bin"],
+            vec!["résultats\"\\", "nested\noutput.bin"],
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source");
+            let worker = temp.path().join("worker");
+            init_worker_test_repo(&source);
+            init_worker_test_repo(&worker);
+            std::fs::write(source.join(".gitignore"), b"*.bin\n").unwrap();
+            commit_worker_test_repo(&source);
+            apply_worker_test_bundle(&source, &worker, None).unwrap();
+            let mut output = worker.clone();
+            let mut incoming = source.clone();
+            for part in &relative {
+                output.push(part);
+                incoming.push(part);
+            }
+            std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(incoming.parent().unwrap()).unwrap();
+            std::fs::write(&output, b"unique ignored output").unwrap();
+            std::fs::write(&incoming, b"incoming tracked code").unwrap();
+            std::fs::write(source.join(".gitignore"), b"").unwrap();
+            commit_worker_test_repo(&source);
+
+            let previous_head = mirror_head(&worker);
+            let result = apply_worker_test_bundle(&source, &worker, None);
+            assert_eq!(mirror_head(&worker), previous_head);
+            assert_eq!(std::fs::read(&output).unwrap(), b"unique ignored output", "{relative:?}");
+            assert!(result.is_err(), "an ignored output collision must refuse: {relative:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn applying_worker_code_accepts_initial_and_incremental_updates_with_distinct_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let worker = temp.path().join("worker");
+        init_worker_test_repo(&source);
+        std::fs::create_dir(&worker).unwrap();
+        std::fs::write(worker.join("output.bin"), b"existing experiment output").unwrap();
+        std::fs::write(source.join("code.txt"), b"v1").unwrap();
+        let first = commit_worker_test_repo(&source);
+        assert!(!apply_worker_test_bundle(&source, &worker, None).unwrap());
+        std::fs::write(source.join("code.txt"), b"v2").unwrap();
+        commit_worker_test_repo(&source);
+        assert!(!apply_worker_test_bundle(&source, &worker, Some(&first)).unwrap());
+        assert_eq!(std::fs::read(worker.join("code.txt")).unwrap(), b"v2");
+        assert_eq!(std::fs::read(worker.join("output.bin")).unwrap(), b"existing experiment output");
+    }
+
+    #[cfg(unix)]
+    async fn forced_worker_sync_repairs_without_a_new_source_commit(remove_repo: bool) {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let worker = temp.path().join("worker");
+        init_worker_test_repo(&source);
+        init_worker_test_repo(&worker);
+        std::fs::write(source.join("code.txt"), b"committed code").unwrap();
+        let head = commit_worker_test_repo(&source);
+        apply_worker_test_bundle(&source, &worker, None).unwrap();
+        std::fs::write(worker.join("code.txt"), b"worker drift").unwrap();
+        std::fs::write(worker.join("output.bin"), b"experiment output").unwrap();
+        if remove_repo {
+            std::fs::remove_dir_all(worker.join(".git")).unwrap();
+        }
+        let result = push_with_fallback(&head, Some(&head), true, |exclude| {
+            std::future::ready(apply_worker_test_bundle(&source, &worker, exclude.as_deref()))
+        }).await;
+
+        assert_eq!(mirror_head(&source).as_deref(), Some(head.as_str()));
+        assert_eq!(std::fs::read(worker.join("output.bin")).unwrap(), b"experiment output");
+        if remove_repo {
+            assert!(result.is_err(), "unknown worker files must refuse repository recovery");
+            assert_eq!(std::fs::read(worker.join("code.txt")).unwrap(), b"worker drift");
+            assert_eq!(mirror_head(&worker), None);
+        } else {
+            assert!(!result.unwrap(), "force must apply even with an unchanged source HEAD");
+            assert_eq!(std::fs::read(worker.join("code.txt")).unwrap(), b"committed code");
+            assert_eq!(mirror_head(&worker).as_deref(), Some(head.as_str()));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn forced_worker_sync_restores_tracked_drift_at_the_same_head() {
+        forced_worker_sync_repairs_without_a_new_source_commit(false).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn forced_worker_sync_refuses_unknown_files_after_repository_removal() {
+        forced_worker_sync_repairs_without_a_new_source_commit(true).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn forced_worker_sync_recreates_a_missing_repository_without_output_collisions() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let worker = temp.path().join("worker");
+        init_worker_test_repo(&source);
+        init_worker_test_repo(&worker);
+        std::fs::write(source.join("code.txt"), b"committed code").unwrap();
+        let head = commit_worker_test_repo(&source);
+        apply_worker_test_bundle(&source, &worker, None).unwrap();
+        std::fs::remove_dir_all(worker.join(".git")).unwrap();
+        std::fs::remove_file(worker.join("code.txt")).unwrap();
+        std::fs::write(worker.join("output.bin"), b"experiment output").unwrap();
+
+        let result = push_with_fallback(&head, Some(&head), true, |exclude| {
+            std::future::ready(apply_worker_test_bundle(&source, &worker, exclude.as_deref()))
+        }).await;
+
+        assert!(!result.unwrap());
+        assert_eq!(std::fs::read(worker.join("code.txt")).unwrap(), b"committed code");
+        assert_eq!(std::fs::read(worker.join("output.bin")).unwrap(), b"experiment output");
+        assert_eq!(mirror_head(&worker).as_deref(), Some(head.as_str()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_incremental_worker_push_retries_a_full_bundle_after_missing_prerequisites() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let worker = temp.path().join("worker");
+        init_worker_test_repo(&source);
+        init_worker_test_repo(&worker);
+        std::fs::write(source.join("code.txt"), b"v1").unwrap();
+        let last_head = commit_worker_test_repo(&source);
+        std::fs::write(source.join("code.txt"), b"v2").unwrap();
+        let head = commit_worker_test_repo(&source);
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let result = push_with_fallback(&head, Some(&last_head), false, |exclude| {
+            attempts.borrow_mut().push(exclude.clone());
+            std::future::ready(apply_worker_test_bundle(&source, &worker, exclude.as_deref()))
+        }).await;
+
+        assert!(!result.unwrap());
+        assert_eq!(attempts.into_inner(), vec![Some(last_head), None]);
+        assert_eq!(mirror_head(&worker).as_deref(), Some(head.as_str()));
+        assert_eq!(std::fs::read(worker.join("code.txt")).unwrap(), b"v2");
+    }
+
+    /// The M4b backwards-HEAD fallback (full bundle) goes through the same
+    /// untracked-output guard as every other apply: moving the worker back to an
+    /// older commit that tracks a path the worker now holds as an untracked output
+    /// is refused, the output and the worker's HEAD stay; without a collision the
+    /// worker is moved back and its outputs survive.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_backwards_full_bundle_still_refuses_untracked_output_collisions() {
+        for collide in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source");
+            let worker = temp.path().join("worker");
+            init_worker_test_repo(&source);
+            init_worker_test_repo(&worker);
+            std::fs::write(source.join("code.txt"), b"v1").unwrap();
+            std::fs::write(source.join("old.txt"), b"old tracked code").unwrap();
+            let c1 = commit_worker_test_repo(&source);
+            std::fs::remove_file(source.join("old.txt")).unwrap();
+            std::fs::write(source.join("code.txt"), b"v2").unwrap();
+            let c2 = commit_worker_test_repo(&source);
+            assert!(!apply_worker_test_bundle(&source, &worker, None).unwrap());
+            let output = if collide { "old.txt" } else { "output.bin" };
+            std::fs::write(worker.join(output), b"unique experiment output").unwrap();
+            let out = Peer::Local(source.clone()).run(&["reset", "-q", "--hard", &c1]).unwrap();
+            assert!(out.status.success());
+
+            let attempts = std::cell::RefCell::new(Vec::new());
+            let result = push_with_fallback(&c1, Some(&c2), false, |exclude| {
+                attempts.borrow_mut().push(exclude.clone());
+                std::future::ready(apply_worker_test_bundle(&source, &worker, exclude.as_deref()))
+            })
+            .await;
+
+            assert_eq!(attempts.into_inner(), vec![Some(c2.clone()), None]);
+            assert_eq!(std::fs::read(worker.join(output)).unwrap(), b"unique experiment output");
+            if collide {
+                assert!(result.is_err(), "the full-bundle fallback must refuse the collision");
+                assert_eq!(mirror_head(&worker).as_deref(), Some(c2.as_str()));
+                assert_eq!(std::fs::read(worker.join("code.txt")).unwrap(), b"v2");
+            } else {
+                assert_eq!(result, Ok(false));
+                assert_eq!(mirror_head(&worker).as_deref(), Some(c1.as_str()));
+                assert_eq!(std::fs::read(worker.join("code.txt")).unwrap(), b"v1");
+            }
+        }
+    }
+
+    #[test]
     fn short_sha_truncates() {
         assert_eq!(short_sha("0123456789abcdef"), "0123456");
         assert_eq!(short_sha("abc"), "abc");
@@ -802,23 +1191,23 @@ mod tests {
 
         let bundle = tmp.join("out.bundle");
         let attempts = std::cell::RefCell::new(Vec::new());
-        let push = |exclude: Option<&str>| {
-            attempts.borrow_mut().push(exclude.map(str::to_string));
-            let result = build_bundle(&tmp, &bundle, exclude);
+        let push = |exclude: Option<String>| {
+            attempts.borrow_mut().push(exclude.clone());
+            let result = build_bundle(&tmp, &bundle, exclude.as_deref());
             async move { result }
         };
-        let outcome = push_with_fallback(&head, Some(&c2), push).await;
+        let outcome = push_with_fallback(&head, Some(&c2), false, push).await;
         assert_eq!(outcome, Ok(false), "a full bundle was built (and would be applied), not 'already there'");
         assert_eq!(*attempts.borrow(), [Some(c2.clone()), None], "the empty incremental fell through to the full bundle");
 
         // Only a worker already AT head is "nothing to send".
         attempts.borrow_mut().clear();
-        let push = |exclude: Option<&str>| {
-            attempts.borrow_mut().push(exclude.map(str::to_string));
-            let result = build_bundle(&tmp, &bundle, exclude);
+        let push = |exclude: Option<String>| {
+            attempts.borrow_mut().push(exclude.clone());
+            let result = build_bundle(&tmp, &bundle, exclude.as_deref());
             async move { result }
         };
-        assert_eq!(push_with_fallback(&head, Some(&head), push).await, Ok(true));
+        assert_eq!(push_with_fallback(&head, Some(&head), false, push).await, Ok(true));
         assert_eq!(attempts.borrow().len(), 1);
     }
 
@@ -827,18 +1216,18 @@ mod tests {
     /// with the full bundle.
     #[tokio::test]
     async fn the_bundle_fallback_never_records_a_head_it_did_not_send() {
-        let empty_always = |_: Option<&str>| async { Ok::<bool, String>(true) };
-        assert!(push_with_fallback("h", Some("older"), empty_always).await.is_err());
-        let empty_always = |_: Option<&str>| async { Ok::<bool, String>(true) };
-        assert!(push_with_fallback("h", None, empty_always).await.is_err());
+        let empty_always = |_: Option<String>| async { Ok::<bool, String>(true) };
+        assert!(push_with_fallback("h", Some("older"), false, empty_always).await.is_err());
+        let empty_always = |_: Option<String>| async { Ok::<bool, String>(true) };
+        assert!(push_with_fallback("h", None, false, empty_always).await.is_err());
 
         let calls = std::cell::Cell::new(0);
-        let flaky = |exclude: Option<&str>| {
+        let flaky = |exclude: Option<String>| {
             calls.set(calls.get() + 1);
             let result = if exclude.is_some() { Err("missing prerequisite".to_string()) } else { Ok(false) };
             async move { result }
         };
-        assert_eq!(push_with_fallback("h", Some("older"), flaky).await, Ok(false));
+        assert_eq!(push_with_fallback("h", Some("older"), false, flaky).await, Ok(false));
         assert_eq!(calls.get(), 2);
     }
 }

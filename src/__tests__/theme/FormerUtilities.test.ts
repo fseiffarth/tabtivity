@@ -1,5 +1,5 @@
 /**
- * With Tailwind removed (S5 of docs/vite8_vitest5_migration_plan.md), a class
+ * With Tailwind removed (S5 of docs/done/vite8_vitest5_migration_plan.md), a class
  * named like one of its utilities no longer styles anything by itself. These
  * are the 54 utility selectors Tailwind 3's content scanner emitted for this
  * repo before the removal. When it went, none of them was relied on (S5's

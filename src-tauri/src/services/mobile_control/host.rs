@@ -5272,7 +5272,7 @@ async fn inbox_file(
 /// never the root.
 ///
 /// A request with `mode: "apply"` (**Apply marks directly**,
-/// `docs/pdf_markup_direct_apply_plan.md`) takes an undo snapshot of the
+/// `docs/done/pdf_markup_direct_apply_plan.md`) takes an undo snapshot of the
 /// project's work tree first (`services::markup_rounds`, owned by this tab and
 /// its project; a remote project gets none). The answer adds `mode` (what the
 /// round got), `undo` (the snapshot's id) and `noUndo` (why a requested

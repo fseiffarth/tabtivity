@@ -2119,7 +2119,7 @@ export function SettingsDialog({
             />
 
             {/* Linux only: WebKitGTK's DMA-BUF renderer, read by the backend at
-                launch (docs/gpu_compositing_plan.md). The canvas defect that
+                launch (docs/done/gpu_compositing_plan.md). The canvas defect that
                 made it drop PDF content is avoided on every webview regardless. */}
             {IS_LINUX && (
               <ToggleCard

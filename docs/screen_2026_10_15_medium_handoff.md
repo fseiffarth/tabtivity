@@ -1585,7 +1585,7 @@ No i18n keys needed (no new display strings). No untested.ts row (no new UI).
     agent CLIs (+ollama); they are the same class (registry agent binaries,
     fenced like the 13 already allowed) and exactly what the frontend writes.
     M4c touches this file's `FileLock` lines only — different hunks.
-  - `services/mobile_control/discovery.rs` `RESUMABLE_BUILTINS` const → 
+  - `services/mobile_control/discovery.rs` `RESUMABLE_BUILTINS` const →
     `resumable_builtins()` from the registry (phone agent list now in registry
     order: claude, codex, agy, gemini, vibe, opencode, cursor-agent, copilot,
     droid, grok, qwen — was claude, codex, qwen, opencode, …).

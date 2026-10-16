@@ -1,4 +1,3 @@
-import { BUNDLE_VERSION } from "../buildInfo";
 import { AppMark } from "../AppMark";
 import { BRAND } from "../../../src/lib/brand";
 import { useT } from "../../../src/lib/i18n";
@@ -15,7 +14,7 @@ export function LockedHomeShell() {
     <header className="home-header">
       <div className="home-brand" aria-label={BRAND.display}>
         <span className="home-logo-frame" aria-hidden="true"><AppMark className="home-logo" /></span>
-        <span className="home-brand-copy"><strong>{BRAND.display}</strong><small>{BUNDLE_VERSION}</small></span>
+        <strong>{BRAND.display}</strong>
       </div>
     </header>
     <div className="projects-row"><h1>{t("mobile.home.projectsTitle")}</h1></div>

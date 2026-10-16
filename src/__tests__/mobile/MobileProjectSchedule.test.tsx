@@ -4,7 +4,7 @@
  * scheduled and opens the sheet from there, without attaching to the session,
  * and a shell tab has no schedules to offer.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Project } from "../../../mobile-web/src/screens/Project";
@@ -90,9 +90,14 @@ describe("Mobile project tab list — scheduled prompts", () => {
     expect(model.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("says nothing under a tab with no schedules", async () => {
+  it("says nothing under a tab with no schedules, and offers its first one from the ⋯ sheet", async () => {
     render(<Project id="p1" back={() => {}} terminal={vi.fn()} />);
-    expect(await screen.findByRole("button", { name: "Scheduled prompts for Codex" })).toBeTruthy();
+    // The ◷ is a shortcut to schedules a tab has; a tab with none reaches the
+    // sheet through ⋯.
+    fireEvent.click(await screen.findByRole("button", { name: "More for Codex" }));
+    expect(screen.queryByRole("button", { name: "Scheduled prompts for Codex" })).toBeNull();
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Codex" })).getByRole("button", { name: "Scheduled prompts" }));
+    expect(await screen.findByRole("dialog", { name: "Scheduled prompts for Codex" })).toBeTruthy();
     expect(screen.queryByText("No scheduled prompts")).toBeNull();
   });
 

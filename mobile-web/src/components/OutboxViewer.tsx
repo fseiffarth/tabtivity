@@ -19,7 +19,7 @@ export type MarkupSend = "queued" | "sent" | false;
  * the prompt goes to, the project the phone-side layer is kept under, a
  * project file's folder trail, the send into the chat, what the agent is
  * doing now (the round's pill), and how to find the file's newest version
- * for **Reload** (`docs/pdf_markup_rounds_plan.md` §2.2–2.3). */
+ * for **Reload** (`docs/done/pdf_markup_rounds_plan.md` §2.2–2.3). */
 export type MarkupTarget = {
   tabId: string;
   projectId: string;

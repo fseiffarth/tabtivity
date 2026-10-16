@@ -1,6 +1,6 @@
 /**
  * Markup tools, round 2 — the shared model both viewers build on
- * (`docs/markup_tools_plan.md`): proofreading stamps in every layer function,
+ * (`docs/done/markup_tools_plan.md`): proofreading stamps in every layer function,
  * selection and editing, per-mark comments, shape snapping, text marks that
  * snap to the page's lines, the before/after words a Submit logs, the pen
  * bar's new prefs (presets, pressure curve, palm rejection) and the undo steps

@@ -318,13 +318,19 @@ altogether.
 
 Extra compute hosts receive the **mirror's** current HEAD one way
 (`worker_sync`): bundle → SFTP → `git fetch` → `reset --hard FETCH_HEAD`,
-never `git clean`, so their untracked outputs survive. An incremental bundle
-excludes the worker's last synced commit; when that comes out empty although
-the mirror's HEAD is a different commit (the mirror was reset backwards), the
-full bundle is sent, so the worker moves back with it and its record stays
-true. Triggered on worker
-connect, on every commit the lockstep watcher sees (so it needs lockstep
-enabled), and by *Sync code now*. A shared-filesystem worker gets nothing —
+never `git clean`. Before reset, a collision check refuses incoming paths that
+would overwrite untracked outputs, including ignored files and file/directory
+replacements; it guards every apply, the full-bundle fallback included. The
+check and reset are separate operations; pause output writers while syncing to
+avoid a new collision after the check. An incremental bundle excludes the
+worker's last synced commit; when that comes out empty although the mirror's
+HEAD is a different commit (the mirror was reset backwards), the full bundle is
+sent, so the worker moves back with it and its record stays true. Triggered on
+worker connect, on every commit the lockstep watcher sees (so it needs lockstep
+enabled), and by *Sync code now*. The manual action sends a full bundle even at
+an unchanged source HEAD to repair tracked worker drift. A removed repository is
+rebuilt only when existing files do not collide with incoming code. A
+shared-filesystem worker gets nothing —
 it already sees the primary's folder. *Pull outputs* is the only worker → local
 byte path, into `<state_dir>/remote-projects/<id>/outputs/<label>/`, never
 into the mirror.

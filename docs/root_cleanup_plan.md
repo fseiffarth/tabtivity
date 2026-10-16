@@ -217,7 +217,7 @@ The changes:
 
 ### Step 3 † — PostCSS into `package.json` (−1 row; after `hosted`)
 
-Tailwind is removed (`c106e375`, `docs/vite8_vitest5_migration_plan.md`
+Tailwind is removed (`c106e375`, `docs/done/vite8_vitest5_migration_plan.md`
 S5): `tailwind.config.js` no longer exists and `postcss.config.js` holds only
 autoprefixer.
 

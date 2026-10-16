@@ -2763,7 +2763,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** The markup view's Submit: the desktop's prompt goes out like a typed
    * one — into the agent's queue while it works (a markup prompt is never a
    * slash command, so `submitDraft` holds it exactly then). The viewer stays
-   * open for the next round (`docs/pdf_markup_rounds_plan.md` §2.5). */
+   * open for the next round (`docs/done/pdf_markup_rounds_plan.md` §2.5). */
   const sendMarkup = useCallback((text: string): MarkupSend => {
     const queued = agentAtWorkRef.current;
     if (!submitDraftRef.current(text, false)) return false;
@@ -4111,7 +4111,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
           setFocusSource("session");
           setFocusMenu(false);
         }}>
-          <span><strong>{t("mobile.focus.session")} {isUntested("mobile.focus.session") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{transcript?.available ? t("mobile.focus.sessionHint") : t(noSessionReason(transcript))}{!transcript?.available && transcript?.reason === "no_session" && isUntested("mobile.focus.noSessionYet") && <em> · {t("mobile.focus.untested")}</em>}</small></span>
+          <span><strong>{t("mobile.focus.session")} {(isUntested("mobile.focus.session") || ((antigravity || /gemini/iu.test(agentLabel)) && isUntested("mobile.focus.googleSession"))) && <em>{t("mobile.focus.untested")}</em>}</strong><small>{transcript?.available ? t("mobile.focus.sessionHint") : t(noSessionReason(transcript))}{!transcript?.available && transcript?.reason === "no_session" && isUntested("mobile.focus.noSessionYet") && <em> · {t("mobile.focus.untested")}</em>}</small></span>
           {sessionShown && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
         </button>
         <button role="menuitemradio" aria-checked={!sessionShown} onClick={() => {

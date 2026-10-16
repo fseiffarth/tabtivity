@@ -472,7 +472,7 @@ file: on the phone from the landed row while the drawer stays in that folder
 (`DELETE …/files/upload?f=<file token>`), on the desktop from the header
 inbox's **Added to projects** section (uploads of the last 24 h, `phone_uploads_list`
 / `phone_upload_undo`; **Keep** hides a row on that desktop only). Design:
-`docs/phone_upload_plan.md`.
+`docs/done/phone_upload_plan.md`.
 
 **Mark up a PDF or picture for the agent.** In an agent tab's viewer (the
 files drawer, the 🖼 gallery or a picture/PDF bubble in the chat) a PDF or a
@@ -491,7 +491,7 @@ frame with no access to the session or the network. Project files need
 **Settings → Mobile → Project files on the phone**; files the agent sent work
 without it.
 
-Marking up is a loop, not one shot (`docs/pdf_markup_rounds_plan.md`):
+Marking up is a loop, not one shot (`docs/done/pdf_markup_rounds_plan.md`):
 **Submit keeps the view open.** The round's marks stay on show, dimmed, and are
 never sent again; marking goes on while the agent works, and the next Submit
 carries only the new marks (into the agent's queue if it is busy). A pill
@@ -503,7 +503,7 @@ be checked and its mark then erased by hand (the eraser and Clear page reach
 shown sent marks; ⋯ **Show sent marks** hides them). Nothing removes a mark
 automatically.
 
-**Apply marks directly, with an Undo** (`docs/pdf_markup_direct_apply_plan.md`;
+**Apply marks directly, with an Undo** (`docs/done/pdf_markup_direct_apply_plan.md`;
 on by default — the phone's switch in Home → ⚙ This device → **Mark up prompt**,
 the desktop's in Settings → Agents → PDF markup). A Submit asks for an `apply`
 round: the desktop first takes a snapshot of the project's git work tree in its
@@ -557,7 +557,7 @@ round can run on another model. On the phone a fresh ✓ ignores
 taps for a moment, so a pen mid-stroke cannot approve. Ticks die with the
 agent's session (at most a day) and with an undone apply round; the marks stay.
 
-**Local models from the phone** (`docs/mobile_local_model_control_plan.md`).
+**Local models from the phone** (`docs/done/mobile_local_model_control_plan.md`).
 Home → **Local models** lists the Ollama models installed on the desktop —
 size, parameters and quantization, idle / loading / loaded / last load failed,
 where a loaded one sits (GPU, N % on the GPU, CPU) and whether it stays loaded

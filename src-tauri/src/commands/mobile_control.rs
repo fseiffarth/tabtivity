@@ -933,7 +933,7 @@ async fn enable_host_service(target: &Path, _config: &HostConfig) -> Result<(), 
 ///
 /// The one exception is the user's own: with "Keep running when Tabtivity is
 /// closed" on (`stay_after_quit`), the host is left up, because since the
-/// headless owner (`docs/headless_owner_plan.md`) it is no longer a listener
+/// headless owner (`docs/done/headless_owner_plan.md`) it is no longer a listener
 /// with nothing behind it — it answers the phone, starts tabs, and fires
 /// scheduled prompts and reminders with no window.
 pub async fn stop_host_for_exit() {

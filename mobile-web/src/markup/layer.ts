@@ -1,6 +1,6 @@
 /**
  * The markup layer: what the reader drew over a PDF's pages or a picture,
- * as vectors in each page's own units (`docs/mobile_pdf_markup_plan.md`
+ * as vectors in each page's own units (`docs/done/mobile_pdf_markup_plan.md`
  * §2.1). A PDF page's units are its points as displayed — after its
  * `/Rotate`, origin top left; a picture's are its pixels. The same numbers
  * draw on the phone (`rasterize.ts`) and bake into the desktop's marked copy
@@ -79,14 +79,14 @@ export type PageLayer = { size: [number, number]; marks: Mark[] };
 /** One Submit's marks exactly as it sent them, page by page in the order of
  * that page's `marks` in the request — what the agent's ticks
  * (`markup_done`: round id, page, 1-based mark) index into
- * (`docs/markup_tick_approve_plan.md` §3). The marks are the sent side's own
+ * (`docs/done/markup_tick_approve_plan.md` §3). The marks are the sent side's own
  * objects, shared, not copies. `words`: per page, by index in that page's
  * logged marks, the page's words under each mark at Submit (`null` where
  * none were read) — what a ✓ group's "was … now …" caption compares the
  * reloaded page against. Absent from records written before it. */
 export type SentRound = { id: string; pages: Record<number, Mark[]>; words?: Record<number, (string | null)[]> };
 /** The marks earlier Submits sent, drawn dimmed and never sent again
- * (`docs/pdf_markup_rounds_plan.md` §2.1), and how many rounds went out.
+ * (`docs/done/pdf_markup_rounds_plan.md` §2.1), and how many rounds went out.
  * Only the reader removes them (eraser, Clear page, Clear all marks, Clear
  * sent marks, approving a ticked mark). `log`: the newest rounds that went
  * out with a round id (`MAX_LOGGED_ROUNDS`), oldest first — absent from

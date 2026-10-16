@@ -2506,7 +2506,7 @@ unchanged; the new agents are additive.
 - [~] **Token stats in the usage recap** (2026-10-01; ✅ code-complete,
   automated tests passing — `token_stats` cargo tests, `TokenStats.test.ts`;
   ❌ never live-verified — pill `stats.sectionTokens`). Plan:
-  `docs/token_stats_plan.md`. The recap's **Tokens** section (under Agents)
+  `docs/done/token_stats_plan.md`. The recap's **Tokens** section (under Agents)
   shows per CLI fresh in · cache write · cache read · output and the output
   share for the Day/Week/Month window, with a Per model toggle. Derived from
   Claude transcripts and Codex rollouts in the agent homes
@@ -2561,7 +2561,7 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
 
 - [~] **Nested `claude --resume` guard on macOS — `ps` fallback** (2026-10-08;
-  `docs/macos_windows_completion_plan.md` §3.6; ✅ code-complete, ❌ never run
+  `docs/done/macos_windows_completion_plan.md` §3.6; ✅ code-complete, ❌ never run
   on a Mac). Where `/proc` is unreadable the POSIX hook walks the tab's
   processes with `ps -o ppid=` and reads each one's environment with `ps -E -o
   command=` (same uid; any `*_TAB_UID`), counting a `claude` by the basename of

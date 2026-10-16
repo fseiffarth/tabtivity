@@ -2143,7 +2143,7 @@ function PdfCanvas({
    *  sharpness, not a grab of the screen around it. Mutually exclusive with
    *  redaction because both modes own the same plain drag gesture. */
   const [copySelecting, setCopySelecting] = useState(false);
-  /** Markup mode (`usePdfMarkup`, `docs/pdf_markup_rounds_plan.md` §2.6) — the
+  /** Markup mode (`usePdfMarkup`, `docs/done/pdf_markup_rounds_plan.md` §2.6) — the
    *  third mode that owns the plain drag, so it excludes the two above. */
   const [marking, setMarking] = useState(false);
   const markingRef = useRef(false);
@@ -2772,7 +2772,7 @@ function PdfCanvas({
    *  or writes the file records the mtime it saw here. */
   const lastMtime = useRef<number | null>(null);
 
-  // ── Mark up (`usePdfMarkup`, `docs/pdf_markup_rounds_plan.md` §2.6) ─────────
+  // ── Mark up (`usePdfMarkup`, `docs/done/pdf_markup_rounds_plan.md` §2.6) ─────────
   // Marks drawn over the pages and sent, as a prompt with a marked copy, to an
   // agent tab of this project. Offered only where the sheets are the file's own
   // pages (`markupGate`), one viewer per file per window (`claimMarkup`).

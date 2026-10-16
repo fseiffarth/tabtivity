@@ -1,7 +1,7 @@
 import type { TabKind } from "../../stores/tabs";
 
 /**
- * How many lines of history a terminal's xterm keeps (`docs/tab_cost_plan.md`
+ * How many lines of history a terminal's xterm keeps (`docs/done/tab_cost_plan.md`
  * step 2). xterm holds about rows × cols × 12 bytes per terminal, and a shell
  * needs less history than an agent, so shells follow the
  * `shell_scrollback_rows` setting while agent tabs keep a fixed

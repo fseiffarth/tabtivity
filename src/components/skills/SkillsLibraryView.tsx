@@ -34,7 +34,7 @@ export interface SkillsLibraryViewProps {
 }
 
 /**
- * The Skills Library's whole UI (`docs/skills_plan.md`): a sources bar, the
+ * The Skills Library's whole UI (`docs/done/skills_plan.md`): a sources bar, the
  * install scope's already-installed skills, a browsable/filterable catalog, and
  * a preview panel that is the ONLY place the install action lives — showing a
  * skill's content before it is copied into agent-trusted territory is the one

@@ -1,5 +1,5 @@
 /**
- * Markup rounds on the phone (`docs/pdf_markup_rounds_plan.md` Phase A): a
+ * Markup rounds on the phone (`docs/done/pdf_markup_rounds_plan.md` Phase A): a
  * Submit keeps the view and its layer, the next Submit sends only the marks
  * made since, a pill follows the agent, Reload draws the file anew — or the
  * agent's newer copy — under the same layer, and the chat's `sendMarkup`

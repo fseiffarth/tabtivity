@@ -1,6 +1,6 @@
 /**
  * The phone's half of the markup questions MCP, as the window's bridge serves
- * it (`docs/markup_questions_mcp_plan.md` P3): the tab's open ask goes to the
+ * it (`docs/done/markup_questions_mcp_plan.md` P3): the tab's open ask goes to the
  * phone with the file's leaf name and never its path, an answer is taken by
  * the desktop (which builds the prompt) and delivered as a phone hold is —
  * and when that delivery fails, the ask is reopened with the answer's receipt

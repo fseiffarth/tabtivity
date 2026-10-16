@@ -1,4 +1,4 @@
-//! Tauri commands for the Skills Library (`docs/skills_plan.md`). Thin wrappers
+//! Tauri commands for the Skills Library (`docs/done/skills_plan.md`). Thin wrappers
 //! over `services::skills` — every filesystem/git op is offloaded to the
 //! blocking pool since a Tauri command otherwise runs on the async runtime's
 //! worker (a `git pull`/clone here is the same cost class as `git_clone`).

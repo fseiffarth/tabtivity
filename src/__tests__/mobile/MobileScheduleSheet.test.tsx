@@ -62,8 +62,8 @@ describe("Mobile schedule sheet", () => {
     render(<ScheduleSheet tabId={TAB} label="Claude" onClose={() => {}} />);
     expect(await screen.findByText("No prompts are scheduled for this tab.")).toBeTruthy();
     expect(screen.getByText("Desktop time zone: Europe/Berlin")).toBeTruthy();
-    // A new schedule starts as a one-time prompt; recurring is opt-in.
-    expect((screen.getByLabelText("Recurrence") as HTMLSelectElement).value).toBe("once");
+    // A new schedule starts as an "In …" one-time prompt; recurring is opt-in.
+    expect((screen.getByLabelText("Recurrence") as HTMLSelectElement).value).toBe("in");
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Review the diff" } });
     fireEvent.change(screen.getByLabelText("Recurrence"), { target: { value: "daily" } });
     fireEvent.change(screen.getByLabelText("Desktop-local time (h)"), { target: { value: "07" } });
@@ -74,7 +74,7 @@ describe("Mobile schedule sheet", () => {
     expect(await screen.findByText("Daily · 07:30")).toBeTruthy();
     expect(screen.getByText("Next: 2026-09-16 09:00 (Europe/Berlin)")).toBeTruthy();
     expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("");
-    expect((screen.getByLabelText("Recurrence") as HTMLSelectElement).value).toBe("once");
+    expect((screen.getByLabelText("Recurrence") as HTMLSelectElement).value).toBe("in");
   });
 
   it("sends the weekdays sorted, and refuses a rule with none picked without a request", async () => {

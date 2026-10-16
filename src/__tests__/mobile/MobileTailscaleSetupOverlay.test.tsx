@@ -44,7 +44,7 @@ describe("Mobile settings — Set up Tailscale Serve in terminal", () => {
 
   /** Answer the app's own confirm (never `window.confirm`) with `button`. */
   async function answer(user: ReturnType<typeof userEvent.setup>, button: string) {
-    const question = await screen.findByRole("dialog", { name: "Set up in terminal" });
+    const question = await screen.findByRole("dialog", { name: "Set up Tailscale Serve" });
     await user.click(within(question).getByRole("button", { name: button }));
   }
 
@@ -60,6 +60,8 @@ describe("Mobile settings — Set up Tailscale Serve in terminal", () => {
     const user = userEvent.setup();
     render(<MobileSettings />);
     await user.click(screen.getByRole("button", { name: "Set up in terminal" }));
+    const dialog = await screen.findByRole("dialog", { name: "Set up Tailscale Serve" });
+    expect(dialog.textContent).toMatch(/tailscale serve --bg/);
     await answer(user, "Set up in terminal");
 
     const rootTabs = useTabsStore.getState().tabsByScope.root ?? [];

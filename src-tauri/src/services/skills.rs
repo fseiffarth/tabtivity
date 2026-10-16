@@ -1,4 +1,4 @@
-//! Skills Library (`docs/skills_plan.md`) — fetch + catalog, no manifest, no
+//! Skills Library (`docs/done/skills_plan.md`) — fetch + catalog, no manifest, no
 //! versioning. A "source" is a git repo (Anthropic's own `anthropics/skills` by
 //! default, or any other collection the user points at); its clone is cached
 //! under `~/.local/share/tabtivity/skills_cache/<id>/` and walked on demand for

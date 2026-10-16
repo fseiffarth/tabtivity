@@ -1,6 +1,6 @@
 /**
  * The desktop PDF viewer's markup mode, the parts with no React in them
- * (`docs/pdf_markup_rounds_plan.md` §2.6): when the Mark up button shows and
+ * (`docs/done/pdf_markup_rounds_plan.md` §2.6): when the Mark up button shows and
  * when it is held back, where an on-disk change of the PDF goes while marks are
  * on it, which viewer of a window may mark a given file, and the typed call
  * into `pdf_markup_submit` with its refusal codes in the reader's words.
@@ -147,13 +147,13 @@ export type PdfMarkupResult = { prompt: string; marked: string | null; mode?: Pd
  * backend's plain code string (see `markupReasonKey`). `mode` is what
  * Settings → PDF markup → Apply marks directly asks for. `round` (`mintRound`)
  * names the Submit, so the prompt numbers its marks and the agent can tick
- * them off (`markup_done`, `docs/markup_tick_approve_plan.md`).
+ * them off (`markup_done`, `docs/done/markup_tick_approve_plan.md`).
  */
 export function submitPdfMarkup(projectId: string, path: string, pages: PdfMarkupPage[], instruction?: string | null, ask?: number | null, mode?: PdfMarkupMode, round?: string): Promise<PdfMarkupResult> {
   return invoke<PdfMarkupResult>("pdf_markup_submit", { projectId, path, pages, ...(instruction ? { instruction } : {}), ...(ask != null ? { ask } : {}), ...(round ? { round } : {}), ...(mode ? { mode } : {}) });
 }
 
-// ── The undo of an `apply` round (`docs/pdf_markup_direct_apply_plan.md`) ──
+// ── The undo of an `apply` round (`docs/done/pdf_markup_direct_apply_plan.md`) ──
 
 /** What an undo would do (preview) or did: the project-relative files, how
  *  many more it did not name, and the PDF's fate; `outside` the files changed

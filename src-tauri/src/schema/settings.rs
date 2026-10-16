@@ -67,7 +67,7 @@ pub struct AppMobileHostSettings {
     pub project_files: Option<bool>,
     /// Does the Mobile host keep running when Tabtivity quits, so the phone,
     /// scheduled prompts and calendar reminders go on with no window
-    /// (`docs/headless_owner_plan.md`)? Default off: a quit stops it. Read by
+    /// (`docs/done/headless_owner_plan.md`)? Default off: a quit stops it. Read by
     /// the quit path (`commands::mobile_control::stop_host_for_exit`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stay_after_quit: Option<bool>,
@@ -440,7 +440,7 @@ pub struct Settings {
     /// back to `"claude"` when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_agent_cmd: Option<String>,
-    /// The desktop PDF viewer's Mark up prompts (`docs/pdf_markup_rounds_plan.md`
+    /// The desktop PDF viewer's Mark up prompts (`docs/done/pdf_markup_rounds_plan.md`
     /// §2.8), the desktop's own as the phone keeps its own: what a Submit tells
     /// the agent after the file references (`None`/blank = `markup::
     /// DEFAULT_INSTRUCTION`), and what **Make these changes** sends once the
@@ -466,7 +466,7 @@ pub struct Settings {
     /// round at once. `None` = off. The phone keeps its own (⋯ switch).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_markup_subagents: Option<bool>,
-    /// **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`):
+    /// **Apply marks directly** (`docs/done/pdf_markup_direct_apply_plan.md`):
     /// a Submit asks `pdf_markup_submit` for `mode: "apply"` — the agent makes
     /// the changes in one turn and the strip offers **Undo** — rather than
     /// `list` (**Make these changes**). `None` = on, so a settings file from
@@ -617,7 +617,7 @@ pub struct Settings {
     pub terminal_webgl: Option<bool>,
     /// EXPERIMENTAL, default OFF, Linux only. Start WebKitGTK on its GPU paint
     /// path: `run()` stops forcing `WEBKIT_DISABLE_DMABUF_RENDERER=1`
-    /// (`services::webkit_gpu`, `docs/gpu_compositing_plan.md`). Read once, at
+    /// (`services::webkit_gpu`, `docs/done/gpu_compositing_plan.md`). Read once, at
     /// launch, before GTK/WebKit init, so a change applies after a restart. The
     /// 2D-canvas acceleration that made this path drop content is off on every
     /// webview regardless. Read via `gpu_compositing()`, strict default-off.

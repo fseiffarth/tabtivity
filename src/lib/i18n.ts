@@ -1835,6 +1835,9 @@ export const enSource = {
   "mobile.projectFilesHelp": "A paired phone may browse these projects' files and open them to read, save or share — never change them; adding files is the switch below. .git, .{slug} and .env files are hidden.",
   "mobile.projectUploads": "Phone may add files to projects",
   "mobile.projectUploadsHelp": "Upload here in the phone's file browser puts the picked files into the open folder under their own names. Nothing is overwritten; dot-folders (.github, .cargo, …) take nothing. Each file stays 24 hours in the header's inbox with Undo. Needs Project files.",
+  "mobile.projectUploadsAskTitle": "Also let the phone add files?",
+  "mobile.projectUploadsAskBody": "With this on, Upload here in the phone's file browser puts files into the folder you have open. Nothing is overwritten and dot-folders take nothing; each upload stays 24 hours in the header's inbox with Undo. Cancel keeps the phone read-only — the switch below can allow it later.",
+  "mobile.projectUploadsAskAllow": "Allow uploads",
   "mobile.rootAccessClosed": "Closed: root agents have the MCP tools, but not all their writes are reviewed. Set \"Review root-agent writes\" to \"All writes\" and keep the root sandbox on, or turn the root MCP tools off.",
   "mobile.projectAccess": "Project access",
   "mobile.projectAccessHelp": "Access is off per project. Enabling it does not restart a live agent; that agent becomes attachable after its next normal reopen.",
@@ -7291,7 +7294,7 @@ export const enSource = {
   "printing.networkCurrent": "(current)",
   "printing.networkForget": "Forget this network's default printer",
 
-  // ── Skills Library (docs/skills_plan.md) ─────────────────────────────────
+  // ── Skills Library (docs/done/skills_plan.md) ─────────────────────────────────
   "skillsLibrary.title": "Skills Library",
   "skillsLibrary.noSources": "No sources yet",
   "skillsLibrary.refresh": "Refresh",
@@ -10030,6 +10033,25 @@ export const enSource = {
   "viewerCrash.sourceFailed": "Couldn't read the file: {error}",
   "odt.errParse": "could not parse the document XML",
   "odt.errNoBody": "no document body found",
+  // ── Phone Home + project screen redesign (docs/mobile_home_redesign_plan.md) ──
+  "mobile.home.needsYou": "Needs you",
+  "mobile.home.needsShowAll": "Show all {count}",
+  "mobile.home.needsWorking": "{count} working · see Agents",
+  "mobile.home.connected": "Connected",
+  "mobile.home.offline": "Offline",
+  "mobile.home.emptyActiveTitle": "Nothing active",
+  "mobile.home.searchAll": "Search all projects",
+  "mobile.home.reorderHint": "Drag {grip} to arrange.",
+  "mobile.home.desktopHead": "Desktop",
+  "mobile.project.colorRow": "Colour…",
+  "mobile.project.subagentsRow": "Subagents",
+  "mobile.project.closeRow": "Close tab",
+  "mobile.project.hintDismiss": "Hide this hint",
+  "mobile.project.emptyTitle": "No tabs yet",
+  "mobile.project.emptyHint": "＋ New tab below opens an agent or a shell.",
+  "mobile.project.emptyHintFiles": "＋ below sends a file from this phone into the project.",
+  "mobile.project.recentlyClosedCount": "Recently closed ({count})",
+  "mobile.project.fabSendFile": "Send a file",
 } as const;
 
 /** English with `{app}` filled. Exported solely for the test aggregator

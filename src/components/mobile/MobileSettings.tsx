@@ -304,6 +304,31 @@ export function MobileSettings() {
     }
   };
 
+  /** Project files, and the uploads switch that rides on it. Turning files on
+   * asks whether the phone may add files too (Cancel keeps it read-only);
+   * turning it off clears uploads as well, so turning files on again later
+   * never reopens the write path unasked. One write either way: `setMailGate`
+   * spreads this render's `stored`, so a second write would undo the first. */
+  const setProjectFiles = async (on: boolean) => {
+    const uploads = on && await confirmAction({
+      title: tr("mobile.projectUploadsAskTitle"),
+      body: tr("mobile.projectUploadsAskBody"),
+      confirmLabel: tr("mobile.projectUploadsAskAllow"),
+    });
+    setError(null);
+    try {
+      await updateSettings({
+        [MOBILE_HOST_KEY]: {
+          ...(stored ?? { enabled: false }),
+          project_files: on || undefined,
+          project_uploads: uploads || undefined,
+        },
+      });
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
   const apply = async (enabled: boolean) => {
     setBusy(true);
     setError(null);
@@ -383,8 +408,9 @@ export function MobileSettings() {
   const setUpInTerminal = async () => {
     const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
     const ok = await confirmAction({
-      title: tr("mobile.setUpInTerminal"),
-      body: tr("mobile.setUpConfirm", { command }),
+      title: tr("mobile.guideSummary"),
+      // The prose's blank lines set the command apart; a <p> collapses `\n`.
+      body: tr("mobile.setUpConfirm", { command }).split("\n").flatMap((line, index) => index === 0 ? [line] : [<br key={index} />, line]),
       confirmLabel: tr("mobile.setUpInTerminal"),
     });
     if (!ok) return;
@@ -665,7 +691,7 @@ export function MobileSettings() {
         label={<><Hint help={t("mobile.projectFilesHelp")}>{t("mobile.projectFiles")}</Hint> <UntestedTag id="mobile.projectFiles" /></>}
         checked={stored?.project_files ?? false}
         disabled={busy}
-        onChange={(event) => void setMailGate("project_files", event.target.checked)}
+        onChange={(event) => void setProjectFiles(event.target.checked)}
       />
       <ToggleRow
         label={<><Hint help={t("mobile.projectUploadsHelp")}>{t("mobile.projectUploads")}</Hint> <UntestedTag id="mobile.files.upload" /></>}

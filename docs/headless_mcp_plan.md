@@ -1,7 +1,7 @@
 # Headless MCP plan — the agent MCP servers for tabs the Mobile host starts
 
 TODO #2339 (`todo/group-z-server.md`). Follows the headless owner work
-(`docs/headless_owner_plan.md`, `docs/headless_owner_handoff.md`, "H3 parity
+(`docs/done/headless_owner_plan.md`, `docs/done/headless_owner_handoff.md`, "H3 parity
 gaps").
 
 ## The problem
