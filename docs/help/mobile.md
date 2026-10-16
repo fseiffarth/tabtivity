@@ -67,8 +67,11 @@ Tailscale command.
 On Windows the phone cannot open this computer's terminals or agent tabs:
 they attach through tmux, which Windows does not have.
 
-An agent tab that was already running becomes reachable after its next normal
-reopen, because the phone attaches to its terminal session.
+An agent tab that was already running when you switched access on has no
+terminal session for the phone to attach to yet. Tap it on the phone and the
+desktop restarts it in one, resuming its conversation; that waits until the
+agent is idle, and a tab that cannot resume its conversation (a local-model,
+sign-in or cloud tab) is reopened on the desktop instead.
 
 ### Which phones see a project
 

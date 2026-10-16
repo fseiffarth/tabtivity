@@ -101,7 +101,7 @@ export function firstGrapheme(text: string): string {
  * doing (turn time, PLAN/GOAL, worktree, subagents), then what it was asked.
  * Rename, colour and the rest live behind ⋯ (`moreFor`).
  */
-export function TabCard({ tab, drag, canReorder, terminalsOffered, swiped, closing, moreOpen, scheduleOpen, chat, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
+export function TabCard({ tab, drag, canReorder, terminalsOffered, swiped, closing, moreOpen, scheduleOpen, chat, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
   tab: TabRow;
   drag: RowDrag;
   canReorder: boolean;
@@ -116,6 +116,12 @@ export function TabCard({ tab, drag, canReorder, terminalsOffered, swiped, closi
    * (`starting` = this one is being started, `busy` = some chat is), so the
    * card opens by starting it, says so under the name, and offers no schedule. */
   chat?: { busy: boolean; starting: boolean };
+  /** Set on an agent tab outside the assistant scope: one the desktop started
+   * before the project's Mobile switch went on runs outside tmux and is listed
+   * as not available, so the card still opens — by asking the desktop to
+   * restart it where the phone can attach (`starting` = this one, `busy` = some
+   * tab is). */
+  restart?: { busy: boolean; starting: boolean };
   onOpen: () => void;
   onModel: () => void;
   onMore: () => void;
@@ -190,9 +196,10 @@ export function TabCard({ tab, drag, canReorder, terminalsOffered, swiped, closi
       <small className="tab-card-when" title={tab.schedules?.next ? t("mobile.project.nextRunTitle", { when: tab.schedules.next.replace("T", " ") }) : undefined}>{schedule}</small>
     </div>}
     {chat && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t(chat.starting ? "mobile.assistant.starting" : "mobile.assistant.notRunning")}</small></div>}
+    {restart?.starting && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t("mobile.project.restarting")}</small>{isUntested("mobile.project.restartForPhone") && <span className="untested">{t("mobile.newTab.untested")}</span>}</div>}
     {/* Last, so it lies over the whole card: a tap anywhere the controls
         above have not claimed opens the session. */}
-    <button className="tab-card-open" disabled={chat ? chat.busy : !tab.available} onClick={onOpen} aria-label={t("mobile.project.openTab", { label: tab.label })} />
+    <button className="tab-card-open" disabled={chat ? chat.busy : restart && !tab.available ? restart.busy : !tab.available} onClick={onOpen} aria-label={t("mobile.project.openTab", { label: tab.label })} />
     {/* The agent's state is the desktop's bare glyph — ▶ working, ? asking,
         ✓ done — as a badge on the tile's corner. */}
     {tab.agent_status && <AgentStatusMark status={tab.agent_status} />}

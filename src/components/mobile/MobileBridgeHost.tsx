@@ -6,10 +6,14 @@ import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes"
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
   ROOT_SCOPE,
+  effectiveTabLocation,
+  isResumableAgentTab,
   refreshWorkspaceScope,
   useTabsStore,
   type TabEntry,
 } from "../../stores/tabs";
+import { markMobileTmuxReady, mobileTmuxReadiness } from "../../lib/terminal/mobileTmuxReady";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { ASSISTANT_SCOPE, assistantErrorCode, assistantNewChat, assistantOptions } from "../../lib/assistant";
 import { ensureAssistantScopeHydrated, mountAssistantChat, startAssistantChat } from "../../stores/assistantScope";
 import { experimentalEnabled } from "../../lib/experimental";
@@ -26,7 +30,7 @@ import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { undoAgentClear } from "../../stores/agents/agentClearUndo";
-import { reopenClosedAgentTab, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
+import { reopenClosedAgentTab, resumeArgsOf, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
 import { isTabColor } from "../../lib/theme/tabColors";
 import type { AgentUsageReport } from "../../lib/agents/agentUsage";
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
@@ -1186,8 +1190,48 @@ async function activate(projectId: string, tmuxSession?: string): Promise<Deskto
     const chat = mobileTargetTab(scope.id, tmuxSession);
     if (!chat) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
     startAssistantChat(chat.key);
+  } else if (tmuxSession) {
+    const refused = wrapAgentTabForPhone(scope, tmuxSession);
+    if (refused) return { status: "error", code: refused, message: "Tab cannot be opened from the phone" };
   }
   return { status: "activated" };
+}
+
+/**
+ * The phone opening a tab it lists as not attachable. An agent tab that was
+ * already running when the scope's Mobile switch went on runs outside tmux
+ * (`lib/terminal/mobileTmuxReady`: a live agent is never respawned behind the
+ * user's back), and the phone attaches through tmux, so it could not open
+ * one. The phone's tap is the consent to that respawn: an idle, resumable
+ * agent is relaunched in place on the args a restore would give it, now inside
+ * its minted tmux session, and the phone's next catalog read finds it live.
+ *
+ * Returns why not, or null when the tab is (or is about to be) coming up:
+ * `session_gone` when there is nothing to bring back — the tab is wrapped
+ * already and its session ended, or tmux never wraps it here (root, a remote
+ * host, Windows, persistent sessions off); `tab_not_resumable` when a respawn
+ * would lose its conversation; `agent_busy` while it works or waits on a
+ * question, which a respawn would cut off.
+ */
+function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string | null {
+  const tab = mobileTargetTab(scope.id, tmuxSession);
+  if (!tab) return "tab_not_found";
+  const ready = mobileTmuxReadiness(scope.id, tab.key);
+  // Not drawn yet (a scope `enterScope` just restored): its first render
+  // stamps the switch, which is on, and the spawn is wrapped.
+  if (ready === undefined) return null;
+  if (ready || (tab.kind !== "agent" && tab.kind !== "local_agent") || scope.id === ROOT_SCOPE) return "session_gone";
+  const project = scope.project;
+  const localRunning = !project?.remote || effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) === "local";
+  const localPersist = !IS_HOST_WINDOWS && useSettingsStore.getState().settings?.persist_local_sessions !== false;
+  if (!localRunning || !localPersist || tab.login) return "session_gone";
+  if (!isResumableAgentTab(tab)) return "tab_not_resumable";
+  if (agentTabState(`${scope.id}:${tab.key}`) !== "idle") return "agent_busy";
+  // One render takes both: the stamp turns the tmux name on and the relaunch
+  // bumps the spawn, so the pane respawns once, wrapped.
+  markMobileTmuxReady(scope.id, tab.key);
+  useTabsStore.getState().relaunchTabInScope(scope.id, tab.key, resumeArgsOf(tab));
+  return null;
 }
 
 function scheduleTargetTab(projectId: string, tmuxSession: string) {

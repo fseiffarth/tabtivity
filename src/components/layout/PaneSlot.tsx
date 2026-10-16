@@ -22,6 +22,7 @@ import {
 } from "../../stores/tabs";
 import type { HostConnState } from "../../stores/remote/remoteStatus";
 import { shouldPersistTab, shouldPersistLocalTab } from "../../lib/terminal/tmuxSession";
+import { mobileTmuxReadyKey } from "../../lib/terminal/mobileTmuxReady";
 import { resolveLocalMirror, resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { MOBILE_ACCESS_KEY } from "../../lib/brand";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
@@ -47,7 +48,8 @@ export interface PaneSlotProps {
   localPersistEnabled: boolean;
   onConnect: () => void;
   /** Shared, mutable, keyed `<scope>/<tabKey>`: whether a local agent tab was
-   *  first seen while Mobile access was on (see CenterPanel). Never replaced. */
+   *  first seen while Mobile access was on (`lib/terminal/mobileTmuxReady`).
+   *  Never replaced. */
   mobileAgentTmuxReady: Map<string, boolean>;
   /** How long a hidden viewer pane stays mounted before it sleeps (§5.3), or
    *  null when sleeping is off (the "Sleep hidden tabs" setting). */
@@ -110,7 +112,7 @@ function PaneSlotImpl({
   // it attachable from the phone — by the box's own switch. Stamped on the
   // slot's first render, before the sleeping branch: a tab that sleeps before
   // it was ever derived must not lose its first-seen answer.
-  const mobileReadyKey = `${scopeKey}/${tab.key}`;
+  const mobileReadyKey = mobileTmuxReadyKey(scopeKey, tab.key);
   if (!mobileAgentTmuxReady.has(mobileReadyKey)) {
     mobileAgentTmuxReady.set(
       mobileReadyKey,

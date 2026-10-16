@@ -391,18 +391,27 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       terminal(body.tab, launch?.sign_in ? { signIn: true } : undefined);
     } catch (reason) { setError(describeFailure(reason)); void load(); } finally { setCreating(false); }
   };
-  /** The chat being started, by tab id: it was restored with the desktop and has
-   * no process yet (the assistant scope starts its chats on demand). */
+  /** The tab being started, by tab id: a chat restored with the desktop that
+   * has no process yet (the assistant scope starts its chats on demand), or an
+   * agent tab the desktop is restarting so the phone can attach to it. */
   const [startingId, setStartingId] = useState<string | null>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  /** Ask the desktop to start one chat, then wait for its session to be live —
+  /** Ask the desktop to start one tab, then wait for its session to be live —
    * the catalog's `available` — and open it. The wait is the desktop starting
-   * a CLI: seconds, not a poll cycle, so it reads the list itself each second. */
-  const startChat = async (tab: TabRow) => {
+   * a CLI: seconds, not a poll cycle, so it reads the list itself each second.
+   *
+   * Outside the assistant scope this is an agent tab that was already running
+   * when the project's Mobile switch went on: it runs outside tmux, which the
+   * phone attaches through, so the desktop restarts it on its resume args
+   * inside its tmux session (`MobileBridgeHost`'s `wrapAgentTabForPhone`), or
+   * says why not — busy, not resumable, or simply gone. */
+  const startTab = async (tab: TabRow) => {
     setStartingId(tab.id); setError("");
     try {
-      await api(`/api/v1/projects/${encodeURIComponent(id)}/activate?tab=${encodeURIComponent(tab.id)}`, { method: "POST" });
+      const started = await api<{ desktop_available?: boolean }>(`/api/v1/projects/${encodeURIComponent(id)}/activate?tab=${encodeURIComponent(tab.id)}`, { method: "POST" });
+      // No window: nothing is left running outside tmux to bring back.
+      if (!assistantScope && started.desktop_available === false) throw new ApiError(410, "session_gone");
       for (let attempt = 0; attempt < CHAT_START_TRIES && alive.current; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         if (!alive.current) return;
@@ -411,7 +420,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         const row = next.tabs.find((candidate) => candidate.id === tab.id);
         if (row?.available) { terminal(row); return; }
       }
-      setError(t("mobile.assistant.startFailed"));
+      setError(t(assistantScope ? "mobile.assistant.startFailed" : "mobile.project.restartFailed"));
     } catch (reason) { if (alive.current) setError(describeFailure(reason)); } finally { if (alive.current) setStartingId(null); }
   };
   /** Drop the row here rather than reloading, and remember that it is gone: the
@@ -615,11 +624,12 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       canReorder={canReorder}
       terminalsOffered={terminalsOffered && !assistantScope}
       chat={assistantScope ? { busy: startingId !== null, starting: startingId === tab.id } : undefined}
+      restart={!assistantScope && terminalsOffered && tab.kind === "agent" ? { busy: startingId !== null, starting: startingId === tab.id } : undefined}
       swiped={swipedId === tab.id}
       closing={closingId !== null}
       moreOpen={moreTab?.id === tab.id}
       scheduleOpen={scheduleTab?.tab.id === tab.id}
-      onOpen={() => (assistantScope && !tab.available ? void startChat(tab) : openTab(tab))}
+      onOpen={() => (!tab.available && (assistantScope || (terminalsOffered && tab.kind === "agent")) ? void startTab(tab) : openTab(tab))}
       onModel={() => terminal(tab, { pickModel: true })}
       onMore={() => setMoreTab(tab)}
       onSchedule={() => setScheduleTab({ tab })}

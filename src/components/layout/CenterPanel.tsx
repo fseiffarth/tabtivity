@@ -76,6 +76,7 @@ import { useT } from "../../lib/i18n";
 import { requestNewTab } from "../../lib/shortcuts/newTabChord";
 import { UntestedTag } from "../common/UntestedTag";
 import { sleepTabsAfterMs } from "../../lib/sleepWhenHidden";
+import { mobileAgentTmuxReady } from "../../lib/terminal/mobileTmuxReady";
 
 /** Pixel coordinates of a group's pane region, relative to the center panel. */
 interface Rect {
@@ -87,12 +88,6 @@ interface Rect {
 
 function CenterPanelImpl() {
   const t = useT();
-  // A live local agent that was already running when Mobile access was enabled
-  // must not be respawned merely to put tmux underneath it. Record eligibility
-  // the first time this CenterPanel sees a tab: new/restored tabs first seen
-  // while opted in are wrapped; tabs first seen before opt-in wait for their
-  // next ordinary reopen (which mints a fresh tab key).
-  const mobileAgentTmuxReady = useRef(new Map<string, boolean>());
   const tabsByScope = useTabsStore((s) => s.tabsByScope);
   const scope = useTabsStore((s) => s.scope);
   const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
@@ -1289,7 +1284,7 @@ function CenterPanelImpl() {
                 hostSsh={remoteSshByHost[scopeKey]}
                 localPersistEnabled={localPersistEnabled}
                 onConnect={getConnect(scopeKey)}
-                mobileAgentTmuxReady={mobileAgentTmuxReady.current}
+                mobileAgentTmuxReady={mobileAgentTmuxReady}
                 sleepAfterMs={sleepAfterMs}
                 inPopout={popoutTabKeys.has(`${scopeKey}/${tab.key}`)}
                 // The root console / a docked agent column draws this PTY:

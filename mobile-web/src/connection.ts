@@ -162,6 +162,10 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   section_hidden: "mobile.failure.sectionHidden",
   project_ineligible: "mobile.failure.projectNotShared",
   tab_not_found: "mobile.failure.tabNotFound",
+  // An agent tab started before Mobile access the desktop will not restart
+  // for the phone (`MobileBridgeHost`'s `wrapAgentTabForPhone`).
+  agent_busy: "mobile.failure.agentBusy",
+  tab_not_resumable: "mobile.failure.tabNotResumable",
   shells_off: "mobile.failure.shellsOff",
   feature_off: "mobile.failure.featureOff",
   // A sign-in address the phone handed back (`sign_in.rs`).
