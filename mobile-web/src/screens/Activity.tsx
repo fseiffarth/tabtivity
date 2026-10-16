@@ -37,8 +37,9 @@ const SORT_LABEL: Record<AgentSort, TranslationKey> = {
 };
 
 /** "3m ago" from a desktop timestamp — a rough age, since the two clocks are
- * not the same clock and the reading is a minute old at worst. */
-function ago(at: number, now: number, t: Translate): string {
+ * not the same clock and the reading is a minute old at worst. Home's Needs
+ * you says its rows' ages in the same words. */
+export function ago(at: number, now: number, t: Translate): string {
   const minutes = Math.max(0, Math.round((now - at) / 60_000));
   if (minutes < 1) return t("mobile.activity.justNow");
   if (minutes < 90) return t("mobile.activity.minutesAgo", { count: minutes });

@@ -10003,6 +10003,25 @@ export const enSource = {
   "viewerCrash.sourceFailed": "Couldn't read the file: {error}",
   "odt.errParse": "could not parse the document XML",
   "odt.errNoBody": "no document body found",
+  // ── Phone Home + project screen redesign (docs/mobile_home_redesign_plan.md) ──
+  "mobile.home.needsYou": "Needs you",
+  "mobile.home.needsShowAll": "Show all {count}",
+  "mobile.home.needsWorking": "{count} working · see Agents",
+  "mobile.home.connected": "Connected",
+  "mobile.home.offline": "Offline",
+  "mobile.home.emptyActiveTitle": "Nothing active",
+  "mobile.home.searchAll": "Search all projects",
+  "mobile.home.reorderHint": "Drag {grip} to arrange.",
+  "mobile.home.desktopHead": "Desktop",
+  "mobile.project.colorRow": "Colour…",
+  "mobile.project.subagentsRow": "Subagents",
+  "mobile.project.closeRow": "Close tab",
+  "mobile.project.hintDismiss": "Hide this hint",
+  "mobile.project.emptyTitle": "No tabs yet",
+  "mobile.project.emptyHint": "＋ New tab below opens an agent or a shell.",
+  "mobile.project.emptyHintFiles": "＋ below sends a file from this phone into the project.",
+  "mobile.project.recentlyClosedCount": "Recently closed ({count})",
+  "mobile.project.fabSendFile": "Send a file",
 } as const;
 
 /** English with `{app}` filled. Exported solely for the test aggregator

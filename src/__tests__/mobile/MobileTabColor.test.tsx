@@ -13,7 +13,7 @@
  * without the sidecar route that already validates, and the stored id is
  * substituted straight into the desktop's `--tab-accent`.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -175,7 +175,13 @@ describe("Mobile bridge — colouring a tab", () => {
   });
 });
 
-describe("Mobile project screen — the row's colour dot", () => {
+/** Colour lives in the card's ⋯ sheet. */
+async function openColour(name: string) {
+  fireEvent.click(await screen.findByRole("button", { name: `More for ${name}` }));
+  fireEvent.click(within(screen.getByRole("dialog", { name })).getByRole("button", { name: "Colour…" }));
+}
+
+describe("Mobile project screen — the row's colour", () => {
   const rows = [
     { id: "t-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false },
     { id: "t-shell", label: "Shell", kind: "shell", available: true, viewer_busy: false, color: "red" },
@@ -213,8 +219,12 @@ describe("Mobile project screen — the row's colour dot", () => {
 
   it("is offered on either kind of tab, and a published colour marks the card", async () => {
     const { container } = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
-    expect(await screen.findByRole("button", { name: "Colour Claude" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Colour Shell" })).toBeTruthy();
+    for (const name of ["Claude", "Shell"]) {
+      fireEvent.click(await screen.findByRole("button", { name: `More for ${name}` }));
+      const sheet = screen.getByRole("dialog", { name });
+      expect(within(sheet).getByRole("button", { name: "Colour…" })).toBeTruthy();
+      fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+    }
     const cards = container.querySelectorAll(".tab-card");
     // Only the tab the catalog published a colour for.
     expect(cards[0].classList.contains("has-tab-color")).toBe(false);
@@ -224,7 +234,7 @@ describe("Mobile project screen — the row's colour dot", () => {
 
   it("sends the palette id, marks the chip, and paints the card without a reload", async () => {
     const { container } = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Colour Claude" }));
+    await openColour("Claude");
     fireEvent.click(screen.getByRole("button", { name: "Teal" }));
 
     await waitFor(() => expect(sent).toEqual([{ url: "/api/v1/tabs/t-agent/color", body: { color: "teal" } }]));
@@ -245,7 +255,7 @@ describe("Mobile project screen — the row's colour dot", () => {
 
   it("says the desktop is needed rather than 'request failed'", async () => {
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Colour Claude" }));
+    await openColour("Claude");
     fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: "desktop_unavailable" }), { status: 503 }));
     fireEvent.click(screen.getByRole("button", { name: "Blue" }));
     expect((await screen.findByRole("alert")).textContent).toBe(`Open desktop ${BRAND.display} to colour a tab.`);
