@@ -351,6 +351,7 @@ export function RemoteMachinesWindow({
         remember: rememberArg(savePassword),
         startPath: remotePath.trim() || null,
       });
+      if (!outcome) return;
       // What the backend actually did, not what the box asked for.
       credential.applyOutcome(outcome);
       setBrowsing(true);

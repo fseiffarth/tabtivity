@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { joinRemotePath, type ParsedSshAddress } from "./scaffold";
 import { resolveRemoteStartDir } from "../../lib/remote/remoteConnect";
@@ -32,6 +32,11 @@ export function useRemoteBrowse() {
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Reset, a newer connect, and teardown invalidate outstanding authentication
+  // and mkdir results before they can restore an obsolete session.
+  const generation = useRef(0);
+
+  useEffect(() => () => { generation.current += 1; }, []);
 
   // Refresh the listing whenever the browse path (or the frozen connection)
   // changes. `password` is a dep so a re-`openSession` with a new credential
@@ -71,6 +76,7 @@ export function useRemoteBrowse() {
   // non-headless login terminal's ControlMaster) — no ssh_connect here. Sets
   // `conn` last so the listing effect fires once with password + path ready.
   const openSession = (target: ParsedSshAddress, sessionPassword: string, startPath: string) => {
+    generation.current += 1;
     setPassword(sessionPassword);
     setPath(startPath || "");
     setConn(target);
@@ -91,38 +97,48 @@ export function useRemoteBrowse() {
   //
   // Returns what the keychain half actually did (`SshConnectOutcome`), so the
   // caller sets its "saved" state from the backend rather than from its own
-  // request — a locked keyring refuses the write and says so.
+  // request — a locked keyring refuses the write and says so. A cancelled
+  // attempt returns null so callers also leave their connection UI untouched.
   const connect = async (opts: {
     target: ParsedSshAddress;
     password: string | null;
     remember?: true | null;
     startPath?: string | null;
-  }): Promise<SshConnectOutcome> => {
+  }): Promise<SshConnectOutcome | null> => {
+    const attempt = ++generation.current;
     const pw = opts.password ? opts.password : null;
-    // First contact: verify the host key's fingerprint before the password is sent.
-    const outcome = await withHostKeyConfirm(() =>
-      invoke<SshConnectOutcome>("ssh_connect", {
-        user: opts.target.user,
-        host: opts.target.host,
-        port: opts.target.port,
-        password: pw,
-        remember: opts.remember ?? null,
-        // A person is at the login form — a tagged HPC host may be dialled by a
-        // gesture, only never by a sweep (`ssh_common`'s dial policy).
-        background: false,
-      }),
-    );
-    const startDir =
-      opts.startPath && opts.startPath.trim()
-        ? opts.startPath.trim()
-        : await resolveRemoteStartDir(
-            opts.target.user,
-            opts.target.host,
-            opts.target.port,
-            pw,
-          );
-    openSession(opts.target, opts.password ?? "", startDir);
-    return outcome;
+    try {
+      // First contact: verify the host key's fingerprint before the password is sent.
+      const outcome = await withHostKeyConfirm(() => {
+        if (attempt !== generation.current) throw new DOMException("", "AbortError");
+        return invoke<SshConnectOutcome>("ssh_connect", {
+          user: opts.target.user,
+          host: opts.target.host,
+          port: opts.target.port,
+          password: pw,
+          remember: opts.remember ?? null,
+          // A person is at the login form — a tagged HPC host may be dialled by a
+          // gesture, only never by a sweep (`ssh_common`'s dial policy).
+          background: false,
+        });
+      });
+      if (attempt !== generation.current) return null;
+      const startDir =
+        opts.startPath && opts.startPath.trim()
+          ? opts.startPath.trim()
+          : await resolveRemoteStartDir(
+              opts.target.user,
+              opts.target.host,
+              opts.target.port,
+              pw,
+            );
+      if (attempt !== generation.current) return null;
+      openSession(opts.target, opts.password ?? "", startDir);
+      return outcome;
+    } catch (e) {
+      if (attempt !== generation.current) return null;
+      throw e;
+    }
   };
 
   const enter = (entry: RemoteEntry) => {
@@ -154,6 +170,7 @@ export function useRemoteBrowse() {
       return;
     }
     const target = joinRemotePath(path || "/", name);
+    const attempt = generation.current;
     setBusy(true);
     setError("");
     try {
@@ -164,8 +181,9 @@ export function useRemoteBrowse() {
         password: password ? password : null,
         path: target,
       });
-      setPath(target);
+      if (attempt === generation.current) setPath(target);
     } catch (e) {
+      if (attempt !== generation.current) return;
       setError(String(e));
       setBusy(false);
     }
@@ -174,11 +192,13 @@ export function useRemoteBrowse() {
   // Drop back to the disconnected state (a credential edit, an explicit
   // "Change…", or a torn-down login).
   const reset = () => {
+    generation.current += 1;
     setConn(null);
     setPassword("");
     setEntries([]);
     setPath("");
     setError("");
+    setBusy(false);
   };
 
   return {

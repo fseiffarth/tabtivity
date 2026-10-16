@@ -745,6 +745,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
         password,
         remember: rememberArg(sshRemember),
       });
+      if (!outcome) return;
       setSshStatus("connected");
       // From what the backend DID, not from the checkbox: a locked keyring refuses
       // the write and returns `save_error`, and a ticked box over an empty keychain
