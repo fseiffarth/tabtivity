@@ -393,26 +393,41 @@ mod tests {
         // Not a CLI id at all.
         let err = new_chat_at(dir.path(), &session, "gemini", None).unwrap_err();
         assert!(err.starts_with("not_offered: "), "{err}");
-        // A real id reaches the service, whose skeleton answers not_built
-        // until the bodies land; once built it either stores a tab or names
-        // its own refusal. Either way a refusal stores nothing.
-        let err = new_chat_at(dir.path(), &session, "claude", None);
-        match err {
-            Err(e) => {
-                assert!(e.starts_with("not_built: ") || e.contains(": "), "{e}");
-                assert!(!session.exists(), "a refused chat wrote {session:?}");
-            }
-            Ok(chat) => {
-                assert_eq!(chat.scope, "assistant");
-                assert!(session.exists());
-            }
-        }
-        // A local CLI without a model is the service's `model_required` once
-        // built; never a stored tab.
-        let local = new_chat_at(dir.path(), &session, "opencode_local", Some("  "));
-        if let Err(e) = &local {
-            assert!(e.contains(": "), "{e}");
-        }
+        // Nothing was stored for either refusal.
+        assert!(!session.exists(), "a refused chat wrote {session:?}");
+        // A local CLI without a model is the service's `model_required`.
+        let err = new_chat_at(dir.path(), &session, "opencode_local", Some("  ")).unwrap_err();
+        assert!(err.starts_with("model_required: "), "{err}");
+        assert!(!session.exists());
+    }
+
+    /// The happy path (S1a is built): a cloud CLI needs no model, a tab lands
+    /// in the assistant scope's file with the launch block, the uid as its
+    /// session id and its own chat folder as cwd, and the answer names that tab.
+    #[test]
+    fn a_new_chat_stores_one_assistant_tab_and_answers_with_its_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = dir.path().join("sessions").join("assistant").join("terminals.json");
+        let chat = new_chat_at(dir.path(), &session, " claude ", None).unwrap();
+        assert_eq!(chat.scope, "assistant");
+        assert!(crate::services::agent_session::is_uuid_shaped(&chat.uid), "{}", chat.uid);
+        assert!(chat.version > 0);
+        let snapshot = crate::services::workspace::snapshot_in(&session).unwrap();
+        assert_eq!(snapshot.version, chat.version);
+        // project-tree-read: ok — the assistant scope's own session, not a project tree
+        let [tab] = snapshot.session.tab_layout.as_slice() else { panic!("one tab expected") };
+        assert_eq!(crate::services::workspace::tab_id(tab), Some(chat.tab_id.as_str()));
+        assert_eq!(tab.session_id.as_deref(), Some(chat.uid.as_str()));
+        assert_eq!(tab.extra["kind"], "agent");
+        assert_eq!(tab.cwd, assistant::chat_dir(dir.path(), &chat.uid).unwrap().to_string_lossy());
+        assert_eq!(assistant::record_launch(tab), Some(AssistantLaunch { cli: AssistantCli::Claude, model: None }));
+        // The command creates no folder: the spawn gate is the one creator.
+        assert!(!assistant::chat_dir(dir.path(), &chat.uid).unwrap().exists());
+        // A second chat is a second tab with its own uid.
+        let other = new_chat_at(dir.path(), &session, "claude", None).unwrap();
+        assert_ne!((&other.uid, &other.tab_id), (&chat.uid, &chat.tab_id));
+        // project-tree-read: ok — the assistant scope's own session, not a project tree
+        assert_eq!(crate::services::workspace::snapshot_in(&session).unwrap().session.tab_layout.len(), 2);
     }
 
     #[test]
