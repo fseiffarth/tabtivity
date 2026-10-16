@@ -86,13 +86,10 @@ afterEach(() => {
 describe("Mobile assistant — the home row", () => {
   it("is a row of its own kind, captioned as the chat assistant", async () => {
     expect(scopeCaption({ kind: "assistant", status: "active" })).toMatch(/^✦ /);
-    fetchMock.mockImplementation((url: string) => json(String(url)).then(() => new Response(
-      JSON.stringify(String(url).includes("alerts") ? { alerts: { enabled: false, items: [] } } : { projects: [
-        { id: "scope", label: "Tabby", status: "active", kind: "assistant", live_sessions: 2 },
-        { id: "p", label: "Alpha", status: "active", live_sessions: 1 },
-      ] }),
-      { status: 200 },
-    )));
+    fetchMock.mockImplementation((url: string) => json(String(url).includes("alerts") ? { alerts: { enabled: false, items: [] } } : { projects: [
+      { id: "scope", label: "Tabby", status: "active", kind: "assistant", live_sessions: 2 },
+      { id: "p", label: "Alpha", status: "active", live_sessions: 1 },
+    ] }));
     const open = vi.fn();
     render(<Home open={open} openTab={() => {}} todo={() => {}} mail={() => {}} />);
     const row = (await screen.findByText("Tabby")).closest("button") as HTMLElement;
@@ -178,7 +175,7 @@ describe("Mobile assistant — the chat list", () => {
 
   it("starts a restored chat that has no process yet, then opens it once its session is live", async () => {
     let live = false;
-    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
       if (init?.method === "POST") { live = true; return json({ status: "activated" }); }
       return json({ ...SCOPE, tabs: [chat("c1", "old chat", { available: live })] });
     });
