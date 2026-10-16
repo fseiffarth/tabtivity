@@ -657,6 +657,20 @@ button.mobile-alert-row { cursor:pointer; }
 .mobile-calendar-agenda article span { color:#aeb2c2; font-size:.86rem; }
 .mobile-calendar-agenda article.cancelled { opacity:.58; }
 .mobile-calendar-agenda article.cancelled strong { text-decoration:line-through; }
+/* The week view: the same day cells as the month grid in a single strip, over
+   a per-day agenda of the days that hold something. */
+.mobile-calendar-weekstrip { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:4px; }
+.mobile-calendar-weekstrip .mobile-calendar-day { min-height:48px; }
+.mobile-calendar-weekgroup { display:grid; gap:9px; }
+.mobile-calendar-weekgroup h2 { margin:6px 0 0; font-size:.9rem; color:#c6cade; }
+/* The day view: the all-day rows on top, then one row per hour. An event sits
+   in the hour it starts in; an empty row's + drafts an event at that hour. */
+.mobile-calendar-dayview { display:grid; }
+.mobile-calendar-hour { display:grid; grid-template-columns:44px minmax(0,1fr); gap:8px; padding:6px 0; border-bottom:1px solid #232836; }
+.mobile-calendar-hour-label { padding-top:9px; color:#9fa4b6; font-size:.75rem; font-variant-numeric:tabular-nums; }
+.mobile-calendar-hour-lane { display:grid; gap:8px; min-height:34px; align-content:start; }
+.mobile-calendar-hour-add { width:100%; min-height:34px; border:1px dashed #383c4d; border-radius:9px; background:transparent; color:#687084; font-size:1rem; }
+.mobile-calendar-empty { margin:0; padding:18px; border:1px solid #383c4d; border-radius:11px; color:#9498aa; text-align:center; }
 /* Mail's pickers: the account dropdown heads the overview, and inside a folder
    the account and folder dropdowns share one row. */
 .mail-mobile-picker { gap:6px; font-size:.86rem; }
@@ -673,9 +687,9 @@ button.mobile-alert-row { cursor:pointer; }
    the layers are set as longhands, so each element keeps its own background
    colour, and a dropdown's chevron rides along as a fifth layer (`--oct-extra`).
    The defaults sit in `:where()` so any rule can retint or resize a piece. */
-:where(:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) > header > button:not(.back),:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select),.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-fab,.todo-chip),.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.calendar-new input:not([type="color"]))) { --oct:10px; --oct-edge:#383c4d; }
+:where(:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) > header > button:not(.back),:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select),.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-fab,.todo-chip),.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"]))) { --oct:10px; --oct-edge:#383c4d; }
 :where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) select { --oct-extra:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239aa0b4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6'/%3E%3C/svg%3E"); --oct-extra-at:right 12px center; --oct-extra-size:12px 8px; }
-:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) > header > button:not(.back),:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select),.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-fab,.todo-chip),.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.calendar-new input:not([type="color"])) {
+:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) > header > button:not(.back),:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select),.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-fab,.todo-chip),.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"])) {
   --oct-img:linear-gradient(to bottom right, var(--oct-lc, var(--oct-edge)) calc(50% + var(--oct-lw, 1px)), transparent 0),
     linear-gradient(to bottom left, var(--oct-edge) calc(50% + 1px), transparent 0),
     linear-gradient(to top left, var(--oct-edge) calc(50% + 1px), transparent 0),
@@ -718,6 +732,7 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-tag-list button { --oct-edge:#3d3860; }
 .todo-editor { --oct:14px; --oct-edge:#524a78; }
 .mobile-calendar-day { --oct:6px; --oct-edge:#303545; }
+.mobile-calendar-hour-add { --oct:6px; }
 .mobile-calendar-day.today > span { --oct:6px; }
 .mobile-calendar-event > i,.mobile-calendar-manage-row > i { --oct:3px; }
 /* The shared `.selected` paints the picked day with `!important`, which would
