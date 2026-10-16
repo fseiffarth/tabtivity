@@ -3771,6 +3771,41 @@ pub fn preview_project_scaffold(source_dir: String) -> Result<Vec<ScaffoldPrevie
     Ok(scaffold_preview(&source))
 }
 
+/// True when the scaffold target's `AGENTS.md` still holds no project guidance:
+/// missing, empty, the untouched legacy stub, or an untouched earlier template
+/// (all `is_legacy_agent_stub` answers). Pure, so the rule is unit-testable
+/// without touching the project list.
+fn agents_empty_at(target: &Path) -> bool {
+    match fs::read_to_string(target.join("AGENTS.md")) {
+        Ok(existing) => is_legacy_agent_stub("AGENTS.md", &existing),
+        Err(_) => !target.join("AGENTS.md").exists(),
+    }
+}
+
+/// True when a project's `AGENTS.md` still holds no project guidance (see
+/// `agents_empty_at`) — drives the one-time agent-tab card that asks the user
+/// to describe the project. A project with no materialized local scaffold
+/// target yet (e.g. a remote project whose mirror hasn't been created)
+/// reports `false` rather than a spurious "empty".
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn project_agents_empty(project_id: String) -> Result<bool, String> {
+    let list_path = storage::projects_path();
+    if !list_path.exists() {
+        return Ok(false);
+    }
+    let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
+    let Some(entry) = list.into_iter().find(|p| p.id == project_id) else {
+        return Ok(false);
+    };
+    let Some((target, _)) = scaffold_target_for_entry(&entry) else {
+        return Ok(false);
+    };
+    if !target.is_dir() {
+        return Ok(false);
+    }
+    Ok(agents_empty_at(&target))
+}
+
 /// True when a project is missing one or more scaffold pieces (any scaffold
 /// doc, `.claude/settings.json`, or — for git-backed projects only —
 /// `.gitignore`) — drives the "no scaffold" tag in the pill hover overlay.
@@ -6524,6 +6559,29 @@ mod tests {
         let report = repair_project_scaffold_at(tmp.path(), false).unwrap();
 
         assert!(report.is_empty());
+    }
+
+    #[test]
+    fn agents_empty_at_matches_missing_empty_stub_and_guidance() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No AGENTS.md at all.
+        assert!(agents_empty_at(tmp.path()));
+
+        // Empty and whitespace-only.
+        std::fs::write(tmp.path().join("AGENTS.md"), "").unwrap();
+        assert!(agents_empty_at(tmp.path()));
+        std::fs::write(tmp.path().join("AGENTS.md"), "  \n").unwrap();
+        assert!(agents_empty_at(tmp.path()));
+
+        // Untouched legacy stub and an untouched earlier template.
+        std::fs::write(tmp.path().join("AGENTS.md"), "# Agents\n").unwrap();
+        assert!(agents_empty_at(tmp.path()));
+        std::fs::write(tmp.path().join("AGENTS.md"), AGENTS_HISTORY[0]).unwrap();
+        assert!(agents_empty_at(tmp.path()));
+
+        // Real project guidance is not empty.
+        std::fs::write(tmp.path().join("AGENTS.md"), "# Agents\n\nRun `npm test`.\n").unwrap();
+        assert!(!agents_empty_at(tmp.path()));
     }
 
     /// PROJECT.md is the navigation hub: a scaffold file it does not link is

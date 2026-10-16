@@ -1821,6 +1821,7 @@ pub fn run() {
             commands::projects::move_remote_mirror,
             commands::projects::create_project,
             commands::projects::preview_project_scaffold,
+            commands::projects::project_agents_empty,
             commands::projects::project_scaffold_missing,
             commands::projects::repair_project_scaffold,
             commands::projects::repair_all_project_scaffolds,

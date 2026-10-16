@@ -545,6 +545,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["patch_compute_host", "core"],
   ["plan_project_dir_rename", "core"],
   ["preview_project_scaffold", "core"],
+  ["project_agents_empty", "core"],
   ["project_folder_exists", "core"],
   ["project_generated_dir", "core"],
   ["project_migration_apply", "core"],

@@ -59,6 +59,8 @@ import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
+import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
+import { buildScaffoldFillPrompt } from "../projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { type ConfirmSpec, useDialogs } from "../common/PromptDialogs";
@@ -369,6 +371,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const [signIn, setSignIn] = useState<SignInRequest | null>(null);
   // The session in this pane was just cleared: offer to take it back.
   const undoClearOffered = useAgentClearUndoStore((state) => !!state.cleared[id]);
+  // The project's AGENTS.md still holds no guidance: offer the one-time fill card.
+  const [agentsEmpty, setAgentsEmpty] = useState(false);
+  const agentsEmptyProbed = useRef<string | null>(null);
   // Over the Reader, only once it has let go of the cleared chat (its mark).
   const readerCleared = useAgentClearUndoStore((state) => state.marks[id] !== undefined);
   const dismissedSignIns = useRef(new Set<string>());
@@ -2157,6 +2162,35 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
 
   const agentPane = paneKind === "agent" || paneKind === "local_agent";
 
+  // One-time empty-AGENTS.md card: only agent panes of a real project probe,
+  // only while visible (hidden panes catch up on show), at most once per
+  // project, and never after the user dismissed it.
+  useEffect(() => {
+    if (!agentPane || !projectId || !visible) return;
+    if (agentsEmptyProbed.current === projectId) return;
+    if (agentsEmptyDismissed(projectId)) return;
+    agentsEmptyProbed.current = projectId;
+    let cancelled = false;
+    invoke<boolean>("project_agents_empty", { projectId })
+      .then((empty) => {
+        if (!cancelled && empty) setAgentsEmpty(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [agentPane, projectId, visible]);
+
+  // Paste the AGENTS.md fill instruction for the user to extend with their
+  // own project description and submit themselves — never submitted for
+  // them, so it cannot answer a trust dialog or a half-booted TUI.
+  const fillAgentsEmpty = () => {
+    termRef.current?.paste(`${buildScaffoldFillPrompt(["AGENTS.md"])}\n`);
+    termRef.current?.focus();
+    if (projectId) dismissAgentsEmpty(projectId);
+    setAgentsEmpty(false);
+  };
+
   // Files dragged in from the OS file manager (`lib/terminal/terminalDrop`):
   // an agent gets them through its folder's inbox as `@` references, a shell
   // their quoted paths — into the Reader's composer while it is up, else typed
@@ -2312,8 +2346,16 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     {undoClearOffered && (!readerOn || readerCleared) && !signIn && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
     )}
+    {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && host && (
+      <TerminalAgentsEmptyCard
+        host={host}
+        projectId={projectId}
+        onFill={fillAgentsEmpty}
+        onDismiss={() => setAgentsEmpty(false)}
+      />
+    )}
     {/* The host's CLI only: a remote or container tab runs another install. */}
-    {zoomable && !remoteHostId && !sandbox && !undoClearOffered && !signIn && host && (
+    {zoomable && !remoteHostId && !sandbox && !undoClearOffered && !agentsEmpty && !signIn && host && (
       <TerminalVersionCard host={host} cmd={cmd} />
     )}
     {keySelecting && host && createPortal(

@@ -771,6 +771,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("patch_compute_host", Core),
     ("plan_project_dir_rename", Core),
     ("preview_project_scaffold", Core),
+    ("project_agents_empty", Core),
     ("project_folder_exists", Core),
     ("project_generated_dir", Core),
     ("project_migration_apply", Core),
