@@ -646,9 +646,9 @@ pub fn assistant_root(state_dir: &Path) -> PathBuf {
     state_dir.join(crate::storage::ASSISTANT_SCOPE)
 }
 
-/// `<state_dir>/assistant/work`: the one folder bound read-write into every
-/// assistant fence (a support mount, not a fence root: `mask_private_state`
-/// would hide a root under the state dir). Holds one folder per chat.
+/// `<state_dir>/assistant/work`: holds one folder per chat. Never bound itself:
+/// each fence binds only its own chat folder read-write (a support mount, not
+/// a fence root: `mask_private_state` would hide a root under the state dir).
 pub fn work_root(state_dir: &Path) -> PathBuf {
     assistant_root(state_dir).join("work")
 }

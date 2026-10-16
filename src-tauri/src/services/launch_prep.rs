@@ -323,8 +323,8 @@ fn settings_assistant_enabled() -> bool {
 }
 
 /// Create the chat's folder private to the user, and say whether it was there.
-/// A link or a non-directory in its place is refused: the work folder is
-/// writable from inside every assistant fence, and a spawn must not start in,
+/// A link or a non-directory in its place is refused: the chat folder is
+/// writable from inside its fence, and a spawn must not start in,
 /// or create things through, a folder a fenced process pointed elsewhere.
 fn ensure_chat_dir(state_dir: &std::path::Path, uid: &str) -> Result<(std::path::PathBuf, bool), String> {
     let dir = crate::services::assistant::chat_dir(state_dir, uid).map_err(|r| r.to_string())?;
