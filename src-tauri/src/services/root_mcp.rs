@@ -212,7 +212,6 @@ impl TokenStore {
             rate: Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0))),
             schedule_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
             push_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
-            web_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
         };
         map.insert(token, session);
     }
@@ -474,8 +473,27 @@ pub struct Session {
     rate: Arc<std::sync::Mutex<(std::time::Instant, u32)>>,
     schedule_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
     push_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
-    web_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
 }
+
+/// The most tabs the web lane's hourly budget remembers at once.
+const WEB_BUDGET_TABS: usize = 512;
+/// `web_fetch` / `web_search` call times per tab id, newest last. Keyed by the
+/// tab, not by the [`Session`]: a respawn mints a new session (and token) for
+/// the same tab, and the budget must not reset with it. Entries older than an
+/// hour are pruned on every admit; past [`WEB_BUDGET_TABS`] the tab that
+/// called longest ago is dropped.
+fn web_budgets() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>> {
+    static BUDGETS: OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>>> = OnceLock::new();
+    BUDGETS.get_or_init(Default::default)
+}
+
+/// How many tabs the web budget map holds now.
+#[cfg(test)]
+pub(crate) fn web_budget_tabs() -> usize { web_budgets().lock_ok().len() }
+/// The cap on [`web_budget_tabs`].
+#[cfg(test)]
+pub(crate) const WEB_BUDGET_TABS_MAX: usize = WEB_BUDGET_TABS;
+
 impl Session {
     pub fn admit_schedule_rate(&self) -> bool {
         let mut calls = self.schedule_rate.lock_ok();
@@ -494,11 +512,18 @@ impl Session {
     }
     /// [`crate::services::web_lane::CALLS_PER_HOUR`] `web_fetch` / `web_search`
     /// calls per tab per rolling hour, counted together
-    /// (`services::web_lane`). A call that is refused for any other reason
-    /// than this budget still spent one: the count is of attempts.
+    /// (`services::web_lane`), per tab id and so across respawns. A call that
+    /// is refused for any other reason than this budget still spent one: the
+    /// count is of attempts.
     pub fn admit_web_rate(&self) -> bool {
-        let mut calls = self.web_rate.lock_ok();
-        calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(3600));
+        let hour = std::time::Duration::from_secs(3600);
+        let mut map = web_budgets().lock_ok();
+        map.retain(|_, calls| { calls.retain(|at| at.elapsed() < hour); !calls.is_empty() });
+        if !map.contains_key(&self.identity.tab) && map.len() >= WEB_BUDGET_TABS {
+            let oldest = map.iter().filter_map(|(tab, calls)| calls.back().map(|at| (*at, tab.clone()))).min().map(|(_, tab)| tab);
+            if let Some(tab) = oldest { map.remove(&tab); }
+        }
+        let calls = map.entry(self.identity.tab.clone()).or_default();
         if calls.len() >= super::web_lane::CALLS_PER_HOUR { return false; }
         calls.push_back(std::time::Instant::now());
         true

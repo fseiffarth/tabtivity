@@ -16,15 +16,15 @@ use crate::schema::settings::{AssistantSearchSettings, ASSISTANT_SEARCH_KINDS};
 use crate::schema::Settings;
 use crate::services::assistant::{self, AssistantCli, AssistantLaunch, Refusal};
 use crate::services::remote_credentials::{self, KeyringState};
+use crate::services::web_lane::{self, SearchConfig};
 use crate::storage;
 use crate::tauri_host::Ctx;
 
 /// What every command answers while the experimental flag is off.
 pub const OFF: &str = "assistant_off";
 
-/// The longest search key and SearXNG URL accepted.
+/// The longest search key accepted.
 const MAX_KEY_LEN: usize = 1024;
-const MAX_URL_LEN: usize = 2048;
 
 fn gate(enabled: bool) -> Result<(), String> {
     if enabled {
@@ -116,7 +116,8 @@ fn search_state(settings: &Settings, keyring: KeyringState, key_stored: Option<b
         .map(str::to_string);
     let searxng_url = block.and_then(|s| s.searxng_url.clone()).filter(|u| !u.trim().is_empty());
     let configured = match kind.as_deref() {
-        Some("searxng") => searxng_url.is_some(),
+        // The lane's verdict on the saved URL, not "something is there".
+        Some("searxng") => matches!(SearchConfig::from_settings(settings), SearchConfig::Searxng(_)),
         Some("ollama") => key_stored == Some(true),
         _ => false,
     };
@@ -265,22 +266,11 @@ pub struct SearchSaved {
     pub settings: Settings,
 }
 
-/// A SearXNG base URL: `http`/`https`, a host, no userinfo, no fragment.
+/// A SearXNG base URL, normalised: the lane's own validator
+/// ([`web_lane::validate_searxng_url`]), so what is saved is what `web_search`
+/// will use.
 fn validate_searxng_url(raw: &str) -> Result<String, String> {
-    let raw = raw.trim();
-    if raw.is_empty() || raw.len() > MAX_URL_LEN || raw.chars().any(char::is_control) {
-        return Err("invalid_url".to_string());
-    }
-    let url = url::Url::parse(raw).map_err(|_| "invalid_url".to_string())?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none_or(str::is_empty)
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-    {
-        return Err("invalid_url".to_string());
-    }
-    Ok(url.to_string())
+    web_lane::validate_searxng_url(raw).map(|url| url.to_string()).ok_or_else(|| "invalid_url".to_string())
 }
 
 fn validate_key(key: &str) -> Result<(), String> {
@@ -465,6 +455,32 @@ mod tests {
         ] {
             assert_eq!(validate_searxng_url(bad), Err("invalid_url".to_string()), "{bad:?}");
         }
+    }
+
+    /// The setter and `web_search` share one validator: whatever the setter
+    /// stores, the lane reads back as a usable URL (never a silent `Unset`),
+    /// and `assistant_options` reports the lane's verdict.
+    #[test]
+    fn what_the_setter_accepts_the_lane_reads_back() {
+        let long_path = format!("https://s.example.org/{}", "a".repeat(600));
+        let long_ok = format!("https://s.example.org/{}", "a".repeat(400));
+        for rejected in ["https://s.example.org/?language=de", "http://localhost:8080/?x=1", long_path.as_str()] {
+            assert_eq!(validate_searxng_url(rejected), Err("invalid_url".to_string()), "{rejected:.40}");
+        }
+        // A path that percent-encodes past the cap when normalised is refused too.
+        let widening = format!("https://s.example.org/{}", "é".repeat(200));
+        assert_eq!(validate_searxng_url(&widening), Err("invalid_url".to_string()));
+        for accepted in ["http://localhost:8080", " https://s.example.org/searx ", "http://[::1]:8888/", "http://192.168.1.5/", long_ok.as_str()] { // privacy-check: ok — address literal in a URL-validator test
+            let stored = validate_searxng_url(accepted).unwrap();
+            assert!(web_lane::validate_searxng_url(&stored).is_some(), "{stored:.60}");
+            let settings = settings_with(&format!(r#"{{"assistant_settings":{{"search":{{"kind":"searxng","searxng_url":"{stored}"}}}}}}"#));
+            assert!(matches!(SearchConfig::from_settings(&settings), SearchConfig::Searxng(_)), "{stored:.60}");
+            assert!(search_state(&settings, KeyringState::Unlocked, None).configured);
+        }
+        // A saved URL the lane would not use is not "configured".
+        let stale = settings_with(r#"{"assistant_settings":{"search":{"kind":"searxng","searxng_url":"http://localhost:8080/?x=1"}}}"#);
+        assert_eq!(SearchConfig::from_settings(&stale), SearchConfig::Unset);
+        assert!(!search_state(&stale, KeyringState::Unlocked, None).configured);
     }
 
     fn set(

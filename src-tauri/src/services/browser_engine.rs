@@ -897,22 +897,30 @@ async fn fetch_page(raw: &str, origin: FetchOrigin) -> Result<FetchedPage, Strin
     let is_html = readable_content_type(&content_type)
         .ok_or_else(|| format!("unsupported-content-type:{content_type}"))?;
 
-    let text = decode_body(&body, &content_type);
-    let title = if is_html {
-        extract_title(&text)
-    } else {
-        String::new()
-    };
+    // Decoding, title extraction and sanitising run over up to 5 MB of a
+    // stranger's bytes (a hostile page can make that slow): off the async
+    // workers, which the lane's call deadline cannot preempt.
+    let (title, html, truncated, blocked_remote) = tokio::task::spawn_blocking(move || {
+        let text = decode_body(&body, &content_type);
+        let title = if is_html {
+            extract_title(&text)
+        } else {
+            String::new()
+        };
 
-    // THE sanitizer — the mail client's, unchanged. No `href` survives, no
-    // attribute can load anything remote, and `script`/`style`/`noscript` are
-    // removed with their contents.
-    let source = if is_html {
-        text
-    } else {
-        mail_sanitize::plain_text_to_html(&text)
-    };
-    let clean = mail_sanitize::sanitize_message_html(&source).map_err(|e| e.to_string())?;
+        // THE sanitizer — the mail client's, unchanged. No `href` survives, no
+        // attribute can load anything remote, and `script`/`style`/`noscript` are
+        // removed with their contents.
+        let source = if is_html {
+            text
+        } else {
+            mail_sanitize::plain_text_to_html(&text)
+        };
+        let clean = mail_sanitize::sanitize_message_html(&source).map_err(|e| e.to_string())?;
+        Ok::<_, String>((title, clean.html, clean.truncated || over_cap, clean.remote_refs))
+    })
+    .await
+    .map_err(|e| format!("fetch-failed: sanitiser stopped: {e}"))??;
 
     Ok(FetchedPage {
         tls: if final_url.scheme() == "https" {
@@ -921,9 +929,9 @@ async fn fetch_page(raw: &str, origin: FetchOrigin) -> Result<FetchedPage, Strin
             TlsState::Insecure
         },
         title,
-        html: clean.html,
-        truncated: clean.truncated || over_cap,
-        blocked_remote: clean.remote_refs,
+        html,
+        truncated,
+        blocked_remote,
         final_url,
     })
 }
@@ -1095,10 +1103,14 @@ async fn resolve_hop(
     hop: usize,
     origin: FetchOrigin,
 ) -> Result<Option<(String, Vec<SocketAddr>)>, String> {
-    let Some(url::Host::Domain(name)) = url.host() else {
-        return Ok(None);
+    let name = match url.host() {
+        Some(url::Host::Domain(name)) => name.to_string(),
+        // A literal has no name to resolve and `hop_allowed` judged its range;
+        // a model-chosen one must also not be one of this host's own addresses.
+        Some(url::Host::Ipv4(ip)) => return reject_own_literal(IpAddr::V4(ip), hop, origin),
+        Some(url::Host::Ipv6(ip)) => return reject_own_literal(IpAddr::V6(ip), hop, origin),
+        None => return Ok(None),
     };
-    let name = name.to_string();
     let port = url
         .port_or_known_default()
         .ok_or_else(|| BlockReason::NoHost.token())?;
@@ -1113,11 +1125,79 @@ async fn resolve_hop(
     Ok(Some((name, addrs)))
 }
 
+/// An IP-literal hop: no pin, but a [`FetchOrigin::Document`] or
+/// [`FetchOrigin::Agent`] one must not name an address of this machine.
+fn reject_own_literal(ip: IpAddr, hop: usize, origin: FetchOrigin) -> Result<Option<(String, Vec<SocketAddr>)>, String> {
+    judge_own(&[ip], hop, origin, is_own_address)?;
+    Ok(None)
+}
+
+/// Whether `ip` is assigned to one of this machine's own interfaces.
+///
+/// A globally routable address can still be *this host*: the model learns its
+/// own public IP from any "what is my IP" page, and a packet to it (or to its
+/// global IPv6) is delivered locally, reaching every service bound to the
+/// wildcard (a dev server, Ollama on `0.0.0.0`, a published Docker port). The
+/// range checks in `web_safety` cannot see that, so ask the kernel: a UDP
+/// socket can be bound only to an address the host owns (`EADDRNOTAVAIL`
+/// otherwise, on Linux, macOS and Windows alike). Nothing is sent, and the
+/// answer is live, so a changed address needs no cache invalidation.
+///
+/// Known limit: a host with only a private address behind a NAT router has
+/// nothing local to match, so a hairpin through the router's public IPv4 is
+/// not detected here (the router decides whether it loops back). Also, with
+/// `net.ipv4.ip_nonlocal_bind=1` every address binds; that is detected once
+/// ([`own_address_probe_is_trustworthy`]) and the check is then skipped rather
+/// than refusing every public address.
+fn is_own_address(ip: IpAddr) -> bool {
+    let ip = unmap(ip);
+    if !own_address_probe_is_trustworthy(ip.is_ipv6()) {
+        return false;
+    }
+    probe_bind(ip)
+}
+
+fn probe_bind(ip: IpAddr) -> bool {
+    std::net::UdpSocket::bind(SocketAddr::new(ip, 0)).is_ok()
+}
+
+/// A documentation address (never assigned) must NOT bind; if it does, the
+/// kernel lets anything bind and a bind says nothing about ownership.
+fn own_address_probe_is_trustworthy(v6: bool) -> bool {
+    static V4: OnceLock<bool> = OnceLock::new();
+    static V6: OnceLock<bool> = OnceLock::new();
+    if v6 {
+        *V6.get_or_init(|| !probe_bind(IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0x0db8, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffe))))
+    } else {
+        *V4.get_or_init(|| !probe_bind(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 254))))
+    }
+}
+
+/// Refuse a model- or document-chosen address that is one of this machine's
+/// own (`is_own` decides; injected so the verdict is testable without an
+/// address the test host happens to have).
+fn judge_own(addrs: &[IpAddr], hop: usize, origin: FetchOrigin, is_own: impl Fn(IpAddr) -> bool) -> Result<(), String> {
+    // A typed URL's first hop is the user's own aim; every other hop is not.
+    if hop == 0 && origin == FetchOrigin::User {
+        return Ok(());
+    }
+    if addrs.iter().any(|ip| is_own(unmap(*ip))) {
+        // The existing vocabulary, as for any other non-public address.
+        let reason = ConfirmReason::PrivateNetwork.token();
+        return Err(if hop > 0 { format!("redirect-to-{reason}") } else { reason.to_string() });
+    }
+    Ok(())
+}
+
 /// The address half of one hop's judgement: every address a name resolved to
 /// must be globally routable — every, not any — once the hop is server- or
 /// model-chosen. Split from [`resolve_hop`] so a mixed answer is testable
 /// without a resolver.
 fn judge_resolved(addrs: &[SocketAddr], hop: usize, origin: FetchOrigin) -> Result<(), String> {
+    judge_resolved_with(addrs, hop, origin, is_own_address)
+}
+
+fn judge_resolved_with(addrs: &[SocketAddr], hop: usize, origin: FetchOrigin, is_own: impl Fn(IpAddr) -> bool) -> Result<(), String> {
     if hop > 0 || origin != FetchOrigin::User {
         for addr in addrs {
             if !address_is_global(addr.ip()) {
@@ -1135,7 +1215,8 @@ fn judge_resolved(addrs: &[SocketAddr], hop: usize, origin: FetchOrigin) -> Resu
             }
         }
     }
-    Ok(())
+    let ips: Vec<IpAddr> = addrs.iter().map(SocketAddr::ip).collect();
+    judge_own(&ips, hop, origin, is_own)
 }
 
 /// IPv4-mapped IPv6 (`::ffff:127.0.0.1`) is the same address as its IPv4 form
@@ -1813,6 +1894,53 @@ mod tests {
             assert!(judge_resolved(&mixed, 0, FetchOrigin::Document).is_err(), "{private}");
             assert_eq!(judge_resolved(&mixed, 0, FetchOrigin::User), Ok(()), "{private}: hop 0 of a typed URL");
         }
+    }
+
+    /// A public-range address can still be this machine's own (its public IP,
+    /// its global IPv6): the packet is delivered locally, to every wildcard
+    /// listener. The model-chosen hops refuse such an address; the user's
+    /// own typed first hop keeps its allowance.
+    #[test]
+    fn a_public_range_address_that_is_this_machines_own_is_refused() {
+        let sock = |ip: &str| SocketAddr::new(ip.parse().unwrap(), 8080);
+        let own = |ip: IpAddr| ip == "93.184.216.34".parse::<IpAddr>().unwrap() || ip == "2606:2800:220:1::1".parse::<IpAddr>().unwrap(); // privacy-check: ok — address literal in an SSRF test/rule
+        for host_addr in ["93.184.216.34", "2606:2800:220:1::1", "::ffff:93.184.216.34"] { // privacy-check: ok — address literal in an SSRF test/rule
+            let mixed = [sock("8.8.8.8"), sock(host_addr)]; // privacy-check: ok — address literal in an SSRF test/rule
+            assert_eq!(judge_resolved_with(&mixed, 0, FetchOrigin::Agent, own), Err("private-network".into()), "{host_addr}");
+            assert_eq!(judge_resolved_with(&mixed, 2, FetchOrigin::Agent, own), Err("redirect-to-private-network".into()), "{host_addr}");
+            assert_eq!(judge_resolved_with(&mixed, 0, FetchOrigin::Document, own), Err("private-network".into()), "{host_addr}");
+            assert_eq!(judge_resolved_with(&mixed, 0, FetchOrigin::User, own), Ok(()), "{host_addr}: hop 0 of a typed URL");
+            assert!(judge_resolved_with(&mixed, 1, FetchOrigin::User, own).is_err(), "{host_addr}: a redirect is not typed");
+        }
+        assert_eq!(judge_resolved_with(&[sock("8.8.8.8")], 0, FetchOrigin::Agent, own), Ok(())); // privacy-check: ok — address literal in an SSRF test/rule
+    }
+
+    /// The real probe: an address the kernel lets a socket bind is ours.
+    /// Loopback always is; a documentation address never is. An IP-literal hop
+    /// is judged by it too (no pin to check, so `resolve_hop` must).
+    #[tokio::test]
+    async fn the_own_address_probe_asks_the_kernel_and_judges_ip_literals() {
+        assert!(is_own_address("127.0.0.1".parse().unwrap())); // privacy-check: ok — address literal in an SSRF test/rule
+        assert!(is_own_address("::ffff:127.0.0.1".parse().unwrap()), "mapped forms are judged as v4"); // privacy-check: ok — address literal in an SSRF test/rule
+        assert!(!is_own_address(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 77))));
+        assert!(!is_own_address(IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 1, 2, 3, 4, 5, 6))));
+        // A global address of this host, when it has one the OS reports (a
+        // connected UDP socket picks the source address a route would use).
+        if let Ok(probe) = std::net::UdpSocket::bind("0.0.0.0:0").and_then(|s| s.connect("8.8.8.8:53").map(|()| s)) { // privacy-check: ok — address literal in an SSRF test/rule
+            if let Ok(local) = probe.local_addr() {
+                assert!(is_own_address(local.ip()), "{local}");
+            }
+        }
+        for literal in ["http://127.0.0.1:9/", "http://[::1]:9/"] {
+            let url = u(literal);
+            if literal.contains("::1") && std::net::UdpSocket::bind("[::1]:0").is_err() {
+                continue; // no IPv6 loopback on this host
+            }
+            assert_eq!(resolve_hop(&url, 0, FetchOrigin::Agent).await, Err("private-network".into()), "{literal}");
+            assert_eq!(resolve_hop(&url, 1, FetchOrigin::Document).await, Err("redirect-to-private-network".into()), "{literal}");
+            assert_eq!(resolve_hop(&url, 0, FetchOrigin::User).await, Ok(None), "{literal}: a typed URL");
+        }
+        assert_eq!(resolve_hop(&u("http://192.0.2.77:9/"), 0, FetchOrigin::Agent).await, Ok(None));
     }
 
     /// End to end against a real loopback socket: an agent fetch of it is

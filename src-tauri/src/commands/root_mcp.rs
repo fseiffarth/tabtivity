@@ -128,6 +128,19 @@ struct ServerState {
 }
 
 static REQUESTS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+/// The web lane's own global pool. A web call holds its permits for up to 15 s
+/// of network I/O (the other lanes' calls are local and short), so on the
+/// shared pool of 8 a handful of concurrent chats would starve root, schedule,
+/// push, markup and help calls into `429`. A web token waits only here.
+static WEB_REQUESTS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+const REQUEST_SLOTS: usize = 8;
+const WEB_REQUEST_SLOTS: usize = 8;
+
+/// The global pool a caller's requests are counted in.
+fn request_pool(caller: root_mcp::Caller) -> Arc<tokio::sync::Semaphore> {
+    let (pool, slots) = if caller == root_mcp::Caller::Web { (&WEB_REQUESTS, WEB_REQUEST_SLOTS) } else { (&REQUESTS, REQUEST_SLOTS) };
+    pool.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(slots))).clone()
+}
 /// How long a request may wait for a worker slot. With the 5 s upload and the
 /// 15 s of work it stays inside a socket's 30 s lifetime.
 const PERMIT_WAIT: Duration = Duration::from_secs(8);
@@ -165,8 +178,7 @@ async fn admit(request: Request, port: u16, store: &root_mcp::TokenStore) -> Res
     // The rate limit above and the socket bound still cap what can queue.
     let permits = async {
         let own = session.permits.clone().acquire_owned().await.ok()?;
-        let global = REQUESTS.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(8))).clone()
-            .acquire_owned().await.ok()?;
+        let global = request_pool(session.identity.caller).acquire_owned().await.ok()?;
         Some((global, own))
     };
     let (global, own) = tokio::time::timeout(PERMIT_WAIT, permits).await
@@ -1208,6 +1220,26 @@ mod security_tests {
         assert!(message.is_array());
         assert_eq!(admit(request(&token, Body::from("\"just a string\"")), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::BAD_REQUEST));
         root_mcp::revoke_tab(&session.identity.tab);
+    }
+
+    /// A web call holds its permits across up to 15 s of network I/O; with
+    /// every web slot taken, the other lanes are admitted all the same.
+    #[tokio::test]
+    async fn a_busy_web_lane_cannot_starve_the_other_lanes() {
+        assert!(!Arc::ptr_eq(&request_pool(root_mcp::Caller::Web), &request_pool(root_mcp::Caller::Agent)));
+        let held = request_pool(root_mcp::Caller::Web).try_acquire_many_owned(WEB_REQUEST_SLOTS as u32).expect("web slots free");
+        let body = || Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#);
+        for caller in [root_mcp::Caller::Agent, root_mcp::Caller::Helper, root_mcp::Caller::Marker] {
+            let (token, session) = root_mcp::test_session(caller);
+            let mut req = request(&token, body());
+            if caller != root_mcp::Caller::Agent {
+                *req.uri_mut() = match caller { root_mcp::Caller::Helper => "/mcp/help", _ => "/mcp/markup" }.parse().unwrap();
+            }
+            let admitted = admit(req, 4321, root_mcp::tokens()).await;
+            assert!(admitted.is_ok(), "{caller:?}: {:?}", admitted.err());
+            root_mcp::revoke_tab(&session.identity.tab);
+        }
+        drop(held);
     }
 
     #[tokio::test(start_paused = true)]
