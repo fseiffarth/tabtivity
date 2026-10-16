@@ -139,8 +139,6 @@ pub struct AssistantLaunch {
 /// token or anything a client sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// Kept for callers written against the skeleton; nothing returns it now.
-    NotBuilt,
     /// The profile is not offered ([`is_offered`]).
     NotOffered,
     /// A local profile with no model.
@@ -163,7 +161,6 @@ impl Refusal {
     /// The fixed category.
     pub fn code(self) -> &'static str {
         match self {
-            Self::NotBuilt => "not_built",
             Self::NotOffered => "not_offered",
             Self::ModelRequired => "model_required",
             Self::BadModel => "bad_model",
@@ -179,7 +176,6 @@ impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = crate::brand::ASSISTANT_NAME;
         match self {
-            Self::NotBuilt => write!(f, "{name} is not available in this build yet."),
             Self::NotOffered => write!(f, "{name} does not offer that CLI."),
             Self::ModelRequired => write!(f, "Pick a local model for this {name} chat."),
             Self::BadModel => write!(f, "That model name is not valid."),

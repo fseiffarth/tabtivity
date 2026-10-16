@@ -45,13 +45,15 @@ and the live-session slice: `agent_fence::assistant_chat_mount` binds exactly
 one creator of that folder is `launch_prep::ensure_chat_dir`; the fence refuses
 a missing one.
 
-Intended spawn behaviour, from the security verification (landing beside this
-doc): the Codex catalog file is checked against an allowlist of fields before
-it is used; when a Tabby CLI exits, the pane ends rather than falling to a
-shell (a login shell inside the chat would be an unpinned terminal); the tmux
-session name of a chat is derived by Tabtivity, not taken from the request;
-and the web token is listed in the tmux `SECRET_ENV` set so it is never put on
-a command line.
+Spawn behaviour, from the security verification: the Codex catalog file is
+built from an allowlist of fields and checked again once written; when a Tabby
+CLI exits, the pane ends rather than falling to a shell (a login shell inside
+the chat would be an unpinned terminal), so a chat whose CLI quit has no
+process and no tmux session until it is started again (the overlay's Restart,
+or the phone opening it; see below); the tmux session name of a chat is derived
+by Tabtivity (`assistant::tmux_session_for`), not taken from the request; and
+the web token is listed in the tmux `SECRET_ENV` set so it is never put on a
+command line.
 
 ## Why page fetch lives outside the fence (the web lane)
 
@@ -118,7 +120,13 @@ Ollama 0.40.3 (A0). All four are offered.
   usable cache from a sibling Tabtivity agent home (shape-checked, regular
   file, size capped; only from a folder named `agent-homes`); none anywhere
   refuses with "start Codex once in any tab, then try again". The home's own
-  cache is never overwritten.
+  cache is never overwritten. The cache's prompt text is never used: every
+  entry carries Tabtivity's own `base_instructions` (a catalog entry needs a
+  base prompt or a template, probed with 0.162.1; the cache's `model_messages`
+  and `base_instructions` are dropped), so a planted cache cannot rewrite what
+  the model is told. `-c mcp_servers={}` does not empty the home's MCP servers
+  (Codex merges tables; probed), so the spawn removes `[mcp_servers]` from the
+  home's `config.toml` (`agent_home::with_codex_trust`).
 - **Local Claude pre-allows the lane (decision 14).** `--allowedTools mcp__web`
   is a permission rule for Tabby's two tools, not a mode, because the auto-mode
   check runs on the local model and timed out. Cloud Claude gets no allow rule.
@@ -194,9 +202,11 @@ next recheck (`access_revoked`). The key is read through
 - A chat restored with the desktop has no process under lazy spawn, so the
   catalog lists it `available:false` and the terminal route answers
   `410 session_gone`. The phone's "Not running, tap to start it" posts
-  `POST /projects/{id}/activate?tab=<tab id>`; the window starts that one chat.
-  No tab named starts none; with no window the route answers `503
-  desktop_unavailable`.
+  `POST /projects/{id}/activate?tab=<tab id>`; the window starts that one chat
+  (`startAssistantChat`, which also respawns a chat started earlier whose CLI
+  has since quit). With no window the owner starts the stored chat detached
+  (`headless::start_chat`) unless it is already running. No tab named starts
+  none and answers `503 desktop_unavailable` with no window.
 - No tmux on Windows, so no phone chat there.
 
 ## Known limits (accepted)
