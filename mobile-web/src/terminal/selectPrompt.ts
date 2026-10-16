@@ -20,6 +20,7 @@
  */
 
 import { busyRow } from "./agentBusy";
+import { readOpenCodeQuestion } from "./openCodeQuestion";
 
 export interface SelectOption {
   /** Position in the run, 0-based. The caller moves the highlight by the
@@ -37,9 +38,14 @@ export interface SelectOption {
    * (`readCodexHooksPage`). Without them a row is answered by walking there
    * (`answerRowKeys`). */
   keys?: string[];
+  /** OpenCode opens an editor before a custom answer can be typed. */
+  input?: "opencode";
 }
 
 export interface SelectPrompt {
+  source?: "opencode";
+  /** Navigation read from a CLI whose headers have no status glyphs. */
+  navigation?: { tabs: QuestionTab[]; focus: number | null; submit: boolean; keys: QuestionStepKeys };
   options: SelectOption[];
   /** Index of the row the dialog is highlighting — where the cursor starts. */
   current: number;
@@ -80,7 +86,7 @@ export interface SelectStep {
   options: SelectOption[];
 }
 
-interface SelectLineLike { text: string; afterRule?: boolean }
+interface SelectLineLike { text: string; afterRule?: boolean; spans?: readonly ReadableSpanLike[] }
 
 /** How far up from the bottom a dialog may sit. Below it the TUI still draws
  * its footer ("Esc to cancel") and, in Codex, the input box — and at phone
@@ -424,6 +430,10 @@ export function readSelectPrompt(
   agentLabel?: string,
   columns?: number,
 ): SelectPrompt | null {
+  if (/opencode/iu.test(agentLabel ?? "")) {
+    const question = readOpenCodeQuestion(lines);
+    if (question) return question;
+  }
   const option = radioMarkerAgent(agentLabel) ? RADIO_OPTION : OPTION;
   const first = Math.max(0, lines.length - SEARCH_WINDOW);
   type Run = {
@@ -527,7 +537,7 @@ export function readSelectPrompt(
 /** The key hints a select dialog prints under its rows: Claude Code's
  * `Enter to select · ↑/↓ to navigate`, its `Enter to confirm`, Codex's
  * `Press enter to confirm`. The input box's own hints name none of these. */
-const DIALOG_FOOTER = /\benter to (?:select|confirm|submit)\b|↑\s*\/?\s*↓\s+to\s+(?:navigate|move|select)\b/iu;
+const DIALOG_FOOTER = /(?:↑↓\s+select|⇆\s+tab)\s+enter\s+(?:submit|confirm|toggle)\s+esc\s+dismiss|\benter to (?:select|confirm|submit)\b|↑\s*\/?\s*↓\s+to\s+(?:navigate|move|select)\b/iu;
 /** Non-blank lines from the bottom the footer may sit above: a status line or
  * two the CLI keeps drawing under a dialog. */
 const FOOTER_REACH = 4;
@@ -807,7 +817,7 @@ const FREE_TEXT = /^(?:\[[^\]]\]\s+)?Type something\.?$/u;
 
 /** Whether `option` is the question's free-text row (`FREE_TEXT`). */
 export function freeTextRow(option: SelectOption): boolean {
-  return FREE_TEXT.test(option.label);
+  return option.input === "opencode" || FREE_TEXT.test(option.label);
 }
 
 /** The writes that answer a question's free-text row with `text`: walk the
@@ -817,6 +827,16 @@ export function freeTextRow(option: SelectOption): boolean {
 export function freeTextWrites(current: number, option: SelectOption, text: string): string[] {
   const line = text.replace(/\s+/gu, " ").trim();
   if (!line) return [];
+  if (option.input === "opencode") {
+    // Enter (or the number shortcut) opens the editor. Clear a previous
+    // answer only when one is shown: Ctrl+U on an empty editor closes it.
+    // Enter saves the words, also on multi-select questions.
+    const open = option.keys ?? selectKeys(current, option.index);
+    // A selected multi-select custom row first unticks; selecting it again
+    // opens its editor. The previous words remain as the editor's value.
+    const reopen = /^\[[✓xX]\]\s/u.test(option.label) && option.description;
+    return [...open, ...(reopen ? (option.keys ?? ["\r"]) : []), ...(option.description ? ["\u0015"] : []), line, "\r"];
+  }
   const writes = [...selectMoveKeys(current, option.index), line];
   return CHECKBOX_LABEL.test(option.label) ? writes : [...writes, "\r"];
 }

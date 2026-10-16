@@ -59,6 +59,10 @@ const DENY_WORD =
 const CODEX_HOOK_TRUST_HEADING = /Hooks\s*need\s*review/;
 const TRUST_OPTION = /(\D|^)\d{1,2}[.)][ \t]*Trust/;
 
+// OpenCode questions have no pointer or yes/no pair. Their footer identifies
+// the choice/toggle page and the final review. Cursor moves can omit spaces.
+const OPENCODE_QUESTION_KEYS = /(?:↑\s*↓\s*select|⇆\s*tab)\s*enter\s*(?:submit|confirm|toggle)\s*esc\s*dismiss/u;
+
 /**
  * True when the text holds a numbered menu offering both an affirmative and a
  * negative answer — under any two numbers, in any order.
@@ -113,6 +117,7 @@ export function stripAnsi(text: string): string {
  * agent tab, to delete escapes that were never there.
  */
 export function looksLikeDecisionPromptStripped(plain: string): boolean {
+  if (OPENCODE_QUESTION_KEYS.test(plain)) return true;
   if (POINTER_CHOICE.test(plain)) return true;
   if (POINTER_WORD.test(plain)) return true;
   if (CODEX_HOOK_TRUST_HEADING.test(plain) && TRUST_OPTION.test(plain)) return true;

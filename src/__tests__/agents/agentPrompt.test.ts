@@ -8,6 +8,16 @@ import { describe, it, expect } from "vitest";
 import { looksLikeDecisionPrompt, stripAnsi } from "../../lib/agents/prompt/prompt";
 
 describe("looksLikeDecisionPrompt", () => {
+  it("detects OpenCode question and review footers without arrow markers or yes/no rows", () => {
+    for (const action of ["submit", "confirm", "toggle"]) {
+      expect(looksLikeDecisionPrompt(`1. Desktop Reader\n2. Phone model sheet\n↑↓ select  enter ${action}  esc dismiss`)).toBe(true);
+    }
+    expect(looksLikeDecisionPrompt("Review\n⇆ tab  enter submit  esc dismiss")).toBe(true);
+    expect(looksLikeDecisionPrompt("↑↓select\x1b[39menterconfirm\x1b[38;5;8mescdismiss")).toBe(true);
+    expect(looksLikeDecisionPrompt("1. Desktop Reader\n2. Phone model sheet")).toBe(false);
+    expect(looksLikeDecisionPrompt("↑↓ select  enter confirm")).toBe(false);
+  });
+
   it("detects a pointer + numbered choice (Claude/Codex approval menu)", () => {
     const screen = [
       "Do you want to make this edit to activity.ts?",

@@ -728,6 +728,7 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
   const stepClass = (answered: boolean, index: number) =>
     [answered && "answered", index === tabFocus && "current"].filter(Boolean).join(" ") || undefined;
   return <>
+    {prompt.source === "opencode" && isUntested("agents.opencode.questions") && <em>{t("mobile.focus.untested")}</em>}
     {tabs.length > 0 && !stepped && <div className="question-tabs">
       {tabs.map((tab, index) => <span key={index} className={tab.answered ? "answered" : undefined}>{tab.answered && "✓ "}{tab.label}</span>)}
     </div>}

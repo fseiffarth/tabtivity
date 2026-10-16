@@ -188,6 +188,7 @@ function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
   return (
     <div className="terminal-reader-question" role="group" aria-label={t("terminal.reader.question")}>
       <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /></small>
+      {question.source === "opencode" && <UntestedTag id="agents.opencode.questions" />}
       {live.context.length > 0 && <pre className="terminal-reader-question-context">{live.context.join("\n")}</pre>}
       {live.tabs.length > 0 && !stepped && (
         <div className="terminal-reader-question-tabs">

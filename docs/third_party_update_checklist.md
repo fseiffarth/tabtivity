@@ -760,6 +760,20 @@ clears with ctrl+u. A release that changes any of those degrades the phone's
 Focus view for OpenCode; a release that adds an agent switch to mini would let
 the `fixed` flag in `agentModes.ts` be dropped.
 
+**OpenCode questions** (`mobile-web/src/terminal/openCodeQuestion.ts`): source
+checked against [1.18.34 QuestionPrompt](https://github.com/anomalyco/opencode/blob/v1.18.34/packages/tui/src/routes/session/question.tsx)
+on 2026-10-16, using the phone screenshot for the numbered layout; not live
+verified. Assumes `↑↓ select  enter submit|confirm|toggle  esc dismiss`, optional
+`⇆ tab`, numbered choices with indented descriptions, a background highlight,
+`Type your own answer`, and headers separated by padding ending in `Confirm`.
+Digits 1–9 select directly; Tab/Shift+Tab changes questions; custom selection
+opens an editor and Enter saves it (also for multi-select). Ctrl+U clears an
+existing custom answer but closes an empty editor. Confirm shows `Review` and
+Enter submits. Check those shapes and keys together after updates; run
+`npx vitest run src/__tests__/mobile/MobileOpenCodeQuestion.test.ts src/__tests__/mobile/MobileFocusQuestion.test.tsx`.
+Live QA: Chat choices and notes, custom answer, toggle several, switch headers,
+Confirm, return to change an answer, then Submit, on phone and desktop.
+
 **Antigravity's model and effort** are read by the phone since 2026-09-20
 (`mobile-web/src/terminal/antigravity.ts`, verified against 1.2.7 by a pty
 capture; 1.2.14 by a tmux capture at 80×24 on 2026-09-30, run through
