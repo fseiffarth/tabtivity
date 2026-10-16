@@ -1545,6 +1545,11 @@ pub fn sandbox_spec_for(project_id: &str) -> Option<SandboxSpec> {
 /// mount, and a value read from it would let the contained process choose what
 /// the next container mounts.
 pub fn project_dir_for(project_id: &str) -> Option<String> {
+    // A reserved scope (`root`, the chat assistant's) is no project, whatever
+    // a hand-edited registry says.
+    if storage::is_reserved_scope(project_id) {
+        return None;
+    }
     let list_path = storage::projects_path();
     let list: crate::schema::projects::ProjectsList = storage::read_json(&list_path).ok()?;
     let entry = list.iter().find(|e| e.id == project_id)?;

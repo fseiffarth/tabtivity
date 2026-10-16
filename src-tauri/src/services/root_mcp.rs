@@ -776,7 +776,7 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
 }
 
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
-pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, armed: bool }
+pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, web: Option<String>, armed: bool }
 impl SpawnTokenGuard {
     pub fn new(opts: &PtyOptions) -> Self {
         Self {
@@ -784,18 +784,19 @@ impl SpawnTokenGuard {
             push: opts.env.get(GIT_TOKEN_ENV).cloned(),
             help: opts.env.get(HELP_TOKEN_ENV).cloned(),
             markup: opts.env.get(MARKUP_TOKEN_ENV).cloned(),
+            web: opts.env.get(WEB_TOKEN_ENV).cloned(),
             armed: true,
         }
     }
     pub fn keep(&mut self) { self.armed = false; }
     /// Whether this spawn was handed a listed token (root, reader, schedule
-    /// or push); the help and markup tokens alone do not count.
+    /// or push); the help, markup and web tokens alone do not count.
     pub fn holds_token(&self) -> bool { self.token.is_some() || self.push.is_some() }
 }
 impl Drop for SpawnTokenGuard {
     fn drop(&mut self) {
         if self.armed {
-            for token in [&self.token, &self.push, &self.help, &self.markup].into_iter().flatten() { revoke_token(token); }
+            for token in [&self.token, &self.push, &self.help, &self.markup, &self.web].into_iter().flatten() { revoke_token(token); }
         }
     }
 }

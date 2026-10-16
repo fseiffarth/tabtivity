@@ -140,7 +140,8 @@ fn mint_for_created(scope: &str, tab: &mut TabEntry) {
     if !pty_tab {
         return;
     }
-    if kind != "shell" && extra_str(tab, SCHEDULE_TARGET_KEY).is_none() {
+    // The chat assistant's scope takes no schedules (plan decision, "Call sites").
+    if kind != "shell" && scope != storage::ASSISTANT_SCOPE && extra_str(tab, SCHEDULE_TARGET_KEY).is_none() {
         tab.extra.insert(SCHEDULE_TARGET_KEY.to_string(), Value::String(crate::commands::projects::uuid_v4()));
     }
     if tmux_of(tab).is_none() {
@@ -815,14 +816,22 @@ pub fn bump_raw_version(session: &mut Value) {
 pub fn snapshot(project_id: &str) -> Result<Snapshot, String> {
     let mut snapshot = snapshot_in(&terminal_service::state_session_path(project_id))?;
     terminal_service::sanitize_loaded_layout(&mut snapshot.session.tab_layout);
+    if project_id == storage::ASSISTANT_SCOPE {
+        terminal_service::sanitize_assistant_layout(&mut snapshot.session.tab_layout, &storage::state_dir());
+    }
     Ok(snapshot)
 }
 
 /// [`sync_in`] for a project scope, then the state-dir write's companions:
 /// stale host-bound markers pruned and the project-tree export copy refreshed
 /// (`terminal_service::store_state_session`).
-pub fn sync(project_id: &str, local_file: &str, client: ClientSync) -> Result<SyncOutcome, String> {
+pub fn sync(project_id: &str, local_file: &str, mut client: ClientSync) -> Result<SyncOutcome, String> {
     let path = terminal_service::state_session_path(project_id);
+    // What a client sends for the chat assistant's scope is cut down to
+    // validated chats before the merge; it has no project folder to copy to.
+    if project_id == storage::ASSISTANT_SCOPE {
+        terminal_service::sanitize_assistant_layout(&mut client.tabs, &storage::state_dir());
+    }
     let outcome = sync_in(&path, project_id, client)?;
     if !outcome.ops.is_empty() {
         terminal_service::after_state_session_write(project_id, local_file);

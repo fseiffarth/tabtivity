@@ -355,7 +355,9 @@ pub(crate) fn conflict_message(conflict: &ProjectConflict) -> String {
 pub(crate) fn read_projects_list() -> Result<ProjectsList, String> {
     let path = storage::projects_path();
     if path.exists() {
-        storage::read_json(&path).map_err(|e| e.to_string())
+        let mut list: ProjectsList = storage::read_json(&path).map_err(|e| e.to_string())?;
+        drop_reserved_projects(&mut list);
+        Ok(list)
     } else {
         Ok(vec![])
     }
@@ -367,13 +369,43 @@ pub(crate) fn read_projects_list() -> Result<ProjectsList, String> {
 pub(crate) fn patch_projects_list<R>(
     patch: impl FnOnce(&mut ProjectsList) -> Result<R, String>,
 ) -> Result<R, String> {
-    let path = storage::projects_path();
-    storage::patch_json(&path, ProjectsList::new(), |list| {
+    patch_projects_list_at(&storage::projects_path(), patch)
+}
+
+/// [`patch_projects_list`] on `path`. A record whose id is a reserved scope's
+/// ([`storage::is_reserved_scope`]) is dropped on the way in, and a patch that
+/// leaves one in is refused whole, so no write path — create, import, clone,
+/// VM, transfer, share — can register a project that borrows `root`'s or the
+/// chat assistant's state.
+fn patch_projects_list_at<R>(
+    path: &std::path::Path,
+    patch: impl FnOnce(&mut ProjectsList) -> Result<R, String>,
+) -> Result<R, String> {
+    storage::patch_json(path, ProjectsList::new(), |list| {
         // The built-in Trash workspace was removed; every registry read or
         // write drops its leftover entry (its folder stays on disk).
         drop_legacy_trash_project(list);
-        patch(list)
+        drop_reserved_projects(list);
+        let result = patch(list)?;
+        match list.iter().find(|p| storage::is_reserved_scope(&p.id)) {
+            Some(p) => Err(reserved_id_message(&p.id)),
+            None => Ok(result),
+        }
     })
+}
+
+/// Why a project id that names a reserved scope is refused.
+fn reserved_id_message(id: &str) -> String {
+    format!("invalid project id '{id}': it names a scope {} keeps for itself", crate::brand::DISPLAY)
+}
+
+/// Drop the registry records that borrow a reserved scope's id (a hand-edited
+/// or imported `projects.json`): they would otherwise hand their folder out as
+/// the scope's, or its state as theirs. Whether anything was dropped.
+fn drop_reserved_projects(list: &mut ProjectsList) -> bool {
+    let before = list.len();
+    list.retain(|p| !storage::is_reserved_scope(&p.id));
+    list.len() != before
 }
 
 /// Patch one registry entry without open-coding another whole-list
@@ -740,6 +772,9 @@ pub struct ArchivedProject {
 pub(crate) fn validate_project_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
         return Err(format!("invalid project id '{id}'"));
+    }
+    if storage::is_reserved_scope(id) {
+        return Err(reserved_id_message(id));
     }
     Ok(())
 }
@@ -5374,6 +5409,61 @@ mod tests {
             local_file: format!("/p/{id}/project.json"),
             extra: extra.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
         }
+    }
+
+    // ── Reserved scope ids (`storage::is_reserved_scope`) ──────────────────
+
+    /// A project record that names a scope the app keeps for itself — root's,
+    /// the chat assistant's — is not a project: never read, never written, and
+    /// not an id a command may validate.
+    #[test]
+    fn a_project_cannot_take_a_reserved_scope_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("projects.json");
+        let hand_edited = vec![
+            entry("p1", "Real", vec![]),
+            entry("assistant", "Borrowed", vec![("directory", serde_json::json!("/home/u/secret"))]),
+            entry("Assistant", "Borrowed", vec![]),
+            entry("root", "Borrowed", vec![]),
+            entry("assistant ", "Borrowed", vec![]),
+        ];
+        std::fs::write(&path, serde_json::to_vec(&hand_edited).unwrap()).unwrap();
+
+        // Dropped on the way in; the next write lands without them.
+        let mut list = hand_edited.clone();
+        assert!(drop_reserved_projects(&mut list));
+        assert_eq!(list.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["p1"]);
+        assert!(!drop_reserved_projects(&mut list));
+        let seen = patch_projects_list_at(&path, |list| Ok(list.iter().map(|p| p.id.clone()).collect::<Vec<_>>())).unwrap();
+        assert_eq!(seen, ["p1"]);
+        let stored: ProjectsList = storage::read_json(&path).unwrap();
+        assert_eq!(stored.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["p1"], "rewritten without the borrowed records");
+
+        // A patch that adds one — create, import, clone, VM, share — is refused
+        // whole, and the file is as it was.
+        for id in ["assistant", "ASSISTANT", " assistant", "root", "Root"] {
+            let before = std::fs::read(&path).unwrap();
+            let refused = patch_projects_list_at(&path, |list| {
+                list.push(entry(id, "New", vec![]));
+                Ok(())
+            });
+            assert!(refused.is_err(), "{id:?}");
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{id:?}");
+        }
+        // An ordinary id still goes through.
+        patch_projects_list_at(&path, |list| {
+            list.push(entry("assistant2", "Fine", vec![]));
+            Ok(())
+        })
+        .unwrap();
+
+        for id in ["assistant", "Assistant", "root", "assistant "] {
+            assert!(validate_project_id(id).is_err(), "{id:?}");
+        }
+        assert!(validate_project_id("0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10").is_ok());
+        assert!(validate_project_id("assistant2").is_ok());
+        // And no folder is ever looked up for one, planted or not.
+        assert_eq!(crate::services::sandbox::project_dir_for("assistant"), None);
     }
 
     /// A project keeps an old-named screenshots or mail folder it already

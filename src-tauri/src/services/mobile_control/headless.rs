@@ -976,7 +976,8 @@ pub fn is_session_command(prompt: &str) -> bool {
 /// recorded. `Ok(false)` when nothing was recorded.
 pub fn record_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, message: &str) -> Result<bool, String> {
     let text = message.trim();
-    if text.is_empty() || is_session_command(text) {
+    // The chat assistant's scope keeps no prompt history (`agent_prompts`).
+    if text.is_empty() || is_session_command(text) || project_id == storage::ASSISTANT_SCOPE {
         return Ok(false);
     }
     agent_prompts::record_at(

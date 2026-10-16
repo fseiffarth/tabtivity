@@ -50,7 +50,11 @@ fn read_boxes_at(path: &Path) -> Result<BoxesList, String> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    storage::read_json(path).map_err(|e| e.to_string())
+    let mut boxes: BoxesList = storage::read_json(path).map_err(|e| e.to_string())?;
+    // A box whose id is a reserved scope's (`storage::is_reserved_scope`) is
+    // a hand-edited record that would borrow that scope's state: not read.
+    boxes.retain(|b| !storage::is_reserved_scope(&b.id));
+    Ok(boxes)
 }
 
 /// Write the list, stamping each box's revision against what the file holds
@@ -78,6 +82,9 @@ fn write_boxes_answering(boxes: &BoxesList, box_id: &str) -> Result<ProjectBox, 
 
 /// Write `boxes` stamped against `current`, and answer what was written.
 fn write_boxes_stamped(path: &Path, current: &BoxesList, boxes: &BoxesList) -> Result<BoxesList, String> {
+    if let Some(reserved) = boxes.iter().find(|b| storage::is_reserved_scope(&b.id)) {
+        return Err(format!("invalid box id '{}': it names a scope {} keeps for itself", reserved.id, crate::brand::DISPLAY));
+    }
     let stamped = stamp_box_revs(current, boxes);
     storage::write_json_atomic(path, &stamped).map_err(|e| e.to_string())?;
     Ok(stamped)
@@ -953,6 +960,32 @@ mod tests {
 
     fn ids(values: &[&str]) -> HashSet<String> {
         values.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A box record that takes a reserved scope's id (root's, the chat
+    /// assistant's) is a hand-edited one: not read, and a save carrying one is
+    /// refused whole.
+    #[test]
+    fn a_box_cannot_take_a_reserved_scope_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boxes.json");
+        let planted = vec![mk_box("real", &[]), mk_box("assistant", &["p"]), mk_box("Assistant", &[]), mk_box("root", &[])];
+        std::fs::write(&path, serde_json::to_vec(&planted).unwrap()).unwrap();
+        assert_eq!(read_boxes_at(&path).unwrap().iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["real"]);
+
+        let before = std::fs::read(&path).unwrap();
+        for id in ["assistant", "ASSISTANT ", "root"] {
+            let mut list = read_boxes_at(&path).unwrap();
+            list.push(mk_box(id, &[]));
+            assert!(save_boxes_at(&path, &list).is_err(), "{id:?}");
+            assert!(write_boxes_stamped(&path, &list[..1].to_vec(), &list).is_err(), "{id:?}");
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{id:?}");
+        }
+        // Reading drops them, so the first honest save rewrites the file without them.
+        let list = read_boxes_at(&path).unwrap();
+        save_boxes_at(&path, &list).unwrap();
+        let stored: BoxesList = storage::read_json(&path).unwrap();
+        assert_eq!(stored.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["real"]);
     }
 
     /// Headless owner plan, H1: the whole-list save is compare-and-swap per

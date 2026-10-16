@@ -4447,6 +4447,15 @@ pub(crate) fn local_launch_line_ok(driver: &str, model: &str, cmd: &str, args: &
         if cmd == "ollama" && args == ["launch", sub, "--model", model] {
             return true;
         }
+        // Local Claude as the chat assistant runs it: `ollama launch claude
+        // --model <m> -- <pinned tail>` (`services::assistant`), the one `--`
+        // tail accepted.
+        if cmd == "ollama" && driver.id == "claude" {
+            let head = ["launch", sub, "--model", model, "--"].map(str::to_string);
+            if let Some(tail) = args.strip_prefix(&head[..]) {
+                return crate::services::assistant::claude_local_tail_ok(tail);
+            }
+        }
     }
     let catalog = driver
         .wants_local_catalog
@@ -4469,6 +4478,34 @@ pub(crate) fn local_launch_line_ok(driver: &str, model: &str, cmd: &str, args: &
 /// of a persisted local-model tab whose own `cmd` may be `ollama`.
 pub(crate) fn local_driver_bin(driver: &str) -> Option<&'static str> {
     LOCAL_DRIVERS.iter().find(|d| d.id == driver).map(|d| d.bin)
+}
+
+/// The launch line of local `driver` for `model` as [`prepare_local_launch`]
+/// builds it, without its probes (installed `ollama launch`, the model's tool
+/// and thinking capabilities): `ollama launch <sub> --model <m>` for a driver
+/// that has one, else the direct fallback with no reasoning override. `None`
+/// for an unknown driver, one with neither form, or a model
+/// [`local_launch_line_ok`] would refuse. The chat assistant builds its line
+/// from this instead of copying the driver table (`services::assistant`).
+pub(crate) fn pinned_local_line(driver: &str, model: &str) -> Option<LocalLaunchSpec> {
+    let driver = LOCAL_DRIVERS.iter().find(|d| d.id == driver)?;
+    if !model_name_ok(model) {
+        return None;
+    }
+    if let Some(sub) = driver.launch_sub {
+        return Some(LocalLaunchSpec {
+            cmd: "ollama".to_string(),
+            args: ["launch", sub, "--model", model].map(str::to_string).to_vec(),
+        });
+    }
+    fallback_spec(driver, model, &[])
+}
+
+/// Whether `model` is a name Tabtivity passes to an agent CLI as a discrete
+/// argument: [`validate_model_name`]'s character set, no surrounding space
+/// and no leading `-` (which a CLI would read as a flag).
+pub(crate) fn model_name_ok(model: &str) -> bool {
+    validate_model_name(model).is_ok() && model == model.trim() && !model.starts_with('-')
 }
 
 /// The extra args this driver needs for `model`, and whether they force the
@@ -4573,6 +4610,17 @@ pub(crate) fn opencode_loaded_models_config(requested: Option<&str>) -> Option<S
     let loaded = loaded_model_names(&ollama_http("GET", "/api/ps", None).ok()?)?;
     let addr = ollama_addr().ok()?;
     Some(opencode_ollama_config(&addr, &loaded, requested))
+}
+
+/// The inline OpenCode config an assistant chat merges its own settings into:
+/// [`opencode_loaded_models_config`], or — when Ollama cannot be asked — the
+/// same `ollama` provider block with no loaded models and `requested` alone,
+/// since the assistant home holds no config of the user's to fall back on.
+pub(crate) fn opencode_assistant_provider(requested: &str) -> String {
+    opencode_loaded_models_config(Some(requested)).unwrap_or_else(|| {
+        let addr = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
+        opencode_ollama_config(&addr, &[], Some(requested))
+    })
 }
 
 /// One local-model driver plus whether Tabtivity currently has a way to launch it.
@@ -4770,7 +4818,7 @@ fn local_catalog_args(model: &str, thinking: Option<bool>) -> Vec<String> {
 /// a valid TOML basic string, and serde does the escaping — the path is
 /// Tabtivity's own but it descends from `$HOME`, which we do not get to assume is
 /// free of quotes or backslashes.
-fn catalog_arg_pair(path: &std::path::Path) -> Vec<String> {
+pub(crate) fn catalog_arg_pair(path: &std::path::Path) -> Vec<String> {
     vec![
         "-c".to_string(),
         format!(
@@ -5593,6 +5641,33 @@ mod tests {
         assert!(!local_launch_line_ok("opencode", m, "ollama", &v(&["launch", "claude", "--model", m])));
         assert_eq!(local_driver_bin("opencode"), Some("opencode"));
         assert_eq!(local_driver_bin("nope"), None);
+    }
+
+    /// The chat assistant builds its local lines from the driver table, not a
+    /// copy of it, and takes a model name only as a plain argument.
+    #[test]
+    fn the_pinned_local_line_is_the_drivers_own_and_takes_only_plain_names() {
+        let m = "qwen3-coder:30b";
+        let claude = pinned_local_line("claude", m).unwrap();
+        assert_eq!((claude.cmd.as_str(), claude.args.as_slice()), ("ollama", ["launch", "claude", "--model", m].map(String::from).as_slice()));
+        let opencode = pinned_local_line("opencode", m).unwrap();
+        assert_eq!(opencode.cmd, "opencode");
+        assert_eq!(opencode.args, ["--model", &format!("ollama/{m}")]);
+        for spec in [&claude, &opencode] {
+            let driver = if spec.cmd == "ollama" { "claude" } else { "opencode" };
+            assert!(local_launch_line_ok(driver, m, &spec.cmd, &spec.args));
+        }
+        // Codex has the direct form only with its catalog, so the plain line
+        // here is the fallback's; an unknown driver has none.
+        assert!(pinned_local_line("nope", m).is_none());
+        for bad in ["--yes", "-m", "", " m", "m ", "a b", "m\"x", "../m", "a//b"] {
+            assert!(pinned_local_line("claude", bad).is_none(), "{bad:?}");
+            assert!(!model_name_ok(bad), "{bad:?}");
+        }
+        assert!(model_name_ok("hf.co/org/model-GGUF:Q4_K_M") && model_name_ok("llama3:latest"));
+        // The provider block always names the requested model, Ollama up or not.
+        let config: serde_json::Value = serde_json::from_str(&opencode_assistant_provider(m)).unwrap();
+        assert!(config["provider"]["ollama"]["models"][m].is_object());
     }
 
     #[test]

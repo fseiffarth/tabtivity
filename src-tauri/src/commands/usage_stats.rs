@@ -97,12 +97,13 @@ pub async fn usage_token_stats(project_id: String) -> Result<TokenReport, String
     .await
 }
 
-/// Every scope id an agent home can belong to: the root console, each
-/// registered project, each box (`box:<id>`). An unreadable registry only
+/// Every scope id an agent home can belong to: the root console, the chat
+/// assistant, each registered project, each box (`box:<id>`). An unreadable registry only
 /// means its homes are filed under the root until the next read succeeds —
 /// the scan re-files them then.
 fn known_scope_ids() -> Vec<String> {
-    let mut ids = vec![crate::storage::ROOT_SCOPE.to_string()];
+    // The chat assistant's tokens are its own, not the root console's.
+    let mut ids = vec![crate::storage::ROOT_SCOPE.to_string(), crate::storage::ASSISTANT_SCOPE.to_string()];
     if let Ok(projects) = crate::commands::projects::read_projects_list() {
         ids.extend(projects.into_iter().map(|p| p.id));
     }
@@ -311,5 +312,11 @@ mod tests {
         assert_eq!(stats.files_changed, 1);
         assert_eq!(stats.lines_added, 5);
         assert_eq!(stats.lines_removed, 2);
+    }
+    #[test]
+    fn the_chat_assistant_is_a_known_scope() {
+        let ids = known_scope_ids();
+        assert!(ids.iter().any(|id| id == crate::storage::ASSISTANT_SCOPE));
+        assert!(ids.iter().any(|id| id == crate::storage::ROOT_SCOPE));
     }
 }
