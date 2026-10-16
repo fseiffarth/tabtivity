@@ -70,6 +70,11 @@ const ANSWER_WAIT_MS = 3000;
  * second click of a double-click, meant for the answered row, took the new
  * dialog's first row (`Review hooks`) unseen. */
 const NEXT_DIALOG_HOLD_MS = 600;
+/** How long the screen must show something the Reader cannot read
+ * (`ReaderLive.stray`) before the chat points at the terminal: a CLI starting
+ * up, a picker answered from the composer or a redraw passes through such a
+ * screen for a moment. */
+const STRAY_MS = 3000;
 const ENCODER = new TextEncoder();
 
 
@@ -877,6 +882,20 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   };
   const stop = () => void typePaneKeys(ptyId, [STOP_KEY]).catch(() => {});
   const shownLive = picking ? NO_LIVE : live;
+  /** The terminal has shown something the chat cannot draw for `STRAY_MS`:
+   * the chat says so and offers the way to it. Not while a picker the facts
+   * row opened or an answer is on screen — the Reader put those there. */
+  const strayNow = live.stray && !picking && !answered;
+  const [strayShown, setStrayShown] = useState(false);
+  useEffect(() => {
+    if (!strayNow || !visible) {
+      setStrayShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setStrayShown(true), STRAY_MS);
+    return () => clearTimeout(timer);
+  }, [strayNow, visible]);
+  const openTerminal = () => { if (tab) useAgentReaderStore.getState().set(readerAgent(tab), false); };
 
   const tabRef = useRef(tab);
   tabRef.current = tab;
@@ -1141,7 +1160,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       list.scrollTop = list.scrollHeight;
     }
     checkPinnedPrompt();
-  }, [turns, pending, live, shownTranscript, visible, checkPinnedPrompt]);
+  }, [turns, pending, live, strayShown, shownTranscript, visible, checkPinnedPrompt]);
 
   const showEarlier = () => {
     const list = listRef.current;
@@ -1382,6 +1401,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
               <button type="button" className="terminal-reader-stop" onClick={stop} title={t("terminal.reader.stopHint")}>
                 {t("terminal.reader.stop")}
               </button>
+            </div>
+          )}
+          {strayShown && (
+            <div className="terminal-reader-working terminal-reader-stray" role="status">
+              <span>{t("terminal.reader.stray")}</span>
+              <button type="button" className="terminal-reader-stop" onClick={openTerminal} title={t("terminal.reader.strayOpenHint")}>
+                {t("terminal.reader.strayOpen")}
+              </button>
+              <UntestedTag id="terminal.reader.stray" />
             </div>
           )}
           {backgroundAtWork > 0 && (

@@ -354,6 +354,24 @@ describe("the desktop Reader's live screen", () => {
     expect(idle.working).toBeNull();
   });
 
+  it("calls a screen it cannot read stray, and nothing it reads or a blank one", () => {
+    const busy = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
+    const idle = ["> fix it", "", "⏺ Done.", "", "> ", "  ? for shortcuts"];
+    expect(readReaderLive(plainBuffer(busy), "Claude").stray).toBe(false);
+    expect(readReaderLive(plainBuffer(idle), "Claude").stray).toBe(false);
+    expect(readReaderLive(plainBuffer(PERMISSION), "Claude").stray).toBe(false);
+    expect(readReaderLive(plainBuffer(["", ""]), "Claude").stray).toBe(false);
+    // A panel of the CLI's own over the input box, and a session that ended.
+    const panel = readReaderLive(plainBuffer([
+      "> fix it", "", "⏺ Done.", "", " Settings", "   Auto-compact          true", "   Theme                 dark", "", "  Esc to close",
+    ]), "Claude");
+    expect(panel.question).toBeNull();
+    expect(panel.stray).toBe(true);
+    const ended = readReaderLive(plainBuffer(["⏺ Done.", "", "Error: connection lost", "user@host:~/project$"]), "Claude");
+    expect(ended.stray).toBe(true);
+    expect(sameReaderLive(ended, readReaderLive(plainBuffer(idle), "Claude"))).toBe(false);
+  });
+
   it("leaves a dialog answered before the last prompt alone", () => {
     const answered = readReaderLive(plainBuffer([
       "Do you want to proceed?", "❯ 1. Yes", "  2. No", "", "> and now the tests", "", "⏺ Running them.", "> ",

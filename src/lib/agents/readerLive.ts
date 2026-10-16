@@ -56,10 +56,15 @@ export interface ReaderLive {
    * context, mode) — the phone's facts row reads the same `sessionStatus`.
    * Null while the bottom of the screen is not the input frame. */
   status: SessionStatus | null;
+  /** The screen shows something none of the above reads: no dialog, no busy
+   * row and no input box at its bottom, yet it is not blank — a picker, an
+   * error or a screen of the CLI's own the chat cannot draw. The Reader
+   * points at the terminal once this lasts (`STRAY_MS`). */
+  stray: boolean;
 }
 
 export const NO_LIVE: ReaderLive = {
-  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null,
+  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false,
 };
 
 /** Rows read off the end of the buffer for the live reading. What it looks
@@ -77,7 +82,8 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   const status = sessionStatus(lines, agentLabel);
   // The input box and the rows under it are the TUI's frame, not output; the
   // tail after the last echoed prompt is what the session draws now.
-  const screen = lines.slice(0, inputFrameStart(lines, agentLabel));
+  const frameStart = inputFrameStart(lines, agentLabel);
+  const screen = lines.slice(0, frameStart);
   let start = 0;
   screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });
   // Codex's hooks page replaces the input box, whose `›` its highlighted row
@@ -105,9 +111,14 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
         : selectSignature(question),
       working: null,
       status,
+      stray: false,
     };
   }
-  return { ...NO_LIVE, working: agentWork(lines), status };
+  const working = agentWork(lines);
+  // `inputFrameStart` answers the screen's length when it finds no input box
+  // (or the box-like row is a dialog's highlighted option).
+  const stray = !working && frameStart >= lines.length && lines.some((line) => line.text.trim() !== "");
+  return { ...NO_LIVE, working, status, stray };
 }
 
 function tabsKey(tabs: readonly QuestionTab[]): string {
@@ -127,6 +138,7 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
     && a.working?.elapsed === b.working?.elapsed
     && a.working?.tokens === b.working?.tokens
     && a.working?.effort === b.working?.effort
+    && a.stray === b.stray
     && sameStatus(a.status, b.status);
 }
 

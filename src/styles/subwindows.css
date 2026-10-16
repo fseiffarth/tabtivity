@@ -3183,6 +3183,13 @@ button.terminal-reader-option:hover:not(:disabled) {
 .terminal-reader-stop:hover {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
+.terminal-reader-stray .terminal-reader-stop {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.terminal-reader-stray .terminal-reader-stop:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 @media (prefers-reduced-motion: reduce) {
   .terminal-reader-working-dots i { animation: none; opacity: 0.7; }
 }
