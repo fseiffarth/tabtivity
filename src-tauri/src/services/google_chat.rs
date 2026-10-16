@@ -22,9 +22,6 @@ use crate::services::home_io::{HomeDir, HomeFile};
 const MAX_FILES: usize = 512;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_STEP_BYTES: usize = 6 * 1024 * 1024;
-/// Wall-clock budget of one SQLite read. Tests get far more: a full parallel
-/// `cargo test` can deschedule a thread past half a second.
-const READ_DEADLINE: std::time::Duration = std::time::Duration::from_millis(if cfg!(test) { 30_000 } else { 500 });
 
 pub fn transcript(cmd: &str, home: &Path, directory: &str, since: Option<i64>, version: Option<&str>, limit: usize) -> AgentTranscript {
     let read = if cmd == "gemini" {
@@ -192,13 +189,19 @@ fn database(file: &HomeFile) -> Option<Connection> {
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false).ok()?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true).ok()?;
     conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_STEP_BYTES as i32).ok()?;
-    conn.busy_timeout(std::time::Duration::from_millis(if cfg!(test) { 5_000 } else { 100 })).ok()?;
-    let deadline = std::time::Instant::now() + READ_DEADLINE;
+    conn.busy_timeout(std::time::Duration::from_millis(100)).ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
     conn.progress_handler(1000, Some(move || std::time::Instant::now() >= deadline)).ok()?;
     Some(conn)
 }
 
 fn antigravity(home: &Path, directory: &str, since: Option<i64>, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+    // SQLite's NOFOLLOW refuses a link at *any* component of the path, the
+    // home's own prefix included (a symlinked /home or temp dir), and the home
+    // is Tabtivity's (`home_io` opens its root by name for the same reason):
+    // resolved once here, so only a link inside the home is refused.
+    #[cfg(unix)]
+    let home = &std::fs::canonicalize(home).ok()?;
     let root = HomeDir::open_existing(home, ".gemini/antigravity-cli")?;
     let summaries = database(&root.file("conversation_summaries.db")?)?;
     let conversations = root.open_subdir("conversations")?;
