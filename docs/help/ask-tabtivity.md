@@ -83,5 +83,5 @@ getting-started, projects, project-desktop, project-transfer, remote-projects,
 sync, git, tabs-and-panels, keyboard, files-and-viewers, pdf-and-markup,
 latex-and-presenter, agent-clis, claude-code, codex, gemini-cli,
 local-models, scheduled-prompts, root-console, mail-calendar, workspace-apps,
-mobile, containers-boxes, server, server-sharing, settings-and-appearance,
+assistant, mobile, containers-boxes, server, server-sharing, settings-and-appearance,
 ask-tabtivity, troubleshooting.

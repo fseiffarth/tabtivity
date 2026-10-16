@@ -96,7 +96,7 @@ Don't push new work while the branch's last ci-cd run is red; the next push is i
   is: grep `docs/filemap_rationale/` (frozen, verify against code).
 - Design rationale, one file per subsystem in `docs/context/` — open only the
   one you're touching: agent_authority, agent_schedule_mcp, agent_sessions,
-  brand_migration, caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
+  assistant, brand_migration, caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
   markup_mcp, mobile_access, multi_host_remote, openvpn, project_boxes, project_transfer,
   release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console,
   server_gateway, sharing, tmux_sessions, usage_stats, vm_projects, web_client.
@@ -125,6 +125,9 @@ Don't push new work while the branch's last ci-cd run is red; the next push is i
   patch or compare-and-swap command.
 
 - Match surrounding style; small focused changes; `rg` for search.
+- A `Some` scope id is reserved (root, assistant) through
+  `storage::is_reserved_scope`: projects, boxes and every registry refuse or
+  drop it. A new registry or id check calls it, not a `"root"` literal.
 - Never spell the app's name in code. Rust: `crate::brand` constants and
   `app_name!`/`app_slug!` macros; TS (desktop and phone): `src/lib/brand.ts`
   (`BRAND`, `NAMES`, `storageKey`, …); dictionaries: `{app}`/`{slug}`; shell:
@@ -207,6 +210,12 @@ Agents:
   recorded on `--resume`. Don't grow that into a mode Tabtivity chooses. (The
   Manage CLIs Codex auto-review switch only edits the user's own Codex config
   in the Tabtivity-wide layer; it is off unless the user turns it on.)
+- The assistant scope (`assistant`, Tabby) is the one place Tabtivity pins an
+  agent CLI's *tool set* (web only, argv built by `services::assistant`, never
+  taken from the renderer or phone); that is not a mode. Its home never gets
+  the `agent_global` layer, and no page fetch runs inside its fence: fetches go
+  through the web lane (`services::web_lane`, `/mcp/web`). Rationale and limits:
+  `docs/context/assistant.md`.
 
 Frontend:
 - Gate remote/SFTP/git probes on connected — a sync command against a dead
