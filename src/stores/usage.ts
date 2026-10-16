@@ -22,8 +22,9 @@ const DETACHED_USAGE_EVENT = "detached-usage";
  *   rewrite per flush rather than one per key.
  * - **Reading** — the zustand store proper, holding the report the recap renders.
  *
- * Scopes are the same ids tabs use: a project id, or `"root"` for the root
- * terminal.
+ * Scopes are the same ids tabs use: a project id, `"root"` for the root
+ * terminal, or `"assistant"` (`lib/assistant.ASSISTANT_SCOPE`) for the Tabby
+ * chats; the recap labels the last two (`StatsRecap`).
  */
 
 /** The scope the root terminal's counters are filed under. */

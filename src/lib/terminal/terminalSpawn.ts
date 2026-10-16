@@ -1,6 +1,7 @@
 import { cmdToKind, effectiveTabLocation, remoteHostIdOf, type TabEntry, type TabKind } from "../../stores/tabs";
 import { envName } from "../brand";
 import type { LoginTarget } from "../remote/loginTarget";
+import { ASSISTANT_SCOPE, type AssistantLaunch } from "../assistant";
 
 /**
  * The kind a `TerminalView` acts as: its declared `kind` prop, else a
@@ -38,6 +39,7 @@ export interface TerminalSpawnInputs {
   tmuxAttach?: string | null;
   hostBoundUid?: string | null;
   hostSession?: boolean;
+  assistant?: AssistantLaunch | null;
   kind?: string;
   scheduleTargetId?: string;
   relaunchSeq?: number;
@@ -68,6 +70,7 @@ export function terminalSpawnKey(p: TerminalSpawnInputs): string {
     p.tmuxAttach ?? null,
     p.hostBoundUid ?? null,
     !!p.hostSession,
+    p.assistant ?? null,
     p.kind ?? null,
     p.scheduleTargetId ?? null,
     p.relaunchSeq ?? 0,
@@ -94,12 +97,17 @@ export function tabTerminalSpawn(
   },
 ) {
   const location = effectiveTabLocation(tab, { vmProject: !!derived.vmProject });
+  // A Tabby chat: the backend builds the argv and the environment from the
+  // launch and reads one thing from the renderer, the chat's uid, which is the
+  // tab's `sessionId`. Nothing else is sent, so a stale or planted `env`/`args`
+  // on the record cannot ride along.
+  const assistant = scope === ASSISTANT_SCOPE ? (tab.assistant ?? null) : null;
   return {
     // PTY ids include the scope: tab keys alone collide across projects.
     id: `${scope}:${tab.key}`,
     cmd: tab.cmd,
-    args: tab.args ?? [],
-    env: tab.env ?? {},
+    args: assistant ? [] : (tab.args ?? []),
+    env: assistant ? (tab.sessionId ? { [envName("TAB_UID")]: tab.sessionId } : {}) : (tab.env ?? {}),
     // A popout is attach-only and never spawns, and its `terminal-ready`
     // never fires, so it takes no initialInput (matches its old behavior).
     initialInput: derived.attachOnly ? undefined : tab.initialInput,
@@ -120,8 +128,10 @@ export function tabTerminalSpawn(
     tmuxAttach: tab.login ? null : (tab.tmuxAttach ?? null),
     hostBoundUid: tab.hostBoundUid ?? null,
     hostSession: !!tab.hostSession,
+    assistant,
     kind: tab.kind,
-    scheduleTargetId: tab.scheduleTargetId,
+    // Tabby chats take no schedule (the backend refuses one for the scope).
+    scheduleTargetId: assistant ? undefined : tab.scheduleTargetId,
     relaunchSeq: tab.relaunchSeq ?? 0,
     zoomable: tab.kind === "agent" || tab.kind === "local_agent",
   };

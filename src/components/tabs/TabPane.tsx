@@ -124,6 +124,9 @@ export interface TabPaneProps {
    *  escape that tier forbids). Resolved by CenterPanel; a popout omits it —
    *  its panes are attach-only and never spawn. */
   vmProject?: boolean;
+  /** A terminal pane shows its Reader always, with no toggle (the Tabby
+   *  overlay's chats; see `TerminalView.readerAlways`). */
+  readerAlways?: boolean;
 }
 
 function TabPaneImpl({
@@ -141,6 +144,7 @@ function TabPaneImpl({
   sandbox = false,
   tmuxSession,
   vmProject = false,
+  readerAlways = false,
 }: TabPaneProps) {
   // Identical in both windows: null for the root scope, else the scope id.
   const projectId = scope === "root" ? null : scope;
@@ -279,6 +283,7 @@ function TabPaneImpl({
           visible={visible}
           focused={focused}
           attachOnly={attachOnly}
+          readerAlways={readerAlways}
         />
         {/* A login tab's "Type it for me" row, when its target has a saved
             credential. After the terminal in the DOM (the pane's first child

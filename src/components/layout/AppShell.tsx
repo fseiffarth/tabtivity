@@ -59,6 +59,7 @@ import { TimerLeaseHost } from "./TimerLeaseHost";
 import { WorkspacePatchHost } from "./WorkspacePatchHost";
 import { CalDavConflictDialog } from "../calendar/CalDavConflictDialog";
 import { RootOverlayHost } from "./RootOverlay";
+import { AssistantScopeHost } from "./AssistantScopeHost";
 import { LocalLossDialog } from "../common/LocalLossDialog";
 import {
   RailAgentsIcon,
@@ -1655,6 +1656,7 @@ export function AppShell() {
           the install or the login. Its host also persists the root scope and merges the rows a
           root agent wrote through Tabtivity's MCP tools — both while closed. */}
       <RootOverlayHost />
+      <AssistantScopeHost />
       {/* The shortcut cheat sheet (F1, `?` in steering mode, or the ⚙ menu) —
           after the overlay family above so the sheet, openable from the
           keyboard while any of them is up, lands on top (same z-index, DOM

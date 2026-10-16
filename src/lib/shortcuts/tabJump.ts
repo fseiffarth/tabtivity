@@ -3,6 +3,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { translate, useI18nStore } from "../i18n";
 import { PROMPTCHART_TAB_CMD, ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { resolveProjectDirectory } from "../../types";
+import { ASSISTANT_SCOPE } from "../assistant";
 
 /**
  * Show the tab a surface is pointing at: make it the visible tab of its
@@ -34,6 +35,10 @@ export function jumpToTab(scope: string, key: string) {
  *  switch has been asked for; a scope already up costs nothing. */
 function bringUpScope(scope: string): Promise<void> {
   const tabs = useTabsStore.getState();
+  // The Tabby scope is no project and no box: there is nothing to bring up
+  // (`setActive("assistant")` would try to activate a project by that name).
+  // Its chats are shown by the assistant overlay, never by the tab bar.
+  if (scope === ASSISTANT_SCOPE) return Promise.resolve();
   if (scope.startsWith(BOX_SCOPE_PREFIX)) {
     return tabs.scope === scope ? Promise.resolve() : useBoxesStore.getState().openBox(scope.slice(BOX_SCOPE_PREFIX.length));
   }

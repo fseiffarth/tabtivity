@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "./tabs";
 import type { SteeringApp } from "../lib/shortcuts/steeringRegion";
 import { storageKey } from "../lib/brand";
+import { ASSISTANT_SCOPE } from "../lib/assistant";
 
 /**
  * The **docked agent** of the mail, calendar and to-do overlays — a root agent
@@ -95,8 +96,13 @@ interface OverlayAgentState {
    * column's mount effect; the set keeps its identity while nothing changes.
    */
   shownKeys: ReadonlySet<string>;
-  markShown: (key: string) => void;
-  unmarkShown: (key: string) => void;
+  /** The same for the Tabby scope: chat tab keys an attach-only view draws
+   *  right now (`AttachedAgentPane`). `CenterPanel`'s copy of the chat keeps
+   *  the PTY and stays hidden regardless; this only keeps it from sleeping. */
+  assistantShownKeys: ReadonlySet<string>;
+  /** `scope` is the scope of `key`'s tab: root (the default) or Tabby. */
+  markShown: (key: string, scope?: string) => void;
+  unmarkShown: (key: string, scope?: string) => void;
   /** The column's width (px), already clamped. */
   width: number;
   /** Commit a finished resize drag: clamped, then remembered on this machine. */
@@ -129,19 +135,22 @@ export const useOverlayAgentStore = create<OverlayAgentState>((set) => ({
       return { docks: { ...s.docks, [app]: EMPTY_DOCK } };
     }),
   shownKeys: new Set<string>(),
-  markShown: (key) =>
+  assistantShownKeys: new Set<string>(),
+  markShown: (key, scope = ROOT_SCOPE) =>
     set((s) => {
-      if (s.shownKeys.has(key)) return s;
-      const shownKeys = new Set(s.shownKeys);
-      shownKeys.add(key);
-      return { shownKeys };
+      const field = scope === ASSISTANT_SCOPE ? "assistantShownKeys" : "shownKeys";
+      if (s[field].has(key)) return s;
+      const keys = new Set(s[field]);
+      keys.add(key);
+      return { [field]: keys };
     }),
-  unmarkShown: (key) =>
+  unmarkShown: (key, scope = ROOT_SCOPE) =>
     set((s) => {
-      if (!s.shownKeys.has(key)) return s;
-      const shownKeys = new Set(s.shownKeys);
-      shownKeys.delete(key);
-      return { shownKeys };
+      const field = scope === ASSISTANT_SCOPE ? "assistantShownKeys" : "shownKeys";
+      if (!s[field].has(key)) return s;
+      const keys = new Set(s[field]);
+      keys.delete(key);
+      return { [field]: keys };
     }),
   width: readPersistedWidth(),
   setWidth: (width) => {
