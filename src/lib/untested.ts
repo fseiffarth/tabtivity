@@ -491,6 +491,7 @@ export const UNTESTED = {
   "mobile.focus.onScreen": { area: "mobile", what: "Terminal · Reader on-screen transcript note", tested: "2026-09-23" },
   "mobile.focus.readAloud": { area: "mobile", what: "Terminal · Reader auto-read toggle", tested: "2026-09-23" },
   "mobile.focus.session": { area: "mobile", what: "Terminal · Reader session card", tested: "2026-09-23" },
+  "mobile.focus.googleSession": { area: "mobile", what: "Terminal · Gemini and Antigravity Chat reads saved prompts and answers from their own session stores, without startup logos or tool output" },
   "mobile.focus.subagents": { area: "mobile", what: "Terminal · Reader subagent cards (with the time each started, and a green ✓ once it has reported back — Claude only) and sticky list open the subagent's own conversation (Claude, Codex, OpenCode); bar goes back up and steps between siblings" },
   "mobile.subagent.input": { area: "mobile", what: "Terminal · Reader · with a Claude subagent open, the composer says Message this subagent and Send delivers the words to that subagent through Claude's own agent list (↓ to the list, Enter on its row, the words typed, back to main); the Reader stays on the subagent; one gone from Claude's list keeps the draft and says why" },
   "mobile.subagent.working": { area: "mobile", what: "Terminal · Reader · an open subagent still at work (Claude) shows a working row under its conversation naming the subagent's own model (e.g. Haiku is working…); gone once it has reported back, or the session stops" },

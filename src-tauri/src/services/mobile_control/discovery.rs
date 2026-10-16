@@ -127,7 +127,7 @@ fn fresh_since(tab: &SavedTab) -> Option<i64> {
         .args
         .as_ref()
         .and_then(Value::as_array)
-        .is_some_and(|args| args.iter().any(|arg| arg.as_str() == Some("--continue")));
+        .is_some_and(|args| args.iter().any(|arg| arg.as_str().is_some_and(|arg| matches!(arg, "--continue" | "--resume" | "-c" | "-r"))));
     if continued {
         return None;
     }
@@ -1719,6 +1719,9 @@ mod tests {
         };
         assert_eq!(fresh_since(&saved(serde_json::json!([]), Some(serde_json::json!(1_700_000_000_123_i64)))), Some(1_700_000_000_123));
         assert_eq!(fresh_since(&saved(serde_json::json!(["--continue"]), Some(serde_json::json!(5)))), None);
+        for args in [serde_json::json!(["--resume", "latest"]), serde_json::json!(["-r", "latest"]), serde_json::json!(["-c"])] {
+            assert_eq!(fresh_since(&saved(args, Some(serde_json::json!(5)))), None);
+        }
         assert_eq!(fresh_since(&saved(serde_json::json!([]), None)), None);
         // An odd shape is no stamp, never a file that fails to parse.
         assert_eq!(fresh_since(&saved(serde_json::json!("x"), Some(serde_json::json!("soon")))), None);
