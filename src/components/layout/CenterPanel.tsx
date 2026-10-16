@@ -31,6 +31,7 @@ import {
   type DetachedDockTarget,
   type LayoutNode,
 } from "../../stores/tabs";
+import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { useSettingsStore } from "../../stores/settings";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
@@ -97,6 +98,12 @@ function CenterPanelImpl() {
   // Root tab keys an app overlay's docked agent column is drawing right now
   // (`OverlayAgentColumn`); their copy here stands down, like the root console.
   const overlayAgentShown = useOverlayAgentStore((st) => st.shownKeys);
+  // The same for Tabby chat keys (assistant scope): the overlay draws them
+  // attach-only; this panel never shows that scope at all (below).
+  const assistantShown = useOverlayAgentStore((st) => st.assistantShownKeys);
+  // A restored Tabby chat spawns its CLI only once it was shown or made
+  // (`startAssistantChat`); until then it has no pane here at all.
+  const assistantStarted = useOverlayAgentStore((st) => st.assistantStartedKeys);
   const layout = useTabsStore((s) => s.layout);
   const layoutByScope = useTabsStore((s) => s.layoutByScope);
   const setScope = useTabsStore((s) => s.setScope);
@@ -1087,10 +1094,12 @@ function CenterPanelImpl() {
     () =>
       Object.entries(tabsByScope).flatMap(([s, scopeTabs]) =>
         !inactiveScopes.has(s)
-          ? scopeTabs.map((tab) => ({ tab, scopeKey: s }))
+          ? scopeTabs
+              .filter((tab) => s !== ASSISTANT_SCOPE || assistantStarted.has(tab.key))
+              .map((tab) => ({ tab, scopeKey: s }))
           : [],
       ),
-    [tabsByScope, inactiveScopes],
+    [tabsByScope, inactiveScopes, assistantStarted],
   );
   // For each current-scope group: its active (visible) tab key, and the group id
   // holding each visible tab key. Rebuilt only when the current scope's layout
@@ -1189,7 +1198,10 @@ function CenterPanelImpl() {
           to that group's measured body rect. */}
       <div className="pane-layer">
         {allTabs.map(({ tab, scopeKey }) => {
-          const isCurrentScope = scopeKey === scope;
+          // The Tabby scope is never the panel's scope (it is no project and
+          // opening Tabby never switches): its chats are mounted here only to
+          // own their PTYs, and the assistant overlay draws them attach-only.
+          const isCurrentScope = scopeKey === scope && scopeKey !== ASSISTANT_SCOPE;
           const groupId = isCurrentScope ? groupOfKey.get(tab.key) : undefined;
           // While a group is fullscreen, only that group's active pane shows.
           const visible =
@@ -1275,7 +1287,8 @@ function CenterPanelImpl() {
                 // The root console / a docked agent column draws this PTY:
                 // its owning pane here stays mounted (§5.3, terminal kinds).
                 drawnElsewhere={
-                  scopeKey === ROOT_SCOPE && (rootConsoleOpen || overlayAgentShown.has(tab.key))
+                  (scopeKey === ROOT_SCOPE && (rootConsoleOpen || overlayAgentShown.has(tab.key))) ||
+                  (scopeKey === ASSISTANT_SCOPE && assistantShown.has(tab.key))
                 }
               />
             </div>

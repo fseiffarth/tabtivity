@@ -24,6 +24,7 @@ import { getDetachedWindowContext } from "./detachedContext";
 import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { envName, tabCommand } from "../lib/brand";
 import { currentTabCommand } from "../lib/brandMigration";
+import { ASSISTANT_SCOPE, readAssistantLaunch, type AssistantLaunch } from "../lib/assistant";
 
 /** A shell tab, or a remote agent tab (Claude/Codex/…), gets a stable persisted
  *  tmux session name at creation (TODO #85), so a persistent remote run reattaches
@@ -40,7 +41,7 @@ function withTmuxSession(
   scope: string,
 ): Omit<TabEntry, "key"> {
   let next = tab;
-  if ((next.kind === "agent" || next.kind === "local_agent") && !next.scheduleTargetId) {
+  if ((next.kind === "agent" || next.kind === "local_agent") && !next.scheduleTargetId && scope !== ASSISTANT_SCOPE) {
     next = { ...next, scheduleTargetId: crypto.randomUUID() };
   }
   if (
@@ -983,6 +984,12 @@ export interface TabEntry {
   // Reader an OpenCode one apart (`lib/agents/agentReader.localTabDriver`).
   // Never saved; a restored tab has `localLaunch.driver` instead.
   localDriver?: string;
+  // A Tabby chat's launch (`lib/assistant.AssistantLaunch`): which CLI and
+  // model the chat runs. Only a tab of the assistant scope carries it. The
+  // backend builds the chat's argv from this block and from nothing else the
+  // tab says (`launch_prep::assistant_gate`), so it is the tab's whole spawn
+  // recipe; persisted, and kept on a restore only in that scope.
+  assistant?: AssistantLaunch;
 }
 
 /** See `TabEntry.localLaunch`. */
@@ -1220,6 +1227,8 @@ export interface SavedTabEntry {
   hostSession?: boolean;
   // Persisted local-model launch line (see TabEntry.localLaunch).
   localLaunch?: LocalLaunch;
+  // Persisted Tabby chat launch (see TabEntry.assistant).
+  assistant?: AssistantLaunch;
 }
 
 /**
@@ -1281,6 +1290,7 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     todoId: t.todoId,
     hostSession: t.hostSession || undefined,
     localLaunch: t.localLaunch,
+    assistant: t.assistant,
     signIn: t.signIn || undefined,
     cloud: t.cloud || undefined,
   };
@@ -5489,15 +5499,19 @@ export async function hydrateScopeFromDisk(
       workspaceVersionByScope: { ...state.workspaceVersionByScope, [scope]: saved.version as number },
     }));
   }
-  const restorable = ((saved.tabLayout as SavedTabEntry[] | undefined) ?? []).filter((tab) =>
-    isRestorableTab({
-      kind: tab.kind ?? cmdToKind(tab.cmd || (tab.type === "files" ? FILES_TAB_CMD : "")),
-      cmd: tab.cmd,
-      sessionId: tab.sessionId,
-      resumeArgs: tab.resumeArgs,
-      viewer: tab.viewer,
-      localLaunch: tab.localLaunch,
-    }),
+  const restorable = ((saved.tabLayout as SavedTabEntry[] | undefined) ?? []).filter(
+    (tab) =>
+      // A Tabby scope tab without a readable launch has nothing to run: the
+      // backend would refuse its spawn, so it does not come back.
+      (scope !== ASSISTANT_SCOPE || !!readAssistantLaunch(tab.assistant)) &&
+      isRestorableTab({
+        kind: tab.kind ?? cmdToKind(tab.cmd || (tab.type === "files" ? FILES_TAB_CMD : "")),
+        cmd: tab.cmd,
+        sessionId: tab.sessionId,
+        resumeArgs: tab.resumeArgs,
+        viewer: tab.viewer,
+        localLaunch: tab.localLaunch,
+      }),
   );
   if (restorable.length === 0) {
     if (opts.createEmptyScope) {
@@ -5695,7 +5709,8 @@ function restoreSavedTab(
     kind,
     cmd: t.cmd,
     sessionId: t.sessionId,
-    scheduleTargetId: isAgent ? (t.scheduleTargetId ?? crypto.randomUUID()) : undefined,
+    // A Tabby chat takes no schedule (the backend refuses one for the scope).
+    scheduleTargetId: isAgent && ctx.scope !== ASSISTANT_SCOPE ? (t.scheduleTargetId ?? crypto.randomUUID()) : undefined,
     resumeArgs: t.resumeArgs,
   };
   // A built-in looks its cmd up in the static table; only a custom agent
@@ -5754,7 +5769,12 @@ function restoreSavedTab(
     cmd: t.cmd,
     args,
     env,
-    cwd: isAgent && ctx.defaultCwd ? restoredAgentCwd(t.cwd, ctx.defaultCwd, ctx.agentRoots) : t.cwd || ctx.defaultCwd,
+    // A Tabby chat keeps its saved cwd: the chat's own folder, which the
+    // backend rewrites at the spawn anyway and which is no project directory.
+    cwd:
+      isAgent && ctx.defaultCwd && ctx.scope !== ASSISTANT_SCOPE
+        ? restoredAgentCwd(t.cwd, ctx.defaultCwd, ctx.agentRoots)
+        : t.cwd || ctx.defaultCwd,
     kind,
     sessionId: t.sessionId,
     // The binding into agent_tasks.json. Kept from the layout when it has one,
@@ -5798,6 +5818,9 @@ function restoreSavedTab(
     hostBoundUid: t.hostBoundUid,
     mobileRequestHash: t.mobileRequestHash,
     localLaunch,
+    // The launch of a Tabby chat; in any other scope the block is ignored (a
+    // project's layout file is attacker-controlled).
+    ...(ctx.scope === ASSISTANT_SCOPE ? { assistant: readAssistantLaunch(t.assistant) } : {}),
     // A Host session never auto-resumes after a restart: it comes back
     // paused and waits for an explicit Resume (only in the root scope,
     // the one place the marker means anything).
@@ -5933,6 +5956,7 @@ export function adoptSyncOutcome(scope: string, outcome: WorkspaceSyncOutcome, s
             (t.createdVersion ?? 0) > known &&
             !RETIRED_TAB_CMDS.has(t.cmd || "") &&
             !withdrawn.has(kindOf(t)) &&
+            (scope !== ASSISTANT_SCOPE || !!readAssistantLaunch(t.assistant)) &&
             isRestorableTab({
               kind: kindOf(t),
               cmd: t.cmd,

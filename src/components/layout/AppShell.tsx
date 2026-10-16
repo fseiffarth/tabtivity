@@ -59,6 +59,8 @@ import { TimerLeaseHost } from "./TimerLeaseHost";
 import { WorkspacePatchHost } from "./WorkspacePatchHost";
 import { CalDavConflictDialog } from "../calendar/CalDavConflictDialog";
 import { RootOverlayHost } from "./RootOverlay";
+import { AssistantScopeHost } from "./AssistantScopeHost";
+import { useAssistantOverlayStore } from "../../stores/assistantOverlay";
 import { LocalLossDialog } from "../common/LocalLossDialog";
 import {
   RailAgentsIcon,
@@ -193,6 +195,9 @@ const HpcPipelineWizardHost = lazy(() =>
 const ModelsOverlayHost = lazy(() =>
   import("../models/ModelsOverlay").then((m) => ({ default: m.ModelsOverlayHost })),
 );
+const AssistantOverlayHost = lazy(() =>
+  import("../assistant/AssistantOverlay").then((m) => ({ default: m.AssistantOverlayHost })),
+);
 // First-run and on-demand pages, mounted only while this shell's own state
 // shows them.
 const HowToStart = lazy(() => import("./HowToStart").then((m) => ({ default: m.HowToStart })));
@@ -229,6 +234,15 @@ function LazyHpcPipelineWizardHost() {
   return (
     <LazyWhen when={open}>
       <HpcPipelineWizardHost />
+    </LazyWhen>
+  );
+}
+
+function LazyAssistantOverlayHost() {
+  const open = useAssistantOverlayStore((s) => s.open);
+  return (
+    <LazyWhen when={open}>
+      <AssistantOverlayHost />
     </LazyWhen>
   );
 }
@@ -1647,6 +1661,11 @@ export function AppShell() {
           before the root console so a one-click install started from one of
           its tabs opens the console on top of it. */}
       <LazyModelsOverlayHost />
+      {/* The Tabby chat overlay: the header's chat-bubble button, in the same
+          family and after it in DOM order (the most recently opened is on top).
+          Before the root console for the Models overlay's reason: its sign-in
+          card opens a terminal tab in the console, which must land on top. */}
+      <LazyAssistantOverlayHost />
       {/* The root console (Ctrl+Shift+R): the root scope as a floating subwindow
           instead of a scope to switch to, and the one overlay onto the root
           terminal — a one-click install (`runInstallInTab`) and a parked login
@@ -1655,6 +1674,7 @@ export function AppShell() {
           the install or the login. Its host also persists the root scope and merges the rows a
           root agent wrote through Tabtivity's MCP tools — both while closed. */}
       <RootOverlayHost />
+      <AssistantScopeHost />
       {/* The shortcut cheat sheet (F1, `?` in steering mode, or the ⚙ menu) —
           after the overlay family above so the sheet, openable from the
           keyboard while any of them is up, lands on top (same z-index, DOM

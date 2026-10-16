@@ -14,19 +14,40 @@ import type { Settings } from "../types";
 export const ASSISTANT_SCOPE = "assistant";
 
 /**
+ * What a chat tab is launched as: the tab's persisted `assistant` block and
+ * `PtyOptions.assistant` (`services::assistant::AssistantLaunch`). The backend
+ * builds the argv from it and from nothing the renderer sends; `cli` is an
+ * `AssistantCli` id (`claude`, `codex`, `opencode_local`, `claude_local`),
+ * `model` is set for the local CLIs.
+ */
+export interface AssistantLaunch {
+  cli: string;
+  model?: string | null;
+}
+
+/** A persisted `assistant` block read defensively (the layout is a file on
+ *  disk): `cli` a non-empty string, `model` a string or absent. Anything else
+ *  is no launch. The backend validates the cli and the model again before it
+ *  builds an argv, so this only keeps the type honest. */
+export function readAssistantLaunch(raw: unknown): AssistantLaunch | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const { cli, model } = raw as Record<string, unknown>;
+  if (typeof cli !== "string" || !cli) return undefined;
+  if (model != null && typeof model !== "string") return undefined;
+  return model ? { cli, model } : { cli };
+}
+
+/**
  * Skeleton placeholder, deleted by the step that builds each surface.
  *
  * The untested register (`lib/untested`) fails on a row no source file uses,
  * and the skeleton step registers the ids before their surfaces exist. These
  * entries are the rows' call sites until then: the step that adds the real
- * `UntestedTag` call site (S4b: `assistant.overlay`, `assistant.newChat`,
- * `assistant.search`; S5b: `mobile.assistant`) deletes its entry here, and
- * this constant with the last one.
+ * `UntestedTag` call site (S5b: `mobile.assistant`; S4b already did
+ * `assistant.overlay`, `assistant.newChat`, `assistant.search`) deletes its
+ * entry here, and this constant with the last one.
  */
 export const ASSISTANT_PENDING_PILLS = [
-  { untested: "assistant.overlay" },
-  { untested: "assistant.newChat" },
-  { untested: "assistant.search" },
   { untested: "mobile.assistant" },
 ] as const;
 

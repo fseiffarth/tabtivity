@@ -393,33 +393,46 @@ fn read_only_for_scope(scope_id: &str, configured: impl FnOnce() -> Vec<String>)
     }
 }
 
-/// The assistant's one writable support mount: `<state_dir>/assistant/work`,
-/// holding a folder per chat. A support mount rather than a fence root because
-/// `mask_private_state` hides the state dir after the roots are bound and only
-/// support mounts are re-bound through it (and the Seatbelt `writable` list is
-/// built from the same mounts). Created `0700` when missing; refused when the
-/// name is a link.
+/// The assistant's one writable support mount: the spawn's own chat folder,
+/// `<state_dir>/assistant/work/<uid>` (`docs/assistant_plan.md`, decision 17),
+/// so a chat cannot see its siblings. `cwd` must be exactly one uuid-shaped
+/// component below the work folder; it is never created here (the spawn gate,
+/// `launch_prep::ensure_chat_dir`, is the one creator, mode `0700`) and must
+/// already be a real directory: a link, a file or a missing folder is refused.
+/// A support mount rather than a fence root because `mask_private_state` hides
+/// the state dir after the roots are bound and only support mounts are re-bound
+/// through it (and the Seatbelt `writable` list is built from the same mounts).
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
-pub(crate) fn assistant_work_mount(state_dir: &Path) -> std::io::Result<BindMount> {
+pub(crate) fn assistant_chat_mount(state_dir: &Path, cwd: &Path) -> std::io::Result<BindMount> {
     let work = crate::services::assistant::work_root(state_dir);
+    let mut parts = cwd.strip_prefix(&work).map_err(|_| std::io::Error::other("not below the work folder"))?.components();
+    let uid = match (parts.next(), parts.next()) {
+        (Some(std::path::Component::Normal(uid)), None) => uid.to_string_lossy().into_owned(),
+        _ => return Err(std::io::Error::other("not exactly one folder below the work folder")),
+    };
+    if !crate::services::agent_session::is_uuid_shaped(&uid) {
+        return Err(std::io::Error::other("not a chat folder name"));
+    }
     if std::fs::symlink_metadata(&work).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(std::io::Error::other("the work folder is a link"));
     }
-    crate::services::agent_home::create_private_dir(&work)?;
-    let path = work.to_string_lossy().into_owned();
+    if !std::fs::symlink_metadata(cwd).is_ok_and(|m| m.is_dir()) {
+        return Err(std::io::Error::other("the chat folder is missing or not a folder"));
+    }
+    let path = cwd.to_string_lossy().into_owned();
     Ok(BindMount { src: path.clone(), dst: path, read_only: false })
 }
 
 /// The writable mounts a scope gets beyond the common ones of
-/// [`agent_state_mounts`]: none, except the assistant's chat folders. Like the
-/// live-session slice they are re-bound after the state mask.
+/// [`agent_state_mounts`]: none, except the assistant's own chat folder. Like
+/// the live-session slice they are re-bound after the state mask.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
-fn scope_extra_mounts(scope_id: &str, state_dir: &Path) -> Result<Vec<BindMount>, String> {
+fn scope_extra_mounts(scope_id: &str, state_dir: &Path, cwd: &str) -> Result<Vec<BindMount>, String> {
     if !is_assistant_scope(scope_id) {
         return Ok(Vec::new());
     }
-    let work = assistant_work_mount(state_dir).map_err(|e| format!("Agent sandbox: the assistant's work folder: {e}"))?;
-    Ok(vec![work])
+    let chat = assistant_chat_mount(state_dir, Path::new(cwd)).map_err(|e| format!("Agent sandbox: the assistant's chat folder: {e}"))?;
+    Ok(vec![chat])
 }
 
 /// Fail-closed shape check for an assistant spawn, before either wrapper
@@ -1053,6 +1066,7 @@ pub(crate) fn local_model_home(
 fn agent_state_mounts(
     scope_id: &str,
     env: &std::collections::HashMap<String, String>,
+    cwd: &str,
 ) -> Result<(Vec<BindMount>, Vec<ControlPin>), String> {
     let state_dir = storage::state_dir();
     let live_root = crate::services::agent_session::live_sessions_dir();
@@ -1063,7 +1077,7 @@ fn agent_state_mounts(
         dst: live_root.to_string_lossy().into_owned(),
         read_only: false,
     }];
-    mounts.extend(scope_extra_mounts(scope_id, &state_dir)?);
+    mounts.extend(scope_extra_mounts(scope_id, &state_dir, cwd)?);
     mounts.extend(
         crate::services::sandbox::ro_mounts_for_hooks(&state_dir.join("hooks"))
             .into_iter()
@@ -1430,7 +1444,7 @@ pub fn wrap_pty_options_bwrap(
     let copilot = basename(&agent_cmd) == "copilot";
     let subcommand = runs_subcommand(&opts.args);
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
-    let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env)?;
+    let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env, &opts.cwd)?;
     let support_mounts = mounts.clone();
     // The user's toolchain allowlist, except in the assistant's fence.
     let mut extra_ro = read_only_for_scope(scope_id, configured_read_only_paths);
@@ -1765,7 +1779,7 @@ fn sandbox_exec_inputs(
     let home = paths::home_dir_string();
     let state_dir = storage::state_dir();
     check_assistant_spawn(scope_id, roots, scope_home, &opts.cwd, &state_dir)?;
-    let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env)?;
+    let (mounts, control_pins) = agent_state_mounts(scope_id, &opts.env, &opts.cwd)?;
     let (mut writable, mut readable) = seatbelt_mount_paths(&mounts);
     let mut protected: Vec<String> = Vec::new();
     protected.push(state_dir.join("hooks").to_string_lossy().into_owned());
@@ -3624,37 +3638,76 @@ mod tests {
         }
     }
 
+    const CHAT_UID: &str = "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10";
+    const SIBLING_UID: &str = "7c1e2a90-5b3d-4f68-8e21-9d0a4b6c3f15";
+
+    /// A state dir with the chat folders the spawn gate would have created.
+    fn state_with_chats(tmp: &Path) -> PathBuf {
+        let state = tmp.join("state");
+        for uid in [CHAT_UID, SIBLING_UID] {
+            std::fs::create_dir_all(crate::services::assistant::chat_dir(&state, uid).unwrap()).unwrap();
+        }
+        state
+    }
+
     #[test]
-    fn the_assistant_work_folder_is_a_private_writable_support_mount() {
+    fn the_assistant_binds_only_its_own_chat_folder_and_creates_nothing() {
         let tmp = tempfile::tempdir().unwrap();
-        let state = tmp.path().join("state");
-        assert!(scope_extra_mounts("p1", &state).unwrap().is_empty());
-        assert!(scope_extra_mounts("root", &state).unwrap().is_empty());
-        assert!(!state.join("assistant").exists(), "another scope creates nothing");
-        let mounts = scope_extra_mounts("assistant", &state).unwrap();
+        let state = state_with_chats(tmp.path());
+        let chat = crate::services::assistant::chat_dir(&state, CHAT_UID).unwrap();
+        let cwd = chat.to_string_lossy().into_owned();
+        assert!(scope_extra_mounts("p1", &state, &cwd).unwrap().is_empty());
+        assert!(scope_extra_mounts("root", &state, &cwd).unwrap().is_empty());
+        let mounts = scope_extra_mounts("assistant", &state, &cwd).unwrap();
+        assert_eq!(mounts, vec![BindMount { src: cwd.clone(), dst: cwd, read_only: false }]);
+        // The mount never creates the folder: that is the spawn gate's job.
+        let fresh = tmp.path().join("fresh");
+        let missing = crate::services::assistant::chat_dir(&fresh, CHAT_UID).unwrap().to_string_lossy().into_owned();
+        assert!(scope_extra_mounts("assistant", &fresh, &missing).is_err());
+        assert!(!fresh.exists());
+        // Only a uuid-shaped single component below the work folder is bound.
         let work = crate::services::assistant::work_root(&state);
-        let want = work.to_string_lossy().into_owned();
-        assert_eq!(mounts, vec![BindMount { src: want.clone(), dst: want, read_only: false }]);
-        assert!(work.is_dir());
+        std::fs::create_dir_all(work.join("notes").join(CHAT_UID)).unwrap();
+        let sibling = work.join(SIBLING_UID).to_string_lossy().into_owned();
+        let bad = [
+            work.to_string_lossy().into_owned(),
+            work.join("notes").to_string_lossy().into_owned(),
+            work.join("notes").join(CHAT_UID).to_string_lossy().into_owned(),
+            chat.join("deeper").to_string_lossy().into_owned(),
+            work.join("..").join("work").join(CHAT_UID).to_string_lossy().into_owned(),
+            state.to_string_lossy().into_owned(),
+            String::new(),
+            "relative".to_string(),
+        ];
+        for cwd in &bad {
+            assert!(scope_extra_mounts("assistant", &state, cwd).is_err(), "{cwd:?}");
+        }
+        assert_eq!(scope_extra_mounts("assistant", &state, &sibling).unwrap()[0].src, sibling);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&work).unwrap().permissions().mode() & 0o777, 0o700);
-            // A link at the name is refused, never bound.
+            // A link at the chat name or at the work folder is refused, never bound.
             let linked = tmp.path().join("linked");
-            std::fs::create_dir_all(linked.join("assistant")).unwrap();
+            std::fs::create_dir_all(linked.join("assistant/work")).unwrap();
             std::fs::create_dir_all(tmp.path().join("elsewhere")).unwrap();
-            std::os::unix::fs::symlink(tmp.path().join("elsewhere"), linked.join("assistant/work")).unwrap();
-            assert!(scope_extra_mounts("assistant", &linked).is_err());
+            let via = linked.join("assistant/work").join(CHAT_UID);
+            std::os::unix::fs::symlink(tmp.path().join("elsewhere"), &via).unwrap();
+            assert!(scope_extra_mounts("assistant", &linked, &via.to_string_lossy()).is_err());
+            let relinked = tmp.path().join("relinked");
+            std::fs::create_dir_all(relinked.join("assistant")).unwrap();
+            std::os::unix::fs::symlink(tmp.path().join("elsewhere"), relinked.join("assistant/work")).unwrap();
+            std::fs::create_dir_all(tmp.path().join("elsewhere").join(CHAT_UID)).unwrap();
+            let through = relinked.join("assistant/work").join(CHAT_UID);
+            assert!(scope_extra_mounts("assistant", &relinked, &through.to_string_lossy()).is_err());
         }
     }
 
     /// The bubblewrap argv of an assistant spawn built from the same pieces the
     /// wrapper uses (no roots, no allowlist, the support mounts, the state
     /// mask): no project, box, `agent-global` or `agent_fence_paths` path is
-    /// bound, and the work folder is re-bound read-write after the mask.
+    /// bound, and the chat's own folder (not the work folder, not a sibling) is
+    /// re-bound read-write after the mask.
     #[test]
-    fn the_assistant_bwrap_argv_binds_only_its_home_and_the_work_folder() {
+    fn the_assistant_bwrap_argv_binds_only_its_home_and_its_own_chat_folder() {
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path().join("state");
         for dir in ["agent-global", "sessions", "remote-projects", "hooks"] {
@@ -3662,11 +3715,13 @@ mod tests {
         }
         std::fs::write(state.join("projects.json"), "[]").unwrap();
         std::fs::create_dir_all(state.join("agent-homes/assistant")).unwrap();
-        let chat = crate::services::assistant::chat_dir(&state, "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10").unwrap();
+        let _ = state_with_chats(tmp.path());
+        let chat = crate::services::assistant::chat_dir(&state, CHAT_UID).unwrap();
+        let sibling = crate::services::assistant::chat_dir(&state, SIBLING_UID).unwrap().to_string_lossy().into_owned();
         let home = crate::services::agent_home::scope_home_in(&state, "assistant");
         let live = BindMount { src: state.join("live/assistant").to_string_lossy().into_owned(), dst: state.join("live").to_string_lossy().into_owned(), read_only: false };
         let mut mounts = vec![live];
-        mounts.extend(scope_extra_mounts("assistant", &state).unwrap());
+        mounts.extend(scope_extra_mounts("assistant", &state, &chat.to_string_lossy()).unwrap());
         let allowlist = ["/home/u/.cargo", "/home/u/.rustup"].map(String::from).to_vec();
         let extra_ro = read_only_for_scope("assistant", || allowlist.clone());
         assert!(extra_ro.is_empty());
@@ -3700,26 +3755,32 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--bind-try"), "no root is bound: {args:?}");
         // The home is the assistant's own.
         assert!(args.windows(3).any(|w| w[0] == "--bind" && w[1] == home.to_string_lossy() && w[2] == "/home/u"));
-        // The mask hides the state dir, then the work folder comes back writable.
+        // The mask hides the state dir, then the chat's own folder comes back writable.
+        let chat_s = chat.to_string_lossy().into_owned();
         let mask = args.windows(2).rposition(|w| w[0] == "--tmpfs" && w[1] == state.to_string_lossy()).unwrap();
-        let rebound = args.windows(3).rposition(|w| w[0] == "--bind" && w[1] == work && w[2] == work).unwrap();
+        let rebound = args.windows(3).rposition(|w| w[0] == "--bind" && w[1] == chat_s && w[2] == chat_s).unwrap();
         assert!(mask < rebound && rebound < sep, "{args:?}");
-        assert!(!args.windows(3).any(|w| w[0] == "--ro-bind" && w[2] == work));
-        // The chat folder is the working directory, inside the re-bound work folder.
+        // Neither the work folder nor a sibling chat is bound, in any mode.
+        for hidden in [&work, &sibling] {
+            assert!(!args[..sep].windows(3).any(|w| w[0].contains("bind") && (&w[1] == hidden || &w[2] == hidden)), "{hidden}: {args:?}");
+        }
+        // The chat folder is the working directory.
         let chdir = args.iter().position(|a| a == "--chdir").unwrap();
-        assert_eq!(args[chdir + 1], chat.to_string_lossy());
+        assert_eq!(args[chdir + 1], chat_s);
         assert!(chat.starts_with(&work));
     }
 
     /// Seatbelt: an empty `roots` list still renders, names the assistant's home
-    /// and the work folder (writable), and no root, allowlist path or other
-    /// scope's home.
+    /// and the chat's own folder (writable), and no root, allowlist path, other
+    /// chat folder or other scope's home.
     #[test]
-    fn the_assistant_seatbelt_profile_names_the_home_and_the_work_folder_and_no_root() {
+    fn the_assistant_seatbelt_profile_names_the_home_and_its_chat_folder_and_no_root() {
         let tmp = tempfile::tempdir().unwrap();
-        let state = tmp.path().join("state");
+        let state = state_with_chats(tmp.path());
+        let chat = crate::services::assistant::chat_dir(&state, CHAT_UID).unwrap().to_string_lossy().into_owned();
+        let sibling = crate::services::assistant::chat_dir(&state, SIBLING_UID).unwrap().to_string_lossy().into_owned();
         let mut mounts = vec![BindMount { src: state.join("live/assistant").to_string_lossy().into_owned(), dst: state.join("live").to_string_lossy().into_owned(), read_only: false }];
-        mounts.extend(scope_extra_mounts("assistant", &state).unwrap());
+        mounts.extend(scope_extra_mounts("assistant", &state, &chat).unwrap());
         mounts.push(BindMount { src: state.join("hooks").to_string_lossy().into_owned(), dst: state.join("hooks").to_string_lossy().into_owned(), read_only: true });
         let (mut writable, readable) = seatbelt_mount_paths(&mounts);
         writable.extend(seatbelt_temp_dirs(None));
@@ -3739,12 +3800,13 @@ mod tests {
         let profile = sandbox_exec_profile(&inputs);
         let work = crate::services::assistant::work_root(&state).to_string_lossy().into_owned();
         assert!(profile.starts_with("(version 1)\n(allow default)\n"));
-        assert!(profile.contains(&format!("(allow file-write* (subpath {}))", sbpl_string(&work))), "{profile}");
+        assert!(profile.contains(&format!("(allow file-write* (subpath {}))", sbpl_string(&chat))), "{profile}");
+        assert!(!profile.contains(&sibling) && !profile.contains(&format!("(allow file-write* (subpath {}))", sbpl_string(&work))), "{profile}");
         assert!(profile.contains(&format!("(allow file-read* file-write* (subpath {}))", sbpl_string(&home.to_string_lossy()))));
         assert!(profile.contains(&format!("(deny file-read* file-write* (subpath {}))", sbpl_string(&crate::services::agent_home::homes_root_in(&state).to_string_lossy()))));
         assert!(!profile.contains(".cargo") && !profile.contains("/w/planted"));
         // Every write allow is the work folder, the live slice or a temp dir.
-        let mut allowed = vec![work.clone(), state.join("live/assistant").to_string_lossy().into_owned()];
+        let mut allowed = vec![chat.clone(), state.join("live/assistant").to_string_lossy().into_owned()];
         allowed.extend(seatbelt_temp_dirs(None));
         let allowed: Vec<String> = allowed.iter().map(|p| format!("(allow file-write* (subpath {}))", sbpl_string(p))).collect();
         for line in profile.lines().filter(|l| l.starts_with("(allow file-write*") && !l.contains("literal")) {

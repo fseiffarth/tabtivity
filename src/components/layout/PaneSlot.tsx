@@ -24,6 +24,7 @@ import type { HostConnState } from "../../stores/remote/remoteStatus";
 import { shouldPersistTab, shouldPersistLocalTab } from "../../lib/terminal/tmuxSession";
 import { resolveLocalMirror, resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { MOBILE_ACCESS_KEY } from "../../lib/brand";
+import { ASSISTANT_SCOPE } from "../../lib/assistant";
 
 export interface PaneSlotProps {
   tab: TabEntry;
@@ -113,7 +114,10 @@ function PaneSlotImpl({
   if (!mobileAgentTmuxReady.has(mobileReadyKey)) {
     mobileAgentTmuxReady.set(
       mobileReadyKey,
-      !!paneProject?.[MOBILE_ACCESS_KEY] || !!paneBox?.[MOBILE_ACCESS_KEY],
+      // A Tabby chat is always tmux-wrapped like a Mobile-scope agent: the
+      // phone's own switch for it (`assistant_access`) is read by the backend,
+      // and the wrap is also what lets a crash leave the chat running.
+      !!paneProject?.[MOBILE_ACCESS_KEY] || !!paneBox?.[MOBILE_ACCESS_KEY] || scopeKey === ASSISTANT_SCOPE,
     );
   }
   // Mount-free remote, per-pane gating. A remote project's LOCAL panes run on
