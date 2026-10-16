@@ -384,9 +384,16 @@ where
 
 /// Where a scope's Claude keeps its transcripts: `<scope home>/.claude/projects`.
 pub(crate) fn claude_projects_roots(project_id: Option<&str>) -> Vec<PathBuf> {
-    vec![crate::services::agent_home::scope_home(project_id)
+    let mut roots = vec![crate::services::agent_home::scope_home(project_id)
         .join(".claude")
-        .join("projects")]
+        .join("projects")];
+    // The chat assistant's local-Claude chats run in the scope's local-model
+    // home (`assistant.local`), not its cloud one; a chat's uuid is in one of
+    // the two (the phone's Focus view reads the transcript from here).
+    if project_id.is_some_and(|id| crate::storage::project_key(id.trim()).eq_ignore_ascii_case(crate::storage::ASSISTANT_SCOPE)) {
+        roots.push(crate::services::agent_home::local_model_home(project_id).join(".claude").join("projects"));
+    }
+    roots
 }
 
 /// Where a scope's Codex keeps its rollouts: `<scope home>/.codex/sessions`.
@@ -2573,6 +2580,19 @@ mod tests {
         assert!(once.contains("name = \"mine\""));
         assert_eq!(once.matches(concat!("name = \"", crate::app_slug!(), "-session\"")).count(), 1);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// The assistant's local-Claude chats keep their transcripts in the
+    /// scope's local-model home, so its Claude roots name both homes; no
+    /// other scope's do.
+    #[test]
+    fn the_assistants_claude_roots_include_its_local_model_home() {
+        let roots = claude_projects_roots(Some("assistant"));
+        assert_eq!(roots.len(), 2);
+        assert!(roots[1].starts_with(crate::services::agent_home::local_model_home(Some("assistant"))));
+        assert_eq!(claude_projects_roots(Some(" Assistant ")).len(), 2);
+        assert_eq!(claude_projects_roots(Some("p1")).len(), 1);
+        assert_eq!(claude_projects_roots(None).len(), 1);
     }
 
     #[test]

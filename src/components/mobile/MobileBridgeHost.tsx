@@ -10,6 +10,9 @@ import {
   useTabsStore,
   type TabEntry,
 } from "../../stores/tabs";
+import { ASSISTANT_SCOPE, assistantErrorCode, assistantNewChat, assistantOptions } from "../../lib/assistant";
+import { ensureAssistantScopeHydrated, mountAssistantChat, startAssistantChat } from "../../stores/assistantScope";
+import { experimentalEnabled } from "../../lib/experimental";
 import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootOverlay";
 import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
 import { useSettingsStore } from "../../stores/settings";
@@ -120,6 +123,9 @@ interface CreateRequest {
   /** A local-model agent: the opaque id `launch_options.local` listed, in
    *  place of `agent_id`. */
   local?: string;
+  /** A chat of the assistant scope: the opaque launch id `launch_options`
+   *  listed under `assistant.launches`, alone. */
+  assistant?: string;
   idempotency_key: string;
 }
 interface MobileWorktree { id: string; label: string; branch?: string; main: boolean }
@@ -247,7 +253,7 @@ type DesktopRequest =
 | { type: "catalog"; request_id: string; project_id?: string }
   | { type: "activity"; request_id: string }
   | { type: "git_states"; request_id: string }
-  | { type: "activate"; request_id: string; project_id: string }
+  | { type: "activate"; request_id: string; project_id: string; tmux_session?: string | null }
   | { type: "create"; request_id: string; request: CreateRequest }
   | { type: "launch_options"; request_id: string; project_id: string }
   | { type: "todo"; request_id: string }
@@ -449,9 +455,29 @@ function mobileRootScope(): MobileScope | undefined {
   return { id: ROOT_SCOPE, name: "Root", cwd, localFile: "" };
 }
 
+/** Whether the chat assistant is the phone's right now: the experimental flag
+ * and the Mobile host's `assistant_access` not switched off (unset is on).
+ * The desktop-side repeat of the sidecar's `discovery::assistant_open`, which
+ * is the perimeter; `Settings::assistant_phone_open` is the same rule on the
+ * typed settings. */
+function assistantPhoneOpen(): boolean {
+  const settings = useSettingsStore.getState().settings;
+  return experimentalEnabled(settings, "assistant") && settings?.[MOBILE_HOST_KEY]?.assistant_access !== false;
+}
+
+/** The chat assistant as a phone scope (`docs/assistant_plan.md`, decision 12).
+ * No project and no folder the phone may use: `cwd` is empty on purpose, so
+ * the project-shaped paths that need one (a shell, an inbox, a worktree)
+ * answer `project_ineligible` for it, and `create` takes its own branch. */
+function mobileAssistantScope(): MobileScope | undefined {
+  if (!assistantPhoneOpen()) return undefined;
+  return { id: ASSISTANT_SCOPE, name: BRAND.assistant, cwd: "", localFile: "" };
+}
+
 function mobileScope(id: string | undefined): MobileScope | undefined {
   if (!id) return undefined;
   if (id === ROOT_SCOPE) return mobileRootScope();
+  if (id === ASSISTANT_SCOPE) return mobileAssistantScope();
   if (id.startsWith(BOX_SCOPE_PREFIX)) {
     const box = useBoxesStore.getState().boxes.find((entry) => boxScopeId(entry.id) === id);
     // A box never opened has no folder yet; the switch resolves one on enable,
@@ -472,7 +498,8 @@ function allMobileScopes(): MobileScope[] {
   const projects = useProjectsStore.getState().projects.flatMap((entry) => mobileScope(entry.id) ?? []);
   const boxes = useBoxesStore.getState().boxes.flatMap((entry) => mobileScope(boxScopeId(entry.id)) ?? []);
   const root = mobileScope(ROOT_SCOPE);
-  return [...(root ? [root] : []), ...projects, ...boxes];
+  const assistant = mobileScope(ASSISTANT_SCOPE);
+  return [...(root ? [root] : []), ...(assistant ? [assistant] : []), ...projects, ...boxes];
 }
 
 /** Load a scope's saved tabs when the desktop has not opened it this session.
@@ -480,6 +507,7 @@ function allMobileScopes(): MobileScope[] {
 async function restoreScope(scope: MobileScope): Promise<void> {
   if (scope.project) await restoreProjectScope(scope.project).catch(() => {});
   else if (scope.id === ROOT_SCOPE) await ensureRootScopeHydrated();
+  else if (scope.id === ASSISTANT_SCOPE) await ensureAssistantScopeHydrated();
 }
 
 /** The phone receives these already-derived activity facts only. The desktop
@@ -530,6 +558,7 @@ function agentTurnScopes(): string[] {
     ...useBoxesStore.getState().boxes.flatMap((entry) => mobileScope(boxScopeId(entry.id)) ?? []),
   ].map((scope) => scope.id);
   if (useSettingsStore.getState().settings?.[MOBILE_HOST_KEY]?.root_access === true) scopes.push(ROOT_SCOPE);
+  if (assistantPhoneOpen()) scopes.push(ASSISTANT_SCOPE);
   return scopes;
 }
 
@@ -819,6 +848,9 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
+  // A chat of the assistant scope is its own thing: the phone names a launch,
+  // never an agent, a folder or a mode.
+  if (scope.id === ASSISTANT_SCOPE || request.assistant) return createAssistantChat(scope, request);
   const cwd = scope.cwd;
   if (!cwd) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
   // The new tab must be in the *shown* scope to get a terminal at all, so the
@@ -919,6 +951,75 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
   return { status: "created", tmux_session: created.tmuxSession };
 }
 
+/** The chats this window has already made for a phone request, by the request's
+ * opaque key: `assistant_new_chat` takes no idempotency key, and the phone
+ * retries a create until it sees the tab. Bounded; a window restart forgets it
+ * (the sidecar's own create, with no window, is idempotent on the file). */
+const assistantCreated = new Map<string, string>();
+const MAX_ASSISTANT_CREATED = 64;
+
+/** The CLI and model a phone's opaque assistant launch id stands for, among
+ * the launches the desktop's own new-chat menu offers: the sidecar derives the
+ * id from the same `(cli, model)` pairs (`mobile_control::assistant::
+ * launch_handle`), so an id it never listed resolves to nothing. */
+async function resolveAssistantLaunch(handle: string): Promise<{ cli: string; model: string | null } | null> {
+  const options = await assistantOptions().catch(() => null);
+  if (!options) return null;
+  const models = options.localModels.slice(0, 64);
+  const pairs = options.clis.flatMap((cli) => (cli.local ? models : [null]).map((model) => ({ cli: cli.id, model })));
+  for (const pair of await Promise.all(pairs.map(async (candidate) => ({
+    ...candidate,
+    id: await invoke<string>("mobile_opaque_id", {
+      domain: "assistant",
+      value: candidate.model === null ? candidate.cli : `${candidate.cli}:${candidate.model}`,
+    }).catch(() => ""),
+  })))) {
+    if (pair.id === handle) return { cli: pair.cli, model: pair.model };
+  }
+  return null;
+}
+
+/** Start one assistant chat for the phone: `assistant_new_chat` (the desktop
+ * command, so the record is `assistant::new_chat_record`'s and the other
+ * windows are told by `workspace:patch`), adopted into this window's store and
+ * raised. The pane that attaches and spawns the CLI is the assistant layer's
+ * (`CenterPanel` keeps every scope's panes mounted). */
+async function createAssistantChat(scope: MobileScope, request: CreateRequest): Promise<DesktopResponse> {
+  const invalid = (message: string): DesktopResponse => ({ status: "error", code: "invalid_request", message });
+  if (
+    scope.id !== ASSISTANT_SCOPE || request.kind !== "agent" || !request.assistant
+    || request.agent_id || request.mode || request.worktree || request.cloud || request.task
+    || request.sign_in || request.like_tab || request.local
+  ) {
+    return invalid("A chat names its launch and nothing else");
+  }
+  const requestHash = await invoke<string>("mobile_opaque_id", { domain: "request", value: request.idempotency_key });
+  const known = assistantCreated.get(requestHash);
+  if (known) return { status: "created", tmux_session: known };
+  const launch = await resolveAssistantLaunch(request.assistant);
+  if (!launch) return { status: "error", code: "unknown_agent", message: "That launch is unavailable" };
+  // Hydrate before the command: a created tab arriving at an unhydrated scope
+  // is only picked up by the hydrate (`mountAssistantChat` needs it too).
+  await ensureAssistantScopeHydrated();
+  let chat;
+  try {
+    chat = await assistantNewChat(launch.cli, launch.model);
+  } catch (error) {
+    return { status: "error", code: assistantErrorCode(error) || "launch_failed", message: "The chat could not be started" };
+  }
+  // The one door for a chat the backend made: adopts the tab (the
+  // `workspace:patch` or a re-read of the stored set, whichever lands first)
+  // and lets its CLI start, which the assistant scope otherwise does lazily.
+  const created = await mountAssistantChat(chat.tabId).catch(() => null);
+  if (!created?.tmuxSession) {
+    return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
+  }
+  useTabsStore.getState().revealTabInScope(ASSISTANT_SCOPE, created.key);
+  if (assistantCreated.size >= MAX_ASSISTANT_CREATED) assistantCreated.clear();
+  assistantCreated.set(requestHash, created.tmuxSession);
+  return { status: "created", tmux_session: created.tmuxSession };
+}
+
 /** A project scope's startable worktrees under their opaque ids — the same
  * list the desktop "+" asks from (`agentWorktreeChoices`: empty unless a
  * linked worktree exists). Box and root scopes have none. */
@@ -950,6 +1051,9 @@ async function launchOptions(projectId: string): Promise<DesktopResponse> {
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
+  // The assistant's launches are the sidecar's to list (it derives their opaque
+  // ids and answers without asking the window); nothing else is offered here.
+  if (scope.id === ASSISTANT_SCOPE) return { status: "launch_options", worktrees: [], cloud: [], sign_in: [] };
   const worktrees = (await worktreesOf(scope)).map(({ id, worktree }) => ({
     id,
     label: worktree.is_main ? "" : worktreeName(worktree.path),
@@ -1055,6 +1159,12 @@ async function signInOptions(): Promise<MobileSignInOption[]> {
  * console is raised over whatever is open, which is what gives its panes a
  * terminal. */
 async function enterScope(scope: MobileScope): Promise<void> {
+  // Like root, the assistant is never switched to; its chats are restored and
+  // their panes are the assistant layer's.
+  if (scope.id === ASSISTANT_SCOPE) {
+    await ensureAssistantScopeHydrated();
+    return;
+  }
   if (scope.id === ROOT_SCOPE) {
     await ensureRootScopeHydrated();
     useRootOverlayStore.getState().show();
@@ -1062,12 +1172,21 @@ async function enterScope(scope: MobileScope): Promise<void> {
   else await useBoxesStore.getState().openBox(scope.id.slice(BOX_SCOPE_PREFIX.length));
 }
 
-async function activate(projectId: string): Promise<DesktopResponse> {
+async function activate(projectId: string, tmuxSession?: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
   await enterScope(scope);
+  // The assistant's chats start lazily (a restored one has no process until
+  // asked for), so the phone opening one names it here and the window starts
+  // its CLI; the pane appears and the phone's next catalog read finds the
+  // tmux session live. Every other scope ignores the name.
+  if (scope.id === ASSISTANT_SCOPE && tmuxSession) {
+    const chat = mobileTargetTab(scope.id, tmuxSession);
+    if (!chat) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
+    startAssistantChat(chat.key);
+  }
   return { status: "activated" };
 }
 
@@ -1170,7 +1289,10 @@ async function reopenMobileTab(projectId: string, closedId?: string): Promise<De
   if (!entry.tmuxSession) {
     return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
   }
-  if (scope.id === ROOT_SCOPE) useTabsStore.getState().revealTabInScope(ROOT_SCOPE, entry.key);
+  if (scope.id === ROOT_SCOPE || scope.id === ASSISTANT_SCOPE) useTabsStore.getState().revealTabInScope(scope.id, entry.key);
+  // A reopened chat is asked for: without this its pane is never mounted (the
+  // assistant scope spawns lazily) and the CLI would not resume.
+  if (scope.id === ASSISTANT_SCOPE) startAssistantChat(entry.key);
   await persistScopeLayout(scope.id);
   return { status: "created", tmux_session: entry.tmuxSession };
 }
@@ -2153,7 +2275,9 @@ async function recordTabPrompt(projectId: string, tmuxSession: string, message: 
   const tab = scheduleTargetTab(scope.id, tmuxSession);
   if (!tab) return { status: "error", code: "tab_not_found", message: "Tab not found" };
   const text = message.trim();
-  if (!text || isSessionCommand(text)) return { status: "seen" };
+  // The chat assistant keeps no prompt history: the chat lives in the CLI's
+  // transcript (`agent_prompts` records nothing for the scope either).
+  if (!text || isSessionCommand(text) || scope.id === ASSISTANT_SCOPE) return { status: "seen" };
   await useAgentPromptsStore.getState().record(scope.id, {
     id: crypto.randomUUID(),
     message: text,
@@ -2502,7 +2626,7 @@ async function handleRequest(
     };
     case "activity": return { status: "activity", statuses: allAgentStatuses(), prompts: allAgentPrompts() };
     case "git_states": return { status: "git_states", states: gitDotRows(allMobileScopes().flatMap((scope) => scope.project ?? [])) };
-    case "activate": return activate(request.project_id);
+    case "activate": return activate(request.project_id, request.tmux_session ?? undefined);
     case "create": return create(request.request, t);
     case "launch_options": return launchOptions(request.project_id);
     case "todo": return { status: "todo", board: await todoSnapshot() };

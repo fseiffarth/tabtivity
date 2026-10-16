@@ -15,6 +15,7 @@ import { dialogLine, type AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
 import { OutboxPost } from "../components/OutboxPost";
 import { SentFilesIndex, sentFiles, type SentFile } from "../components/SentFilesIndex";
+import { useScopeKind } from "../scopeKind";
 import { ComposerThumb, InboxAlbum, leafName } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
 import { Fragment, memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -802,7 +803,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
  * model picker already up — once, as soon as the session has drawn.
  * `subagent`: one was picked off the tab card's subagent list, so the session
  * opens in Focus on that subagent's own conversation. */
-export function Terminal({ tab, project, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab }: {
+export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab }: {
   tab: TabRow;
   /** The project the tab belongs to, for the files drawer a swipe from the
    * left of the output opens (`ProjectFiles`). */
@@ -822,6 +823,11 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   // retry, its other way in and the Done that closes the tab.
   const signInTab = openedToSignIn || tab.sign_in === true;
   const t = useT();
+  /** A chat of the assistant scope: it has no folder behind it, so the
+   * affordances that reach one are gone — the files drawer, the outbox, inbox
+   * uploads (the composer's **+**), Commit and Mark up. */
+  const bare = useScopeKind(projectOfTab) === "assistant";
+  const project = bare ? undefined : projectOfTab;
   const host = useRef<HTMLDivElement>(null);
   const wideHint = useRef<HTMLDivElement>(null);
   const readableHost = useRef<HTMLElement>(null);
@@ -2073,7 +2079,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** What this chat changed and has not committed: the Commit chip's count
    * and its sheet's list, read again each time the sheet opens. */
   const [commitRefresh, setCommitRefresh] = useState(0);
-  const uncommitted = useChatUncommitted(tab.id, tab.kind === "agent", transcript?.version, commitRefresh);
+  const uncommitted = useChatUncommitted(tab.id, tab.kind === "agent" && !bare, transcript?.version, commitRefresh);
   const uncommittedCount = uncommitted?.available ? uncommitted.total : 0;
   /** Reads the stored session: on open, every TRANSCRIPT_POLL while the page
    * is visible, and TRANSCRIPT_SETTLE after the screen last changed. A read
@@ -2341,6 +2347,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     setGallery(false);
     setOutboxOpen(null);
     setInboxOpen(null);
+    if (bare) return;
     let stopped = false;
     let inflight: AbortController | undefined;
     const poll = () => {
@@ -2365,7 +2372,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [tab.id]);
+  }, [tab.id, bare]);
   /** Reads the usage panel now and every `LIMITS_POLL` while the page is
    * visible. A CLI with no usage readout stops the polling; a failed read keeps
    * what was shown — the next poll retries. */
@@ -2673,7 +2680,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
       return true;
     }
     const id = slash ? undefined : ++pendingId.current;
-    if (id !== undefined && agentAtWork && !interrupt) {
+    // A chat of the assistant scope has no held-prompt binding: its words go straight to the CLI.
+    if (id !== undefined && agentAtWork && !interrupt && !bare) {
       holdDraft(id, text, fromComposer);
       return true;
     }
@@ -3657,15 +3665,15 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** An agent tab's viewers offer **Mark up**; a shell has no chat to send to.
    * The agent's state is in the deps, so the viewers re-render on its edges. */
   const markupTarget = useMemo<MarkupTarget | undefined>(
-    () => (tab.kind === "agent"
+    () => (tab.kind === "agent" && !bare
       ? { tabId: tab.id, projectId: project ?? `tab:${tab.id}`, onSend: sendMarkup, agent: markupAgent, refresh: refreshOutboxFile }
       : undefined),
-    [tab.kind, tab.id, project, sendMarkup, markupAgent, refreshOutboxFile],
+    [tab.kind, tab.id, bare, project, sendMarkup, markupAgent, refreshOutboxFile],
   );
   /** The agent's open markup question (`markup_ask`), for the banner over the
    * composer: read on the markup views' own poll, only while the Focus chat
    * is on screen (no viewer over it) and on each agent edge. */
-  const { asks: markupAsks } = useMarkupAsks(tab.kind === "agent" ? tab.id : undefined, undefined,
+  const { asks: markupAsks } = useMarkupAsks(tab.kind === "agent" && !bare ? tab.id : undefined, undefined,
     view === "focus" && !outboxOpen && !inboxOpen && !filesOpen && !gallery && !askedFile, markupAgent);
   const markupAsk = markupAsks.find((ask) => ask.questions.length > 0);
   /** The file it is about, if this tab's outbox has it — the newest copy. */
@@ -4398,10 +4406,12 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
         </div>
         <div className="composer-bar">
           {tab.kind === "agent" && <>
+            {!bare && <>
             <input ref={fileInput} type="file" accept={ANY_FILE_ACCEPT} multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-file-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={galleryInput} type="file" accept="image/*,video/*" multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-gallery-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-camera-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <button className={`composer-add${addSheet ? " open" : ""}`} disabled={!connected} onClick={() => setAddSheet(true)} aria-label={t("mobile.add.title")} aria-haspopup="dialog" aria-expanded={addSheet} title={t("mobile.add.hint")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+            </>}
             {/* Folds the key row below in and out; it starts folded. */}
             <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
             {/* Plan / Goal / Clear sit centred between the keys button and Send, evenly spaced. */}
@@ -4419,7 +4429,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
               : <button className="composer-prefix" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={clearConversation} aria-label={t("mobile.composer.clearChat")} title={t("mobile.composer.clearChat")}>{t("mobile.composer.clearChip")}</button>}
             {((undoable && isUntested("mobile.composer.undoClear")) || (undoing && isUntested("mobile.composer.undoing"))) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
             {/* Commit opens its sheet: one commit, or split into several. */}
-            <button className="composer-prefix composer-commit" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={() => { setCommitSheet(true); setCommitRefresh((count) => count + 1); }} aria-label={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")} aria-haspopup="dialog" aria-expanded={commitSheet} title={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M2 12h6.5M15.5 12H22" /></svg>{uncommittedCount > 0 && <span className="composer-commit-count" aria-hidden="true">{uncommittedCount > 99 ? "99+" : uncommittedCount}</span>}</button>
+{!bare &&             <button className="composer-prefix composer-commit" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={() => { setCommitSheet(true); setCommitRefresh((count) => count + 1); }} aria-label={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")} aria-haspopup="dialog" aria-expanded={commitSheet} title={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M2 12h6.5M15.5 12H22" /></svg>{uncommittedCount > 0 && <span className="composer-commit-count" aria-hidden="true">{uncommittedCount > 99 ? "99+" : uncommittedCount}</span>}</button>}
             </div>
           </>}
           {tab.kind !== "agent" && <>

@@ -37,20 +37,6 @@ export function readAssistantLaunch(raw: unknown): AssistantLaunch | undefined {
   return model ? { cli, model } : { cli };
 }
 
-/**
- * Skeleton placeholder, deleted by the step that builds each surface.
- *
- * The untested register (`lib/untested`) fails on a row no source file uses,
- * and the skeleton step registers the ids before their surfaces exist. These
- * entries are the rows' call sites until then: the step that adds the real
- * `UntestedTag` call site (S5b: `mobile.assistant`; S4b already did
- * `assistant.overlay`, `assistant.newChat`, `assistant.search`) deletes its
- * entry here, and this constant with the last one.
- */
-export const ASSISTANT_PENDING_PILLS = [
-  { untested: "mobile.assistant" },
-] as const;
-
 // ── Commands (`commands/assistant.rs`) ──────────────────────────────────────
 //
 // Each refuses with the wire code `assistant_off` while the experimental flag

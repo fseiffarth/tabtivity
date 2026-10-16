@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
+    future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
+    pin::Pin,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -121,9 +123,20 @@ struct HeadlessSpawner {
     launch: headless::HeadlessLaunch,
     installed: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     new_project: NewProject,
+    /// What the desktop's own new-chat menu would offer the chat assistant
+    /// (`commands::assistant::assistant_options`: the CLIs and their login,
+    /// Ollama's models). The phone's launch ids are derived from it and
+    /// resolved against it; a test swaps in a fixed answer.
+    assistant_options: AssistantOptionsSeam,
 }
 
 type NewProject = Arc<dyn Fn(&str, &str) -> Result<String, PhoneProjectRefusal> + Send + Sync>;
+
+type AssistantOptionsSeam = Arc<
+    dyn Fn() -> Pin<Box<dyn Future<Output = Result<crate::commands::assistant::AssistantOptions, String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 impl Default for HeadlessSpawner {
     fn default() -> Self {
@@ -146,6 +159,7 @@ impl Default for HeadlessSpawner {
             }),
             installed: Arc::new(crate::commands::agents::binary_is_installed),
             new_project: Arc::new(crate::commands::projects::create_project_for_phone),
+            assistant_options: Arc::new(|| Box::pin(crate::commands::assistant::assistant_options())),
         }
     }
 }
@@ -182,6 +196,14 @@ struct SessionBody {
 struct ProjectQuery {
     view: Option<String>,
     q: Option<String>,
+}
+
+/// `POST /projects/{id}/activate?tab=<tab id>`: the tab the phone is about to
+/// open, so a scope that starts its chats lazily can start that one.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ActivateQuery {
+    tab: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1169,6 +1191,9 @@ async fn project(
     if public.kind == ScopeKind::Project {
         public.git = git.as_deref().and_then(git_dot);
     }
+    // The assistant scope starts chats from its own launches, never a plain
+    // agent: the ＋ sheet's agent list would only offer what the create refuses.
+    let agents = if public.kind == ScopeKind::Assistant { Vec::new() } else { agents };
     let closed = closed_tab_rows(closed);
     let mut timings = timings
         .into_iter()
@@ -1359,6 +1384,12 @@ async fn create_tab(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
+    // A chat of the assistant scope names its launch and nothing else, and no
+    // other scope takes one: the scope has no plain agent, no shell, no
+    // worktree. (`launch_shape_ok` already kept the other fields out.)
+    if (project.public.kind == ScopeKind::Assistant) != request.assistant.is_some() {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
     request.project_id = project.raw_id.clone();
     let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
@@ -1369,6 +1400,17 @@ async fn create_tab(
         return create_headless(&state, &phone, &project_id, &request).await;
     }
     answer_created(&state, &phone, &project_id, response).await
+}
+
+/// The launches a phone's assistant handle may resolve to right now: what the
+/// desktop's new-chat menu would offer (`assistant_options`), as opaque ids.
+/// Empty when the options cannot be read (the flag is off, say), which no
+/// handle resolves against.
+async fn assistant_choices(state: &HostState) -> Vec<super::assistant::Choice> {
+    match (state.spawner.assistant_options)().await {
+        Ok(options) => super::assistant::choices(&host_key(state), &options),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// A create answered by the owner with no window: `headless::create_tab`
@@ -1389,7 +1431,8 @@ async fn create_headless(
     };
     let state_dir = &state.config.state_dir;
     let agents = headless::agents(state_dir, &host_key(state), &*state.spawner.installed);
-    let created = headless::create_tab(state_dir, &host_key(state), project, request, &agents, &state.spawner.launch).await;
+    let assistant = if request.assistant.is_some() { assistant_choices(state).await } else { Vec::new() };
+    let created = headless::create_tab(state_dir, &host_key(state), project, request, &agents, &assistant, &state.spawner.launch).await;
     match created {
         Ok(created) => {
             poke_window(state, Some(&project.raw_id), &["workspace"]);
@@ -1432,7 +1475,7 @@ fn headless_create_error(refusal: headless::CreateRefusal) -> (StatusCode, Json<
         match refusal {
             headless::CreateRefusal::DesktopUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             headless::CreateRefusal::LaunchFailed(_) | headless::CreateRefusal::Persist(_) => StatusCode::BAD_GATEWAY,
-            headless::CreateRefusal::UnknownAgent => StatusCode::BAD_REQUEST,
+            headless::CreateRefusal::UnknownAgent | headless::CreateRefusal::Assistant(_) => StatusCode::BAD_REQUEST,
         },
         refusal.code(),
     )
@@ -1732,6 +1775,24 @@ async fn launch_options(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
+    if project.public.kind == ScopeKind::Assistant {
+        // Answered here, window or not: the options are the desktop's own
+        // command run in this process, and the scope has no worktree, cloud
+        // session, sign-in tab or local-model agent to ask the window about.
+        return match (state.spawner.assistant_options)().await {
+            Ok(options) => (
+                StatusCode::OK,
+                Json(json!({
+                    "worktrees": [],
+                    "cloud": [],
+                    "sign_in": [],
+                    "local": null,
+                    "assistant": super::assistant::phone_options(&host_key(&state), &options),
+                })),
+            ),
+            Err(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "assistant_unavailable"),
+        };
+    }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = new_request_id();
     let response = admin::desktop_call(
@@ -1778,6 +1839,7 @@ async fn activate_project(
     State(state): State<HostState>,
     headers: HeaderMap,
     Path(project_id): Path<String>,
+    Query(query): Query<ActivateQuery>,
 ) -> impl IntoResponse {
     let phone = match authenticate(&headers, &state) {
         Ok(phone) => phone,
@@ -1792,6 +1854,15 @@ async fn activate_project(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
+    // A named tab must be one of this scope's own; its tmux name is what the
+    // window knows it by.
+    let tmux_session = match query.tab.as_deref() {
+        None => None,
+        Some(tab_id) => match catalog_snapshot.tab(tab_id) {
+            Some((owner, tab)) if owner.raw_id == project.raw_id => Some(tab.tmux_name.clone()),
+            _ => return api_error(StatusCode::NOT_FOUND, "tab_not_found"),
+        },
+    };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = new_request_id();
     let response = admin::desktop_call(
@@ -1799,6 +1870,7 @@ async fn activate_project(
         &DesktopRequest::Activate {
             request_id,
             project_id: project.raw_id.clone(),
+            tmux_session,
         },
     )
     .await;
@@ -3405,6 +3477,11 @@ async fn sign_in_tab(
     if tab.public.kind != "agent" {
         return api_error(StatusCode::BAD_REQUEST, "agent_tab_required");
     }
+    // A chat runs on the CLI's shared login, and the scope starts nothing but
+    // chats: there is no sign-in tab to open beside one.
+    if project.public.kind == ScopeKind::Assistant {
+        return api_error(StatusCode::BAD_REQUEST, "unsupported_sign_in");
+    }
     let request = CreateTabRequest {
         project_id: project.raw_id.clone(),
         kind: CreateTabKind::Agent,
@@ -3416,6 +3493,7 @@ async fn sign_in_tab(
         sign_in: Some(if body.alternate { "alternate" } else { "default" }.to_string()),
         like_tab: Some(tab.tmux_name.clone()),
         local: None,
+        assistant: None,
         idempotency_key: body.idempotency_key,
     };
     let project_id = project.public.id.clone();
@@ -3684,6 +3762,30 @@ fn agent_tab(
     Ok((project.raw_id.clone(), tab.clone()))
 }
 
+/// The chat assistant's scope has a work folder and no project folder: nothing
+/// is read from it, written into it or probed with git on a phone's behalf —
+/// no files, outbox, inbox, upload, markup, desktop-image or uncommitted-changes
+/// route (the `== ScopeKind::Project` gates cover files, git, worktrees and
+/// activation; these are the folder-based routes that gate on nothing but the
+/// scope's existence). A chat's own files live in the CLI's transcript.
+fn has_folder(project: &super::discovery::ResolvedProject) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if project.public.kind == ScopeKind::Assistant {
+        return Err(api_error(StatusCode::NOT_FOUND, "not_a_project"));
+    }
+    Ok(())
+}
+
+/// The chat assistant's scope takes no schedules and no collected prompts
+/// (`docs/assistant_plan.md`: a chat is typed into, never scheduled, and its
+/// words stay in the CLI's transcript): `project_id` is the raw scope id of a
+/// tab or scope the catalog resolved, which is `assistant` for no other scope.
+fn no_schedules_here(project_id: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if super::discovery::is_assistant_scope_id(project_id) {
+        return Err(api_error(StatusCode::NOT_FOUND, "not_a_project"));
+    }
+    Ok(())
+}
+
 async fn schedules(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -3697,6 +3799,9 @@ async fn schedules(
         Ok(target) => target,
         Err(error) => return error,
     };
+    if let Err(error) = no_schedules_here(&project_id) {
+        return error;
+    }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = new_request_id();
     let response = admin::desktop_call(
@@ -3912,6 +4017,9 @@ async fn tab_uncommitted(
     let Some((project, tab)) = snapshot.tab(&tab_id) else {
         return api_error(StatusCode::NOT_FOUND, "tab_not_found");
     };
+    if let Err(error) = has_folder(project) {
+        return error;
+    }
     if tab.public.kind != "agent" {
         return api_error(StatusCode::BAD_REQUEST, "agent_tab_required");
     }
@@ -3977,6 +4085,9 @@ async fn schedule_mutation(
         Ok(target) => target,
         Err(error) => return error,
     };
+    if let Err(error) = no_schedules_here(&project_id) {
+        return error;
+    }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = new_request_id();
     let response = admin::desktop_call(
@@ -4127,6 +4238,7 @@ fn prompt_project(
     let Some(project) = catalog.project(project_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
     };
+    no_schedules_here(&project.raw_id)?;
     Ok(project.raw_id.clone())
 }
 
@@ -4623,6 +4735,9 @@ async fn inbox_upload(
     let Some((project, _)) = catalog.tab(&tab_id) else {
         return api_error(StatusCode::NOT_FOUND, "tab_not_found");
     };
+    if let Err(error) = has_folder(project) {
+        return error;
+    }
     let root = project.root.clone();
     drop(catalog);
     store_in_project_inbox(root, query.name, body).await
@@ -4733,6 +4848,7 @@ fn inbox_project(
     let Some((project, _)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
+    has_folder(project)?;
     Ok(project.raw_id.clone())
 }
 
@@ -4843,6 +4959,9 @@ async fn attach_desktop_image(
         let Some((project, _)) = snapshot.tab(&tab_id) else {
             return api_error(StatusCode::NOT_FOUND, "tab_not_found");
         };
+        if let Err(error) = has_folder(project) {
+            return error;
+        }
         let (state_dir, root, image_id) = (state.config.state_dir.clone(), project.root.clone(), request.image_id);
         let attached = tokio::task::spawn_blocking(move || headless::attach_desktop_image(&state_dir, &root, &image_id))
             .await
@@ -4874,6 +4993,7 @@ fn outbox_root(
     let Some((project, _)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
+    has_folder(project)?;
     Ok(project.root.clone())
 }
 
@@ -4890,6 +5010,7 @@ fn project_drop_box_root(
     let Some(project) = catalog.project(project_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
     };
+    has_folder(project)?;
     Ok(project.root.clone())
 }
 
@@ -4924,6 +5045,9 @@ async fn outbox_list(
     let Some((project, tab)) = catalog.tab(&tab_id) else {
         return api_error(StatusCode::NOT_FOUND, "tab_not_found");
     };
+    if let Err(error) = has_folder(project) {
+        return error;
+    }
     // Every file is listed — the gallery holds them all — but only what this
     // tab sent is marked `from_tab`, the files its chat shows.
     let rows = row_seal(&state, project);
@@ -4948,6 +5072,9 @@ async fn project_outbox_list(
     let Some(project) = catalog.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
+    if let Err(error) = has_folder(project) {
+        return error;
+    }
     let rows = row_seal(&state, project);
     outbox_listing(project.root.clone(), None, rows).await
 }
@@ -5304,6 +5431,9 @@ async fn markup_submit(
         let Some((project, tab)) = catalog.tab(&tab_id) else {
             return api_error(StatusCode::NOT_FOUND, "tab_not_found");
         };
+        if let Err(error) = has_folder(project) {
+            return error;
+        }
         // A tab with a session id is one `tabtivity-send` can answer into.
         (project.root.clone(), project.raw_id.clone(), project.public.kind, tab.session_id.is_some())
     };
@@ -5368,6 +5498,7 @@ fn markup_undo_owner(state: &HostState, phone: &Phone, tab_id: &str, undo_id: &s
     let Some((project, _)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
+    has_folder(project)?;
     Ok(markup_rounds::Owner::Phone { tab: tab_id.to_string(), project: project.raw_id.clone() })
 }
 
@@ -5518,6 +5649,7 @@ fn markup_tab(
     let Some((project, tab)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
+    has_folder(project)?;
     if tab.public.kind != "agent" {
         return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
     }
@@ -8110,6 +8242,26 @@ mod tests {
         assert!(!body.contains(RAW_BOX));
     }
 
+    /// `?tab=` on an activation names the tab the phone is opening (the
+    /// assistant starts its chats lazily): it must be a tab of that scope, an
+    /// unknown one is refused before the window is asked, and nothing else is
+    /// accepted in the query.
+    #[tokio::test]
+    async fn an_activation_may_name_only_a_tab_of_its_own_scope() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(54)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+        let activate = |query: &str| request_as("POST", &format!("/api/v1/projects/{project_id}/activate{query}"), &cookie, None);
+        let (status, _, body) = host.send(activate("?tab=no-such-tab")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        assert!(body.contains("tab_not_found"), "answered: {body}");
+        let (status, _, _) = host.send(activate("?other=1")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, body) = host.send(activate("")).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+    }
+
     fn create_request(project_id: &str, cookie: &str, body: Value) -> Request<Body> {
         Request::builder()
             .method("POST")
@@ -8249,6 +8401,305 @@ mod tests {
         assert_eq!(shell.cmd, "");
         assert!(!shell.agent);
         assert!(shell.tmux_session.as_deref().is_some_and(|n| n.starts_with(&format!("{}{RAW_PROJECT}--shell-", crate::brand::TMUX_PREFIX))));
+    }
+
+    /// A host holding the chat assistant's scope and nothing else: the flag on
+    /// (so the scope is listed), the files, upload and shell switches on too —
+    /// so a refusal can only be the scope's — a recorder for the spawn seam
+    /// that makes the chat folder the way `launch_prep` does, and a fixed
+    /// answer for the desktop's options command.
+    fn assistant_host(launch: headless::HeadlessLaunch) -> Fixture {
+        let mut host = Fixture::bare();
+        let state_dir = host.state.config.state_dir.clone();
+        std::fs::write(state_dir.join("projects.json"), "[]").expect("projects");
+        std::fs::write(
+            state_dir.join("settings.json"),
+            json!({
+                "assistant": true,
+                crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true, "project_files": true, "project_uploads": true },
+            })
+            .to_string(),
+        )
+        .expect("write settings");
+        let launch: headless::HeadlessLaunch = Arc::new(move |opts: PtyOptions| {
+            // `launch_prep` makes the chat's folder before the process starts.
+            let _ = std::fs::create_dir_all(&opts.cwd);
+            launch(opts)
+        });
+        host.state.spawner = HeadlessSpawner {
+            launch,
+            installed: Arc::new(|_| true),
+            assistant_options: Arc::new(|| Box::pin(async { Ok(super::super::assistant::fixture_options()) })),
+            ..HeadlessSpawner::default()
+        };
+        host
+    }
+
+    /// Start one Claude chat through the phone's routes. Returns the scope's
+    /// opaque id and the chat's opaque tab id.
+    async fn start_assistant_chat(host: &Fixture, cookie: &str, key: &str) -> (String, String) {
+        let (_, _, body) = host.send(get_as("/api/v1/projects", cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().unwrap_or_else(|| panic!("scope: {body}")).to_string();
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/launch-options"), cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let launches = json(&body)["assistant"]["launches"].clone();
+        let claude = launches.as_array().expect("launches").iter().find(|l| l["label"] == "Claude" && l["local"] == false).expect("a cloud Claude launch")["id"]
+            .as_str()
+            .expect("launch id")
+            .to_string();
+        let request = json!({ "project_id": project_id, "kind": "agent", "assistant": claude, "idempotency_key": key });
+        let (status, _, body) = host.send(create_request(&project_id, cookie, request)).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        (project_id, json(&body)["tab"]["id"].as_str().expect("tab id").to_string())
+    }
+
+    /// S5a: the assistant is a phone scope that needs no window. It is listed
+    /// as its own kind behind its gate; its launch options and create speak
+    /// opaque ids only; the owner mints the chat with `new_chat_record` (no
+    /// `args`, `env` or schedule binding in the record) and starts it detached
+    /// through `launch_options`, which hands `launch_prep` the validated launch
+    /// and the chat's uid and nothing the record said; a repeat opens nothing
+    /// twice; and everything but a chat is refused.
+    #[tokio::test]
+    async fn an_assistant_chat_is_started_by_the_owner_from_an_opaque_launch() {
+        let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = recorded.clone();
+        let host = assistant_host(Arc::new(move |opts: PtyOptions| {
+            sink.lock().unwrap().push(opts);
+            Box::pin(async { Ok(()) })
+        }));
+        let cookie = host.pair_device(&signing_key(71)).await.0;
+        let (_, _, body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let row = &json(&body)["projects"][0];
+        assert_eq!(row["kind"], "assistant");
+        assert_eq!(row["label"], crate::brand::ASSISTANT_NAME);
+        assert_eq!(row["live_sessions"], 0);
+        assert!(!body.contains("\"assistant\":\"assistant\""), "the raw scope id does not cross: {body}");
+        let project_id = row["id"].as_str().expect("scope id").to_string();
+        assert_ne!(project_id, "assistant");
+
+        // launch-options: the assistant block replaces every other ＋ option.
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/launch-options"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let options = json(&body);
+        assert_eq!(options["worktrees"], json!([]));
+        assert_eq!(options["cloud"], json!([]));
+        assert_eq!(options["sign_in"], json!([]));
+        assert_eq!(options["local"], Value::Null);
+        assert_eq!(options["assistant"]["ollama_reachable"], true);
+        let launches = options["assistant"]["launches"].as_array().expect("launches");
+        assert_eq!(launches.len(), 5, "the not-installed Codex is not offered: {body}");
+        for needle in ["qwen3", "opencode_local", "claude_local", "/", crate::brand::TMUX_PREFIX] {
+            // Model names are shown (they are Ollama's own labels); ids carry nothing.
+            if needle != "qwen3" {
+                assert!(!launches.iter().any(|l| l["id"].as_str().unwrap().contains(needle)), "{needle} in an id: {body}");
+            }
+        }
+        let by = |label: &str, model: Option<&str>| {
+            launches
+                .iter()
+                .find(|l| l["label"] == label && l.get("model").and_then(Value::as_str) == model)
+                .unwrap_or_else(|| panic!("{label} {model:?}: {body}"))["id"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let claude = by("Claude", None);
+        let opencode = by("OpenCode", Some("qwen3:8b"));
+
+        // A create must name a launch, and only that.
+        let key = "s5a-chat-0123456789abcdef";
+        let post = |body: Value| create_request(&project_id, &cookie, body);
+        for refused in [
+            json!({ "project_id": project_id, "kind": "agent", "idempotency_key": key }),
+            json!({ "project_id": project_id, "kind": "shell", "idempotency_key": key }),
+            json!({ "project_id": project_id, "kind": "agent", "agent_id": "x", "idempotency_key": key }),
+            json!({ "project_id": project_id, "kind": "agent", "assistant": claude, "agent_id": "x", "idempotency_key": key }),
+            json!({ "project_id": project_id, "kind": "agent", "assistant": claude, "mode": "plan", "idempotency_key": key }),
+            json!({ "project_id": project_id, "kind": "agent", "assistant": claude, "local": "l", "idempotency_key": key }),
+            json!({ "project_id": project_id, "kind": "agent", "assistant": claude, "sign_in": "default", "idempotency_key": key }),
+        ] {
+            let (status, _, body) = host.send(post(refused.clone())).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}: {body}");
+            assert_eq!(json(&body)["error"], "invalid_request", "{refused}");
+        }
+        for unknown in ["claude", "claude_local:qwen3:8b", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "../../etc"] {
+            let (status, _, body) = host.send(post(json!({ "project_id": project_id, "kind": "agent", "assistant": unknown, "idempotency_key": key }))).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{unknown}: {body}");
+            assert_eq!(json(&body)["error"], "unknown_agent", "{unknown}");
+        }
+        assert!(recorded.lock().unwrap().is_empty(), "nothing was started by a refusal");
+        assert!(!host.state.config.state_dir.join("sessions").join("assistant").join("terminals.json").exists() || {
+            let session: Value = serde_json::from_slice(&std::fs::read(host.state.config.state_dir.join("sessions/assistant/terminals.json")).unwrap()).unwrap();
+            session["tabLayout"].as_array().is_none_or(Vec::is_empty)
+        });
+
+        // The real create.
+        let request = json!({ "project_id": project_id, "kind": "agent", "assistant": claude, "idempotency_key": key });
+        let (status, _, body) = host.send(post(request.clone())).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let answer = json(&body);
+        assert_eq!(answer["desktop_available"], false);
+        assert_eq!(answer["tab"]["kind"], "agent");
+        assert_eq!(answer["tab"]["label"], "Claude");
+        let tab_id = answer["tab"]["id"].as_str().expect("tab id").to_string();
+
+        let session_path = host.state.config.state_dir.join("sessions").join("assistant").join("terminals.json");
+        let session: Value = serde_json::from_slice(&std::fs::read(&session_path).expect("session")).expect("json");
+        let tabs = session["tabLayout"].as_array().expect("tabs");
+        assert_eq!(tabs.len(), 1, "{session}");
+        let minted = &tabs[0];
+        let uid = minted["sessionId"].as_str().expect("chat uuid").to_string();
+        assert!(crate::services::agent_session::is_uuid_shaped(&uid));
+        assert_eq!(minted["assistant"], json!({ "cli": "claude" }));
+        assert_eq!(minted["cmd"], "claude");
+        assert_eq!(minted["kind"], "agent");
+        for absent in ["args", "env", "scheduleTargetId", "localLaunch", "sandbox"] {
+            assert!(minted.get(absent).is_none(), "{absent} in {minted}");
+        }
+        let tmux = minted["tmuxSession"].as_str().expect("tmux").to_string();
+        assert!(tmux.starts_with(&format!("{}assistant--agent-", crate::brand::TMUX_PREFIX)), "{tmux}");
+        let chat_dir = crate::services::assistant::chat_dir(&host.state.config.state_dir, &uid).unwrap();
+        assert_eq!(std::path::Path::new(minted["cwd"].as_str().unwrap()), chat_dir);
+        let leaks = |body: &str| {
+            assert!(!body.contains(&uid), "chat uid leaked: {body}");
+            assert!(!body.contains(crate::brand::TMUX_PREFIX), "tmux name leaked: {body}");
+            assert!(!body.contains(&host.state.config.state_dir.to_string_lossy().to_string()), "path leaked: {body}");
+        };
+        leaks(&body);
+
+        // The spawn seam got the validated launch and the uid, not the record's say.
+        let spawned = recorded.lock().unwrap().clone();
+        assert_eq!(spawned.len(), 1);
+        let opts = &spawned[0];
+        assert_eq!(opts.assistant, Some(crate::services::assistant::AssistantLaunch { cli: crate::services::assistant::AssistantCli::Claude, model: None }));
+        assert_eq!(opts.project_id.as_deref(), Some("assistant"));
+        assert_eq!(opts.cmd, "claude");
+        assert!(opts.args.is_empty());
+        assert_eq!(opts.env, HashMap::from([(crate::app_env!("TAB_UID").to_string(), uid.clone())]));
+        assert!(opts.agent && !opts.local_model && opts.schedule_target_id.is_none() && opts.login.is_none() && !opts.host_session);
+        assert_eq!(opts.tmux_session.as_deref(), Some(tmux.as_str()));
+        assert_eq!(opts.id, format!("headless:{tmux}"));
+
+        // The same request again answers the same tab and starts nothing.
+        let (status, _, body) = host.send(post(request)).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(json(&body)["tab"]["id"], tab_id);
+        assert_eq!(recorded.lock().unwrap().len(), 1);
+
+        // A local launch carries its model; the record keeps it strict.
+        let (status, _, body) = host
+            .send(post(json!({ "project_id": project_id, "kind": "agent", "assistant": opencode, "idempotency_key": "s5a-local-0123456789abcdef" })))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(json(&body)["tab"]["label"], "OpenCode · qwen3:8b");
+        assert_eq!(json(&body)["tab"]["local_model"], true);
+        let local = recorded.lock().unwrap().last().cloned().expect("second spawn");
+        assert_eq!(local.assistant.as_ref().and_then(|l| l.model.as_deref()), Some("qwen3:8b"));
+        assert_eq!(local.cmd, "opencode");
+
+        // The scope lists both chats; its detail offers no plain agent.
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        let detail = json(&body);
+        assert_eq!(detail["tabs"].as_array().unwrap().len(), 2, "{body}");
+        assert_eq!(detail["agents"], json!([]));
+        assert_eq!(detail["files"], false);
+        leaks(&body);
+
+        // The gate re-checked at the point of use: a catalog a few seconds old
+        // still lists the scope, but the create is refused once the switch is off.
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ "assistant": true, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "assistant_access": false } }).to_string(),
+        )
+        .expect("switch off");
+        let (status, _, body) = host
+            .send(post(json!({ "project_id": project_id, "kind": "agent", "assistant": claude, "idempotency_key": "s5a-late-0123456789abcdef" })))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(json(&body)["error"], "assistant_off");
+        assert_eq!(recorded.lock().unwrap().len(), 2);
+    }
+
+    /// A launch id means nothing outside the assistant scope.
+    #[tokio::test]
+    async fn an_assistant_launch_is_refused_in_a_project() {
+        let host = headless_host(Arc::new(|_| Box::pin(async { Ok(()) })));
+        let cookie = host.pair_device(&signing_key(72)).await.0;
+        let (project_id, _) = project_and_tab(&host, &cookie).await;
+        let (status, _, body) = host
+            .send(create_request(
+                &project_id,
+                &cookie,
+                json!({ "project_id": project_id, "kind": "agent", "assistant": "x", "idempotency_key": "s5a-proj-0123456789abcdef" }),
+            ))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(json(&body)["error"], "invalid_request");
+    }
+
+    /// S5a: every route that reads or writes a project's files, repository,
+    /// outbox, inbox, uploads, markup, worktrees or schedules answers a tab or
+    /// scope of the assistant with a refusal, whatever the host-wide switches
+    /// say (they are all on here), and the chat's own routes still work. This
+    /// lists the `== ScopeKind::Project` gates and the folder-based routes
+    /// that gate on the scope alone (`has_folder`).
+    #[tokio::test]
+    async fn the_assistant_scope_is_no_project_to_any_folder_route() {
+        let host = assistant_host(Arc::new(|_| Box::pin(async { Ok(()) })));
+        let cookie = host.pair_device(&signing_key(73)).await.0;
+        let (project_id, tab_id) = start_assistant_chat(&host, &cookie, "s5a-gates-0123456789abcdef").await;
+        let (p, t) = (project_id.as_str(), tab_id.as_str());
+        let any = json!({});
+        let routes: Vec<(&str, String, Value, &[&str])> = vec![
+            // Repository.
+            ("GET", format!("/api/v1/projects/{p}/git"), Value::Null, &["not_a_project"]),
+            ("GET", format!("/api/v1/tabs/{t}/uncommitted"), Value::Null, &["not_a_project"]),
+            // Files drawer and uploads.
+            ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
+            ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),
+            ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
+            ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable", "files_off"]),
+            ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable", "files_off"]),
+            // Outbox and inbox, by project and by tab.
+            ("GET", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
+            ("DELETE", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
+            ("GET", format!("/api/v1/projects/{p}/outbox/a.txt"), Value::Null, &["not_a_project"]),
+            ("DELETE", format!("/api/v1/projects/{p}/outbox/a.txt"), Value::Null, &["not_a_project"]),
+            ("POST", format!("/api/v1/projects/{p}/inbox?name=a.txt"), any.clone(), &["not_a_project"]),
+            ("GET", format!("/api/v1/tabs/{t}/outbox"), Value::Null, &["not_a_project"]),
+            ("DELETE", format!("/api/v1/tabs/{t}/outbox"), Value::Null, &["not_a_project"]),
+            ("GET", format!("/api/v1/tabs/{t}/outbox/a.txt"), Value::Null, &["not_a_project"]),
+            ("DELETE", format!("/api/v1/tabs/{t}/outbox/a.txt"), Value::Null, &["not_a_project"]),
+            ("GET", format!("/api/v1/tabs/{t}/inbox"), Value::Null, &["not_a_project"]),
+            ("GET", format!("/api/v1/tabs/{t}/inbox/a.txt"), Value::Null, &["not_a_project"]),
+            ("POST", format!("/api/v1/tabs/{t}/inbox?name=a.txt"), any.clone(), &["not_a_project"]),
+            ("GET", format!("/api/v1/tabs/{t}/desktop-images"), Value::Null, &["not_a_project"]),
+            ("POST", format!("/api/v1/tabs/{t}/desktop-images"), json!({ "image_id": desktop_images::CLIPBOARD_ID }), &["not_a_project"]),
+            // Markup.
+            ("GET", format!("/api/v1/tabs/{t}/markup/questions"), Value::Null, &["not_a_project"]),
+            ("POST", format!("/api/v1/tabs/{t}/markup/answer"), any.clone(), &["not_a_project", "invalid_request"]),
+            ("POST", format!("/api/v1/tabs/{t}/markup/dismiss"), any.clone(), &["not_a_project", "invalid_request"]),
+            // Worktrees, activation, sign-in, schedules, collected prompts.
+            ("POST", format!("/api/v1/projects/{p}/activate"), Value::Null, &["desktop_unavailable"]),
+            ("POST", format!("/api/v1/tabs/{t}/sign-in"), json!({ "idempotency_key": "s5a-signin-0123456789abcdef" }), &["unsupported_sign_in"]),
+            ("GET", format!("/api/v1/tabs/{t}/schedules"), Value::Null, &["not_a_project"]),
+            ("POST", format!("/api/v1/tabs/{t}/schedules"), json!({ "enabled": true, "message": "x", "rule": { "type": "daily", "time": "09:00" } }), &["not_a_project"]),
+            ("GET", format!("/api/v1/projects/{p}/prompts"), Value::Null, &["not_a_project"]),
+            ("POST", format!("/api/v1/projects/{p}/prompts"), json!({ "message": "x" }), &["not_a_project"]),
+        ];
+        for (method, uri, body, codes) in routes {
+            let request = request_as(method, &uri, &cookie, (!body.is_null()).then_some(body));
+            let (status, _, answer) = host.send(request).await;
+            let code = json(&answer).get("error").and_then(Value::as_str).unwrap_or("").to_string();
+            assert!(!status.is_success() && codes.contains(&code.as_str()), "{method} {uri} -> {status} {answer} (wanted one of {codes:?})");
+        }
+        // Not a gate to forget: the global drop box belongs to no project.
+        // What a chat is still for: its own detail and transcript routes.
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{t}"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{t}/transcript"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
     }
 
     /// What a raw HTTP POST of a `ping` to `127.0.0.1:port` answers: the status.

@@ -1,4 +1,5 @@
 import { translate, useI18nStore, type TranslationKey } from "../../src/lib/i18n";
+import type { ScopeKind } from "./api";
 
 /**
  * The home list's hand-arranged project order.
@@ -65,9 +66,10 @@ export function mergeProjectOrder(stored: readonly string[], listed: readonly st
  * root console are not projects and have no status of their own; root also
  * says how many of its agents' proposals wait — a count only, because deciding
  * them is the desktop's alone. */
-export function scopeCaption(row: { kind?: "project" | "box" | "root"; status: string; pending_reviews?: number }): string {
+export function scopeCaption(row: { kind?: ScopeKind; status: string; pending_reviews?: number }): string {
   const lang = useI18nStore.getState().lang;
   if (row.kind === "box") return `⬡ ${translate(lang, "mobile.home.scopeBox")}`;
+  if (row.kind === "assistant") return `✦ ${translate(lang, "mobile.home.scopeAssistant")}`;
   if (row.kind !== "root") {
     // The catalog's status is a protocol word; the two it sends are worded
     // here, and anything newer reads as itself rather than as nothing.
