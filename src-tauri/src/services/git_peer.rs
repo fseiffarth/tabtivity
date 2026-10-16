@@ -3848,10 +3848,16 @@ mod tests {
             eprintln!("git not on PATH — skipping a_repo_git_refuses_is_a_probe_error_not_an_empty_side");
             return;
         }
+        // The ownership check still passes a repo any protected config lists in
+        // `safe.directory` (CI runners carry `*`), so the probe reads no ambient config.
         let refused = |dir: &Path| -> String {
             run_sh(
                 dir,
-                &format!("GIT_TEST_ASSUME_DIFFERENT_OWNER=1; export GIT_TEST_ASSUME_DIFFERENT_OWNER; {PROBE_SCRIPT}"),
+                &format!(
+                    "GIT_TEST_ASSUME_DIFFERENT_OWNER=1 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null; \
+                     export GIT_TEST_ASSUME_DIFFERENT_OWNER GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL; \
+                     unset GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT; {PROBE_SCRIPT}"
+                ),
             )
         };
         let tmp = tempfile::tempdir().unwrap();

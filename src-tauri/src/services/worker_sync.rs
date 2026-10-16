@@ -184,6 +184,8 @@ fn worker_apply_script() -> String {
 /// Compare Git's quoted paths so whitespace/newlines remain one record. Both
 /// listings use identical quoting; only their enclosing quotes are removed.
 /// Ancestor lookups catch both file-to-directory and directory-to-file collisions.
+/// The last-component regex is a string: BSD awk (macOS) ends a `/…/` literal at
+/// the `/` inside `[^/]`.
 fn worker_output_guard() -> &'static str {
     r#"guard=$(mktemp -d) &&
 trap 'rm -rf "$guard"' 0 &&
@@ -198,13 +200,13 @@ function path(value) {
 FILENAME == ARGV[1] {
     name = path($0)
     outputs[name] = 1
-    while (sub(/\/[^/]*$/, "", name)) ancestors[name] = 1
+    while (sub("/[^/]*$", "", name)) ancestors[name] = 1
     next
 }
 {
     name = path($0)
     collision = (name in outputs || name in ancestors)
-    while (!collision && sub(/\/[^/]*$/, "", name)) collision = (name in outputs)
+    while (!collision && sub("/[^/]*$", "", name)) collision = (name in outputs)
     if (collision) {
         print "Worker sync refused: untracked output collides with incoming code: " $0
         exit 1

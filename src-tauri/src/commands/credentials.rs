@@ -466,6 +466,11 @@ mod tests {
     use super::*;
     use app_core::{Caller, ClientId};
 
+    /// Windows resolves `ssh` to its full path (`…\OpenSSH\ssh.exe`).
+    fn program_stem(cmd: &str) -> String {
+        std::path::Path::new(cmd).file_stem().unwrap().to_string_lossy().to_ascii_lowercase()
+    }
+
     fn ssh(host: &str) -> LoginTarget {
         LoginTarget::Ssh {
             user: Some("alice".to_string()),
@@ -583,7 +588,7 @@ mod tests {
                 port: Some(2222),
             })
         );
-        assert_eq!(opts.cmd, "ssh");
+        assert_eq!(program_stem(&opts.cmd), "ssh");
         assert_eq!(opts.args.last().map(String::as_str), Some("alice@host.example"));
         assert!(opts.args.windows(2).any(|w| w == ["-p", "2222"]));
         assert!(!opts.args.iter().any(|a| a.contains("loot")), "{:?}", opts.args);
@@ -673,7 +678,7 @@ mod tests {
             host: "h.example".into(),
             port: Some(2222),
         }));
-        assert_eq!(opts.cmd, "ssh");
+        assert_eq!(program_stem(&opts.cmd), "ssh");
 
         let mut opts = hostile("root:ssh", ssh);
         let target = apply_login_with(&mut opts, &window(), |_| panic!("the desktop is never asked")).unwrap();

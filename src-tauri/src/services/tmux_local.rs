@@ -1477,11 +1477,15 @@ mod tests {
         }
         // After a fenced command, the unfenced login shell does not inherit it.
         assert!(trailing_shell(true, false).contains(&format!("-u {web} ")));
-        // A chat's tmux client argv (the assistant path) carries no value either.
-        let mut opts = assistant_fixture(env.clone());
-        opts.cmd = "bwrap".into();
-        let argv = local_tmux_argv(opts.tmux_session.as_deref().unwrap(), &opts, false);
-        assert!(!argv.iter().any(|a| a.contains("web-s3cret")), "{argv:?}");
+        // A chat's tmux client argv (the assistant path) carries no value either —
+        // where this host's tmux has `-e` (below 3.2, and on Windows, the inline
+        // `export`s are `launcher_line`'s documented limit).
+        if tmux_supports_session_env() {
+            let mut opts = assistant_fixture(env.clone());
+            opts.cmd = "bwrap".into();
+            let argv = local_tmux_argv(opts.tmux_session.as_deref().unwrap(), &opts, false);
+            assert!(!argv.iter().any(|a| a.contains("web-s3cret")), "{argv:?}");
+        }
     }
 
     fn assistant_fixture(env: HashMap<String, String>) -> PtyOptions {

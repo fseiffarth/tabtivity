@@ -133,8 +133,12 @@ fn ask_once(socket: &Path, request: &Request) -> Result<Reply, Failure> {
             || e.raw_os_error() == Some(libc::EPROTOTYPE)
     };
     let mut stream = std::os::unix::net::UnixStream::connect(socket).map_err(|e| Failure::Other(format!("{}: {e}", socket.display())))?;
-    stream.set_read_timeout(Some(DEADLINE)).map_err(|e| Failure::Other(e.to_string()))?;
-    stream.set_write_timeout(Some(DEADLINE)).map_err(|e| Failure::Other(e.to_string()))?;
+    // macOS fails setsockopt with EINVAL once the peer has closed: a keeper at
+    // its cap hung up before the timeouts were set.
+    let timeouts = stream.set_read_timeout(Some(DEADLINE)).and_then(|()| stream.set_write_timeout(Some(DEADLINE)));
+    if let Err(e) = timeouts {
+        return Err(if e.raw_os_error() == Some(libc::EINVAL) { Failure::Unanswered(e.to_string()) } else { Failure::Other(e.to_string()) });
+    }
     let mut line = serde_json::to_vec(request).map_err(|e| Failure::Other(e.to_string()))?;
     line.push(b'\n');
     if let Err(e) = stream.write_all(&line) {
