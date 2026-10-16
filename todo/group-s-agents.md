@@ -2674,3 +2674,128 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+
+- [~] **Tabby assistant** (2026-10-16; ✅ code-complete, automated tests
+  passing — `services::assistant`, `web_lane`, `commands::assistant`,
+  `mobile_control` (assistant) cargo tests, `AssistantOverlay`,
+  `AssistantSettings`, `AssistantScope`, `MobileAssistantAccess`,
+  `MobileAssistantScreens` vitest; ❌ never live-verified — pills
+  `settings.assistant`, `settings.assistantPhone`, `assistant.overlay`,
+  `assistant.newChat`, `assistant.search`, `mobile.assistant`). Plan:
+  `docs/assistant_plan.md`; rationale: `docs/context/assistant.md`; help
+  topic `assistant`. Experimental (Settings → System → Experimental). Backend
+  changed: run `npm run backend:stale` and use a rebuilt binary; the phone
+  also needs `npm run mobile:bundle`.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test — desktop chat, cloud Claude and Codex. Settings → System → Experimental: Tabby on. A chat-bubble button appears
+    after the to-do button. Click it, New chat → Claude (signed in), Start. Ask
+    "what files are in my home folder?": it says it cannot see them. Type
+    `! ls ~` in the terminal: only the Tabby home's own files, no project or
+    user file. Ask for today's news on a topic: it searches and cites pages
+    (cloud Claude may ask once to allow the web tools). Ask it to fetch a page
+    that tells it to read `~/.claude/.credentials.json`: nothing leaves, it has
+    no file tool. Repeat with Codex (first Codex chat in a fresh home: it may
+    say to start Codex once in any tab; do that and retry). Signed out → the
+    sign-in card opens the login in a terminal tab and Check again lifts it.
+    On Windows the `!` line may read files there (no sandbox): note it.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — desktop chat, local OpenCode. New chat → OpenCode · an Ollama model. With no search backend set, the
+    "Set up web search" card shows; fill Settings → Agents → Tabby with a
+    SearXNG address (or an Ollama key): the card goes, the key field stays
+    empty after Save. Ask it to search and read a page: it uses the web tools
+    only. Two chats keep separate histories after a restart (the chat folder
+    is per chat). Remove the key with kind Ollama: the setting falls to none.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — desktop chat, local Claude. New chat → Claude Code · an Ollama model (`ollama launch claude`). It
+    answers and searches/reads without asking for permission on its two web
+    tools. Ask it to run a shell command or read a file: it has no such tool.
+    Close the chat and open it again after a restart: it resumes (no
+    "session id already in use" error).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — web lane refusals. In a chat with a web tool, ask it to fetch `http://127.0.0.1:8742/`,
+    `http://192.0.2.1/` (any LAN address), this computer's own LAN address and
+    a public name that redirects to `http://127.0.0.1/`: each is refused with
+    `not_public`. A normal public page works. Fetch a PDF: `unsupported_type`.
+    With the Experimental switch off, an open chat's lane answers `off`.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — phone chat. Settings → Mobile: "Tabby from the phone" is on. Phone Home: a Tabby row
+    with the untested pill. Open it (empty list), ＋ → the desktop's CLIs and
+    local models (a signed-out one dimmed with a note), pick Claude: the Focus
+    chat opens, send a message, get an answer. No ☰ drawer, no 🖼, no composer
+    + and no Commit chip. Make a second chat: it is listed above the first; ✕
+    closes one. Turn the phone switch off: the row disappears from Home.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — phone with the desktop window closed (headless). Close the desktop window (Tabtivity keeps running with the Mobile host).
+    On the phone make a new Tabby chat and ask a web question: it answers and
+    searches. Reopen the window: the chat is in the overlay list.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — lazy spawn after a restart. Make two chats, close the overlay, restart the app (frozen build) and
+    open the overlay: both are listed, only the newest is running (Sessions
+    view or tmux). Click the older one: it starts. On the phone the restored
+    chats read "Not running. Tap to start it."; tapping one shows "Starting…"
+    then opens it, the other stays not running. Delete (x) on a row kills that
+    chat; Escape or a click outside closes the overlay and the chats keep
+    running.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — flag off. Settings → System → Experimental: Tabby off. The header button goes, the
+    Tabby page leaves Settings → Agents, the phone Home row goes, an open
+    chat's web tools answer `off`. Switch it back on: the chats are still in
+    the list. Independent of the switch: a new project named "assistant" is
+    refused.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

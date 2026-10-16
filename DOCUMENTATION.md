@@ -991,6 +991,33 @@ The withdrawals are all in the interface. The backend loops that keep two trees
 in step — byte-sync, git lockstep, the usage watcher — are untouched, since
 skipping those would not be withdrawing an aid but declining to do the work.
 
+### Tabby Assistant (experimental)
+
+Tabby is a chat assistant that searches and reads the web and sees nothing
+else on the computer. Design, the two layers and the accepted limits:
+`docs/context/assistant.md`; user-facing text: `docs/help/assistant.md`.
+
+- **Switch.** Settings → System → Experimental, `settings.json["assistant"]`
+  (absent = off); the backend refuses its commands, spawns and web lane while
+  it is off. `settings.json["assistant_settings"]` holds the default CLI and
+  model and the search backend (`search.kind` `searxng` or `ollama`,
+  `searxng_url`); the Ollama key lives only in the keychain.
+- **Chats** are agent tabs in the reserved scope `assistant`
+  (`<state_dir>/sessions/assistant/`), one empty working folder per chat under
+  `<state_dir>/assistant/work/<uid>`, shown in the header button's overlay
+  through the Reader. The CLIs are Claude, Codex, and OpenCode or Claude Code
+  on an Ollama model; the backend builds each argv and pins the tool set to the
+  web. A restored chat starts only when it is selected (or opened from the
+  phone).
+- **Web.** Cloud CLIs search natively. Every page fetch, and local models'
+  search, goes through the web lane on Tabtivity's loopback MCP listener
+  (`/mcp/web`): public addresses only, no proxy, text replies, 120 calls per
+  chat per hour.
+- **Phone.** Settings → Mobile → "Tabby from the phone" (default on) adds a
+  Tabby row to the phone's Home; chats work with the desktop window closed.
+- **Windows** has no sandbox, so the user's own `!` and `@` in a chat reach
+  files there; the model's tools stay web-only.
+
 ### Ollama Model Management
 
 The Settings dialog shows an `Ollama...` panel when `ollama_is_installed`
