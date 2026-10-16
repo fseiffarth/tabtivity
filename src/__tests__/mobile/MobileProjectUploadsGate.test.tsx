@@ -4,9 +4,10 @@
  * Project files is off; and the three places Mobile settings rebuild the host
  * object from an explicit field list (host on/off, Detect Serve, Lock down)
  * must each carry it — the first two carry Browser access too, which lockdown
- * leaves out on purpose.
+ * leaves out on purpose. Turning Project files on asks whether uploads go on
+ * too, and turning it off takes uploads with it.
  */
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -95,6 +96,46 @@ describe("Mobile settings — phone uploads switch", () => {
     await waitFor(async () => expect((await toggle()).checked).toBe(false));
   });
 
+  const filesToggle = async () =>
+    screen.findByRole("checkbox", { name: /Project files on the phone/ }) as Promise<HTMLInputElement>;
+
+  it("is offered when Project files goes on, and stored with it when allowed", async () => {
+    host();
+    const user = userEvent.setup();
+    render(<MobileSettings />);
+    await user.click(await filesToggle());
+    const dialog = await screen.findByRole("dialog");
+    expect(hostWrites()).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Allow uploads" }));
+    await waitFor(() => expect(hostWrites()).toHaveLength(1));
+    expect(hostWrites()[0]).toMatchObject({ project_files: true, project_uploads: true });
+    await waitFor(async () => expect((await toggle()).checked).toBe(true));
+  });
+
+  it("stays off when the offer is cancelled, while Project files still goes on", async () => {
+    host();
+    const user = userEvent.setup();
+    render(<MobileSettings />);
+    await user.click(await filesToggle());
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(hostWrites()).toHaveLength(1));
+    expect(hostWrites()[0]).toMatchObject({ project_files: true });
+    expect(JSON.parse(JSON.stringify(hostWrites()[0]))).not.toHaveProperty("project_uploads");
+    await waitFor(async () => expect((await toggle()).checked).toBe(false));
+  });
+
+  it("goes off with Project files, without asking", async () => {
+    host({ project_files: true, project_uploads: true });
+    const user = userEvent.setup();
+    render(<MobileSettings />);
+    await user.click(await filesToggle());
+    await waitFor(() => expect(hostWrites()).toHaveLength(1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const written = JSON.parse(JSON.stringify(hostWrites()[0]));
+    expect(written).not.toHaveProperty("project_files");
+    expect(written).not.toHaveProperty("project_uploads");
+  });
+
   it("survives switching the host off, with Browser access", async () => {
     host({ project_files: true, project_uploads: true, browser_client: true });
     const user = userEvent.setup();
@@ -116,13 +157,13 @@ describe("Mobile settings — phone uploads switch", () => {
 
   it("survives Lock down now, which closes Browser access", async () => {
     running = true;
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     host({ project_files: true, project_uploads: true, browser_client: true });
     const user = userEvent.setup();
     render(<MobileSettings />);
     const lock = await screen.findByRole("button", { name: "Lock down now" });
     await waitFor(() => expect((lock as HTMLButtonElement).disabled).toBe(false));
     await user.click(lock);
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Lock down now" }));
     await waitFor(() => expect(hostWrites()).toHaveLength(1));
     expect(hostWrites()[0]).toMatchObject({ enabled: false, project_uploads: true });
     expect(JSON.parse(JSON.stringify(hostWrites()[0]))).not.toHaveProperty("browser_client");

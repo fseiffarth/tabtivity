@@ -16,6 +16,7 @@ import { MobileAccessPicker, phoneReachLabel } from "./MobileAccessPicker";
 import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
 import { isMobileEligible, PairedDeviceAccess } from "./PairedDeviceAccess";
 import { AddDevicePanel, useAddDevice } from "./AddDevice";
+import { useDialogs } from "../common/PromptDialogs";
 
 /** `translate` at the live language, for code that runs outside a render: the
  *  module-level parser below and the async callbacks, whose `useCallback`
@@ -143,6 +144,7 @@ export function MobileSettings() {
   const setBoxMobileAccess = useBoxesStore((state) => state.setBoxMobileAccess);
   const setProjectMobileAccess = useProjectsStore((state) => state.setProjectMobileAccess);
   const stored = settings?.[MOBILE_HOST_KEY];
+  const { confirmAction, dialogs } = useDialogs();
   // The browser client's sign-in link, shown on request (it carries the token).
   const [browserLink, setBrowserLink] = useState<string | null>(null);
   const [browserLinkError, setBrowserLinkError] = useState<string | null>(null);
@@ -302,6 +304,31 @@ export function MobileSettings() {
     }
   };
 
+  /** Project files, and the uploads switch that rides on it. Turning files on
+   * asks whether the phone may add files too (Cancel keeps it read-only);
+   * turning it off clears uploads as well, so turning files on again later
+   * never reopens the write path unasked. One write either way: `setMailGate`
+   * spreads this render's `stored`, so a second write would undo the first. */
+  const setProjectFiles = async (on: boolean) => {
+    const uploads = on && await confirmAction({
+      title: tr("mobile.projectUploadsAskTitle"),
+      body: tr("mobile.projectUploadsAskBody"),
+      confirmLabel: tr("mobile.projectUploadsAskAllow"),
+    });
+    setError(null);
+    try {
+      await updateSettings({
+        [MOBILE_HOST_KEY]: {
+          ...(stored ?? { enabled: false }),
+          project_files: on || undefined,
+          project_uploads: uploads || undefined,
+        },
+      });
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
   const apply = async (enabled: boolean) => {
     setBusy(true);
     setError(null);
@@ -378,9 +405,15 @@ export function MobileSettings() {
     );
   };
 
-  const setUpInTerminal = () => {
+  const setUpInTerminal = async () => {
     const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
-    if (!window.confirm(tr("mobile.setUpConfirm", { command }))) return;
+    const ok = await confirmAction({
+      title: tr("mobile.guideSummary"),
+      // The prose's blank lines set the command apart; a <p> collapses `\n`.
+      body: tr("mobile.setUpConfirm", { command }).split("\n").flatMap((line, index) => index === 0 ? [line] : [<br key={index} />, line]),
+      confirmLabel: tr("mobile.setUpInTerminal"),
+    });
+    if (!ok) return;
     runInstallInTab(tr("mobile.guideSummary"), command, "default");
   };
 
@@ -429,7 +462,13 @@ export function MobileSettings() {
   };
 
   const lockDownNow = async () => {
-    if (!window.confirm(tr("mobile.lockdownConfirm"))) return;
+    const ok = await confirmAction({
+      title: tr("mobile.lockdownNow"),
+      body: tr("mobile.lockdownConfirm"),
+      confirmLabel: tr("mobile.lockdownNow"),
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {
@@ -558,7 +597,7 @@ export function MobileSettings() {
             </li>
           </ol>
           <div className="mobile-settings-guide-actions">
-            <button type="button" className="settings-btn sm" title={t("mobile.setUpInTerminalHelp")} onClick={setUpInTerminal}>{t("mobile.setUpInTerminal")}</button>
+            <button type="button" className="settings-btn sm" title={t("mobile.setUpInTerminalHelp")} onClick={() => void setUpInTerminal()}>{t("mobile.setUpInTerminal")}</button>
             <a href="https://tailscale.com/docs/features/tailscale-serve" target="_blank" rel="noreferrer" title={t("mobile.guideOutro")}>{t("mobile.serveDocs")}</a>
           </div>
           <div className="settings-card-row">
@@ -652,7 +691,7 @@ export function MobileSettings() {
         label={<><Hint help={t("mobile.projectFilesHelp")}>{t("mobile.projectFiles")}</Hint> <UntestedTag id="mobile.projectFiles" /></>}
         checked={stored?.project_files ?? false}
         disabled={busy}
-        onChange={(event) => void setMailGate("project_files", event.target.checked)}
+        onChange={(event) => void setProjectFiles(event.target.checked)}
       />
       <ToggleRow
         label={<><Hint help={t("mobile.projectUploadsHelp")}>{t("mobile.projectUploads")}</Hint> <UntestedTag id="mobile.files.upload" /></>}
@@ -764,8 +803,14 @@ export function MobileSettings() {
       {devices.length > 0 && <button
         type="button"
         className="settings-btn sm danger"
-        onClick={() => {
-          if (!window.confirm(tr("mobile.forgetAllConfirm"))) return;
+        onClick={async () => {
+          const ok = await confirmAction({
+            title: tr("mobile.forgetAll"),
+            body: tr("mobile.forgetAllConfirm"),
+            confirmLabel: tr("mobile.forgetAll"),
+            danger: true,
+          });
+          if (!ok) return;
           void invoke<AdminResponse>("mobile_admin", { request: { type: "forget_all" } })
             .then((response) => {
               if (response.status === "error") throw new Error(response.message);
@@ -854,6 +899,7 @@ export function MobileSettings() {
         </div>
       )}
       <ConnectToServer />
+      {dialogs}
     </SettingsCard>
   );
 }
