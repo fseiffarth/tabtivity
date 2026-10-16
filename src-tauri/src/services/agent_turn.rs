@@ -43,6 +43,14 @@ use crate::services::home_io;
 /// Suffix of the per-tab turn record beside the session record (`<uid>.turn`).
 pub const TURN_SUFFIX: &str = ".turn";
 
+/// Suffix of the per-tab record of the Bash calls the agent put in the
+/// background (`<uid>.bg`): their task ids, one a line, the last few kept. The
+/// hook writes it on a `PostToolUse` whose result names a `backgroundTaskId`.
+const BG_SUFFIX: &str = ".bg";
+
+/// The most task ids [`note_background_tasks`] takes from a record.
+const BG_TASKS_MAX: usize = 32;
+
 /// The event the frontend listens for: `{ id: <pty id>, state: <word> }`.
 pub const TURN_EVENT: &str = "agent-turn";
 
@@ -127,6 +135,7 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
     jobs().lock_ok().remove(uid);
     settled().lock_ok().remove(uid);
     turn_ends().lock_ok().remove(uid);
+    bg_tasks().lock_ok().remove(uid);
     let paths = record_paths(uid, project_id);
     let cut_off = records_hold_turn_in_flight(&paths);
     let resting = !cut_off && records_hold_finished_turn(&paths);
@@ -165,11 +174,13 @@ pub fn on_tab_gone(pty_id: &str) {
     let mut jobs = jobs().lock_ok();
     let mut settled = settled().lock_ok();
     let mut ends = turn_ends().lock_ok();
+    let mut bg = bg_tasks().lock_ok();
     for uid in gone {
         states.remove(&uid);
         jobs.remove(&uid);
         settled.remove(&uid);
         ends.remove(&uid);
+        bg.remove(&uid);
     }
 }
 
@@ -192,6 +203,7 @@ fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
 /// hook writes).
 pub fn clear_record(uid: &str, project_id: Option<&str>) {
     for p in record_paths(uid, project_id) {
+        let _ = std::fs::remove_file(p.with_extension(&BG_SUFFIX[1..]));
         let _ = std::fs::remove_file(p);
     }
 }
@@ -336,6 +348,42 @@ fn turn_ends() -> &'static Mutex<HashMap<String, u64>> {
     E.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// uid → the task ids of the Bash calls its agent put in the background, read
+/// from the hook's `<uid>.bg` record beside the turn record (see
+/// [`note_background_tasks`]). What tells a backgrounded shell from the tool
+/// call the agent waits on WHILE a turn runs: Claude spells the two alike (since
+/// 2.1.x neither redirects stdin), but each writes its own `tasks/<id>.output`.
+fn bg_tasks() -> &'static Mutex<HashMap<String, HashSet<String>>> {
+    static T: OnceLock<Mutex<HashMap<String, HashSet<String>>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The task ids a `.bg` record lists: one a line, alphanumeric (what Claude
+/// mints), the last [`BG_TASKS_MAX`] at most. Anything else on a line drops it.
+fn parse_bg_tasks(text: &str) -> HashSet<String> {
+    let ids: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|id| !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric()))
+        .collect();
+    ids[ids.len().saturating_sub(BG_TASKS_MAX)..].iter().map(|id| id.to_string()).collect()
+}
+
+/// Take `uid`'s background task ids from the `.bg` record in `dir` (the
+/// directory the turn record that just changed is in). Read on every turn
+/// event: the hook writes the ids before the turn record that triggers this.
+fn note_background_tasks(uid: &str, dir: &Path) {
+    let ids = home_io::read_record(&dir.join(format!("{uid}{BG_SUFFIX}")))
+        .map(|text| parse_bg_tasks(&text))
+        .unwrap_or_default();
+    let mut bg = bg_tasks().lock_ok();
+    if ids.is_empty() {
+        bg.remove(uid);
+    } else {
+        bg.insert(uid.to_string(), ids);
+    }
+}
+
 /// The time since boot in clock ticks (`/proc/uptime` × `CLK_TCK`): the clock
 /// a process's `stat` start time is read on.
 #[cfg(target_os = "linux")]
@@ -373,6 +421,7 @@ fn note_state(uid: &str, state: TurnState) {
         states().lock_ok().remove(uid);
         jobs().lock_ok().remove(uid);
         turn_ends().lock_ok().remove(uid);
+        bg_tasks().lock_ok().remove(uid);
         return;
     }
     let mut states = states().lock_ok();
@@ -443,7 +492,8 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
     };
     let max_age = if may_settle { Duration::ZERO } else { JOB_SCAN_MAX_AGE };
     let ends = turn_ends().lock_ok().clone();
-    let live = tool_shell_uids(&want, &ends, max_age);
+    let bg = bg_tasks().lock_ok().clone();
+    let live = tool_shell_uids(&want, &ends, &bg, max_age);
     let mut jobs = jobs().lock_ok();
     let mut out = Vec::new();
     for (uid, pty) in &bound {
@@ -499,6 +549,9 @@ fn is_agent_tool_shell(comm: &str, cmdline: &str, parent_comm: &str) -> bool {
 /// (2026-09-20), both jobs and tool calls, and matched as that whole seam so a
 /// `< /dev/null` INSIDE the command (which lands before the closing quote)
 /// cannot be mistaken for it.
+/// Claude 2.1.300 no longer writes it (measured 2026-10-15): a backgrounded
+/// call is spelled like any other and is known by its task instead
+/// ([`bg_tasks`]). Kept for the Claude versions that still do.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 const CLAUDE_BACKGROUND_SEAM: &str = "' < /dev/null && pwd -P >|";
 
@@ -514,15 +567,43 @@ const CLAUDE_BACKGROUND_SEAM: &str = "' < /dev/null && pwd -P >|";
 ///    background subagent (or the agent, woken by a task notification) is
 ///    waiting on, and counting it lit the tab's command mark for each such
 ///    call and dropped it a moment later.
-///  - Claude's wrapper says so ([`CLAUDE_BACKGROUND_SEAM`]) — the only reading
-///    that can tell the two apart WHILE a turn runs, which is what makes the
-///    "agent and a command at once" mark possible.
+///  - Claude says so — the only reading that can tell the two apart WHILE a
+///    turn runs, which is what makes the "agent and a command at once" mark
+///    possible. Either the shell writes to the output file of a task the hook
+///    recorded as backgrounded (`task`, see [`bg_tasks`]; Linux), or, from a
+///    Claude that still spells it so, its wrapper redirects stdin
+///    ([`CLAUDE_BACKGROUND_SEAM`]).
 ///
-/// Codex has no such seam, so a background exec of its own is only seen once its
+/// Codex has neither, so a background exec of its own is only seen once its
 /// turn ends. Better that than every `bash -lc` it waits on reading as a job.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
-fn is_background_job(cmdline: &str, state: TurnState, outlived: bool) -> bool {
-    (state == TurnState::Done && outlived) || cmdline.contains(CLAUDE_BACKGROUND_SEAM)
+fn is_background_job(cmdline: &str, state: TurnState, outlived: bool, task: bool) -> bool {
+    (state == TurnState::Done && outlived) || task || cmdline.contains(CLAUDE_BACKGROUND_SEAM)
+}
+
+/// Whether the shell `pid` is the body of one of `tasks`: its stdout or stderr
+/// is that task's `tasks/<id>.output`, the file Claude gives every Bash call.
+/// Read through `/proc/<pid>/fd` (the same access its `environ` already takes);
+/// only the file's name and folder are looked at, so a fenced shell's path,
+/// seen from outside its mount namespace, still answers.
+#[cfg(target_os = "linux")]
+fn writes_task_output(pid: u32, tasks: &HashSet<String>) -> bool {
+    [1, 2].iter().any(|fd| {
+        std::fs::read_link(Path::new("/proc").join(pid.to_string()).join("fd").join(fd.to_string()))
+            .ok()
+            .is_some_and(|target| is_task_output(&target, tasks))
+    })
+}
+
+/// Whether `path` is `…/tasks/<id>.output` for an id in `tasks`.
+#[cfg(any(target_os = "linux", test))]
+fn is_task_output(path: &Path, tasks: &HashSet<String>) -> bool {
+    path.parent().and_then(Path::file_name).is_some_and(|dir| dir == "tasks")
+        && path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(".output"))
+            .is_some_and(|id| tasks.contains(id))
 }
 
 /// The tab uid a NUL-separated environment block belongs to, if it sets one.
@@ -553,6 +634,7 @@ fn environ_uid(environ: &[u8]) -> Option<String> {
 fn tool_shell_uids(
     want: &HashMap<&str, TurnState>,
     ends: &HashMap<String, u64>,
+    bg: &HashMap<String, HashSet<String>>,
     max_age: Duration,
 ) -> std::collections::HashSet<String> {
     use crate::services::proc_table;
@@ -574,8 +656,11 @@ fn tool_shell_uids(
         }
         let cmdline = crate::sysstat::cmdline(proc_.pid).unwrap_or_default();
         let parent_comm = table.get(proc_.ppid).map(|p| p.comm.as_str()).unwrap_or_default();
-        if is_agent_tool_shell(&proc_.comm, &cmdline, parent_comm)
-            && is_background_job(&cmdline, *state, outlived_turn(proc_.start, ends.get(&uid).copied()))
+        if !is_agent_tool_shell(&proc_.comm, &cmdline, parent_comm) {
+            continue;
+        }
+        let task = bg.get(&uid).is_some_and(|tasks| writes_task_output(proc_.pid, tasks));
+        if is_background_job(&cmdline, *state, outlived_turn(proc_.start, ends.get(&uid).copied()), task)
             && proc_table::alive(proc_)
         {
             out.insert(uid);
@@ -623,7 +708,7 @@ fn background_job_uids(
         let parent_comm = probe.comm_ppid(ppid).map(|(c, _)| c).unwrap_or_default();
         // No start time is read here: a shell still running after the Stop
         // counts, as it did before Linux compared the two.
-        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state, true) {
+        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state, true, false) {
             out.insert(uid);
         }
     }
@@ -642,6 +727,7 @@ fn background_job_uids(
 fn tool_shell_uids(
     want: &HashMap<&str, TurnState>,
     _ends: &HashMap<String, u64>,
+    _bg: &HashMap<String, HashSet<String>>,
     _max_age: Duration,
 ) -> std::collections::HashSet<String> {
     struct Proc(HashMap<u32, u32>);
@@ -672,6 +758,7 @@ fn tool_shell_uids(
 fn tool_shell_uids(
     _want: &HashMap<&str, TurnState>,
     _ends: &HashMap<String, u64>,
+    _bg: &HashMap<String, HashSet<String>>,
     _max_age: Duration,
 ) -> std::collections::HashSet<String> {
     std::collections::HashSet::new()
@@ -733,6 +820,9 @@ pub fn start(ctx: CoreCtx) {
                     }
                     if let (Some((id, state)), Some(uid)) = (resolve_event(&path), uid_of(&path)) {
                         note_state(&uid, state);
+                        if let Some(dir) = path.parent() {
+                            note_background_tasks(&uid, dir);
+                        }
                         // The flag beside a brand-new verdict is this moment's,
                         // not the last poll's: a `done` lands the instant the
                         // agent's last tool finished, and a job that ended with
@@ -895,21 +985,112 @@ mod tests {
         // (measured 2026-09-20); the `< /dev/null` seam is the whole difference.
         let fg = "/bin/bash -c source /home/u/.claude/shell-snapshots/snapshot-bash-1-x.sh 2>/dev/null || true && eval 'npm test' && pwd -P >| /tmp/claude-e9e6-cwd";
         let bg = "/bin/bash -c source /home/u/.claude/shell-snapshots/snapshot-bash-1-x.sh 2>/dev/null || true && eval 'sleep 300; echo done' < /dev/null && pwd -P >| /tmp/claude-89e8-cwd";
-        assert!(!is_background_job(fg, TurnState::Working, true));
-        assert!(is_background_job(bg, TurnState::Working, true));
+        assert!(!is_background_job(fg, TurnState::Working, true, false));
+        assert!(is_background_job(bg, TurnState::Working, true, false));
         // A `< /dev/null` the USER wrote lands inside the eval'd string, before
         // its closing quote, so it is not the seam.
         let inner = "/bin/bash -c source /home/u/.claude/shell-snapshots/snapshot-bash-1-x.sh 2>/dev/null || true && eval 'npm test < /dev/null' && pwd -P >| /tmp/claude-1111-cwd";
-        assert!(!is_background_job(inner, TurnState::Working, true));
+        assert!(!is_background_job(inner, TurnState::Working, true, false));
+        // Claude 2.1.300 spells a backgrounded call exactly like `fg` (measured
+        // 2026-10-15): the task it writes the output of is what says so.
+        assert!(is_background_job(fg, TurnState::Working, true, true));
         // Once the turn is over, anything still running outlived it — the
         // reading that needs no wrapper spelling, and Codex's only one.
-        assert!(is_background_job(fg, TurnState::Done, true));
-        assert!(is_background_job("bash -lc cargo build", TurnState::Done, true));
-        assert!(!is_background_job("bash -lc cargo build", TurnState::Decision, true));
+        assert!(is_background_job(fg, TurnState::Done, true, false));
+        assert!(is_background_job("bash -lc cargo build", TurnState::Done, true, false));
+        assert!(!is_background_job("bash -lc cargo build", TurnState::Decision, true, false));
         // One started after the Stop is not the turn's: a background subagent's
         // tool call, or the woken agent's. A backgrounded one still is a job.
-        assert!(!is_background_job(fg, TurnState::Done, false));
-        assert!(is_background_job(bg, TurnState::Done, false));
+        assert!(!is_background_job(fg, TurnState::Done, false, false));
+        assert!(is_background_job(bg, TurnState::Done, false, false));
+        assert!(is_background_job(fg, TurnState::Done, false, true));
+    }
+
+    #[test]
+    fn a_task_is_known_by_its_output_file_and_the_record_keeps_only_ids() {
+        let tasks: HashSet<String> = ["brwkwm4yv".to_string()].into();
+        let base = std::env::temp_dir().join("claude-1000").join("proj").join("sess");
+        assert!(is_task_output(&base.join("tasks").join("brwkwm4yv.output"), &tasks));
+        // Another task, the wrong folder, or another file of the task: no.
+        assert!(!is_task_output(&base.join("tasks").join("b0h5x14ma.output"), &tasks));
+        assert!(!is_task_output(&base.join("scratch").join("brwkwm4yv.output"), &tasks));
+        assert!(!is_task_output(&base.join("tasks").join("brwkwm4yv.log"), &tasks));
+        // The record: one id a line, anything that is not one dropped, the last
+        // `BG_TASKS_MAX` kept.
+        let parsed = parse_bg_tasks("abc1\n\n../x\nbad id\nDEF2\r\n");
+        assert_eq!(parsed, ["abc1".to_string(), "DEF2".to_string()].into());
+        let many: String = (0..BG_TASKS_MAX + 5).map(|i| format!("t{i}\n")).collect();
+        let parsed = parse_bg_tasks(&many);
+        assert_eq!(parsed.len(), BG_TASKS_MAX);
+        assert!(!parsed.contains("t0") && parsed.contains(&format!("t{}", BG_TASKS_MAX + 4)));
+    }
+
+    /// Claude 2.1.300 spells a backgrounded Bash call exactly like the call it
+    /// waits on; the hook's task id, matched to the file the shell writes to,
+    /// is what tells them apart while the turn runs.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_shell_writing_a_recorded_background_task_is_a_job_mid_turn() {
+        let _guard = scan_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let bg_uid = format!("job-task-bg-{}", std::process::id());
+        let fg_uid = format!("job-task-fg-{}", std::process::id());
+        let bg_pty = "proj-j:agent-task-bg";
+        let fg_pty = "proj-j:agent-task-fg";
+        let tmp = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-job-task-{}"), std::process::id()));
+        let snap = tmp.join("shell-snapshots");
+        let tasks = tmp.join("tasks");
+        let live = tmp.join("live");
+        for d in [&snap, &tasks, &live] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let snapshot = snap.join("snapshot-bash-test.sh");
+        std::fs::write(&snapshot, "").unwrap();
+        bind_tab(&bg_uid, bg_pty, None);
+        bind_tab(&fg_uid, fg_pty, None);
+        note_state(&bg_uid, TurnState::Working);
+        note_state(&fg_uid, TurnState::Working);
+        // The hook recorded the background call's task for one tab only.
+        std::fs::write(live.join(format!("{bg_uid}{BG_SUFFIX}")), "bgtask1\n").unwrap();
+        note_background_tasks(&bg_uid, &live);
+        note_background_tasks(&fg_uid, &live);
+        // The same wrapper spelling for both, each writing its own task file.
+        let cwd_file = tmp.join("cwd");
+        let spawn = |uid: &str, task: &str| {
+            let out = std::fs::File::create(tasks.join(format!("{task}.output"))).unwrap();
+            std::process::Command::new("bash")
+                .arg("-c")
+                .arg(format!(
+                    "source {} 2>/dev/null || true && eval 'sleep 30' && pwd -P >| {}",
+                    snapshot.display(),
+                    cwd_file.display(),
+                ))
+                .env(crate::app_env!("TAB_UID"), uid)
+                .stdout(out.try_clone().unwrap())
+                .stderr(out)
+                .spawn()
+                .unwrap()
+        };
+        let mut backgrounded = spawn(&bg_uid, "bgtask1");
+        let mut foreground = spawn(&fg_uid, "fgtask1");
+        let raised = (0..50).any(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            rescan();
+            refresh_jobs(None);
+            job_flag(&bg_uid)
+        });
+        assert!(raised, "the scan never found the backgrounded task's shell");
+        assert!(!job_flag(&fg_uid), "a foreground tool call was read as a job");
+        let _ = backgrounded.kill();
+        let _ = backgrounded.wait();
+        let _ = foreground.kill();
+        let _ = foreground.wait();
+        rescan();
+        refresh_jobs(None);
+        assert!(!job_flag(&bg_uid));
+        on_tab_gone(bg_pty);
+        on_tab_gone(fg_pty);
+        assert!(!bg_tasks().lock().unwrap().contains_key(&bg_uid));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
