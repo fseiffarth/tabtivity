@@ -192,7 +192,7 @@ describe("Mobile assistant — the chat list", () => {
     rememberScopeKind("p", "project");
     fetchMock.mockImplementation((url: string) => String(url).endsWith("/outbox")
       ? json({ files: [] })
-      : json({ project: { id: "p", label: "Alpha", status: "active", live_sessions: 1 }, desktop_available: true, tabs: [chat("a", "claude 1")], agents: [] }));
+      : json({ project: { id: "p", label: "Alpha", status: "active", live_sessions: 1 }, desktop_available: true, tabs: [chat("a", "claude 1", { schedules: { total: 1, enabled: 1 } })], agents: [] }));
     const { container } = render(<Project id="p" back={() => {}} terminal={() => {}} />);
     await screen.findByText("claude 1");
     expect(container.querySelector(".tab-card-schedule")).toBeTruthy();
