@@ -895,7 +895,7 @@ pub fn archive(
 /// in the CLI's own transcript; its words are not a project's prompts, and
 /// the history is where prompts are kept for re-use and for the user's review.
 fn records_nothing_for(scope_id: &str) -> bool {
-    scope_id == storage::ASSISTANT_SCOPE
+    storage::is_assistant_scope(scope_id)
 }
 
 /// Record one delivery straight onto the history. Returns the project's
@@ -1693,5 +1693,12 @@ mod tests {
         let kept = record_at(dir.path(), "p1", recorded("b", "hello", "delivered")).unwrap();
         assert_eq!(kept.len(), 1);
         assert!(list_at(dir.path(), crate::storage::ASSISTANT_SCOPE).unwrap().is_empty());
+        // Any spelling of the id is the same folder on a case-folding filesystem.
+        for id in ["Assistant", " assistant", "ASSISTANT"] {
+            let wrote = record_at(dir.path(), id, recorded("c", "what is a monad", "delivered")).unwrap();
+            assert!(wrote.is_empty(), "{id:?}");
+        }
+        assert!(list_at(dir.path(), "Assistant").unwrap().is_empty());
+        assert!(records_nothing_for("Assistant") && !records_nothing_for("p1"));
     }
 }

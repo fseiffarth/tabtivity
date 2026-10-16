@@ -122,9 +122,7 @@ fn write_terminal_session(
         return Err(crate::services::workspace::OWNED_ERROR.to_string());
     }
     let mut tab_layout = tabs.to_vec();
-    if project_id == storage::ASSISTANT_SCOPE {
-        sanitize_assistant_layout(&mut tab_layout, &storage::state_dir());
-    }
+    sanitize_scope_layout(project_id, &mut tab_layout, &storage::state_dir());
     let session = TerminalSession {
         tab_layout,
         active_tab_index,
@@ -170,7 +168,7 @@ pub(crate) fn after_state_session_write(project_id: &str, local_file: &str) {
     };
     // The chat assistant's scope has no project folder: nothing is copied out
     // of the state dir, whatever file the caller named.
-    let local_file = if project_id == storage::ASSISTANT_SCOPE { "" } else { local_file };
+    let local_file = export_target(project_id, local_file);
     // Drop host-bound markers (#150) for tabs this project no longer has, so the
     // directory does not accumulate one file per local-model tab ever opened.
     // Driven off the layout that was just saved, which is the same file the spawn
@@ -257,9 +255,7 @@ fn write_export_copy(local_file: &str, session: &TerminalSession) {
 pub fn load_terminal_session(project_id: &str) -> TerminalSession {
     let mut session = read_state_session(project_id).unwrap_or_default();
     sanitize_loaded_layout(&mut session.tab_layout);
-    if project_id == storage::ASSISTANT_SCOPE {
-        sanitize_assistant_layout(&mut session.tab_layout, &storage::state_dir());
-    }
+    sanitize_scope_layout(project_id, &mut session.tab_layout, &storage::state_dir());
     session
 }
 
@@ -471,8 +467,33 @@ pub(crate) fn sanitize_assistant_layout(tabs: &mut Vec<TabEntry>, state_dir: &Pa
             tab.extra.insert(crate::services::assistant::ASSISTANT_KEY.to_string(), block);
         }
         tab.cwd = dir.to_string_lossy().into_owned();
+        // The session name is the backend's, derived from the uid: a layout
+        // cannot point a chat at another session (`new-session -A` attaches).
+        if let Some(uid) = tab.session_id.as_deref() {
+            tab.extra.insert("tmuxSession".to_string(), Value::String(crate::services::assistant::tmux_session_for(uid)));
+        }
         true
     });
+}
+
+/// The scope's own layout rule, when it has one: the chat assistant's scope
+/// ([`storage::is_assistant_scope`]: every spelling of its id, since a
+/// case-folding filesystem maps them all onto its folder) keeps only validated
+/// chats. The one call the save, load, snapshot and sync paths make.
+pub(crate) fn sanitize_scope_layout(project_id: &str, tabs: &mut Vec<TabEntry>, state_dir: &Path) {
+    if storage::is_assistant_scope(project_id) {
+        sanitize_assistant_layout(tabs, state_dir);
+    }
+}
+
+/// The project-tree file a scope's layout is exported next to: none for the
+/// chat assistant's scope (any spelling), which has no project folder.
+pub(crate) fn export_target<'a>(project_id: &str, local_file: &'a str) -> &'a str {
+    if storage::is_assistant_scope(project_id) {
+        ""
+    } else {
+        local_file
+    }
 }
 
 /// Sanitize an untrusted persisted layout in place against the current known-good
@@ -1420,7 +1441,9 @@ mod tests {
             assert_eq!(tab.cwd, crate::services::assistant::chat_dir(state, CHAT_UID).unwrap().to_string_lossy());
             // The window's own bookkeeping stays.
             assert_eq!(tab.extra["color"], "teal");
-            assert_eq!(tab.extra["tmuxSession"], "slug-assistant--agent-1");
+            // The tmux session is the backend's, derived from the uid: the
+            // planted name (a session `new-session -A` would attach to) is gone.
+            assert_eq!(tab.extra["tmuxSession"], crate::services::assistant::tmux_session_for(CHAT_UID).as_str());
         }
         assert_eq!(tabs[1].extra["assistant"], serde_json::json!({ "cli": "claude", "model": "claude-opus-5" }));
     }
@@ -1440,6 +1463,31 @@ mod tests {
             assert!(!tab.extra.contains_key(key), "{key}");
         }
         assert_eq!(tab.cmd, "codex");
+    }
+
+    /// The scope's id is a directory name, and a case-folding filesystem maps
+    /// `Assistant` onto `assistant`: every spelling gets the scope's layout rule
+    /// and no export copy, not only the exact one.
+    #[test]
+    fn every_spelling_of_the_assistant_scope_gets_its_layout_rule() {
+        let state = Path::new("state");
+        for id in ["assistant", "Assistant", "ASSISTANT", " assistant", "assistant ", "assistant\n"] {
+            let mut tabs = vec![planted_chat(serde_json::json!({ "cli": "claude" })), entry("bash")];
+            sanitize_scope_layout(id, &mut tabs, state);
+            assert_eq!(tabs.len(), 1, "{id:?}: the plain shell is dropped");
+            for key in ASSISTANT_DROPPED_KEYS {
+                assert!(!tabs[0].extra.contains_key(*key), "{id:?} {key}");
+            }
+            assert_eq!(tabs[0].cwd, crate::services::assistant::chat_dir(state, CHAT_UID).unwrap().to_string_lossy(), "{id:?}");
+            assert_eq!(export_target(id, "/projects/p/project.json"), "", "{id:?}: nothing is copied out of the state dir");
+        }
+        // A project (or box) id is left alone, whatever it resembles.
+        for id in ["p1", "assistants", "my-assistant", "root"] {
+            let mut tabs = vec![entry("bash")];
+            sanitize_scope_layout(id, &mut tabs, state);
+            assert_eq!(tabs.len(), 1, "{id:?}");
+            assert_eq!(export_target(id, "/projects/p/project.json"), "/projects/p/project.json", "{id:?}");
+        }
     }
 
     #[test]

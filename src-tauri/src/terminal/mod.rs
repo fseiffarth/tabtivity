@@ -2053,6 +2053,7 @@ fn launch(
     let help_token = env.and_then(|env| env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned());
     let push_token = env.and_then(|env| env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned());
     let markup_token = env.and_then(|env| env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned());
+    let web_token = env.and_then(|env| env.get(crate::services::root_mcp::WEB_TOKEN_ENV).cloned());
     tokio::spawn(async move {
         let emitter = ctx.clone();
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
@@ -2107,6 +2108,10 @@ fn launch(
                 // sweep rings `markup-mcp-changed` through the change hook.
                 crate::services::root_mcp::revoke_token(&token);
                 crate::services::markup_mcp::sweep();
+            }
+            if let Some(token) = web_token {
+                // The assistant's web lane: a chat's token dies with its CLI.
+                crate::services::root_mcp::revoke_token(&token);
             }
             if let Some(token) = mcp_token {
                 let state = crate::storage::state_dir();
@@ -3869,6 +3874,51 @@ mod client_tests {
         route_close(tab, seq);
         routes().lock().unwrap().remove(tab);
         kill_test_ptys(&registry);
+    }
+
+    /// The assistant's web-lane token is revoked when its process ends, like the
+    /// help, push and markup tokens: a finished chat's bearer opens nothing.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_chats_web_lane_token_dies_with_its_process() {
+        use crate::services::root_mcp::{authenticate, test_session_for_tab, WEB_TOKEN_ENV};
+        let (token, _) = test_session_for_tab(crate::services::root_mcp::Caller::Web, "assistant:revoke-t", std::path::Path::new("/nonexistent"));
+        let header = format!("Bearer {token}");
+        assert!(authenticate(Some(&header)).is_some(), "minted");
+        let tab = "assistant:revoke-t";
+        let opts = PtyOptions {
+            login: None,
+            assistant: None,
+            id: tab.to_string(),
+            cmd: "sh".to_string(),
+            local_model: false,
+            args: vec!["-c".to_string(), "exit 0".to_string()],
+            env: HashMap::from([(WEB_TOKEN_ENV.to_string(), token.clone())]),
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            local_only: true,
+            sandbox: false,
+            agent: false,
+            project_id: None,
+            schedule_target_id: None,
+            host_session: false,
+            remote_host_id: None,
+            tmux_session: None,
+            tmux_attach: None,
+            host_bound_uid: None,
+        };
+        let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
+        let ctx = ctx_as(Caller::Local(ClientId::main()), RecordingEvents::new());
+        let seq = crate::services::agent_fence::begin_spawn(tab);
+        spawn_pty(ctx, registry, opts, seq).unwrap();
+        for _ in 0..200 {
+            if authenticate(Some(&header)).is_none() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("the web token still opens the lane after its process ended");
     }
 
     /// The whole of #2347 against a real tmux server of the test's own (`-L`,
