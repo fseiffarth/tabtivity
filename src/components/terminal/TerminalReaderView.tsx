@@ -105,6 +105,40 @@ function RunningShellLine({ shell }: { shell: RunningShell }) {
  * shown as a tag beside the label (the phone's `QuestionList` does the same). */
 const RECOMMENDED = /\s+\(Recommended\)$/u;
 
+/** The reader's answer rows that can be picked right now. */
+const OPTION_BUTTONS = "button.terminal-reader-option:not(:disabled)";
+
+/** Moves the keyboard from the composer onto the open question's rows: the
+ * row the CLI has highlighted, else the first. False when none can be picked. */
+function focusQuestionOption(from: Element): boolean {
+  const root = from.closest(".terminal-reader");
+  const rows = root ? Array.from(root.querySelectorAll<HTMLButtonElement>(OPTION_BUTTONS)) : [];
+  const row = rows.find((candidate) => candidate.classList.contains("current")) ?? rows[0];
+  row?.focus();
+  return !!row;
+}
+
+/** ↑/↓ (Home/End) walk focus over the answer rows, Enter or Space picks the
+ * focused one; ↑ off the first row goes back to the composer. */
+function walkQuestionOptions(event: KeyboardEvent<HTMLElement>) {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  // The free-text row's field keeps its own caret keys.
+  if (!(event.target instanceof HTMLButtonElement)) return;
+  const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>(OPTION_BUTTONS));
+  const at = rows.indexOf(event.target);
+  if (at < 0) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? 0
+    : event.key === "End" ? rows.length - 1
+    : at + (event.key === "ArrowUp" ? -1 : 1);
+  if (next < 0) {
+    event.currentTarget.closest(".terminal-reader")?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea")?.focus();
+    return;
+  }
+  rows[Math.min(next, rows.length - 1)]?.focus();
+}
+
 /** The choice the session waits on, as buttons: what it was drawn onto (a
  * permission prompt's command or diff), an agent question's headers as chips,
  * its question, then one row per option. A click sends the arrow keys and
@@ -147,7 +181,7 @@ function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
     [answeredTab && "answered", index === focus && "current"].filter(Boolean).join(" ") || undefined;
   return (
     <div className="terminal-reader-question" role="group" aria-label={t("terminal.reader.question")}>
-      <small className="terminal-reader-question-head">{t("terminal.reader.question")}</small>
+      <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /></small>
       {live.context.length > 0 && <pre className="terminal-reader-question-context">{live.context.join("\n")}</pre>}
       {live.tabs.length > 0 && !stepped && (
         <div className="terminal-reader-question-tabs">
@@ -197,7 +231,7 @@ function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
         </div>
       )}
       {live.ask.length > 0 && <p className="terminal-reader-question-ask">{live.ask.join("\n")}</p>}
-      <div className="terminal-reader-options">
+      <div className="terminal-reader-options" onKeyDown={walkQuestionOptions}>
         {question.options.map((option) => {
           const recommended = RECOMMENDED.exec(option.label);
           const label = question.review ? t("terminal.reader.questionSubmitStep") : option.label;
@@ -413,7 +447,7 @@ const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   send_failed: "terminal.reader.sendFailed",
 };
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, focused, visible, steering, onEscape, onStatus }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, focused, visible, steering, questionOpen, onEscape, onStatus }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -427,6 +461,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   focused: boolean;
   visible: boolean;
   steering: boolean;
+  /** A dialog waits on an answer: ↑/↓ in an empty composer walk its rows. */
+  questionOpen: boolean;
   onEscape: () => void;
   onStatus: () => void;
 }) {
@@ -601,6 +637,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
 
   const onComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (slashKey(e)) {
+      e.preventDefault();
+    } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
       e.preventDefault();
     } else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && walkHistory(e, e.key === "ArrowUp" ? -1 : 1)) {
       e.preventDefault();
@@ -1385,6 +1423,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
         focused={focused}
         visible={visible}
         steering={steering}
+        questionOpen={!!shownLive.question}
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}
       />

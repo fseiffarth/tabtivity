@@ -3057,6 +3057,11 @@ button.terminal-reader-option:hover:not(:disabled) {
 .terminal-reader-option.current {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
 }
+.terminal-reader-option:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
 .terminal-reader-option:disabled {
   opacity: 0.55;
   cursor: var(--cur-default, default);
