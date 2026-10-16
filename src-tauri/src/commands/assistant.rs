@@ -23,8 +23,6 @@ use crate::tauri_host::Ctx;
 pub const OFF: &str = "assistant_off";
 
 /// The keychain account of the Ollama web-search key (plan decision 7).
-// S2: replace with remote_credentials::web_search_account("ollama")
-const OLLAMA_SEARCH_ACCOUNT: &str = "web-search:ollama";
 
 /// The longest search key and SearXNG URL accepted.
 const MAX_KEY_LEN: usize = 1024;
@@ -130,7 +128,7 @@ fn search_state(settings: &Settings, keyring: KeyringState, key_stored: Option<b
 /// Read the keychain half of [`SearchState`]; blocking.
 fn read_search_state(settings: &Settings) -> SearchState {
     let keyring = remote_credentials::keyring_state();
-    let key_stored = (keyring == KeyringState::Unlocked).then(|| remote_credentials::has(OLLAMA_SEARCH_ACCOUNT));
+    let key_stored = (keyring == KeyringState::Unlocked).then(|| remote_credentials::has(&remote_credentials::web_search_account("ollama")));
     search_state(settings, keyring, key_stored)
 }
 
@@ -363,8 +361,8 @@ pub async fn assistant_set_search(kind: String, url: Option<String>, key: Option
             url.as_deref(),
             key.as_deref(),
             keyring == KeyringState::Unlocked,
-            || remote_credentials::has(OLLAMA_SEARCH_ACCOUNT),
-            |secret| remote_credentials::set(OLLAMA_SEARCH_ACCOUNT, secret),
+            || remote_credentials::has(&remote_credentials::web_search_account("ollama")),
+            |secret| remote_credentials::set(&remote_credentials::web_search_account("ollama"), secret),
         )?;
         let search = read_search_state(&settings);
         Ok(SearchSaved { search, settings })
