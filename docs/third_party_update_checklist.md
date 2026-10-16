@@ -626,9 +626,13 @@ Install via `npm install -g @google/gemini-cli`. The 0.59.0 bundle still
 defines `--resume` (alias `-r`) and renders the `NN% used` footer (read out of
 the package, 2026-09-15; not live).
 
-- No transcript is read: the Agents view's last-prompt line comes from the
-  prompt echo on the pane's screen (`> …`, parsed by the mobile `chatTurns`),
-  so a changed echo marker or an unindented multi-line echo loses the line.
+- Phone Chat reads stored sessions through `services::google_chat` (not live
+  verified): `.gemini/tmp/<project>/chats/*.json` and newer JSONL records with
+  `$patch`, `$rewindTo`, `$set`; project directory is SHA-256 or the slug in
+  `.gemini/projects.json`. Messages use `type: user|gemini`, `content`, optional
+  `displayContent`, `timestamp`, `model`; tool calls and thoughts stay out.
+  Re-check those fields and paths on update. The Agents view's last-prompt
+  line still reads the pane's `> …` echo through mobile `chatTurns`.
 
 **Verify** `gemini --help | grep -E 'resume|prompt'`; open a tab, `/stats`.
 
@@ -764,6 +768,15 @@ changes any of those leaves the model chip on the tab's last known model and
 the sheet without its rows. `agy models` lists the model ids and their efforts
 (`gemini-3.1-pro-{high,low}` — no medium), which is the quickest check that the
 list still looks as the sheet expects.
+
+Phone Chat now reads Antigravity's stored conversation through
+`services::google_chat` (not live verified): `conversation_summaries.db`
+selects a main session by `workspace_uris`; its conversation database's
+`steps` holds a CortexStep protobuf in `step_payload`. The installed 1.3.3
+descriptor defines user input as type 14, field 19 → field 2; answers as
+type 15, field 20 → field 1; completion status 3; timestamps at field 5 →
+field 1. Re-check these against the binary descriptor and database schema on
+update. Thinking and tools are omitted. Versions include the WAL's timestamp.
 
 Vibe and Copilot are full-screen (alternate-screen) TUIs, as plain `opencode`
 is; the phone's Focus view cannot read them — a release that changes that is an

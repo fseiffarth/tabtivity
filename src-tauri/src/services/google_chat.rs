@@ -44,6 +44,10 @@ fn epoch(text: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(text).ok().map(|time| time.timestamp_millis())
 }
 
+fn key(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
 fn stamp(file: &HomeFile) -> Option<String> {
     let meta = file.open_read()?.metadata().ok()?;
     let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
@@ -84,17 +88,17 @@ fn gemini(home: &Path, directory: &str, since: Option<i64>, version: Option<&str
     let mut candidates = Vec::new();
     for identifier in identifiers {
         let Some(chats) = tmp.open_subdir(&identifier).and_then(|dir| dir.open_subdir("chats")) else { continue; };
-        for name in chats.names().into_iter().take(MAX_FILES) {
+        for name in chats.names().into_iter().rev().take(MAX_FILES) {
             if !name.ends_with(".json") && !name.ends_with(".jsonl") { continue; }
             let Some(file) = chats.file(&name) else { continue; };
             let Some(meta) = file.open_read().and_then(|file| file.metadata().ok()) else { continue; };
             if meta.len() <= MAX_BYTES { candidates.push((meta.modified().ok(), file, name.ends_with(".jsonl"), format!("{identifier}:{name}"))); }
         }
     }
-    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
     let mut budget = MAX_BYTES;
     for (_, file, jsonl, name) in candidates.into_iter().take(MAX_FILES) {
-        let current = format!("gemini:{directory}:{name}:{}:{since:?}:{limit}", stamp(&file)?);
+        let current = format!("gemini:{}:{}:{since:?}:{limit}", key(&format!("{directory}:{name}")), stamp(&file)?);
         if version == Some(current.as_str()) { return Some(empty(current, version)); }
         let len = file.open_read()?.metadata().ok()?.len();
         budget = budget.checked_sub(len)?;
@@ -122,7 +126,7 @@ fn gemini(home: &Path, directory: &str, since: Option<i64>, version: Option<&str
         }
         return Some(finish(read, limit));
     }
-    Some(empty(format!("gemini:new:{directory}:{since:?}:{limit}"), version))
+    Some(empty(format!("gemini:new:{}:{since:?}:{limit}", key(directory)), version))
 }
 
 fn part_text(value: &Value) -> String {
@@ -195,13 +199,15 @@ fn antigravity(home: &Path, directory: &str, since: Option<i64>, version: Option
     let root = HomeDir::open_existing(home, ".gemini/antigravity-cli")?;
     let summaries = database(&root.file("conversation_summaries.db")?)?;
     let conversations = root.open_subdir("conversations")?;
+    let canonical = std::fs::canonicalize(directory).ok();
     let mut query = summaries.prepare("SELECT conversation_id, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = '' ORDER BY last_modified_time DESC LIMIT 512").ok()?;
     let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).ok()?;
     for row in rows {
         let (id, workspaces) = row.ok()?;
         if !crate::services::agent_session::is_uuid_shaped(&id) { continue; }
         let workspaces: Vec<String> = serde_json::from_str(&workspaces).ok()?;
-        if !workspaces.iter().any(|uri| url::Url::parse(uri).ok().and_then(|uri| uri.to_file_path().ok()).is_some_and(|path| path == Path::new(directory))) { continue; }
+        if !workspaces.iter().any(|uri| url::Url::parse(uri).ok().and_then(|uri| uri.to_file_path().ok())
+            .is_some_and(|path| path == Path::new(directory) || canonical.as_deref() == Some(path.as_path()))) { continue; }
         let file = conversations.file(&format!("{id}.db"))?;
         let conn = database(&file)?;
         if let Some(since) = since {
@@ -230,7 +236,7 @@ fn antigravity(home: &Path, directory: &str, since: Option<i64>, version: Option
         read.entries.reverse();
         return Some(finish(read, limit));
     }
-    Some(empty(format!("agy:new:{directory}:{since:?}:{limit}"), version))
+    Some(empty(format!("agy:new:{}:{since:?}:{limit}", key(directory)), version))
 }
 
 fn step_time(payload: &[u8]) -> Option<i64> {
@@ -319,6 +325,7 @@ mod tests {
         assert_eq!(texts(&read), [("prompt", "fix it"), ("answer", "Fixed.")]);
         assert_eq!(read.entries[0].at.as_deref(), Some("2026-10-15T12:00:00Z"));
         assert_eq!(read.model.as_deref(), Some("gemini-test"));
+        assert!(!read.version.as_deref().unwrap().contains(directory));
         assert!(transcript("gemini", home.path(), directory, None, read.version.as_deref(), 60).unchanged);
         let tail = transcript("gemini", home.path(), directory, None, read.version.as_deref(), 1);
         assert!(!tail.unchanged);
@@ -327,6 +334,25 @@ mod tests {
         let fresh = transcript("gemini", home.path(), directory, Some(epoch("2026-10-15T13:00:00Z").unwrap()), None, 60);
         assert!(fresh.available && fresh.entries.is_empty());
         assert!(transcript("gemini", home.path(), home.path().to_str().unwrap(), None, None, 60).entries.is_empty());
+    }
+
+    #[test]
+    fn gemini_reads_a_jsonl_session_from_the_project_slug_registry() {
+        let home = tempfile::tempdir().unwrap();
+        let directory = home.path().to_str().unwrap();
+        let gemini = home.path().join(".gemini");
+        let chats = gemini.join("tmp").join("project-slug").join("chats");
+        std::fs::create_dir_all(&chats).unwrap();
+        std::fs::write(gemini.join("projects.json"), json!({"projects": {directory: "project-slug"}}).to_string()).unwrap();
+        let metadata = json!({"sessionId": "one", "projectHash": key(directory), "startTime": "2026-10-15T12:00:00Z"});
+        let prompt = json!({"id": "p", "type": "user", "content": "fix it"});
+        let answer = json!({"id": "a", "type": "gemini", "content": "Partial"});
+        let patch = json!({"$patch": {"id": "a", "content": "Fixed."}});
+        std::fs::write(chats.join("session-one.jsonl"), format!("{metadata}\n{prompt}\n{answer}\n{patch}\n")).unwrap();
+        let read = transcript("gemini", home.path(), directory, None, None, 60);
+        assert!(read.available);
+        assert_eq!(texts(&read), [("prompt", "fix it"), ("answer", "Fixed.")]);
+        assert!(!read.version.as_deref().unwrap().contains(directory));
     }
 
     #[test]
