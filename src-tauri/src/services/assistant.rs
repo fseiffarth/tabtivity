@@ -185,7 +185,10 @@ impl std::fmt::Display for Refusal {
             Self::BadModel => write!(f, "That model name is not valid."),
             Self::BadUid => write!(f, "That {name} chat has an invalid id."),
             Self::NoLane => write!(f, "{name}'s web tools are not available right now."),
-            Self::CodexCatalog => write!(f, "Codex couldn't be started without its file tool, so {name} did not start it."),
+            Self::CodexCatalog => write!(
+                f,
+                "Codex couldn't be started without its file tool, so {name} did not start it. Start Codex once in any tab, then try again."
+            ),
             Self::Config => write!(f, "{name} could not set up its tools for this chat."),
         }
     }
@@ -442,7 +445,49 @@ fn codex_catalog_ok(catalog: &[u8]) -> bool {
     })
 }
 
-/// Build the catalog from the home's `models_cache.json`, write it into the
+/// The most of a sibling home's `models_cache.json` copied in (decision 16).
+const CODEX_SEED_CAP: u64 = 8 * 1024 * 1024;
+
+/// Decision 16: a home Codex never ran in has no `models_cache.json`, and Codex
+/// is not started without the catalog built from it, so the first Codex chat
+/// could never start. When the home has none, copy the newest usable one from
+/// any other agent home next to it (`<state>/agent-homes/*`) into
+/// `<home>/.codex`. Every read is a no-follow regular-file read relative to
+/// directory handles (`home_io`), capped at [`CODEX_SEED_CAP`]; a link, a
+/// FIFO, an oversized or unusable file in a sibling is skipped, and the write
+/// goes through `home_io` too. Finding nothing changes nothing: the caller's
+/// catalog build then refuses as it always did. Only a home inside a folder
+/// named like the agent-homes folder seeds, so a stray path never scans its
+/// parent.
+fn seed_codex_models_cache(home: &Path) {
+    use std::io::Read;
+    let rel = format!(".codex/{CODEX_MODELS_CACHE}");
+    if crate::services::home_io::HomeFile::open_existing(home, &rel).is_some_and(|file| file.metadata().is_some()) {
+        return;
+    }
+    let Some(homes) = home.parent().filter(|p| p.file_name().is_some_and(|n| n == crate::services::agent_home::HOMES_DIR)) else {
+        return;
+    };
+    let newest = crate::services::agent_home::existing_homes_under(homes)
+        .into_iter()
+        .filter(|other| other != home)
+        .filter_map(|other| {
+            let file = crate::services::home_io::HomeFile::open_existing(&other, &rel)?.open_read()?;
+            let modified = file.metadata().ok()?.modified().ok()?;
+            let mut bytes = Vec::new();
+            file.take(CODEX_SEED_CAP + 1).read_to_end(&mut bytes).ok()?;
+            (bytes.len() as u64 <= CODEX_SEED_CAP && build_codex_catalog(&bytes).is_some()).then_some((modified, bytes))
+        })
+        .max_by_key(|(modified, _)| *modified);
+    if let Some((_, bytes)) = newest {
+        if let Some(target) = crate::services::home_io::HomeFile::open(home, &rel) {
+            let _ = target.write(&bytes);
+        }
+    }
+}
+
+/// Build the catalog from the home's `models_cache.json` (seeded first when
+/// missing, [`seed_codex_models_cache`]), write it into the
 /// home through `home_io` (every operation relative to a directory handle: a
 /// fenced agent owns that tree) and check what was written. Any failure —
 /// no cache, an unreadable one, an unknown shape, a failed check — is
@@ -450,6 +495,7 @@ fn codex_catalog_ok(catalog: &[u8]) -> bool {
 /// tool.
 fn write_codex_catalog(home: &Path) -> Result<(), Refusal> {
     use std::io::Read;
+    seed_codex_models_cache(home);
     let cache = crate::services::home_io::HomeFile::open_existing(home, &format!(".codex/{CODEX_MODELS_CACHE}"))
         .and_then(|file| file.open_read())
         .and_then(|file| {
@@ -993,6 +1039,99 @@ mod tests {
         assert!(!codex_catalog_ok(br#"{"models":[]}"#));
         assert!(codex_catalog_ok(br#"{"models":[{"apply_patch_tool_type":null}]}"#));
         assert!(build_codex_catalog(br#"{"models":[{"apply_patch_tool_type":"freeform"}]}"#).is_some_and(|b| codex_catalog_ok(&b)));
+    }
+
+    /// `<state>/agent-homes/<name>` with a Codex cache of `slug` models (or none).
+    fn agent_home_with_cache(state: &Path, name: &str, slug: Option<&str>) -> PathBuf {
+        let home = crate::services::agent_home::homes_root_in(state).join(name);
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        if let Some(slug) = slug {
+            std::fs::write(home.join(".codex").join(CODEX_MODELS_CACHE), serde_json::json!({ "models": [{ "slug": slug }] }).to_string()).unwrap();
+        }
+        home
+    }
+
+    fn catalog_slugs(home: &Path) -> Vec<String> {
+        let written = std::fs::read(home.join(".codex").join(CODEX_CATALOG_FILE)).unwrap();
+        let catalog: serde_json::Value = serde_json::from_slice(&written).unwrap();
+        catalog["models"].as_array().unwrap().iter().map(|m| m["slug"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn the_first_codex_chat_copies_the_newest_model_list_from_a_sibling_home() {
+        let state = tempfile::tempdir().unwrap();
+        let old = agent_home_with_cache(state.path(), "p1", Some("old"));
+        let new = agent_home_with_cache(state.path(), "p2", Some("new"));
+        // An unusable newest file is passed over for a usable older one.
+        let junk = agent_home_with_cache(state.path(), "p3", None);
+        std::fs::write(junk.join(".codex").join(CODEX_MODELS_CACHE), "not json").unwrap();
+        let day = std::time::Duration::from_secs(86_400);
+        let set = |home: &Path, age: std::time::Duration| {
+            let file = std::fs::File::options().write(true).open(home.join(".codex").join(CODEX_MODELS_CACHE)).unwrap();
+            file.set_modified(std::time::SystemTime::now() - age).unwrap();
+        };
+        set(&old, day * 3);
+        set(&new, day);
+        set(&junk, std::time::Duration::ZERO);
+        let home = crate::services::agent_home::homes_root_in(state.path()).join("assistant");
+        std::fs::create_dir_all(&home).unwrap();
+        let grant = lane();
+        launch_line(&launch(AssistantCli::Codex, None), &ctx(&home, Some(&grant))).unwrap();
+        assert_eq!(catalog_slugs(&home), ["new"]);
+        // The copy is the home's own now; the sibling's file is untouched.
+        assert!(home.join(".codex").join(CODEX_MODELS_CACHE).is_file());
+        assert!(std::fs::read_to_string(new.join(".codex").join(CODEX_MODELS_CACHE)).unwrap().contains("new"));
+        // A later start never re-seeds: the home's own cache wins over a newer sibling.
+        agent_home_with_cache(state.path(), "p4", Some("newer"));
+        launch_line(&launch(AssistantCli::Codex, None), &ctx(&home, Some(&grant))).unwrap();
+        assert_eq!(catalog_slugs(&home), ["new"]);
+    }
+
+    #[test]
+    fn with_no_model_list_anywhere_the_first_codex_chat_is_refused_and_says_what_to_do() {
+        let state = tempfile::tempdir().unwrap();
+        agent_home_with_cache(state.path(), "p1", None);
+        let home = crate::services::agent_home::homes_root_in(state.path()).join("assistant");
+        std::fs::create_dir_all(&home).unwrap();
+        assert_eq!(launch_line(&launch(AssistantCli::Codex, None), &ctx(&home, None)), Err(Refusal::CodexCatalog));
+        assert!(!home.join(".codex").join(CODEX_MODELS_CACHE).exists());
+        assert!(!home.join(".codex").join(CODEX_CATALOG_FILE).exists());
+        assert!(Refusal::CodexCatalog.to_string().contains("Start Codex once in any tab"));
+        // A home outside an agent-homes folder never scans its neighbours.
+        let stray = state.path().join("stray");
+        std::fs::create_dir_all(&stray).unwrap();
+        agent_home_with_cache(state.path(), "assistant-neighbour", Some("x"));
+        std::fs::rename(crate::services::agent_home::homes_root_in(state.path()).join("assistant-neighbour"), state.path().join("neighbour")).unwrap();
+        assert_eq!(launch_line(&launch(AssistantCli::Codex, None), &ctx(&stray, None)), Err(Refusal::CodexCatalog));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_or_a_fifo_in_a_sibling_home_is_not_a_model_list() {
+        let state = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("stolen.json"), r#"{"models":[{"slug":"stolen"}]}"#).unwrap();
+        // A link at the file, a FIFO at the file, and a link at `.codex`.
+        let linked = agent_home_with_cache(state.path(), "linked", None);
+        std::os::unix::fs::symlink(outside.path().join("stolen.json"), linked.join(".codex").join(CODEX_MODELS_CACHE)).unwrap();
+        let fifo = agent_home_with_cache(state.path(), "fifo", None);
+        crate::services::home_io::mkfifo(&fifo.join(".codex").join(CODEX_MODELS_CACHE));
+        let dir_link = crate::services::agent_home::homes_root_in(state.path()).join("dirlink");
+        std::fs::create_dir_all(&dir_link).unwrap();
+        std::fs::write(outside.path().join(CODEX_MODELS_CACHE), r#"{"models":[{"slug":"stolen"}]}"#).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir_link.join(".codex")).unwrap();
+        let home = crate::services::agent_home::homes_root_in(state.path()).join("assistant");
+        std::fs::create_dir_all(&home).unwrap();
+        let refused = crate::services::home_io::within_deadline({
+            let home = home.clone();
+            move || launch_line(&launch(AssistantCli::Codex, None), &ctx(&home, None))
+        });
+        assert_eq!(refused, Err(Refusal::CodexCatalog));
+        assert!(!home.join(".codex").join(CODEX_MODELS_CACHE).exists());
+        // With one real list among them, that one is used.
+        agent_home_with_cache(state.path(), "real", Some("real"));
+        launch_line(&launch(AssistantCli::Codex, None), &ctx(&home, None)).unwrap();
+        assert_eq!(catalog_slugs(&home), ["real"]);
     }
 
     #[cfg(unix)]

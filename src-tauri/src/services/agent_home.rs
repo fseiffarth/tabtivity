@@ -598,7 +598,12 @@ pub fn delete_scope_home(scope_id: &str) -> io::Result<()> {
 
 /// Every scope key that has a home, for the login keeper's sweep.
 pub(crate) fn existing_homes_in(state_dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(homes_root_in(state_dir)) else {
+    existing_homes_under(&homes_root_in(state_dir))
+}
+
+/// [`existing_homes_in`] for a known homes folder (`<state>/agent-homes`).
+pub(crate) fn existing_homes_under(homes_root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(homes_root) else {
         return Vec::new();
     };
     let mut homes: Vec<PathBuf> = entries
