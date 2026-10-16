@@ -1242,7 +1242,7 @@ export interface MarkupPageBody { n: number; size: [number, number]; marks: Mark
  * its asking dial (0–4), absent at the default stop; `mode` what **Apply
  * marks directly** asks for (absent = `list`); `round` this Submit's id
  * (`mintRound`), which the prompt names its marks under for the agent's
- * ticks (`markup_done`, `docs/markup_tick_approve_plan.md`); `origin`
+ * ticks (`markup_done`, `docs/done/markup_tick_approve_plan.md`); `origin`
  * `viewer` when the markup view has no agent chat to send to, so the prompt
  * tells the agent to ask only through `markup_ask` (absent = `chat`). */
 export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string; ask?: number; mode?: MarkupMode; round?: string; origin?: MarkupOrigin }
@@ -1331,7 +1331,7 @@ export function markupUndoConflict(error: unknown): { files: string[]; more: num
 }
 
 /** One question of an agent's markup ask (`markup_ask`,
- * `docs/markup_questions_mcp_plan.md`): 2–6 options, a 1-based `page` and a
+ * `docs/done/markup_questions_mcp_plan.md`): 2–6 options, a 1-based `page` and a
  * `quote` of that page's words it is about. */
 export interface PhoneMarkupQuestion {
   question: string;

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * The Skills Library's **install target** (`docs/skills_plan.md`) — the one
+ * The Skills Library's **install target** (`docs/done/skills_plan.md`) — the one
  * thing about the feature that is scoped at all, since the sources and their
  * cached clones are machine state shared by every project.
  *

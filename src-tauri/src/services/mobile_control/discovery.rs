@@ -923,7 +923,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             kind: ScopeKind::Root,
             roots: vec![root.dir.clone()],
             // Root has its own switch and gate; per-phone root is out of
-            // scope (docs/mobile_device_scoped_access_plan.md).
+            // scope (docs/done/mobile_device_scoped_access_plan.md).
             devices: None,
         });
     }

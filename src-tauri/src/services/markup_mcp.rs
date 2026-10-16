@@ -1,7 +1,7 @@
 //! **The markup questions MCP** — `markup_ask` / `markup_withdraw` /
 //! `markup_done`, served to a local project-agent tab as the server
 //! `<slug>-markup` on `/mcp/markup` (`Caller::Marker`). Plans:
-//! `docs/markup_questions_mcp_plan.md`, `docs/markup_tick_approve_plan.md`.
+//! `docs/done/markup_questions_mcp_plan.md`, `docs/done/markup_tick_approve_plan.md`.
 //!
 //! An agent reading a PDF markup round asks the user about an ambiguous mark;
 //! the questions show up as choosable options inside that tab's markup view

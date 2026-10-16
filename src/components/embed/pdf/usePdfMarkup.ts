@@ -1,6 +1,6 @@
 /**
  * The desktop PDF viewer's markup mode — its layer, storage, Submit and pill
- * (`docs/pdf_markup_rounds_plan.md` §2.6). The marks are the phone's own
+ * (`docs/done/pdf_markup_rounds_plan.md` §2.6). The marks are the phone's own
  * (`mobile-web/src/markup/`): the same vectors in page points, the same
  * rounds (sent marks dim and are never sent again), the same IndexedDB store
  * — in this webview, keyed by the project and the file's absolute path, never
@@ -11,7 +11,7 @@
  * the CLI's own queue (`holdPhonePrompt`), exactly as a phone prompt sent
  * mid-turn: typed in at once, never waiting an hour for an idle point.
  *
- * The agent's markup questions (`markup_ask`, `docs/markup_questions_mcp_plan.md`
+ * The agent's markup questions (`markup_ask`, `docs/done/markup_questions_mcp_plan.md`
  * P2) are listed here too: the target tab's open ask for this file, re-read on
  * `markup-mcp-changed` while the pane is on screen and once more when it shows
  * again. An answer goes out the Submit's way; when it cannot be queued the ask
@@ -19,7 +19,7 @@
  *
  * Each Submit carries a fresh round id (`mintRound`) and logs its marks as
  * sent (`SentLayer.log`), so the agent's ticks (`markup_done`,
- * `docs/markup_tick_approve_plan.md` §3) — read for every agent tab of the
+ * `docs/done/markup_tick_approve_plan.md` §3) — read for every agent tab of the
  * project on the asks' triggers — map onto sent marks; the viewer shows a ✓
  * on each, and only the reader's click (one, or Approve all) removes a mark.
  * An undone `apply` round is forgotten from the log: its ticks show nothing.
@@ -213,7 +213,7 @@ export type MarkupQuestions = {
 };
 export type QuestionFocus = { askId: string; index: number; on: "card" | "page"; nonce: number };
 
-/** The Undo of an `apply` round (`docs/pdf_markup_direct_apply_plan.md`):
+/** The Undo of an `apply` round (`docs/done/pdf_markup_direct_apply_plan.md`):
  *  offered on the pill once the round is done; `ask` reads what it would put
  *  back for the confirm dialog (`preview`), `confirm` runs it and answers
  *  whether it went through — the strip then reloads the PDF. `note` is how

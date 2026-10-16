@@ -2760,7 +2760,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   /** The markup view's Submit: the desktop's prompt goes out like a typed
    * one — into the agent's queue while it works (a markup prompt is never a
    * slash command, so `submitDraft` holds it exactly then). The viewer stays
-   * open for the next round (`docs/pdf_markup_rounds_plan.md` §2.5). */
+   * open for the next round (`docs/done/pdf_markup_rounds_plan.md` §2.5). */
   const sendMarkup = useCallback((text: string): MarkupSend => {
     const queued = agentAtWorkRef.current;
     if (!submitDraftRef.current(text, false)) return false;

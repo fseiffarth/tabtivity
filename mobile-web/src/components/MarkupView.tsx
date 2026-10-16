@@ -294,7 +294,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
 
 /**
  * **Mark up** — a PDF's pages or a picture with a layer to write on that
- * lives only on this phone (`docs/mobile_pdf_markup_plan.md`): handwriting
+ * lives only on this phone (`docs/done/mobile_pdf_markup_plan.md`): handwriting
  * with a pen (Apple Pencil, a stylus), highlighter boxes, typed notes, an
  * eraser that takes whole strokes. Saved on the phone as each stroke ends,
  * never sent anywhere until **Submit**, which uploads each marked page's
@@ -321,7 +321,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * switches the markup on and draws, as in the phone's own Markup and Notes.
  * Which mode the reader opens in is this phone's choice (`markupOpen.ts`).
  *
- * Submit keeps the view open (`docs/pdf_markup_rounds_plan.md`): the round's
+ * Submit keeps the view open (`docs/done/pdf_markup_rounds_plan.md`): the round's
  * marks move to the layer's sent side, drawn dimmed and never sent again, and
  * a pill follows the agent (`submitState.ts`) — sent / queued / working /
  * asking / finished. Marking goes on meanwhile; the next Submit sends only
@@ -547,7 +547,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   useEffect(() => () => { printRun.current++; }, []);
   /** A pin tapped: the card opens at its question. */
   const [questionFocus, setQuestionFocus] = useState<QuestionFocus | null>(null);
-  /** **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): the
+  /** **Apply marks directly** (`docs/done/pdf_markup_direct_apply_plan.md`): the
    * tab the last Submit went to — its undo snapshot is that tab's — why an
    * asked-for `apply` round runs as `list`, the confirm sheet with what an
    * undo would put back, and how the last undo went. */
@@ -1879,7 +1879,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     });
   };
   // --- The agent's ticks: a ✓ on each sent mark it says it handled ----------
-  /** The ticked sent marks (`markup_done`, `docs/markup_tick_approve_plan.md`
+  /** The ticked sent marks (`markup_done`, `docs/done/markup_tick_approve_plan.md`
    * §4), while the sent marks show, one badge per group of them that sit
    * together (`tickGroups`: one remark, however many strokes it took). A tap
    * on a badge approves its group — its marks leave the layer, undoably — and

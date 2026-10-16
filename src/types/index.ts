@@ -411,7 +411,7 @@ export interface Settings {
    *  (`"claude"`, `"codex"`, …). Set from the 🧠 menu's Agents section; every
    *  reader falls back to `"claude"` when unset. */
   default_agent_cmd?: string;
-  /** Desktop PDF viewer Mark up prompts (`docs/pdf_markup_rounds_plan.md` §2.8):
+  /** Desktop PDF viewer Mark up prompts (`docs/done/pdf_markup_rounds_plan.md` §2.8):
    *  the Submit's instruction and the **Make these changes** follow-up;
    *  unset/blank = the defaults. */
   pdf_markup_instruction?: string;
@@ -425,7 +425,7 @@ export interface Settings {
   /** Subagent mode: each Submit asks the tab's agent to hand the round to a
    *  new subagent (`markupForSubagent`); unset = off. */
   pdf_markup_subagents?: boolean;
-  /** **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): a
+  /** **Apply marks directly** (`docs/done/pdf_markup_direct_apply_plan.md`): a
    *  Submit asks for an `apply` round backed by an undo snapshot; unset = on,
    *  `false` = the agent lists the changes first (**Make these changes**). */
   pdf_markup_direct?: boolean;
@@ -647,7 +647,7 @@ export interface Settings {
   terminal_webgl?: boolean;
   /** EXPERIMENTAL, default OFF, Linux only. Start WebKitGTK with its DMA-BUF
    *  (GPU) renderer on; read by the backend once at launch, so it applies after
-   *  a restart (`docs/gpu_compositing_plan.md`). Like `terminal_webgl`, never
+   *  a restart (`docs/done/gpu_compositing_plan.md`). Like `terminal_webgl`, never
    *  carried by Debug mode. */
   gpu_compositing?: boolean;
   /** EXPERIMENTAL, default OFF. The markdown relationship graph: adds a "Graph"
@@ -735,7 +735,7 @@ export interface Settings {
    *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
    *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
   sleep_tabs_after_min?: number;
-  /** Lines of history a shell terminal keeps (`docs/tab_cost_plan.md` step
+  /** Lines of history a shell terminal keeps (`docs/done/tab_cost_plan.md` step
    *  2): every `TerminalView` whose kind is not `agent`/`local_agent`. Unset or
    *  invalid → 2,000; clamped to [100, 50,000]. Agent tabs keep a fixed 5,000.
    *  Read through `shellScrollbackRows` (`lib/terminal/scrollback`), applied

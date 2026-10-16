@@ -1,4 +1,4 @@
-//! Types for the Skills Library (`docs/skills_plan.md`): a browsable catalog of
+//! Types for the Skills Library (`docs/done/skills_plan.md`): a browsable catalog of
 //! git-hosted Claude Code skills (plain `<name>/SKILL.md` folders) that can be
 //! copied into a project's own `.claude/skills/` or into the machine's personal
 //! `~/.claude/skills/`. See `services::skills` for the logic; these are just the

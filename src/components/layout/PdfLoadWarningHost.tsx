@@ -14,7 +14,7 @@ import {
 const TOAST_MS = 3200;
 
 /**
- * The soft "many PDFs are loaded" notice (`docs/tab_cost_plan.md` step 1),
+ * The soft "many PDFs are loaded" notice (`docs/done/tab_cost_plan.md` step 1),
  * mounted once in the main window's `AppShell`. Follows the loaded-PDF count of
  * `lib/tabCost` — notified only when it moves, never per render or reload —
  * through the `pdfWarnStep` hysteresis, and shows AppShell's own toast

@@ -1,6 +1,6 @@
 /**
  * What the agent did with the last markup Submit — the pill a markup view
- * shows while it stays open (`docs/pdf_markup_rounds_plan.md` §2.2). One pure
+ * shows while it stays open (`docs/done/pdf_markup_rounds_plan.md` §2.2). One pure
  * machine for the phone and the desktop: each host feeds it the agent's state
  * as it sees it (the phone: the live screen's busy row and select prompt; the
  * desktop: the tab's activity) and a clock.
@@ -19,7 +19,7 @@
  * `finished` — a `markup_ask` answer, or in a `list` round the edit itself,
  * comes in a later turn — and a new Submit restarts it.
  *
- * Two kinds of round (`docs/pdf_markup_direct_apply_plan.md`): by default a
+ * Two kinds of round (`docs/done/pdf_markup_direct_apply_plan.md`): by default a
  * Submit has the agent make the changes at once, and the desktop keeps an
  * undo snapshot of the project's work tree — the round carries its id
  * (`undo`), the host settles it each time the round finishes, and the pill

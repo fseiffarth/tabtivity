@@ -1306,7 +1306,7 @@ pub fn run() {
     // renderer died, window froze) and later dropped PDF content. That loss was
     // traced to the GPU-accelerated 2D canvas, which every webview now has off
     // (`webkit_tuning_plugin`); see docs/pdf_gpu_rendering_check_plan.md and
-    // docs/gpu_compositing_plan.md. So the renderer stays off by default, on
+    // docs/done/gpu_compositing_plan.md. So the renderer stays off by default, on
     // only with the experimental `gpu_compositing` setting, and an inherited
     // value is always the user's. Read here, before GTK/WebKit init and before
     // any thread exists (`set_var`). A missing or unreadable file means off.
@@ -2353,7 +2353,7 @@ pub fn run() {
             commands::sqlite::sqlite_page,
             // Spreadsheet (.xlsx/.xls) reader (Dev G)
             commands::sheets::read_spreadsheet,
-            // Skills Library (docs/skills_plan.md)
+            // Skills Library (docs/done/skills_plan.md)
             commands::skills::skills_list_sources,
             commands::skills::skills_add_source,
             commands::skills::skills_remove_source,

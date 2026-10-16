@@ -1,5 +1,5 @@
 /**
- * **The** typed invoke surface for the Skills Library (`docs/skills_plan.md`) —
+ * **The** typed invoke surface for the Skills Library (`docs/done/skills_plan.md`) —
  * one wrapper per `skills_*` command, the convention `lib/mail.ts`/
  * `lib/window/printing.ts` established: no component calls `invoke("skills_*")`
  * directly.

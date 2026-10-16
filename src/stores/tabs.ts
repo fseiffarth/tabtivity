@@ -351,7 +351,7 @@ export const BROWSER_TAB_CMD = tabCommand("browser");
 export const PRINTING_TAB_CMD = tabCommand("printing");
 
 /**
- * Sentinel `cmd` for the Skills Library tab (`docs/skills_plan.md`): browse a
+ * Sentinel `cmd` for the Skills Library tab (`docs/done/skills_plan.md`): browse a
  * git-hosted collection of Claude Code skills (plain `<name>/SKILL.md`
  * folders), preview one, and copy it into this project's `.claude/skills/`.
  *

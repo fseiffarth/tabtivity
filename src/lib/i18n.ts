@@ -7269,7 +7269,7 @@ export const enSource = {
   "printing.networkCurrent": "(current)",
   "printing.networkForget": "Forget this network's default printer",
 
-  // ── Skills Library (docs/skills_plan.md) ─────────────────────────────────
+  // ── Skills Library (docs/done/skills_plan.md) ─────────────────────────────────
   "skillsLibrary.title": "Skills Library",
   "skillsLibrary.noSources": "No sources yet",
   "skillsLibrary.refresh": "Refresh",

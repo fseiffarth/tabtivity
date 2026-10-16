@@ -1,6 +1,6 @@
 /**
  * The agent's ticks on the desktop (`markup_done`,
- * `docs/markup_tick_approve_plan.md` §3): a Submit carries a fresh round id
+ * `docs/done/markup_tick_approve_plan.md` §3): a Submit carries a fresh round id
  * and logs its marks; `usePdfMarkup` reads the ticks on `markup-mcp-changed`
  * and maps them onto the sent marks; each gets a ✓ (`PdfTickBadges`) whose
  * click approves — removes — that mark, undoably; the strip says "n done ·

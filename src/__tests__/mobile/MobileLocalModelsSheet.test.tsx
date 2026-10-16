@@ -1,6 +1,6 @@
 /**
  * The phone's Local models sheet and its Home row (plan
- * `docs/mobile_local_model_control_plan.md` §6): the desktop's installed
+ * `docs/done/mobile_local_model_control_plan.md` §6): the desktop's installed
  * Ollama models with state, placement and keep-alive; Load / Unload / Start
  * Ollama; polling fast while something moves and slow otherwise; and no
  * download, update or delete control anywhere.

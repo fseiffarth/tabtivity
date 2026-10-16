@@ -170,7 +170,7 @@ are unless the spike wins clearly and the user agrees.
 
 ## Order with the other frontend plans
 
-This plan is independent of `docs/vite8_vitest5_migration_plan.md`
+This plan is independent of `docs/done/vite8_vitest5_migration_plan.md`
 (plugin-react 4.7 and vitest 4 both run React 19), but both edit
 `package.json` and the lockfile. Don't run them at the same time: land
 whichever starts first, then rebase the other onto it. The React Compiler

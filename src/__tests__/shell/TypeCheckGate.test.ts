@@ -1,5 +1,5 @@
 /**
- * The type-check gate (`docs/typescript7_plan.md`): `npm run build` and
+ * The type-check gate (`docs/done/typescript7_plan.md`): `npm run build` and
  * `npm run mobile:build` type-check with TypeScript 7's native compiler, run by
  * path (`typescript-native`), while `typescript` 5.x stays installed for
  * typescript-eslint and editors. Nothing else in the build reads types, so a

@@ -1,6 +1,6 @@
 /**
  * The sealed pdf.js frame (`mobile-web/pdf-frame.html`): PDF bytes in, page
- * pictures out, nothing else (`docs/mobile_pdf_markup_plan.md` §2.2).
+ * pictures out, nothing else (`docs/done/mobile_pdf_markup_plan.md` §2.2).
  *
  * Loaded as `<iframe sandbox="allow-scripts">`, so this runs in an opaque
  * origin: no session cookie, no storage, no API, and the sidecar's policy for

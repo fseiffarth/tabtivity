@@ -1,6 +1,6 @@
 /**
  * Settings → Power & performance → "What open tabs hold" (`TabCostList`,
- * `docs/tab_cost_plan.md` step 1): rows largest first across every loaded
+ * `docs/done/tab_cost_plan.md` step 1): rows largest first across every loaded
  * scope, Close through `closeTabInScope`, Show only for the current scope's
  * tabs (activates and closes Settings), Refresh re-reads, and the collapsed
  * lines for tabs with nothing loaded and PDFs outside a tab.

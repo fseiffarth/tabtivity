@@ -1,5 +1,5 @@
 /**
- * The desktop markup mode's pure rules (`docs/pdf_markup_rounds_plan.md` §2.6,
+ * The desktop markup mode's pure rules (`docs/done/pdf_markup_rounds_plan.md` §2.6,
  * `lib/viewers/pdfMarkup.ts`): when the viewer offers Mark up, where an on-disk
  * change goes while marks are on the pages, one marking viewer per file, the
  * command's refusal codes, and which agent tab a Submit goes to.

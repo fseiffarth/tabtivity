@@ -36,7 +36,7 @@ interface Props {
 /**
  * The docked agent column of a mail / calendar / to-do overlay: an attach-only
  * view of a ROOT tab beside the app, so a root agent's MCP writes land next to
- * the prompt that caused them (`docs/overlay_agent_plan.md`). The tab is an
+ * the prompt that caused them (`docs/done/overlay_agent_plan.md`). The tab is an
  * ordinary root tab — its PTY is owned by `CenterPanel`'s keep-alive layer and
  * it is in the root console's strip — so hiding the column ends nothing.
  *

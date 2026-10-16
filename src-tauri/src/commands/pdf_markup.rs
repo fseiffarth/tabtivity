@@ -1,5 +1,5 @@
 //! The desktop PDF viewer's **Mark up** → **Submit**
-//! (`docs/pdf_markup_rounds_plan.md` §2.6): the same submit as the phone's
+//! (`docs/done/pdf_markup_rounds_plan.md` §2.6): the same submit as the phone's
 //! (`services::mobile_control::markup`), named by the project id and the
 //! absolute path the viewer opened instead of a sealed token, with each
 //! page's layer PNG in the payload rather than uploaded through the inbox
@@ -15,7 +15,7 @@
 //! Errors are wire codes (`MarkupError::code()` plus `project_not_found`,
 //! `remote_project`, `markup_failed`) for the frontend to map to text.
 //!
-//! **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): a
+//! **Apply marks directly** (`docs/done/pdf_markup_direct_apply_plan.md`): a
 //! Submit with `mode: "apply"` takes an undo snapshot first
 //! (`services::markup_rounds`, owned by the project id) and answers which mode
 //! the round got; `pdf_markup_undo_settle` / `_preview` / `pdf_markup_undo`

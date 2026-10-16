@@ -1,5 +1,5 @@
 /**
- * Markup rounds, the pure half (`docs/pdf_markup_rounds_plan.md` §2.1–2.2):
+ * Markup rounds, the pure half (`docs/done/pdf_markup_rounds_plan.md` §2.1–2.2):
  * a Submit moves its marks to the layer's sent side, which only the reader
  * clears (eraser, Clear page, Clear sent marks), never a Submit or a Reload; the phone-only store keeps a sent-only record, still
  * reads records from before rounds, and moves a layer to a newer file; and the

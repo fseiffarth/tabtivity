@@ -1,4 +1,4 @@
-//! The phone's **Upload here** (`docs/phone_upload_plan.md`): files picked on
+//! The phone's **Upload here** (`docs/done/phone_upload_plan.md`): files picked on
 //! the phone land in the project folder the read-only browser (`files.rs`)
 //! stands in — the one write into a visible project folder, and the folder the
 //! user chose is the consent.

@@ -1,6 +1,6 @@
 /**
  * The messages between the markup view and the sealed pdf.js frame
- * (`mobile-web/pdf-frame.html`, `docs/mobile_pdf_markup_plan.md` §2.2).
+ * (`mobile-web/pdf-frame.html`, `docs/done/mobile_pdf_markup_plan.md` §2.2).
  *
  * The frame parses the PDF — attacker-controlled bytes — in an opaque origin
  * with no cookie, no storage and no network, so whatever it says is treated
