@@ -2045,6 +2045,40 @@ mod tests {
         assert!(valid_opaque_control_domain("assistant"));
     }
 
+    /// An open chat terminal is granted by the catalog while the gate is open
+    /// and loses the grant at the next load once either switch goes off —
+    /// which is what `pty_bridge`'s five-second re-check closes it on
+    /// (`recheck`: a catalog that no longer lists the tab is `access_revoked`).
+    #[test]
+    fn an_open_chat_loses_its_grant_when_the_gate_closes() {
+        let tmux = format!("{}assistant--agent-bbbbbbbbb1", crate::brand::TMUX_PREFIX);
+        let dir = assistant_state(Some(serde_json::json!({ "assistant": true })), vec![]);
+        let state = dir.path();
+        let chat = crate::services::assistant::work_root(state).join(CHAT_A);
+        fs::create_dir_all(&chat).expect("chat folder");
+        fs::write(
+            state.join("sessions").join("assistant").join("terminals.json"),
+            serde_json::json!({ "tabLayout": [chat_tab(CHAT_A, &chat, serde_json::json!({ "cli": "claude" }), "bbbbbbbbb1")] }).to_string(),
+        )
+        .expect("session");
+        let live = HashMap::from([(tmux.clone(), LiveTmux { activity: 5, cwd: chat.canonicalize().unwrap() })]);
+        let env = RootEnv { dir: state.join("root"), fenced: || true };
+        let load = || Catalog::load_with(state, &[7; 32], &env, &live).expect("catalog");
+        let open = load();
+        let tab_id = open.projects[0].tabs[0].public.id.clone();
+        assert!(open.grants(&tab_id, &tmux));
+        assert!(open.projects[0].tabs[0].public.available);
+        for off in [
+            serde_json::json!({ "assistant": false }),
+            serde_json::json!({ "assistant": true, crate::brand::MOBILE_HOST_KEY: { "assistant_access": false } }),
+        ] {
+            fs::write(state.join("settings.json"), off.to_string()).expect("off");
+            let closed = load();
+            assert!(!closed.grants(&tab_id, &tmux), "{off}");
+            assert!(closed.projects.is_empty());
+        }
+    }
+
     /// A `projects.json` record that takes the chat assistant's id — or root's
     /// in another spelling — is listed by nobody: the catalog has no such
     /// source (until the assistant's own switch lists it), and the record does

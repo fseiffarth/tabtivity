@@ -2582,6 +2582,19 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
+    /// The assistant's local-Claude chats keep their transcripts in the
+    /// scope's local-model home, so its Claude roots name both homes; no
+    /// other scope's do.
+    #[test]
+    fn the_assistants_claude_roots_include_its_local_model_home() {
+        let roots = claude_projects_roots(Some("assistant"));
+        assert_eq!(roots.len(), 2);
+        assert!(roots[1].starts_with(crate::services::agent_home::local_model_home(Some("assistant"))));
+        assert_eq!(claude_projects_roots(Some(" Assistant ")).len(), 2);
+        assert_eq!(claude_projects_roots(Some("p1")).len(), 1);
+        assert_eq!(claude_projects_roots(None).len(), 1);
+    }
+
     #[test]
     fn a_local_model_home_keeps_only_apps_hook() {
         let home = unique_tmp(concat!(crate::app_slug!(), "-vibe-local-hooks"));

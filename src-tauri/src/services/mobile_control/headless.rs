@@ -1940,6 +1940,109 @@ mod tests {
         assert!(record.extra["env"].get("PATH").is_some());
     }
 
+    const CHAT: &str = "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10";
+
+    fn chat_record(state: &Path, launch: &crate::services::assistant::AssistantLaunch) -> TabEntry {
+        let mut record = crate::services::assistant::new_chat_record(state, launch, CHAT, Some("h")).expect("chat record");
+        record.extra.insert("tmuxSession".into(), serde_json::json!(format!("{}assistant--agent-1", crate::brand::TMUX_PREFIX)));
+        record
+    }
+
+    /// `launch_options` is the one seam a create, a reopen, an undo-clear
+    /// relaunch and the scheduler's relaunch share. For the assistant's scope
+    /// it takes the validated launch block and the chat's uid from the record
+    /// and nothing else: a hand-edited `args`, `env`, `scheduleTargetId`,
+    /// `sandbox` or `localLaunch` never reaches the spawn, and a record that is
+    /// not a chat comes out with no launch, which the spawn gate refuses.
+    #[test]
+    fn an_assistant_record_is_launched_from_its_block_and_uid_alone() {
+        use crate::services::assistant::{AssistantCli, AssistantLaunch};
+        let state = tempfile::tempdir().expect("state");
+        let launch = AssistantLaunch { cli: AssistantCli::OpenCodeLocal, model: Some("qwen3:8b".into()) };
+        let mut record = chat_record(state.path(), &launch);
+        record.extra.insert("args".into(), serde_json::json!(["--dangerously-skip-permissions", "--session-id", "other"]));
+        record.extra.insert("env".into(), serde_json::json!({ "LD_PRELOAD": "/tmp/x.so", "PATH": "/tmp/evil", crate::app_env!("TAB_UID"): "other" }));
+        record.extra.insert("scheduleTargetId".into(), serde_json::json!("target-1"));
+        record.extra.insert("sandbox".into(), serde_json::json!(true));
+        record.extra.insert("localLaunch".into(), serde_json::json!({ "driver": "claude", "model": "m", "args": [] }));
+        record.extra.insert("loginTab".into(), serde_json::json!(true));
+        let tmux = format!("{}assistant--agent-1", crate::brand::TMUX_PREFIX);
+        // Every spelling of the scope id is the scope.
+        for scope in ["assistant", "Assistant", " assistant"] {
+            let opts = launch_options(scope, &record);
+            assert_eq!(opts.assistant.as_ref(), Some(&launch), "{scope}");
+            assert_eq!(opts.project_id.as_deref(), Some("assistant"), "{scope}");
+            assert_eq!(opts.cmd, "opencode");
+            assert!(opts.args.is_empty());
+            assert_eq!(opts.env, HashMap::from([(crate::app_env!("TAB_UID").to_string(), CHAT.to_string())]));
+            assert!(opts.agent && !opts.local_model && !opts.sandbox && !opts.host_session);
+            assert!(opts.schedule_target_id.is_none() && opts.login.is_none() && opts.tmux_attach.is_none() && opts.host_bound_uid.is_none());
+            assert_eq!(opts.tmux_session.as_deref(), Some(tmux.as_str()));
+        }
+        // Not a chat: a bad block, another cmd, a session id that is no uuid.
+        let launched = |edit: &dyn Fn(&mut TabEntry)| {
+            let mut bad = chat_record(state.path(), &launch);
+            edit(&mut bad);
+            launch_options("assistant", &bad)
+        };
+        assert!(launched(&|t| { t.extra.insert("assistant".into(), serde_json::json!({ "cli": "claude", "args": ["-x"] })); }).assistant.is_none());
+        assert!(launched(&|t| { t.extra.insert("assistant".into(), serde_json::json!({ "cli": "opencode_local", "model": "--evil" })); }).assistant.is_none());
+        assert!(launched(&|t| t.cmd = "bash".into()).assistant.is_none());
+        assert!(launched(&|t| t.session_id = Some("../../x".into())).assistant.is_none());
+        assert!(launched(&|t| { t.extra.remove("assistant"); }).assistant.is_none());
+        let opts = launched(&|t| { t.extra.remove("assistant"); t.extra.insert("args".into(), serde_json::json!(["--x"])); });
+        assert!(opts.assistant.is_none() && opts.args.is_empty() && opts.env.is_empty());
+        // Any other scope still reads its record as before.
+        assert!(launch_options("p1", &record).assistant.is_none());
+        assert_eq!(launch_options("p1", &record).args, vec!["--dangerously-skip-permissions", "--session-id", "other"]);
+    }
+
+    /// A closed chat comes back through the same seam: the owner puts resume
+    /// args on a reopened record (`resume_args`), and the spawn never sees them.
+    #[tokio::test]
+    async fn a_reopened_chat_is_launched_without_the_resume_args() {
+        use crate::services::assistant::{AssistantCli, AssistantLaunch};
+        let state = tempfile::tempdir().expect("state");
+        let launch = AssistantLaunch { cli: AssistantCli::Claude, model: None };
+        let path = session_file(state.path(), "assistant");
+        let created = crate::services::workspace::create_tab_in(&path, "assistant", chat_record(state.path(), &launch), Some("h")).expect("create");
+        let tmux = crate::services::workspace::tmux_of(&created.tab).expect("tmux").to_string();
+        crate::services::workspace::close_tab_in(&path, "assistant", &tmux, 1).expect("close");
+        let chat_folder = crate::services::assistant::chat_dir(state.path(), CHAT).expect("folder");
+        std::fs::create_dir_all(&chat_folder).expect("chat folder");
+        let project = ResolvedProject {
+            public: super::super::discovery::PublicProject {
+                id: "a".into(),
+                label: "Tabby".into(),
+                status: "active".into(),
+                kind: ScopeKind::Assistant,
+                live_sessions: 0,
+                last_activity: None,
+                pending_reviews: None,
+                git: None,
+                agents: None,
+            },
+            raw_id: "assistant".into(),
+            root: state.path().to_path_buf(),
+            roots: vec![state.path().to_path_buf()],
+            tabs: Vec::new(),
+            devices: None,
+        };
+        let seen: Arc<std::sync::Mutex<Vec<PtyOptions>>> = Arc::default();
+        let sink = seen.clone();
+        let launcher: HeadlessLaunch = Arc::new(move |opts| {
+            sink.lock().unwrap().push(opts);
+            Box::pin(async { Ok(()) })
+        });
+        let reopened = reopen_tab(state.path(), &project, None, &launcher).await.expect("reopen").expect("a closed tab");
+        assert!(!reopened.existed);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].assistant.as_ref(), Some(&launch));
+        assert!(seen[0].args.is_empty(), "{:?}", seen[0].args);
+        assert_eq!(seen[0].env.get(crate::app_env!("TAB_UID")).map(String::as_str), Some(CHAT));
+    }
+
     #[test]
     fn a_transcript_answers_the_same_not_yet_reasons_as_the_window() {
         assert_eq!(transcript("p1", &tab("claude", None), None, None, None).reason.as_deref(), Some("no_session"));
