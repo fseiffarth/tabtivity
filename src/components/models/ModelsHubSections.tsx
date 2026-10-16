@@ -16,6 +16,7 @@ import {
   gpuTotals,
 } from "../../lib/gpu";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { DEFAULT_COMPACT_AGENT_IDS } from "../tabs/newTabItems";
 import { useAutoloadNotice, type HubAgentInfo, type ModelsHub } from "./useModelsHub";
@@ -127,7 +128,14 @@ function StatMeter({
         {note && <span className="local-model-stat-note">{note}</span>}
         <span className="local-model-stat-detail">{detail}</span>
       </div>
-      <div className="local-model-meter">
+      <div
+        className="local-model-meter"
+        role="meter"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(pct)}
+      >
         <div
           className={`local-model-meter-fill ${gpuTone(pct, 100)}`}
           style={{ width: `${pct}%` }}
@@ -246,11 +254,14 @@ function UpdateAction({
   busy,
   onUpdate,
   t,
+  overlay,
 }: {
   update: OllamaModelUpdate | undefined;
   busy: boolean;
   onUpdate: () => void;
   t: (k: TranslationKey, v?: Record<string, string>) => string;
+  /** The overlay's card footer: a real (filled) button, not a menu chip. */
+  overlay?: boolean;
 }) {
   if (!update) return null;
   if (update.error) {
@@ -264,7 +275,7 @@ function UpdateAction({
   return (
     <button
       type="button"
-      className="local-model-role-chip local-model-update-action"
+      className={overlay ? "btn-primary lm-btn" : "local-model-role-chip local-model-update-action"}
       disabled={busy}
       title={t("localModel.updateTitle", { name: update.model })}
       onClick={onUpdate}
@@ -416,13 +427,324 @@ export function AgentChips({ agent: a, wiredClis }: { agent: HubAgentInfo; wired
   );
 }
 
-/**
- * One model list — Running or On disk. The overlay tiles its cards as a grid
- * (`.local-model-grid`, the overview tiles' vocabulary); the dropdown keeps
- * its single column, and its rows stay direct children of the menu there.
- */
-function ModelCards({ grid, children }: { grid: boolean; children: ReactNode }) {
-  return grid ? <div className="local-model-grid">{children}</div> : <>{children}</>;
+/* ── The overlay's Local models page ─────────────────────────────────────────
+   The dropdown's rows are menu rows; the overlay has room for cards, so it gets
+   its own markup (`lm-*`, apps.css) over the same hub verbs. Same facts, same
+   tooltips, same stores — only the arrangement differs: a status bar, one card
+   per model (what it is → what it is used for → verbs), the machine's meters
+   above the lists so "will it fit" is answered before a load. */
+
+type TFn = (k: TranslationKey, v?: Record<string, string>) => string;
+
+/** A short heading with a quiet count — sentence case, never an uppercase band. */
+function LmHeading({ title, count }: { title: string; count?: number }) {
+  return (
+    <div className="lm-heading">
+      <h3 className="lm-heading-title">{title}</h3>
+      {count != null && <span className="lm-count">{count}</span>}
+    </div>
+  );
+}
+
+/** A pressed/unpressed choice (a task, Root, MCP): bordered with a tick when on,
+ *  so it cannot be mistaken for the borderless facts beside it. */
+function LmToggle({
+  label,
+  title,
+  on,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  title: string;
+  on: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`lm-toggle${on ? " on" : ""}`}
+      title={title}
+      aria-pressed={on}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** What the model IS, as plain text with dot separators (never pills): the
+ *  caveat leads — it is the one thing worth finding down a list — then the
+ *  dimensions, where it runs, and the capabilities Ollama reported. */
+function ModelFacts({ m, t, resident }: { m: LocalModelInfo; t: TFn; resident: boolean }) {
+  return (
+    <div className="lm-facts">
+      <CaveatChip m={m} t={t} />
+      {m.parameter_size && (
+        <span className="lm-fact" title={t("localModel.paramTitle", { value: m.parameter_size })}>
+          {m.parameter_size}
+        </span>
+      )}
+      {m.quantization && (
+        <span className="lm-fact" title={t("localModel.quantTitle", { value: m.quantization })}>
+          {m.quantization}
+        </span>
+      )}
+      {m.size > 0 && (
+        <span className="lm-fact" title={t("localModel.diskSizeTitle", { size: formatBytes(m.size) })}>
+          {formatBytes(m.size)}
+        </span>
+      )}
+      {resident && (
+        <span className={`lm-fact lm-place ${m.size_vram > 0 ? "gpu" : "cpu"}`}>
+          {m.size_vram > 0 ? `GPU ${formatBytes(m.size_vram)}` : "CPU"}
+        </span>
+      )}
+      {hasCapability(m, "vision") && (
+        <span className="lm-fact" title={t("localModel.visionTitle", { name: m.name })}>
+          {t("localModel.visionChip")}
+        </span>
+      )}
+      {hasCapability(m, "thinking") && (
+        <span className="lm-fact" title={t("localModel.thinkingTitle", { name: m.name })}>
+          {t("localModel.thinkingChip")}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** "Load on start" — an immediate switch (no Save), the same one on both cards. */
+function LoadOnStart({ name, hub, t }: { name: string; hub: ModelsHub; t: TFn }) {
+  const on = hub.autoload.includes(name);
+  return (
+    <label
+      className="lm-switch-label"
+      title={t(on ? "localModel.autostartOnTitle" : "localModel.autostartOffTitle", { name })}
+    >
+      <Toggle size="sm" checked={on} onChange={() => hub.toggleAutoload(name)} />
+      <span>{t("localModel.ov.loadOnStart")}</span>
+    </label>
+  );
+}
+
+/** A resident model: its status, the tasks it is pinned to, where it is offered,
+ *  and the two verbs that are about it right now (Unload; Update if there is one). */
+function RunningModelCard({ m, hub, t }: { m: LocalModelInfo; hub: ModelsHub; t: TFn }) {
+  const {
+    activeModel,
+    roles,
+    rootOffModels,
+    updates,
+    downloads,
+    unloading,
+    select,
+    toggleRole,
+    toggleRootModel,
+    modelMcpOn,
+    toggleMcpModel,
+    updateModel,
+    unloadFromMemory,
+    clearConversations,
+  } = hub;
+  const isDefault = activeModel === m.name;
+  const rootOn = !rootOffModels.includes(m.name);
+  const mcpOn = modelMcpOn(m.name);
+  return (
+    <article className="lm-card is-running">
+      <header className="lm-card-head">
+        <span className="local-model-lamp" aria-hidden="true" title={t("localModel.loadedClickDefaultTitle")} />
+        <h4 className="lm-card-name" title={m.name}>
+          {m.name}
+        </h4>
+        {isDefault ? (
+          <span className="lm-flag" title={t("localModel.defaultLoadedTitle")}>
+            {t("localModel.ov.default")}
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="lm-link"
+            title={t("localModel.loadedClickDefaultTitle")}
+            onClick={() => select(m.name)}
+          >
+            {t("localModel.ov.makeDefault")}
+          </button>
+        )}
+      </header>
+      <ModelFacts m={m} t={t} resident />
+      <div className="lm-group">
+        <span className="lm-group-label">{t("localModel.ov.usedFor")}</span>
+        <div className="lm-toggles">
+          {MODEL_ROLES.map((r) => {
+            const on = roles[r.key] === m.name;
+            const roleLabel = t(r.labelKey);
+            // An Ollama cloud model can't be the Mail model: mail stays on this
+            // machine (gap 25). Disabled unless it is already on, so it can be
+            // turned off.
+            const cloudMail = r.key === "mail" && m.remote === true;
+            const title = cloudMail
+              ? t("localModel.mailCloudTitle", { name: m.name })
+              : t(on ? "localModel.usedForRole" : "localModel.useForRole", {
+                  role: roleLabel.toLowerCase(),
+                  name: m.name,
+                });
+            return (
+              <LmToggle
+                key={r.key}
+                label={roleLabel}
+                title={r.pending ? `${title} — ${t("localModel.roleNotWired")}` : title}
+                on={on}
+                disabled={cloudMail && !on}
+                onClick={() => toggleRole(r.key, m.name)}
+              />
+            );
+          })}
+          {m.remote && <UntestedTag id="localModelMenu.mailCloud" />}
+        </div>
+      </div>
+      <div className="lm-group">
+        <span className="lm-group-label">{t("localModel.ov.rootLabel")}</span>
+        <div className="lm-toggles">
+          <LmToggle
+            label={t("localModel.rootChip")}
+            title={t(rootOn ? "localModel.isRootModelTitle" : "localModel.setRootModelTitle", { name: m.name })}
+            on={rootOn}
+            onClick={() => toggleRootModel(m.name)}
+          />
+          <LmToggle
+            label={t("localModel.mcpChip")}
+            title={t(
+              lacksTools(m)
+                ? "localModel.mcpNoToolsTitle"
+                : mcpOn
+                  ? "localModel.isMcpModelTitle"
+                  : "localModel.setMcpModelTitle",
+              { name: m.name },
+            )}
+            on={mcpOn}
+            disabled={lacksTools(m) && !mcpOn}
+            onClick={() => toggleMcpModel(m.name, mcpOn)}
+          />
+          <UntestedTag id="localModelMenu.4" />
+        </div>
+      </div>
+      <footer className="lm-card-foot">
+        <LoadOnStart name={m.name} hub={hub} t={t} />
+        <div className="lm-actions">
+          <UpdateAction
+            update={updates[m.name]}
+            busy={downloads[m.name] !== undefined}
+            onUpdate={() => updateModel(m.name)}
+            t={t}
+            overlay
+          />
+          <button
+            type="button"
+            className="lm-ghost"
+            title={t("localModel.clearChipTitle", { name: m.name })}
+            onClick={() => void clearConversations(m.name)}
+          >
+            {t("localModel.ov.clear")}
+          </button>
+          <UntestedTag id="localModelMenu.clearConversations" />
+          <button
+            type="button"
+            className="settings-btn sm"
+            disabled={unloading.has(m.name)}
+            title={t("localModel.unloadFromMemoryTitle", { name: m.name })}
+            onClick={() => unloadFromMemory(m.name)}
+          >
+            {unloading.has(m.name) ? t("localModel.unloading") : t("ollama.unload")}
+          </button>
+        </div>
+      </footer>
+    </article>
+  );
+}
+
+/** A model on disk: what it is, and one primary verb — load it. */
+function DiskModelCard({ m, hub, t }: { m: LocalModelInfo; hub: ModelsHub; t: TFn }) {
+  const { loads, updates, downloads, gpuStatus, loadIntoMemory, updateModel, clearConversations } = hub;
+  const st = loads[m.name];
+  return (
+    <article className="lm-card">
+      <header className="lm-card-head">
+        <span className="lm-dot-off" aria-hidden="true" />
+        <h4 className="lm-card-name" title={m.name}>
+          {m.name}
+        </h4>
+      </header>
+      <ModelFacts m={m} t={t} resident={false} />
+      <footer className="lm-card-foot">
+        <LoadOnStart name={m.name} hub={hub} t={t} />
+        <div className="lm-actions">
+          <UpdateAction
+            update={updates[m.name]}
+            busy={downloads[m.name] !== undefined}
+            onUpdate={() => updateModel(m.name)}
+            t={t}
+            overlay
+          />
+          <button
+            type="button"
+            className="lm-ghost"
+            title={t("localModel.clearChipTitle", { name: m.name })}
+            onClick={() => void clearConversations(m.name)}
+          >
+            {t("localModel.ov.clear")}
+          </button>
+          <UntestedTag id="localModelMenu.clearConversations" />
+          {st === "loading" || st === "error" ? (
+            <button
+              type="button"
+              className={`${st === "error" ? "btn-danger" : "btn-primary"} lm-btn`}
+              disabled={st === "loading"}
+              title={t(st === "error" ? "localModel.failedRetryTitle" : "localModel.loadIntoMemoryTitle")}
+              onClick={() => loadIntoMemory(m.name)}
+            >
+              {st === "loading" ? t("common.loading") : t("localModel.ov.retry")}
+            </button>
+          ) : gpuStatus?.gpu_present ? (
+            <>
+              <button
+                type="button"
+                className="settings-btn sm"
+                title={t("localModel.loadOnCpuTitle", { name: m.name })}
+                onClick={() => loadIntoMemory(m.name, "cpu")}
+              >
+                {t("localModel.ov.loadCpu")}
+              </button>
+              <button
+                type="button"
+                className="btn-primary lm-btn"
+                title={t("localModel.loadOnGpuTitle", { name: m.name })}
+                onClick={() => loadIntoMemory(m.name, "gpu")}
+              >
+                {t("localModel.ov.loadGpu")}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn-primary lm-btn"
+              title={t("localModel.loadIntoMemoryTitle")}
+              onClick={() => loadIntoMemory(m.name)}
+            >
+              {t("ollama.load")}
+            </button>
+          )}
+        </div>
+      </footer>
+      {st === "loading" && (
+        <div className="ollama-download-bar local-model-load-bar">
+          <div className="ollama-download-bar-fill indeterminate" />
+        </div>
+      )}
+    </article>
+  );
 }
 
 /**
@@ -442,10 +764,14 @@ export function LocalModelsSection({
   hub,
   layout,
   onManageModels,
+  machine,
 }: {
   hub: ModelsHub;
   layout: "menu" | "overlay";
   onManageModels: () => void;
+  /** Overlay only: the Machine meters, placed after the status and notices so
+   *  "will it fit" is read before the lists (the dropdown keeps them last). */
+  machine?: ReactNode;
 }) {
   const t = useT();
   const {
@@ -521,6 +847,333 @@ export function LocalModelsSection({
   // Resident models are selectable; the rest are offered as "load into memory".
   const running = models.filter((m) => m.running);
   const available = models.filter((m) => !m.running);
+
+  const overlay = layout === "overlay";
+  const noteBtn = overlay ? "settings-btn sm" : "local-model-role-chip";
+  const dlBtn = overlay ? "settings-btn sm" : "local-model-download-action";
+  const igpuBtn = overlay ? "settings-btn sm" : "tab-new-menu-item local-model-igpu-fix";
+
+  const notices = (
+    <>
+      {showRestoreNote && (
+        <div
+          className={`local-model-autostart-note${
+            restorePhase === "timeout" ? " saver" : restorePhase === "error" ? " failed" : ""
+          }`}
+        >
+          <button
+            type="button"
+            className="local-model-autostart-dismiss"
+            title={t("localModel.autostartDismiss")}
+            aria-label={t("localModel.autostartDismiss")}
+            onClick={restoreDismiss}
+          >
+            ✕
+          </button>
+          <div className="local-model-autostart-text">
+            <span className="local-model-autostart-sentence">{restoreSentence}</span>
+            <UntestedTag id="localModelMenu.2" />
+          </div>
+          {/* Waiting is the one phase with something to *stop*; the two
+              that ended without the models being back are the ones with
+              something to retry. A finished restore offers neither — the
+              models are in memory, and the note is only there to say so. */}
+          {restorePhase === "waiting" && (
+            <div className="local-model-autostart-actions">
+              <button
+                type="button"
+                className={noteBtn}
+                title={t("localModel.upgradeRestoreCancelTitle")}
+                onClick={restoreCancel}
+              >
+                {t("localModel.upgradeRestoreCancel")}
+              </button>
+            </div>
+          )}
+          {(restorePhase === "timeout" || restorePhase === "error") && (
+            <div className="local-model-autostart-actions">
+              <button
+                type="button"
+                className={noteBtn}
+                title={t("localModel.upgradeRestoreNowTitle")}
+                onClick={() => void restoreNow()}
+              >
+                {t("localModel.upgradeRestoreNow")}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {showAutoNote && (
+        <div
+          className={`local-model-autostart-note${
+            autoPhase === "skipped" ? " saver" : autoPhase === "error" ? " failed" : ""
+          }`}
+        >
+          {/* Corner ✕, not a chip in the action row: dismissing is not one of
+              the note's offers, and while loading it was that row's only
+              member — a lone ✕ floating where a button was expected. */}
+          <button
+            type="button"
+            className="local-model-autostart-dismiss"
+            title={t("localModel.autostartDismiss")}
+            aria-label={t("localModel.autostartDismiss")}
+            onClick={autoDismiss}
+          >
+            ✕
+          </button>
+          <div className="local-model-autostart-text">
+            <span className="local-model-autostart-sentence">{autoNoteTitle}</span>
+            <UntestedTag id="localModelMenu.3" />
+          </div>
+          {autoPhase !== "loading" && (
+            <div className="local-model-autostart-actions">
+              <button
+                type="button"
+                className={noteBtn}
+                title={t("localModel.autostartLoadNowTitle")}
+                onClick={() => void autoLoadNow()}
+              >
+                {t("localModel.autostartLoadNow")}
+              </button>
+              {autoPhase === "skipped" && (
+                <button
+                  type="button"
+                  className={noteBtn}
+                  title={t("localModel.autostartSettingsTitle")}
+                  onClick={onManageModels}
+                >
+                  {t("localModel.autostartSettings")}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+  const downloadsBlock = (
+    <>
+      {installed && (Object.keys(downloads).length > 0 || paused.length > 0) && (
+        <div className="local-model-downloads">
+          {Object.entries(downloads).map(([model, d]) => (
+            <div key={model} className="local-model-download-row" title={t("localModel.downloadingTitle")}>
+              <div className="local-model-download-head">
+                <span className="local-model-loaded-name">{model}</span>
+                <span className="local-model-download-pct">
+                  {d.pct != null ? `${d.pct}%` : "…"}
+                </span>
+                <button
+                  type="button"
+                  className={dlBtn}
+                  title={t("localModel.pauseDownloadTitle")}
+                  onClick={() => pausePull(model)}
+                >
+                  {t("ollama.pause")}
+                </button>
+              </div>
+              <div className="ollama-download-bar">
+                <div
+                  className={`ollama-download-bar-fill${d.pct == null ? " indeterminate" : ""}`}
+                  style={d.pct != null ? { width: `${d.pct}%` } : undefined}
+                />
+              </div>
+            </div>
+          ))}
+          {paused.map((model) => (
+            <div key={`paused:${model}`} className="local-model-download-row" title={t("localModel.pausedTitle")}>
+              <div className="local-model-download-head">
+                <span className="local-model-loaded-name">{model}</span>
+                <span className="local-model-download-pct">{t("ollama.pausedBadge")}</span>
+                <button
+                  type="button"
+                  className={dlBtn}
+                  title={t("localModel.resumeDownloadTitle")}
+                  onClick={() => resumePull(model)}
+                >
+                  {t("ollama.resume")}
+                </button>
+                <button
+                  type="button"
+                  className={`${dlBtn} danger`}
+                  title={t("localModel.deletePartialDownloadTitle")}
+                  onClick={() => deletePausedPull(model)}
+                >
+                  {t("ollama.delete")}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+  const igpuNote = (
+    <>
+          {gpuStatus?.igpu_dropped && (
+            <div className="local-model-igpu-notice">
+              <div className="local-model-igpu-text">
+                {t("localModel.igpuDropped")} <UntestedTag id="localModel.igpuDropped" />
+              </div>
+              {gpuStatus.fix_cmd ? (
+                <button
+                  type="button"
+                  className={igpuBtn}
+                  title={gpuStatus.fix_cmd}
+                  onClick={() =>
+                    runInstallInTab(
+                      t("localModel.igpuFixLabel"),
+                      gpuStatus.fix_cmd,
+                      gpuStatus.shell_kind as InstallShellKind,
+                    )
+                  }
+                >
+                  {t("localModel.igpuFixAction")}
+                </button>
+              ) : (
+                <div className="local-model-igpu-text">{t("localModel.igpuFixManual")}</div>
+              )}
+            </div>
+          )}
+    </>
+  );
+
+  if (overlay) {
+    const installedVersion = installed && version?.current ? version : null;
+    const statusText = !installed
+      ? t("localModel.notInstalled")
+      : status === "stopped"
+        ? t("localModel.stopped")
+        : t("localModel.running");
+    const downloadCount = Object.keys(downloads).length + paused.length;
+    const showIgpu = installed && models.length > 0 && gpuStatus?.igpu_dropped;
+    return (
+      <div className="lm-page">
+        <div className="lm-status">
+          <div className="lm-status-main">
+            <span
+              className={`ollama-status-dot ${installed && status !== "stopped" ? "running" : "stopped"}`}
+              aria-hidden="true"
+            />
+            <span className="lm-status-text">{statusText}</span>
+            {installedVersion && (
+              <span className="lm-status-version">
+                {installedVersion.latest && !installedVersion.update_available
+                  ? t("localModel.ollamaVersionCurrent", { current: installedVersion.current })
+                  : t("localModel.ollamaVersion", { current: installedVersion.current })}
+              </span>
+            )}
+            {installedVersion?.update_available && (
+              <button
+                type="button"
+                className="btn-primary lm-btn"
+                title={`${t("localModel.ollamaUpdateSentence", {
+                  latest: installedVersion.latest,
+                  current: installedVersion.current,
+                })} — ${t("localModel.ollamaUpgradeTitle", { latest: installedVersion.latest })}`}
+                onClick={upgradeOllama}
+              >
+                {t("localModel.ov.upgradeTo", { latest: installedVersion.latest })}
+              </button>
+            )}
+          </div>
+          {installed && (
+            <div className="lm-status-actions">
+              {/* The check is the page's one outbound request, so it stays a
+                  button: a manifest-digest HEAD per installed model, only when
+                  clicked. A found update shows on its card; what has no other
+                  surface is the clean result and the failure. */}
+              {models.length > 0 && !checkingUpdates && checkResult && !(checkResult.ok && checkResult.updates > 0) && (
+                <span className="lm-status-note">
+                  {checkResult.ok ? t("localModel.updatesNone") : checkResult.reason}
+                </span>
+              )}
+              {models.length > 0 && (
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  disabled={checkingUpdates}
+                  title={t("localModel.checkUpdatesTitle")}
+                  onClick={checkUpdates}
+                >
+                  {checkingUpdates ? t("localModel.checkingUpdates") : t("localModel.checkUpdates")}
+                </button>
+              )}
+              <button
+                type="button"
+                className="settings-btn sm"
+                title={t("modelsOverlay.intro.ollama")}
+                onClick={onManageModels}
+              >
+                {t("localModel.ov.manage")}
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="lm-banners">
+          {notices}
+          {showIgpu && igpuNote}
+        </div>
+        {machine}
+        {installed && downloadCount > 0 && (
+          <section className="lm-section">
+            <LmHeading title={t("localModel.ov.downloads")} count={downloadCount} />
+            {downloadsBlock}
+          </section>
+        )}
+        {!installed ? (
+          <div className="lm-empty">
+            <p>{t("localModel.ov.emptyNotInstalled")}</p>
+            <button type="button" className="btn-primary lm-btn" onClick={onManageModels}>
+              {t("localModel.ov.install")}
+            </button>
+          </div>
+        ) : loading && models.length === 0 ? (
+          <div className="lm-empty">
+            <p>{t("common.loading")}</p>
+          </div>
+        ) : error ? (
+          <div className="lm-empty">
+            <p>{error}</p>
+          </div>
+        ) : models.length === 0 ? (
+          <div className="lm-empty">
+            <p>{status === "stopped" ? t("localModel.serverStopped") : t("localModel.noModelsInstalled")}</p>
+            <button type="button" className="btn-primary lm-btn" onClick={onManageModels}>
+              {t("localModel.ov.download")}
+            </button>
+          </div>
+        ) : (
+          <>
+            <section className="lm-section">
+              <LmHeading title={t("localModel.runningGroup")} count={running.length} />
+              {running.length === 0 ? (
+                <div className="lm-empty is-compact">
+                  <p>{t("ollama.noModelLoaded")}</p>
+                </div>
+              ) : (
+                <div className="lm-grid">
+                  {running.map((m) => (
+                    <RunningModelCard key={m.name} m={m} hub={hub} t={t} />
+                  ))}
+                </div>
+              )}
+            </section>
+            {available.length > 0 && (
+              <section className="lm-section">
+                <LmHeading title={t("localModel.onDiskGroup")} count={available.length} />
+                <div className="lm-grid">
+                  {available.map((m) => (
+                    <DiskModelCard key={m.name} m={m} hub={hub} t={t} />
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -628,153 +1281,8 @@ export function LocalModelsSection({
           Ollama's memory). Toned like the autoload notice it borrows its
           chrome from: amber for the wait that ran out, red for a model that
           would not come back. */}
-      {showRestoreNote && (
-        <div
-          className={`local-model-autostart-note${
-            restorePhase === "timeout" ? " saver" : restorePhase === "error" ? " failed" : ""
-          }`}
-        >
-          <button
-            type="button"
-            className="local-model-autostart-dismiss"
-            title={t("localModel.autostartDismiss")}
-            aria-label={t("localModel.autostartDismiss")}
-            onClick={restoreDismiss}
-          >
-            ✕
-          </button>
-          <div className="local-model-autostart-text">
-            <span className="local-model-autostart-sentence">{restoreSentence}</span>
-            <UntestedTag id="localModelMenu.2" />
-          </div>
-          {/* Waiting is the one phase with something to *stop*; the two
-              that ended without the models being back are the ones with
-              something to retry. A finished restore offers neither — the
-              models are in memory, and the note is only there to say so. */}
-          {restorePhase === "waiting" && (
-            <div className="local-model-autostart-actions">
-              <button
-                type="button"
-                className="local-model-role-chip"
-                title={t("localModel.upgradeRestoreCancelTitle")}
-                onClick={restoreCancel}
-              >
-                {t("localModel.upgradeRestoreCancel")}
-              </button>
-            </div>
-          )}
-          {(restorePhase === "timeout" || restorePhase === "error") && (
-            <div className="local-model-autostart-actions">
-              <button
-                type="button"
-                className="local-model-role-chip"
-                title={t("localModel.upgradeRestoreNowTitle")}
-                onClick={() => void restoreNow()}
-              >
-                {t("localModel.upgradeRestoreNow")}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-      {showAutoNote && (
-        <div
-          className={`local-model-autostart-note${
-            autoPhase === "skipped" ? " saver" : autoPhase === "error" ? " failed" : ""
-          }`}
-        >
-          {/* Corner ✕, not a chip in the action row: dismissing is not one of
-              the note's offers, and while loading it was that row's only
-              member — a lone ✕ floating where a button was expected. */}
-          <button
-            type="button"
-            className="local-model-autostart-dismiss"
-            title={t("localModel.autostartDismiss")}
-            aria-label={t("localModel.autostartDismiss")}
-            onClick={autoDismiss}
-          >
-            ✕
-          </button>
-          <div className="local-model-autostart-text">
-            <span className="local-model-autostart-sentence">{autoNoteTitle}</span>
-            <UntestedTag id="localModelMenu.3" />
-          </div>
-          {autoPhase !== "loading" && (
-            <div className="local-model-autostart-actions">
-              <button
-                type="button"
-                className="local-model-role-chip"
-                title={t("localModel.autostartLoadNowTitle")}
-                onClick={() => void autoLoadNow()}
-              >
-                {t("localModel.autostartLoadNow")}
-              </button>
-              {autoPhase === "skipped" && (
-                <button
-                  type="button"
-                  className="local-model-role-chip"
-                  title={t("localModel.autostartSettingsTitle")}
-                  onClick={onManageModels}
-                >
-                  {t("localModel.autostartSettings")}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-      {installed && (Object.keys(downloads).length > 0 || paused.length > 0) && (
-        <div className="local-model-downloads">
-          {Object.entries(downloads).map(([model, d]) => (
-            <div key={model} className="local-model-download-row" title={t("localModel.downloadingTitle")}>
-              <div className="local-model-download-head">
-                <span className="local-model-loaded-name">{model}</span>
-                <span className="local-model-download-pct">
-                  {d.pct != null ? `${d.pct}%` : "…"}
-                </span>
-                <button
-                  type="button"
-                  className="local-model-download-action"
-                  title={t("localModel.pauseDownloadTitle")}
-                  onClick={() => pausePull(model)}
-                >
-                  {t("ollama.pause")}
-                </button>
-              </div>
-              <div className="ollama-download-bar">
-                <div
-                  className={`ollama-download-bar-fill${d.pct == null ? " indeterminate" : ""}`}
-                  style={d.pct != null ? { width: `${d.pct}%` } : undefined}
-                />
-              </div>
-            </div>
-          ))}
-          {paused.map((model) => (
-            <div key={`paused:${model}`} className="local-model-download-row" title={t("localModel.pausedTitle")}>
-              <div className="local-model-download-head">
-                <span className="local-model-loaded-name">{model}</span>
-                <span className="local-model-download-pct">{t("ollama.pausedBadge")}</span>
-                <button
-                  type="button"
-                  className="local-model-download-action"
-                  title={t("localModel.resumeDownloadTitle")}
-                  onClick={() => resumePull(model)}
-                >
-                  {t("ollama.resume")}
-                </button>
-                <button
-                  type="button"
-                  className="local-model-download-action danger"
-                  title={t("localModel.deletePartialDownloadTitle")}
-                  onClick={() => deletePausedPull(model)}
-                >
-                  {t("ollama.delete")}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      {notices}
+      {downloadsBlock}
       {!installed ? (
         <div className="tab-new-menu-hint">{t("localModel.notInstalled")}</div>
       ) : loading && models.length === 0 ? (
@@ -795,7 +1303,7 @@ export function LocalModelsSection({
           {running.length === 0 ? (
             <div className="tab-new-menu-hint">{t("ollama.noModelLoaded")}</div>
           ) : (
-            <ModelCards grid={layout === "overlay"}>
+            <>
             {running.map((m) => (
               <div key={m.name} className="local-model-row">
                 <button
@@ -951,7 +1459,7 @@ export function LocalModelsSection({
                 </div>
               </div>
             ))}
-            </ModelCards>
+            </>
           )}
           {/* The resident model is on the CPU, this machine has a GPU, and
               the reason is the server's own integrated-GPU gate rather than
@@ -962,31 +1470,7 @@ export function LocalModelsSection({
               runs in a visible terminal (it needs a root password, and a
               command that rewrites a service is one to read first) rather
               than being applied behind their back. */}
-          {gpuStatus?.igpu_dropped && (
-            <div className="local-model-igpu-notice">
-              <div className="local-model-igpu-text">
-                {t("localModel.igpuDropped")} <UntestedTag id="localModel.igpuDropped" />
-              </div>
-              {gpuStatus.fix_cmd ? (
-                <button
-                  type="button"
-                  className="tab-new-menu-item local-model-igpu-fix"
-                  title={gpuStatus.fix_cmd}
-                  onClick={() =>
-                    runInstallInTab(
-                      t("localModel.igpuFixLabel"),
-                      gpuStatus.fix_cmd,
-                      gpuStatus.shell_kind as InstallShellKind,
-                    )
-                  }
-                >
-                  {t("localModel.igpuFixAction")}
-                </button>
-              ) : (
-                <div className="local-model-igpu-text">{t("localModel.igpuFixManual")}</div>
-              )}
-            </div>
-          )}
+          {igpuNote}
           {/* Installed-but-not-resident models — click to load into memory. */}
           {available.length > 0 && (
             <>
@@ -997,7 +1481,7 @@ export function LocalModelsSection({
                   GPU / CPU verb, so a header repeating the verb said the
                   same thing one level up. */}
               <div className="tab-new-menu-group-label is-sub">{t("localModel.onDiskGroup")}</div>
-              <ModelCards grid={layout === "overlay"}>
+              <>
               {available.map((m) => {
                 const st = loads[m.name];
                 return (
@@ -1144,7 +1628,7 @@ export function LocalModelsSection({
                   </div>
                 );
               })}
-              </ModelCards>
+              </>
             </>
           )}
         </>
@@ -1159,7 +1643,7 @@ export function LocalModelsSection({
  * it is what the machine has left for whichever of them you pick. The overlay
  * shows it as the strip above its Local models tab.
  */
-export function MachineMeters({ hub }: { hub: ModelsHub }) {
+export function MachineMeters({ hub, layout = "menu" }: { hub: ModelsHub; layout?: "menu" | "overlay" }) {
   const t = useT();
   const { gpus, machine } = hub;
   const { used: gpuUsed, total: gpuTotal } = gpuTotals(gpus);
@@ -1205,6 +1689,71 @@ export function MachineMeters({ hub }: { hub: ModelsHub }) {
       ]
         .filter(Boolean)
         .join("\n");
+  const stats = (
+    <div className="local-model-stats">
+      {showMachine && (
+        <>
+          <StatMeter
+            label="CPU"
+            value={t("localModel.cpuPercent", { pct: Math.round(machine.cpu_percent) })}
+            // Temperature only where a sensor answers. The tooltip
+            // carries the load average, a three-number reading no
+            // single row has room for.
+            note={cpuTemp}
+            detail={t("localModel.cpuCores", { cores: machine.num_cores })}
+            percent={machine.cpu_percent}
+            title={cpuTitle}
+          />
+          <StatMeter
+            label="RAM"
+            value={t("localModel.statUsedTotal", {
+              used: formatBytes(machine.mem_used_bytes),
+              total: formatBytes(machine.mem_total_bytes),
+            })}
+            // The hottest DIMM, on the boards that wire a sensor at
+            // all. Absent everywhere else — and absent is the common
+            // answer here, which is exactly why it must not be a zero.
+            note={memTemp}
+            detail={t("localModel.ramFree", {
+              free: formatBytes(
+                Math.max(0, machine.mem_total_bytes - machine.mem_used_bytes),
+              ),
+            })}
+            percent={gpuPercent(machine.mem_used_bytes, machine.mem_total_bytes)}
+            title={ramTitle}
+          />
+        </>
+      )}
+      {gpus.length > 0 && (
+        <StatMeter
+          label="GPU"
+          value={t("localModel.statUsedTotal", {
+            used: formatBytes(gpuUsed),
+            total: formatBytes(gpuTotal),
+          })}
+          // Utilization and temperature, each only when a driver
+          // reports it — `null` there means "the driver won't say",
+          // not an idle or a cold GPU. The free headroom keeps the
+          // row's end either way: it is the figure that answers
+          // whether the next model fits.
+          note={gpuNote}
+          detail={t("localModel.gpuFree", { free: formatBytes(Math.max(0, gpuTotal - gpuUsed)) })}
+          percent={gpuPercent(gpuUsed, gpuTotal)}
+          title={gpus.map((gpu) => gpuAdapterTooltip(gpu)).join("\n")}
+        />
+      )}
+    </div>
+  );
+  const showStats = showMachine || gpus.length > 0;
+
+  if (layout === "overlay") {
+    return showStats ? (
+      <section className="lm-section">
+        <LmHeading title={t("localModel.machineGroup")} />
+        {stats}
+      </section>
+    ) : null;
+  }
   return (
     <>
       {/* Its own group, and the menu's last, because it is neither an agent
@@ -1222,59 +1771,7 @@ export function MachineMeters({ hub }: { hub: ModelsHub }) {
           <div className="tab-new-menu-group-label local-model-machine-label">
             <span>{t("localModel.machineGroup")}</span>
           </div>
-          <div className="local-model-stats">
-            {showMachine && (
-              <>
-                <StatMeter
-                  label="CPU"
-                  value={t("localModel.cpuPercent", { pct: Math.round(machine.cpu_percent) })}
-                  // Temperature only where a sensor answers. The tooltip
-                  // carries the load average, a three-number reading no
-                  // single row has room for.
-                  note={cpuTemp}
-                  detail={t("localModel.cpuCores", { cores: machine.num_cores })}
-                  percent={machine.cpu_percent}
-                  title={cpuTitle}
-                />
-                <StatMeter
-                  label="RAM"
-                  value={t("localModel.statUsedTotal", {
-                    used: formatBytes(machine.mem_used_bytes),
-                    total: formatBytes(machine.mem_total_bytes),
-                  })}
-                  // The hottest DIMM, on the boards that wire a sensor at
-                  // all. Absent everywhere else — and absent is the common
-                  // answer here, which is exactly why it must not be a zero.
-                  note={memTemp}
-                  detail={t("localModel.ramFree", {
-                    free: formatBytes(
-                      Math.max(0, machine.mem_total_bytes - machine.mem_used_bytes),
-                    ),
-                  })}
-                  percent={gpuPercent(machine.mem_used_bytes, machine.mem_total_bytes)}
-                  title={ramTitle}
-                />
-              </>
-            )}
-            {gpus.length > 0 && (
-              <StatMeter
-                label="GPU"
-                value={t("localModel.statUsedTotal", {
-                  used: formatBytes(gpuUsed),
-                  total: formatBytes(gpuTotal),
-                })}
-                // Utilization and temperature, each only when a driver
-                // reports it — `null` there means "the driver won't say",
-                // not an idle or a cold GPU. The free headroom keeps the
-                // row's end either way: it is the figure that answers
-                // whether the next model fits.
-                note={gpuNote}
-                detail={t("localModel.gpuFree", { free: formatBytes(Math.max(0, gpuTotal - gpuUsed)) })}
-                percent={gpuPercent(gpuUsed, gpuTotal)}
-                title={gpus.map((gpu) => gpuAdapterTooltip(gpu)).join("\n")}
-              />
-            )}
-          </div>
+          {stats}
         </>
       )}
     </>

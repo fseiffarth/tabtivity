@@ -584,9 +584,10 @@
 
 .project-search-entry:focus,
 .project-search-entry:focus-visible {
-  border-color: transparent;
+  border-color: var(--accent);
   background: var(--control-bg);
-  outline: none;
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: -2px;
 }
 
 /* Right-anchored: the box sits right of the + now, i.e. in the header's right
@@ -915,8 +916,8 @@
 }
 .models-overlay-pane-agents .dialog-scroll > .settings-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
-  align-items: start;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+  align-items: stretch;
   gap: 12px;
 }
 :is(.models-overlay-pane-agents, .models-overlay-pane-ollama) .dialog-scroll > .settings-help {
@@ -966,50 +967,22 @@
 .models-overlay-models .local-model-meter {
   height: 6px;
 }
-/* The Ollama tab: its lists (downloads, downloaded models, load-on-start, the
-   catalog) tile the same way. Anything in a list that is not a card — a
-   loading or end-of-results line, the lazy-load sentinel — spans the row. */
+/* The Ollama tab: its lists (downloads, downloaded models, the catalog) tile
+   the same way; the card chrome itself is `.ollama-model-row` /
+   `.ollama-catalog-row` (Models overlay: Ollama section redesign, below).
+   Anything in a list that is not a card — a loading or end-of-results line,
+   the lazy-load sentinel — spans the row. */
 .models-overlay-pane-ollama .dialog-scroll > .settings-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
   align-items: stretch;
   gap: 10px;
 }
-.models-overlay-pane-ollama .dialog-scroll > .settings-list.ollama-autostart-list {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
-  align-content: start;
-  gap: 6px;
-}
 .models-overlay-pane-ollama
   .dialog-scroll
   > .settings-list
-  > :not(.ollama-model-row, .ollama-catalog-row, .ollama-autostart-row) {
+  > :not(.ollama-model-row, .ollama-catalog-row) {
   grid-column: 1 / -1;
-}
-.models-overlay-pane-ollama .ollama-model-row {
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 14px;
-  border-color: var(--control-border);
-  border-radius: var(--radius-lg);
-}
-/* The catalog's rows were divider-separated lines; as grid cells they take
-   the card chrome the downloaded models already wear, hover included. */
-.models-overlay-pane-ollama .ollama-catalog-row,
-.models-overlay-pane-ollama .ollama-catalog-row:last-child {
-  gap: 6px;
-  padding: 12px 14px;
-  background: var(--control-bg);
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-lg);
-  transition: border-color var(--transition);
-}
-.models-overlay-pane-ollama :is(.ollama-model-row, .ollama-catalog-row):hover {
-  border-color: var(--accent);
-}
-.models-overlay-pane-ollama .ollama-catalog-tags {
-  margin-top: auto;
-  padding-top: 4px;
 }
 
 /* Split-scroll frame, generalized — the one Settings uses, made reusable so any
@@ -1247,4 +1220,1862 @@
   .settings-navigation-compact { display: block; }
   .settings-navigation-compact .dropdown-trigger { width: 100%; }
   .settings-navigation-compact .dropdown-menu { max-height: 45vh; overflow-y: auto; }
+}
+
+/* ── Models overlay: Skills library redesign ──
+   One toolbar (search · source · refresh · sources), a Browse / Installed
+   switch, an equal-height card grid, and a preview that only exists while a
+   card is open — its footer carries the scope choice beside the one Install
+   button. Badges are soft tints with no border and a pill edge, buttons keep
+   the square control look, so the two never read as the same thing. */
+.skills-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  flex-wrap: wrap;
+}
+.skills-search {
+  flex: 1 1 200px;
+  min-width: 140px;
+}
+.skills-source-select {
+  min-width: 0;
+  max-width: 220px;
+  padding: 6px 8px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.skills-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.skills-input:focus-visible,
+.skills-source-select:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.skills-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: var(--cur-pointer, pointer);
+}
+.skills-btn:hover:not(:disabled) {
+  background: var(--control-hover-bg);
+  border-color: var(--accent);
+}
+.skills-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.skills-btn.danger {
+  color: var(--danger);
+}
+.skills-btn.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+.skills-btn:disabled {
+  opacity: 0.5;
+  cursor: var(--cur-default, default);
+}
+
+/* Sources: a short list with a remove per row, then the add form. */
+.skills-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 14px 8px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+.skills-source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.skills-source-label {
+  font-weight: 600;
+  flex: none;
+}
+.skills-source-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.skills-add-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.skills-add-source .skills-input {
+  flex: 1 1 140px;
+}
+.skills-add-source .skills-add-url {
+  flex: 3 1 240px;
+}
+
+.skills-strip {
+  margin: 0 14px 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--border-color);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  word-break: break-word;
+}
+.skills-strip.error {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+.skills-strip.notice {
+  margin: 0 0 10px;
+  border-left-color: var(--warning);
+  color: var(--text-primary);
+}
+.skills-strip.info {
+  margin: 0 0 10px;
+  border-left-color: var(--accent);
+  color: var(--text-secondary);
+}
+
+/* Browse / Installed. An underline switch, not buttons. */
+.skills-tabs {
+  display: flex;
+  gap: 18px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.skills-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 8px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: var(--cur-pointer, pointer);
+}
+.skills-tab:hover {
+  color: var(--text-primary);
+}
+.skills-tab.on {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.skills-tab-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.skills-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.skills-list-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  overflow-y: auto;
+  border-right: none;
+  width: auto;
+  max-width: none;
+}
+.skills-body.has-preview .skills-list-col {
+  border-right: 1px solid var(--border-subtle);
+}
+.skills-empty {
+  padding: 24px 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.skills-group-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-secondary);
+}
+
+/* Equal-height cards: grid rows stretch, the description clamps to two lines. */
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+.skills-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+.skills-card:hover {
+  border-color: var(--accent);
+}
+.skills-card.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+}
+.skills-card-static {
+  cursor: var(--cur-default, default);
+}
+.skills-card-static:hover {
+  border-color: var(--border-subtle);
+}
+.skills-card-name {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.skills-card-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.skills-card-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 6px;
+  min-height: 22px;
+}
+
+/* State badges: tinted text, no border, pill edge — not a control. */
+.skills-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: inherit;
+  user-select: none;
+}
+.skills-badge.installed {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+}
+.skills-badge.installed::before {
+  content: "✓";
+  font-size: 10px;
+}
+.skills-badge.scripts {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+}
+
+/* The preview exists only while a card is open. */
+.skills-preview {
+  flex: 0 0 clamp(300px, 44%, 520px);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg-panel);
+}
+.skills-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.skills-preview-titles {
+  min-width: 0;
+}
+.skills-preview-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.skills-preview-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.skills-close {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: var(--cur-pointer, pointer);
+}
+.skills-close:hover {
+  background: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+.skills-preview-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+.skills-preview-desc {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.skills-preview-files {
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+.skills-preview-files summary {
+  color: var(--text-muted);
+  cursor: var(--cur-pointer, pointer);
+}
+.skills-preview-files ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+}
+.skills-preview-body {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.skills-install-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+}
+.skills-install-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.skills-seg {
+  display: inline-flex;
+  align-items: center;
+}
+.skills-seg-label {
+  margin-right: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.skills-seg-btn {
+  padding: 5px 10px;
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: var(--cur-pointer, pointer);
+}
+.skills-seg-btn + .skills-seg-btn {
+  border-left: none;
+}
+.skills-seg-btn:first-of-type {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+.skills-seg-btn:last-of-type {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.skills-seg-btn:hover {
+  color: var(--text-primary);
+}
+.skills-seg-btn.on {
+  background: color-mix(in srgb, var(--accent) 18%, var(--control-bg));
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.skills-install-note {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.skills-install-btn {
+  padding: 7px 18px;
+}
+.skills-install-btn:disabled {
+  opacity: 0.55;
+  cursor: var(--cur-default, default);
+}
+
+/* Narrow window: the preview covers the list instead of squeezing it. */
+@media (max-width: 760px) {
+  .skills-preview {
+    position: absolute;
+    inset: 0;
+    flex: none;
+  }
+}
+
+/* ── Models overlay: Ollama section redesign ── */
+/* One status card heads the panel: server state + its primary action, and the
+   local-model runtime (Vibe) as the card's second line. */
+.ollama-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+}
+.ollama-status-card.down {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border-color));
+}
+.ollama-status-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* A static ring (never an animated shadow) makes the dot read as a state. */
+.ollama-status-card .ollama-status-dot {
+  width: 10px;
+  height: 10px;
+}
+.ollama-status-card .ollama-status-dot.running {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
+}
+.ollama-status-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ollama-status-title {
+  font-size: var(--text-md);
+  font-weight: 650;
+  color: var(--text-primary);
+}
+.ollama-status-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.ollama-runtime-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+.ollama-runtime-name {
+  color: var(--text-secondary);
+}
+.ollama-runtime-state {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.ollama-runtime-state.ok {
+  color: var(--success);
+}
+.ollama-runtime-install {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Section heading: sentence case, a quiet count, no wall of small caps. */
+.ollama-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  font-weight: 650;
+}
+.ollama-section-count {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Downloaded-model card: name + live state, quiet metadata line (plain text,
+   so it cannot be mistaken for a button), one primary verb with the secondary
+   and destructive ones pushed to the other end, and the load-at-start switch
+   on its own hairline-separated row. */
+.ollama-model-card.running {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--control-border));
+}
+.ollama-model-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+.ollama-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ollama-live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.ollama-live.gpu {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.ollama-model-actions {
+  align-items: center;
+}
+.ollama-model-actions-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.ollama-ghost-btn {
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: var(--cur-pointer, pointer);
+  transition: background var(--transition), color var(--transition);
+}
+.ollama-ghost-btn:hover:not(:disabled) {
+  background: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+.ollama-ghost-btn.danger {
+  color: var(--danger);
+}
+.ollama-ghost-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 12%, var(--control-bg));
+  color: var(--danger);
+}
+.ollama-ghost-btn:disabled {
+  opacity: 0.5;
+  cursor: var(--cur-default, default);
+}
+.ollama-ghost-btn:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.ollama-model-autostart {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+}
+
+/* Energy Saver opt-out: applies on toggle; "Saved" flashes beside the switch. */
+.ollama-startup .settings-card-row .ollama-status-text {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+/* Storage (advanced): the folder as a path, not a placeholder-looking input. */
+.ollama-path-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ollama-path {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--bg-main);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.ollama-path-default {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Registry: one bar to search or pull a typed ref, segmented filters, cards. */
+.ollama-browse-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ollama-search-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 7px 12px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+}
+.ollama-search-input:hover {
+  border-color: var(--accent);
+}
+.ollama-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ollama-search-input:disabled {
+  opacity: 0.5;
+}
+.ollama-pull-ref {
+  max-width: min(100%, 360px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+.ollama-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.ollama-filter-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ollama-filters .ollama-sort-label {
+  margin-left: auto;
+}
+.ollama-filter-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.ollama-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-full);
+  background: var(--control-bg);
+  overflow: hidden;
+}
+.ollama-seg button {
+  padding: 3px 10px;
+  border: none;
+  border-left: 1px solid var(--control-border);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  text-transform: capitalize;
+  cursor: var(--cur-pointer, pointer);
+  transition: background var(--transition), color var(--transition);
+}
+.ollama-seg button:first-child {
+  border-left: none;
+}
+.ollama-seg button:hover:not(.active) {
+  background: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+.ollama-seg button.active {
+  background: color-mix(in srgb, var(--accent) 20%, var(--control-bg));
+  color: var(--accent);
+  font-weight: 600;
+}
+.ollama-seg button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+.ollama-reg-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ollama-reg-error > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Registry card internals. */
+.ollama-catalog-header {
+  min-width: 0;
+}
+.ollama-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ollama-cap {
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text-secondary) 14%, transparent);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.7;
+}
+.ollama-catalog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+.ollama-catalog-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ollama-catalog-facts {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.ollama-variant .dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  cursor: var(--cur-pointer, pointer);
+}
+.ollama-variant .dropdown-trigger:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* ── Models overlay: frame, overview & Local models redesign ── */
+/* The bar. The way back is the first thing in it and wears the accent, so it
+   reads as the one control that leaves the section; the trail after the title
+   is plain text — section name, then its one-line purpose. Two classes deep so
+   it outranks the single-class rules in mail-todo.css whatever the order. */
+.models-overlay .models-overlay-back {
+  align-self: center;
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 11px 0 8px;
+  margin-right: 2px;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--control-border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--control-bg));
+  color: var(--accent);
+  font-weight: 600;
+  cursor: var(--cur-pointer, pointer);
+}
+.models-overlay .models-overlay-back:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--control-bg));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.models-overlay .models-overlay-trail {
+  gap: 8px;
+  padding-left: 4px;
+}
+.models-overlay .models-overlay-trail-sep {
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+}
+.models-overlay .models-overlay-trail-current {
+  flex-shrink: 0;
+}
+.models-overlay .models-overlay-trail-sub {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The overview: four equal cards, each icon + name + purpose, one status line
+   with its state dot, and a foot with what is in it and an explicit "Open".
+   Scoped to `.models-home-sections`: the Machines overlay reuses `.models-tile`. */
+.models-home-sections {
+  gap: 16px;
+}
+.models-home-sections .models-tile {
+  min-height: 176px;
+  gap: 14px;
+  padding: 18px 20px;
+}
+.models-home-sections .models-tile-head {
+  align-items: flex-start;
+}
+.models-home-sections .models-tile-titles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.models-home-sections .models-tile-title {
+  flex: none;
+  font-size: 15px;
+}
+.models-home-sections .models-tile-intro {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+.models-home-sections .models-tile-stat {
+  font-size: 13px;
+  font-weight: 600;
+}
+.models-home-sections .models-tile-foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+/* What is inside: quiet text with a state dot, not outlined pills. */
+.models-home-sections .models-tile-chips {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+  gap: 4px 14px;
+}
+.models-home-sections .models-tile-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 170px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.models-home-sections .models-tile-chip::before {
+  content: "";
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.models-home-sections .models-tile-chip.on::before {
+  background: var(--success);
+}
+.models-home-sections .models-tile-chip.off,
+.models-home-sections .models-tile-chip.more {
+  color: var(--text-muted);
+}
+.models-home-sections .models-tile-chip.more::before {
+  content: none;
+}
+.models-tile-open {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  transition: transform var(--transition);
+}
+.models-tile:hover .models-tile-open,
+.models-tile:focus-visible .models-tile-open {
+  transform: translateX(3px);
+}
+
+/* Local models: one page, short sentence-case headings, a card per model. */
+.models-overlay-body .models-overlay-models.dialog-scroll {
+  gap: 0;
+  padding-block: 20px 32px;
+}
+.lm-page {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  min-width: 0;
+}
+.lm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lm-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lm-heading-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.lm-count {
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text-secondary) 16%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+/* One weight of button on the page: 28px tall, 12px. Primary is the accent fill
+   (`.btn-primary`), everything else the outline default. */
+.lm-page :is(button.settings-btn.sm, button.lm-btn) {
+  min-height: 28px;
+  padding: 4px 12px;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* Status bar: Ollama's state and the page-level verbs. */
+.lm-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 12px 16px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-lg);
+}
+.lm-status-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+.lm-status .ollama-status-dot {
+  width: 10px;
+  height: 10px;
+}
+.lm-status-text {
+  font-size: 14px;
+  font-weight: 600;
+}
+.lm-status-version {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.lm-status-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.lm-status-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Notices sit directly under the status bar. */
+.lm-banners {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.lm-banners:empty {
+  display: none;
+}
+.lm-page .local-model-autostart-note {
+  margin: 0;
+  gap: 10px;
+  padding: 11px 42px 11px 14px;
+  border-radius: var(--radius-lg);
+}
+.lm-page .local-model-autostart-text {
+  padding-right: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.lm-page .local-model-autostart-actions {
+  gap: 8px;
+}
+.lm-page .local-model-autostart-dismiss {
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+}
+.lm-page .local-model-igpu-notice {
+  margin: 0;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: var(--radius-lg);
+}
+.lm-page .local-model-igpu-text {
+  font-size: 13px;
+}
+.lm-page .local-model-igpu-notice > button {
+  align-self: flex-start;
+}
+
+/* Downloads: a card each, with the shared progress bar. */
+.lm-page .local-model-downloads {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.lm-page .local-model-download-row {
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-lg);
+}
+.lm-page .local-model-download-head .local-model-loaded-name {
+  font-size: 13px;
+}
+.lm-page .local-model-download-pct {
+  font-size: 12px;
+}
+
+/* Machine: three meters across, the reading large and the headroom beside it. */
+.models-overlay-models .lm-page .local-model-stats {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.lm-page .local-model-stat-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "label detail" "value note";
+  align-items: baseline;
+  gap: 2px 10px;
+}
+.lm-page .local-model-stat-label {
+  grid-area: label;
+  font-size: 11px;
+}
+.lm-page .local-model-stat-detail {
+  grid-area: detail;
+  margin-left: 0;
+  font-size: 12px;
+}
+.lm-page .local-model-stat-value {
+  grid-area: value;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+}
+.lm-page .local-model-stat-note {
+  grid-area: note;
+  font-size: 12px;
+  text-align: right;
+}
+.models-overlay-models .lm-page .local-model-meter {
+  height: 6px;
+}
+
+/* Model cards: equal height, foot pinned, status first. */
+.lm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+  align-items: stretch;
+  gap: 14px;
+}
+.lm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--transition);
+}
+.lm-card.is-running {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--control-border));
+}
+.lm-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--control-border));
+}
+.lm-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.lm-card-name {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lm-card .local-model-lamp {
+  width: 8px;
+  height: 8px;
+}
+/* On disk, not in memory: the lamp's hollow twin. */
+.lm-dot-off {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+}
+/* A status label: tinted wash, no border, no hover, no pointer. */
+.lm-flag {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+.lm-link,
+.lm-ghost {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: var(--cur-pointer, pointer);
+  transition: background var(--transition), color var(--transition);
+}
+.lm-link {
+  padding: 3px 8px;
+  color: var(--accent);
+  font-weight: 600;
+}
+.lm-link:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.lm-ghost {
+  padding: 5px 8px;
+  color: var(--text-secondary);
+}
+.lm-ghost:hover {
+  background: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+/* What the model is: plain text, dot-separated; only the caveat is tinted. */
+.lm-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 0;
+  min-height: 20px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.lm-facts .local-model-chip {
+  margin-right: 8px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+.lm-fact {
+  white-space: nowrap;
+}
+.lm-fact + .lm-fact::before {
+  content: "·";
+  margin: 0 7px;
+  color: var(--text-muted);
+}
+.lm-place.gpu {
+  color: var(--success);
+}
+.lm-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lm-group-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.lm-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+/* A choice you can press: bordered, ticked when on. */
+.lm-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 11px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: var(--cur-pointer, pointer);
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+.lm-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.lm-toggle.on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.lm-toggle.on::before {
+  content: "✓";
+  color: var(--accent);
+  font-size: 11px;
+}
+.lm-toggle:disabled {
+  opacity: 0.5;
+  cursor: var(--cur-default, default);
+}
+.lm-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.lm-switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: var(--cur-pointer, pointer);
+}
+.lm-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.lm-card .local-model-load-bar {
+  margin: 0;
+}
+.lm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px 20px;
+  border: 1px dashed var(--control-border);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  text-align: center;
+}
+.lm-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+.lm-empty.is-compact {
+  padding: 16px;
+}
+
+/* ── Models overlay: Agents section redesign ── */
+/* The Agents & CLIs section (`AgentsPanel`, in Settings too): a short lead, the
+   installed CLIs as an equal-height card grid, a search for the rest, and the
+   rarely-touched settings as closed groups. Status is a dot and a word, the
+   version is plain text — neither has a border or a fill, so nothing but a
+   button looks like one. Buttons are the settings button: one filled primary
+   per card at most, outlined for the rest, `danger` for the destructive one. */
+.agents-lead {
+  margin: 0;
+  max-width: 880px;
+}
+.agents-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+}
+.agents-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text-secondary) 15%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+/* A "?" that carries a long explanation as its tooltip. Not a button. */
+.agents-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-muted) 20%, transparent);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+}
+.agents-help:hover,
+.agents-help:focus-visible {
+  color: var(--text-primary);
+}
+.agents-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.agents-status-text {
+  display: inline-block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.agents-status-text::first-letter {
+  text-transform: uppercase;
+}
+.agents-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.agents-status.is-ok .agents-dot {
+  background: var(--success);
+}
+.agents-status.is-warn {
+  color: var(--warning);
+}
+.agents-status.is-warn .agents-dot {
+  background: var(--warning);
+}
+.agents-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.agents-note.is-warn {
+  color: var(--warning);
+}
+
+/* The card grid. Cards stretch to the row's height; the actions and the one
+   fold sit on the foot (margin-top: auto), so a row lines them up. */
+.settings-list.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+  align-items: stretch;
+  gap: 12px;
+}
+.settings-card.agents-card {
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  transition: border-color var(--transition);
+}
+.settings-card.agents-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color));
+}
+.agents-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.agents-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.agents-card-name {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+}
+.agents-card.is-hidden .agents-card-name {
+  opacity: 0.6;
+}
+.agents-card-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+.agents-reorder {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+}
+.agents-reorder .agents-icon-btn {
+  border-radius: 0;
+}
+.agents-reorder .agents-icon-btn + .agents-icon-btn {
+  border-left: 1px solid var(--control-border);
+}
+.agents-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: var(--cur-pointer, pointer);
+  transition: background var(--transition), color var(--transition);
+}
+.agents-icon-btn:hover:not(:disabled) {
+  background: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+.agents-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: var(--cur-default, default);
+}
+.agents-spin {
+  display: inline-block;
+  animation: agents-spin 1s linear infinite;
+}
+@keyframes agents-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* What the CLI is, as plain text: version, sign-in, shortcut. */
+.agents-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.agents-version {
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: 12px;
+}
+.agents-version.is-new {
+  color: var(--success);
+  font-weight: 600;
+}
+.agents-version-arrow {
+  margin: 0 -8px;
+  color: var(--text-muted);
+}
+/* A warning or an instruction that needs the reader: an accent rail, not a
+   chip. The Node notice, a drifted CLI version and Codex's session hook. */
+.agents-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
+}
+.agents-notice-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.agents-notice-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+.agents-notice .settings-help,
+.agents-notice .agent-version-stale {
+  margin: 0;
+}
+.agents-notice .agent-version-stale {
+  font-size: 12px;
+}
+/* How the CLI is used: the dropdown's four switches, labelled and with a tick
+   when on (colour is not the only signal). */
+.agents-card-use {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+.agents-card-use-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.agents-card-use .local-model-row-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 0;
+}
+.agents-card-use .local-model-role-chip {
+  padding: 4px 9px;
+  font-size: 11px;
+}
+.agents-card-use .local-model-role-chip.on::before {
+  content: "✓";
+  margin-right: 4px;
+}
+.agents-card-foot {
+  margin-top: auto;
+}
+.agents-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.agents-spacer {
+  flex: 1 1 0;
+}
+
+/* A fold: one line while closed, its content on a hairline rail when open. */
+.agents-fold {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agents-fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: var(--cur-pointer, pointer);
+}
+.agents-fold-toggle:hover,
+.agents-fold.open > .agents-fold-toggle {
+  color: var(--accent-secondary);
+}
+.agents-fold-toggle:focus-visible,
+.agents-group-head:focus-visible {
+  outline: 1px solid var(--accent-secondary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.agents-fold-chevron {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  transition: transform 120ms ease;
+}
+.agents-fold.open > .agents-fold-toggle .agents-fold-chevron {
+  transform: rotate(90deg);
+}
+.agents-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0 2px 12px;
+  border-left: 2px solid var(--border-subtle);
+}
+.agents-fold-body .settings-help,
+.agents-block .settings-help {
+  margin: 0;
+}
+
+/* Settings groups: closed rows with a one-line summary, in one frame. */
+.agents-groups {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+.agents-group + .agents-group {
+  border-top: 1px solid var(--border-subtle);
+}
+.agents-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+  transition: background var(--transition);
+}
+.agents-group-head:hover {
+  background: var(--control-hover-bg);
+}
+.agents-group-chevron {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+  transition: transform 120ms ease;
+}
+.agents-group.open > .agents-group-head .agents-group-chevron {
+  color: var(--accent-secondary);
+  transform: rotate(90deg);
+}
+.agents-group-title {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.agents-group-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agents-group-body {
+  padding: 14px 16px 16px 36px;
+  border-top: 1px solid var(--border-subtle);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agents-fold-chevron,
+  .agents-group-chevron {
+    transition: none;
+  }
+  .agents-spin {
+    animation: none;
+  }
+}
+
+/* Rows inside a group: a name and its status on the left, its actions on the
+   right, hairline between. */
+.agents-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.agents-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agents-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agents-option .settings-help {
+  margin: 0;
+}
+.agents-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.agents-block > .settings-subheader + .agents-row {
+  border-top: none;
+}
+.agents-row-main {
+  display: flex;
+  flex: 1 1 220px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.agents-row-name {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.agents-row-note {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.agents-row-note.is-warn {
+  color: var(--warning);
+}
+.agents-subhead {
+  margin-top: 10px;
+}
+.agents-key-form {
+  display: flex;
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.agents-key-form .password-input-wrap {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+.agents-key-form .password-input-wrap > .agents-input {
+  width: 100%;
+}
+.agents-input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+}
+.agents-input:focus-visible {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+}
+.agents-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.agents-limit-input {
+  width: 76px;
+  text-align: right;
+}
+.agents-limit-input::-webkit-inner-spin-button,
+.agents-limit-input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+.agents-limit-unit {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.agents-search .agents-input {
+  width: 100%;
+  max-width: 420px;
+  height: 34px;
 }
