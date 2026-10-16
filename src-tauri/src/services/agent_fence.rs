@@ -378,7 +378,7 @@ pub const ROOT_SCOPE: &str = "root";
 /// first, before any `projects.json` lookup (a planted entry with that id must
 /// never yield a directory).
 pub(crate) fn is_assistant_scope(scope_id: &str) -> bool {
-    storage::project_key(scope_id.trim()).eq_ignore_ascii_case(storage::ASSISTANT_SCOPE)
+    storage::is_assistant_scope(scope_id)
 }
 
 /// The read-only host paths a scope's fence shows on top of its home:

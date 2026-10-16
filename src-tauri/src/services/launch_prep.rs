@@ -400,6 +400,12 @@ fn assistant_gate(opts: &mut PtyOptions, state_dir: &std::path::Path, enabled: b
     opts.local_model = launch.cli.is_local();
     opts.schedule_target_id = None;
     opts.host_bound_uid = None;
+    // The caller's tmux name is never used: `new-session -A -s <name>` attaches
+    // to ANY existing session of that name (a shell tab's, say). A chat that
+    // persists gets the name its uid derives; one that doesn't stays unwrapped.
+    if opts.tmux_session.is_some() {
+        opts.tmux_session = Some(crate::services::assistant::tmux_session_for(&uid));
+    }
     Ok(Some(AssistantPlan { launch, uid, chat_dir, chat_dir_existed }))
 }
 
@@ -1735,8 +1741,8 @@ mod tests {
         assert_eq!(opts.cmd, "claude", "the profile's binary, not bash");
         assert!(!opts.sandbox && opts.local_only && opts.agent && !opts.local_model);
         assert_eq!((opts.schedule_target_id.as_deref(), opts.host_bound_uid.as_deref()), (None, None));
-        // The tmux name is the window's; everything else is rebuilt.
-        assert_eq!(opts.tmux_session.as_deref(), Some("slug-assistant--agent-1"));
+        // The tmux name is the one the uid derives, never the caller's.
+        assert_eq!(opts.tmux_session, Some(crate::services::assistant::tmux_session_for(CHAT)));
         // A second spawn of the chat finds its folder.
         let mut again = chat_opts(AssistantCli::Claude, None);
         assert!(assistant_gate(&mut again, state.path(), true).unwrap().unwrap().chat_dir_existed);
@@ -1749,6 +1755,32 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&folder).unwrap().permissions().mode() & 0o077, 0, "private to the user");
         }
+    }
+
+    /// `new-session -A -s <name>` attaches to ANY existing session of that name,
+    /// a shell tab's or one the user attached by hand. A chat is never given a
+    /// name a caller chose: the gate sets it from the uid, and the tmux argv
+    /// that comes out carries only that.
+    #[test]
+    fn a_caller_supplied_tmux_session_never_reaches_tmux() {
+        let state = tempfile::tempdir().unwrap();
+        for hostile in ["other-p1--shell-aaaa", "user-session", "x:y", "", "-t"] {
+            let mut opts = chat_opts(AssistantCli::Claude, None);
+            opts.tmux_session = Some(hostile.to_string());
+            assistant_gate(&mut opts, state.path(), true).unwrap().expect("a chat");
+            assert_eq!(opts.tmux_session, Some(crate::services::assistant::tmux_session_for(CHAT)), "{hostile:?}");
+            let argv = crate::services::tmux_local::local_tmux_argv(opts.tmux_session.as_deref().unwrap(), &opts, false);
+            let at = argv.iter().position(|a| a == "-s").expect("new-session -s");
+            assert_eq!(argv[at + 1], crate::services::assistant::tmux_session_for(CHAT));
+            if !hostile.is_empty() {
+                assert!(!argv.iter().any(|a| a.contains(hostile) && a != "-t"), "{hostile:?} in {argv:?}");
+            }
+        }
+        // A chat the window did not wrap in tmux stays unwrapped.
+        let mut plain = chat_opts(AssistantCli::Claude, None);
+        plain.tmux_session = None;
+        assistant_gate(&mut plain, state.path(), true).unwrap().unwrap();
+        assert_eq!(plain.tmux_session, None);
     }
 
     #[test]
@@ -1935,7 +1967,7 @@ mod tests {
         // Codex: a resumable session replaces the argv the resolver sees, and
         // the pinned arguments go in front of its `resume <id>`.
         std::fs::create_dir_all(home.path().join(".codex")).unwrap();
-        std::fs::write(home.path().join(".codex").join("models_cache.json"), r#"{"models":[{"slug":"x","apply_patch_tool_type":"freeform"}]}"#).unwrap();
+        std::fs::write(home.path().join(".codex").join("models_cache.json"), crate::services::assistant::test_support::codex_cache(&["x"])).unwrap();
         let live = "019ea7c8-b7d5-7a13-80e2-1ad6608db5e6";
         let resolver = |mut opts: PtyOptions| {
             assert!(opts.args.is_empty(), "the resolver is handed an empty argv, which it would replace");

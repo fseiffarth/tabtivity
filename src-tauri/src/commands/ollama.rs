@@ -4447,15 +4447,11 @@ pub(crate) fn local_launch_line_ok(driver: &str, model: &str, cmd: &str, args: &
         if cmd == "ollama" && args == ["launch", sub, "--model", model] {
             return true;
         }
-        // Local Claude as the chat assistant runs it: `ollama launch claude
-        // --model <m> -- <pinned tail>` (`services::assistant`), the one `--`
-        // tail accepted.
-        if cmd == "ollama" && driver.id == "claude" {
-            let head = ["launch", sub, "--model", model, "--"].map(str::to_string);
-            if let Some(tail) = args.strip_prefix(&head[..]) {
-                return crate::services::assistant::claude_local_tail_ok(tail);
-            }
-        }
+        // No `--` tail is accepted here, whatever the scope: the chat
+        // assistant's pinned tail (`services::assistant::claude_local_tail_ok`)
+        // is built and checked by the assistant's own launch path, against the
+        // lane that spawn was granted. A persisted `localLaunch` of a project
+        // tab must match the plain line exactly.
     }
     let catalog = driver
         .wants_local_catalog

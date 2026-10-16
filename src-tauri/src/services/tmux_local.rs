@@ -316,8 +316,21 @@ fn local_tmux_args_with(
     env: &HashMap<String, String>,
     session_env: bool,
 ) -> Vec<String> {
+    local_tmux_args_with_end(session, target_cmd, target_args, env, session_env, false)
+}
+
+/// [`local_tmux_args_with`], with `ends` = the pane ends when the command does
+/// (an assistant chat: no trailing login shell, see [`local_tmux_args_on_end`]).
+fn local_tmux_args_with_end(
+    session: &str,
+    target_cmd: &str,
+    target_args: &[String],
+    env: &HashMap<String, String>,
+    session_env: bool,
+    ends: bool,
+) -> Vec<String> {
     let line = command_line(target_cmd, target_args, env, session_env);
-    local_tmux_args_for(session, line.as_deref(), env, session_env, is_fence(target_cmd, env))
+    local_tmux_args_on_end(session, line.as_deref(), env, session_env, is_fence(target_cmd, env), ends, socket_args())
 }
 
 /// Whether the tab's command is an agent fence (`agent_fence` has already
@@ -454,6 +467,11 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     // (A hosted server's administrator's key reaches agents through the same
     // proxy tokens since #2389; the two raw-key carrier slots that followed
     // here never shipped.)
+    // The assistant's web-lane token (`Caller::Web`), slot 8638: like every
+    // lane token it is a bearer on a loopback MCP port, so it rides the
+    // client's environment, never a `-e` value on the world-readable argv.
+    // (`WEB_URL_ENV` is a loopback URL, not a secret.)
+    crate::services::root_mcp::WEB_TOKEN_ENV,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -493,6 +511,7 @@ fn launcher_line(path: &str, env: &HashMap<String, String>, session_env: bool) -
 
 /// [`local_tmux_args_with`] with the command half already rendered: `line` is
 /// what tmux runs before the trailing login shell, or `None` for a shell tab.
+#[cfg(test)]
 fn local_tmux_args_for(
     session: &str,
     line: Option<&str>,
@@ -500,16 +519,33 @@ fn local_tmux_args_for(
     session_env: bool,
     fenced: bool,
 ) -> Vec<String> {
-    local_tmux_args_on(session, line, env, session_env, fenced, socket_args())
+    local_tmux_args_on_end(session, line, env, session_env, fenced, false, socket_args())
 }
 
 /// [`local_tmux_args_for`] on the tmux server `socket` names ([`socket_args`]).
+#[cfg(test)]
 fn local_tmux_args_on(
     session: &str,
     line: Option<&str>,
     env: &HashMap<String, String>,
     session_env: bool,
     fenced: bool,
+    socket: Vec<String>,
+) -> Vec<String> {
+    local_tmux_args_on_end(session, line, env, session_env, fenced, false, socket)
+}
+
+/// The one builder: `ends` drops the trailing login shell, so the pane (and
+/// its session) ends with the command. Only an assistant chat sets it: its
+/// fence is the whole guarantee, and a login shell after the CLI exits would
+/// be an unfenced host shell that the chat's composer (or a phone) types into.
+fn local_tmux_args_on_end(
+    session: &str,
+    line: Option<&str>,
+    env: &HashMap<String, String>,
+    session_env: bool,
+    fenced: bool,
+    ends: bool,
     socket: Vec<String>,
 ) -> Vec<String> {
     let pairs = session_env_pairs(env);
@@ -556,10 +592,14 @@ fn local_tmux_args_on(
     if let Some(line) = line {
         // One positional arg = the command line tmux runs via `sh -c`. Keeping a
         // login shell after it is what makes a finished run reattachable.
-        args.push(format!(
-            "{line}; {}",
-            trailing_shell(fenced, crate::services::agent_exec::has_carriers(env))
-        ));
+        if ends {
+            args.push(line.to_string());
+        } else {
+            args.push(format!(
+                "{line}; {}",
+                trailing_shell(fenced, crate::services::agent_exec::has_carriers(env))
+            ));
+        }
     }
     // Session options as trailing tmux commands (standalone ';' tokens split argv).
     for tok in [
@@ -728,7 +768,9 @@ pub fn wrap_pty_options_local(opts: &mut PtyOptions) {
 /// way.
 pub fn local_tmux_argv(session: &str, opts: &PtyOptions, detached: bool) -> Vec<String> {
     let session_env = tmux_supports_session_env();
-    let mut args = local_tmux_args_with(session, &opts.cmd, &opts.args, &opts.env, session_env);
+    // An assistant chat's pane ends with its CLI: no unfenced login shell after.
+    let ends = opts.assistant.is_some();
+    let mut args = local_tmux_args_with_end(session, &opts.cmd, &opts.args, &opts.env, session_env, ends);
     if !opts.cmd.is_empty() && argv_bytes(&args) > TMUX_ARGV_BUDGET {
         // Past the client's message limit, tmux would exit with `command too
         // long` and the tab with `[process exited]`. Move the command into a
@@ -737,12 +779,14 @@ pub fn local_tmux_argv(session: &str, opts: &PtyOptions, detached: bool) -> Vec<
         match write_launcher(session, &script) {
             Ok(path) => {
                 let line = launcher_line(&path.to_string_lossy(), &opts.env, session_env);
-                args = local_tmux_args_for(
+                args = local_tmux_args_on_end(
                     session,
                     Some(&line),
                     &opts.env,
                     session_env,
                     is_fence(&opts.cmd, &opts.env),
+                    ends,
+                    socket_args(),
                 );
             }
             Err(e) => {
@@ -1175,7 +1219,8 @@ mod tests {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
             assert_eq!(SECRET_UPDATE_ENV_SLOT + at, 8636 + i, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 8);
+        assert_eq!(SECRET_ENV.len(), 9);
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8638);
         for var in crate::services::agent_api_keys::ENV_VARS {
             assert!(!SECRET_ENV.contains(var), "{var}");
         }
@@ -1242,6 +1287,7 @@ mod tests {
             (crate::services::root_mcp::SCHEDULE_TOKEN_ENV, "sched-s3cret"),
             (crate::services::root_mcp::HELP_TOKEN_ENV, "help-s3cret"),
             (crate::services::root_mcp::MARKUP_TOKEN_ENV, "markup-s3cret"),
+            (crate::services::root_mcp::WEB_TOKEN_ENV, "web-s3cret"),
             (crate::services::copilot_auth::TOKEN_ENV, "gho_copilot-s3cret"),
             (crate::services::agent_api_keys::ANTHROPIC_CARRIER, "sk-test-anthropic-s3cret"),
             (crate::services::agent_api_keys::GEMINI_CARRIER, "gemini-token-s3cret"),
@@ -1410,6 +1456,90 @@ mod tests {
         assert!(kill_failure_is_already_gone("server exited unexpectedly"));
         assert!(!kill_failure_is_already_gone("permission denied"));
         assert!(!kill_failure_is_already_gone(""));
+    }
+
+    /// The assistant's web-lane token is a bearer like the other lanes': on
+    /// no argv, never in a launcher script, listed in `update-environment`, and
+    /// dropped from the login shell a fenced command leaves behind.
+    #[test]
+    fn the_web_lane_token_is_a_secret_like_every_other_lane_token() {
+        let web = crate::services::root_mcp::WEB_TOKEN_ENV;
+        assert!(SECRET_ENV.contains(&web));
+        assert!(!SECRET_ENV.contains(&crate::services::root_mcp::WEB_URL_ENV), "the lane URL is loopback, not a secret");
+        let env = env_of(&[(crate::app_env!("TAB_UID"), "tab-uid-1"), (web, "web-s3cret"), (crate::services::root_mcp::WEB_URL_ENV, "http://127.0.0.1:1/mcp/web")]);
+        for session_env in [true, false] {
+            assert!(!launcher_script("claude", &["--x".into()], &env, session_env).contains("web-s3cret"));
+        }
+        for cmd in ["", "claude", "bwrap"] {
+            let args = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), cmd, &[], &env, true);
+            assert!(!args.iter().any(|a| a.contains("web-s3cret")), "{cmd}: {args:?}");
+            assert!(args.iter().any(|a| a == web), "{cmd}: listed in update-environment");
+        }
+        // After a fenced command, the unfenced login shell does not inherit it.
+        assert!(trailing_shell(true, false).contains(&format!("-u {web} ")));
+        // A chat's tmux client argv (the assistant path) carries no value either.
+        let mut opts = assistant_fixture(env.clone());
+        opts.cmd = "bwrap".into();
+        let argv = local_tmux_argv(opts.tmux_session.as_deref().unwrap(), &opts, false);
+        assert!(!argv.iter().any(|a| a.contains("web-s3cret")), "{argv:?}");
+    }
+
+    fn assistant_fixture(env: HashMap<String, String>) -> PtyOptions {
+        PtyOptions {
+            login: None,
+            assistant: Some(crate::services::assistant::AssistantLaunch { cli: crate::services::assistant::AssistantCli::Claude, model: None }),
+            id: "assistant:t1".into(),
+            cmd: "claude".into(),
+            args: vec!["--x".into()],
+            env,
+            cwd: "/state/assistant/work/u".into(),
+            cols: 80,
+            rows: 24,
+            local_only: true,
+            sandbox: false,
+            agent: true,
+            project_id: Some("assistant".into()),
+            remote_host_id: None,
+            tmux_session: Some(crate::services::assistant::tmux_session_for("0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10")),
+            tmux_attach: None,
+            host_bound_uid: None,
+            local_model: false,
+            schedule_target_id: None,
+            host_session: false,
+        }
+    }
+
+    /// An assistant chat's fence is the whole guarantee: when its CLI exits the
+    /// pane ends. No login shell, fenced or not, is left behind for the chat's
+    /// composer (or a phone) to type host commands into.
+    #[test]
+    fn an_assistant_chats_pane_ends_with_its_cli_and_leaves_no_login_shell() {
+        let env = env_of(&[(crate::app_env!("TAB_UID"), "tab-uid-1"), (crate::services::root_mcp::WEB_TOKEN_ENV, "web-s3cret")]);
+        for cmd in ["claude", "bwrap", "/usr/bin/sandbox-exec"] {
+            let mut opts = assistant_fixture(env.clone());
+            opts.cmd = cmd.into();
+            for session_env in [true, false] {
+                let line = command_line(&opts.cmd, &opts.args, &opts.env, session_env);
+                let ends = local_tmux_args_on_end("s", line.as_deref(), &opts.env, session_env, is_fence(&opts.cmd, &opts.env), true, vec![]);
+                let at = ends.iter().position(|a| a == "-s").unwrap() + 2;
+                // The command is the last positional: no `; exec … -l`.
+                assert_eq!(&ends[at], line.as_ref().unwrap(), "{cmd}");
+                assert!(!ends.iter().any(|a| a.contains("SHELL") || a.contains(" -l") || a.contains("exec env") || a.contains(FENCE_INPUT_DRAIN)), "{cmd}: {ends:?}");
+            }
+            // Through the real entry point, from the options.
+            let argv = local_tmux_argv("s", &opts, false);
+            assert!(!argv.iter().any(|a| a.contains("SHELL")), "{cmd}: {argv:?}");
+            // The same command in a project tab still keeps its shell.
+            let mut project = opts.clone();
+            project.assistant = None;
+            let argv = local_tmux_argv("s", &project, false);
+            assert!(argv.iter().any(|a| a.contains("\"${SHELL:-/bin/bash}\" -l")), "{cmd}: {argv:?}");
+        }
+        // The launcher form of the same chat (a command too long for the argv)
+        // ends too: it is the same builder with the command moved out.
+        let launched = local_tmux_args_on_end("s", Some("'/l.sh'"), &env, true, true, true, vec![]);
+        let at = launched.iter().position(|a| a == "-s").unwrap() + 2;
+        assert_eq!(launched[at], "'/l.sh'");
     }
 
     #[test]

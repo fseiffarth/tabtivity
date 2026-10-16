@@ -517,6 +517,16 @@ pub fn is_reserved_scope(id: &str) -> bool {
     [ROOT_SCOPE, ASSISTANT_SCOPE].iter().any(|scope| key.eq_ignore_ascii_case(scope))
 }
 
+/// Whether `id` names the chat assistant's scope, in any spelling the state
+/// dir would fold onto it (`Assistant`, ` assistant`): the same reduction as
+/// [`is_reserved_scope`]. Every place that gives the scope its rules (layout
+/// sanitiser, no export copy, no prompt history, no schedule binding) asks this
+/// and never compares with [`ASSISTANT_SCOPE`], or a case-folding filesystem
+/// would let another spelling reach the scope's folder without them.
+pub fn is_assistant_scope(id: &str) -> bool {
+    project_key(id.trim()).eq_ignore_ascii_case(ASSISTANT_SCOPE)
+}
+
 /// Working directory for terminals that are not attached to a project.
 pub fn root_work_dir() -> std::path::PathBuf {
     paths::root_work_dir()
