@@ -957,6 +957,12 @@ pub enum DesktopRequest {
     Activate {
         request_id: String,
         project_id: String,
+        /// The tab the phone is opening, by its tmux name: the window starts
+        /// its CLI when the scope runs chats lazily (the assistant's: a chat
+        /// restored at launch has no process until something asks for it).
+        /// Any other scope ignores it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tmux_session: Option<String>,
     },
     Create {
         request_id: String,
@@ -2207,10 +2213,17 @@ mod tests {
         let request = DesktopRequest::Activate {
             request_id: "request-1".into(),
             project_id: "project-1".into(),
+            tmux_session: None,
         };
         let json = serde_json::to_value(&request).expect("serialize activation request");
         assert_eq!(json["type"], "activate");
         assert_eq!(json["project_id"], "project-1");
+        assert!(json.get("tmux_session").is_none(), "the plain activation sends no tab");
+        let named: DesktopRequest = serde_json::from_value(
+            serde_json::json!({ "type": "activate", "request_id": "r", "project_id": "p", "tmux_session": "tab-1" }),
+        )
+        .expect("an activation naming its tab");
+        assert!(matches!(named, DesktopRequest::Activate { tmux_session: Some(ref tab), .. } if tab == "tab-1"));
         let restored: DesktopRequest =
             serde_json::from_value(json).expect("deserialize activation request");
         assert_eq!(restored.request_id(), "request-1");

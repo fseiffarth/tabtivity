@@ -6,12 +6,12 @@ import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes"
 import {
   RESUMABLE_AGENTS,
   ROOT_SCOPE,
-  hydrateScopeFromDisk,
   refreshWorkspaceScope,
   useTabsStore,
   type TabEntry,
 } from "../../stores/tabs";
 import { ASSISTANT_SCOPE, assistantErrorCode, assistantNewChat, assistantOptions } from "../../lib/assistant";
+import { ensureAssistantScopeHydrated, mountAssistantChat, startAssistantChat } from "../../stores/assistantScope";
 import { experimentalEnabled } from "../../lib/experimental";
 import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootOverlay";
 import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
@@ -253,7 +253,7 @@ type DesktopRequest =
 | { type: "catalog"; request_id: string; project_id?: string }
   | { type: "activity"; request_id: string }
   | { type: "git_states"; request_id: string }
-  | { type: "activate"; request_id: string; project_id: string }
+  | { type: "activate"; request_id: string; project_id: string; tmux_session?: string | null }
   | { type: "create"; request_id: string; request: CreateRequest }
   | { type: "launch_options"; request_id: string; project_id: string }
   | { type: "todo"; request_id: string }
@@ -472,15 +472,6 @@ function assistantPhoneOpen(): boolean {
 function mobileAssistantScope(): MobileScope | undefined {
   if (!assistantPhoneOpen()) return undefined;
   return { id: ASSISTANT_SCOPE, name: BRAND.assistant, cwd: "", localFile: "" };
-}
-
-/** Restore the assistant scope's saved chats on first use this session, as the
- * root console's restore does: the phone lists its tabs from the saved session
- * file, which outlives the store's knowledge of them. `createEmptyScope` marks
- * a scope with nothing saved as hydrated, so a later persist may write it. */
-function ensureAssistantScopeHydrated(): Promise<boolean> {
-  if (ASSISTANT_SCOPE in useTabsStore.getState().tabsByScope) return Promise.resolve(true);
-  return hydrateScopeFromDisk(ASSISTANT_SCOPE, "", { createEmptyScope: true }).catch(() => false);
 }
 
 function mobileScope(id: string | undefined): MobileScope | undefined {
@@ -1007,6 +998,8 @@ async function createAssistantChat(scope: MobileScope, request: CreateRequest): 
   if (known) return { status: "created", tmux_session: known };
   const launch = await resolveAssistantLaunch(request.assistant);
   if (!launch) return { status: "error", code: "unknown_agent", message: "That launch is unavailable" };
+  // Hydrate before the command: a created tab arriving at an unhydrated scope
+  // is only picked up by the hydrate (`mountAssistantChat` needs it too).
   await ensureAssistantScopeHydrated();
   let chat;
   try {
@@ -1014,9 +1007,10 @@ async function createAssistantChat(scope: MobileScope, request: CreateRequest): 
   } catch (error) {
     return { status: "error", code: assistantErrorCode(error) || "launch_failed", message: "The chat could not be started" };
   }
-  // The patch event adopts the tab; this makes sure of it before the answer.
-  await refreshWorkspaceScope(ASSISTANT_SCOPE).catch(() => undefined);
-  const created = (useTabsStore.getState().tabsByScope[ASSISTANT_SCOPE] ?? []).find((tab) => tab.sessionId === chat.uid);
+  // The one door for a chat the backend made: adopts the tab (the
+  // `workspace:patch` or a re-read of the stored set, whichever lands first)
+  // and lets its CLI start, which the assistant scope otherwise does lazily.
+  const created = await mountAssistantChat(chat.tabId).catch(() => null);
   if (!created?.tmuxSession) {
     return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
   }
@@ -1178,12 +1172,21 @@ async function enterScope(scope: MobileScope): Promise<void> {
   else await useBoxesStore.getState().openBox(scope.id.slice(BOX_SCOPE_PREFIX.length));
 }
 
-async function activate(projectId: string): Promise<DesktopResponse> {
+async function activate(projectId: string, tmuxSession?: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
   await enterScope(scope);
+  // The assistant's chats start lazily (a restored one has no process until
+  // asked for), so the phone opening one names it here and the window starts
+  // its CLI; the pane appears and the phone's next catalog read finds the
+  // tmux session live. Every other scope ignores the name.
+  if (scope.id === ASSISTANT_SCOPE && tmuxSession) {
+    const chat = mobileTargetTab(scope.id, tmuxSession);
+    if (!chat) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
+    startAssistantChat(chat.key);
+  }
   return { status: "activated" };
 }
 
@@ -1287,6 +1290,9 @@ async function reopenMobileTab(projectId: string, closedId?: string): Promise<De
     return { status: "error", code: "launch_failed", message: "Persistent terminal session was not created" };
   }
   if (scope.id === ROOT_SCOPE || scope.id === ASSISTANT_SCOPE) useTabsStore.getState().revealTabInScope(scope.id, entry.key);
+  // A reopened chat is asked for: without this its pane is never mounted (the
+  // assistant scope spawns lazily) and the CLI would not resume.
+  if (scope.id === ASSISTANT_SCOPE) startAssistantChat(entry.key);
   await persistScopeLayout(scope.id);
   return { status: "created", tmux_session: entry.tmuxSession };
 }
@@ -2620,7 +2626,7 @@ async function handleRequest(
     };
     case "activity": return { status: "activity", statuses: allAgentStatuses(), prompts: allAgentPrompts() };
     case "git_states": return { status: "git_states", states: gitDotRows(allMobileScopes().flatMap((scope) => scope.project ?? [])) };
-    case "activate": return activate(request.project_id);
+    case "activate": return activate(request.project_id, request.tmux_session ?? undefined);
     case "create": return create(request.request, t);
     case "launch_options": return launchOptions(request.project_id);
     case "todo": return { status: "todo", board: await todoSnapshot() };

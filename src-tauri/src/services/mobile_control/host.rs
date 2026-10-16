@@ -198,6 +198,14 @@ struct ProjectQuery {
     q: Option<String>,
 }
 
+/// `POST /projects/{id}/activate?tab=<tab id>`: the tab the phone is about to
+/// open, so a scope that starts its chats lazily can start that one.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ActivateQuery {
+    tab: Option<String>,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct MailQuery {
@@ -1831,6 +1839,7 @@ async fn activate_project(
     State(state): State<HostState>,
     headers: HeaderMap,
     Path(project_id): Path<String>,
+    Query(query): Query<ActivateQuery>,
 ) -> impl IntoResponse {
     let phone = match authenticate(&headers, &state) {
         Ok(phone) => phone,
@@ -1845,6 +1854,15 @@ async fn activate_project(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
+    // A named tab must be one of this scope's own; its tmux name is what the
+    // window knows it by.
+    let tmux_session = match query.tab.as_deref() {
+        None => None,
+        Some(tab_id) => match catalog_snapshot.tab(tab_id) {
+            Some((owner, tab)) if owner.raw_id == project.raw_id => Some(tab.tmux_name.clone()),
+            _ => return api_error(StatusCode::NOT_FOUND, "tab_not_found"),
+        },
+    };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = new_request_id();
     let response = admin::desktop_call(
@@ -1852,6 +1870,7 @@ async fn activate_project(
         &DesktopRequest::Activate {
             request_id,
             project_id: project.raw_id.clone(),
+            tmux_session,
         },
     )
     .await;
@@ -8221,6 +8240,26 @@ mod tests {
             .await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
         assert!(!body.contains(RAW_BOX));
+    }
+
+    /// `?tab=` on an activation names the tab the phone is opening (the
+    /// assistant starts its chats lazily): it must be a tab of that scope, an
+    /// unknown one is refused before the window is asked, and nothing else is
+    /// accepted in the query.
+    #[tokio::test]
+    async fn an_activation_may_name_only_a_tab_of_its_own_scope() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(54)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+        let activate = |query: &str| request_as("POST", &format!("/api/v1/projects/{project_id}/activate{query}"), &cookie, None);
+        let (status, _, body) = host.send(activate("?tab=no-such-tab")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        assert!(body.contains("tab_not_found"), "answered: {body}");
+        let (status, _, _) = host.send(activate("?other=1")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, body) = host.send(activate("")).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
     }
 
     fn create_request(project_id: &str, cookie: &str, body: Value) -> Request<Body> {

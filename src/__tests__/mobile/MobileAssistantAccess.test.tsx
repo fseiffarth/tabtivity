@@ -22,6 +22,7 @@ import { useActivityStore } from "../../stores/activity";
 import { useBoxesStore } from "../../stores/boxes";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
+import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useTabsStore } from "../../stores/tabs";
 import type { TabEntry } from "../../stores/tabs";
 import type { Settings } from "../../types";
@@ -32,6 +33,8 @@ const UID = "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10";
 const TMUX = `${BRAND.slug}-assistant--agent-123456789`;
 const CHAT: TabEntry = {
   key: "chat-1",
+  id: "t1",
+  assistant: { cli: "claude" },
   label: "Claude",
   kind: "agent",
   cmd: "claude",
@@ -66,6 +69,8 @@ async function ask(request: Record<string, unknown>) {
 }
 
 const activate = vi.fn(() => Promise.resolve());
+/** The chats whose CLI the assistant layer has been asked to start. */
+const started = () => [...useOverlayAgentStore.getState().assistantStartedKeys];
 /** The `assistant_new_chat` calls so far (`ask` clears the invoke mock). */
 const made: unknown[] = [];
 /** A request key no earlier test used: the bridge remembers keys it answered. */
@@ -97,6 +102,7 @@ async function mount(settings: Settings, tabs: TabEntry[] = [CHAT]) {
   useSettingsStore.setState({ settings, loaded: true });
   useTabsStore.setState({ scope: "p-other", tabsByScope: { [ASSISTANT_SCOPE]: tabs } });
   useActivityStore.setState({ busyByTab: { [`${ASSISTANT_SCOPE}:chat-1`]: true } });
+  useOverlayAgentStore.setState({ assistantStartedKeys: new Set() });
   render(<MobileBridgeHost />);
   await vi.waitFor(() => expect(vi.mocked(listen).mock.calls.length).toBeGreaterThan(0));
 }
@@ -158,6 +164,20 @@ describe("Mobile bridge — the chat assistant", () => {
     expect(activate).not.toHaveBeenCalled();
     expect(useTabsStore.getState().scope).toBe("p-other");
     expect(useProjectsStore.getState().activeId).toBe("p-other");
+    // Naming no chat starts none: a restored chat has no process until asked for.
+    expect(started()).toEqual([]);
+  });
+
+  it("starts the one restored chat the phone names, and no other", async () => {
+    const other: TabEntry = { ...CHAT, key: "chat-2", id: "t2", tmuxSession: `${TMUX}-2` };
+    await mount(open, [CHAT, other]);
+    expect(await ask({ type: "activate", request_id: "a1", project_id: ASSISTANT_SCOPE, tmux_session: `${TMUX}-2` })).toEqual({ status: "activated" });
+    expect(started()).toEqual(["chat-2"]);
+    expect(activate).not.toHaveBeenCalled();
+    // A chat the scope does not hold is refused and starts nothing.
+    expect(await ask({ type: "activate", request_id: "a2", project_id: ASSISTANT_SCOPE, tmux_session: "nope" }))
+      .toMatchObject({ status: "error", code: "tab_not_found" });
+    expect(started()).toEqual(["chat-2"]);
   });
 
   it("offers no worktree, cloud session, sign-in or local agent (the sidecar lists its launches)", async () => {
@@ -172,6 +192,10 @@ describe("Mobile bridge — the chat assistant", () => {
     const key = freshKey();
     expect(await create({}, key)).toEqual({ status: "created", tmux_session: TMUX });
     expect(made).toEqual([{ cli: "claude", model: null }]);
+    // The new chat is mounted through the assistant layer's door and started
+    // (the scope spawns lazily): its pane is what creates the tmux session.
+    expect(started()).toEqual(["chat-1"]);
+    expect(useTabsStore.getState().tabsByScope[ASSISTANT_SCOPE]?.[0]).toMatchObject({ assistant: { cli: "claude" }, sessionId: UID });
     // The phone retries a create until it sees the tab: the same key opens nothing twice.
     expect(await create({}, key)).toEqual({ status: "created", tmux_session: TMUX });
     expect(made).toHaveLength(1);
