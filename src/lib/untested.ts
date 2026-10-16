@@ -32,6 +32,7 @@ export type UntestedEntry = {
 /** Every tagged feature. One row per pill; `tested` retires it. */
 export const UNTESTED = {
   "sidePanel.ideToggle": { area: "shell", what: "Side panel as a VS Code-style docked bar: always-on rail, click-to-toggle, Ctrl+B, snap-close sash, Auto-hide mode" },
+  "centerPanel.openTab": { area: "shell", what: "Empty workspace · Open a tab opens the empty group's new-tab menu" },
   "desktop.settingsNavigation": { area: "shell", what: "Grouped settings pages, the left-hand search box and per-page scroll restoration" },
   "desktop.modalFocus": { area: "common", what: "Modal focus containment, restoration and nested Escape" },
   "desktop.projectForms": { area: "projects", what: "Project form sections, field guidance and pinned actions" },

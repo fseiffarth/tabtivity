@@ -1810,6 +1810,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           className={`tab-new-btn${tabs.length === 0 ? " empty-hint" : ""}`}
           data-hint-anchor="tab-add"
           title={t("tabBar.newTabTitle")}
+          aria-label={t("tabBar.newTabTitle")}
+          aria-haspopup="menu"
+          aria-expanded={menuPos !== null}
           onClick={openAddMenu}
         >
           +

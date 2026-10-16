@@ -12,7 +12,7 @@
  * ("animation shows but split is not done").
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, render, cleanup } from "@testing-library/react";
+import { act, fireEvent, render, cleanup } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(false)) }));
 
@@ -53,7 +53,8 @@ vi.mock("../../components/files/FileBrowser", () => ({
 }));
 
 import { CenterPanel } from "../../components/layout/CenterPanel";
-import { useTabsStore, type GroupNode, type SplitNode } from "../../stores/tabs";
+import { EMPTY_GROUP_ID, useTabsStore, type GroupNode, type SplitNode } from "../../stores/tabs";
+import { NEW_TAB_SHORTCUT_EVENT, type NewTabShortcutDetail } from "../../lib/shortcuts/newTabChord";
 import { useDragStore } from "../../stores/drag/drag";
 import { useProjectsStore } from "../../stores/projects";
 import * as coords from "../../lib/window/coords";
@@ -173,6 +174,35 @@ describe("CenterPanel — pointer drag → edge split (integration)", () => {
 
   const RIGHT_X = 700; // right half of an 800-wide body
   const BODY_Y = BAR_H + 200;
+
+  it("opens the empty scope's own new-tab menu from its full-body placeholder", async () => {
+    useProjectsStore.setState({ projects: [], activeId: null, rootDir: "/r" });
+    useTabsStore.setState({
+      scope: "root", tabsByScope: { root: [] }, layoutByScope: { root: null },
+      focusedGroupByScope: { root: null }, tabs: [], layout: null,
+      focusedGroupId: null, activeKey: null, detachedGroupsByScope: {},
+    });
+    useTabsStore.getState().setScope("root");
+    const requests: NewTabShortcutDetail[] = [];
+    const onRequest = (event: Event) => requests.push((event as CustomEvent<NewTabShortcutDetail>).detail);
+    window.addEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+    try {
+      const { container } = render(<CenterPanel />);
+      await flush();
+      expect(container.querySelector(".center-placeholder")).not.toBeNull();
+      expect(container.querySelector(".center-placeholder")?.contains(container.querySelector(".center-placeholder-card"))).toBe(true);
+      expect(container.querySelector(".tab-new-btn")?.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => {
+        fireEvent.click(container.querySelector(".center-placeholder-action")!);
+      });
+      expect(requests).toEqual([{ request: { kind: "menu" }, groupId: EMPTY_GROUP_ID, besideActive: undefined }]);
+      expect(container.querySelector(".tab-new-btn")?.getAttribute("aria-expanded")).toBe("true");
+      expect(document.querySelector(".tab-add-menu")).not.toBeNull();
+      expect(useTabsStore.getState().scope).toBe("root");
+    } finally {
+      window.removeEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+    }
+  });
 
   function expectSplitRight(aKey: string, bKey: string) {
     const layout = useTabsStore.getState().layout;

@@ -73,6 +73,8 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { resolveProjectDirectory } from "../../types";
 import { useT } from "../../lib/i18n";
+import { requestNewTab } from "../../lib/shortcuts/newTabChord";
+import { UntestedTag } from "../common/UntestedTag";
 import { sleepTabsAfterMs } from "../../lib/sleepWhenHidden";
 
 /** Pixel coordinates of a group's pane region, relative to the center panel. */
@@ -1183,11 +1185,17 @@ function CenterPanelImpl() {
             style={{ height: "100%" }}
           >
             <div className="center-placeholder-card">
-              <div className="center-placeholder-title">{t("centerPanel.noTabsOpen")}</div>
+              <h2 className="center-placeholder-title">{t("centerPanel.noTabsOpen")}</h2>
               <div className="center-placeholder-hint">
-                {t("centerPanel.noTabsHintPre")} <span className="center-placeholder-key">+</span>{" "}
-                {t("centerPanel.noTabsHintPost")}
+                {t("centerPanel.noTabsGuidance")}
               </div>
+              <button
+                className="center-placeholder-action"
+                aria-label={t("centerPanel.openTab")}
+                onClick={() => requestNewTab({ kind: "menu" }, { groupId: EMPTY_GROUP_ID })}
+              >
+                {t("centerPanel.openTab")} <UntestedTag id="centerPanel.openTab" />
+              </button>
             </div>
           </div>
         </Subwindow>

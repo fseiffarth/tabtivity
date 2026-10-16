@@ -2635,6 +2635,7 @@ export function ProjectPill({
         )}
         <button
           className="pill-main"
+          aria-current={active ? "page" : undefined}
           onClick={onClick}
           title={fastMode ? project.name : undefined}
         >

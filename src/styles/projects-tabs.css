@@ -57,6 +57,13 @@
   color: var(--text-primary);
 }
 
+.project-pill .pill-main:focus-visible,
+.tab:focus-visible,
+.tab-new-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .project-pill.dragging {
   opacity: 0.45;
   /* No transform transition here: the inline translateX follows the pointer
@@ -175,6 +182,8 @@
      on each side (vertical offset 0) so it reads as a raised chip lifted off
      the flat, shadowless neighbours. */
   color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-weight: 600;
   border-top-color: var(--accent);
   box-shadow: 3px 0 4.5px -2px rgba(0, 0, 0, 0.4), -3px 0 4.5px -2px rgba(0, 0, 0, 0.4);
 }
@@ -1366,6 +1375,7 @@
      at a glance among many; and it is the only tab with a side 3D shadow, a
      raised chip lifted off the flat, shadowless neighbours. */
   color: var(--text-primary);
+  font-weight: 600;
   border-bottom-color: var(--tab-accent, var(--subwindow-tab-active));
   background-image: linear-gradient(
     to top,
@@ -2510,8 +2520,8 @@ button.tab-todo-link {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 30px;
-  padding: 6px 10px;
+  min-height: 34px;
+  padding: 7px 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: var(--control-bg);

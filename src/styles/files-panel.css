@@ -796,7 +796,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: 4px;
   /* Left padding is 6px, not the block's 12px, ON PURPOSE: every child here is
      a `.toolbar-btn` carrying its own 6px inner padding, so 12px would push the
      first LABEL to 18px while the project name one row up and the file names
@@ -809,6 +809,11 @@
   /* Second row of the same header block — shares `.side-panel-header`'s fill. */
   background-color: var(--bg-subheader);
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.side-panel-toolbar .toolbar-btn:focus-visible {
+  outline-color: var(--accent);
+  outline-offset: -1px;
 }
 
 /* The SIDE PANEL's header block specifically. The two rules above paint every
