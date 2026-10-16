@@ -117,6 +117,11 @@ struct SavedTab {
     args: Option<Value>,
     #[serde(default)]
     launched_at: Option<Value>,
+    /// The chat assistant's launch block (`assistant::ASSISTANT_KEY`): what
+    /// makes a tab of that scope a chat at all. Loose, validated where the
+    /// scope is resolved ([`assistant_chat`]).
+    #[serde(default)]
+    assistant: Option<Value>,
 }
 
 /// [`ResolvedTab::since`] off the saved record: its stamped launch moment,
@@ -151,6 +156,12 @@ pub enum ScopeKind {
     /// The root console (`docs/context/root_console.md`, "On the phone"): the
     /// one scope that is in neither list, behind its own switch and gate.
     Root,
+    /// The chat assistant (`docs/assistant_plan.md`, decision 12): like root it
+    /// is in neither list and behind a switch of its own ([`assistant_open`]),
+    /// but it holds no project, no files and no repository: every
+    /// `== ScopeKind::Project` gate leaves it out, and its tabs are chats the
+    /// phone starts from [`super::assistant`]'s opaque launches.
+    Assistant,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -531,6 +542,7 @@ fn valid_opaque_control_domain(domain: &str) -> bool {
     matches!(
         domain,
         "agent"
+            | "assistant"
             | "request"
             | "task"
             | "mail"
@@ -616,6 +628,56 @@ fn root_open(state_dir: &Path, env: &RootEnv) -> bool {
         Some("destructive" | "off")
     );
     staged && (env.fenced)()
+}
+
+/// The assistant scope's own id, as the desktop's tab store and bridge spell it.
+const ASSISTANT_SCOPE_ID: &str = crate::storage::ASSISTANT_SCOPE;
+
+/// The assistant scope's id, or anything that maps onto its session directory
+/// (`Assistant`, ` assistant`: a case-folding filesystem or the key reduction
+/// would otherwise let a project record share its state and walk past
+/// [`assistant_open`]).
+pub(super) fn is_assistant_scope_id(id: &str) -> bool {
+    project_key(id.trim()).eq_ignore_ascii_case(ASSISTANT_SCOPE_ID)
+}
+
+/// Whether the chat assistant is the phone's right now: the experimental flag
+/// on and `[MOBILE_HOST_KEY].assistant_access` not `false` (unset is on — it
+/// holds no right a phone should not reach). Read per catalog load, like
+/// [`root_open`], so turning either off unlists the scope and an open chat
+/// detaches at `pty_bridge`'s next re-check. Raw JSON, the sidecar's way;
+/// [`crate::schema::Settings::assistant_phone_open`] is the same rule on the
+/// typed settings and a test holds the two together (including the debug
+/// fallback of a profile not yet marked `experimental_explicit`). Missing or
+/// unreadable settings refuse.
+pub fn assistant_open(state_dir: &Path) -> bool {
+    let Some(settings) = fs::read(state_dir.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    else {
+        return false;
+    };
+    // A value that is not a boolean would fail the typed settings' parse (and
+    // so read as the defaults: off); it closes this reader too.
+    let flag = |key: &str| -> Option<Option<bool>> {
+        match settings.get(key) {
+            None | Some(Value::Null) => Some(None),
+            Some(Value::Bool(value)) => Some(Some(*value)),
+            Some(_) => None,
+        }
+    };
+    let (Some(flag_on), Some(explicit), Some(debug)) = (flag("assistant"), flag("experimental_explicit"), flag("debug")) else {
+        return false;
+    };
+    let host = settings.get(crate::brand::MOBILE_HOST_KEY);
+    let Some(access) = (match host.and_then(|host| host.get("assistant_access")) {
+        None | Some(Value::Null) => Some(None),
+        Some(Value::Bool(value)) => Some(Some(*value)),
+        Some(_) => None,
+    }) else {
+        return false;
+    };
+    flag_on.unwrap_or_else(|| !explicit.unwrap_or(false) && debug.unwrap_or(false)) && access != Some(false)
 }
 
 fn project_key(id: &str) -> String {
@@ -927,6 +989,20 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             devices: None,
         });
     }
+    if assistant_open(state_dir) {
+        sources.push(ScopeSource {
+            raw_id: ASSISTANT_SCOPE_ID.into(),
+            label: crate::brand::ASSISTANT_NAME.into(),
+            status: "active".into(),
+            kind: ScopeKind::Assistant,
+            // Every chat runs in a folder of its own below the work folder
+            // (`assistant::chat_dir`); a tab whose cwd is anywhere else is
+            // dropped by `resolve_scope`.
+            roots: vec![crate::services::assistant::work_root(state_dir)],
+            // Like root: one switch, not a per-phone list.
+            devices: None,
+        });
+    }
     for project in &projects {
         if !project.app_mobile_access || !mobile_local(project) {
             continue;
@@ -936,7 +1012,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
         // session directory — and walk past that gate — by taking its id.
         // The same for any scope the app keeps for itself (the chat
         // assistant's has its own source, listed by its own switch).
-        if is_root_scope_id(&project.id) || crate::storage::is_reserved_scope(&project.id) {
+        if is_root_scope_id(&project.id) || is_assistant_scope_id(&project.id) || crate::storage::is_reserved_scope(&project.id) {
             continue;
         }
         let Some(root_raw) = project.directory.as_deref() else {
@@ -1009,7 +1085,8 @@ pub struct ScopeAccess {
     /// catalog lists no box (no root) then, which is right for what it
     /// shows; for a rule that answer would *remove*, it is unknown instead.
     boxes_unread: bool,
-    root_unread: bool,
+    /// `settings.json`, which root's and the assistant's switches live in.
+    settings_unread: bool,
 }
 
 /// Whether `path` exists but does not parse as `T` — a missing file is a
@@ -1033,13 +1110,13 @@ impl ScopeAccess {
                 .map(|source| (source.raw_id, source.devices))
                 .collect(),
             boxes_unread: present_but_unreadable::<Vec<BoxRecord>>(&state_dir.join("boxes.json")),
-            root_unread: present_but_unreadable::<Value>(&state_dir.join("settings.json")),
+            settings_unread: present_but_unreadable::<Value>(&state_dir.join("settings.json")),
         })
     }
 
     /// Whether the phone paired as `device_id` reaches the scope `raw_id`. A
-    /// scope no longer opted in reaches no phone. `Err` for a box or root
-    /// whose file cannot be read right now: not known, so not "no".
+    /// scope no longer opted in reaches no phone. `Err` for a box, root or
+    /// assistant whose file cannot be read right now: not known, so not "no".
     pub fn reaches(&self, raw_id: &str, device_id: &str) -> Result<bool, String> {
         if let Some(devices) = self.scopes.get(raw_id) {
             return Ok(device_listed(devices.as_deref(), device_id));
@@ -1047,7 +1124,7 @@ impl ScopeAccess {
         if self.boxes_unread && raw_id.starts_with("box:") {
             return Err("boxes.json cannot be read".into());
         }
-        if self.root_unread && is_root_scope_id(raw_id) {
+        if self.settings_unread && (is_root_scope_id(raw_id) || is_assistant_scope_id(raw_id)) {
             return Err("settings.json cannot be read".into());
         }
         Ok(false)
@@ -1140,6 +1217,31 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
     }
 }
 
+/// The launch an assistant-scope tab must carry to be listed, or `None` for a
+/// record the scope does not keep: the strict `assistant` block of an offered
+/// profile (a bad model fails), a plain agent tab (no local-model launch, sign-in,
+/// cloud session or attach) running that profile's binary, a uuid-shaped
+/// `sessionId`, and a working folder that is exactly `work/<sessionId>`. The
+/// sidecar reads the session file raw, past `terminal_service`'s sanitiser, so
+/// the rule is repeated here (`assistant::record_launch` is the same one on a
+/// loaded `TabEntry`).
+fn assistant_chat(tab: &SavedTab, roots: &[PathBuf]) -> Option<crate::services::assistant::AssistantLaunch> {
+    use crate::services::assistant::{validate_launch, AssistantLaunch};
+    let launch: AssistantLaunch = serde_json::from_value(tab.assistant.clone()?).ok()?;
+    validate_launch(&launch).ok()?;
+    let uid = tab.session_id.as_deref().filter(|uid| crate::services::agent_session::is_uuid_shaped(uid))?;
+    let plain = tab.kind == "agent"
+        && tab.cmd == launch.cli.bin()
+        && tab.local_launch.is_none()
+        && !tab.sign_in
+        && !tab.cloud
+        && tab.tmux_attach.is_none();
+    let cwd = Path::new(&tab.cwd).canonicalize().ok()?;
+    let own_folder = roots.first().is_some_and(|work| cwd.parent() == Some(work.as_path()))
+        && cwd.file_name().and_then(|name| name.to_str()) == Some(uid);
+    (plain && own_folder).then_some(launch)
+}
+
 /// Read one scope's saved tabs and join them to the live tmux rows. `None`
 /// when the scope's home directory does not resolve — a scope with no home has
 /// nowhere for an inbox and nothing a tab could be checked against.
@@ -1150,17 +1252,27 @@ fn resolve_scope(
     shells: bool,
     source: ScopeSource,
 ) -> Option<ResolvedProject> {
+    let assistant = source.kind == ScopeKind::Assistant;
     let mut roots: Vec<PathBuf> = Vec::new();
     for (index, raw) in source.roots.iter().enumerate() {
         match raw.canonicalize() {
             Ok(root) => roots.push(root),
+            // The assistant's work folder is made by the first chat's spawn:
+            // until then the scope is listed with no tab, so the phone can
+            // start that chat (a tab cannot sit below a root that is not
+            // there, so none is listed).
+            Err(_) if assistant && index == 0 => {}
             // The home must exist; a member root that does not simply hosts
             // no box tab, exactly as the fence's root list treats it.
             Err(_) if index == 0 => return None,
             Err(_) => {}
         }
     }
-    let root = roots.first()?.clone();
+    let root = match roots.first() {
+        Some(root) => root.clone(),
+        None if assistant => source.roots.first()?.clone(),
+        None => return None,
+    };
     let session_path = state_dir
         .join("sessions")
         .join(project_key(&source.raw_id))
@@ -1185,6 +1297,17 @@ fn resolve_scope(
         // started with — and while the tmux session lives, both reattach.
         let local_agent = tab.kind == "local_agent";
         let agent = tab.kind == "agent" || local_agent;
+        // The assistant scope lists chats and nothing else: a tab with no
+        // valid launch block (a hand-edited or older record) is not one, and
+        // a chat's folder is its own `work/<uid>`.
+        let chat = if assistant {
+            match assistant_chat(&tab, &roots) {
+                Some(chat) => Some(chat),
+                None => continue,
+            }
+        } else {
+            None
+        };
         let eligible_kind = (shells && tab.kind == "shell")
             || (agent && (resumable(&tab) || tab.sign_in || tab.cloud))
             || (local_agent
@@ -1234,7 +1357,7 @@ fn resolve_scope(
                 .filter(|id| TAB_COLORS.contains(id))
                 .map(str::to_string),
             sign_in: agent && tab.sign_in,
-            local_model: local_agent,
+            local_model: local_agent || chat.as_ref().is_some_and(|launch| launch.cli.is_local()),
             worktree: None,
             subagent_worktrees: Vec::new(),
         };
@@ -1246,7 +1369,7 @@ fn resolve_scope(
             cmd: transcript_cmd_of(&tab).to_string(),
             cwd: tab.cwd.clone(),
             since: fresh_since(&tab),
-            local_model: local_agent,
+            local_model: local_agent || chat.as_ref().is_some_and(|launch| launch.cli.is_local()),
         });
     }
     let last_activity = tabs.iter().filter_map(|t| t.public.last_activity).max();
@@ -1707,6 +1830,221 @@ mod tests {
         assert!(!is_root_scope_id("rooted"));
     }
 
+    const CHAT_A: &str = "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10";
+    const CHAT_B: &str = "1c9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a11";
+
+    /// One saved assistant tab: `launch` is the strict block, `cwd` the folder.
+    fn chat_tab(uid: &str, cwd: &Path, launch: serde_json::Value, tmux_tail: &str) -> serde_json::Value {
+        serde_json::json!({
+            "label": "Claude", "cmd": "claude", "cwd": cwd.to_string_lossy(), "kind": "agent",
+            "sessionId": uid, "assistant": launch,
+            "tmuxSession": format!("{}assistant--agent-{tmux_tail}", crate::brand::TMUX_PREFIX),
+        })
+    }
+
+    fn assistant_state(settings: Option<serde_json::Value>, tabs: Vec<serde_json::Value>) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        fs::write(state.join("projects.json"), "[]").expect("projects");
+        if let Some(settings) = settings {
+            fs::write(state.join("settings.json"), settings.to_string()).expect("settings");
+        }
+        let sessions = state.join("sessions").join("assistant");
+        fs::create_dir_all(&sessions).expect("session dir");
+        fs::write(sessions.join("terminals.json"), serde_json::json!({ "tabLayout": tabs }).to_string()).expect("session");
+        dir
+    }
+
+    fn load_assistant(state: &Path) -> Vec<ResolvedProject> {
+        let env = RootEnv { dir: state.join("root"), fenced: || true };
+        Catalog::load_with(state, &[7; 32], &env, &HashMap::new()).expect("catalog").projects
+    }
+
+    /// The chat assistant reaches the phone by its switch and gate alone
+    /// (`assistant_open`), as a scope of its own kind rooted in the work
+    /// folder: listed before its folder exists (so the phone can start the
+    /// first chat), with only the tabs that carry a valid launch and live in
+    /// their own `work/<uid>` folder.
+    #[test]
+    fn the_assistant_scope_is_listed_by_its_gate_alone_and_keeps_only_chats() {
+        let on = serde_json::json!({ "assistant": true });
+        let work = |state: &Path| crate::services::assistant::work_root(state);
+        let valid = serde_json::json!({ "cli": "claude" });
+
+        // Off: the flag unset, or the Mobile switch off, or no settings, or an
+        // unreadable file.
+        for settings in [
+            None,
+            Some(serde_json::json!({})),
+            Some(serde_json::json!({ "assistant": false })),
+            Some(serde_json::json!({ "assistant": true, crate::brand::MOBILE_HOST_KEY: { "assistant_access": false } })),
+        ] {
+            let dir = assistant_state(settings, vec![]);
+            assert!(load_assistant(dir.path()).is_empty());
+        }
+        let dir = assistant_state(None, vec![]);
+        fs::write(dir.path().join("settings.json"), b"{").expect("corrupt");
+        assert!(load_assistant(dir.path()).is_empty());
+
+        // On, no work folder yet: one assistant row, no tab.
+        let dir = assistant_state(Some(on.clone()), vec![]);
+        let listed = load_assistant(dir.path());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].public.kind, ScopeKind::Assistant);
+        assert_eq!(listed[0].public.label, crate::brand::ASSISTANT_NAME);
+        assert_eq!(listed[0].raw_id, "assistant");
+        assert!(listed[0].tabs.is_empty());
+        assert_eq!(listed[0].public.pending_reviews, None);
+        assert_eq!(serde_json::to_value(&listed[0].public).unwrap()["kind"], "assistant");
+
+        // Chats: A is good, the rest are each wrong in one way.
+        let dir = assistant_state(Some(on.clone()), vec![]);
+        let state = dir.path();
+        let (a, b) = (work(state).join(CHAT_A), work(state).join(CHAT_B));
+        fs::create_dir_all(&a).expect("chat a");
+        fs::create_dir_all(&b).expect("chat b");
+        let outside = state.join("elsewhere");
+        fs::create_dir_all(&outside).expect("outside");
+        let mut local = chat_tab(CHAT_A, &a, serde_json::json!({ "cli": "opencode_local", "model": "qwen3:8b" }), "ccccccccc1");
+        local["cmd"] = "opencode".into();
+        let mut shell = chat_tab(CHAT_A, &a, valid.clone(), "ccccccccc2");
+        shell["kind"] = "shell".into();
+        let mut local_launch = chat_tab(CHAT_A, &a, valid.clone(), "ccccccccc3");
+        local_launch["localLaunch"] = serde_json::json!({ "driver": "claude", "model": "m", "args": [] });
+        let mut sign_in = chat_tab(CHAT_A, &a, valid.clone(), "ccccccccc4");
+        sign_in["signIn"] = true.into();
+        let mut wrong_bin = chat_tab(CHAT_A, &a, valid.clone(), "ccccccccc5");
+        wrong_bin["cmd"] = "codex".into();
+        let mut no_block = chat_tab(CHAT_A, &a, valid.clone(), "ccccccccc6");
+        no_block.as_object_mut().unwrap().remove("assistant");
+        let tabs = vec![
+            chat_tab(CHAT_A, &a, valid.clone(), "bbbbbbbbb1"),
+            local,
+            shell,
+            local_launch,
+            sign_in,
+            wrong_bin,
+            no_block,
+            // An unknown key in the block, a bad model, an unoffered cli.
+            chat_tab(CHAT_A, &a, serde_json::json!({ "cli": "claude", "args": ["--x"] }), "ddddddddd1"),
+            chat_tab(CHAT_A, &a, serde_json::json!({ "cli": "claude", "model": "--evil" }), "ddddddddd2"),
+            chat_tab(CHAT_A, &a, serde_json::json!({ "cli": "gemini" }), "ddddddddd3"),
+            // Not uuid-shaped, another chat's folder, a folder elsewhere, a project folder.
+            chat_tab("not-a-uuid", &a, valid.clone(), "eeeeeeeee1"),
+            chat_tab(CHAT_A, &b, valid.clone(), "eeeeeeeee2"),
+            chat_tab(CHAT_A, &outside, valid.clone(), "eeeeeeeee3"),
+            chat_tab(CHAT_A, &work(state), valid.clone(), "eeeeeeeee4"),
+            // A tmux name of another scope.
+            {
+                let mut other = chat_tab(CHAT_B, &b, valid.clone(), "fffffffff1");
+                other["tmuxSession"] = format!("{}p1--agent-fffffffff1", crate::brand::TMUX_PREFIX).into();
+                other
+            },
+            chat_tab(CHAT_B, &b, valid, "bbbbbbbbb2"),
+        ];
+        fs::write(
+            state.join("sessions").join("assistant").join("terminals.json"),
+            serde_json::json!({ "tabLayout": tabs }).to_string(),
+        )
+        .expect("session");
+        let listed = load_assistant(state);
+        assert_eq!(listed.len(), 1);
+        let kept: Vec<_> = listed[0].tabs.iter().map(|t| (t.session_id.as_deref().unwrap(), t.cmd.as_str(), t.local_model)).collect();
+        assert_eq!(kept, [(CHAT_A, "claude", false), (CHAT_A, "opencode", true), (CHAT_B, "claude", false)]);
+        assert!(listed[0].tabs.iter().all(|t| t.public.kind == "agent"));
+        assert_eq!(listed[0].root, work(state).canonicalize().unwrap());
+
+        // A symlinked chat folder that points out is not "below" the work folder.
+        #[cfg(unix)]
+        {
+            let link = work(state).join("1d9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a12");
+            std::os::unix::fs::symlink(&outside, &link).expect("link");
+            let linked = chat_tab("1d9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a12", &link, serde_json::json!({ "cli": "claude" }), "ggggggggg1");
+            let mut tabs = tabs.clone();
+            tabs.push(linked);
+            fs::write(state.join("sessions").join("assistant").join("terminals.json"), serde_json::json!({ "tabLayout": tabs }).to_string()).expect("session");
+            assert_eq!(load_assistant(state)[0].tabs.len(), 3);
+        }
+    }
+
+    /// The raw-JSON gate and `Settings::assistant_phone_open` are one rule:
+    /// every combination of the flag, Debug mode, the explicit marker and the
+    /// Mobile switch, and a value of the wrong type (which fails the typed
+    /// parse, so reads as off, and closes this reader too).
+    #[test]
+    fn the_raw_json_gate_agrees_with_the_typed_settings() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let agree = |settings: serde_json::Value| {
+            fs::write(dir.path().join("settings.json"), settings.to_string()).expect("settings");
+            let typed = serde_json::from_value::<crate::schema::Settings>(settings.clone())
+                .map(|s| s.assistant_phone_open())
+                .unwrap_or(false);
+            assert_eq!(assistant_open(dir.path()), typed, "{settings}");
+            typed
+        };
+        let states = [None, Some(true), Some(false)];
+        let mut opened = 0;
+        for flag in states {
+            for debug in states {
+                for explicit in states {
+                    for access in states {
+                        let mut settings = serde_json::Map::new();
+                        for (key, value) in [("assistant", flag), ("debug", debug), ("experimental_explicit", explicit)] {
+                            if let Some(value) = value {
+                                settings.insert(key.into(), value.into());
+                            }
+                        }
+                        let mut host = serde_json::Map::from_iter([("enabled".to_string(), true.into())]);
+                        if let Some(access) = access {
+                            host.insert("assistant_access".into(), access.into());
+                        }
+                        settings.insert(crate::brand::MOBILE_HOST_KEY.into(), host.into());
+                        opened += usize::from(agree(settings.into()));
+                    }
+                }
+            }
+        }
+        assert!(opened > 0 && opened < 81);
+        // No Mobile block at all.
+        assert!(agree(serde_json::json!({ "assistant": true })));
+        assert!(!agree(serde_json::json!({})));
+        // A profile not yet marked explicit still follows Debug mode.
+        assert!(agree(serde_json::json!({ "debug": true })));
+        assert!(!agree(serde_json::json!({ "debug": true, "experimental_explicit": true })));
+        // Wrong types close both.
+        for bad in [
+            serde_json::json!({ "assistant": "yes" }),
+            serde_json::json!({ "assistant": true, "debug": 1 }),
+            serde_json::json!({ "assistant": true, crate::brand::MOBILE_HOST_KEY: { "assistant_access": "no" } }),
+        ] {
+            assert!(!agree(bad));
+        }
+        // Missing and unreadable files refuse.
+        fs::remove_file(dir.path().join("settings.json")).expect("remove");
+        assert!(!assistant_open(dir.path()));
+    }
+
+    /// A phone-made prompt or schedule is checked against the same gate
+    /// (`phone_origin`): the assistant scope reaches every paired phone while
+    /// open, none once either switch is off, and is unknown (`Err`) while the
+    /// settings file cannot be read. Spellings of its id never reach a project.
+    #[test]
+    fn scope_access_follows_the_assistant_gate() {
+        let dir = assistant_state(Some(serde_json::json!({ "assistant": true })), vec![]);
+        let env = RootEnv { dir: dir.path().join("root"), fenced: || true };
+        let access = ScopeAccess::load_with(dir.path(), &env).expect("access");
+        assert_eq!(access.reaches("assistant", "PHONE"), Ok(true));
+        assert_eq!(access.reaches("Assistant", "PHONE"), Ok(false), "only the scope's own spelling is a scope id");
+        fs::write(dir.path().join("settings.json"), serde_json::json!({ "assistant": true, crate::brand::MOBILE_HOST_KEY: { "assistant_access": false } }).to_string()).expect("off");
+        let access = ScopeAccess::load_with(dir.path(), &env).expect("access");
+        assert_eq!(access.reaches("assistant", "PHONE"), Ok(false));
+        fs::write(dir.path().join("settings.json"), b"{").expect("corrupt");
+        let access = ScopeAccess::load_with(dir.path(), &env).expect("access");
+        assert!(access.reaches("assistant", "PHONE").is_err());
+        assert!(is_assistant_scope_id("assistant") && is_assistant_scope_id(" Assistant ") && !is_assistant_scope_id("assistants"));
+        assert!(valid_opaque_control_domain("assistant"));
+    }
+
     /// A `projects.json` record that takes the chat assistant's id — or root's
     /// in another spelling — is listed by nobody: the catalog has no such
     /// source (until the assistant's own switch lists it), and the record does
@@ -1779,6 +2117,7 @@ mod tests {
             cloud: false,
             args: None,
             launched_at: None,
+            assistant: None,
         };
         assert_eq!(agent_label_of(&tab("release review", "claude")), "Claude");
         assert_eq!(agent_label_of(&tab("Codex", "codex")), "Codex");

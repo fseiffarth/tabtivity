@@ -113,6 +113,13 @@ pub struct CreateTabRequest {
     /// sign-in rides with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<String>,
+    /// A chat of the assistant scope (`docs/assistant_plan.md`, decision 12):
+    /// the opaque launch id `launch-options` listed, which stands for a CLI
+    /// and, for a local one, a model. The scope takes this and nothing else —
+    /// no agent, mode, worktree, cloud, sign-in or local-model field rides
+    /// with it — and no other scope takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<String>,
     pub idempotency_key: String,
 }
 
@@ -158,6 +165,23 @@ impl CreateTabRequest {
                 || self.task.is_some()
                 || self.sign_in.is_some()
                 || self.like_tab.is_some()
+                || self.assistant.is_some()
+            {
+                return false;
+            }
+        }
+        if let Some(id) = &self.assistant {
+            if !agent
+                || id.is_empty()
+                || id.len() > 128
+                || self.agent_id.is_some()
+                || self.mode.is_some()
+                || self.worktree.is_some()
+                || self.cloud.is_some()
+                || self.task.is_some()
+                || self.sign_in.is_some()
+                || self.like_tab.is_some()
+                || self.local.is_some()
             {
                 return false;
             }
@@ -2852,8 +2876,28 @@ mod tests {
             json!({"worktree": "w1"}),
             json!({"cloud": "open"}),
             json!({"sign_in": "default"}),
+            json!({"assistant": "c1"}),
         ] {
             let mut body = json!({"project_id": "p", "kind": "agent", "local": "l1", "idempotency_key": key});
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(!ok(body), "{extra}");
+        }
+        // An assistant chat: agent kind, a bounded id, and nothing else.
+        assert!(ok(json!({"project_id": "p", "kind": "agent", "assistant": "c1", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "shell", "assistant": "c1", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "assistant": "", "idempotency_key": key})));
+        assert!(!ok(json!({"project_id": "p", "kind": "agent", "assistant": "x".repeat(129), "idempotency_key": key})));
+        for extra in [
+            json!({"agent_id": "a"}),
+            json!({"mode": "plan"}),
+            json!({"worktree": "w1"}),
+            json!({"cloud": "open"}),
+            json!({"task": "hi"}),
+            json!({"sign_in": "default"}),
+            json!({"like_tab": "t"}),
+            json!({"local": "l1"}),
+        ] {
+            let mut body = json!({"project_id": "p", "kind": "agent", "assistant": "c1", "idempotency_key": key});
             body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             assert!(!ok(body), "{extra}");
         }

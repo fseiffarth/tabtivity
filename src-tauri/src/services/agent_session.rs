@@ -384,9 +384,16 @@ where
 
 /// Where a scope's Claude keeps its transcripts: `<scope home>/.claude/projects`.
 pub(crate) fn claude_projects_roots(project_id: Option<&str>) -> Vec<PathBuf> {
-    vec![crate::services::agent_home::scope_home(project_id)
+    let mut roots = vec![crate::services::agent_home::scope_home(project_id)
         .join(".claude")
-        .join("projects")]
+        .join("projects")];
+    // The chat assistant's local-Claude chats run in the scope's local-model
+    // home (`assistant.local`), not its cloud one; a chat's uuid is in one of
+    // the two (the phone's Focus view reads the transcript from here).
+    if project_id.is_some_and(|id| crate::storage::project_key(id.trim()).eq_ignore_ascii_case(crate::storage::ASSISTANT_SCOPE)) {
+        roots.push(crate::services::agent_home::local_model_home(project_id).join(".claude").join("projects"));
+    }
+    roots
 }
 
 /// Where a scope's Codex keeps its rollouts: `<scope home>/.codex/sessions`.

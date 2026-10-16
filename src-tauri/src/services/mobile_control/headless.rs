@@ -641,6 +641,10 @@ pub enum CreateRefusal {
     /// a local model, a mode, a sign-in like a tab, or the root console.
     DesktopUnavailable,
     UnknownAgent,
+    /// The assistant service or the scope's gate refused the chat: a fixed
+    /// category (`assistant::Refusal::code`, or `assistant_off`), never text a
+    /// client sent.
+    Assistant(&'static str),
     /// The tab was minted and then taken back out: the spawn failed.
     LaunchFailed(String),
     Persist(String),
@@ -651,6 +655,7 @@ impl CreateRefusal {
         match self {
             Self::DesktopUnavailable => "desktop_unavailable",
             Self::UnknownAgent => "unknown_agent",
+            Self::Assistant(code) => code,
             Self::LaunchFailed(_) => "launch_failed",
             Self::Persist(_) => "persist_failed",
         }
@@ -669,6 +674,53 @@ pub struct HeadlessCreated {
 /// A scope's session file under `state_dir`, as `terminal_service` keys it.
 pub fn session_file(state_dir: &Path, raw_id: &str) -> std::path::PathBuf {
     state_dir.join("sessions").join(storage::project_key(raw_id)).join("terminals.json")
+}
+
+/// The assistant arm of [`create_tab`]: resolve the opaque launch, build the
+/// record with `assistant::new_chat_record` (one path for the desktop command
+/// and this), append it under the session file's lock and start it detached.
+async fn create_chat(
+    state_dir: &Path,
+    host_key: &[u8],
+    project: &ResolvedProject,
+    request: &CreateTabRequest,
+    choices: &[super::assistant::Choice],
+    launch: &HeadlessLaunch,
+) -> Result<HeadlessCreated, CreateRefusal> {
+    let (Some(handle), true, CreateTabKind::Agent) =
+        (request.assistant.as_deref(), project.public.kind == ScopeKind::Assistant, &request.kind)
+    else {
+        return Err(CreateRefusal::UnknownAgent);
+    };
+    // The perimeter again, at the point of use: the catalog that listed the
+    // scope may be a few seconds old.
+    if !super::discovery::assistant_open(state_dir) {
+        return Err(CreateRefusal::Assistant("assistant_off"));
+    }
+    let chosen = super::assistant::resolve(choices, handle).ok_or(CreateRefusal::UnknownAgent)?;
+    let request_hash = key_id(host_key, "request", &[&request.idempotency_key]);
+    let uid = crate::commands::projects::uuid_v4();
+    let record = crate::services::assistant::new_chat_record(state_dir, &chosen, &uid, Some(&request_hash))
+        .map_err(|refusal| CreateRefusal::Assistant(refusal.code()))?;
+    let path = session_file(state_dir, &project.raw_id);
+    let created = crate::services::workspace::create_tab_in(&path, &project.raw_id, record, Some(&request_hash))
+        .map_err(CreateRefusal::Persist)?;
+    let tmux_session = crate::services::workspace::tmux_of(&created.tab)
+        .ok_or_else(|| CreateRefusal::Persist("the owner minted no tmux name".to_string()))?
+        .to_string();
+    if created.existed {
+        return Ok(HeadlessCreated { tmux_session, existed: true });
+    }
+    if let Err(reason) = launch(launch_options(&project.raw_id, &created.tab)).await {
+        let id = crate::services::workspace::tab_id(&created.tab).map(str::to_string);
+        let _ = crate::services::workspace::edit_in(&path, &project.raw_id, |session| {
+            // project-tree-read: ok — the state-dir session file the owner just wrote, keyed by scope id.
+            session.tab_layout.retain(|tab| crate::services::workspace::tab_id(tab) != id.as_deref());
+            Ok(())
+        });
+        return Err(CreateRefusal::LaunchFailed(reason));
+    }
+    Ok(HeadlessCreated { tmux_session, existed: false })
 }
 
 /// The tab record a headless create appends — `buildStaticTabSpec`'s shape:
@@ -735,6 +787,14 @@ pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
 /// through the same filter here (`terminal_service::strip_persisted_env`):
 /// no loader or control variable from a stored layout reaches the spawn.
 pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
+    // The chat assistant's scope trusts nothing of the record but the validated
+    // launch block and the chat's uid: the CLI line, its env and its folder are
+    // rebuilt by `launch_prep`'s assistant gate from `PtyOptions.assistant` and
+    // `TAB_UID`. This seam serves a create, a reopen, an undo-clear relaunch and
+    // the scheduler's relaunch alike, so none of them can feed it `args`/`env`.
+    if super::discovery::is_assistant_scope_id(project_id) {
+        return assistant_launch_options(tab);
+    }
     let mut filtered = tab.clone();
     crate::services::terminal_service::strip_persisted_env(
         &mut filtered,
@@ -784,6 +844,40 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
     }
 }
 
+/// [`launch_options`] for a chat of the assistant scope. A record without a
+/// valid launch (`assistant::record_launch`: strict block, offered profile,
+/// good model, matching `cmd`, uuid `sessionId`) gets `assistant: None`, which
+/// the spawn gate refuses — a plain shell or agent never starts in this scope.
+fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
+    let launch = crate::services::assistant::record_launch(tab);
+    let uid = launch.as_ref().and(tab.session_id.clone());
+    let tmux = crate::services::workspace::tmux_of(tab).unwrap_or_default().to_string();
+    PtyOptions {
+        login: None,
+        id: format!("{LAUNCH_ID_PREFIX}{tmux}"),
+        // The gate rewrites these from the launch; they are only the record's
+        // honest values, never `args`/`env` from the file.
+        cmd: launch.as_ref().map(|l| l.cli.bin().to_string()).unwrap_or_default(),
+        args: Vec::new(),
+        env: uid.map(|uid| HashMap::from([(crate::app_env!("TAB_UID").to_string(), uid)])).unwrap_or_default(),
+        cwd: tab.cwd.clone(),
+        cols: HEADLESS_COLS,
+        rows: HEADLESS_ROWS,
+        local_only: false,
+        sandbox: false,
+        agent: true,
+        project_id: Some(crate::storage::ASSISTANT_SCOPE.to_string()),
+        schedule_target_id: None,
+        remote_host_id: None,
+        tmux_session: Some(tmux),
+        tmux_attach: None,
+        host_bound_uid: None,
+        local_model: false,
+        host_session: false,
+        assistant: launch,
+    }
+}
+
 /// `Create` with no window (headless owner plan, H1b): what the window's
 /// bridge does for a shell or a plain agent tab, done by the owner — the
 /// tab is minted into the scope's session file first (so a window opening
@@ -799,8 +893,18 @@ pub async fn create_tab(
     project: &ResolvedProject,
     request: &CreateTabRequest,
     agents: &[AgentChoice],
+    assistant: &[super::assistant::Choice],
     launch: &HeadlessLaunch,
 ) -> Result<HeadlessCreated, CreateRefusal> {
+    // The chat assistant (decision 12): the one scope that may start with no
+    // window besides a project or box. Its tab is a chat record built by the
+    // assistant service from a launch the phone named by opaque id — the
+    // request's `agent_id`, `mode`, `local` and the rest are not read, and
+    // `launch_shape_ok` already refused a body that carries them. A plain
+    // shell or agent in the scope is refused, and so is a chat anywhere else.
+    if project.public.kind == ScopeKind::Assistant || request.assistant.is_some() {
+        return create_chat(state_dir, host_key, project, request, assistant, launch).await;
+    }
     if request.sign_in.is_some()
         || request.cloud.is_some()
         || request.worktree.is_some()
