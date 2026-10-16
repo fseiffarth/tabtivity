@@ -808,7 +808,7 @@ async fn fetch_raw_from(raw: &str, origin: FetchOrigin) -> Result<(Vec<u8>, Stri
         // against one network round trip, and sharing a client across hops would
         // mean the pin for hop 1 still applied at hop 2.
         let pin = resolve_hop(&url, hop, origin).await?;
-        let client = reader_client(pin.as_ref())?;
+        let client = reader_client(pin.as_ref(), origin)?;
         let resp = client
             .get(url.clone())
             .send()
@@ -1016,6 +1016,15 @@ pub async fn fetch_document_image(raw: &str) -> Result<DocumentImage, String> {
     })
 }
 
+/// Whether a fetch of this origin goes through the environment's proxy
+/// (`HTTP(S)_PROXY`). An agent's fetch never does (`docs/assistant_plan.md`,
+/// decision 15): a proxy resolves the name itself, past the address check and
+/// the pin of [`resolve_hop`]. The user's own reader and document fetches keep
+/// honouring it.
+fn honours_proxy_env(origin: FetchOrigin) -> bool {
+    origin != FetchOrigin::Agent
+}
+
 /// Build the reader's HTTP client.
 ///
 /// Split out so it can be constructed in a unit test: `reqwest` is compiled
@@ -1031,13 +1040,16 @@ pub async fn fetch_document_image(raw: &str) -> Result<DocumentImage, String> {
 /// the OS trust store via `rustls-native-certs`. There is no knob anywhere on
 /// it for ignoring a certificate error.
 ///
+/// `origin` decides the one thing that differs between callers: whether the
+/// `HTTP(S)_PROXY` environment applies ([`honours_proxy_env`]).
+///
 /// `pin` is the `(hostname, addresses)` pair [`resolve_hop`] already checked. It
 /// is what makes that check mean anything: without it the resolver is consulted
 /// a second time when the connection is made, and a hostile authoritative server
 /// answering with a public address for the check and a private one for the
 /// connect walks straight through. This is the DNS-rebinding shape, and a
 /// check-then-connect gate that does not pin is decoration.
-fn reader_client(pin: Option<&(String, Vec<SocketAddr>)>) -> Result<reqwest::Client, String> {
+fn reader_client(pin: Option<&(String, Vec<SocketAddr>)>, origin: FetchOrigin) -> Result<reqwest::Client, String> {
     crate::services::mail_engine::install_crypto_provider();
     let mut builder = reqwest::Client::builder()
         .user_agent(READER_USER_AGENT)
@@ -1048,6 +1060,9 @@ fn reader_client(pin: Option<&(String, Vec<SocketAddr>)>) -> Result<reqwest::Cli
         // No `Referer`: a reader fetch must not tell the destination which page
         // the URL came from.
         .referer(false);
+    if !honours_proxy_env(origin) {
+        builder = builder.no_proxy();
+    }
     if let Some((host, addrs)) = pin {
         builder = builder.resolve_to_addrs(host, addrs);
     }
@@ -1614,16 +1629,36 @@ mod tests {
     /// they opened a reader tab.
     #[test]
     fn the_reader_client_builds_with_a_crypto_provider_installed() {
-        assert!(reader_client(None).is_ok());
+        assert!(reader_client(None, FetchOrigin::User).is_ok());
         // Twice, because the install is idempotent and a second reader tab must
         // not be the thing that panics.
-        assert!(reader_client(None).is_ok());
+        assert!(reader_client(None, FetchOrigin::User).is_ok());
         // And with a pin, which is the shape every real fetch uses.
         let pin = (
             "example.com".to_string(),
             vec![SocketAddr::from(([203, 0, 113, 10], 443))],
         );
-        assert!(reader_client(Some(&pin)).is_ok());
+        assert!(reader_client(Some(&pin), FetchOrigin::Agent).is_ok());
+    }
+
+    /// Decision 15: an agent's fetch never uses `HTTP(S)_PROXY` (the proxy
+    /// would resolve the name past the address check and the pin); the user's
+    /// own fetches still do. `Client`'s `Debug` lists the proxies it holds, so
+    /// the built clients are inspected, not just the choice function.
+    #[test]
+    fn the_agent_client_ignores_proxies_even_when_the_environment_sets_one() {
+        assert!(!honours_proxy_env(FetchOrigin::Agent));
+        assert!(honours_proxy_env(FetchOrigin::User) && honours_proxy_env(FetchOrigin::Document));
+        let before = std::env::var_os("HTTPS_PROXY");
+        std::env::set_var("HTTPS_PROXY", "http://proxy.invalid:3128");
+        let held = |origin| format!("{:?}", reader_client(None, origin).unwrap()).contains("proxies");
+        let (agent, user, document) = (held(FetchOrigin::Agent), held(FetchOrigin::User), held(FetchOrigin::Document));
+        match before {
+            Some(v) => std::env::set_var("HTTPS_PROXY", v),
+            None => std::env::remove_var("HTTPS_PROXY"),
+        }
+        assert!(!agent, "the agent client holds a proxy");
+        assert!(user && document, "the user's and the document client keep the environment's proxy");
     }
 
     /// The address half of disclosed gap (c). These are the judgements
