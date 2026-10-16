@@ -10011,6 +10011,8 @@ export const enSource = {
   "assistant.chatFallback": "Chat",
   "assistant.deleteChat": "Delete this chat",
   "assistant.loading": "Loading…",
+  "assistant.chatEnded": "This chat has ended: its assistant program quit.",
+  "assistant.restartChat": "Restart chat",
   "assistant.optionsFailed": "Couldn't read the available CLIs: {reason}",
   "assistant.recheck": "Check again",
   "assistant.openAgents": "Open Manage CLIs",

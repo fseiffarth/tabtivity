@@ -107,6 +107,11 @@ interface OverlayAgentState {
    *  removes a key: the chat keeps running once started. */
   assistantStartedKeys: ReadonlySet<string>;
   markAssistantStarted: (key: string) => void;
+  /** Started chats whose process has ended (the CLI quit, and with it the
+   *  pane: a Tabby chat leaves no shell behind). Cleared when it respawns.
+   *  `startAssistantChat` restarts one; the overlay offers the same. */
+  assistantEndedKeys: ReadonlySet<string>;
+  markAssistantEnded: (key: string, ended: boolean) => void;
   /** `scope` is the scope of `key`'s tab: root (the default) or Tabby. */
   markShown: (key: string, scope?: string) => void;
   unmarkShown: (key: string, scope?: string) => void;
@@ -148,6 +153,15 @@ export const useOverlayAgentStore = create<OverlayAgentState>((set) => ({
     set((s) => {
       if (s.assistantStartedKeys.has(key)) return s;
       return { assistantStartedKeys: new Set(s.assistantStartedKeys).add(key) };
+    }),
+  assistantEndedKeys: new Set<string>(),
+  markAssistantEnded: (key, ended) =>
+    set((s) => {
+      if (s.assistantEndedKeys.has(key) === ended) return s;
+      const keys = new Set(s.assistantEndedKeys);
+      if (ended) keys.add(key);
+      else keys.delete(key);
+      return { assistantEndedKeys: keys };
     }),
   markShown: (key, scope = ROOT_SCOPE) =>
     set((s) => {

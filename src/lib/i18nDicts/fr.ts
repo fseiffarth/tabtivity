@@ -9884,6 +9884,8 @@ export const dict: Dict = {
   "assistant.chatFallback": "Conversation",
   "assistant.deleteChat": "Supprimer cette conversation",
   "assistant.loading": "Chargement…",
+  "assistant.chatEnded": "Cette conversation est terminée : son programme assistant s'est arrêté.",
+  "assistant.restartChat": "Relancer la conversation",
   "assistant.optionsFailed": "Impossible de lire les CLI disponibles : {reason}",
   "assistant.recheck": "Vérifier à nouveau",
   "assistant.openAgents": "Ouvrir la gestion des CLI",

@@ -9886,6 +9886,8 @@ export const dict: Dict = {
   "assistant.chatFallback": "Chat",
   "assistant.deleteChat": "Diesen Chat löschen",
   "assistant.loading": "Wird geladen…",
+  "assistant.chatEnded": "Dieser Chat ist beendet: Das Assistenzprogramm wurde beendet.",
+  "assistant.restartChat": "Chat neu starten",
   "assistant.optionsFailed": "Die verfügbaren CLIs konnten nicht gelesen werden: {reason}",
   "assistant.recheck": "Erneut prüfen",
   "assistant.openAgents": "CLIs verwalten öffnen",

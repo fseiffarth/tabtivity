@@ -2,6 +2,7 @@ import { isDetachedWindow } from "./detachedContext";
 import { hydrateScopeFromDisk, refreshWorkspaceScope, useTabsStore, type TabEntry } from "./tabs";
 import { ASSISTANT_SCOPE } from "../lib/assistant";
 import { useOverlayAgentStore } from "./overlayAgent";
+import { onTerminalExit, onTerminalReady } from "../lib/terminal/terminalBus";
 
 /**
  * The **Tabby scope** in the tabs store: the chats of the assistant
@@ -39,15 +40,50 @@ export async function ensureAssistantScopeHydrated(): Promise<boolean> {
   return hydrated();
 }
 
+// A chat's process ends with its CLI: the pane runs the pinned line and nothing
+// after it (no login shell, which would be outside the fence), and the tmux
+// session goes with it. Every started chat watches its PTY so a chat that
+// quit can be started again (`startAssistantChat`), here or from the phone.
+const endWatches = new Map<string, () => void>();
+
+function watchChatEnd(key: string): void {
+  if (endWatches.has(key)) return;
+  const ptyId = `${ASSISTANT_SCOPE}:${key}`;
+  const { markAssistantEnded } = useOverlayAgentStore.getState();
+  const offExit = onTerminalExit(ptyId, () => markAssistantEnded(key, true));
+  const offReady = onTerminalReady(ptyId, () => markAssistantEnded(key, false));
+  endWatches.set(key, () => {
+    offExit();
+    offReady();
+  });
+}
+
+/** Stop watching a chat that was deleted (its pane is gone with it). */
+export function forgetAssistantChat(key: string): void {
+  endWatches.get(key)?.();
+  endWatches.delete(key);
+  useOverlayAgentStore.getState().markAssistantEnded(key, false);
+}
+
 /**
  * Let the chat's CLI run. Hydrating the scope restores chats as records only
  * (`CenterPanel` mounts the pane that owns a PTY just for started chats), so
  * the CLI of a restored chat starts when this is called: the overlay calls it
  * for the chat it shows, and `mountAssistantChat` / `addTabToAssistant` call it
- * for a chat that was just made. Idempotent; ends nothing, ever.
+ * for a chat that was just made. A chat started earlier whose CLI has since
+ * quit is started again (the same pane respawns its PTY; the backend resumes
+ * the conversation), so the phone opening such a chat, or the overlay's Restart,
+ * brings it back. Otherwise idempotent; never ends a running chat.
  */
 export function startAssistantChat(key: string): void {
-  useOverlayAgentStore.getState().markAssistantStarted(key);
+  const store = useOverlayAgentStore.getState();
+  if (store.assistantStartedKeys.has(key) && store.assistantEndedKeys.has(key)) {
+    store.markAssistantEnded(key, false);
+    useTabsStore.getState().relaunchTabInScope(ASSISTANT_SCOPE, key, []);
+    return;
+  }
+  watchChatEnd(key);
+  store.markAssistantStarted(key);
 }
 
 /** The scope's chat tabs, in the order the scope holds them (oldest first). */

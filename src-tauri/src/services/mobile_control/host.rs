@@ -1856,10 +1856,14 @@ async fn activate_project(
     };
     // A named tab must be one of this scope's own; its tmux name is what the
     // window knows it by.
+    let mut chat_running = false;
     let tmux_session = match query.tab.as_deref() {
         None => None,
         Some(tab_id) => match catalog_snapshot.tab(tab_id) {
-            Some((owner, tab)) if owner.raw_id == project.raw_id => Some(tab.tmux_name.clone()),
+            Some((owner, tab)) if owner.raw_id == project.raw_id => {
+                chat_running = tab.public.available;
+                Some(tab.tmux_name.clone())
+            }
             _ => return api_error(StatusCode::NOT_FOUND, "tab_not_found"),
         },
     };
@@ -1870,7 +1874,7 @@ async fn activate_project(
         &DesktopRequest::Activate {
             request_id,
             project_id: project.raw_id.clone(),
-            tmux_session,
+            tmux_session: tmux_session.clone(),
         },
     )
     .await;
@@ -1878,6 +1882,23 @@ async fn activate_project(
         // No window: the registry entry is marked active under the file's
         // lock, and the next window restores it open (headless owner plan,
         // H3). A box or the root console has no such status.
+        // A chat of the assistant's scope the phone is opening: its process
+        // ends with its CLI (no shell is left behind), and no window means
+        // nobody to start it again, so the owner does, detached, like the
+        // create did. One that is running is left alone.
+        if project.public.kind == ScopeKind::Assistant {
+            let Some(tmux) = tmux_session.as_deref() else {
+                return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+            };
+            if !chat_running {
+                if let Err(refusal) = headless::start_chat(&state.config.state_dir, project, tmux, &state.spawner.launch).await {
+                    return headless_create_error(refusal);
+                }
+                catalog_stale(&state);
+                poke_window(&state, Some(&project.raw_id), &["workspace"]);
+            }
+            return (StatusCode::OK, Json(json!({ "status": "activated", "desktop_available": false })));
+        }
         if project.public.kind != ScopeKind::Project {
             return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
         }
@@ -8618,6 +8639,50 @@ mod tests {
             .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(json(&body)["error"], "assistant_off");
+        assert_eq!(recorded.lock().unwrap().len(), 2);
+    }
+
+    /// A chat's process ends with its CLI (no shell is left in the pane), so a
+    /// chat the phone opens may be gone; with no window the owner starts it
+    /// again, from the stored record, detached under the same tmux name.
+    #[tokio::test]
+    async fn opening_an_ended_chat_with_no_window_starts_it_again() {
+        let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = recorded.clone();
+        let host = assistant_host(Arc::new(move |opts: PtyOptions| {
+            sink.lock().unwrap().push(opts);
+            Box::pin(async { Ok(()) })
+        }));
+        let cookie = host.pair_device(&signing_key(61)).await.0;
+        let (project_id, tab_id) = start_assistant_chat(&host, &cookie, "s5a-restart-0123456789abcdef").await;
+        assert_eq!(recorded.lock().unwrap().len(), 1);
+        let activate = |query: &str| request_as("POST", &format!("/api/v1/projects/{project_id}/activate{query}"), &cookie, None);
+
+        // No chat named: nothing to start, and no window to ask.
+        let (status, _, body) = host.send(activate("")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+
+        // The named chat has no live session in this fixture: it is started
+        // again with the first start's options (same tmux name, same uid).
+        let (status, _, body) = host.send(activate(&format!("?tab={tab_id}"))).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["desktop_available"], false);
+        let spawned = recorded.lock().unwrap().clone();
+        assert_eq!(spawned.len(), 2, "started once more");
+        assert_eq!(spawned[1].tmux_session, spawned[0].tmux_session);
+        assert_eq!(spawned[1].env, spawned[0].env);
+        assert_eq!(spawned[1].assistant, spawned[0].assistant);
+        assert_eq!(spawned[1].project_id.as_deref(), Some("assistant"));
+        assert!(!body.contains(crate::brand::TMUX_PREFIX), "tmux name leaked: {body}");
+
+        // The gate closed meanwhile: refused, nothing started.
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ "assistant": true, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "assistant_access": false } }).to_string(),
+        )
+        .unwrap();
+        let (status, _, body) = host.send(activate(&format!("?tab={tab_id}"))).await;
+        assert_ne!(status, StatusCode::OK, "answered: {body}");
         assert_eq!(recorded.lock().unwrap().len(), 2);
     }
 

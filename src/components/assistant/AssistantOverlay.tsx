@@ -5,7 +5,7 @@ import { useExperimental } from "../../lib/experimental";
 import { useT } from "../../lib/i18n";
 import { storageKey } from "../../lib/brand";
 import { useAssistantOverlayStore } from "../../stores/assistantOverlay";
-import { ensureAssistantScopeHydrated, startAssistantChat } from "../../stores/assistantScope";
+import { ensureAssistantScopeHydrated, forgetAssistantChat, startAssistantChat } from "../../stores/assistantScope";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
@@ -92,6 +92,7 @@ function AssistantOverlay() {
 
   const deleteChat = (chat: TabEntry) => {
     useAssistantOverlayStore.getState().forget(chat.key);
+    forgetAssistantChat(chat.key);
     // Like closing any tab: the pane unmounts and its PTY is reaped. The persist
     // host saves the shorter list.
     useTabsStore.getState().removeTabInScope(ASSISTANT_SCOPE, chat.key);
@@ -215,7 +216,9 @@ function ChatRow({
 /** One chat: the cards its CLI may need above, the attach-only view below. */
 function ChatView({ chat, handle }: { chat: TabEntry; handle: AssistantOptionsHandle }) {
   const { options, refresh } = handle;
+  const t = useT();
   const started = useOverlayAgentStore((s) => s.assistantStartedKeys.has(chat.key));
+  const ended = useOverlayAgentStore((s) => s.assistantEndedKeys.has(chat.key));
   const rootConsoleOpen = useRootOverlayStore((s) => s.open);
   const cli = options?.clis.find((c) => c.id === chat.assistant?.cli);
   const block = options && cli ? cliBlock(cli, options) : null;
@@ -245,6 +248,18 @@ function ChatView({ chat, handle }: { chat: TabEntry; handle: AssistantOptionsHa
       {options && cli?.local && !block && (
         <div className="assistant-chat-notes">
           <SearchSetupCard options={options} compact onSaved={() => void refresh()} />
+        </div>
+      )}
+      {started && ended && (
+        <div className="assistant-chat-notes">
+          <div className="settings-card assistant-card" role="status">
+            <p className="settings-help">{t("assistant.chatEnded")}</p>
+            <div className="settings-link-row">
+              <button type="button" className="settings-btn sm primary" onClick={() => startAssistantChat(chat.key)}>
+                {t("assistant.restartChat")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
       <div ref={bodyRef} className="assistant-chat-body">

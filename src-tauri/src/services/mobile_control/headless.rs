@@ -1020,6 +1020,39 @@ pub async fn reopen_tab(
     Ok(Some(HeadlessCreated { tmux_session, existed: false }))
 }
 
+/// `Activate` of one chat of the assistant's scope with no window: a chat's
+/// process (and tmux session) ends with its CLI, and a restored one has none
+/// until asked for, so the owner starts the stored chat again, detached, from
+/// the record's validated launch (`launch_options`, which `launch_prep`'s gate
+/// turns into the pinned line; Claude resumes by its uid). The caller has
+/// checked the chat is not running. Refused when the gate is closed, the tab
+/// is not one of the scope's chats, or its record no longer validates.
+pub async fn start_chat(
+    state_dir: &Path,
+    project: &ResolvedProject,
+    tmux_session: &str,
+    launch: &HeadlessLaunch,
+) -> Result<(), CreateRefusal> {
+    if project.public.kind != ScopeKind::Assistant {
+        return Err(CreateRefusal::UnknownAgent);
+    }
+    if !super::discovery::assistant_open(state_dir) {
+        return Err(CreateRefusal::Assistant("assistant_off"));
+    }
+    let path = session_file(state_dir, &project.raw_id);
+    // project-tree-read: ok — the state-dir session file, keyed by scope id.
+    let session: crate::schema::session::TerminalSession = storage::read_json(&path).map_err(|e| CreateRefusal::Persist(format!("read session: {e}")))?;
+    let record = session
+        .tab_layout
+        .iter()
+        .find(|tab| crate::services::workspace::tmux_of(tab) == Some(tmux_session))
+        .ok_or(CreateRefusal::UnknownAgent)?;
+    if crate::services::assistant::record_launch(record).is_none() {
+        return Err(CreateRefusal::Assistant(crate::services::assistant::Refusal::Config.code()));
+    }
+    launch(launch_options(&project.raw_id, record)).await.map_err(CreateRefusal::LaunchFailed)
+}
+
 /// `Activate` with no window: the registry entry's `status` becomes
 /// `active` under the file's lock (`storage::patch_json`), so the next
 /// window restores the project open. Boxes and the root console have no
