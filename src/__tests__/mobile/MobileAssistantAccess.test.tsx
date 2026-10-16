@@ -177,7 +177,7 @@ describe("Mobile bridge — the chat assistant", () => {
     expect(made).toHaveLength(1);
     // A local launch carries its model.
     await create({ assistant: "assistant-opencode_local:qwen3:8b" });
-    expect(made.at(-1)).toEqual({ cli: "opencode_local", model: "qwen3:8b" });
+    expect(made[made.length - 1]).toEqual({ cli: "opencode_local", model: "qwen3:8b" });
     expect(made).toHaveLength(2);
   });
 
