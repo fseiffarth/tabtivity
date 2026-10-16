@@ -386,6 +386,37 @@ aliases, and anything about where or how credentials are stored.
 
 **Assumes**
 
+- **0.163.0 (2026-10-16), live but outside Tabtivity** — the GitHub
+  release's musl build plus its `codex-code-mode-host`, run in a private tmux
+  with its own `CODEX_HOME` and a local Ollama model, inside a fenced agent
+  tab, `--no-daemon`. `--version` prints `codex-cli 0.163.0`;
+  `resume [SESSION_ID]`, `exec --skip-git-repo-check`, `--no-daemon`, `--oss`,
+  `-m`, `-c`, `--dangerously-bypass-hook-trust` stand and `-a` still takes
+  `on-request | never`. Fed to the parsers as captured (real xterm replay,
+  100 columns): the approval menu (same three labels, `›` on row 1,
+  `Environment: local` over the `$ <command>` title; the command in row 2 now
+  carries an OSC 8 link, which `stripAnsi` drops), the decision lamp (while
+  blocked only `[ ! ]`/`[ . ] Action Required | <action> | <dir>` titles and
+  empty synchronized-update frames), both `/model` steps (unchanged, footer
+  `enter default · s session · esc back`), the mode line (CSI-u Shift+Tab and
+  tmux's backtab toggle the silent default and `Plan mode`). The first-run
+  folder question (`Trust and continue` / `Quit`, footer `enter continue ·
+  esc quit`) is followed in place by the "Hooks need review" menu; its
+  `Review hooks` row opens the hooks page — an unnumbered event table, footer
+  `t trust all · enter review · esc close` (`enter details · esc close` once
+  trusted) — which `readCodexHooksPage` reads as a Trust all / Close card
+  (`t` writes the bare `trusted_hash` tables `codex_hook_state_in` reads).
+  Before it, a Chat-view double-click on `Trust and continue` landed its
+  second click on `Review hooks` and left the session on a page the chat did
+  not show; a dialog that replaces an answered one now takes no click for a
+  moment. Hook payloads as on 0.162.1, Stop adding `stop_hook_active`.
+  Rollout: first line `session_meta` with `session_id` and `cwd`,
+  `turn_context.model`, user prompts as `response_item` user messages,
+  `event_msg` `token_count` totals unchanged. Writer lock: a second
+  `exec resume` exits 1 with "already has an active writer"; after the TUI is
+  SIGKILLed the same resume succeeds and the lock file is gone. A fenced
+  Codex still warns that its own bubblewrap sandbox cannot create user
+  namespaces (the startup `⚠ 1 warning`), as expected inside the fence.
 - **0.162.1 (2026-10-11), live but outside Tabtivity** — npm's linux-x64
   tarball (`vendor/<triple>/bin/` still carries `codex-code-mode-host` beside
   `codex`) run in a private tmux with its own `CODEX_HOME` and a local Ollama
@@ -527,7 +558,7 @@ aliases, and anything about where or how credentials are stored.
   duplicate guard independent of hook trust; duplicates use the documented
   `codex resume` picker (no id). Never delete Codex's writer locks to force a
   resume. Verify this lifecycle again when its thread store changes (last
-  checked live on 0.162.1, with the CLI itself: a SIGKILLed writer releases
+  checked live on 0.163.0, with the CLI itself: a SIGKILLed writer releases
   the lock).
 - Session rollouts at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`
   whose **first line** is `{"type":"session_meta","payload":{"session_id","cwd",…}}`.
@@ -549,7 +580,7 @@ aliases, and anything about where or how credentials are stored.
   (`CODEX_HOOK_EVENTS`; 0.154.0 names those events and no `Notification`, read
   off the binary's strings, not live — so a Codex approval wait is still read
   off its screen). Their payloads carry `session_id` and `hook_event_name`
-  like Claude's (verified live on 0.161.0 and 0.162.1). Trust state is read from
+  like Claude's (verified live on 0.161.0, 0.162.1 and 0.163.0). Trust state is read from
   `[hooks.state."…"]` tables (`trusted_hash`, enabled flag), each hook by
   position, so the new blocks need the same one-time `/hooks` trust.
   Text-appended per event, never reserialized.
@@ -560,7 +591,7 @@ aliases, and anything about where or how credentials are stored.
 - Preface commands `/new /compact /status`; `/status` is *not* available in
   exec mode, so there is no usage recipe.
 - The decision lamp reads Codex's screen off the PTY, and two habits of its
-  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.162.1):
+  ratatui TUI are load-bearing (verified against 0.153.0; live again on 0.163.0):
   - **A blocked Codex is not a quiet Codex.** It keeps repainting its terminal
     title on a ~100ms timer — a braille frame while working, and while blocked
     an `ESC ] 0 ; [ ! ] Action Required BEL` alternating with `[ . ]`. Those
@@ -585,7 +616,7 @@ aliases, and anything about where or how credentials are stored.
     options away from yes/no/allow/cancel wording is what would break it.
 - Mobile: modes `working (silent) | plan | read only | auto | full access`;
   Shift+Tab is sent as CSI-u. Verified against codex-cli 0.151.0; live on
-  0.161.0 and 0.162.1, where Shift+Tab toggles only the silent default and plan (the
+  0.161.0, 0.162.1 and 0.163.0, where Shift+Tab toggles only the silent default and plan (the
   other three are not on its cycle).
 - Mobile's model sheet reads `/model` off the screen, and Codex answers it in
   **two steps** — `Select Model and Effort`, then `Select Reasoning Level for
@@ -594,7 +625,7 @@ aliases, and anything about where or how credentials are stored.
   the highlight marked `›`; the sheet holds until a *different* list is drawn
   and closes when none is. Renumbering, dropping the heading, or drawing the
   next step without clearing the previous one is what would break it. Verified
-  against codex-cli 0.153.4 and live against 0.159.2, 0.161.0 and 0.162.1, whose reasoning step's
+  against codex-cli 0.153.4 and live against 0.159.2, 0.161.0, 0.162.1 and 0.163.0, whose reasoning step's
   footer reads `enter default · s session · esc back`: the Enter the sheet
   sends saves the pick as the default, `s` would keep it to the session.
 
