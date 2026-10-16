@@ -40,6 +40,27 @@ describe("scheduled agent input", () => {
     ]);
   });
 
+  it("closes a dialog the CLI has up over its composer before typing", async () => {
+    // OpenCode's dialogs take typed words instead of the agent: a "yes" from
+    // the Reader landed in a model picker left up, and its Ctrl+A opened
+    // "Connect a provider". The pane's own keys close it first, once.
+    registerScheduledAgentInput("target", {
+      ptyId: "project:agent",
+      ready: () => true,
+      bracketedPaste: () => true,
+      agent: "opencode",
+      recordAuthorizedInput: vi.fn(),
+      dialogCloseKeys: () => ["\u001b"],
+    });
+
+    await submitScheduledAgentMessage("target", "yes", { preface: ["/compact"], settle: () => Promise.resolve() });
+
+    expect(writeMock.mock.calls.map(([, bytes]) => decode(bytes))).toEqual([
+      "\u001b", "\u0001\u000b", "\u001b[200~/compact\u001b[201~", "\r",
+      "\u0001\u000b", "\u001b[200~yes\u001b[201~", "\r",
+    ]);
+  });
+
   it("submits each prefix command on its own, in order, before the message", async () => {
     const record = vi.fn();
     const noteInput = vi.fn();

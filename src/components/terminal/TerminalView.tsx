@@ -34,6 +34,8 @@ import { deliverDrop, insertIntoReader } from "../../lib/terminal/terminalDrop";
 import { isExternalFileDrag, parseDroppedFilePaths } from "../files/importDrop";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
+import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../../mobile-web/src/terminal/openCodeMini";
+import { bufferRows } from "../../../mobile-web/src/terminal/subagentInput";
 import { asleepPty, killAsleepPty, parkPty, takeAsleepPty } from "../../lib/terminal/sleepingPtys";
 import { terminalSpawnKey, terminalViewKind } from "../../lib/terminal/terminalSpawn";
 import type { LoginTarget } from "../../lib/remote/loginTarget";
@@ -927,6 +929,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           // reads as this tab working, but is deliberately NOT counted: the
           // usage recap counts prompts asked, and a slash command is not one.
           noteInput: () => noteUserInput(id),
+          // OpenCode's dialogs (a picker the Reader's model chip left up, say)
+          // take typed words instead of the agent; read off the viewport.
+          dialogCloseKeys: () => (term && isOpenCodeTab(cmd) ? openCodeDialogCloseKeys(bufferRows(term.buffer.active, term.rows)) : []),
         })
       : undefined;
 

@@ -103,6 +103,7 @@ import {
 import { NO_QUESTION_PARTS, questionParts, type QuestionParts } from "../terminal/questionParts";
 import {
   isOpenCodeTab,
+  openCodeDialogCloseKeys,
   openCodePickKeys,
   readOpenCodePicker,
   OPENCODE_MODEL_KEYS,
@@ -864,6 +865,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The bottom rows of the attached screen as drawn: Claude's agent list
    * is walked by them (`subagentInput`). */
   const screenRows = useRef<() => string[]>(() => []);
+  /** The attached screen's rows, the viewport only: whether OpenCode has a
+   * dialog up over its composer (`openCodeDialogCloseKeys`). */
+  const viewportRows = useRef<() => string[]>(() => []);
   const [viewportHeight, setViewportHeight] = useState<number>();
   const [connected, setConnected] = useState(false);
   const [stoppedReason, setStoppedReason] = useState("");
@@ -1421,6 +1425,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     });
     bracketedPaste.current = () => term.modes.bracketedPasteMode === true;
     screenRows.current = () => bufferRows(term.buffer.active);
+    viewportRows.current = () => bufferRows(term.buffer.active, term.rows);
     // The history log needs to know when xterm trims scrollback (row indices
     // shift), and xterm has no public event for it — so this rides the internal
     // buffer list's own trim emitter (`scrollbackTrimEvent`), guarded: when a
@@ -1980,6 +1985,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       write.current = () => false;
       bracketedPaste.current = () => false;
       screenRows.current = () => [];
+      viewportRows.current = () => [];
       clearTimeout(reconnectTimer);
       clearTimeout(ackTimer);
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "detached" }));
@@ -2550,7 +2556,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * composer's Send and the composer chips' slash commands. */
   const sendAgentText = (text: string, prompt?: number) => {
     const bracketed = bracketsAgentMessage(tab.agent_label ?? tab.label, bracketedPaste.current());
-    const message = { writes: agentInputWrites(text, bracketed), prompt, settles: SLASH_COMMAND.test(text) };
+    const typed = agentInputWrites(text, bracketed);
+    // A dialog OpenCode has up over its composer would take the message
+    // instead of the agent: closed first (`openCodeDialogCloseKeys`).
+    const writes = typed.length > 0 && isOpenCodeTab(tab.agent_label ?? tab.label)
+      ? [...openCodeDialogCloseKeys(viewportRows.current()), ...typed]
+      : typed;
+    const message = { writes, prompt, settles: SLASH_COMMAND.test(text) };
     // Behind a command still settling, and behind anything already waiting on
     // one, a message queues; the writes it reports as sent go once it drains.
     if (message.writes.length > 0 && (settleQueue.current.length > 0 || !commandSettled())) {
@@ -3187,10 +3199,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       return () => window.clearTimeout(next);
     }
     // Never drawn: the session may have no `/model` picker at all. Step out of
-    // the way rather than hold an empty sheet over its output.
-    const timer = window.setTimeout(() => setModelSheet(false), MODEL_PICKER_WAIT);
+    // the way rather than hold an empty sheet over its output. OpenCode's was
+    // opened by the chip's own keys, and one this could not read is still up
+    // in the session, where the next message would land in it: closed there.
+    const timer = window.setTimeout(() => {
+      if (openCode) openCodeDialogCloseKeys(viewportRows.current()).forEach((key) => write.current(key));
+      setModelSheet(false);
+    }, MODEL_PICKER_WAIT);
     return () => window.clearTimeout(timer);
-  }, [modelSheet, picker, pickerStep, answered]);
+  }, [modelSheet, picker, pickerStep, answered, openCode]);
   /** A windowed picker says how many rows it is not drawing: the highlight is
    * walked to each one it hides, which scrolls it into view, and back. Only
    * arrow keys — nothing is accepted — and only while nothing was tapped. */
@@ -3384,6 +3401,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     // The dialog is the session's own and still open: close it there too,
     // rather than leaving a modal behind that the reader can no longer see.
     if (picker) type("\u001b");
+    else if (openCode) openCodeDialogCloseKeys(viewportRows.current()).forEach((key) => type(key));
     setModelSheet(false);
     setAnswered(null);
     setReveal(null);
