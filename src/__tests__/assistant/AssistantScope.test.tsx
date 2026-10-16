@@ -61,6 +61,7 @@ import {
   assistantTabs,
   ensureAssistantScopeHydrated,
   mountAssistantChat,
+  startAssistantChat,
 } from "../../stores/assistantScope";
 import { useProjectsStore } from "../../stores/projects";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
@@ -102,7 +103,7 @@ function resetStores() {
     fullscreenGroupId: null,
   });
   useProjectsStore.setState({ projects: [], activeId: "p1", rootDir: "/r" });
-  useOverlayAgentStore.setState({ shownKeys: new Set(), assistantShownKeys: new Set() });
+  useOverlayAgentStore.setState({ shownKeys: new Set(), assistantShownKeys: new Set(), assistantStartedKeys: new Set() });
   useRootOverlayStore.setState({ open: false, installTabs: {} });
 }
 
@@ -310,6 +311,9 @@ describe("the pane layer", () => {
     await act(async () => {
       await ensureAssistantScopeHydrated();
     });
+    // A restored chat runs only once it was shown (or made): the overlay does
+    // this for the chat it shows.
+    act(() => startAssistantChat(assistantTabs()[0].key));
     return assistantTabs()[0];
   }
 
@@ -341,6 +345,38 @@ describe("the pane layer", () => {
     expect(calls.filter(([c]) => c === "root_mcp_status")).toEqual([]);
     view.unmount();
     expect(useOverlayAgentStore.getState().assistantShownKeys.has(chatTab.key)).toBe(false);
+  });
+
+  it("spawns none of the saved chats at hydrate, and each one when it is first shown", async () => {
+    const ids = ["a", "b", "c"];
+    snapshot = {
+      version: 3,
+      tabLayout: ids.map((id, i) => chat(id, `${i}${i}${i}${i}${i}${i}${i}${i}-1111-4111-8111-111111111111`)),
+    };
+    await act(async () => {
+      await ensureAssistantScopeHydrated();
+    });
+    render(<CenterPanel />);
+    await act(async () => {});
+    const chats = assistantTabs();
+    expect(chats).toHaveLength(3);
+    // Three saved chats, three records: not one pane, so not one PTY.
+    expect(document.querySelectorAll('[data-testid^="pane-assistant-"]')).toHaveLength(0);
+    expect(panes.filter((p) => p.scope === ASSISTANT_SCOPE)).toEqual([]);
+
+    // Showing one starts that one.
+    await act(async () => {
+      startAssistantChat(chats[1].key);
+    });
+    const owned = Array.from(document.querySelectorAll('[data-testid^="pane-assistant-"]'));
+    expect(owned.map((n) => n.getAttribute("data-testid"))).toEqual([`pane-${ASSISTANT_SCOPE}-${chats[1].key}-own`]);
+
+    // A chat the backend just made (or the phone opened) mounts started.
+    snapshot = { version: 4, tabLayout: [...(snapshot.tabLayout as SavedTabEntry[]), chat("d", UID_B, { createdVersion: 4 })] };
+    await act(async () => {
+      await mountAssistantChat("d");
+    });
+    expect(document.querySelectorAll('[data-testid^="pane-assistant-"]')).toHaveLength(2);
   });
 
   it("never treats the Tabby scope as the current one, even when the store's scope says so", async () => {

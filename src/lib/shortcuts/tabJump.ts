@@ -4,6 +4,7 @@ import { translate, useI18nStore } from "../i18n";
 import { PROMPTCHART_TAB_CMD, ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { resolveProjectDirectory } from "../../types";
 import { ASSISTANT_SCOPE } from "../assistant";
+import { useAssistantOverlayStore } from "../../stores/assistantOverlay";
 
 /**
  * Show the tab a surface is pointing at: make it the visible tab of its
@@ -26,6 +27,8 @@ import { ASSISTANT_SCOPE } from "../assistant";
  */
 export function jumpToTab(scope: string, key: string) {
   const tabs = useTabsStore.getState();
+  // A Tabby chat is shown by its overlay, which a jump opens on that chat.
+  if (scope === ASSISTANT_SCOPE) useAssistantOverlayStore.getState().openOverlay(key);
   if (!tabs.revealTabInScope(scope, key) && tabs.scope === scope) tabs.setActive(key);
   void bringUpScope(scope);
 }

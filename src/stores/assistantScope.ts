@@ -1,6 +1,7 @@
 import { isDetachedWindow } from "./detachedContext";
 import { hydrateScopeFromDisk, refreshWorkspaceScope, useTabsStore, type TabEntry } from "./tabs";
 import { ASSISTANT_SCOPE } from "../lib/assistant";
+import { useOverlayAgentStore } from "./overlayAgent";
 
 /**
  * The **Tabby scope** in the tabs store: the chats of the assistant
@@ -38,6 +39,17 @@ export async function ensureAssistantScopeHydrated(): Promise<boolean> {
   return hydrated();
 }
 
+/**
+ * Let the chat's CLI run. Hydrating the scope restores chats as records only
+ * (`CenterPanel` mounts the pane that owns a PTY just for started chats), so
+ * the CLI of a restored chat starts when this is called: the overlay calls it
+ * for the chat it shows, and `mountAssistantChat` / `addTabToAssistant` call it
+ * for a chat that was just made. Idempotent; ends nothing, ever.
+ */
+export function startAssistantChat(key: string): void {
+  useOverlayAgentStore.getState().markAssistantStarted(key);
+}
+
 /** The scope's chat tabs, in the order the scope holds them (oldest first). */
 export function assistantTabs(): readonly TabEntry[] {
   return useTabsStore.getState().tabsByScope[ASSISTANT_SCOPE] ?? [];
@@ -59,13 +71,20 @@ export function assistantTabById(tabId: string): TabEntry | undefined {
  * set (closed meanwhile) or in a popout.
  *
  * Does NOT activate the chat anywhere: showing it is `revealAssistantChat`.
+ * It does let the chat's CLI start (`startAssistantChat`).
  */
 export async function mountAssistantChat(tabId: string): Promise<TabEntry | null> {
   if (!(await ensureAssistantScopeHydrated())) return null;
-  const held = assistantTabById(tabId);
-  if (held) return held;
+  await refreshIfMissing(tabId);
+  const tab = assistantTabById(tabId) ?? null;
+  // Mounting is asking for the chat to run (a new chat, the phone opening one).
+  if (tab) startAssistantChat(tab.key);
+  return tab;
+}
+
+async function refreshIfMissing(tabId: string): Promise<void> {
+  if (assistantTabById(tabId)) return;
   await refreshWorkspaceScope(ASSISTANT_SCOPE).catch(() => {});
-  return assistantTabById(tabId) ?? null;
 }
 
 /** Make `key` the active tab of its group in the scope (a no-op for a key the
@@ -91,6 +110,7 @@ export function addTabToAssistant(
 ): void {
   const add = () => {
     const tab = useTabsStore.getState().addTabToScope(ASSISTANT_SCOPE, spec);
+    startAssistantChat(tab.key);
     onOpened?.(tab);
   };
   if (isDetachedWindow() || ASSISTANT_SCOPE in useTabsStore.getState().tabsByScope) {

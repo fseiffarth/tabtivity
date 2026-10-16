@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "../../stores/settings";
+import { useExperimental } from "../../lib/experimental";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
 import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
@@ -136,6 +137,7 @@ function Hint({ help, children }: { help: string; children: ReactNode }) {
 
 export function MobileSettings() {
   const t = useT();
+  const assistantOn = useExperimental("assistant");
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.updateSettings);
   const projects = useProjectsStore((state) => state.projects);
@@ -286,15 +288,18 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models" | "assistant_access", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
         [MOBILE_HOST_KEY]: {
           ...(stored ?? { enabled: false }),
-          // `mail_read` and `local_models` default on, so only their "off" is
-          // stored; the rest default off, so only their "on" is.
-          [gate]: gate === "mail_read" || gate === "local_models" ? (on ? undefined : false) : on || undefined,
+          // `mail_read`, `local_models` and `assistant_access` default on, so
+          // only their "off" is stored; the rest default off, so only their
+          // "on" is.
+          [gate]: gate === "mail_read" || gate === "local_models" || gate === "assistant_access"
+            ? (on ? undefined : false)
+            : on || undefined,
         },
       });
     } catch (reason) {
@@ -675,6 +680,16 @@ export function MobileSettings() {
         disabled={busy}
         onChange={(event) => void setMailGate("local_models", event.target.checked)}
       />
+      {/* Tabby's phone switch. Meaningful only while the experimental switch is
+          on (the backend ignores it otherwise), so the row appears with it. */}
+      {assistantOn && (
+        <ToggleRow
+          label={<><Hint help={t("mobile.assistantGateHelp")}>{t("mobile.assistantGate")}</Hint> <UntestedTag id="settings.assistantPhone" /></>}
+          checked={stored?.assistant_access !== false}
+          disabled={busy}
+          onChange={(event) => void setMailGate("assistant_access", event.target.checked)}
+        />
+      )}
 
       <div className="settings-subheader"><Hint help={t("mobile.projectAccessHelp")}>{t("mobile.projectAccess")}</Hint></div>
       {eligible.length > 0 && <input

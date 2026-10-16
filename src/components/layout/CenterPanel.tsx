@@ -101,6 +101,9 @@ function CenterPanelImpl() {
   // The same for Tabby chat keys (assistant scope): the overlay draws them
   // attach-only; this panel never shows that scope at all (below).
   const assistantShown = useOverlayAgentStore((st) => st.assistantShownKeys);
+  // A restored Tabby chat spawns its CLI only once it was shown or made
+  // (`startAssistantChat`); until then it has no pane here at all.
+  const assistantStarted = useOverlayAgentStore((st) => st.assistantStartedKeys);
   const layout = useTabsStore((s) => s.layout);
   const layoutByScope = useTabsStore((s) => s.layoutByScope);
   const setScope = useTabsStore((s) => s.setScope);
@@ -1091,10 +1094,12 @@ function CenterPanelImpl() {
     () =>
       Object.entries(tabsByScope).flatMap(([s, scopeTabs]) =>
         !inactiveScopes.has(s)
-          ? scopeTabs.map((tab) => ({ tab, scopeKey: s }))
+          ? scopeTabs
+              .filter((tab) => s !== ASSISTANT_SCOPE || assistantStarted.has(tab.key))
+              .map((tab) => ({ tab, scopeKey: s }))
           : [],
       ),
-    [tabsByScope, inactiveScopes],
+    [tabsByScope, inactiveScopes, assistantStarted],
   );
   // For each current-scope group: its active (visible) tab key, and the group id
   // holding each visible tab key. Rebuilt only when the current scope's layout

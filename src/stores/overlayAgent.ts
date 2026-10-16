@@ -100,6 +100,13 @@ interface OverlayAgentState {
    *  right now (`AttachedAgentPane`). `CenterPanel`'s copy of the chat keeps
    *  the PTY and stays hidden regardless; this only keeps it from sleeping. */
   assistantShownKeys: ReadonlySet<string>;
+  /** Tabby chat keys whose CLI may run this session. A restored chat is only a
+   *  saved record until it is first shown (or just made): `CenterPanel` mounts
+   *  the pane that owns its PTY, and so spawns the CLI, only for keys in this
+   *  set, so opening Tabby with many saved chats starts none of them. Nothing
+   *  removes a key: the chat keeps running once started. */
+  assistantStartedKeys: ReadonlySet<string>;
+  markAssistantStarted: (key: string) => void;
   /** `scope` is the scope of `key`'s tab: root (the default) or Tabby. */
   markShown: (key: string, scope?: string) => void;
   unmarkShown: (key: string, scope?: string) => void;
@@ -136,6 +143,12 @@ export const useOverlayAgentStore = create<OverlayAgentState>((set) => ({
     }),
   shownKeys: new Set<string>(),
   assistantShownKeys: new Set<string>(),
+  assistantStartedKeys: new Set<string>(),
+  markAssistantStarted: (key) =>
+    set((s) => {
+      if (s.assistantStartedKeys.has(key)) return s;
+      return { assistantStartedKeys: new Set(s.assistantStartedKeys).add(key) };
+    }),
   markShown: (key, scope = ROOT_SCOPE) =>
     set((s) => {
       const field = scope === ASSISTANT_SCOPE ? "assistantShownKeys" : "shownKeys";

@@ -43,14 +43,11 @@ export function readAssistantLaunch(raw: unknown): AssistantLaunch | undefined {
  * The untested register (`lib/untested`) fails on a row no source file uses,
  * and the skeleton step registers the ids before their surfaces exist. These
  * entries are the rows' call sites until then: the step that adds the real
- * `UntestedTag` call site (S4b: `assistant.overlay`, `assistant.newChat`,
- * `assistant.search`; S5b: `mobile.assistant`) deletes its entry here, and
- * this constant with the last one.
+ * `UntestedTag` call site (S5b: `mobile.assistant`; S4b already did
+ * `assistant.overlay`, `assistant.newChat`, `assistant.search`) deletes its
+ * entry here, and this constant with the last one.
  */
 export const ASSISTANT_PENDING_PILLS = [
-  { untested: "assistant.overlay" },
-  { untested: "assistant.newChat" },
-  { untested: "assistant.search" },
   { untested: "mobile.assistant" },
 ] as const;
 
