@@ -81,7 +81,7 @@ export function ScheduleSheet({ tabId, label, onClose, initialMessage }: { tabId
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [message, setMessage] = useState(initialMessage ?? "");
-  const [kind, setKind] = useState<FormKind>("once");
+  const [kind, setKind] = useState<FormKind>("in");
   const [time, setTime] = useState("09:00");
   const [once, setOnce] = useState(mobileLocalDateTime);
   const [inHours, setInHours] = useState("1");
@@ -134,7 +134,7 @@ export function ScheduleSheet({ tabId, label, onClose, initialMessage }: { tabId
   const reset = () => {
     setEditing(null);
     setMessage("");
-    setKind("once");
+    setKind("in");
     setTime("09:00");
     setOnce(mobileLocalDateTime());
     setInHours("1");
@@ -204,7 +204,7 @@ export function ScheduleSheet({ tabId, label, onClose, initialMessage }: { tabId
       <div className="mobile-schedule-form" aria-disabled={held}>
         <h3>{t(editing ? "agentSchedule.edit" : "agentSchedule.add")}</h3>
         <label>{t("agentSchedule.message")}<textarea rows={4} value={message} disabled={held} onChange={(event) => setMessage(event.target.value)} /></label>
-        <label>{t("agentSchedule.recurrence")}<select value={kind} disabled={held} onChange={(event) => setKind(event.target.value as FormKind)}><option value="once">{t("agentSchedule.once")}</option><option value="in">{t("agentSchedule.in")}</option><option value="daily">{t("agentSchedule.daily")}</option><option value="weekdays">{t("agentSchedule.weekdays")}</option></select></label>
+        <label>{t("agentSchedule.recurrence")}<select value={kind} disabled={held} onChange={(event) => setKind(event.target.value as FormKind)}><option value="in">{t("agentSchedule.in")}</option><option value="once">{t("agentSchedule.once")}</option><option value="daily">{t("agentSchedule.daily")}</option><option value="weekdays">{t("agentSchedule.weekdays")}</option></select></label>
         {kind === "in" ? <div className="mobile-schedule-in">
           <span>{t("agentSchedule.inDelay")} {isUntested("mobile.sheet.scheduleIn") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
           <div><input type="number" inputMode="numeric" min={0} step={1} value={inHours} disabled={held} aria-label={t("agentSchedule.inHours")} onChange={(event) => setInHours(event.target.value)} /><span>{t("agentSchedule.inHoursUnit")}</span><input type="number" inputMode="numeric" min={0} step={1} value={inMinutes} disabled={held} aria-label={t("agentSchedule.inMinutes")} onChange={(event) => setInMinutes(event.target.value)} /><span>{t("agentSchedule.inMinutesUnit")}</span></div>

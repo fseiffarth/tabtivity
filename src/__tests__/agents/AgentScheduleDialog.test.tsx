@@ -87,8 +87,9 @@ describe("AgentScheduleDialog", () => {
     await act(async () => {
       root = render(<AgentScheduleDialog scope="project-1" tab={tab} onClose={() => {}} />);
     });
-    // One-time is what the form opens on, so the calendar is already there.
-    expect(root.getByDisplayValue("One time")).toBeTruthy();
+    // The form opens on "In …"; picking One time brings the calendar.
+    expect(root.getByDisplayValue("In …")).toBeTruthy();
+    fireEvent.change(root.getByDisplayValue("In …"), { target: { value: "once" } });
 
     expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
     expect(document.querySelector(".datetime-field")).toBeTruthy();
@@ -165,7 +166,6 @@ describe("AgentScheduleDialog", () => {
       render(<AgentScheduleDialog scope="project-1" tab={tab} onClose={() => {}} />);
     });
 
-    fireEvent.change(screen.getByDisplayValue("One time"), { target: { value: "in" } });
     fireEvent.change(screen.getByLabelText("Minutes from now"), { target: { value: "30" } });
     expect(screen.getByTestId("agent-schedule-in-at").textContent).toContain("Sends");
     fireEvent.change(document.querySelector(".agent-schedule-form textarea")!, {
@@ -190,7 +190,6 @@ describe("AgentScheduleDialog", () => {
       render(<AgentScheduleDialog scope="project-1" tab={tab} onClose={() => {}} />);
     });
 
-    fireEvent.change(screen.getByDisplayValue("One time"), { target: { value: "in" } });
     fireEvent.change(screen.getByLabelText("Hours from now"), { target: { value: "0" } });
     fireEvent.change(document.querySelector(".agent-schedule-form textarea")!, {
       target: { value: "Check the build" },
