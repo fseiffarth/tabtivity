@@ -5,6 +5,7 @@ import { classifyUnavailable, describeFailure, describeUnavailable, type Unavail
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
 import { arrangeProjects, mergeProjectOrder, scopeCaption } from "../projectOrder";
 import { useRowDrag } from "../rowDrag";
+import { rememberScopeKind } from "../scopeKind";
 import { placeBeside } from "../tabReorder";
 import { Activity } from "./Activity";
 import { SECTION_ICON } from "../glyphs";
@@ -243,7 +244,7 @@ export function Home({ open, openTab, todo, mail }: {
     const timer = window.setTimeout(() => {
       const suffix = view === "search" ? `?view=search&q=${encodeURIComponent(query)}` : "?view=active";
       void api<{ projects: ProjectRow[] }>(`/api/v1/projects${suffix}`, { signal: controller.signal })
-        .then((body) => { setRows(body.projects); setOffline(null); setLoaded(true); })
+        .then((body) => { for (const project of body.projects) rememberScopeKind(project.id, project.kind); setRows(body.projects); setOffline(null); setLoaded(true); })
         .catch((error: unknown) => { if (!controller.signal.aborted) setOffline(classifyUnavailable(error)); });
     }, view === "search" ? 180 : 0);
     return () => {
@@ -365,7 +366,7 @@ export function Home({ open, openTab, todo, mail }: {
         ref={drag.rowRef(project.id)}
       >
         <div className="tab-card-head">
-          <button className="card" onClick={() => open(project.id)}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.git && <GitMark state={project.git} />}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
+          <button className="card" onClick={() => open(project.id)}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.kind === "assistant" && isUntested("mobile.assistant") && <span className="untested">{t("mobile.newTab.untested")}</span>}{project.git && <GitMark state={project.git} />}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
           {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && <button
             className="tab-card-grip"

@@ -10067,6 +10067,20 @@ export const enSource = {
   "assistant.settings.searchHelp": "What a local model searches the web with. Cloud CLIs search on their own and ignore this.",
   "mobile.assistantGate": "{assistant} from the phone",
   "mobile.assistantGateHelp": "A paired phone may open {assistant} chats here. They can search and read the web and see no file, project or setting on this computer. It works with no window open.",
+  "mobile.home.scopeAssistant": "chat assistant",
+  "mobile.assistant.newChat": "New chat",
+  "mobile.assistant.note": "A {assistant} chat can search and read the web. It sees no file, project or setting on the desktop.",
+  "mobile.assistant.loading": "Looking up the CLIs on the desktop…",
+  "mobile.assistant.failed": "The desktop could not list its CLIs. Is its window open?",
+  "mobile.assistant.none": "No chat CLI is installed on the desktop yet.",
+  "mobile.assistant.cloudGroup": "CLIs",
+  "mobile.assistant.localGroup": "Local models",
+  "mobile.assistant.ollamaDown": "Ollama is not running on the desktop, so no local model can start.",
+  "mobile.assistant.notReady": "{label} is not signed in on the desktop.",
+  "mobile.assistant.empty": "No chats yet. Tap ＋ to start one.",
+  "mobile.assistant.notRunning": "Not running. Tap to start it.",
+  "mobile.assistant.starting": "Starting…",
+  "mobile.assistant.startFailed": "The chat did not start. Is the desktop window open?",
 } as const;
 
 /** English with `{app}` filled. Exported solely for the test aggregator

@@ -10,6 +10,8 @@ import { useRowDrag } from "../rowDrag";
 import { applyServerOrder, placeBeside } from "../tabReorder";
 import { ColorSheet } from "./ColorSheet";
 import { NewTabSheet, type NewTabLaunch } from "./NewTabSheet";
+import { NewChatSheet } from "./NewChatSheet";
+import { isAssistantScope, rememberScopeKind } from "../scopeKind";
 import { useProjectInbox } from "../components/ProjectInbox";
 import { PromptsSheet } from "./PromptsSheet";
 import { SubagentsSheet } from "./SubagentsSheet";
@@ -51,6 +53,9 @@ const SORT_LABEL: Record<AgentSort, TranslationKey> = {
  *  and a row hidden for ever would be a tab the reader can neither see nor
  *  close again. */
 const CLOSED_HELD_MS = 30_000;
+
+/** How many one-second reads the wait for a started chat's session lasts. */
+const CHAT_START_TRIES = 25;
 
 /** The line under an agent tab, in the words the desktop's Agents view uses:
  * how many prompts are scheduled and when the first one fires. The desktop
@@ -207,7 +212,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * or the root console has no repo of its own. */
   const [gitOpen, setGitOpen] = useState(false);
   const screenRef = useRef<HTMLElement | null>(null);
-  const filesOffered = !!detail?.files;
+  /** A chat list of the assistant scope, not a project: no folder stands behind
+   * it, so everything that reaches one (files, outbox, inbox, git, schedules,
+   * collected prompts) stays out, and its chats are listed newest first. */
+  const assistantScope = detail?.project.kind === "assistant";
+  const filesOffered = !!detail?.files && !assistantScope;
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project";
   /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
    * host with none (Windows) nothing can be opened, scheduled or sent to from
@@ -280,17 +289,21 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const chooseSort = (next: AgentSort) => { setSort(next); writeChoice("projectTabsSort", next); };
   /** The dropdown under the project's name, which picks the order. */
   const [sortMenu, setSortMenu] = useState(false);
-  const tabs = useMemo(() => sortAgentTabs(detail?.tabs ?? [], sort, (tab) => ({
-    decision: tab.agent_status === "question",
-    working: tab.agent_status === "working",
-    workingAt: tab.working_at,
-    doneAt: tab.done_at,
-  })), [detail?.tabs, sort]);
+  const tabs = useMemo(() => assistantScope
+    // The assistant's chats are a log, not a workspace: the scope holds them
+    // oldest first, the list shows the newest on top, in no other order.
+    ? [...(detail?.tabs ?? [])].reverse()
+    : sortAgentTabs(detail?.tabs ?? [], sort, (tab) => ({
+      decision: tab.agent_status === "question",
+      working: tab.agent_status === "working",
+      workingAt: tab.working_at,
+      doneAt: tab.done_at,
+    })), [detail?.tabs, sort, assistantScope]);
   /** Rearranging by hand is offered under the manual order alone. The other two
    * are computed from what the agents did, so a dropped row would spring back
    * the next time one of them worked — the same rule the desktop's own drag
    * follows. */
-  const canReorder = sort === "native" && tabs.length > 1;
+  const canReorder = sort === "native" && tabs.length > 1 && !assistantScope;
   const pendingKeys = useRef(new Map<string, string>());
   const inFlight = useRef(false);
   /** A move the desktop has not answered yet. The poll is paused across it: the
@@ -301,7 +314,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     if (inFlight.current || moving.current) return Promise.resolve();
     inFlight.current = true;
     return api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(id)}`)
-      .then((next) => { setDetail(withoutClosed(next, closed.current)); setError(""); })
+      .then((next) => { rememberScopeKind(id, next.project.kind); setDetail(withoutClosed(next, closed.current)); setError(""); })
       // Keep the last good view rather than blanking the tab list: on a poll
       // this fast, one dropped packet used to wipe the screen and flash the
       // "Desktop unavailable" notice on every flaky-signal hiccup.
@@ -332,6 +345,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     setOutbox([]);
     setGalleryOpen(false);
     setFileOpen(null);
+    // No folder stands behind the assistant scope, so there is no outbox to read.
+    if (assistantScope || isAssistantScope(id)) return;
     let stopped = false;
     let inflight: AbortController | undefined;
     const poll = () => {
@@ -356,7 +371,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [id]);
+  }, [id, assistantScope]);
   useEffect(() => {
     if (!fileOpen && !galleryOpen) return;
     // The viewer opens over the gallery, so Escape closes the top one first.
@@ -414,7 +429,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   );
   const create = async (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => {
     setCreating(true); setError("");
-    const action = `${kind}:${agent?.id ?? ""}:${mode ?? ""}:${launch?.worktree ?? ""}:${launch?.cloud ?? ""}:${launch?.task ?? ""}:${launch?.sign_in ?? ""}:${launch?.local ?? ""}`;
+    const action = `${kind}:${agent?.id ?? ""}:${mode ?? ""}:${launch?.worktree ?? ""}:${launch?.cloud ?? ""}:${launch?.task ?? ""}:${launch?.sign_in ?? ""}:${launch?.local ?? ""}:${launch?.assistant ?? ""}`;
     const idempotencyKey = pendingKeys.current.get(action) ?? crypto.randomUUID();
     pendingKeys.current.set(action, idempotencyKey);
     try {
@@ -422,6 +437,29 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       pendingKeys.current.delete(action);
       terminal(body.tab, launch?.sign_in ? { signIn: true } : undefined);
     } catch (reason) { setError(describeFailure(reason)); void load(); } finally { setCreating(false); }
+  };
+  /** The chat being started, by tab id: it was restored with the desktop and has
+   * no process yet (the assistant scope starts its chats on demand). */
+  const [startingId, setStartingId] = useState<string | null>(null);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  /** Ask the desktop to start one chat, then wait for its session to be live —
+   * the catalog's `available` — and open it. The wait is the desktop starting
+   * a CLI: seconds, not a poll cycle, so it reads the list itself each second. */
+  const startChat = async (tab: TabRow) => {
+    setStartingId(tab.id); setError("");
+    try {
+      await api(`/api/v1/projects/${encodeURIComponent(id)}/activate?tab=${encodeURIComponent(tab.id)}`, { method: "POST" });
+      for (let attempt = 0; attempt < CHAT_START_TRIES && alive.current; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        if (!alive.current) return;
+        const next = await api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(id)}`);
+        setDetail(withoutClosed(next, closed.current));
+        const row = next.tabs.find((candidate) => candidate.id === tab.id);
+        if (row?.available) { terminal(row); return; }
+      }
+      setError(t("mobile.assistant.startFailed"));
+    } catch (reason) { if (alive.current) setError(describeFailure(reason)); } finally { if (alive.current) setStartingId(null); }
   };
   /** Drop the row here rather than reloading, and remember that it is gone: the
    *  next catalog read can still be carrying the tab that was just closed — the
@@ -541,7 +579,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         text while there is only one tab to order. */}
     <header className="project-header">
       <button className="back" onClick={back}>‹</button>
-      <div className="terminal-title">{tabs.length > 1
+      <div className="terminal-title">{tabs.length > 1 && !assistantScope
         ? <><h1><button
           className="project-title"
           onClick={() => setSortMenu((open) => !open)}
@@ -550,7 +588,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           title={t("mobile.project.sortAria")}
         ><span>{detail?.project.label ?? t("mobile.project.fallbackName")}</span><span className="view-caret" aria-hidden="true" /></button></h1>
           <small>{t("mobile.project.sortedBy", { order: t(SORT_LABEL[sort]) })}</small></>
-        : <h1>{detail?.project.label ?? t("mobile.project.fallbackName")}</h1>}</div>
+        : <h1>{detail?.project.label ?? t("mobile.project.fallbackName")}{assistantScope && isUntested("mobile.assistant") && <small className="untested">{t("mobile.newTab.untested")}</small>}</h1>}</div>
       <div className="project-header-tools">
         {/* What this project has besides its tabs — the agent's files (the
             🖼 the Focus screen carries), Git and the file browser — lives in
@@ -575,12 +613,12 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           onClick={() => setNewTabOpen(true)}
           aria-haspopup="dialog"
           aria-expanded={newTabOpen}
-          aria-label={t(terminalsOffered ? "mobile.newTab.title" : "mobile.projectInbox.send")}
-          title={t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
+          aria-label={assistantScope ? t("mobile.assistant.newChat") : t(terminalsOffered ? "mobile.newTab.title" : "mobile.projectInbox.send")}
+          title={assistantScope ? t("mobile.assistant.newChat") : t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
         ><span aria-hidden="true">＋</span></button>
       </div>
     </header>
-    {sortMenu && tabs.length > 1 && <div className="focus-menu-backdrop" role="presentation" onClick={() => setSortMenu(false)}>
+    {sortMenu && tabs.length > 1 && !assistantScope && <div className="focus-menu-backdrop" role="presentation" onClick={() => setSortMenu(false)}>
       <div className="focus-menu project-menu" role="menu" aria-label={t("mobile.project.sortAria")} onClick={(event) => event.stopPropagation()}>
         {AGENT_SORTS.map((value) => <button key={value} role="menuitemradio" aria-checked={sort === value} onClick={() => { chooseSort(value); setSortMenu(false); }}>
           <span><strong>{t(SORT_LABEL[value])}</strong></span>
@@ -651,8 +689,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             {/* Scheduling lives out here beside the tab, not inside the
                 session: reaching a schedule must not mean attaching a
                 terminal. The ◷ rides right of the model; agent tabs only. */}
-            {tab.kind === "agent" && terminalsOffered && <button className="tab-card-icon accent tab-card-schedule" onClick={() => setScheduleTab({ tab })} aria-haspopup="dialog" aria-expanded={scheduleTab?.tab.id === tab.id} aria-label={t("mobile.project.scheduledFor", { label: tab.label })} title={t("agentPrompts.scheduledHeading")}><span aria-hidden="true">◷</span></button>}
-            {tab.kind === "agent" && isUntested("mobile.project.scheduledInPrompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+            {tab.kind === "agent" && terminalsOffered && !assistantScope && <button className="tab-card-icon accent tab-card-schedule" onClick={() => setScheduleTab({ tab })} aria-haspopup="dialog" aria-expanded={scheduleTab?.tab.id === tab.id} aria-label={t("mobile.project.scheduledFor", { label: tab.label })} title={t("agentPrompts.scheduledHeading")}><span aria-hidden="true">◷</span></button>}
+            {tab.kind === "agent" && !assistantScope && isUntested("mobile.project.scheduledInPrompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           </span>
         </span>
       </div>
@@ -677,7 +715,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       </div>}
       {/* Last, so it lies over the whole card: a tap anywhere the controls above
           have not claimed opens the session. */}
-      <button className="tab-card-open" disabled={!tab.available} onClick={() => terminal(tab)} aria-label={t("mobile.project.openTab", { label: tab.label })} />
+      <button className="tab-card-open" disabled={assistantScope ? startingId !== null : !tab.available} onClick={() => (assistantScope && !tab.available ? void startChat(tab) : terminal(tab))} aria-label={t("mobile.project.openTab", { label: tab.label })} />
+      {assistantScope && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t(startingId === tab.id ? "mobile.assistant.starting" : "mobile.assistant.notRunning")}</small></div>}
       {/* The agent's state is the desktop's bare glyph — ▶ working, ? asking,
           ✓ done — set on the card's left border, where it reads down the list
           at a glance without spending a row's width on a worded pill. */}
@@ -730,10 +769,17 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         : <><span aria-hidden="true">↺</span> {row.label}</>}</button>)}
     </section>}
     {detail?.project.status === "inactive" && <section className="create"><button className="primary" disabled={activating} onClick={() => void activate()}>{t("mobile.project.activate")}</button></section>}
-    <section className="create"><button disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}>◷ {t("agentPrompts.heading")}</button></section>
+    {assistantScope && detail && tabs.length === 0 && <p className="sheet-note" role="status">{t("mobile.assistant.empty")}</p>}
+    {!assistantScope && <section className="create"><button disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}>◷ {t("agentPrompts.heading")}</button></section>}
     {/* The shell and agent buttons that stood here are the header's ＋ now: a
         project with a screenful of tabs put them past the end of the scroll. */}
-    {newTabOpen && detail && <NewTabSheet
+    {newTabOpen && detail && assistantScope && <NewChatSheet
+      projectId={id}
+      busy={creating}
+      onClose={() => setNewTabOpen(false)}
+      onPick={(assistant) => { setNewTabOpen(false); void create("agent", undefined, undefined, { assistant }); }}
+    />}
+    {newTabOpen && detail && !assistantScope && <NewTabSheet
       projectId={id}
       agents={detail.agents}
       shells={detail.shells === true}

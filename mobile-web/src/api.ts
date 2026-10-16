@@ -2,13 +2,15 @@ import { translate, useI18nStore } from "../../src/lib/i18n";
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
 
+/** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
+export type ScopeKind = "project" | "box" | "root" | "assistant";
 /** One row of the phone's list. `kind` says whether it is a project or a box
  * (#31aa) — a box is a scope of its own on the desktop, always "active" here,
  * and a host older than the field sends none, which reads as a project. */
 /** A project's pending git state, the desktop pill's dot: changes not yet added ▸ staged, not committed ▸ committed, not pushed ▸ `.git` missing. Absent when clean. */
 export type GitDot = "dirty" | "staged" | "unpushed" | "broken";
 export interface AgentCounts { working: number; question: number; done: number }
-export interface ProjectRow { id: string; label: string; status: string; kind?: "project" | "box" | "root"; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
+export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
 export type AgentStatus = "working" | "question" | "interrupted" | "done";
 /** The desktop's own one-line summary of a tab's scheduled prompts: what the
  * Agents view prints under an agent tab, so the project overview says the same
@@ -53,7 +55,12 @@ export interface SignInRow { agent_id: string; signed_in?: boolean; account?: st
  * frontier models, which a local model may answer badly. */
 export interface LocalAgentRow { id: string; label: string; caution: boolean }
 export interface LocalLaunchRow { model: string; ready: boolean; agents: LocalAgentRow[] }
-export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow }
+/** One way to start a chat of the assistant scope, under an opaque id the host
+ * derived: a CLI, and for a local one the Ollama model it drives. `ready` false
+ * is a CLI that is not signed in; `default` the desktop's own preselection. */
+export interface AssistantLaunchRow { id: string; label: string; local: boolean; model?: string; ready: boolean; default: boolean }
+export interface AssistantLaunchOptions { ollama_reachable: boolean; launches: AssistantLaunchRow[] }
+export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions }
 
 /** `GET /api/v1/projects/{id}/launch-options` — asked when the ＋ sheet opens.
  * A desktop that predates the route answers 404; that reads as "project folder
@@ -61,7 +68,7 @@ export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow
 export async function getLaunchOptions(projectId: string, signal?: AbortSignal): Promise<LaunchOptions> {
   try {
     const body = await api<Partial<LaunchOptions>>(`/api/v1/projects/${encodeURIComponent(projectId)}/launch-options`, { signal });
-    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}) };
+    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}) };
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404) return { worktrees: [], cloud: [], sign_in: [] };
     throw reason;
