@@ -3,9 +3,11 @@ import { isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
 import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
 import {
+  answerRowKeys,
   freeTextRow,
   freeTextWrites,
   questionTabKeys,
+  readCodexHooksPage,
   readReviewStep,
   readSelectPrompt,
   selectKeys,
@@ -78,8 +80,11 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   const screen = lines.slice(0, inputFrameStart(lines, agentLabel));
   let start = 0;
   screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });
-  const tail = screen.slice(start);
-  const question = tail.length > 0 ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel) : null;
+  // Codex's hooks page replaces the input box, whose `›` its highlighted row
+  // reads as: it is read off the whole screen.
+  const hooksPage = readCodexHooksPage(lines, agentLabel);
+  const tail = hooksPage ? lines : screen.slice(start);
+  const question = hooksPage ?? (tail.length > 0 ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel) : null);
   if (question) {
     const parts = questionParts(tail, question);
     const ask = parts.ask.map((line) => line.text.trimEnd());
@@ -149,7 +154,8 @@ export function modelPickKeys(picker: SelectPrompt, option: SelectOption, agentL
 }
 
 /** The keystrokes that answer `question` with `option`: arrows from the
- * highlighted row, then Enter — what the phone sends for a tapped row.
+ * highlighted row, then Enter — or the row's own keys (`answerRowKeys`) —
+ * what the phone sends for a tapped row.
  *
  * None for Claude Code's free-text row (`freeTextRow`): Enter on its empty
  * field does not pick it, it turns the whole question down ("User declined to
@@ -157,7 +163,7 @@ export function modelPickKeys(picker: SelectPrompt, option: SelectOption, agentL
  * (`answerTextKeys`). */
 export function answerKeys(question: SelectPrompt, option: SelectOption): string[] {
   if (freeTextRow(option)) return [];
-  return selectKeys(question.current, option.index);
+  return answerRowKeys(question, option);
 }
 
 /** The keystrokes that answer `question`'s free-text row with `text` — the

@@ -64,6 +64,12 @@ const LIVE_SETTLE_MS = 250;
 const LIVE_POLL_MS = 1500;
 /** How long an answered dialog stays unclickable while the session redraws. */
 const ANSWER_WAIT_MS = 3000;
+/** How long the dialog an answer brought up stays unclickable. A CLI asks
+ * its next question at once and in the same place — Codex's "Hooks need
+ * review" under its folder question, both with their first row first — so the
+ * second click of a double-click, meant for the answered row, took the new
+ * dialog's first row (`Review hooks`) unseen. */
+const NEXT_DIALOG_HOLD_MS = 600;
 const ENCODER = new TextEncoder();
 
 
@@ -288,6 +294,7 @@ function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
           );
         })}
       </div>
+      {question.options.some((option) => option.keys) && <UntestedTag id="terminal.reader.codexHooksPage" />}
       {!!question.hidden && <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small>}
       {answered && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.answering")}</small>}
     </div>
@@ -735,6 +742,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const [answered, setAnswered] = useState("");
   /** What `answered` waits on: a row's answer, or a walk along the tab row. */
   const [answeredBy, setAnsweredBy] = useState<"row" | "step">("row");
+  /** The dialog drawn in place of an answered one, while it is held
+   * (`NEXT_DIALOG_HOLD_MS`). */
+  const [heldSignature, setHeldSignature] = useState("");
   const [picking, setPicking] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusRequest, setStatusRequest] = useState(0);
@@ -819,16 +829,25 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     if (!answered) return;
     if (live.signature !== answered) {
       setAnswered("");
+      if (live.question) setHeldSignature(live.signature);
       return;
     }
     const stuckTimer = setTimeout(() => setAnswered(""), ANSWER_WAIT_MS);
     return () => clearTimeout(stuckTimer);
   }, [answered, live.signature]);
+  useEffect(() => {
+    if (!heldSignature) return;
+    const holdTimer = setTimeout(() => setHeldSignature(""), NEXT_DIALOG_HOLD_MS);
+    return () => clearTimeout(holdTimer);
+  }, [heldSignature]);
+  /** The dialog on screen takes no answer: one is on its way, or it has just
+   * replaced the one answered. */
+  const held = (!!answered && answered === live.signature) || (!!heldSignature && heldSignature === live.signature);
 
   const answer = (index: number) => {
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
-    if (!question || !option || answered) return;
+    if (!question || !option || answered || held) return;
     const keys = answerKeys(question, option);
     if (keys.length === 0) return;
     setAnswered(live.signature);
@@ -840,7 +859,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const answerText = (index: number, text: string) => {
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
-    if (!question || !option || answered) return;
+    if (!question || !option || answered || held) return;
     const keys = answerTextKeys(question, option, text);
     if (keys.length === 0) return;
     setAnswered(live.signature);
@@ -850,7 +869,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
-    if (!live.question || keys.length === 0 || answered) return;
+    if (!live.question || keys.length === 0 || answered || held) return;
     setAnswered(live.signature);
     setAnsweredBy("step");
     void typePaneKeys(ptyId, keys).catch(() => setAnswered(""));
@@ -1333,7 +1352,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
           <LiveQuestion
             live={shownLive}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
-            busy={!!answered && answered === live.signature}
+            busy={held}
             onAnswer={answer}
             onType={answerText}
             onStep={step}

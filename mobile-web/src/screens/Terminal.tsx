@@ -83,10 +83,12 @@ import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { sessionLimits } from "../terminal/sessionUsage";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import {
+  answerRowKeys,
   freeTextRow,
   freeTextWrites,
   mergeSelectRows,
   questionTabKeys,
+  readCodexHooksPage,
   readReviewStep,
   readSelectPrompt,
   dialogFooterShown,
@@ -300,6 +302,11 @@ const NEWEST_SLACK = 4;
  * opens. Past it the sheet steps aside: the dialog — or the reason there is
  * none — is in the session output, and the arrow keys still answer it. */
 const MODEL_PICKER_WAIT = 6_000;
+/** How long the dialog an answer brought up takes no tap: a CLI asks its next
+ * question at once and in the same place (Codex's "Hooks need review" under
+ * its folder question), and a second tap meant for the answered row took the
+ * new dialog's row unseen. */
+const NEXT_DIALOG_HOLD = 600;
 /** How long after asking a CLI for its sign-in link (`askForLink`) its
  * clipboard copy is taken as the answer. */
 const LINK_WAIT_MS = 5_000;
@@ -756,6 +763,7 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
       onType={(row, text) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onType(option, text); }}
       typeNote={isUntested("mobile.question.freeText") && <em>{t("mobile.focus.untested")}</em>}
     />
+    {prompt.options.some((option) => option.keys) && isUntested("mobile.question.codexHooksPage") && <em>{t("mobile.focus.untested")}</em>}
   </>;
 }
 
@@ -3644,6 +3652,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * choice the session is waiting on, which the transcript cannot carry. */
   const liveTail = useMemo(() => {
     if (!sessionShown) return [];
+    // Codex's hooks page replaces the input box, whose `›` its highlighted
+    // row reads as: it is read off the whole screen.
+    if (readCodexHooksPage(liveScreen, agentLabel)) return liveScreen;
     // On the alternate screen that tail is the frame itself, cut at its input
     // box the way `painted` cuts the scrollback's: a fullscreen agent draws its
     // session there, so a question of its own reaches the phone in no other
@@ -3659,7 +3670,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * itself — its rows, and where on the tail they start — not just that there
    * is one. */
   const liveQuestion = useMemo(
-    () => (liveTail.length > 0 ? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel) : null),
+    () => (liveTail.length > 0
+      ? readCodexHooksPage(liveTail, agentLabel) ?? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel)
+      : null),
     [liveTail, agentLabel],
   );
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
@@ -3746,11 +3759,21 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * its rows stay listed, but nothing can be tapped twice. */
   const [questionSent, setQuestionSent] = useState<{ signature: string; number: number } | null>(null);
   const sentSignature = questionSent?.signature ?? "";
+  /** The dialog drawn in place of an answered one, while it is held
+   * (`NEXT_DIALOG_HOLD`). */
+  const [heldQuestion, setHeldQuestion] = useState("");
+  useEffect(() => {
+    if (!heldQuestion) return;
+    const timer = window.setTimeout(() => setHeldQuestion(""), NEXT_DIALOG_HOLD);
+    return () => window.clearTimeout(timer);
+  }, [heldQuestion]);
+  const questionHeld = !!questionSent || (!!heldQuestion && heldQuestion === questionSignature);
   useEffect(() => {
     if (!sentSignature) return;
     // Redrawn as something else — answered, or moved on: the list is live again.
     if (questionSignature !== sentSignature) {
       setQuestionSent(null);
+      if (questionSignature) setHeldQuestion(questionSignature);
       return;
     }
     // Still the same question after the keys had time to land: the answer did
@@ -3762,9 +3785,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * and Enter the on-screen key row sends, so a tapped row lands exactly as a
    * walked one. Nothing here decides what the options are. */
   const answerQuestion = (option: SelectOption) => {
-    if (!liveQuestion || questionSent) return;
+    if (!liveQuestion || questionHeld) return;
     clearPending();
-    if (!deliver(selectKeys(liveQuestion.current, option.index))) return;
+    if (!deliver(answerRowKeys(liveQuestion, option))) return;
     setQuestionSent({ signature: questionSignature, number: option.number });
   };
   /** Walks a several-question dialog — Claude Code's ←/→, Codex's
@@ -3772,7 +3795,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * sent. No row is pending, but none can be tapped until the session redraws. */
   const stepQuestion = (from: number, to: number) => {
     const keys = questionTabKeys(from, to, questionStepKeys);
-    if (!liveQuestion || questionSent || keys.length === 0) return;
+    if (!liveQuestion || questionHeld || keys.length === 0) return;
     clearPending();
     if (!deliver(keys)) return;
     setQuestionSent({ signature: questionSignature, number: -1 });
@@ -3781,7 +3804,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * under it: the highlight walked there, the words, and Enter where Enter
    * sends them (`freeTextWrites`). */
   const answerQuestionText = (option: SelectOption, text: string) => {
-    if (!liveQuestion || questionSent) return;
+    if (!liveQuestion || questionHeld) return;
     const writes = freeTextWrites(liveQuestion.current, option, text);
     if (writes.length === 0) return;
     clearPending();

@@ -32,6 +32,11 @@ export interface SelectOption {
   label: string;
   /** The note the dialog printed in the row's second column, if any. */
   description?: string;
+  /** The keys that answer this row, sent as they are, on a page whose rows
+   * are its footer's keys rather than a highlight to walk
+   * (`readCodexHooksPage`). Without them a row is answered by walking there
+   * (`answerRowKeys`). */
+  keys?: string[];
 }
 
 export interface SelectPrompt {
@@ -637,6 +642,67 @@ function readUnnumberedPrompt(lines: readonly SelectLineLike[], first: number, c
   };
 }
 
+const CODEX_HOOKS_HEADING = /^\s*Hooks\s*$/u;
+const CODEX_HOOKS_TABLE = /^\s*Event\s{2,}Installed\s{2,}Active\b/u;
+/** The page's footer: `t trust all · enter review · esc close` while hooks
+ * wait on a verdict, `enter details · esc close` once none does. */
+const CODEX_HOOKS_FOOTER = /^\s*(?:t (trust all)\s*·\s*)?enter (?:review|details)\s*·\s*esc (close)\s*$/u;
+
+/**
+ * Codex's hooks page (0.163.0): what `Review hooks` on its startup "Hooks need
+ * review" menu opens, and `/hooks`. A table of hook events under its heading,
+ * its highlight on an event row, its answers in the footer:
+ *
+ *     Hooks
+ *     Lifecycle hooks from config and enabled plugins.
+ *
+ *     ⚠ 5 hooks need review before they can run.
+ *
+ *     Event                 Installed   Active      Review      Description
+ *
+ *     PreToolUse            0           0           0           Before a tool executes
+ *   › PostToolUse           1           0           1           After a tool executes
+ *     …
+ *
+ *     t trust all · enter review · esc close
+ *
+ * It has no numbered rows, so a reader showed nothing while the session
+ * waited on it — and from the chat the startup menu's first row, a click away
+ * from its `Trust all and continue`, lands here. Read as a dialog of the
+ * footer's own answers: `t` trusts every hook and `esc` then closes the page
+ * (where `Trust all and continue` would have got to), or `esc` alone. `enter`
+ * opens one event's hooks, a page further down that this does not follow.
+ * Codex tabs only; the whole screen, since the page replaces the input box
+ * and its `›` row reads as one.
+ */
+export function readCodexHooksPage(lines: readonly SelectLineLike[], agentLabel?: string): SelectPrompt | null {
+  if (!/codex/iu.test(agentLabel ?? "")) return null;
+  let footer = lines.length - 1;
+  while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
+  const keys = footer >= 0 ? CODEX_HOOKS_FOOTER.exec(lines[footer].text) : null;
+  if (!keys) return null;
+  let heading = -1;
+  let table = -1;
+  for (let index = footer - 1; index >= 0 && footer - index <= DIALOG_LINES; index -= 1) {
+    if (table < 0 && CODEX_HOOKS_TABLE.test(lines[index].text)) table = index;
+    if (table >= 0 && CODEX_HOOKS_HEADING.test(lines[index].text)) {
+      heading = index;
+      break;
+    }
+  }
+  if (heading < 0) return null;
+  // The rows are the footer's own words, as the CLI printed them.
+  const [, trustAll, close] = keys;
+  const rows = trustAll ? [{ label: trustAll, keys: ["t", "\u001b"] }, { label: close, keys: ["\u001b"] }] : [{ label: close, keys: ["\u001b"] }];
+  const options = rows.map((row, index): SelectOption => ({
+    index,
+    number: index + 1,
+    label: row.label.charAt(0).toUpperCase() + row.label.slice(1),
+    keys: row.keys,
+  }));
+  return { options, current: 0, title: lines[heading].text.trim(), start: table, question: heading, context: heading };
+}
+
 /** What the list on screen *is*, as opposed to where its highlight sits: the
  * heading and the rows. A caller that answered a dialog compares this to tell
  * the list it answered — still painted while the TUI catches up — from the
@@ -724,6 +790,12 @@ export function revealSelectRow(step: SelectStep, prompt: SelectPrompt): number 
  * answered exactly as a walked one. */
 export function selectKeys(current: number, target: number): string[] {
   return [...selectMoveKeys(current, target), "\r"];
+}
+
+/** The keystrokes that answer `prompt` with `option`: the row's own keys when
+ * the page names them (`SelectOption.keys`), else the walk to it. */
+export function answerRowKeys(prompt: SelectPrompt, option: SelectOption): string[] {
+  return option.keys ? [...option.keys] : selectKeys(prompt.current, option.index);
 }
 
 /** Claude Code's free-text row under an agent's question (AskUserQuestion,
