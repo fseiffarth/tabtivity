@@ -564,11 +564,18 @@ fn trust_codex_config(file: &HomeFile, dirs: &[String]) -> io::Result<()> {
     file.write(out.as_bytes())
 }
 
-/// Pure: `text` with every dir of `dirs` trusted; `None` when `text` is not
-/// TOML or `projects` is not a table.
+/// Pure: `text` with every dir of `dirs` trusted and no MCP server; `None` when
+/// `text` is not TOML or `projects` is not a table.
+///
+/// The assistant's tool set is pinned on argv, but Codex merges `-c` tables
+/// into `config.toml` rather than replacing them (`-c mcp_servers={}` leaves a
+/// planted server running; probed against 0.162.1), and `[mcp_servers.<name>]`
+/// gives the model tools of its own. The assistant registers none (its web
+/// lane is not Codex's), so the table is removed at every spawn.
 fn with_codex_trust(text: &str, dirs: &[String]) -> Option<String> {
     use toml_edit::{value, DocumentMut, Item, Table};
     let mut doc: DocumentMut = text.parse().ok()?;
+    doc.remove("mcp_servers");
     if doc.get("projects").is_none() {
         let mut projects = Table::new();
         projects.set_implicit(true);
@@ -867,6 +874,35 @@ mod tests {
         prepare_assistant_home_in(state, false, &other).unwrap();
         assert_eq!(std::fs::read_to_string(home.join(".codex/config.toml")).unwrap(), text);
         assert_eq!(text.matches("[[hooks.SessionStart]]").count(), 1);
+    }
+
+    /// Codex merges `-c mcp_servers={}` into `config.toml` instead of replacing
+    /// it (probed against 0.162.1: the planted server still starts), so the
+    /// only way to keep a server a writer of the home planted away from the
+    /// model is to take the table out at every spawn.
+    #[test]
+    fn a_planted_mcp_server_is_removed_from_the_assistant_homes_codex_config_at_every_spawn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let chat = crate::services::assistant::chat_dir(state, CHAT).unwrap();
+        let home = prepare_assistant_home_in(state, false, &chat).unwrap().dir;
+        let config = home.join(".codex/config.toml");
+        let before = std::fs::read_to_string(&config).unwrap();
+        for planted in [
+            "[mcp_servers.evil]\ncommand = \"/bin/sh\"\nargs = [\"-c\", \"x\"]\n",
+            "mcp_servers = { evil = { url = \"http://127.0.0.1:1/mcp\" } }\n",
+            "[mcp_servers.\"a b\".env]\nK = \"v\"\n",
+        ] {
+            std::fs::write(&config, format!("model = \"gpt-x\"\n{planted}\n{before}")).unwrap();
+            prepare_assistant_home_in(state, false, &chat).unwrap();
+            let after = std::fs::read_to_string(&config).unwrap();
+            assert!(!after.contains("mcp_servers") && !after.contains("evil") && !after.contains("a b"), "{after}");
+            // Everything else stays: another key, the trust entry, the hooks.
+            assert!(after.contains("model = \"gpt-x\""), "{after}");
+            let doc: toml_edit::DocumentMut = after.parse().unwrap();
+            assert_eq!(doc["projects"][chat.to_string_lossy().as_ref()]["trust_level"].as_str(), Some("trusted"));
+            assert_eq!(after.matches("[[hooks.SessionStart]]").count(), 1, "{after}");
+        }
     }
 
     /// Existing keys stay (a signed-in identity, an onboarding flag the user

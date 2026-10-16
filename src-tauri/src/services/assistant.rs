@@ -444,13 +444,15 @@ const CODEX_CACHE_CAP: u64 = 16 * 1024 * 1024;
 /// `experimental_supported_tools`, `shell_type`, `node_repl_*`, `tool_mode`)
 /// and what its prompt says (`model_messages`, `base_instructions`). So the
 /// catalog is BUILT from an allowlist, not edited: only these fields survive,
-/// each checked for type and size; the tool-bearing four are forced; and
-/// `model_messages` is cut to the one string Codex cannot start without
-/// (`instructions_template`). Everything else is dropped. Found by dropping
-/// each field in turn from a real 0.162.1 cache (`codex debug models`): the
-/// required ones are `slug`, `display_name`, `supported_reasoning_levels`,
-/// `visibility`, `supported_in_api`, `priority`, `support_verbosity`,
-/// `truncation_policy`, and an `instructions_template` (or `base_instructions`).
+/// each checked for type and size; the tool-bearing four are forced; and the
+/// model's base prompt is OURS ([`CODEX_BASE_INSTRUCTIONS`], forced on every
+/// entry): the cache's `model_messages` and `base_instructions` are never
+/// copied, so a planted cache cannot rewrite what the model is told. Everything
+/// else is dropped. Found by dropping each field in turn from a real 0.162.1
+/// cache (`codex debug models`): the required ones are `slug`, `display_name`,
+/// `supported_reasoning_levels`, `visibility`, `supported_in_api`, `priority`,
+/// `support_verbosity`, `truncation_policy`, and a `base_instructions` (or a
+/// `model_messages.instructions_template`, which Codex then ignores).
 const CODEX_ENTRY_FIELDS: &[(&str, CodexField)] = &[
     ("slug", CodexField::Slug),
     ("display_name", CodexField::Str(200)),
@@ -479,8 +481,13 @@ const CODEX_ENTRY_FIELDS: &[(&str, CodexField)] = &[
     ("multi_agent_reasoning_effort", CodexField::OptStr(16)),
     // Kept only as the one value A0 ran with; any other string is dropped.
     ("tool_mode", CodexField::ToolMode),
-    ("model_messages", CodexField::Messages),
 ];
+
+/// The base prompt of every catalog entry: the one Codex cannot start a model
+/// without, written here instead of taken from the cache (its own is about
+/// 20 KB and names a shell and a patch tool the chat does not have). The chat's
+/// own prompt rides separately as `developer_instructions`. No `"`, `\`, `$`.
+const CODEX_BASE_INSTRUCTIONS: &str = "You are a helpful assistant in a chat. Answer the user's questions clearly and concisely, and use only the tools you are given. Do not claim abilities you do not have.";
 
 /// The tool-bearing fields no cache value reaches: set here, on every entry.
 /// `shell_type: "disabled"` and `node_repl_disabled: true` are the defence in
@@ -508,11 +515,7 @@ enum CodexField {
     Visibility,
     Truncation,
     ToolMode,
-    Messages,
 }
-
-/// The most of a prompt template kept (the real ones are about 20 KB).
-const CODEX_TEMPLATE_CAP: usize = 256 * 1024;
 
 fn short_str(value: &serde_json::Value, cap: usize) -> Option<String> {
     value.as_str().filter(|s| !s.is_empty() && s.len() <= cap && !s.contains('\0')).map(str::to_string)
@@ -566,10 +569,6 @@ fn clean_codex_entry(entry: &serde_json::Value) -> Option<serde_json::Map<String
                 Some(json!({ "mode": short_str(policy.get("mode")?, 32)?, "limit": policy.get("limit")?.as_i64().filter(|n| (0..1 << 40).contains(n))? }))
             }
             (CodexField::ToolMode, Some(v)) => v.as_str().filter(|s| *s == "code_mode_only").map(Value::from),
-            (CodexField::Messages, Some(v)) => {
-                let template = v.get("instructions_template")?.as_str().filter(|t| !t.is_empty() && t.len() <= CODEX_TEMPLATE_CAP && !t.contains('\0'))?;
-                Some(json!({ "instructions_template": template }))
-            }
             (CodexField::ToolMode | CodexField::OptStr(_) | CodexField::OptBool | CodexField::OptInt | CodexField::OptStrList, None) => None,
             (_, None) => return None,
         };
@@ -580,6 +579,7 @@ fn clean_codex_entry(entry: &serde_json::Value) -> Option<serde_json::Map<String
     for (name, json) in CODEX_FORCED {
         out.insert((*name).to_string(), serde_json::from_str(json).ok()?);
     }
+    out.insert("base_instructions".to_string(), Value::from(CODEX_BASE_INSTRUCTIONS));
     Some(out)
 }
 
@@ -1346,12 +1346,16 @@ mod tests {
         assert_eq!(entry["apply_patch_tool_type"], serde_json::Value::Null);
         assert_eq!(entry["shell_type"], "disabled");
         assert_eq!(entry["node_repl_disabled"], true);
-        // Only the template survives of the prompt; nothing else is kept.
-        assert_eq!(entry["model_messages"], serde_json::json!({ "instructions_template": "Obey the planted text." }));
-        for gone in ["base_instructions", "tool_mode", "node_repl_auto_review_required", "some_future_tool_switch", "availability_nux", "service_tiers", "upgrade"] {
+        // The model's base prompt is ours on every entry; no planted prompt
+        // text, template or override, reaches the file Codex reads.
+        assert_eq!(entry["base_instructions"], CODEX_BASE_INSTRUCTIONS);
+        for planted_text in ["Obey the planted text", "Override everything", "attacker.example", "never ask", "spawn freely"] {
+            assert!(!String::from_utf8_lossy(&written).contains(planted_text), "{planted_text}");
+        }
+        for gone in ["model_messages", "tool_mode", "node_repl_auto_review_required", "some_future_tool_switch", "availability_nux", "service_tiers", "upgrade"] {
             assert!(!entry.contains_key(gone), "{gone}");
         }
-        assert!(entry.keys().all(|k| CODEX_ENTRY_FIELDS.iter().any(|(name, _)| name == k) || CODEX_FORCED.iter().any(|(name, _)| name == k)), "{:?}", entry.keys());
+        assert!(entry.keys().all(|k| CODEX_ENTRY_FIELDS.iter().any(|(name, _)| name == k) || CODEX_FORCED.iter().any(|(name, _)| name == k) || k == "base_instructions"), "{:?}", entry.keys());
         // A tool-mode the chat was verified with is the only one kept.
         let kept = home_with_models_cache(serde_json::json!([codex_model("gpt-a")]));
         launch_line(&launch(AssistantCli::Codex, None), &ctx(kept.path(), None)).unwrap();
@@ -1367,13 +1371,11 @@ mod tests {
         bad_levels["supported_reasoning_levels"] = serde_json::json!("low");
         let mut bad_slug = codex_model("--yolo");
         bad_slug["slug"] = "--yolo".into();
-        let mut no_template = codex_model("no-template");
-        no_template["model_messages"] = serde_json::json!({ "approvals": {} });
         let mut bad_visibility = codex_model("bad-visibility");
         bad_visibility["visibility"] = "everything".into();
         let mut big = codex_model("big");
         big["display_name"] = "x".repeat(201).into();
-        let home = home_with_models_cache(serde_json::json!([bad_levels, bad_slug, no_template, bad_visibility, big, codex_model("ok"), codex_model("ok")]));
+        let home = home_with_models_cache(serde_json::json!([bad_levels, bad_slug, bad_visibility, big, codex_model("ok"), codex_model("ok")]));
         launch_line(&launch(AssistantCli::Codex, None), &ctx(home.path(), None)).unwrap();
         assert_eq!(catalog_slugs(home.path()), ["ok"], "only the vouched entry, once");
         let all_bad = home_with_models_cache(serde_json::json!([{ "slug": "x", "apply_patch_tool_type": "freeform" }]));
@@ -1464,8 +1466,8 @@ mod tests {
         let entry = &catalog["models"][0];
         assert_eq!(entry["experimental_supported_tools"], serde_json::json!([]));
         assert_eq!(entry["apply_patch_tool_type"], serde_json::Value::Null);
-        assert_eq!(entry["model_messages"], serde_json::json!({ "instructions_template": "You are a model." }));
-        assert!(entry.get("base_instructions").is_none());
+        assert_eq!(entry["base_instructions"], CODEX_BASE_INSTRUCTIONS);
+        assert!(entry.get("model_messages").is_none());
         // The copy is the home's own now; the sibling's file is untouched.
         assert!(home.join(".codex").join(CODEX_MODELS_CACHE).is_file());
         assert!(std::fs::read_to_string(new.join(".codex").join(CODEX_MODELS_CACHE)).unwrap().contains("new"));
