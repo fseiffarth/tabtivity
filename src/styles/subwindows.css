@@ -2122,7 +2122,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 }
 .terminal-reader-turn .outbox-post-picture.pending {
   background: color-mix(in srgb, var(--accent) 16%, var(--bg-main));
-  cursor: default;
+  cursor: var(--cur-default, default);
 }
 .terminal-reader-turn .outbox-post-picture img {
   display: block;
