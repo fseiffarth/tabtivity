@@ -172,7 +172,7 @@ const NO_ATTENTION: Record<string, AttentionKind> = {};
 //    choice/permission prompt on its screen. Its own colour because it
 //    is the one state that is about you rather than about the agent.
 //  - interrupted (`--status-interrupted`, solid): you cut the agent's
-//    turn off; it holds until the next turn starts. Like finished, it is
+//    turn off; it holds until the next turn starts or the tab is opened. Like finished, it is
 //    left off the viewed tab, whose screen already says "interrupted".
 // Working wins, and shows on the viewed tab too: it says the tab is still
 // RUNNING, which a screen that has paused scrolling (an agent thinking, a
