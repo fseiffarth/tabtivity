@@ -10073,5 +10073,4 @@ export const dict: Dict = {
   "mobile.project.emptyHint": "＋ Nuova scheda, in basso, apre un agente o una shell.",
   "mobile.project.emptyHintFiles": "＋ in basso invia un file da questo telefono al progetto.",
   "mobile.project.recentlyClosedCount": "Chiuse di recente ({count})",
-  "mobile.project.fabSendFile": "Invia un file",
 };

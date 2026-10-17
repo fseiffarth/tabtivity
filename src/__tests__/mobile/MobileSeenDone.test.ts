@@ -5,7 +5,7 @@
  * anything it cannot trust as "nothing seen".
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { SEEN_DONE_CAP, isUnseenDone, markDoneSeen, parseSeenDone, readSeenDone, withSeen } from "../../../mobile-web/src/seenDone";
+import { SEEN_DONE_CAP, isUnseenDone, markDoneSeen, markInterruptedSeen, parseSeenDone, readSeenDone, readSeenInterrupted, showsStatusBadge, withSeen, withoutResumed } from "../../../mobile-web/src/seenDone";
 import { storageKey } from "../../lib/brand";
 
 beforeEach(() => {
@@ -54,5 +54,27 @@ describe("seen finished tabs", () => {
     expect(parseSeenDone("not json")).toEqual([]);
     expect(parseSeenDone("{\"t1\":5}")).toEqual([]);
     expect(parseSeenDone("[[\"t1\",5],[\"t2\",\"x\"],[3,4],[\"t3\"]]")).toEqual([["t1", 5]]);
+  });
+});
+
+describe("the card's state badge", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("goes once a finished or interrupted tab has been opened, and only then", () => {
+    const done = { id: "t1", agent_status: "done", done_at: 5 };
+    const stopped = { id: "t2", agent_status: "interrupted" };
+    expect(showsStatusBadge([], [], done)).toBe(true);
+    expect(showsStatusBadge([["t1", 5]], [], done)).toBe(false);
+    expect(showsStatusBadge([["t1", 5]], [], { ...done, done_at: 9 })).toBe(true);
+    expect(showsStatusBadge([], [], stopped)).toBe(true);
+    expect(showsStatusBadge([], ["t2"], stopped)).toBe(false);
+    expect(showsStatusBadge([], [], { id: "t3", agent_status: "working" })).toBe(true);
+  });
+
+  it("forgets an interrupted tab once it runs again", () => {
+    markInterruptedSeen("t2");
+    expect(readSeenInterrupted()).toEqual(["t2"]);
+    expect(withoutResumed(["t2"], [{ id: "t2", agent_status: "interrupted" }])).toEqual(["t2"]);
+    expect(withoutResumed(["t2"], [{ id: "t2", agent_status: "working" }])).toEqual([]);
   });
 });

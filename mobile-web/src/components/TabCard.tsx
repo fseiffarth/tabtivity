@@ -68,13 +68,6 @@ export function PromptLines({ tab }: { tab: TabRow }) {
   </div>;
 }
 
-/** The letter a card's tile shows: the agent's initial, `>_` for a shell. A
- * tab whose agent the desktop did not name falls back to its own label's. */
-export function tabInitial(tab: Pick<TabRow, "kind" | "agent_label" | "label">): string {
-  if (tab.kind === "shell") return ">_";
-  return firstGrapheme(tab.agent_label?.trim() || tab.label).toUpperCase();
-}
-
 /** `Intl.Segmenter`, which the app's TS lib does not declare yet. */
 type GraphemeSegmenter = new (locale?: string, options?: { granularity: "grapheme" }) => { segment(text: string): Iterable<{ segment: string }> };
 
@@ -101,8 +94,10 @@ export function firstGrapheme(text: string): string {
  * doing (turn time, PLAN/GOAL, worktree, subagents), then what it was asked.
  * Rename, colour and the rest live behind ⋯ (`moreFor`).
  */
-export function TabCard({ tab, drag, canReorder, terminalsOffered, swiped, closing, moreOpen, scheduleOpen, chat, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
+export function TabCard({ tab, statusShown, drag, canReorder, terminalsOffered, swiped, closing, moreOpen, scheduleOpen, chat, restart, onOpen, onModel, onMore, onSchedule, onSubagents, onClose }: {
   tab: TabRow;
+  /** False once a finished or interrupted tab has been opened here. */
+  statusShown: boolean;
   drag: RowDrag;
   canReorder: boolean;
   terminalsOffered: boolean;
@@ -148,13 +143,13 @@ export function TabCard({ tab, drag, canReorder, terminalsOffered, swiped, closi
     style={color ? { ["--tab-color" as string]: color } as CSSProperties : undefined}
   >
     <div className="tab-card-head">
-      <span className="tab-card-tile" aria-hidden="true">{tabInitial(tab)}</span>
       {/* The card opens the session. A button cannot hold a button, so the
           opener is a sibling stretched over the whole card — head, prompts
           and foot — and the controls that are not it sit above it. */}
       <div className={`card tab-card-main${tab.available ? "" : " unavailable"}`}>
         <span>
           <span className="tab-card-title">
+            {tab.agent_status && statusShown && <AgentStatusMark status={tab.agent_status} />}
             <strong>{tab.label}</strong>
             {/* The model is its own control: a tap opens the session with its
                 model picker already up. A local-model tab's is only shown. */}
@@ -200,9 +195,6 @@ export function TabCard({ tab, drag, canReorder, terminalsOffered, swiped, closi
     {/* Last, so it lies over the whole card: a tap anywhere the controls
         above have not claimed opens the session. */}
     <button className="tab-card-open" disabled={chat ? chat.busy : restart && !tab.available ? restart.busy : !tab.available} onClick={onOpen} aria-label={t("mobile.project.openTab", { label: tab.label })} />
-    {/* The agent's state is the desktop's bare glyph — ▶ working, ? asking,
-        ✓ done — as a badge on the tile's corner. */}
-    {tab.agent_status && <AgentStatusMark status={tab.agent_status} />}
   </div>;
 }
 
@@ -232,10 +224,12 @@ export const TAB_ACTION_LABEL: Record<TabAction, TranslationKey> = {
 
 /** A phone-side file card: a PDF opened from the drawer or a file being
  * marked up. The desktop opens nothing for it, and ✕ only forgets it here. */
-export function FileTabCard({ file, swipeKey, unsent, linked, onOpen, onForget }: {
+export function FileTabCard({ file, swipeKey, swiped, unsent, linked, onOpen, onForget }: {
   file: FileTab;
   /** The card's key, which a swipe closes it by. */
   swipeKey: string;
+  /** A swipe is closing it: it slides out and collapses. */
+  swiped: boolean;
   /** Marks not yet submitted. */
   unsent: number;
   /** The agent tab its markup rounds went to, while it is open. */
@@ -246,7 +240,7 @@ export function FileTabCard({ file, swipeKey, unsent, linked, onOpen, onForget }
   const t = useT();
   const name = file.label ?? file.name;
   const markup = file.from === "outbox" || file.tab !== undefined || unsent > 0;
-  return <div className="tab-card file-tab-card" data-swipe-close={swipeKey}>
+  return <div className={`tab-card file-tab-card${swiped ? " swiped-out" : ""}`} data-swipe-close={swipeKey}>
     <div className="tab-card-head">
       <span className="tab-card-tile file" aria-hidden="true"><FileGlyph kind={file.kind} /></span>
       <div className="card tab-card-main">

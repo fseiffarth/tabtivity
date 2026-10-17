@@ -10202,7 +10202,6 @@ export const enSource = {
   "mobile.project.emptyHint": "＋ New tab below opens an agent or a shell.",
   "mobile.project.emptyHintFiles": "＋ below sends a file from this phone into the project.",
   "mobile.project.recentlyClosedCount": "Recently closed ({count})",
-  "mobile.project.fabSendFile": "Send a file",
 } as const;
 
 /** English with `{app}` filled. Exported solely for the test aggregator

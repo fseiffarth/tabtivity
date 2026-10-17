@@ -675,7 +675,7 @@ export const UNTESTED = {
   "mobile.home.seenDone": { area: "mobile", what: "Home · A finished agent tab leaves Needs you once opened on this phone (from Needs you, the Agents view or its project screen) and comes back when it finishes another turn" },
   "mobile.home.hintDismiss": { area: "mobile", what: "Home · The \"Drag ⠿ to arrange\" line under the projects hides for good on its × or after the first drag" },
   "mobile.project.cardMenu": { area: "mobile", what: "Project · A tab card's ⋯ opens a sheet with Rename, Colour…, Scheduled prompts, Subagents and Close tab; the colour dot and the tap-the-name rename are gone, and ◷ shows only on a tab that has schedules" },
-  "mobile.project.fab": { area: "mobile", what: "Project · \"＋ New tab\" is a floating button above the tab bar (the header's ＋ is gone); \"Send a file\" on a host without tmux; the last card scrolls clear of it" },
+  "mobile.project.fab": { area: "mobile", what: "Project · a round ＋ button (new tab) floats above the tab bar (the header's ＋ is gone); \"Send a file\" on a host without tmux; the last card scrolls clear of it" },
   "mobile.project.hintDismiss": { area: "mobile", what: "Project · The drag and swipe hints sit in one muted line under the cards; its × hides them for good, and each also goes once its gesture has been used" },
   "mobile.setupTitle": { area: "mobile", what: "MobileSetupGuide · Set up Tabtivity Mobile" },
   "mobile.speech.language": { area: "mobile", what: "Terminal · Reader voice-language picker", tested: "2026-09-23" },

@@ -63,9 +63,9 @@ nav button,.keys button { flex:1; }
 .drawer-menu .project-menu-icon { flex:0 0 auto; width:22px; font-size:1.1rem; text-align:center; }
 .drawer-menu .project-menu-count { color:#8fb8ff; font-weight:650; }
 .project-menu-note { margin:2px 6px 0; }
-.cards { display:grid; gap:10px; }
+.cards { display:grid; grid-template-columns:minmax(0,1fr); gap:10px; }
 .card { width:100%; text-align:left; justify-content:space-between; padding:16px; background:rgba(28,31,43,.92); }
-.card span:first-child { display:grid; gap:4px; }
+.card span:first-child { display:grid; gap:4px; min-width:0; overflow-wrap:anywhere; }
 .card-trailing { flex:0 0 auto; gap:10px; }
 .tab-card { position:relative; display:grid; border:1px solid #383c4d; border-radius:11px; background:rgba(28,31,43,.92); }
 .tab-card .card { border:0; background:transparent; }
@@ -118,11 +118,16 @@ nav button,.keys button { flex:1; }
 /* Home's project rows: the grip a quiet column beside the opener. */
 .tab-card.one-row .tab-card-grip { border-left:0; border-radius:0; }
 .tab-card.dragging { opacity:.65; }
-/* A card a right→left swipe is closing slides out the way the finger went
-   while the desktop answers; a refused close drops the class and it slides
-   back. Transform and opacity only — nothing blurred is animated. */
-.tab-card { transition:transform .18s ease-out, opacity .18s ease-out; }
-.tab-card.swiped-out { transform:translateX(-100%); opacity:0; pointer-events:none; }
+/* A card a right→left swipe is closing slides out the way the finger went,
+   then its height collapses so the cards below glide up (`--card-h` is its
+   measured height, set at the swipe: a transition cannot leave `none`). While
+   the desktop answers it stays gone; a refused close drops the class and it
+   slides back. Transform, opacity and height only — nothing blurred. */
+.tab-card { max-height:var(--card-h,none); transition:transform .18s ease-out, opacity .18s ease-out, max-height .2s ease-in-out .14s, margin-bottom .2s ease-in-out .14s; }
+/* Sideways moves reach the card's own drag (`terminal/cardSwipe.ts`); the page keeps the vertical scroll. */
+.project-screen .tab-card { touch-action:pan-y; }
+.tab-card.swiped-out { max-height:0; margin-bottom:-10px; overflow:hidden; transform:translateX(-100%); opacity:0; pointer-events:none; }
+@media (prefers-reduced-motion:reduce) { .tab-card, .tab-card.swiped-out { transition:none; } }
 /* The slot the dropped card would land in, drawn on the card it lands beside.
    An outline rather than a moved card: the list itself does not rearrange until
    the finger lifts, so the line is the whole preview. */
@@ -244,13 +249,15 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
 .project-screen .tab-card-grip > span { position:absolute; right:4px; bottom:4px; display:grid; place-items:center; width:16px; height:16px; line-height:1; transform:rotate(45deg); }
 .project-screen .tab-card:has(.tab-card-grip) .tab-card-prompts { margin-right:26px; }
 .project-screen .tab-card:has(.tab-card-grip) .tab-card-foot { padding-right:26px; }
-/* The state badge: a hexagon on the tile's corner. Taps pass through it. */
-.tab-card > .tab-card-status { position:absolute; top:41px; left:41px; z-index:2; display:grid; place-items:center; width:22px; height:22px; padding:0; border:0; border-radius:0; background:currentColor; clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); font-size:.72rem; line-height:1; pointer-events:none; }
-.tab-card > .tab-card-status::before { content:""; position:absolute; inset:1.5px; background:var(--status-face); clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); }
-.tab-card > .tab-card-status.working { --status-face:#173827; font-size:.56rem; }
-.tab-card > .tab-card-status.question { --status-face:#493b1d; }
-.tab-card > .tab-card-status.done { --status-face:#193a29; }
-.tab-card > .tab-card-status.interrupted { --status-face:#46202a; }
+/* The state badge: a hexagon, on a file card's tile corner or leading an agent card's name. Taps pass through it. */
+.tab-card .tab-card-status { position:absolute; top:38px; left:38px; z-index:2; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:0; background:currentColor; clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); font-size:.72rem; line-height:1; pointer-events:none; }
+/* On an agent card it leads the name (there is no tile to ride on). */
+.tab-card-title > .tab-card-status { position:relative; top:auto; left:auto; flex:0 0 auto; }
+.tab-card .tab-card-status::before { content:""; position:absolute; inset:1.5px; background:var(--status-face); clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); }
+.tab-card .tab-card-status.working { --status-face:#173827; font-size:.56rem; }
+.tab-card .tab-card-status.question { --status-face:#493b1d; }
+.tab-card .tab-card-status.done { --status-face:#193a29; }
+.tab-card .tab-card-status.interrupted { --status-face:#46202a; }
 /* The Activity pill breathes; the working hexagon is drawn only as a
    solid bright line, four of its six edges long (each edge spans 60° seen
    from the centre, so 240°), running around its edge: a conic sweep whose start angle turns
@@ -264,12 +271,12 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
 .agent-status.done .agent-status-glyph { animation:agent-status-pop .5s cubic-bezier(.3,1.6,.5,1) both; }
 .agent-status.interrupted .agent-status-glyph { animation:agent-status-stop .45s cubic-bezier(.3,1.5,.5,1) both; }
 @property --hex-run { syntax:"<angle>"; inherits:false; initial-value:0deg; }
-.tab-card > .tab-card-status.working { --hex-ring:polygon(evenodd,25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%,25% 6.7%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),1.5px 50%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(1.5px + .75*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(100% - 1.5px) 50%,calc(1.5px + .75*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px))); background:none; }
-.tab-card > .tab-card-status.working::before { display:none; }
-.tab-card > .tab-card-status.working::after { content:""; position:absolute; inset:0; background:conic-gradient(from var(--hex-run), transparent 0 120deg, currentColor 0); clip-path:var(--hex-ring); animation:agent-status-hex-run 1.4s linear infinite; }
-.tab-card > .tab-card-status.question { animation:agent-status-hex-pulse 1.6s ease-in-out infinite; }
-.tab-card > .tab-card-status.question::after { content:""; position:absolute; inset:0; background:currentColor; animation:agent-status-hex-glow 1.6s ease-in-out infinite; }
-.tab-card > .tab-card-status.question .agent-status-glyph { animation:none; }
+.tab-card .tab-card-status.working { --hex-ring:polygon(evenodd,25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%,25% 6.7%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),1.5px 50%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(1.5px + .75*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(100% - 1.5px) 50%,calc(1.5px + .75*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px))); background:none; }
+.tab-card .tab-card-status.working::before { display:none; }
+.tab-card .tab-card-status.working::after { content:""; position:absolute; inset:0; background:conic-gradient(from var(--hex-run), transparent 0 120deg, currentColor 0); clip-path:var(--hex-ring); animation:agent-status-hex-run 1.4s linear infinite; }
+.tab-card .tab-card-status.question { animation:agent-status-hex-pulse 1.6s ease-in-out infinite; }
+.tab-card .tab-card-status.question::after { content:""; position:absolute; inset:0; background:currentColor; animation:agent-status-hex-glow 1.6s ease-in-out infinite; }
+.tab-card .tab-card-status.question .agent-status-glyph { animation:none; }
 @keyframes agent-status-breathe { 50% { opacity:.55; } }
 @keyframes agent-status-hex-run { to { --hex-run:360deg; } }
 @keyframes agent-status-hex-pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.12); } }
@@ -279,8 +286,8 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
 @keyframes agent-status-stop { 0% { transform:scale(1.8); opacity:0; } 55% { transform:scale(.85); opacity:1; } 100% { transform:scale(1); } }
 @media (prefers-reduced-motion:reduce) {
   .agent-status .agent-status-glyph { animation:none; }
-  .tab-card > .tab-card-status.working::after,.tab-card > .tab-card-status.question,.tab-card > .tab-card-status.question::after { animation:none; }
-  .tab-card > .tab-card-status.question::after { display:none; }
+  .tab-card .tab-card-status.working::after,.tab-card .tab-card-status.question,.tab-card .tab-card-status.question::after { animation:none; }
+  .tab-card .tab-card-status.question::after { display:none; }
   .tab-card,.project-foot-caret { transition:none; }
 }
 small { color:#9498aa; }
@@ -403,7 +410,7 @@ small { color:#9498aa; }
 .project-activate { margin-bottom:var(--sp-3); }
 .project-activate > button { --o:var(--oct-md); width:100%; min-height:var(--hit); border:0; }
 /* The octagon these screens cut their pieces to, each its own `--o`. */
-.home-switch,.home-switch > button,.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button,.fab-extended::before,.fab-extended::after { clip-path:polygon(var(--o) 0,calc(100% - var(--o)) 0,100% var(--o),100% calc(100% - var(--o)),calc(100% - var(--o)) 100%,var(--o) 100%,0 calc(100% - var(--o)),0 var(--o)); }
+.home-switch,.home-switch > button,.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button,.fab-round::before,.fab-round::after { clip-path:polygon(var(--o) 0,calc(100% - var(--o)) 0,100% var(--o),100% calc(100% - var(--o)),calc(100% - var(--o)) 100%,var(--o) 100%,0 calc(100% - var(--o)),0 var(--o)); }
 /* The four top-level sections. Fixed to the bottom edge so it survives the long
    scroll of a board or a month, on the same `--screen-measure` as `.screen`, and kept under the modal backdrops (z-index 10/12) so an
    open editor still covers it. `.tabbed > .screen` pays for the space it takes
@@ -477,12 +484,14 @@ button.mobile-alert-row { cursor:pointer; }
    as `.screen` so it keeps the board's right edge on a wide window. */
 .todo-fab,.fab { position:fixed; z-index:9; right:max(18px,calc((100vw - var(--screen-measure)) / 2 + 18px)); bottom:calc(86px + max(24px,env(safe-area-inset-bottom))); }
 .todo-fab { width:58px; height:58px; padding:0; border-radius:50%; font-size:1.9rem; line-height:1; box-shadow:0 10px 24px rgba(4,5,9,.55); }
-/* ＋ New tab: the to-do FAB's place and octagon, with its word. Face and
-   shadow are clipped layers, the shadow a static offset copy. */
-.fab-extended { --o:var(--oct-fab); display:flex; align-items:center; gap:var(--sp-2); height:56px; padding:0 22px 0 18px; border:0; background:none; isolation:isolate; font-size:var(--fs-body); font-weight:700; }
-.fab-extended::before,.fab-extended::after { content:""; position:absolute; inset:0; z-index:-1; background:#6c5ce7; }
-.fab-extended::after { z-index:-2; inset:5px 0 -5px; background:rgba(4,5,9,.5); }
-.fab-plus { font-size:1.35rem; line-height:1; }
+/* ＋ New tab: the to-do FAB's place and octagon, icon only (its name is the
+   aria-label). Face and shadow are clipped layers, the shadow a static offset
+   copy. */
+.fab-round { --o:var(--oct-fab); display:grid; place-items:center; width:58px; height:58px; padding:0; border:0; background:none; isolation:isolate; }
+.fab-round::before,.fab-round::after { content:""; position:absolute; inset:0; z-index:-1; background:#6c5ce7; }
+.fab-round::after { z-index:-2; inset:5px 0 -5px; background:rgba(4,5,9,.5); }
+.fab-plus { font-size:2rem; line-height:1; }
+.fab-round > .untested { position:absolute; top:-14px; right:0; margin:0; }
 /* The last card must not end under the button the way it must not end under the
    tab bar; this replaces `.tabbed > .screen`'s allowance rather than adding to
    it, so the two never double up. */

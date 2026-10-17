@@ -72,3 +72,47 @@ export function markDoneSeen(tabId: string, doneAt: number | undefined, storage?
   }
   return next;
 }
+
+const INTERRUPTED_KEY = storageKey("mobile.seenInterrupted");
+
+/** Interrupted tabs this phone has opened. The desktop lets an interrupted tab's
+ * lamp go once its screen is viewed; the phone's card does the same. Unlike a
+ * finished turn there is no timestamp to compare, so a tab leaves the list as
+ * soon as it reports any other state (`withoutResumed`) and its next
+ * interruption shows again. */
+export function readSeenInterrupted(storage?: SeenStorage): ReadonlyArray<string> {
+  try {
+    const parsed: unknown = JSON.parse((storage ?? localStorage).getItem(INTERRUPTED_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeSeenInterrupted(ids: ReadonlyArray<string>, storage?: SeenStorage): ReadonlyArray<string> {
+  try {
+    (storage ?? localStorage).setItem(INTERRUPTED_KEY, JSON.stringify(ids));
+  } catch {
+    // See readSeenDone.
+  }
+  return ids;
+}
+
+export function markInterruptedSeen(tabId: string, storage?: SeenStorage): ReadonlyArray<string> {
+  return writeSeenInterrupted([tabId, ...readSeenInterrupted(storage).filter((id) => id !== tabId)].slice(0, SEEN_DONE_CAP), storage);
+}
+
+/** The list minus every tab that is listed now in a state other than
+ * interrupted — it ran again, so the next interruption is news. Pure. */
+export function withoutResumed(seen: ReadonlyArray<string>, tabs: ReadonlyArray<{ id: string; agent_status?: string }>): ReadonlyArray<string> {
+  const resumed = new Set(tabs.filter((tab) => tab.agent_status !== "interrupted").map((tab) => tab.id));
+  return seen.filter((id) => !resumed.has(id));
+}
+
+/** Whether a tab's card still wears its state badge: a finished or interrupted
+ * one is dropped once this phone has opened it. */
+export function showsStatusBadge(seen: SeenDone, interrupted: ReadonlyArray<string>, tab: { id: string; agent_status?: string; done_at?: number }): boolean {
+  if (tab.agent_status === "done") return isUnseenDone(seen, tab);
+  if (tab.agent_status === "interrupted") return !interrupted.includes(tab.id);
+  return true;
+}

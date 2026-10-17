@@ -18,7 +18,8 @@ import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { FileTabCard, TAB_ACTION_LABEL, TabCard, tabActions, type TabAction } from "../components/TabCard";
 import { OptionSheet } from "../components/OptionSheet";
-import { markDoneSeen } from "../seenDone";
+import { clearCardDrag, installCardSwipe } from "../terminal/cardSwipe";
+import { markDoneSeen, markInterruptedSeen, readSeenDone, readSeenInterrupted, showsStatusBadge, withoutResumed, writeSeenInterrupted } from "../seenDone";
 import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab } from "../components/OutboxViewer";
 import { ProjectFiles, asViewerFile } from "../components/ProjectFiles";
@@ -80,6 +81,21 @@ function withoutClosed(detail: ProjectDetail, closed: Map<string, number>): Proj
     : { ...detail, tabs: detail.tabs.filter((row) => !closed.has(row.id)) };
 }
 
+/** How long a swiped card takes to leave (`.tab-card.swiped-out`), slide and
+ *  collapse together. */
+const SWIPE_OUT_MS = 360;
+
+/** A card's own height, pinned before it is swiped out so the collapse has a
+ *  number to run from (a transition cannot start at `none`); the read forces
+ *  the style in before the class that animates it. */
+function pinHeight(card: HTMLElement) {
+  card.style.setProperty("--card-h", `${card.getBoundingClientRect().height}px`);
+}
+function unpinHeight(card: HTMLElement) {
+  card.style.removeProperty("--card-h");
+  clearCardDrag(card);
+}
+
 /** A phone-side file card's key, for React and for the swipe that closes it;
  * prefixed so it can never read as a session's id. */
 function fileTabKey(file: FileTab): string {
@@ -109,6 +125,10 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   /** The header's ＋: what to open next — a shell, or one of the desktop's
    * agents in one of its modes. */
   const [newTabOpen, setNewTabOpen] = useState(false);
+  /** Which finished / interrupted tabs this phone has opened: their card
+   *  badge goes, as the desktop's lamp does (`seenDone.ts`). */
+  const [seenDone, setSeenDone] = useState(() => readSeenDone());
+  const [seenInterrupted, setSeenInterrupted] = useState(() => readSeenInterrupted());
   /** The ＋ sheet's "Send a file": its picker and a row per pick. */
   const projectInbox = useProjectInbox(id);
   /** The agent tab being renamed. The desktop owns the tab layout, so the sheet
@@ -172,7 +192,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * the swipe: the listener below outlives the render that installed it, and
    * would otherwise close against that render's list. Set further down, once
    * the list and `close` are in hand. */
-  const swipeClose = useRef<(card: Element) => void>(() => {});
+  const swipeClose = useRef<(card: HTMLElement) => boolean>(() => false);
   useEffect(() => {
     const host = screenRef.current;
     if (drawerOpen || !host) return;
@@ -181,12 +201,16 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     // from the left edge too; right→left over a card closes it.
     return installFocusSwipe(host, {
       onSwipeRight: () => { if (drawerOffered) setDrawerOpen(true); },
-      onSwipeLeft: (_start, target) => {
-        const card = target?.closest("[data-swipe-close]");
-        if (card) swipeClose.current(card);
-      },
+      // A leftward drag over a card closes it (`installCardSwipe`, below), so a
+      // leftward flick has nothing left to do here.
+      onSwipeLeft: () => {},
     }, { ignore: ".tab-card-grip, .sheet-backdrop, [role='dialog']", leftEdge: drawerOffered });
   }, [drawerOffered, drawerOpen]);
+  useEffect(() => {
+    const host = screenRef.current;
+    if (drawerOpen || !host) return;
+    return installCardSwipe(host, (card) => swipeClose.current(card));
+  }, [drawerOpen]);
   const outboxScope = useMemo(() => ({ project: id }), [id]);
   const filesScope = useMemo(() => ({ files: id }), [id]);
   /** The pictures among them, which the full-screen viewer steps through. */
@@ -252,6 +276,15 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       workingAt: tab.working_at,
       doneAt: tab.done_at,
     })), [detail?.tabs, sort, assistantScope]);
+  // A tab that ran again forgets it was seen interrupted: its next interruption
+  // is news.
+  useEffect(() => {
+    const rows = detail?.tabs;
+    if (!rows) return;
+    const kept = withoutResumed(seenInterrupted, rows);
+    if (kept.length === seenInterrupted.length) return;
+    setSeenInterrupted(writeSeenInterrupted(kept));
+  }, [detail?.tabs, seenInterrupted]);
   /** Rearranging by hand is offered under the manual order alone. The other two
    * are computed from what the agents did, so a dropped row would spring back
    * the next time one of them worked — the same rule the desktop's own drag
@@ -459,13 +492,22 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     const tab = tabs.find((row) => row.id === key);
     dropHint("swipe");
     if (tab) {
-      if (closingId !== null) return;
+      if (closingId !== null) return false;
+      pinHeight(card);
       setSwipedId(tab.id);
-      void close(tab).finally(() => setSwipedId(null));
-      return;
+      // The card leaves the list when the close lands, so let the exit play first.
+      void new Promise((done) => window.setTimeout(done, SWIPE_OUT_MS)).then(() => close(tab)).finally(() => { setSwipedId(null); unpinHeight(card); });
+      return true;
     }
     const file = shownFileTabs.find((row) => fileTabKey(row) === key);
-    if (file) closeFileTab(id, file);
+    if (file) {
+      // Nothing to ask the desktop: let the card go out, then forget it.
+      pinHeight(card);
+      setSwipedId(fileTabKey(file));
+      window.setTimeout(() => { closeFileTab(id, file); setSwipedId(null); }, SWIPE_OUT_MS);
+      return true;
+    }
+    return false;
   };
   /** The closed tab whose reopen is in flight. */
   const [reopeningId, setReopeningId] = useState<string | null>(null);
@@ -544,7 +586,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   /** Opening a finished tab is reading what it finished: Home's Needs you
    *  stops listing it (`seenDone.ts`). */
   const openTab = (tab: TabRow) => {
-    if (tab.agent_status === "done") markDoneSeen(tab.id, tab.done_at);
+    if (tab.agent_status === "done") setSeenDone(markDoneSeen(tab.id, tab.done_at));
+    if (tab.agent_status === "interrupted") setSeenInterrupted(markInterruptedSeen(tab.id));
     terminal(tab);
   };
   const projectName = detail?.project.label ?? t("mobile.project.fallbackName");
@@ -620,6 +663,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     <section className="cards">{tabs.map((tab) => <TabCard
       key={tab.id}
       tab={tab}
+      statusShown={showsStatusBadge(seenDone, seenInterrupted, tab)}
       drag={drag}
       canReorder={canReorder}
       terminalsOffered={terminalsOffered && !assistantScope}
@@ -643,6 +687,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       key={fileTabKey(file)}
       file={file}
       swipeKey={fileTabKey(file)}
+      swiped={swipedId === fileTabKey(file)}
       unsent={unsentMarks[fileTabKey(file)] ?? 0}
       linked={file.tab ? tabs.find((row) => row.id === file.tab && row.kind === "agent") : undefined}
       onOpen={() => setFileTabOpen(file)}
@@ -689,14 +734,14 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         instead — the notice above says why. On a host with no tmux it stays
         for that file row alone, and is named after it. */}
     <button
-      className="primary fab fab-extended"
+      className="primary fab fab-round"
       disabled={!detail}
       onClick={() => setNewTabOpen(true)}
       aria-haspopup="dialog"
       aria-expanded={newTabOpen}
       aria-label={assistantScope ? t("mobile.assistant.newChat") : t(terminalsOffered ? "mobile.newTab.title" : "mobile.projectInbox.send")}
       title={assistantScope ? t("mobile.assistant.newChat") : t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
-    ><span aria-hidden="true" className="fab-plus">＋</span><span aria-hidden="true">{assistantScope ? t("mobile.assistant.newChat") : t(terminalsOffered ? "mobile.newTab.title" : "mobile.project.fabSendFile")}</span>{isUntested("mobile.project.fab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>
+    ><span aria-hidden="true" className="fab-plus">＋</span>{isUntested("mobile.project.fab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>
     {moreTab && <OptionSheet
       title={moreTab.label}
       waiting=""

@@ -1,5 +1,5 @@
 /**
- * The project screen's swipe-to-close: a right→left flick over a tab card
+ * The project screen's swipe-to-close: a right→left drag over a tab card
  * closes that tab through the desktop, as its ✕ does; a left→right one does
  * not, and a refused close slides the card back.
  */
@@ -29,12 +29,14 @@ function hostWith(closeStatus = 200) {
   });
 }
 
-/** A one-finger flick, as `focusSwipe` listens for it. */
+/** A one-finger drag from `from` to `to`, as `cardSwipe` and `focusSwipe` listen for it. */
 function swipe(target: Element, from: number, to: number) {
   act(() => {
     if ("PointerEvent" in window) {
       const init = { bubbles: true, cancelable: true, pointerType: "touch", pointerId: 9, isPrimary: true, clientY: 300 };
       target.dispatchEvent(new PointerEvent("pointerdown", { ...init, clientX: from }));
+      target.dispatchEvent(new PointerEvent("pointermove", { ...init, clientX: (from + to) / 2 }));
+      target.dispatchEvent(new PointerEvent("pointermove", { ...init, clientX: to }));
       target.dispatchEvent(new PointerEvent("pointerup", { ...init, clientX: to }));
     } else {
       const touchEvent = (type: string, clientX: number) => {
