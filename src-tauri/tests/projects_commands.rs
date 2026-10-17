@@ -1167,7 +1167,7 @@ fn rewrite_bundle_manifest(bundle: &Path, manifest: &serde_json::Value) {
         let opts = zip::write::FileOptions::<()>::default();
         for i in 0..src.len() {
             let mut entry = src.by_index(i).unwrap();
-            let name = entry.name().to_string();
+            let name = entry.name().unwrap().to_string();
             if name == concat!(app_lib::app_slug!(), "-export.json") {
                 continue;
             }

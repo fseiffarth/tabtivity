@@ -133,7 +133,7 @@ rusqlite = { version = "0.40.1", features = ["bundled", "hooks", "limits"] }
 tempfile = "3"
 # Extract dropped/double-clicked .zip archives in place (deflate covers the vast
 # majority of real-world zips; "stored" entries need no feature).
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
 # Read the `.synctex.gz` a TeX compile emits, so a deck slide can be anchored to
 # the source line that produced its page rather than to a content fingerprint
 # (commands::tex::synctex_page_lines). Already in the tree via `zip`'s deflate
