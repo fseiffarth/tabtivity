@@ -1720,6 +1720,7 @@ pub fn run() {
             commands::mobile_control::mobile_tailscale_serve_status,
             commands::mobile_control::mobile_desktop_images,
             commands::mobile_control::mobile_attach_desktop_image,
+            commands::mobile_control::project_inbox_describe,
             commands::mobile_control::global_inbox_list,
             commands::mobile_control::global_inbox_open,
             commands::mobile_control::global_inbox_reveal,

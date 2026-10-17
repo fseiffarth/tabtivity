@@ -654,6 +654,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("mobile_verify_tailscale_serve", Admin),
     ("phone_upload_undo", Core),
     ("phone_uploads_list", Core),
+    ("project_inbox_describe", Core),
     // commands/monitor.rs
     ("gpu_memory_snapshot", Client),
     ("gpu_process_snapshot", Client),

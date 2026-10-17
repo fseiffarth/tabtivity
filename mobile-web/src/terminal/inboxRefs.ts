@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { LEGACY_NAMES, NAMES } from "../../../src/lib/brand";
 import { describeInbox, type OutboxFile } from "../api";
@@ -68,10 +68,17 @@ function knownFor(tabId: string, leaves: readonly string[]): Map<string, Describ
   return known;
 }
 
+/** How a screen asks the desktop about inbox leaves: the phone's HTTP route
+ * (the default), or the desktop Chat's own command (`ReaderInbox`). */
+export type DescribeInbox = (names: string[], signal: AbortSignal) => Promise<OutboxFile[]>;
+
 /** The files `leaves` name in `tabId`'s project inbox, as the desktop typed
  * them; asks for the leaves not known yet, once, and answers again when they
- * arrive. A failed ask is asked again when the leaves change. */
-export function useInboxFiles(tabId: string, leaves: readonly string[]): ReadonlyMap<string, Described> {
+ * arrive. A failed ask is asked again when the leaves change. `tabId` is only
+ * the cache's key when `describe` is given — the desktop Chat keys by project. */
+export function useInboxFiles(tabId: string, leaves: readonly string[], describe?: DescribeInbox): ReadonlyMap<string, Described> {
+  const ask = useRef(describe);
+  ask.current = describe;
   const wanted = leaves.join("\n");
   const [version, setVersion] = useState(0);
   useEffect(() => {
@@ -83,7 +90,7 @@ export function useInboxFiles(tabId: string, leaves: readonly string[]): Readonl
         const batch = missing.slice(start, start + BATCH);
         let files: OutboxFile[];
         try {
-          files = await describeInbox(tabId, batch, controller.signal);
+          files = await (ask.current?.(batch, controller.signal) ?? describeInbox(tabId, batch, controller.signal));
         } catch {
           return;
         }

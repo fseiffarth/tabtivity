@@ -442,6 +442,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["mobile_verify_tailscale_serve", "admin"],
   ["phone_upload_undo", "core"],
   ["phone_uploads_list", "core"],
+  ["project_inbox_describe", "core"],
   ["gpu_memory_snapshot", "client"],
   ["gpu_process_snapshot", "client"],
   ["machine_load_snapshot", "client"],

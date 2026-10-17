@@ -35,6 +35,7 @@ import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
 import { UntestedTag } from "../common/UntestedTag";
+import { ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { PATH_LINK_ATTR, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
@@ -394,6 +395,7 @@ function Turn({ turn, cutLabel, planLabel, agentLabel, use24h, onOpenAgent }: {
   use24h: boolean;
   onOpenAgent: (turn: SubagentPick) => void;
 }) {
+  const withFiles = useDrawsInbox(turn.text);
   const moment = chatMoment(turn.stamp);
   const time = moment && <small className="terminal-reader-time">{chatTime(moment, use24h)}</small>;
   const cut = turn.cut && <small className="terminal-reader-cut">{cutLabel}</small>;
@@ -425,7 +427,12 @@ function Turn({ turn, cutLabel, planLabel, agentLabel, use24h, onOpenAgent }: {
     </>;
   }
   if (turn.kind === "prompt") {
-    return <div className="terminal-reader-turn user" data-prompt={turn.text}><PromptText text={turn.text} />{cut}{time}</div>;
+    return (
+      <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"} data-prompt={turn.text}>
+        <ReaderPromptBody text={turn.text}>{(words) => <PromptText text={words} />}</ReaderPromptBody>
+        {cut}{time}
+      </div>
+    );
   }
   if (turn.questions) return <AskedQuestions questions={turn.questions} time={time} />;
   return (
@@ -1063,6 +1070,23 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const levelEntriesRef = useRef(levelEntries);
   levelEntriesRef.current = levelEntries;
   const turns = useMemo(() => transcriptTurns(levelEntries), [levelEntries]);
+  // The files the phone sent into the project inbox, drawn in their prompts'
+  // bubbles as on the phone (`ReaderInbox`).
+  const promptTexts = useMemo(() => turns.filter((turn) => turn.kind === "prompt").map((turn) => turn.text), [turns]);
+  const openInboxRef = useRef<(entry: FileEntry) => void>(() => undefined);
+  openInboxRef.current = (entry) => {
+    const ctx = pathContextRef.current;
+    openPathLink(entry, {}, { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t });
+  };
+  const openInboxEntry = useCallback((entry: FileEntry) => openInboxRef.current(entry), []);
+  const settleInbox = useCallback(() => {
+    const list = listRef.current;
+    if (list && stuck.current) list.scrollTop = list.scrollHeight;
+  }, []);
+  const readerInbox = useReaderInbox({
+    projectId, projectDir: pathContext.projectDir, disabled: pathContext.disabled,
+    texts: promptTexts, enabled: visible, openEntry: openInboxEntry, settle: settleInbox,
+  });
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
   const sessionAgents = useMemo(() => entries.filter((entry) => entry.kind === "agent"), [entries]);
   /** What ↑ in the composer walks: the session's prompts, as the CLI's box. */
@@ -1312,6 +1336,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       )}
       <div className="terminal-reader-stream">
         <PathLinksContext.Provider value={pathLinks}>
+        <ReaderInboxContext.Provider value={readerInbox}>
         <div
           ref={listRef}
           className="terminal-reader-list"
@@ -1425,6 +1450,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
             <RunningShellLine key={`${shell.at ?? ""}:${shell.command}:${runningShells.slice(0, index).filter((other) => other.at === shell.at && other.command === shell.command).length}`} shell={shell} />
           ))}
         </div>
+        </ReaderInboxContext.Provider>
         </PathLinksContext.Provider>
         <PathLinkHint hover={visible ? pathHover : null} />
         {!openStep && pinnedPrompt && (

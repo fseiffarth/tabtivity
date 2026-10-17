@@ -20,7 +20,7 @@ use crate::{
             DetectedServeSettings, HostConfig,
         },
         discovery::opaque_control_id,
-        inbox,
+        inbox, outbox,
         uploads,
         protocol::{
             AdminDevice, AdminRequest, AdminResponse, DesktopRequest, DesktopResponse,
@@ -177,6 +177,24 @@ pub async fn mobile_attach_desktop_image(
     })
     .await
     .map_err(|_| "write_failed".to_string())?
+}
+
+/// What a local project's inbox holds among `names` — the leaves the desktop
+/// Chat read out of a prompt's `@` references, so it can draw the pictures the
+/// phone's Focus chat draws (`inbox::describe`, the same answer the phone's
+/// `GET …/tabs/{id}/inbox?names=` gets): typed by the bytes, in the order
+/// asked, a leaf the inbox does not hold left out. A remote project has no
+/// local inbox and an unknown one no folder: both are an `Err`, which the
+/// caller does not remember as "gone".
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn project_inbox_describe(project_id: String, names: Vec<String>) -> Result<Vec<outbox::OutboxFile>, String> {
+    let root = crate::services::markup_mcp::project_root(&project_id).ok_or_else(|| "project_unavailable".to_string())?;
+    app_core::rt::spawn_blocking(move || {
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        inbox::describe(&root, &names).map_err(|error| error.code().to_string())
+    })
+    .await
+    .map_err(|_| "read_failed".to_string())?
 }
 
 // ── Global inbox (phone → Send to desktop) ──────────────────────────────────
